@@ -28,22 +28,39 @@ Both require: an email account, a set of LLM instructions, and email tracking. T
 
 **Inbound workflow:**
 
-- Registered on an account to handle unsolicited emails
-- Any incoming email that doesn't match an existing thread is routed here
+- Handles incoming emails that match the workflow's purpose
+- An account can have multiple active inbound workflows (e.g., product questions, billing, partnerships)
 - Responds using the workflow's instructions
 - Status: `draft` -> `active` -> `paused`
 
-### Constraints
+### State Model
 
-- An account can have **at most one active inbound workflow**. If an unsolicited email arrives, it must route to exactly one handler. Multiple active inbound workflows on the same account would create ambiguity.
-- An account can have **multiple outbound workflows** (different campaigns, different audiences).
+| `type`     | `status`    | Behavior                                                  |
+| ---------- | ----------- | --------------------------------------------------------- |
+| `outbound` | `draft`     | Created, not sending. Editing instructions and template.  |
+| `outbound` | `active`    | Sending to contacts. Agent handles replies.               |
+| `outbound` | `paused`    | Sending stopped. Existing threads still handled.          |
+| `outbound` | `completed` | All contacts contacted. Only reply handling remains.      |
+| `inbound`  | `draft`     | Created, not receiving. Editing instructions.             |
+| `inbound`  | `active`    | Receiving emails. LLM classifier routes emails here.      |
+| `inbound`  | `paused`    | Classifier skips this workflow. Existing threads handled. |
 
 ### Email Routing
 
 When an email arrives for an account:
 
-1. **Match by thread**: look up `gmail_thread_id` in the `email` table. If a match exists, route to the workflow that owns that thread (via `workflow_id` on the email row).
-2. **Unmatched inbound**: if no thread match, check if the account has an active inbound workflow. If yes, route there. If no, store the email unrouted.
+1. **Thread match**: look up `gmail_thread_id` in the `email` table. If a match exists, route to the workflow that owns that thread (via `workflow_id`). This is a fast, cheap check but unreliable -- users forward instead of reply, start new threads, and email clients break threading.
+2. **LLM classification**: if no thread match, classify the email via a dedicated LLM call (not an agent). The classifier sees the email content and the list of active workflows on the account (name + description). Returns a `workflow_id` or `unrouted`.
+3. **Unrouted**: if classification finds no match, store the email without a workflow.
+
+### Email Classification
+
+A lightweight, single-turn LLM call using Pydantic AI structured output:
+
+- **Input**: email subject, body, sender + list of active workflows (name, description) for the account
+- **Output**: `workflow_id` or `None` (unrouted)
+- **No tools, no agent** -- pure routing decision, no side effects
+- **Fast model** -- can use a smaller model (e.g., Haiku) since this is a classification task
 
 ## Agent Execution
 
@@ -59,11 +76,20 @@ The agent is invoked by three types of events:
 | Task due      | Periodic task runner | Task description + context        |
 | Manual send   | CLI command          | Contact list + template           |
 
+### Contact History and Cooldown
+
+When the agent processes a contact, it receives the **full email history between this account and this contact across all workflows** -- not just the current workflow's thread. This lets the agent make informed decisions ("we pitched them 45 days ago with no reply, adjust the angle" or "they replied negatively last month, skip").
+
+The `send_email` tool enforces a **cooldown guard** on unsolicited outreach only:
+
+- **Reply** (`thread_id` provided) -- always allowed, no cooldown. The contact wrote to us and deserves a response regardless of prior outreach history.
+- **New conversation** (no `thread_id`) -- check the last unsolicited outbound email to this contact from this account. If sent within the cooldown period (configurable, default 43200 minutes / 30 days), refuse to send.
+
 ### Tools
 
 The agent interacts with the system through tools only. Starting set:
 
-- `send_email(to, subject, body, thread_id)` -- send via Gmail API
+- `send_email(to, subject, body, thread_id)` -- send via Gmail API (cooldown on new conversations only; replies always allowed)
 - `create_task(description, scheduled_at, context)` -- schedule deferred work
 - `search_emails(query)` -- query email history
 - `read_contact(email)` / `read_company(domain)` -- CRM lookups
@@ -80,77 +106,13 @@ Examples:
 - "Send the next batch of outbound emails tomorrow at 9am"
 - "Re-check this thread in 2 hours for a response"
 
-The task runner is a periodic loop alongside the sync loop:
+The task runner is a periodic loop alongside the sync loop. For each due task: load the workflow, invoke the agent with the task context, mark task as completed or failed.
 
-```sql
-SELECT * FROM task
-WHERE scheduled_at <= now() AND status = 'pending'
-ORDER BY scheduled_at
-```
-
-For each due task: load the workflow, invoke the agent with the task context, mark task as completed or failed.
-
-### Execution Flow
-
-```
-Event (email / task / manual)
-  |
-  +-> Load workflow instructions (system prompt)
-  +-> Load event context (email body, task description, contact list)
-  +-> Invoke pydantic-ai agent with tools
-  +-> Agent acts: sends emails, creates tasks, queries data
-  +-> Done (stateless, no cleanup)
-```
+See `docs/email-flow.md` for detailed execution flows.
 
 ## Schema
 
-Replace `campaign` with `workflow`:
-
-```sql
-CREATE TABLE IF NOT EXISTS workflow (
-    id                TEXT PRIMARY KEY,
-    name              TEXT NOT NULL,
-    type              TEXT NOT NULL,            -- 'inbound' or 'outbound'
-    account_id        TEXT NOT NULL REFERENCES account(id),
-    status            TEXT NOT NULL DEFAULT 'draft',
-    instructions      TEXT NOT NULL DEFAULT '', -- LLM system prompt
-    template_subject  TEXT NOT NULL DEFAULT '', -- outbound only
-    template_body     TEXT NOT NULL DEFAULT '', -- outbound only
-    created_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS task (
-    id            TEXT PRIMARY KEY,
-    workflow_id   TEXT NOT NULL REFERENCES workflow(id),
-    email_id      TEXT REFERENCES email(id),
-    description   TEXT NOT NULL,
-    context       JSONB NOT NULL DEFAULT '{}',
-    scheduled_at  TIMESTAMPTZ NOT NULL,
-    status        TEXT NOT NULL DEFAULT 'pending',
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    completed_at  TIMESTAMPTZ
-);
-```
-
-Replace `campaign_id` with `workflow_id` on the `email` table:
-
-```sql
--- on email table
-workflow_id TEXT REFERENCES workflow(id)
-```
-
-### CLI
-
-```
-mailpilot workflow create --name N --type inbound|outbound --account-id ID
-mailpilot workflow list [--account-id ID]
-mailpilot workflow view ID
-mailpilot workflow update ID [--name N] [--instructions-file F]
-mailpilot workflow activate ID          -- set status to active (register inbound)
-mailpilot workflow pause ID             -- set status to paused
-mailpilot workflow send ID [--limit N]  -- outbound only: send to contacts
-```
+See `src/mailpilot/schema.sql`. Tables: `workflow` (replaces `campaign`), `task`, and `workflow_id` on `email`.
 
 ## Consequences
 
@@ -158,13 +120,14 @@ mailpilot workflow send ID [--limit N]  -- outbound only: send to contacts
 
 - One abstraction for both objectives -- no campaign/responder split
 - Instructions are general -- no assumption about RAG, tools, or pipeline
+- Multiple inbound workflows per account -- flexible routing by business purpose
+- LLM classification handles broken threads, forwards, and new conversations
 - Per-account isolation maintained -- workflows are scoped to accounts
-- Email routing is deterministic: thread match first, then inbound fallback
 - Stateless agent invocations -- simple, predictable, no state management
 - Task-based planning -- deferred work is just database rows with timestamps, no complex orchestration
 
 ### Negative
 
 - `template_subject` and `template_body` are only relevant for outbound -- wasted columns on inbound rows (acceptable, keeps schema simple)
-- One active inbound workflow per account limits flexibility (acceptable -- instructions within a workflow can handle sub-routing)
+- LLM classification is non-deterministic -- same email may route differently on retry (acceptable, mitigated by storing the routing decision on the email row)
 - Stateless invocations mean the agent re-reads context each time (acceptable -- database reads are cheap, and it avoids stale state)

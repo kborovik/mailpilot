@@ -24,7 +24,11 @@ Gmail API with `google-api-python-client` + service account domain-wide delegati
 
 Each account syncs independently via ThreadPoolExecutor. Pub/Sub streaming pull (`google-cloud-pubsub`) for real-time notifications. History API for incremental sync. Full re-sync on history 404.
 
-Email body stored as plain text only (see `docs/adr-02-email-body-storage-strategy.md`). Two-phase pipeline: raw extraction during sync, then LLM cleaning during classification.
+Email body stored as plain text only (see `docs/adr-02-email-body-storage-strategy.md`).
+
+### Workflows
+
+Workflow is the central abstraction for both outbound campaigns and inbound auto-reply (see `docs/adr-03-workflow-model.md`). Each workflow is executed by a Pydantic AI agent with tool access. Inbound emails are routed via thread matching then LLM classification. Agent plans multi-step work via deferred tasks. See `docs/email-flow.md` for execution flows.
 
 ### CLI
 
@@ -46,8 +50,8 @@ mailpilot account view ID
 
 mailpilot company create --domain D [--name N] [opts]
 mailpilot company search QUERY [--limit N]
-mailpilot company update ID [--name N] [--unreject]
-mailpilot company list [--limit N] [--all]
+mailpilot company update ID [--name N]
+mailpilot company list [--limit N]
 mailpilot company view ID
 mailpilot company export FILE
 mailpilot company import FILE
@@ -60,9 +64,22 @@ mailpilot contact view ID
 mailpilot contact export FILE
 mailpilot contact import FILE
 
+mailpilot workflow create --name N --type inbound|outbound --account-id ID
+mailpilot workflow list [--account-id ID]
+mailpilot workflow view ID
+mailpilot workflow update ID [--name N] [--instructions-file F]
+mailpilot workflow activate ID
+mailpilot workflow pause ID
+mailpilot workflow send ID [--limit N]
+
 mailpilot email list [--limit N] [--contact-id ID] [--account-id ID]
 mailpilot email search QUERY [--limit N]
 mailpilot email view ID
+
+mailpilot sync start
+mailpilot sync stop
+mailpilot sync status
+mailpilot sync run [--account-id ID]
 
 mailpilot config get [KEY]
 mailpilot config set KEY VALUE
@@ -74,20 +91,9 @@ mailpilot status
 
 See `src/mailpilot/schema.sql`. Requires PostgreSQL 18. Connection: `database_url` setting (default: `postgresql://localhost/mailpilot`). Schema applied automatically on first connection.
 
-Tables: `account`, `company`, `contact`, `campaign`, `email`.
+Tables: `account`, `company`, `contact`, `workflow`, `email`, `task`.
 
 Prefer atomic single-query operations: use `UPDATE ... FROM ... RETURNING` to join, mutate, and return in one round-trip instead of SELECT-then-UPDATE.
-
-### Company State Model
-
-Company state is determined by two columns: `rejected_reason` (JSONB array) and `qualification_notes` (TEXT).
-
-| `rejected_reason`        | `qualification_notes` | State                                    |
-| ------------------------ | --------------------- | ---------------------------------------- |
-| `[]`                     | `NULL`                | Pending -- discovered, not yet qualified |
-| `[]`                     | `"Meets criteria..."` | Accepted -- passed AI qualification      |
-| `["ai_rejected"]`        | `"Does not meet..."`  | Rejected by AI                           |
-| `["incomplete_profile"]` | `"Missing: ..."`      | Rejected -- missing required fields      |
 
 ### Settings
 

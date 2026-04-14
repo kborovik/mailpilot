@@ -45,12 +45,14 @@ CREATE TABLE IF NOT EXISTS contact (
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS campaign (
+CREATE TABLE IF NOT EXISTS workflow (
     id                TEXT PRIMARY KEY,
     name              TEXT NOT NULL,
     description       TEXT NOT NULL DEFAULT '',
+    type              TEXT NOT NULL,
     account_id        TEXT NOT NULL REFERENCES account(id),
     status            TEXT NOT NULL DEFAULT 'draft',
+    instructions      TEXT NOT NULL DEFAULT '',
     template_subject  TEXT NOT NULL DEFAULT '',
     template_body     TEXT NOT NULL DEFAULT '',
     created_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -63,7 +65,7 @@ CREATE TABLE IF NOT EXISTS email (
     gmail_thread_id   TEXT,
     account_id        TEXT NOT NULL REFERENCES account(id),
     contact_id        TEXT REFERENCES contact(id),
-    campaign_id       TEXT REFERENCES campaign(id),
+    workflow_id       TEXT REFERENCES workflow(id),
     direction         TEXT NOT NULL,
     subject           TEXT NOT NULL DEFAULT '',
     body_text         TEXT NOT NULL DEFAULT '',
@@ -75,11 +77,25 @@ CREATE TABLE IF NOT EXISTS email (
     created_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS task (
+    id            TEXT PRIMARY KEY,
+    workflow_id   TEXT NOT NULL REFERENCES workflow(id),
+    email_id      TEXT REFERENCES email(id),
+    description   TEXT NOT NULL,
+    context       JSONB NOT NULL DEFAULT '{}',
+    scheduled_at  TIMESTAMPTZ NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'pending',
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at  TIMESTAMPTZ
+);
+
 CREATE INDEX IF NOT EXISTS idx_company_name ON company(LOWER(name));
 CREATE INDEX IF NOT EXISTS idx_contact_domain ON contact(domain);
 CREATE INDEX IF NOT EXISTS idx_contact_company_id ON contact(company_id);
-CREATE INDEX IF NOT EXISTS idx_campaign_account_id ON campaign(account_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_account_id ON workflow(account_id);
+CREATE INDEX IF NOT EXISTS idx_task_workflow_id ON task(workflow_id);
+CREATE INDEX IF NOT EXISTS idx_task_scheduled_at ON task(scheduled_at) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_email_account_id ON email(account_id);
 CREATE INDEX IF NOT EXISTS idx_email_contact_id ON email(contact_id);
-CREATE INDEX IF NOT EXISTS idx_email_campaign_id ON email(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_email_workflow_id ON email(workflow_id);
 CREATE INDEX IF NOT EXISTS idx_email_gmail_thread_id ON email(gmail_thread_id);
