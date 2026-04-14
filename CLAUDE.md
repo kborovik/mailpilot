@@ -15,11 +15,11 @@ CRM application for cold email outreach via Gmail. Manages target companies and 
 
 ### Gmail Integration
 
-Gmail API with service account + domain-wide delegation for Google Workspace (see `docs/adr-01-gmail-api-integration.md`). Credential resolution: `GOOGLE_APPLICATION_CREDENTIALS` env var. Scope: `gmail.modify`. Custom headers on sent emails for traceability (`X-MailPilot-Version`, `X-MailPilot-Account-Id`).
+Gmail API with `google-api-python-client` + service account domain-wide delegation (see `docs/adr-01-gmail-api-integration.md`). Single scope: `gmail.modify`. Per-account impersonation via `credentials.with_subject(email)`. Custom headers on sent emails (`X-MailPilot-Version`, `X-MailPilot-Account-Id`).
+
+Each account syncs independently via ThreadPoolExecutor. Pub/Sub streaming pull (`google-cloud-pubsub`) for real-time notifications. History API for incremental sync. Full re-sync on history 404.
 
 Email body stored as plain text only (see `docs/adr-02-email-body-storage-strategy.md`). Two-phase pipeline: raw extraction during sync, then LLM cleaning during classification.
-
-Push notifications via Pub/Sub streaming pull (see `docs/adr-03-gmail-watch-implementation.md`).
 
 ### CLI
 
@@ -97,10 +97,6 @@ API keys and config stored in `~/.mailpilot/config.json` via `mailpilot config s
 - `database_url` -- PostgreSQL connection (default: `postgresql://localhost/mailpilot`)
 - `logfire_token` -- Pydantic Logfire token (optional)
 - `logfire_environment` -- deployment environment tag (default: `development`)
-
-### Gmail Authentication
-
-Service account credentials via `GOOGLE_APPLICATION_CREDENTIALS` env var pointing to a JSON key file. Domain-wide delegation required for Google Workspace. Single scope: `gmail.modify`.
 
 ## LLM-First Code Style
 
