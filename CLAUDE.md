@@ -2,7 +2,12 @@
 
 ## Project Overview
 
-CRM application for cold email outreach via Gmail. Manages target companies and contacts, enriches via Firecrawl + Claude, qualifies via AI, discovers contacts via Hunter.io, verifies emails via Bouncer, and sends/tracks emails through Gmail API with service account delegation.
+AI email platform on Google Workspace with two objectives:
+
+1. **Outbound cold email** -- discover target companies, enrich via Firecrawl + Claude, qualify via AI, find contacts via Hunter.io, verify emails via Bouncer, send and track campaigns through Gmail API.
+2. **Inbound auto-reply** -- monitor incoming emails via Pub/Sub, search a knowledge base (RAG), generate and send AI-powered replies based on predefined instructions.
+
+Both objectives operate through Gmail API with service account delegation. Each email account syncs and sends independently.
 
 ## Principles
 

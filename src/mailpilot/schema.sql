@@ -23,14 +23,7 @@ CREATE TABLE IF NOT EXISTS company (
     locations             JSONB NOT NULL DEFAULT '[]',
     company_type          TEXT,
     recent_activity       TEXT,
-    rejected_reason       JSONB NOT NULL DEFAULT '[]',
     qualification_notes   TEXT,
-    qualified_at          TIMESTAMPTZ,
-    mail_provider         TEXT,
-    mx_checked_at         TIMESTAMPTZ,
-    firecrawl_enriched_at TIMESTAMPTZ,
-    firecrawl_sources     JSONB NOT NULL DEFAULT '[]',
-    hunter_searched_at    TIMESTAMPTZ,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -48,11 +41,6 @@ CREATE TABLE IF NOT EXISTS contact (
     department            TEXT,
     profile_summary       TEXT,
     linkedin              TEXT,
-    bouncer_status        TEXT,
-    bouncer_score         INTEGER,
-    bouncer_date          TEXT,
-    firecrawl_sources     JSONB NOT NULL DEFAULT '[]',
-    firecrawl_enriched_at TIMESTAMPTZ,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -79,9 +67,9 @@ CREATE TABLE IF NOT EXISTS email (
     direction         TEXT NOT NULL,
     subject           TEXT NOT NULL DEFAULT '',
     body_text         TEXT NOT NULL DEFAULT '',
+    labels            JSONB NOT NULL DEFAULT '[]',
     status            TEXT NOT NULL DEFAULT 'draft',
     is_classified     BOOLEAN NOT NULL DEFAULT FALSE,
-    labels            JSONB NOT NULL DEFAULT '[]',
     sent_at           TIMESTAMPTZ,
     received_at       TIMESTAMPTZ,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
