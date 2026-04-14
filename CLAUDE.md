@@ -1,0 +1,150 @@
+# CLAUDE Instructions
+
+## Project Overview
+
+CRM application for cold email outreach via Gmail. Manages target companies and contacts, enriches via Firecrawl + Claude, qualifies via AI, discovers contacts via Hunter.io, verifies emails via Bouncer, and sends/tracks emails through Gmail API with service account delegation.
+
+## Principles
+
+- Technical accuracy over politeness
+- Simplicity above all. YAGNI is law.
+- Type-safety is non-negotiable. basedpyright strict mode.
+- TDD for ALL changes.
+
+## Architecture
+
+### Gmail Integration
+
+Gmail API with service account + domain-wide delegation for Google Workspace (see `docs/adr-01-gmail-api-integration.md`). Credential resolution: `GOOGLE_APPLICATION_CREDENTIALS` env var. Scope: `gmail.modify`. Custom headers on sent emails for traceability (`X-MailPilot-Version`, `X-MailPilot-Account-Id`).
+
+Email body stored as plain text only (see `docs/adr-02-email-body-storage-strategy.md`). Two-phase pipeline: raw extraction during sync, then LLM cleaning during classification.
+
+Push notifications via Pub/Sub streaming pull (see `docs/adr-03-gmail-watch-implementation.md`).
+
+### CLI
+
+The CLI must be LLM Agent friendly: JSON output only. Exit codes must be meaningful. Error messages must be actionable. The CLI is a thin dispatcher -- no domain logic or logging. All `logfire` calls belong in pipeline/agent modules where decisions happen. CLI only does `logfire.configure()` and `output()`.
+
+**Lazy imports in `cli.py`.** Only `click` is imported at module level. All heavy dependencies (`logfire`, `psycopg`, `httpx`, `pydantic`, `mailpilot.database`, `mailpilot.pipeline`, `mailpilot.settings`) are imported inside command function bodies so that `--help` / `--version` stay fast (~50 ms). When adding or modifying CLI commands, always put `from mailpilot.*` imports inside the function, never at the top of the file. Tests must patch functions at their source module (e.g. `mailpilot.pipeline.func`), not at `mailpilot.cli.func`.
+
+**Settings-first parameter passing.** CLI commands never pass config values (API keys) as separate function arguments. Instead: (1) load `Settings` via `get_settings()`, (2) pass the `Settings` instance to pipeline functions. Pipeline functions read all config from `settings`. Only operational params (`limit`, `scope`, `on_progress`) stay as function arguments.
+
+**Convention: GitHub CLI (`gh`) as reference.** Standard verbs: `list` (summary), `view ID` (full record), `get` (fetch from external API), `set` (update config). All IDs are UUIDv7.
+
+```
+mailpilot --version
+mailpilot --debug COMMAND
+
+mailpilot account create --email E [--display-name N]
+mailpilot account list
+mailpilot account view ID
+
+mailpilot company create --domain D [--name N] [opts]
+mailpilot company search QUERY [--limit N]
+mailpilot company update ID [--name N] [--unreject]
+mailpilot company list [--limit N] [--all]
+mailpilot company view ID
+mailpilot company export FILE
+mailpilot company import FILE
+
+mailpilot contact create --email E [--first-name F] [--last-name L] [opts]
+mailpilot contact update ID [--email E] [--first-name F] [--last-name L] [opts]
+mailpilot contact search QUERY [--limit N]
+mailpilot contact list [--limit N] [--domain D] [--company-id ID]
+mailpilot contact view ID
+mailpilot contact export FILE
+mailpilot contact import FILE
+
+mailpilot email list [--limit N] [--contact-id ID] [--account-id ID]
+mailpilot email search QUERY [--limit N]
+mailpilot email view ID
+
+mailpilot config get [KEY]
+mailpilot config set KEY VALUE
+
+mailpilot status
+```
+
+### PostgreSQL Schema
+
+See `src/mailpilot/schema.sql`. Requires PostgreSQL 18. Connection: `database_url` setting (default: `postgresql://localhost/mailpilot`). Schema applied automatically on first connection.
+
+Tables: `account`, `company`, `contact`, `campaign`, `email`.
+
+Prefer atomic single-query operations: use `UPDATE ... FROM ... RETURNING` to join, mutate, and return in one round-trip instead of SELECT-then-UPDATE.
+
+### Company State Model
+
+Company state is determined by two columns: `rejected_reason` (JSONB array) and `qualification_notes` (TEXT).
+
+| `rejected_reason`        | `qualification_notes` | State                                    |
+| ------------------------ | --------------------- | ---------------------------------------- |
+| `[]`                     | `NULL`                | Pending -- discovered, not yet qualified |
+| `[]`                     | `"Meets criteria..."` | Accepted -- passed AI qualification      |
+| `["ai_rejected"]`        | `"Does not meet..."`  | Rejected by AI                           |
+| `["incomplete_profile"]` | `"Missing: ..."`      | Rejected -- missing required fields      |
+
+### Settings
+
+API keys and config stored in `~/.mailpilot/config.json` via `mailpilot config set KEY VALUE`:
+
+- `anthropic_api_key` -- Anthropic Claude API key
+- `anthropic_model` -- Anthropic model ID (default: `claude-sonnet-4-6`)
+- `firecrawl_api_key` -- Firecrawl API key
+- `google_project_id` -- Google Cloud project ID (for Pub/Sub)
+- `google_pubsub_topic` -- Pub/Sub topic name (default: `gmail-watch`)
+- `google_pubsub_subscription` -- Pub/Sub subscription name (default: `mailpilot-watch`)
+- `database_url` -- PostgreSQL connection (default: `postgresql://localhost/mailpilot`)
+- `logfire_token` -- Pydantic Logfire token (optional)
+- `logfire_environment` -- deployment environment tag (default: `development`)
+
+### Gmail Authentication
+
+Service account credentials via `GOOGLE_APPLICATION_CREDENTIALS` env var pointing to a JSON key file. Domain-wide delegation required for Google Workspace. Single scope: `gmail.modify`.
+
+## LLM-First Code Style
+
+- Explicit, fully descriptive names (no abbreviations)
+- Flat, linear code structure
+- Type hints on all functions, parameters, and return values
+- Docstrings on public functions (Google convention)
+- Import order: stdlib, third-party, local
+
+## Commands
+
+```bash
+make check              # lint + tests
+make lint               # py-format + py-lint + py-types
+make py-test            # pytest -x
+make py-format          # ruff format
+make py-lint            # ruff check --fix
+make py-types           # basedpyright
+make clean              # export data, drop tables, re-apply schema
+make py-update          # upgrade venv + dependencies (uv sync --upgrade)
+make py-reset           # clean __pycache__/build artifacts, rebuild venv
+uv run ruff format      # format (without make)
+uv run ruff check --fix # lint (without make)
+uv run basedpyright     # type check (without make)
+```
+
+## TDD Process
+
+1. Write failing test first
+2. Implement minimal code to pass
+3. Run: `uv run ruff check --fix` then `uv run basedpyright`
+
+Tests use a separate database: `postgresql://localhost/mailpilot_test` (override with `DATABASE_URL` env var). The `database_connection` fixture truncates all tables before each test. Use `make_test_settings()` for Settings instances and `load_fixture()` for JSON fixtures -- all in `conftest.py`. HTTP mocking uses `pytest-httpx`.
+
+## Observability
+
+Logging and tracing use [Pydantic Logfire](https://pydantic.dev/logfire) (OpenTelemetry-based). All modules use `import logfire` directly -- no per-module logger variable.
+
+- `logfire.debug("msg", key=value)` / `logfire.warn("msg", key=value)` for logging
+- `logfire.span("name")` context manager for pipeline stage tracing
+- `configure_logging()` in `cli.py` enables console output only with `--debug` flag
+- Token: `mailpilot config set logfire_token <TOKEN>` or `LOGFIRE_TOKEN` env var
+- Cloud send: `send_to_logfire='if-token-present'` -- console-only when no token
+
+## Standards
+
+ASCII-only. Use: `<-` `->` `--` `"` `(c)` `(tm)` `...`
