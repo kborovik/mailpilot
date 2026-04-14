@@ -49,8 +49,8 @@ Lightweight LLM call to route unmatched emails:
 Run the workflow's Pydantic AI agent:
 
 - **Input**: workflow instructions (system prompt) + email content + contact email history (cross-workflow)
-- **Tools available**: `send_email()`, `create_task()`, `search_emails()`, `read_contact()`, `read_company()`
-- **Agent decides**: reply, create follow-up task, or take no action
+- **Tools available**: `send_email()`, `create_task()`, `update_contact_status()`, `search_emails()`, `read_contact()`, `read_company()`
+- **Agent decides**: reply, create follow-up task, update contact status, or take no action
 - **Stateless**: no persistent conversation, no cleanup
 
 ---
@@ -71,7 +71,7 @@ For each contact in the target list:
 
 - Load full email history between this account and this contact (cross-workflow)
 - Call `check_cooldown()` -- if within cooldown, skip contact
-- Invoke `invoke_workflow_agent()` with contact + history + template
+- Invoke `invoke_workflow_agent()` with contact + history + instructions
 
 ### 3. Cooldown -- `check_cooldown()`
 
@@ -85,8 +85,7 @@ Guard against duplicate unsolicited outreach:
 
 Same as inbound step 6. The agent receives:
 
-- Workflow instructions + template (subject, body)
-- Contact details + email history
+- Workflow instructions + contact details + email history
 - Agent calls `send_email()` tool to deliver the message
 
 ### 5. Send -- `send_email()`

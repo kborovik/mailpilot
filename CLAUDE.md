@@ -13,6 +13,7 @@ Both objectives operate through Gmail API with service account delegation. Each 
 
 - Technical accuracy over politeness
 - Simplicity above all. YAGNI is law.
+- Agent-driven, not system-driven. The system provides tools and scheduling; LLM agents make all business decisions (what to send, when to follow up, when to give up).
 - Type-safety is non-negotiable. basedpyright strict mode.
 - TDD for ALL changes.
 
@@ -70,7 +71,7 @@ mailpilot workflow view ID
 mailpilot workflow update ID [--name N] [--instructions-file F]
 mailpilot workflow activate ID
 mailpilot workflow pause ID
-mailpilot workflow send ID [--limit N]
+mailpilot workflow run --workflow-id ID --contact-id ID
 
 mailpilot email list [--limit N] [--contact-id ID] [--account-id ID]
 mailpilot email search QUERY [--limit N]

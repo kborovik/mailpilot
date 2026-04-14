@@ -21,29 +21,38 @@ Both require: an email account, a set of LLM instructions, and email tracking. T
 
 **Outbound workflow:**
 
-- Has a target list of contacts
-- Sends emails using a subject/body template
-- Replies to responses using the workflow's instructions
-- Status: `draft` -> `active` -> `paused` -> `completed`
+- Targets contacts individually via `workflow_contact`
+- Agent generates email subject and body per the workflow's instructions
+- Handles replies using the same instructions
+- Status: `draft` -> `active` -> `paused`
 
 **Inbound workflow:**
 
-- Handles incoming emails that match the workflow's purpose
+- Tracks contacts individually via `workflow_contact` (added automatically on classification)
 - An account can have multiple active inbound workflows (e.g., product questions, billing, partnerships)
 - Responds using the workflow's instructions
 - Status: `draft` -> `active` -> `paused`
 
 ### State Model
 
-| `type`     | `status`    | Behavior                                                  |
-| ---------- | ----------- | --------------------------------------------------------- |
-| `outbound` | `draft`     | Created, not sending. Editing instructions and template.  |
-| `outbound` | `active`    | Sending to contacts. Agent handles replies.               |
-| `outbound` | `paused`    | Sending stopped. Existing threads still handled.          |
-| `outbound` | `completed` | All contacts contacted. Only reply handling remains.      |
-| `inbound`  | `draft`     | Created, not receiving. Editing instructions.             |
-| `inbound`  | `active`    | Receiving emails. LLM classifier routes emails here.      |
-| `inbound`  | `paused`    | Classifier skips this workflow. Existing threads handled. |
+Workflow status is purely operational. Outcome tracking lives on `workflow_contact`.
+
+**Workflow status** (is this workflow running?):
+
+| `status`  | Behavior                                                               |
+| --------- | ---------------------------------------------------------------------- |
+| `draft`   | Created, not running. Editing instructions and objective.              |
+| `active`  | Running. Outbound sends to pending contacts. Inbound receives emails.  |
+| `paused`  | No new work. Existing threads still handled (no ghosting mid-thread).  |
+
+**Contact status** (did we achieve the objective with this contact?):
+
+| `status`    | Meaning                                          |
+| ----------- | ------------------------------------------------ |
+| `pending`   | Queued, not yet contacted                        |
+| `active`    | Conversation in progress                         |
+| `completed` | Agent determined objective achieved              |
+| `failed`    | Agent determined objective cannot be achieved    |
 
 ### Email Routing
 
@@ -62,9 +71,30 @@ A lightweight, single-turn LLM call using Pydantic AI structured output:
 - **No tools, no agent** -- pure routing decision, no side effects
 - **Fast model** -- can use a smaller model (e.g., Haiku) since this is a classification task
 
+### Scope
+
+A workflow is scoped: **account (1) <=> workflow (1) <=> contact (1)**. The `workflow_contact` join table binds contacts to workflows and tracks per-contact outcome. The `reason` field holds the agent's explanation ("meeting booked for Tuesday", "contact explicitly declined", "no response after 3 follow-ups").
+
+- **Outbound**: contacts are added before sending. `workflow send` queries `WHERE status = 'pending'`.
+- **Inbound**: contacts are added automatically when classification routes an email.
+
+A contact can be in multiple workflows (different accounts, different campaigns). The composite PK `(workflow_id, contact_id)` prevents duplicates within the same workflow.
+
+### Objective
+
+Each workflow has an `objective` -- a clear statement of what the agent is trying to achieve. The agent evaluates each interaction against this objective and updates the contact status accordingly.
+
+Examples:
+
+- Outbound sales: "Book a demo meeting"
+- Inbound support: "Answer the product question"
+- Inbound partnership: "Qualify and forward to sales team"
+
+The agent uses the `update_contact_status` tool to report outcomes. The system never decides success or failure -- only the agent does.
+
 ## Agent Execution
 
-Each workflow is executed by a Pydantic AI agent. The agent is **stateless** -- each invocation gets fresh context from the database. No persistent conversation history, no context window management.
+Each workflow is executed by a Pydantic AI agent. The agent is **stateless** -- each invocation gets fresh context from the database. No persistent conversation history, no context window management. The agent makes all business decisions: what to send, when to follow up, when to give up.
 
 ### Events
 
@@ -74,7 +104,7 @@ The agent is invoked by three types of events:
 | ------------- | -------------------- | --------------------------------- |
 | Email arrives | Pub/Sub sync         | New email + workflow instructions |
 | Task due      | Periodic task runner | Task description + context        |
-| Manual send   | CLI command          | Contact list + template           |
+| Manual send   | CLI command          | Contact list + instructions       |
 
 ### Contact History and Cooldown
 
@@ -91,6 +121,7 @@ The agent interacts with the system through tools only. Starting set:
 
 - `send_email(to, subject, body, thread_id)` -- send via Gmail API (cooldown on new conversations only; replies always allowed)
 - `create_task(description, scheduled_at, context)` -- schedule deferred work
+- `update_contact_status(contact_id, status, reason)` -- report outcome (active, completed, failed)
 - `search_emails(query)` -- query email history
 - `read_contact(email)` / `read_company(domain)` -- CRM lookups
 
@@ -112,7 +143,7 @@ See `docs/email-flow.md` for detailed execution flows.
 
 ## Schema
 
-See `src/mailpilot/schema.sql`. Tables: `workflow` (replaces `campaign`), `task`, and `workflow_id` on `email`.
+See `src/mailpilot/schema.sql`. Tables: `workflow`, `workflow_contact`, `task`, and `workflow_id` on `email`.
 
 ## Consequences
 
@@ -128,6 +159,6 @@ See `src/mailpilot/schema.sql`. Tables: `workflow` (replaces `campaign`), `task`
 
 ### Negative
 
-- `template_subject` and `template_body` are only relevant for outbound -- wasted columns on inbound rows (acceptable, keeps schema simple)
+- Agent-driven outcomes depend on LLM quality -- mitigated by well-crafted workflow objectives and instructions
 - LLM classification is non-deterministic -- same email may route differently on retry (acceptable, mitigated by storing the routing decision on the email row)
 - Stateless invocations mean the agent re-reads context each time (acceptable -- database reads are cheap, and it avoids stale state)
