@@ -94,8 +94,8 @@ CREATE TABLE IF NOT EXISTS task (
     context       JSONB NOT NULL DEFAULT '{}',
     scheduled_at  TIMESTAMPTZ NOT NULL,
     status        TEXT NOT NULL DEFAULT 'pending',
-    completed_at  TIMESTAMPTZ
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at  TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_company_name ON company(LOWER(name));

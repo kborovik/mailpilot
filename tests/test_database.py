@@ -1,0 +1,209 @@
+"""Integration tests for database CRUD operations (real DB)."""
+
+from typing import Any
+
+import psycopg
+
+from conftest import (
+    make_test_account,
+    make_test_company,
+    make_test_contact,
+    make_test_workflow,
+)
+from mailpilot.database import (
+    create_email,
+    get_account,
+    get_company,
+    get_contact,
+    get_workflow,
+    list_accounts,
+    list_companies,
+    list_contacts,
+    list_emails,
+    list_workflows,
+    search_companies,
+    search_contacts,
+    update_company,
+    update_contact,
+    update_workflow,
+)
+
+# -- Account -------------------------------------------------------------------
+
+
+def test_create_and_get_account(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    assert account.email == "test@example.com"
+    assert account.display_name == "Test Account"
+    assert account.id
+
+    fetched = get_account(database_connection, account.id)
+    assert fetched is not None
+    assert fetched.id == account.id
+    assert fetched.email == account.email
+
+
+def test_get_account_not_found(database_connection: psycopg.Connection[dict[str, Any]]):
+    assert get_account(database_connection, "nonexistent") is None
+
+
+def test_list_accounts(database_connection: psycopg.Connection[dict[str, Any]]):
+    make_test_account(database_connection, email="a@test.com")
+    make_test_account(database_connection, email="b@test.com")
+    accounts = list_accounts(database_connection)
+    assert len(accounts) == 2
+
+
+# -- Company -------------------------------------------------------------------
+
+
+def test_create_and_get_company(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    company = make_test_company(database_connection)
+    assert company.name == "Test Corp"
+    assert company.domain == "testcorp.com"
+
+    fetched = get_company(database_connection, company.id)
+    assert fetched is not None
+    assert fetched.domain == "testcorp.com"
+
+
+def test_list_companies(database_connection: psycopg.Connection[dict[str, Any]]):
+    make_test_company(database_connection, name="Alpha", domain="alpha.com")
+    make_test_company(database_connection, name="Beta", domain="beta.com")
+    companies = list_companies(database_connection)
+    assert len(companies) == 2
+    assert companies[0].name == "Alpha"
+
+
+def test_search_companies(database_connection: psycopg.Connection[dict[str, Any]]):
+    make_test_company(database_connection, name="Acme Inc", domain="acme.com")
+    make_test_company(database_connection, name="Beta Corp", domain="beta.com")
+    results = search_companies(database_connection, "acme")
+    assert len(results) == 1
+    assert results[0].name == "Acme Inc"
+
+
+def test_update_company(database_connection: psycopg.Connection[dict[str, Any]]):
+    company = make_test_company(database_connection)
+    updated = update_company(
+        database_connection, company.id, name="New Name", industry="Tech"
+    )
+    assert updated is not None
+    assert updated.name == "New Name"
+    assert updated.industry == "Tech"
+    assert updated.updated_at > company.updated_at
+
+
+def test_update_company_not_found(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    assert update_company(database_connection, "nonexistent", name="X") is None
+
+
+# -- Contact -------------------------------------------------------------------
+
+
+def test_create_contact_with_company(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    company = make_test_company(database_connection)
+    contact = make_test_contact(database_connection, company_id=company.id)
+    assert contact.company_id == company.id
+
+    fetched = get_contact(database_connection, contact.id)
+    assert fetched is not None
+    assert fetched.company_id == company.id
+
+
+def test_list_contacts_by_domain(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    make_test_contact(database_connection, email="a@foo.com", domain="foo.com")
+    make_test_contact(database_connection, email="b@bar.com", domain="bar.com")
+    results = list_contacts(database_connection, domain="foo.com")
+    assert len(results) == 1
+    assert results[0].domain == "foo.com"
+
+
+def test_search_contacts(database_connection: psycopg.Connection[dict[str, Any]]):
+    make_test_contact(database_connection, email="alice@test.com", domain="test.com")
+    make_test_contact(database_connection, email="bob@test.com", domain="test.com")
+    results = search_contacts(database_connection, "alice")
+    assert len(results) == 1
+
+
+def test_update_contact(database_connection: psycopg.Connection[dict[str, Any]]):
+    contact = make_test_contact(database_connection)
+    updated = update_contact(
+        database_connection, contact.id, first_name="Jane", position="CEO"
+    )
+    assert updated is not None
+    assert updated.first_name == "Jane"
+    assert updated.position == "CEO"
+
+
+# -- Workflow ------------------------------------------------------------------
+
+
+def test_create_and_get_workflow(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    assert workflow.type == "outbound"
+    assert workflow.status == "draft"
+    assert workflow.account_id == account.id
+
+    fetched = get_workflow(database_connection, workflow.id)
+    assert fetched is not None
+    assert fetched.name == "Test Workflow"
+
+
+def test_list_workflows_by_account(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    a1 = make_test_account(database_connection, email="a@test.com")
+    a2 = make_test_account(database_connection, email="b@test.com")
+    make_test_workflow(database_connection, account_id=a1.id, name="W1")
+    make_test_workflow(database_connection, account_id=a2.id, name="W2")
+    results = list_workflows(database_connection, account_id=a1.id)
+    assert len(results) == 1
+    assert results[0].name == "W1"
+
+
+def test_update_workflow(database_connection: psycopg.Connection[dict[str, Any]]):
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    updated = update_workflow(
+        database_connection, workflow.id, status="active", objective="Book demo"
+    )
+    assert updated is not None
+    assert updated.status == "active"
+    assert updated.objective == "Book demo"
+
+
+# -- Email ---------------------------------------------------------------------
+
+
+def test_create_and_list_emails(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    email = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Hello",
+        body_text="Hi there",
+        gmail_message_id="msg_123",
+    )
+    assert email.direction == "inbound"
+    assert email.subject == "Hello"
+
+    emails = list_emails(database_connection, account_id=account.id)
+    assert len(emails) == 1
+    assert emails[0].id == email.id

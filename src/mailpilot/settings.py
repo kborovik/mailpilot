@@ -90,7 +90,14 @@ def load_settings(config_path: Path = CONFIG_PATH) -> Settings:
         )
         return defaults
 
-    return Settings()
+    if config_path == CONFIG_PATH:
+        return Settings()
+
+    # Non-default path: read file directly and pass as kwargs so
+    # JsonConfigSource (which hardcodes CONFIG_PATH) is bypassed.
+    data: dict[str, Any] = json.loads(config_path.read_text())
+    overrides = {k: v for k, v in data.items() if k in Settings.model_fields}
+    return Settings(**overrides)
 
 
 def save_settings(settings: Settings, config_path: Path = CONFIG_PATH) -> None:
