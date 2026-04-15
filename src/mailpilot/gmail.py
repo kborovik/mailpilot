@@ -178,7 +178,7 @@ def get_message(
 
 
 @_retry_on_transient
-def send_message(  # noqa: PLR0913
+def send_message(
     service: Any,
     to: str,
     subject: str,

@@ -92,9 +92,23 @@ mailpilot status
 
 See `src/mailpilot/schema.sql`. Requires PostgreSQL 18. Connection: `database_url` setting (default: `postgresql://localhost/mailpilot`). Schema applied automatically on first connection.
 
-Tables: `account`, `company`, `contact`, `workflow`, `email`, `task`.
+Tables: `account`, `company`, `contact`, `workflow`, `workflow_contact`, `email`, `task`.
 
 Prefer atomic single-query operations: use `UPDATE ... FROM ... RETURNING` to join, mutate, and return in one round-trip instead of SELECT-then-UPDATE.
+
+### Database Layer
+
+Single flat `database.py` with `# -- Entity ---` section headers. All functions in `database.py`, no per-entity modules.
+
+Function convention:
+
+- `create_X(connection, ...) -> X` -- INSERT RETURNING *, commit, return model
+- `get_X(connection, id) -> X | None` -- SELECT by PK
+- `list_X(connection, ...) -> list[X]` -- SELECT with optional filters
+- `update_X(connection, id, **fields) -> X | None` -- dynamic SET via `_build_update()`
+- `search_X(connection, query, ...) -> list[X]` -- LIKE search
+
+All functions take `psycopg.Connection` as first arg, return domain models from `models.py` (never raw dicts). Use `Model.model_validate(row)` at the DB boundary. IDs are UUIDv7 via `_new_id()` (`uuid.uuid7()`). Dynamic SQL uses `psycopg.sql` (`SQL`, `Identifier`, `Placeholder`) -- never f-strings in queries.
 
 ### Settings
 

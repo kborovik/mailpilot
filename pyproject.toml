@@ -93,6 +93,12 @@ known-first-party = ["mailpilot"]
 "src/mailpilot/cli.py" = [
     "PLR0913", # Click commands have many parameters by design
 ]
+"src/mailpilot/database.py" = [
+    "PLR0913", # Create functions map to table columns
+]
+"src/mailpilot/gmail.py" = [
+    "PLR0913", # Gmail API functions have many parameters
+]
 "tests/**/*.py" = [
     "D",       # No docstrings required in tests
     "PLR2004", # Magic values OK in tests
