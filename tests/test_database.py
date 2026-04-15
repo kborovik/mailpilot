@@ -186,6 +186,24 @@ def test_update_workflow(database_connection: psycopg.Connection[dict[str, Any]]
     assert updated.objective == "Book demo"
 
 
+def test_list_workflows_by_status(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    w1 = make_test_workflow(database_connection, account_id=account.id, name="W1")
+    make_test_workflow(database_connection, account_id=account.id, name="W2")
+    update_workflow(database_connection, w1.id, status="active")
+    # w2 stays as draft
+    active = list_workflows(database_connection, account_id=account.id, status="active")
+    assert len(active) == 1
+    assert active[0].name == "W1"
+    drafts = list_workflows(database_connection, account_id=account.id, status="draft")
+    assert len(drafts) == 1
+    assert drafts[0].name == "W2"
+    all_workflows = list_workflows(database_connection, account_id=account.id)
+    assert len(all_workflows) == 2
+
+
 # -- Email ---------------------------------------------------------------------
 
 
@@ -203,7 +221,25 @@ def test_create_and_list_emails(
     )
     assert email.direction == "inbound"
     assert email.subject == "Hello"
+    assert email.status == "received"
+    assert email.is_routed is False
 
     emails = list_emails(database_connection, account_id=account.id)
     assert len(emails) == 1
     assert emails[0].id == email.id
+
+
+def test_create_email_with_explicit_status(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    email = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="Outgoing",
+        status="sent",
+        is_routed=True,
+    )
+    assert email.status == "sent"
+    assert email.is_routed is True

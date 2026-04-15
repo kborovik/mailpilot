@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS contact (
     department            TEXT,
     profile_summary       TEXT,
     linkedin              TEXT,
+    status                TEXT NOT NULL DEFAULT 'active',
+    status_reason         TEXT NOT NULL DEFAULT '',
     created_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -79,7 +81,7 @@ CREATE TABLE IF NOT EXISTS email (
     subject           TEXT NOT NULL DEFAULT '',
     body_text         TEXT NOT NULL DEFAULT '',
     labels            JSONB NOT NULL DEFAULT '[]',
-    status            TEXT NOT NULL DEFAULT 'draft',
+    status            TEXT NOT NULL DEFAULT 'received',
     is_routed         BOOLEAN NOT NULL DEFAULT FALSE,
     sent_at           TIMESTAMPTZ,
     received_at       TIMESTAMPTZ,

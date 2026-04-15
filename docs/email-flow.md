@@ -4,7 +4,7 @@
 
 ### 1. Notification -- `receive_notification()`
 
-Pub/Sub streaming pull callback receives a notification:
+Pub/Sub streaming pull callback receives a notification. Requires `GmailClient.watch()` to be active on the account (renewed before `watch_expiration`).
 
 - **Input**: base64-encoded JSON `{"emailAddress": "...", "historyId": "..."}`
 - **Action**: decode, look up account by email, submit sync task to ThreadPoolExecutor
@@ -12,20 +12,25 @@ Pub/Sub streaming pull callback receives a notification:
 
 ### 2. Sync -- `sync_account()`
 
-Fetch changes from Gmail and store new messages:
+Fetch changes from Gmail and collect new messages:
 
-- **If account has `gmail_history_id`**: call Gmail History API (`historyTypes=messageAdded`), page through results
-- **If no history ID or 404**: full sync via `list_messages(max_results=500)`
-- For each new message: call `fetch_message()` then `store_email()`
+- **INBOX only**: both sync paths filter to INBOX label to skip spam, trash, and sent mail
+- **If account has `gmail_history_id`**: call `GmailClient.get_history(history_types=["messageAdded"], label_id="INBOX")`, pages through results automatically
+- **If no history ID or 404**: full sync via `GmailClient.list_messages(max_results=100, label_ids=["INBOX"])`
+- For each new message: call `GmailClient.get_message()`, then `extract_text_from_message()`, then `create_email()` with the extracted text
+- **Auto-contact**: look up sender by email in `contact` table. If not found, create a contact with `email`, `domain` (from address), and `first_name`/`last_name` (parsed from the `From` header display name, e.g., `"Jane Smith <jane@co.com>"`). Set `email.contact_id` to the resolved contact
+- **Recency gate**: only emails received within the last 7 days are routed (passed to step 4). Older messages are stored with `is_routed = TRUE` and `workflow_id = NULL` -- they serve as context for agent history but are not acted upon
 - **Update**: `gmail_history_id` and `last_synced_at` on account
 
 ### 3. Extract -- `extract_text_from_message()`
 
-Extract plain text from Gmail message payload:
+Extract and normalize plain text from Gmail message payload:
 
-- Walk MIME parts recursively
+- Walk MIME parts recursively via `_extract_text_from_part()`
 - Use `text/plain` parts only (no HTML conversion)
-- If no `text/plain` found, store empty string
+- In `multipart/*` containers, prefer the first `text/plain` sub-part
+- Normalize: strip trailing whitespace per line, collapse 3+ consecutive blank lines to 2, strip leading/trailing blank lines
+- If no `text/plain` found, return empty string
 
 ### 4. Route -- `route_email()`
 
@@ -39,7 +44,7 @@ Determine which workflow handles this email:
 
 Lightweight LLM call to route unmatched emails:
 
-- **Input**: email subject, body, sender + list of active workflows (name, description) for the account
+- **Input**: email subject, body, sender + list of active workflows (name, description, objective) for the account
 - **Output**: `workflow_id` or `None`
 - **Model**: fast/cheap model (e.g., Haiku) via Pydantic AI structured output
 - **No tools, no agent** -- pure routing decision
@@ -57,38 +62,30 @@ Run the workflow's Pydantic AI agent:
 
 ## Outbound Email Flow
 
-### 1. Initiate -- `send_campaign()`
+### 1. Initiate -- `workflow run`
 
-CLI entry point: `mailpilot workflow send ID --limit N`
+CLI entry point: `mailpilot workflow run --workflow-id ID --contact-id ID`
 
-- **Input**: workflow ID + contact limit
+- **Input**: workflow ID + contact ID
 - **Action**: load workflow, verify status is `active` and type is `outbound`
-- **Output**: list of target contacts for this workflow
-
-### 2. Per-Contact -- `process_outbound_contact()`
-
-For each contact in the target list:
-
 - Load full email history between this account and this contact (cross-workflow)
-- Call `check_cooldown()` -- if within cooldown, skip contact
-- Invoke `invoke_workflow_agent()` with contact + history + instructions
 
-### 3. Cooldown -- `check_cooldown()`
+### 2. Cooldown -- `check_cooldown()`
 
 Guard against duplicate unsolicited outreach:
 
 - Query last unsolicited outbound email (no `gmail_thread_id`) to this contact from this account
-- If `sent_at` is within the cooldown period (configurable, default 43200 minutes): **refuse**
+- If `sent_at` is within the cooldown period (configurable, default 43200 minutes / 30 days): **refuse**
 - Replies (`thread_id` provided) bypass cooldown entirely
 
-### 4. Execute -- `invoke_workflow_agent()`
+### 3. Execute -- `invoke_workflow_agent()`
 
 Same as inbound step 6. The agent receives:
 
 - Workflow instructions + contact details + email history
 - Agent calls `send_email()` tool to deliver the message
 
-### 5. Send -- `send_email()`
+### 4. Send -- `send_email()`
 
 Agent tool that sends via Gmail API:
 

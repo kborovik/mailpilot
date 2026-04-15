@@ -159,6 +159,7 @@ class GmailClient:
         self,
         query: str = "",
         max_results: int = 100,
+        label_ids: list[str] | None = None,
         user_id: str = "me",
     ) -> list[dict[str, Any]]:
         """List messages matching a Gmail search query.
@@ -166,16 +167,21 @@ class GmailClient:
         Args:
             query: Gmail search query (e.g. "is:unread in:inbox").
             max_results: Maximum number of messages to return.
+            label_ids: Filter by label IDs (e.g., ["INBOX"]). AND logic.
             user_id: Gmail user ID.
 
         Returns:
             List of message stubs with id and threadId.
         """
+        kwargs: dict[str, Any] = {
+            "userId": user_id,
+            "q": query,
+            "maxResults": max_results,
+        }
+        if label_ids is not None:
+            kwargs["labelIds"] = label_ids
         response: dict[str, Any] = (
-            self._service.users()
-            .messages()
-            .list(userId=user_id, q=query, maxResults=max_results)
-            .execute()
+            self._service.users().messages().list(**kwargs).execute()
         )
         messages: list[dict[str, Any]] = response.get("messages", [])
         return messages
@@ -302,24 +308,41 @@ class GmailClient:
         self,
         start_history_id: str,
         user_id: str = "me",
+        history_types: list[str] | None = None,
+        label_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Fetch mailbox changes since a history ID.
+
+        Pages through all results automatically.
 
         Args:
             start_history_id: History ID to start from.
             user_id: Gmail user ID.
+            history_types: Filter by history type (e.g., ["messageAdded"]).
+            label_id: Filter by label (e.g., "INBOX").
 
         Returns:
             List of history records.
         """
-        response: dict[str, Any] = (
-            self._service.users()
-            .history()
-            .list(userId=user_id, startHistoryId=start_history_id)
-            .execute()
-        )
-        history: list[dict[str, Any]] = response.get("history", [])
-        return history
+        kwargs: dict[str, Any] = {
+            "userId": user_id,
+            "startHistoryId": start_history_id,
+        }
+        if history_types is not None:
+            kwargs["historyTypes"] = history_types
+        if label_id is not None:
+            kwargs["labelId"] = label_id
+        all_history: list[dict[str, Any]] = []
+        while True:
+            response: dict[str, Any] = (
+                self._service.users().history().list(**kwargs).execute()
+            )
+            all_history.extend(response.get("history", []))
+            next_page_token = response.get("nextPageToken")
+            if next_page_token is None:
+                break
+            kwargs["pageToken"] = next_page_token
+        return all_history
 
     @_retry_on_transient
     def watch(
@@ -407,16 +430,41 @@ def extract_text_from_message(message: dict[str, Any]) -> str:
     """Extract plain text from a Gmail message payload.
 
     Walks MIME parts recursively. Uses text/plain parts only.
+    Normalizes whitespace: strips trailing spaces per line, collapses
+    runs of 3+ blank lines to 2, and strips leading/trailing blank lines.
     Returns empty string if no text/plain part found (per ADR-02).
 
     Args:
         message: Full Gmail message dict (format="full").
 
     Returns:
-        Extracted plain text body.
+        Extracted and normalized plain text body.
     """
     payload = message.get("payload", {})
-    return _extract_text_from_part(payload)
+    raw = _extract_text_from_part(payload)
+    return _normalize_text(raw)
+
+
+def _normalize_text(text: str) -> str:
+    """Normalize extracted email text.
+
+    Strips trailing whitespace per line, collapses 3+ consecutive
+    blank lines to 2, and strips leading/trailing blank lines.
+    """
+    if not text:
+        return ""
+    lines = [line.rstrip() for line in text.splitlines()]
+    collapsed: list[str] = []
+    blank_count = 0
+    for line in lines:
+        if line == "":
+            blank_count += 1
+            if blank_count <= 2:
+                collapsed.append(line)
+        else:
+            blank_count = 0
+            collapsed.append(line)
+    return "\n".join(collapsed).strip()
 
 
 def _extract_text_from_part(part: dict[str, Any]) -> str:

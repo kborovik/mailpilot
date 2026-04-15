@@ -57,6 +57,8 @@ class Contact(BaseModel):
     department: str | None = None
     profile_summary: str | None = None
     linkedin: str | None = None
+    status: str = "active"
+    status_reason: str = ""
     created_at: datetime
     updated_at: datetime
 
@@ -110,7 +112,7 @@ class Email(BaseModel):
     subject: str = ""
     body_text: str = ""
     labels: list[str] = []
-    status: str = "draft"
+    status: str = "received"
     is_routed: bool = False
     sent_at: datetime | None = None
     received_at: datetime | None = None

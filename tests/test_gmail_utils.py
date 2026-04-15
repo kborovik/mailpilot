@@ -68,6 +68,29 @@ def test_extract_nested_multipart():
     assert extract_text_from_message(message) == "Nested plain"
 
 
+def test_extract_normalizes_whitespace():
+    raw = "Hello  \n\n\n\n\nWorld\nEnd  "
+    message = {
+        "payload": {
+            "mimeType": "text/plain",
+            "body": {"data": _b64(raw)},
+        }
+    }
+    result = extract_text_from_message(message)
+    assert result == "Hello\n\n\nWorld\nEnd"
+
+
+def test_extract_strips_leading_trailing_blanks():
+    raw = "\n\n\nContent\n\n\n"
+    message = {
+        "payload": {
+            "mimeType": "text/plain",
+            "body": {"data": _b64(raw)},
+        }
+    }
+    assert extract_text_from_message(message) == "Content"
+
+
 def test_extract_empty_payload():
     assert extract_text_from_message({}) == ""
     assert extract_text_from_message({"payload": {}}) == ""

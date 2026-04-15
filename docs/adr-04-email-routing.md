@@ -8,7 +8,7 @@ Accepted
 
 MailPilot accounts can have multiple active workflows (e.g., sales outreach, support, partnerships). When an inbound email arrives, the system must decide which workflow handles it. When an outbound email bounces, the system must detect and record the failure.
 
-Routing must be fast, deterministic when possible, and never lose emails. An unrouted email is better than a misrouted one.
+Routing must be fast, deterministic when possible, and never lose emails. An unrouted email is better than a misrouted one. Only INBOX emails are synced -- spam, trash, and sent mail are filtered out at the Gmail API level (see `docs/email-flow.md` step 2).
 
 See `docs/adr-03-workflow-model.md` for the workflow model and agent execution.
 
@@ -40,18 +40,26 @@ When an inbound email arrives for an account, route it through a three-step pipe
 
 **Step 2 -- LLM classification**: If no thread match, classify via a single-turn LLM call. Returns a `workflow_id` or `None`. Only **active** workflows are candidates -- paused and draft workflows are excluded. This means a new email about a paused workflow's topic will go unrouted. This is intentional: paused workflows only handle existing threads, not new conversations.
 
-**Step 3 -- Unrouted**: If classification returns no match, store the email with `workflow_id = NULL`. The email is preserved and can be viewed via `mailpilot email list --account-id ID` and `mailpilot email view ID`.
+**Step 3 -- Unrouted**: If classification returns no match, store the email with `workflow_id = NULL` and `is_routed = TRUE`. The email is preserved and can be viewed via `mailpilot email list --account-id ID` and `mailpilot email view ID`.
 
 ### Classification
 
 A lightweight, single-turn LLM call using Pydantic AI structured output:
 
-- **Input**: email subject, body, sender + list of active workflows (name, description, objective) for the account
+- **Input**: email subject, body, sender + list of active workflows (name, description, objective) for the account. Active workflows are queried via `list_workflows(account_id=..., status="active")`
 - **Output**: `workflow_id` or `None` (unrouted)
 - **No tools, no agent** -- pure routing decision, no side effects
 - **Fast model** -- can use a smaller model (e.g., Haiku) since this is a classification task
 
 The classifier sees the workflow `objective` alongside name and description, since the objective is the most concise statement of what the workflow does.
+
+### Auto-Contact Creation
+
+During sync (before routing), the system resolves the sender to a `contact` record. If no contact exists for the sender email, a contact is created with `email`, `domain` (extracted from address), and `first_name`/`last_name` (parsed from the `From` header display name, e.g., `"John Doe <john@example.com>"` -> `first_name="John"`, `last_name="Doe"`). If the `From` header has no display name, the name fields are left as `NULL`. This ensures every email has a `contact_id`, which is required for agent history queries and cooldown checks. See `docs/email-flow.md` step 2.
+
+### Recency Gate
+
+Only emails received within the last 7 days are routed (passed to the routing pipeline). Older messages synced during a full sync are stored with `is_routed = TRUE` and `workflow_id = NULL` -- they serve as context for agent email history but are not acted upon. This prevents the agent from replying to stale emails during initial bootstrap.
 
 ### The `is_routed` Flag
 
@@ -81,14 +89,19 @@ Bounce detection relies on Gmail bounce notification emails and labels. The exac
 ### Positive
 
 - Three-step pipeline ensures no email is lost -- worst case is unrouted, never silently dropped
+- INBOX-only filtering eliminates spam and trash at the API level before any processing
 - Thread match handles the common case (replies) cheaply
 - LLM classification handles broken threads, forwards, and new conversations
 - `is_routed` flag prevents non-deterministic re-classification on re-sync
 - Paused workflow exclusion from classification is consistent with "no new work" semantics
 - Bounce detection feeds into global contact status for cross-workflow protection
+- Auto-contact creation ensures every email has a `contact_id` for history queries and cooldown checks
+- Recency gate prevents stale emails from triggering agent actions during full sync
 
 ### Negative
 
 - LLM classification is non-deterministic -- same email may route differently on retry (acceptable, mitigated by storing the routing decision via `is_routed`)
 - No re-routing mechanism -- once routed, an email stays with its workflow. Manual correction requires direct database update. Acceptable for now; a `mailpilot email route ID --workflow-id WID` command can be added later if needed
 - Thread match can route to paused workflows -- intentional (no ghosting), but may surprise users who expect "paused" to mean "fully stopped"
+- Auto-contact creation produces basic records (email, domain, first/last name from header) -- further enrichment happens later via other tools
+- Recency gate (7 days) means emails older than that are never routed, even if they match a workflow -- acceptable trade-off to avoid acting on stale context

@@ -50,8 +50,8 @@ mailpilot account list
 mailpilot account view ID
 
 mailpilot company create --domain D [--name N] [opts]
-mailpilot company search QUERY [--limit N]
 mailpilot company update ID [--name N]
+mailpilot company search QUERY [--limit N]
 mailpilot company list [--limit N]
 mailpilot company view ID
 mailpilot company export FILE
@@ -66,15 +66,16 @@ mailpilot contact export FILE
 mailpilot contact import FILE
 
 mailpilot workflow create --name N --type inbound|outbound --account-id ID
+mailpilot workflow update ID [--name N] [--instructions-file F]
+mailpilot wrokflow search QUERY [--limit N]
 mailpilot workflow list [--account-id ID]
 mailpilot workflow view ID
-mailpilot workflow update ID [--name N] [--instructions-file F]
 mailpilot workflow activate ID
 mailpilot workflow pause ID
 mailpilot workflow run --workflow-id ID --contact-id ID
 
-mailpilot email list [--limit N] [--contact-id ID] [--account-id ID]
 mailpilot email search QUERY [--limit N]
+mailpilot email list [--limit N] [--contact-id ID] [--account-id ID]
 mailpilot email view ID
 
 mailpilot run
@@ -99,7 +100,7 @@ Single flat `database.py` with `# -- Entity ---` section headers. All functions 
 
 Function convention:
 
-- `create_X(connection, ...) -> X` -- INSERT RETURNING *, commit, return model
+- `create_X(connection, ...) -> X` -- INSERT RETURNING \*, commit, return model
 - `get_X(connection, id) -> X | None` -- SELECT by PK
 - `list_X(connection, ...) -> list[X]` -- SELECT with optional filters
 - `update_X(connection, id, **fields) -> X | None` -- dynamic SET via `_build_update()`

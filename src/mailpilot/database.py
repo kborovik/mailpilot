@@ -579,26 +579,29 @@ def get_workflow(
 def list_workflows(
     connection: psycopg.Connection[dict[str, Any]],
     account_id: str | None = None,
+    status: str | None = None,
 ) -> list[Workflow]:
-    """List workflows with optional account filter.
+    """List workflows with optional account and status filters.
 
     Args:
         connection: Open database connection.
         account_id: Filter by account ID.
+        status: Filter by workflow status (e.g., "active").
 
     Returns:
         List of workflows ordered by creation time.
     """
+    conditions: list[SQL] = []
+    params: dict[str, object] = {}
     if account_id is not None:
-        rows = connection.execute(
-            "SELECT * FROM workflow WHERE account_id = %(account_id)s "
-            "ORDER BY created_at",
-            {"account_id": account_id},
-        ).fetchall()
-    else:
-        rows = connection.execute(
-            "SELECT * FROM workflow ORDER BY created_at"
-        ).fetchall()
+        conditions.append(SQL("account_id = %(account_id)s"))
+        params["account_id"] = account_id
+    if status is not None:
+        conditions.append(SQL("status = %(status)s"))
+        params["status"] = status
+    where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
+    query = SQL("SELECT * FROM workflow {} ORDER BY created_at").format(where)
+    rows = connection.execute(query, params).fetchall()
     return [Workflow.model_validate(row) for row in rows]
 
 
@@ -763,6 +766,8 @@ def create_email(
     gmail_thread_id: str | None = None,
     contact_id: str | None = None,
     workflow_id: str | None = None,
+    status: str = "received",
+    is_routed: bool = False,
 ) -> Email:
     """Create a new email record.
 
@@ -776,6 +781,8 @@ def create_email(
         gmail_thread_id: Gmail thread ID.
         contact_id: Optional contact FK.
         workflow_id: Optional workflow FK.
+        status: Email status ("sent" or "received").
+        is_routed: Whether the routing pipeline has processed this email.
 
     Returns:
         Created email.
@@ -784,10 +791,11 @@ def create_email(
         """\
         INSERT INTO email (id, account_id, direction, subject,
             body_text, gmail_message_id, gmail_thread_id,
-            contact_id, workflow_id)
+            contact_id, workflow_id, status, is_routed)
         VALUES (%(id)s, %(account_id)s, %(direction)s,
             %(subject)s, %(body_text)s, %(gmail_message_id)s,
-            %(gmail_thread_id)s, %(contact_id)s, %(workflow_id)s)
+            %(gmail_thread_id)s, %(contact_id)s, %(workflow_id)s,
+            %(status)s, %(is_routed)s)
         RETURNING *
         """,
         {
@@ -800,6 +808,8 @@ def create_email(
             "gmail_thread_id": gmail_thread_id,
             "contact_id": contact_id,
             "workflow_id": workflow_id,
+            "status": status,
+            "is_routed": is_routed,
         },
     ).fetchone()
     connection.commit()
