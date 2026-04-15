@@ -362,8 +362,8 @@ def create_label_if_not_exists(
 def extract_text_from_message(message: dict[str, Any]) -> str:
     """Extract plain text from a Gmail message payload.
 
-    Walks MIME parts recursively. Prefers text/plain; falls back to
-    text/html converted via html2text.
+    Walks MIME parts recursively. Uses text/plain parts only.
+    Returns empty string if no text/plain part found (per ADR-02).
 
     Args:
         message: Full Gmail message dict (format="full").
@@ -386,12 +386,6 @@ def _extract_text_from_part(part: dict[str, Any]) -> str:
         if data:
             return base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
 
-    if mime_type == "text/html":
-        data = body.get("data", "")
-        if data:
-            html = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
-            return _html_to_text(html)
-
     if mime_type.startswith("multipart/"):
         # Prefer text/plain in multipart/alternative.
         plain_parts = [p for p in parts if p.get("mimeType") == "text/plain"]
@@ -404,20 +398,6 @@ def _extract_text_from_part(part: dict[str, Any]) -> str:
                 return text
 
     return ""
-
-
-def _html_to_text(html: str) -> str:
-    """Convert HTML to plain text using html2text."""
-    import html2text
-
-    converter = html2text.HTML2Text()
-    converter.ignore_images = True
-    converter.ignore_emphasis = True
-    converter.ignore_links = False
-    converter.body_width = 0
-    converter.unicode_snob = True
-    text: str = converter.handle(html)
-    return text
 
 
 def get_message_headers(

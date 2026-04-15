@@ -35,7 +35,7 @@ clean: ## Export data, reset DB schema
 	mailpilot company export $(DATA_DIR)/companies-$(TS).json
 	mailpilot contact export $(DATA_DIR)/contacts-$(TS).json
 	$(call header,Resetting database schema)
-	psql postgresql://localhost/mailpilot -c "DROP TABLE IF EXISTS email, campaign, contact, company, account CASCADE"
+	psql postgresql://localhost/mailpilot -c "DROP TABLE IF EXISTS task, email, workflow_contact, workflow, contact, company, account CASCADE"
 	mailpilot status > /dev/null
 
 py-update:

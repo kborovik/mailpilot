@@ -51,7 +51,7 @@ def get_status_counts(
         connection: Open database connection.
 
     Returns:
-        Dict with accounts, companies, contacts, campaigns, emails counts.
+        Dict with accounts, companies, contacts, workflows, emails counts.
     """
     row = connection.execute(
         """\
@@ -59,7 +59,7 @@ def get_status_counts(
             (SELECT COUNT(*) FROM account) AS accounts,
             (SELECT COUNT(*) FROM company) AS companies,
             (SELECT COUNT(*) FROM contact) AS contacts,
-            (SELECT COUNT(*) FROM campaign) AS campaigns,
+            (SELECT COUNT(*) FROM workflow) AS workflows,
             (SELECT COUNT(*) FROM email) AS emails
         FROM (SELECT 1) AS _dummy
         """
@@ -68,6 +68,6 @@ def get_status_counts(
         "accounts": row["accounts"],  # type: ignore[index]
         "companies": row["companies"],  # type: ignore[index]
         "contacts": row["contacts"],  # type: ignore[index]
-        "campaigns": row["campaigns"],  # type: ignore[index]
+        "workflows": row["workflows"],  # type: ignore[index]
         "emails": row["emails"],  # type: ignore[index]
     }

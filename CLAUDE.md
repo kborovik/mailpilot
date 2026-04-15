@@ -102,7 +102,6 @@ API keys and config stored in `~/.mailpilot/config.json` via `mailpilot config s
 
 - `anthropic_api_key` -- Anthropic Claude API key
 - `anthropic_model` -- Anthropic model ID (default: `claude-sonnet-4-6`)
-- `firecrawl_api_key` -- Firecrawl API key
 - `google_project_id` -- Google Cloud project ID (for Pub/Sub)
 - `google_pubsub_topic` -- Pub/Sub topic name (default: `gmail-watch`)
 - `google_pubsub_subscription` -- Pub/Sub subscription name (default: `mailpilot-watch`)

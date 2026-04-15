@@ -29,7 +29,6 @@ Requirements:
 | `google-api-python-client` | Gmail API client (service objects, discovery) |
 | `google-auth`              | Service account credentials + token refresh   |
 | `google-cloud-pubsub`      | Pub/Sub streaming pull subscriber             |
-| `html2text`                | HTML-to-plain-text conversion for email body  |
 
 ### Concurrency Model
 
