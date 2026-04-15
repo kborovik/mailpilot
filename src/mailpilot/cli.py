@@ -10,13 +10,9 @@ When adding new commands, keep imports inside the function body.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import Any, NoReturn
 
 import click
-from click.shell_completion import get_completion_class
-
-if TYPE_CHECKING:
-    from mailpilot.settings import Settings
 
 
 def _database_url() -> str:
@@ -63,13 +59,6 @@ def output_error(message: str, code: str) -> NoReturn:
     raise SystemExit(1)
 
 
-def _get_settings() -> Settings:
-    """Load settings (lazy import)."""
-    from mailpilot.settings import get_settings
-
-    return get_settings()
-
-
 # -- Main CLI ------------------------------------------------------------------
 
 
@@ -81,6 +70,8 @@ def _get_settings() -> Settings:
 def main(ctx: click.Context, debug: bool, completion: str | None) -> None:
     """MailPilot -- CRM for cold email outreach via Gmail."""
     if completion:
+        from click.shell_completion import get_completion_class
+
         comp_cls = get_completion_class(completion)
         if comp_cls:
             click.echo(comp_cls(main, {}, "mailpilot", "_MAILPILOT_COMPLETE").source())

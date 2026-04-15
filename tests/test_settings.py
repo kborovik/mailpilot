@@ -17,8 +17,8 @@ def test_default_settings():
 
 
 def test_settings_from_kwargs():
-    settings = Settings(logfire_environment="staging", anthropic_api_key="sk-test")
-    assert settings.logfire_environment == "staging"
+    settings = Settings(logfire_environment="production", anthropic_api_key="sk-test")
+    assert settings.logfire_environment == "production"
     assert settings.anthropic_api_key == "sk-test"
 
 
@@ -30,17 +30,17 @@ def test_settings_env_override(monkeypatch: pytest.MonkeyPatch):
 
 def test_settings_kwargs_override_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("MAILPILOT_LOGFIRE_ENVIRONMENT", "production")
-    settings = Settings(logfire_environment="test")
-    assert settings.logfire_environment == "test"
+    settings = Settings(logfire_environment="development")
+    assert settings.logfire_environment == "development"
 
 
 def test_save_and_load_settings(tmp_path: Path):
     config_path = tmp_path / "config.json"
-    original = Settings(logfire_environment="staging", anthropic_api_key="sk-123")
+    original = Settings(logfire_environment="production", anthropic_api_key="sk-123")
     save_settings(original, config_path=config_path)
 
     loaded = load_settings(config_path=config_path)
-    assert loaded.logfire_environment == "staging"
+    assert loaded.logfire_environment == "production"
     assert loaded.anthropic_api_key == "sk-123"
 
 
@@ -56,8 +56,8 @@ def test_load_settings_creates_default_file(tmp_path: Path):
 def test_load_settings_ignores_unknown_keys(tmp_path: Path):
     config_path = tmp_path / "config.json"
     config_path.write_text(
-        json.dumps({"unknown_key": "value", "logfire_environment": "custom"})
+        json.dumps({"unknown_key": "value", "logfire_environment": "production"})
     )
     settings = load_settings(config_path=config_path)
-    assert settings.logfire_environment == "custom"
+    assert settings.logfire_environment == "production"
     assert not hasattr(settings, "unknown_key")

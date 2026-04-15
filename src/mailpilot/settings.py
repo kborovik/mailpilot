@@ -9,7 +9,7 @@ Priority (highest to lowest):
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import PostgresDsn
 from pydantic_settings import (
@@ -23,6 +23,8 @@ CONFIG_PATH = MAILPILOT_DIR / "config.json"
 
 DEFAULT_DATABASE_URL = "postgresql://localhost/mailpilot"
 DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6"
+
+LogfireEnvironment = Literal["development", "production"]
 
 
 class JsonConfigSource(PydanticBaseSettingsSource):
@@ -47,7 +49,7 @@ class Settings(BaseSettings):
 
     database_url: PostgresDsn = PostgresDsn(DEFAULT_DATABASE_URL)
     logfire_token: str = ""
-    logfire_environment: str = "development"
+    logfire_environment: LogfireEnvironment = "development"
     anthropic_api_key: str = ""
     anthropic_model: str = DEFAULT_ANTHROPIC_MODEL
     google_project_id: str = ""

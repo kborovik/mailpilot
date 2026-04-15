@@ -13,6 +13,7 @@ import base64
 import time
 from email.mime.text import MIMEText
 from functools import wraps
+from importlib.metadata import version
 from typing import Any
 
 import logfire
@@ -27,8 +28,7 @@ _MAX_RETRIES = 5
 _MAX_BACKOFF = 30.0
 
 # Custom headers added to all outgoing emails.
-# TODO: implement application version, replace fixed version value with dynamic
-_MAILPILOT_VERSION = "0.1.0"
+_MAILPILOT_VERSION = version("mailpilot")
 
 
 def _retry_on_transient(func: Any) -> Any:
