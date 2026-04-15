@@ -111,13 +111,13 @@ class Email(BaseModel):
     body_text: str = ""
     labels: list[str] = []
     status: str = "draft"
-    is_classified: bool = False
+    is_routed: bool = False
     sent_at: datetime | None = None
     received_at: datetime | None = None
     created_at: datetime
 
 
-TaskStatus = Literal["pending", "completed", "failed"]
+TaskStatus = Literal["pending", "completed", "failed", "cancelled"]
 
 
 class Task(BaseModel):
@@ -125,6 +125,7 @@ class Task(BaseModel):
 
     id: str
     workflow_id: str
+    contact_id: str
     email_id: str | None = None
     description: str
     context: dict[str, object] = {}

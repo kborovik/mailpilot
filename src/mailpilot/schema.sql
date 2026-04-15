@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS email (
     body_text         TEXT NOT NULL DEFAULT '',
     labels            JSONB NOT NULL DEFAULT '[]',
     status            TEXT NOT NULL DEFAULT 'draft',
-    is_classified     BOOLEAN NOT NULL DEFAULT FALSE,
+    is_routed         BOOLEAN NOT NULL DEFAULT FALSE,
     sent_at           TIMESTAMPTZ,
     received_at       TIMESTAMPTZ,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS email (
 CREATE TABLE IF NOT EXISTS task (
     id            TEXT PRIMARY KEY,
     workflow_id   TEXT NOT NULL REFERENCES workflow(id),
+    contact_id    TEXT NOT NULL REFERENCES contact(id),
     email_id      TEXT REFERENCES email(id),
     description   TEXT NOT NULL,
     context       JSONB NOT NULL DEFAULT '{}',
@@ -111,6 +112,7 @@ CREATE INDEX IF NOT EXISTS idx_contact_company_id ON contact(company_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_account_id ON workflow(account_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_contact_contact_id ON workflow_contact(contact_id);
 CREATE INDEX IF NOT EXISTS idx_task_workflow_id ON task(workflow_id);
+CREATE INDEX IF NOT EXISTS idx_task_contact_id ON task(contact_id);
 CREATE INDEX IF NOT EXISTS idx_task_scheduled_at ON task(scheduled_at) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_email_account_id ON email(account_id);
 CREATE INDEX IF NOT EXISTS idx_email_contact_id ON email(contact_id);

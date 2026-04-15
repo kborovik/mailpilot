@@ -84,7 +84,7 @@ def test_workflow_contact_defaults():
 def test_email_direction_literal():
     email = Email(id="1", account_id="a1", direction="inbound", created_at=NOW)
     assert email.direction == "inbound"
-    assert email.is_classified is False
+    assert email.is_routed is False
 
 
 def test_email_invalid_direction_raises():
@@ -96,6 +96,7 @@ def test_task_defaults():
     task = Task(
         id="1",
         workflow_id="w1",
+        contact_id="c1",
         description="follow up",
         scheduled_at=NOW,
         created_at=NOW,

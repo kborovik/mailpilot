@@ -15,7 +15,7 @@ Both require: an email account, a set of LLM instructions, and email tracking. T
 
 ## Decision
 
-**Workflow** is the central abstraction. A workflow binds an account to a set of instructions and a direction (inbound or outbound). Each workflow is executed by a Pydantic AI agent (`pydantic-ai-slim[anthropic]`).
+**Workflow** is the central abstraction. A workflow binds an account to a set of instructions and a direction (inbound or outbound). Each workflow is executed by a Pydantic AI agent.
 
 ### Workflow Types
 
@@ -35,45 +35,93 @@ Both require: an email account, a set of LLM instructions, and email tracking. T
 
 ### State Model
 
+Three levels of status tracking, from global to per-workflow:
+
+1. **Contact status** -- can we email this person at all? (system-enforced)
+2. **Email status** -- what happened to this message? (system-set)
+3. **Workflow status** -- is this workflow running? (operational)
+4. **Workflow-contact status** -- did we achieve this workflow's objective? (agent-driven)
+
+**Contact status** (global, across all workflows):
+
+| `status`       | Meaning                                    | Set by                     |
+| -------------- | ------------------------------------------ | -------------------------- |
+| `active`       | Can be emailed (default)                   | System                     |
+| `bounced`      | Email invalid, delivery failed             | System (bounce detection)  |
+| `unsubscribed` | Contact requested no further emails        | Agent via `disable_contact` |
+
+The `send_email` tool checks `contact.status = 'active'` before sending -- same pattern as the cooldown guard. If the contact is not active, the tool refuses with a clear message. This is a hard block across all workflows.
+
+`status_reason` holds the explanation ("hard bounce on 2026-04-10", "replied: do not contact me again").
+
+**Email status** (what happened to this message?):
+
+| `status`   | Meaning                            | Set by                    |
+| ---------- | ---------------------------------- | ------------------------- |
+| `sent`     | Delivered to Gmail API (outbound)  | System after send         |
+| `received` | Synced from Gmail (inbound)        | System during sync        |
+| `bounced`  | Delivery failed (outbound)         | System (bounce detection) |
+
+No `draft` state -- the agent sends immediately via `send_email` tool, and inbound emails arrive already delivered. Set on creation based on direction.
+
 Workflow status is purely operational. Outcome tracking lives on `workflow_contact`.
 
 **Workflow status** (is this workflow running?):
 
-| `status`  | Behavior                                                               |
-| --------- | ---------------------------------------------------------------------- |
-| `draft`   | Created, not running. Editing instructions and objective.              |
-| `active`  | Running. Outbound sends to pending contacts. Inbound receives emails.  |
-| `paused`  | No new work. Existing threads still handled (no ghosting mid-thread).  |
+| `status` | Behavior                                                              |
+| -------- | --------------------------------------------------------------------- |
+| `draft`  | Created, not running. Editing instructions and objective.             |
+| `active` | Running. Outbound sends to pending contacts. Inbound receives emails. |
+| `paused` | No new work. Existing threads still handled (no ghosting mid-thread). |
 
-**Contact status** (did we achieve the objective with this contact?):
+**Workflow status transitions:**
 
-| `status`    | Meaning                                          |
-| ----------- | ------------------------------------------------ |
-| `pending`   | Queued, not yet contacted                        |
-| `active`    | Conversation in progress                         |
-| `completed` | Agent determined objective achieved              |
-| `failed`    | Agent determined objective cannot be achieved    |
+```
+         activate          pause
+  draft ---------> active --------> paused
+                     ^                 |
+                     |     resume      |
+                     +-----------------+
+```
+
+| From     | To       | Trigger                | Guard                                        |
+| -------- | -------- | ---------------------- | -------------------------------------------- |
+| `draft`  | `active` | `workflow activate ID` | instructions and objective must be non-empty |
+| `active` | `paused` | `workflow pause ID`    | none                                         |
+| `paused` | `active` | `workflow activate ID` | none                                         |
+
+All other transitions are invalid. `draft -> paused` is meaningless (nothing to pause). `active -> draft` and `paused -> draft` are not allowed -- edit instructions while active or paused. No terminal state: workflows are paused, not deleted.
+
+**Paused semantics:** A paused workflow still handles replies to existing threads (via thread match routing) and executes pending tasks. It does NOT accept new contacts (outbound) or classify new emails (inbound).
+
+**Workflow-contact status** (did we achieve this workflow's objective with this contact?):
+
+| `status`    | Meaning                                       |
+| ----------- | --------------------------------------------- |
+| `pending`   | Queued, not yet contacted                     |
+| `active`    | Conversation in progress                      |
+| `completed` | Agent determined objective achieved           |
+| `failed`    | Agent determined objective cannot be achieved |
+
+**Workflow-Contact status transitions:**
+
+```
+  pending -----> active -----> completed
+                 ^ ^ |
+          retry  | | | retry
+                 | v |
+                 failed
+```
+
+Agent has full discretion -- any transition is valid, including non-linear ones (`pending -> failed` on bounce, `completed -> active` on re-engagement, `failed -> active` on retry). No system-level guards. The agent must provide a `reason` explaining each transition via `update_contact_status`.
 
 ### Email Routing
 
-When an email arrives for an account:
-
-1. **Thread match**: look up `gmail_thread_id` in the `email` table. If a match exists, route to the workflow that owns that thread (via `workflow_id`). This is a fast, cheap check but unreliable -- users forward instead of reply, start new threads, and email clients break threading.
-2. **LLM classification**: if no thread match, classify the email via a dedicated LLM call (not an agent). The classifier sees the email content and the list of active workflows on the account (name + description). Returns a `workflow_id` or `unrouted`.
-3. **Unrouted**: if classification finds no match, store the email without a workflow.
-
-### Email Classification
-
-A lightweight, single-turn LLM call using Pydantic AI structured output:
-
-- **Input**: email subject, body, sender + list of active workflows (name, description) for the account
-- **Output**: `workflow_id` or `None` (unrouted)
-- **No tools, no agent** -- pure routing decision, no side effects
-- **Fast model** -- can use a smaller model (e.g., Haiku) since this is a classification task
+See `docs/adr-04-email-routing.md`. Inbound emails are routed to workflows via thread match then LLM classification. Paused workflows receive replies to existing threads but are excluded from classification (no new conversations).
 
 ### Scope
 
-A workflow is scoped: **account (1) <=> workflow (1) <=> contact (1)**. The `workflow_contact` join table binds contacts to workflows and tracks per-contact outcome. The `reason` field holds the agent's explanation ("meeting booked for Tuesday", "contact explicitly declined", "no response after 3 follow-ups").
+A workflow is scoped: **account (1) -> workflow (N) -> contact (M via workflow_contact)**. The `workflow_contact` join table binds contacts to workflows and tracks per-workflow-contact outcome. The `reason` field holds the agent's explanation ("meeting booked for Tuesday", "contact explicitly declined", "no response after 3 follow-ups").
 
 - **Outbound**: contacts are added before sending. `workflow send` queries `WHERE status = 'pending'`.
 - **Inbound**: contacts are added automatically when classification routes an email.
@@ -106,6 +154,14 @@ The agent is invoked by three types of events:
 | Task due      | Periodic task runner | Task description + context        |
 | Manual send   | CLI command          | Contact list + instructions       |
 
+### Concurrency
+
+Multiple events can arrive for the same contact simultaneously (e.g., two emails in quick succession, or an email arriving while a task fires). Without coordination, parallel agent invocations would read the same database state and may produce duplicate replies.
+
+**Per-contact mutex**: Before invoking the agent for a `(workflow_id, contact_id)` pair, acquire a PostgreSQL advisory lock keyed on that pair. If the lock is already held, skip the invocation -- the in-progress agent will see the new email when it reads context. The skipped event is not lost: the agent's next invocation (via task or next email) will pick it up.
+
+This is a "skip if busy" pattern, not a queue. It avoids deadlocks and keeps the system simple. Advisory locks are automatically released when the connection/transaction ends.
+
 ### Contact History and Cooldown
 
 When the agent processes a contact, it receives the **full email history between this account and this contact across all workflows** -- not just the current workflow's thread. This lets the agent make informed decisions ("we pitched them 45 days ago with no reply, adjust the angle" or "they replied negatively last month, skip").
@@ -117,12 +173,17 @@ The `send_email` tool enforces a **cooldown guard** on unsolicited outreach only
 
 ### Tools
 
-The agent interacts with the system through tools only. Starting set:
+The agent interacts with the system through tools only. Tool signatures below show only the parameters the **agent** passes. `workflow_id` and `account_id` are **injected by the system** via Pydantic AI dependency injection -- the agent always operates within a single workflow and account. This prevents the agent from accidentally acting on a different workflow.
 
-- `send_email(to, subject, body, thread_id)` -- send via Gmail API (cooldown on new conversations only; replies always allowed)
-- `create_task(description, scheduled_at, context)` -- schedule deferred work
-- `update_contact_status(contact_id, status, reason)` -- report outcome (active, completed, failed)
+Starting set:
+
+- `send_email(to, subject, body, thread_id)` -- send via Gmail API. Guards: (1) contact must be `active` (not bounced/unsubscribed), (2) cooldown on new conversations only; replies always allowed
+- `create_task(contact_id, description, scheduled_at, context, email_id)` -- schedule deferred work. `contact_id` is required (every task targets a contact); `email_id` is optional context
+- `cancel_task(task_id)` -- cancel a pending task (e.g., follow-up no longer needed because the contact replied)
+- `update_contact_status(contact_id, status, reason)` -- report per-workflow outcome (active, completed, failed)
+- `disable_contact(contact_id, status, reason)` -- set global contact status to `bounced` or `unsubscribed`. Hard block across all workflows
 - `search_emails(query)` -- query email history
+- `list_workflow_contacts(workflow_id)` -- list contacts in the workflow with their status. Lets the agent coordinate across contacts (e.g., skip person B if person A at the same company already completed the objective)
 - `read_contact(email)` / `read_company(domain)` -- CRM lookups
 
 Additional tools (file access, web search, SQL queries) can be added per workflow as needed.
@@ -152,13 +213,13 @@ See `src/mailpilot/schema.sql`. Tables: `workflow`, `workflow_contact`, `task`, 
 - One abstraction for both objectives -- no campaign/responder split
 - Instructions are general -- no assumption about RAG, tools, or pipeline
 - Multiple inbound workflows per account -- flexible routing by business purpose
-- LLM classification handles broken threads, forwards, and new conversations
 - Per-account isolation maintained -- workflows are scoped to accounts
 - Stateless agent invocations -- simple, predictable, no state management
 - Task-based planning -- deferred work is just database rows with timestamps, no complex orchestration
+- Two-level status model -- global contact blocks (system-enforced) + per-workflow outcomes (agent-driven)
 
 ### Negative
 
 - Agent-driven outcomes depend on LLM quality -- mitigated by well-crafted workflow objectives and instructions
-- LLM classification is non-deterministic -- same email may route differently on retry (acceptable, mitigated by storing the routing decision on the email row)
 - Stateless invocations mean the agent re-reads context each time (acceptable -- database reads are cheap, and it avoids stale state)
+- See `docs/adr-04-email-routing.md` for routing-specific trade-offs

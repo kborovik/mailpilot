@@ -480,6 +480,43 @@ def update_contact(
     return Contact.model_validate(row)
 
 
+def disable_contact(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact_id: str,
+    status: str,
+    status_reason: str,
+) -> Contact | None:
+    """Set a global block on a contact (bounced or unsubscribed).
+
+    This is a hard block across all workflows. The send_email tool checks
+    contact.status before sending.
+
+    Args:
+        connection: Open database connection.
+        contact_id: Contact ID.
+        status: New status ("bounced" or "unsubscribed").
+        status_reason: Explanation for the block.
+
+    Returns:
+        Updated contact, or None if not found.
+    """
+    row = connection.execute(
+        """\
+        UPDATE contact
+        SET status = %(status)s,
+            status_reason = %(status_reason)s,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = %(id)s
+        RETURNING *
+        """,
+        {"id": contact_id, "status": status, "status_reason": status_reason},
+    ).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Contact.model_validate(row)
+
+
 # -- Workflow ------------------------------------------------------------------
 
 
@@ -859,6 +896,7 @@ def search_emails(
 def create_task(
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str,
+    contact_id: str,
     description: str,
     scheduled_at: str,
     context: dict[str, object] | None = None,
@@ -869,6 +907,7 @@ def create_task(
     Args:
         connection: Open database connection.
         workflow_id: Workflow FK.
+        contact_id: Contact FK (every task targets a contact).
         description: What the agent should do.
         scheduled_at: When to execute (ISO timestamp).
         context: Arbitrary JSON context for the agent.
@@ -879,14 +918,16 @@ def create_task(
     """
     row = connection.execute(
         """\
-        INSERT INTO task (id, workflow_id, email_id, description, context, scheduled_at)
-        VALUES (%(id)s, %(workflow_id)s, %(email_id)s, %(description)s,
-                %(context)s, %(scheduled_at)s)
+        INSERT INTO task (id, workflow_id, contact_id, email_id,
+            description, context, scheduled_at)
+        VALUES (%(id)s, %(workflow_id)s, %(contact_id)s, %(email_id)s,
+                %(description)s, %(context)s, %(scheduled_at)s)
         RETURNING *
         """,
         {
             "id": _new_id(),
             "workflow_id": workflow_id,
+            "contact_id": contact_id,
             "email_id": email_id,
             "description": description,
             "context": Json(context or {}),
@@ -961,6 +1002,36 @@ def complete_task(
         WHERE id = %(id)s RETURNING *
         """,
         {"id": task_id, "status": status},
+    ).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Task.model_validate(row)
+
+
+def cancel_task(
+    connection: psycopg.Connection[dict[str, Any]],
+    task_id: str,
+) -> Task | None:
+    """Cancel a pending task.
+
+    Only cancels tasks with status 'pending'. Already completed or failed
+    tasks are not affected.
+
+    Args:
+        connection: Open database connection.
+        task_id: Task ID.
+
+    Returns:
+        Cancelled task, or None if not found or not pending.
+    """
+    row = connection.execute(
+        """\
+        UPDATE task SET status = 'cancelled', completed_at = CURRENT_TIMESTAMP
+        WHERE id = %(id)s AND status = 'pending'
+        RETURNING *
+        """,
+        {"id": task_id},
     ).fetchone()
     connection.commit()
     if row is None:

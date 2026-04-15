@@ -5,10 +5,13 @@ as standalone functions (not methods) so they can be unit-tested without
 spinning up a full agent.
 
 Tools per ADR-03:
-    - ``send_email`` -- send via Gmail API with cooldown guard
+    - ``send_email`` -- send via Gmail API with contact status + cooldown guards
     - ``create_task`` -- schedule deferred work
-    - ``update_contact_status`` -- report outcome (active, completed, failed)
+    - ``cancel_task`` -- cancel a pending task
+    - ``update_contact_status`` -- report per-workflow outcome
+    - ``disable_contact`` -- set global contact block (bounced/unsubscribed)
     - ``search_emails`` -- query email history
+    - ``list_workflow_contacts`` -- list contacts in workflow with status
     - ``read_contact`` -- CRM contact lookup
     - ``read_company`` -- CRM company lookup
 """
@@ -26,10 +29,12 @@ def send_email(
 ) -> dict[str, Any]:
     """Send an email via Gmail API.
 
-    Cooldown guard on unsolicited outreach only:
-    - Reply (thread_id provided): always allowed
-    - New conversation (no thread_id): blocked if last unsolicited outbound
-      to this contact from this account was within cooldown period (30 days)
+    Guards:
+    1. Contact must be active (not bounced/unsubscribed) -- hard block
+    2. Cooldown on unsolicited outreach only:
+       - Reply (thread_id provided): always allowed
+       - New conversation (no thread_id): blocked if last unsolicited outbound
+         to this contact from this account was within cooldown period (30 days)
 
     Args:
         to: Recipient email address.
@@ -44,16 +49,20 @@ def send_email(
 
 
 def create_task(
+    contact_id: str,
     description: str,
     scheduled_at: str,
     context: dict[str, Any] | None = None,
+    email_id: str | None = None,
 ) -> dict[str, str]:
     """Schedule deferred work for later execution.
 
     Args:
+        contact_id: Contact this task targets (required).
         description: What the agent should do when the task runs.
         scheduled_at: When to execute (ISO 8601 timestamp).
         context: Arbitrary JSON context for the agent on re-invocation.
+        email_id: Optional triggering email for focused context.
 
     Returns:
         Dict with created task ID.
@@ -77,6 +86,57 @@ def update_contact_status(
 
     Returns:
         Dict with updated status.
+    """
+    raise NotImplementedError
+
+
+def cancel_task(task_id: str) -> dict[str, str]:
+    """Cancel a pending task.
+
+    Use when a previously scheduled follow-up is no longer needed (e.g.,
+    the contact replied before the follow-up was due).
+
+    Args:
+        task_id: Task ID to cancel.
+
+    Returns:
+        Dict with cancelled task ID and status.
+    """
+    raise NotImplementedError
+
+
+def disable_contact(
+    contact_id: str,
+    status: str,
+    reason: str,
+) -> dict[str, str]:
+    """Set a global block on a contact (bounced or unsubscribed).
+
+    This is a hard block across all workflows. The send_email tool checks
+    contact status before sending.
+
+    Args:
+        contact_id: Contact ID.
+        status: "bounced" or "unsubscribed".
+        reason: Explanation (e.g., "hard bounce", "replied: do not contact").
+
+    Returns:
+        Dict with updated contact status.
+    """
+    raise NotImplementedError
+
+
+def list_workflow_contacts(workflow_id: str) -> list[dict[str, Any]]:
+    """List contacts in a workflow with their outcome status.
+
+    Lets the agent coordinate across contacts (e.g., skip person B if
+    person A at the same company already completed the objective).
+
+    Args:
+        workflow_id: Workflow ID.
+
+    Returns:
+        List of workflow-contact records with status and reason.
     """
     raise NotImplementedError
 
