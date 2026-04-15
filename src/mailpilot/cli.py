@@ -85,15 +85,49 @@ def main(ctx: click.Context, debug: bool, completion: str | None) -> None:
 
 @main.command()
 def status() -> None:
-    """Show application state summary."""
+    """Show application state summary including sync loop status."""
     configure_logging()
 
-    from mailpilot.database import get_status_counts, initialize_database
+    from mailpilot.database import (
+        get_status_counts,
+        get_sync_status,
+        initialize_database,
+    )
 
     connection = initialize_database(_database_url())
     try:
         counts = get_status_counts(connection)
-        output({"status": counts})
+        sync = get_sync_status(connection)
+        sync_info: dict[str, object]
+        if sync is None:
+            sync_info = {"running": False}
+        else:
+            sync_info = {
+                "running": True,
+                "pid": sync.pid,
+                "started_at": sync.started_at.isoformat(),
+                "heartbeat_at": sync.heartbeat_at.isoformat(),
+            }
+        output({"status": counts, "sync": sync_info})
+    finally:
+        connection.close()
+
+
+# -- Run command ---------------------------------------------------------------
+
+
+@main.command()
+@click.pass_context
+def run(ctx: click.Context) -> None:
+    """Start the sync loop (foreground, managed by systemd)."""
+    configure_logging(debug=ctx.obj.get("debug", False))
+
+    from mailpilot.database import initialize_database
+    from mailpilot.sync import start_sync_loop
+
+    connection = initialize_database(_database_url())
+    try:
+        start_sync_loop(connection)
     finally:
         connection.close()
 

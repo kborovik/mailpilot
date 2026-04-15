@@ -77,10 +77,7 @@ mailpilot email list [--limit N] [--contact-id ID] [--account-id ID]
 mailpilot email search QUERY [--limit N]
 mailpilot email view ID
 
-mailpilot sync start
-mailpilot sync stop
-mailpilot sync status
-mailpilot sync run [--account-id ID]
+mailpilot run
 
 mailpilot config get [KEY]
 mailpilot config set KEY VALUE

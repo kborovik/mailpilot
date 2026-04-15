@@ -98,6 +98,13 @@ CREATE TABLE IF NOT EXISTS task (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS sync_status (
+    id            TEXT PRIMARY KEY DEFAULT 'singleton',
+    pid           INTEGER NOT NULL,
+    started_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    heartbeat_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_company_name ON company(LOWER(name));
 CREATE INDEX IF NOT EXISTS idx_contact_domain ON contact(domain);
 CREATE INDEX IF NOT EXISTS idx_contact_company_id ON contact(company_id);

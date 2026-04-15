@@ -132,3 +132,12 @@ class Task(BaseModel):
     status: TaskStatus = "pending"
     completed_at: datetime | None = None
     created_at: datetime
+
+
+class SyncStatus(BaseModel):
+    """Singleton row tracking the running sync process."""
+
+    id: str = "singleton"
+    pid: int
+    started_at: datetime
+    heartbeat_at: datetime
