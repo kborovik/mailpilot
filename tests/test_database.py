@@ -3,6 +3,7 @@
 from typing import Any
 
 import psycopg
+import pytest
 
 from conftest import (
     make_test_account,
@@ -11,6 +12,7 @@ from conftest import (
     make_test_workflow,
 )
 from mailpilot.database import (
+    activate_workflow,
     create_email,
     get_account,
     get_company,
@@ -25,6 +27,7 @@ from mailpilot.database import (
     list_contacts,
     list_emails,
     list_workflows,
+    pause_workflow,
     search_companies,
     search_contacts,
     update_account,
@@ -214,12 +217,80 @@ def test_list_workflows_by_account(
 def test_update_workflow(database_connection: psycopg.Connection[dict[str, Any]]):
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
+    updated = update_workflow(database_connection, workflow.id, objective="Book demo")
+    assert updated is not None
+    assert updated.objective == "Book demo"
+
+
+def test_update_workflow_ignores_immutable_fields(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
     updated = update_workflow(
-        database_connection, workflow.id, status="active", objective="Book demo"
+        database_connection, workflow.id, type="inbound", account_id="other"
     )
     assert updated is not None
-    assert updated.status == "active"
-    assert updated.objective == "Book demo"
+    assert updated.type == "outbound"
+    assert updated.account_id == account.id
+
+
+def test_activate_workflow(database_connection: psycopg.Connection[dict[str, Any]]):
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    update_workflow(
+        database_connection,
+        workflow.id,
+        objective="Book demo",
+        instructions="You are a sales rep.",
+    )
+    activated = activate_workflow(database_connection, workflow.id)
+    assert activated.status == "active"
+
+
+def test_activate_workflow_requires_objective(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    update_workflow(
+        database_connection, workflow.id, instructions="You are a sales rep."
+    )
+    with pytest.raises(ValueError, match="objective must be non-empty"):
+        activate_workflow(database_connection, workflow.id)
+
+
+def test_activate_workflow_requires_instructions(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    update_workflow(database_connection, workflow.id, objective="Book demo")
+    with pytest.raises(ValueError, match="instructions must be non-empty"):
+        activate_workflow(database_connection, workflow.id)
+
+
+def test_pause_workflow(database_connection: psycopg.Connection[dict[str, Any]]):
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    update_workflow(
+        database_connection,
+        workflow.id,
+        objective="Book demo",
+        instructions="You are a sales rep.",
+    )
+    activate_workflow(database_connection, workflow.id)
+    paused = pause_workflow(database_connection, workflow.id)
+    assert paused.status == "paused"
+
+
+def test_pause_workflow_requires_active_status(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    with pytest.raises(ValueError, match="cannot pause workflow"):
+        pause_workflow(database_connection, workflow.id)
 
 
 def test_list_workflows_by_status(
@@ -228,7 +299,13 @@ def test_list_workflows_by_status(
     account = make_test_account(database_connection)
     w1 = make_test_workflow(database_connection, account_id=account.id, name="W1")
     make_test_workflow(database_connection, account_id=account.id, name="W2")
-    update_workflow(database_connection, w1.id, status="active")
+    update_workflow(
+        database_connection,
+        w1.id,
+        objective="Book demo",
+        instructions="You are a sales rep.",
+    )
+    activate_workflow(database_connection, w1.id)
     # w2 stays as draft
     active = list_workflows(database_connection, account_id=account.id, status="active")
     assert len(active) == 1

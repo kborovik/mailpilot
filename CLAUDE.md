@@ -65,9 +65,9 @@ mailpilot contact view ID
 mailpilot contact export FILE
 mailpilot contact import FILE
 
-mailpilot workflow create --name N --type inbound|outbound --account-id ID
-mailpilot workflow update ID [--name N] [--instructions-file F]
-mailpilot wrokflow search QUERY [--limit N]
+mailpilot workflow create --name N --type inbound|outbound --account-id ID [--objective O] [--instructions-file F]
+mailpilot workflow update ID [--name N] [--objective O] [--instructions-file F]
+mailpilot workflow search QUERY [--limit N]
 mailpilot workflow list [--account-id ID]
 mailpilot workflow view ID
 mailpilot workflow activate ID

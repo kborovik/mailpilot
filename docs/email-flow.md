@@ -45,7 +45,7 @@ Determine which workflow handles this email:
 
 Lightweight LLM call to route unmatched emails:
 
-- **Input**: email subject, body, sender + list of active workflows (name, description, objective) for the account
+- **Input**: email subject, body, sender + list of active workflows (name, objective) for the account
 - **Output**: `workflow_id` or `None`
 - **Model**: fast/cheap model (e.g., Haiku) via Pydantic AI structured output
 - **No tools, no agent** -- pure routing decision

@@ -46,12 +46,12 @@ When an inbound email arrives for an account, route it through a three-step pipe
 
 A lightweight, single-turn LLM call using Pydantic AI structured output:
 
-- **Input**: email subject, body, sender + list of active workflows (name, description, objective) for the account. Active workflows are queried via `list_workflows(account_id=..., status="active")`
+- **Input**: email subject, body, sender + list of active workflows (name, objective) for the account. Active workflows are queried via `list_workflows(account_id=..., status="active")`
 - **Output**: `workflow_id` or `None` (unrouted)
 - **No tools, no agent** -- pure routing decision, no side effects
 - **Fast model** -- can use a smaller model (e.g., Haiku) since this is a classification task
 
-The classifier sees the workflow `objective` alongside name and description, since the objective is the most concise statement of what the workflow does.
+The classifier sees the workflow `name` and `objective`, since the objective is the most concise statement of what the workflow does.
 
 ### Auto-Contact Creation
 

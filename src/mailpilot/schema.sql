@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS contact (
     department            TEXT,
     profile_summary       TEXT,
     linkedin              TEXT,
-    status                TEXT NOT NULL DEFAULT 'active',
+    status                TEXT NOT NULL DEFAULT 'active'
+                          CHECK (status IN ('active', 'bounced', 'unsubscribed')),
     status_reason         TEXT NOT NULL DEFAULT '',
     created_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -49,21 +50,23 @@ CREATE TABLE IF NOT EXISTS contact (
 
 CREATE TABLE IF NOT EXISTS workflow (
     id                TEXT PRIMARY KEY,
-    name              TEXT NOT NULL,
-    description       TEXT NOT NULL DEFAULT '',
-    type              TEXT NOT NULL,
     account_id        TEXT NOT NULL REFERENCES account(id),
-    status            TEXT NOT NULL DEFAULT 'draft',
+    type              TEXT NOT NULL CHECK (type IN ('inbound', 'outbound')),
+    name              TEXT NOT NULL,
     objective         TEXT NOT NULL DEFAULT '',
     instructions      TEXT NOT NULL DEFAULT '',
+    status            TEXT NOT NULL DEFAULT 'draft'
+                      CHECK (status IN ('draft', 'active', 'paused')),
     created_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (account_id, name)
 );
 
 CREATE TABLE IF NOT EXISTS workflow_contact (
     workflow_id   TEXT NOT NULL REFERENCES workflow(id),
     contact_id    TEXT NOT NULL REFERENCES contact(id),
-    status        TEXT NOT NULL DEFAULT 'pending',
+    status        TEXT NOT NULL DEFAULT 'pending'
+                  CHECK (status IN ('pending', 'active', 'completed', 'failed')),
     reason        TEXT NOT NULL DEFAULT '',
     created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -77,11 +80,12 @@ CREATE TABLE IF NOT EXISTS email (
     account_id        TEXT NOT NULL REFERENCES account(id),
     contact_id        TEXT REFERENCES contact(id),
     workflow_id       TEXT REFERENCES workflow(id),
-    direction         TEXT NOT NULL,
+    direction         TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound')),
     subject           TEXT NOT NULL DEFAULT '',
     body_text         TEXT NOT NULL DEFAULT '',
     labels            JSONB NOT NULL DEFAULT '[]',
-    status            TEXT NOT NULL DEFAULT 'received',
+    status            TEXT NOT NULL DEFAULT 'received'
+                      CHECK (status IN ('sent', 'received', 'bounced')),
     is_routed         BOOLEAN NOT NULL DEFAULT FALSE,
     sent_at           TIMESTAMPTZ,
     received_at       TIMESTAMPTZ,
@@ -96,7 +100,8 @@ CREATE TABLE IF NOT EXISTS task (
     description   TEXT NOT NULL,
     context       JSONB NOT NULL DEFAULT '{}',
     scheduled_at  TIMESTAMPTZ NOT NULL,
-    status        TEXT NOT NULL DEFAULT 'pending',
+    status        TEXT NOT NULL DEFAULT 'pending'
+                  CHECK (status IN ('pending', 'completed', 'failed', 'cancelled')),
     completed_at  TIMESTAMPTZ,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

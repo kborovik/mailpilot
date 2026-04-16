@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted. Amended by ADR-06 (Workflow Field Definitions).
 
 ## Context
 

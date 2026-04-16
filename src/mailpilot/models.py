@@ -72,7 +72,6 @@ class Workflow(BaseModel):
 
     id: str
     name: str
-    description: str = ""
     type: WorkflowType
     account_id: str
     status: WorkflowStatus = "draft"

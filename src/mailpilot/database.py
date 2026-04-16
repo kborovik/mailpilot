@@ -664,17 +664,21 @@ def update_workflow(
 ) -> Workflow | None:
     """Update a workflow by ID.
 
+    Only ``name``, ``objective``, and ``instructions`` are updatable.
+    Status transitions use ``activate_workflow()`` / ``pause_workflow()``.
+    ``type`` and ``account_id`` are immutable after creation.
+
     Args:
         connection: Open database connection.
         workflow_id: Workflow ID.
-        **fields: Fields to update (must be valid Workflow field names).
+        **fields: Fields to update.
 
     Returns:
         Updated workflow, or None if not found.
     """
     if not fields:
         return get_workflow(connection, workflow_id)
-    allowed = set(Workflow.model_fields) - {"id", "created_at"}
+    allowed = {"name", "objective", "instructions"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return get_workflow(connection, workflow_id)
@@ -684,6 +688,84 @@ def update_workflow(
     connection.commit()
     if row is None:
         return None
+    return Workflow.model_validate(row)
+
+
+def activate_workflow(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+) -> Workflow:
+    """Transition a workflow to active status.
+
+    Valid transitions: ``draft -> active``, ``paused -> active``.
+    Guards: ``objective`` and ``instructions`` must be non-empty.
+
+    Args:
+        connection: Open database connection.
+        workflow_id: Workflow ID.
+
+    Returns:
+        Updated workflow.
+
+    Raises:
+        ValueError: If workflow not found, already active, or missing
+            objective/instructions.
+    """
+    workflow = get_workflow(connection, workflow_id)
+    if workflow is None:
+        raise ValueError(f"workflow {workflow_id} not found")
+    if workflow.status == "active":
+        raise ValueError("workflow is already active")
+    if not workflow.objective.strip():
+        raise ValueError("objective must be non-empty to activate")
+    if not workflow.instructions.strip():
+        raise ValueError("instructions must be non-empty to activate")
+    row = connection.execute(
+        """\
+        UPDATE workflow
+        SET status = 'active', updated_at = CURRENT_TIMESTAMP
+        WHERE id = %(id)s
+        RETURNING *
+        """,
+        {"id": workflow_id},
+    ).fetchone()
+    connection.commit()
+    return Workflow.model_validate(row)
+
+
+def pause_workflow(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+) -> Workflow:
+    """Transition a workflow to paused status.
+
+    Valid transition: ``active -> paused``.
+
+    Args:
+        connection: Open database connection.
+        workflow_id: Workflow ID.
+
+    Returns:
+        Updated workflow.
+
+    Raises:
+        ValueError: If workflow not found or not active.
+    """
+    workflow = get_workflow(connection, workflow_id)
+    if workflow is None:
+        raise ValueError(f"workflow {workflow_id} not found")
+    if workflow.status != "active":
+        raise ValueError(f"cannot pause workflow in status '{workflow.status}'")
+    row = connection.execute(
+        """\
+        UPDATE workflow
+        SET status = 'paused', updated_at = CURRENT_TIMESTAMP
+        WHERE id = %(id)s
+        RETURNING *
+        """,
+        {"id": workflow_id},
+    ).fetchone()
+    connection.commit()
     return Workflow.model_validate(row)
 
 
