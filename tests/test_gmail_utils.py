@@ -2,7 +2,11 @@
 
 import base64
 
-from mailpilot.gmail import extract_text_from_message, get_message_headers
+from mailpilot.gmail import (
+    extract_text_from_message,
+    get_message_headers,
+    parse_sender,
+)
 
 
 def _b64(text: str) -> str:
@@ -115,3 +119,48 @@ def test_get_message_headers():
 def test_get_message_headers_empty():
     assert get_message_headers({}) == {}
     assert get_message_headers({"payload": {}}) == {}
+
+
+# -- parse_sender --------------------------------------------------------------
+
+
+def test_parse_sender_full_name():
+    email, first, last = parse_sender("John Doe <john@example.com>")
+    assert email == "john@example.com"
+    assert first == "John"
+    assert last == "Doe"
+
+
+def test_parse_sender_email_only():
+    email, first, last = parse_sender("alice@example.com")
+    assert email == "alice@example.com"
+    assert first is None
+    assert last is None
+
+
+def test_parse_sender_angle_brackets_no_name():
+    email, first, last = parse_sender("<bob@example.com>")
+    assert email == "bob@example.com"
+    assert first is None
+    assert last is None
+
+
+def test_parse_sender_quoted_name():
+    email, first, last = parse_sender('"Jane Smith" <jane@example.com>')
+    assert email == "jane@example.com"
+    assert first == "Jane"
+    assert last == "Smith"
+
+
+def test_parse_sender_single_word_name():
+    email, first, last = parse_sender("Madonna <madonna@example.com>")
+    assert email == "madonna@example.com"
+    assert first == "Madonna"
+    assert last is None
+
+
+def test_parse_sender_three_part_name():
+    email, first, last = parse_sender("Mary Jane Watson <mj@example.com>")
+    assert email == "mj@example.com"
+    assert first == "Mary"
+    assert last == "Jane Watson"

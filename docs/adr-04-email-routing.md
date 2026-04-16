@@ -36,7 +36,7 @@ When an inbound email arrives for an account, route it through a three-step pipe
   is_routed = true, workflow_id = NULL
 ```
 
-**Step 1 -- Thread match**: Look up `gmail_thread_id` in the `email` table. If a prior email in the same thread exists, route to its `workflow_id`. Fast and cheap, but unreliable -- users forward instead of reply, start new threads, and email clients break threading. Thread match works regardless of workflow status (active or paused) to honor the "no ghosting" guarantee.
+**Step 1 -- Thread match**: Look up `gmail_thread_id` in the `email` table. If a prior email in the same thread has a non-null `workflow_id`, route to the `workflow_id` of the most recent such email. If all prior emails in the thread have `workflow_id = NULL` (unrouted), fall through to classification -- this gives the classifier a chance to route the thread now that more context exists. Fast and cheap, but unreliable -- users forward instead of reply, start new threads, and email clients break threading. Thread match works regardless of workflow status (active or paused) to honor the "no ghosting" guarantee.
 
 **Step 2 -- LLM classification**: If no thread match, classify via a single-turn LLM call. Returns a `workflow_id` or `None`. Only **active** workflows are candidates -- paused and draft workflows are excluded. This means a new email about a paused workflow's topic will go unrouted. This is intentional: paused workflows only handle existing threads, not new conversations.
 

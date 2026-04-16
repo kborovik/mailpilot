@@ -15,6 +15,10 @@ from mailpilot.database import (
     get_account,
     get_company,
     get_contact,
+    get_contact_by_email,
+    get_email,
+    get_email_by_gmail_message_id,
+    get_emails_by_gmail_thread_id,
     get_workflow,
     list_accounts,
     list_companies,
@@ -23,8 +27,10 @@ from mailpilot.database import (
     list_workflows,
     search_companies,
     search_contacts,
+    update_account,
     update_company,
     update_contact,
+    update_email,
     update_workflow,
 )
 
@@ -54,6 +60,20 @@ def test_list_accounts(database_connection: psycopg.Connection[dict[str, Any]]):
     make_test_account(database_connection, email="b@test.com")
     accounts = list_accounts(database_connection)
     assert len(accounts) == 2
+
+
+def test_update_account(database_connection: psycopg.Connection[dict[str, Any]]):
+    account = make_test_account(database_connection)
+    updated = update_account(database_connection, account.id, gmail_history_id="12345")
+    assert updated is not None
+    assert updated.gmail_history_id == "12345"
+    assert updated.updated_at > account.updated_at
+
+
+def test_update_account_not_found(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    assert update_account(database_connection, "nonexistent", display_name="X") is None
 
 
 # -- Company -------------------------------------------------------------------
@@ -144,6 +164,22 @@ def test_update_contact(database_connection: psycopg.Connection[dict[str, Any]])
     assert updated is not None
     assert updated.first_name == "Jane"
     assert updated.position == "CEO"
+
+
+def test_get_contact_by_email(database_connection: psycopg.Connection[dict[str, Any]]):
+    contact = make_test_contact(
+        database_connection, email="alice@test.com", domain="test.com"
+    )
+    found = get_contact_by_email(database_connection, "alice@test.com")
+    assert found is not None
+    assert found.id == contact.id
+    assert found.email == "alice@test.com"
+
+
+def test_get_contact_by_email_not_found(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    assert get_contact_by_email(database_connection, "nobody@test.com") is None
 
 
 # -- Workflow ------------------------------------------------------------------
@@ -243,3 +279,97 @@ def test_create_email_with_explicit_status(
     )
     assert email.status == "sent"
     assert email.is_routed is True
+
+
+def test_get_email_by_gmail_message_id(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    email = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="msg_abc",
+    )
+    found = get_email_by_gmail_message_id(database_connection, "msg_abc")
+    assert found is not None
+    assert found.id == email.id
+
+
+def test_get_email_by_gmail_message_id_not_found(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    assert get_email_by_gmail_message_id(database_connection, "nonexistent") is None
+
+
+def test_get_emails_by_gmail_thread_id(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    e1 = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="msg_1",
+        gmail_thread_id="thread_abc",
+        subject="First",
+    )
+    e2 = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        gmail_message_id="msg_2",
+        gmail_thread_id="thread_abc",
+        subject="Reply",
+        status="sent",
+    )
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="msg_3",
+        gmail_thread_id="thread_other",
+        subject="Unrelated",
+    )
+    results = get_emails_by_gmail_thread_id(database_connection, "thread_abc")
+    assert len(results) == 2
+    ids = {e.id for e in results}
+    assert e1.id in ids
+    assert e2.id in ids
+
+
+def test_get_emails_by_gmail_thread_id_empty(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    assert get_emails_by_gmail_thread_id(database_connection, "nonexistent") == []
+
+
+def test_update_email(database_connection: psycopg.Connection[dict[str, Any]]):
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    email = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="msg_update",
+    )
+    assert email.is_routed is False
+    assert email.workflow_id is None
+
+    updated = update_email(
+        database_connection, email.id, is_routed=True, workflow_id=workflow.id
+    )
+    assert updated is not None
+    assert updated.is_routed is True
+    assert updated.workflow_id == workflow.id
+
+    # Verify via get
+    fetched = get_email(database_connection, email.id)
+    assert fetched is not None
+    assert fetched.is_routed is True
+
+
+def test_update_email_not_found(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    assert update_email(database_connection, "nonexistent", status="bounced") is None

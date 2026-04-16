@@ -36,7 +36,8 @@ Extract and normalize plain text from Gmail message payload:
 
 Determine which workflow handles this email:
 
-- **Step 1 -- Thread match**: query `email` table by `gmail_thread_id`. If found, use the existing `workflow_id`.
+- **Prerequisite**: `contact_id` is set on the email (auto-contact runs during sync, before routing)
+- **Step 1 -- Thread match**: query `email` table by `gmail_thread_id`. If a prior email has a non-null `workflow_id`, use the most recent one. If all prior emails are unrouted (`workflow_id = NULL`), fall through to classification.
 - **Step 2 -- LLM classification**: if no thread match, call `classify_email()`.
 - **Step 3 -- Unrouted**: if classification returns no match, store email with `workflow_id = NULL`.
 

@@ -1,4 +1,4 @@
-# ADR-04: Schema Migration Strategy
+# ADR-05: Schema Migration Strategy
 
 ## Status
 

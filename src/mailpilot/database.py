@@ -191,6 +191,36 @@ def list_accounts(
     return [Account.model_validate(row) for row in rows]
 
 
+def update_account(
+    connection: psycopg.Connection[dict[str, Any]],
+    account_id: str,
+    **fields: object,
+) -> Account | None:
+    """Update an account by ID.
+
+    Args:
+        connection: Open database connection.
+        account_id: Account ID.
+        **fields: Fields to update (must be valid Account field names).
+
+    Returns:
+        Updated account, or None if not found.
+    """
+    if not fields:
+        return get_account(connection, account_id)
+    allowed = set(Account.model_fields) - {"id", "created_at"}
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return get_account(connection, account_id)
+    updates["id"] = account_id
+    query = _build_update("account", updates, SQL("id = %(id)s"))
+    row = connection.execute(query, updates).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Account.model_validate(row)
+
+
 # -- Company -------------------------------------------------------------------
 
 
@@ -382,6 +412,28 @@ def get_contact(
     row = connection.execute(
         "SELECT * FROM contact WHERE id = %(id)s",
         {"id": contact_id},
+    ).fetchone()
+    if row is None:
+        return None
+    return Contact.model_validate(row)
+
+
+def get_contact_by_email(
+    connection: psycopg.Connection[dict[str, Any]],
+    email: str,
+) -> Contact | None:
+    """Get a contact by email address.
+
+    Args:
+        connection: Open database connection.
+        email: Contact email address.
+
+    Returns:
+        Contact if found, None otherwise.
+    """
+    row = connection.execute(
+        "SELECT * FROM contact WHERE email = %(email)s",
+        {"email": email},
     ).fetchone()
     if row is None:
         return None
@@ -898,6 +950,89 @@ def search_emails(
         {"pattern": pattern, "limit": limit},
     ).fetchall()
     return [Email.model_validate(row) for row in rows]
+
+
+def get_email_by_gmail_message_id(
+    connection: psycopg.Connection[dict[str, Any]],
+    gmail_message_id: str,
+) -> Email | None:
+    """Get an email by Gmail message ID.
+
+    Args:
+        connection: Open database connection.
+        gmail_message_id: Gmail message ID (unique).
+
+    Returns:
+        Email if found, None otherwise.
+    """
+    row = connection.execute(
+        "SELECT * FROM email WHERE gmail_message_id = %(gmail_message_id)s",
+        {"gmail_message_id": gmail_message_id},
+    ).fetchone()
+    if row is None:
+        return None
+    return Email.model_validate(row)
+
+
+def get_emails_by_gmail_thread_id(
+    connection: psycopg.Connection[dict[str, Any]],
+    gmail_thread_id: str,
+) -> list[Email]:
+    """Get all emails in a Gmail thread.
+
+    Args:
+        connection: Open database connection.
+        gmail_thread_id: Gmail thread ID.
+
+    Returns:
+        Emails in the thread ordered by creation time.
+    """
+    rows = connection.execute(
+        """\
+        SELECT * FROM email
+        WHERE gmail_thread_id = %(gmail_thread_id)s
+        ORDER BY created_at
+        """,
+        {"gmail_thread_id": gmail_thread_id},
+    ).fetchall()
+    return [Email.model_validate(row) for row in rows]
+
+
+def update_email(
+    connection: psycopg.Connection[dict[str, Any]],
+    email_id: str,
+    **fields: object,
+) -> Email | None:
+    """Update an email by ID.
+
+    Args:
+        connection: Open database connection.
+        email_id: Email ID.
+        **fields: Fields to update (must be valid Email field names).
+
+    Returns:
+        Updated email, or None if not found.
+    """
+    if not fields:
+        return get_email(connection, email_id)
+    allowed = {"workflow_id", "is_routed", "status", "contact_id"}
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return get_email(connection, email_id)
+    updates["id"] = email_id
+    # email table has no updated_at column -- use raw SQL instead of _build_update
+    set_parts = [
+        SQL("{} = {}").format(Identifier(k), Placeholder(k))
+        for k in updates
+        if k != "id"
+    ]
+    set_clause = SQL(", ").join(set_parts)
+    query = SQL("UPDATE email SET {} WHERE id = %(id)s RETURNING *").format(set_clause)
+    row = connection.execute(query, updates).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Email.model_validate(row)
 
 
 # -- Task ----------------------------------------------------------------------

@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import time
 from email.mime.text import MIMEText
+from email.utils import parseaddr
 from functools import wraps
 from importlib.metadata import version
 from typing import Any
@@ -510,3 +511,30 @@ def get_message_headers(
         value = header.get("value", "")
         headers[name] = value
     return headers
+
+
+def parse_sender(from_header: str) -> tuple[str, str | None, str | None]:
+    """Parse a From header into email, first name, and last name.
+
+    Handles formats like:
+    - ``"John Doe <john@example.com>"``
+    - ``"john@example.com"``
+    - ``"<john@example.com>"``
+    - ``'"Jane Smith" <jane@example.com>'``
+
+    Args:
+        from_header: Raw From header value.
+
+    Returns:
+        Tuple of (email, first_name, last_name). Name fields are None
+        if no display name is present.
+    """
+    display_name, email_address = parseaddr(from_header)
+    if not email_address:
+        email_address = from_header.strip()
+    if not display_name:
+        return (email_address, None, None)
+    parts = display_name.strip().split(None, 1)
+    first_name = parts[0] if parts else None
+    last_name = parts[1] if len(parts) > 1 else None
+    return (email_address, first_name, last_name)
