@@ -2,12 +2,18 @@
 
 ## Project Overview
 
-CRM application for cold email outreach via Gmail. Manages target companies and contacts, enriches via Firecrawl + Claude, qualifies via AI, discovers contacts via Hunter.io, verifies emails via Bouncer, and sends/tracks emails through Gmail API with service account delegation.
+AI email platform on Google Workspace with two objectives:
+
+1. **Outbound cold email** -- discover target companies, enrich via Firecrawl + Claude, qualify via AI, find contacts via Hunter.io, verify emails via Bouncer, send and track campaigns through Gmail API.
+2. **Inbound auto-reply** -- monitor incoming emails via Pub/Sub, search a knowledge base (RAG), generate and send AI-powered replies based on predefined instructions.
+
+Both objectives operate through Gmail API with service account delegation. Each email account syncs and sends independently.
 
 ## Principles
 
 - Technical accuracy over politeness
 - Simplicity above all. YAGNI is law.
+- Agent-driven, not system-driven. The system provides tools and scheduling; LLM agents make all business decisions (what to send, when to follow up, when to give up).
 - Type-safety is non-negotiable. basedpyright strict mode.
 - TDD for ALL changes.
 
@@ -15,19 +21,23 @@ CRM application for cold email outreach via Gmail. Manages target companies and 
 
 ### Gmail Integration
 
-Gmail API with service account + domain-wide delegation for Google Workspace (see `docs/adr-01-gmail-api-integration.md`). Credential resolution: `GOOGLE_APPLICATION_CREDENTIALS` env var. Scope: `gmail.modify`. Custom headers on sent emails for traceability (`X-MailPilot-Version`, `X-MailPilot-Account-Id`).
+Gmail API with `google-api-python-client` + service account domain-wide delegation (see `docs/adr-01-gmail-api-integration.md`). Single scope: `gmail.modify`. Per-account impersonation via `credentials.with_subject(email)`. Custom headers on sent emails (`X-MailPilot-Version`, `X-MailPilot-Account-Id`).
 
-Email body stored as plain text only (see `docs/adr-02-email-body-storage-strategy.md`). Two-phase pipeline: raw extraction during sync, then LLM cleaning during classification.
+Each account syncs independently via ThreadPoolExecutor. Pub/Sub streaming pull (`google-cloud-pubsub`) for real-time notifications. History API for incremental sync. Full re-sync on history 404.
 
-Push notifications via Pub/Sub streaming pull (see `docs/adr-03-gmail-watch-implementation.md`).
+Email body stored as plain text only (see `docs/adr-02-email-body-storage-strategy.md`).
+
+### Workflows
+
+Workflow is the central abstraction for both outbound campaigns and inbound auto-reply (see `docs/adr-03-workflow-model.md`). Each workflow is executed by a Pydantic AI agent with tool access. Inbound emails are routed via thread matching then LLM classification. Agent plans multi-step work via deferred tasks. See `docs/email-flow.md` for execution flows.
 
 ### CLI
 
-The CLI must be LLM Agent friendly: JSON output only. Exit codes must be meaningful. Error messages must be actionable. The CLI is a thin dispatcher -- no domain logic or logging. All `logfire` calls belong in pipeline/agent modules where decisions happen. CLI only does `logfire.configure()` and `output()`.
+The CLI must be LLM Agent friendly: JSON output only. Exit codes must be meaningful. Error messages must be actionable. The CLI is a thin dispatcher -- no domain logic or logging. All `logfire` calls belong in sync/agent modules where decisions happen. CLI only does `logfire.configure()` and `output()`.
 
-**Lazy imports in `cli.py`.** Only `click` is imported at module level. All heavy dependencies (`logfire`, `psycopg`, `httpx`, `pydantic`, `mailpilot.database`, `mailpilot.pipeline`, `mailpilot.settings`) are imported inside command function bodies so that `--help` / `--version` stay fast (~50 ms). When adding or modifying CLI commands, always put `from mailpilot.*` imports inside the function, never at the top of the file. Tests must patch functions at their source module (e.g. `mailpilot.pipeline.func`), not at `mailpilot.cli.func`.
+**Lazy imports in `cli.py`.** Only `click` is imported at module level. All heavy dependencies (`logfire`, `psycopg`, `httpx`, `pydantic`, `mailpilot.database`, `mailpilot.sync`, `mailpilot.settings`) are imported inside command function bodies so that `--help` / `--version` stay fast (~50 ms). When adding or modifying CLI commands, always put `from mailpilot.*` imports inside the function, never at the top of the file. Tests must patch functions at their source module (e.g. `mailpilot.sync.func`), not at `mailpilot.cli.func`.
 
-**Settings-first parameter passing.** CLI commands never pass config values (API keys) as separate function arguments. Instead: (1) load `Settings` via `get_settings()`, (2) pass the `Settings` instance to pipeline functions. Pipeline functions read all config from `settings`. Only operational params (`limit`, `scope`, `on_progress`) stay as function arguments.
+**Settings-first parameter passing.** CLI commands never pass config values (API keys) as separate function arguments. Instead: (1) load `Settings` via `get_settings()`, (2) pass the `Settings` instance to sync/agent functions. These functions read all config from `settings`. Only operational params (`limit`, `scope`, `on_progress`) stay as function arguments.
 
 **Convention: GitHub CLI (`gh`) as reference.** Standard verbs: `list` (summary), `view ID` (full record), `get` (fetch from external API), `set` (update config). All IDs are UUIDv7.
 
@@ -40,9 +50,9 @@ mailpilot account list
 mailpilot account view ID
 
 mailpilot company create --domain D [--name N] [opts]
+mailpilot company update ID [--name N]
 mailpilot company search QUERY [--limit N]
-mailpilot company update ID [--name N] [--unreject]
-mailpilot company list [--limit N] [--all]
+mailpilot company list [--limit N]
 mailpilot company view ID
 mailpilot company export FILE
 mailpilot company import FILE
@@ -55,9 +65,20 @@ mailpilot contact view ID
 mailpilot contact export FILE
 mailpilot contact import FILE
 
-mailpilot email list [--limit N] [--contact-id ID] [--account-id ID]
+mailpilot workflow create --name N --type inbound|outbound --account-id ID [--objective O] [--instructions-file F]
+mailpilot workflow update ID [--name N] [--objective O] [--instructions-file F]
+mailpilot workflow search QUERY [--limit N]
+mailpilot workflow list [--account-id ID]
+mailpilot workflow view ID
+mailpilot workflow activate ID
+mailpilot workflow pause ID
+mailpilot workflow run --workflow-id ID --contact-id ID
+
 mailpilot email search QUERY [--limit N]
+mailpilot email list [--limit N] [--contact-id ID] [--account-id ID]
 mailpilot email view ID
+
+mailpilot run
 
 mailpilot config get [KEY]
 mailpilot config set KEY VALUE
@@ -69,20 +90,23 @@ mailpilot status
 
 See `src/mailpilot/schema.sql`. Requires PostgreSQL 18. Connection: `database_url` setting (default: `postgresql://localhost/mailpilot`). Schema applied automatically on first connection.
 
-Tables: `account`, `company`, `contact`, `campaign`, `email`.
+Tables: `account`, `company`, `contact`, `workflow`, `workflow_contact`, `email`, `task`.
 
 Prefer atomic single-query operations: use `UPDATE ... FROM ... RETURNING` to join, mutate, and return in one round-trip instead of SELECT-then-UPDATE.
 
-### Company State Model
+### Database Layer
 
-Company state is determined by two columns: `rejected_reason` (JSONB array) and `qualification_notes` (TEXT).
+Single flat `database.py` with `# -- Entity ---` section headers. All functions in `database.py`, no per-entity modules.
 
-| `rejected_reason`        | `qualification_notes` | State                                    |
-| ------------------------ | --------------------- | ---------------------------------------- |
-| `[]`                     | `NULL`                | Pending -- discovered, not yet qualified |
-| `[]`                     | `"Meets criteria..."` | Accepted -- passed AI qualification      |
-| `["ai_rejected"]`        | `"Does not meet..."`  | Rejected by AI                           |
-| `["incomplete_profile"]` | `"Missing: ..."`      | Rejected -- missing required fields      |
+Function convention:
+
+- `create_X(connection, ...) -> X` -- INSERT RETURNING \*, commit, return model
+- `get_X(connection, id) -> X | None` -- SELECT by PK
+- `list_X(connection, ...) -> list[X]` -- SELECT with optional filters
+- `update_X(connection, id, **fields) -> X | None` -- dynamic SET via `_build_update()`
+- `search_X(connection, query, ...) -> list[X]` -- LIKE search
+
+All functions take `psycopg.Connection` as first arg, return domain models from `models.py` (never raw dicts). Use `Model.model_validate(row)` at the DB boundary. IDs are UUIDv7 via `_new_id()` (`uuid.uuid7()`). Dynamic SQL uses `psycopg.sql` (`SQL`, `Identifier`, `Placeholder`) -- never f-strings in queries.
 
 ### Settings
 
@@ -90,17 +114,12 @@ API keys and config stored in `~/.mailpilot/config.json` via `mailpilot config s
 
 - `anthropic_api_key` -- Anthropic Claude API key
 - `anthropic_model` -- Anthropic model ID (default: `claude-sonnet-4-6`)
-- `firecrawl_api_key` -- Firecrawl API key
 - `google_project_id` -- Google Cloud project ID (for Pub/Sub)
 - `google_pubsub_topic` -- Pub/Sub topic name (default: `gmail-watch`)
 - `google_pubsub_subscription` -- Pub/Sub subscription name (default: `mailpilot-watch`)
 - `database_url` -- PostgreSQL connection (default: `postgresql://localhost/mailpilot`)
 - `logfire_token` -- Pydantic Logfire token (optional)
 - `logfire_environment` -- deployment environment tag (default: `development`)
-
-### Gmail Authentication
-
-Service account credentials via `GOOGLE_APPLICATION_CREDENTIALS` env var pointing to a JSON key file. Domain-wide delegation required for Google Workspace. Single scope: `gmail.modify`.
 
 ## LLM-First Code Style
 
@@ -140,7 +159,7 @@ Tests use a separate database: `postgresql://localhost/mailpilot_test` (override
 Logging and tracing use [Pydantic Logfire](https://pydantic.dev/logfire) (OpenTelemetry-based). All modules use `import logfire` directly -- no per-module logger variable.
 
 - `logfire.debug("msg", key=value)` / `logfire.warn("msg", key=value)` for logging
-- `logfire.span("name")` context manager for pipeline stage tracing
+- `logfire.span("name")` context manager for sync/agent stage tracing
 - `configure_logging()` in `cli.py` enables console output only with `--debug` flag
 - Token: `mailpilot config set logfire_token <TOKEN>` or `LOGFIRE_TOKEN` env var
 - Cloud send: `send_to_logfire='if-token-present'` -- console-only when no token
