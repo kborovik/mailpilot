@@ -89,7 +89,6 @@ def _print_completion(
     "--completion",
     type=click.Choice(["bash", "zsh", "fish"]),
     default=None,
-    hidden=True,
     is_eager=True,
     expose_value=False,
     callback=_print_completion,
