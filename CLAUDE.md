@@ -146,6 +146,17 @@ uv run ruff check --fix # lint (without make)
 uv run basedpyright     # type check (without make)
 ```
 
+## GitHub
+
+Use the `/github-*` skills for all GitHub operations -- never drive `gh` or `git push`-to-PR flows by hand. The skills encode project conventions (Conventional Commits, PR-to-issue linking via `Resolves #N`, squash-merge defaults, release-note-ready merge messages).
+
+- `/github-issue-create` -- file an issue
+- `/github-pr-create` -- open a PR from an issue number or objective
+- `/github-pr-merge` -- merge a PR with a release-note-ready commit message
+- `/github-commit-staged` -- commit staged changes with a descriptive message
+
+If a GitHub operation isn't covered by a skill (e.g. reviewing comments, closing an issue manually), fall back to `gh`.
+
 ## TDD Process
 
 1. Write failing test first
