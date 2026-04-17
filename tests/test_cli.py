@@ -38,6 +38,27 @@ def mock_connection() -> MagicMock:
     return MagicMock()
 
 
+# -- --completion --------------------------------------------------------------
+
+
+def test_completion_zsh(runner: CliRunner) -> None:
+    result = runner.invoke(main, ["--completion", "zsh"])
+    assert result.exit_code == 0
+    assert "#compdef mailpilot" in result.output
+    assert "_MAILPILOT_COMPLETE=zsh_complete" in result.output
+
+
+def test_completion_bash(runner: CliRunner) -> None:
+    result = runner.invoke(main, ["--completion", "bash"])
+    assert result.exit_code == 0
+    assert "_MAILPILOT_COMPLETE=bash_complete" in result.output
+
+
+def test_completion_unsupported_shell(runner: CliRunner) -> None:
+    result = runner.invoke(main, ["--completion", "tcsh"])
+    assert result.exit_code != 0
+
+
 # -- account create ------------------------------------------------------------
 
 
