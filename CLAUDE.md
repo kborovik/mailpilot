@@ -119,7 +119,7 @@ API keys and config stored in `~/.mailpilot/config.json` via `mailpilot config s
 - `google_pubsub_subscription` -- Pub/Sub subscription name (default: `mailpilot-watch`)
 - `database_url` -- PostgreSQL connection (default: `postgresql://localhost/mailpilot`)
 - `logfire_token` -- Pydantic Logfire token (optional)
-- `logfire_environment` -- deployment environment tag (default: `development`)
+- `logfire_environment` -- deployment environment tag. Literal: `development` | `production` (default: `development`). Tags every span sent to Logfire so traces from dev runs can be filtered out when investigating production behaviour.
 
 ## LLM-First Code Style
 
@@ -174,6 +174,15 @@ Logging and tracing use [Pydantic Logfire](https://pydantic.dev/logfire) (OpenTe
 - `configure_logging()` in `cli.py` enables console output only with `--debug` flag
 - Token: `mailpilot config set logfire_token <TOKEN>` or `LOGFIRE_TOKEN` env var
 - Cloud send: `send_to_logfire='if-token-present'` -- console-only when no token
+
+**Cloud project.** All records land in Logfire project **`pilot`** (scope of the shared write token). That project holds records for two services distinguished by `service_name`: `mailpilot` (this repo) and `leadpilot` (sibling project). Within each service, spans are further split by `deployment_environment` (`development` | `production`), set from the `logfire_environment` setting. When querying via MCP, always pass `project='pilot'` and filter with `WHERE service_name = 'mailpilot' AND deployment_environment = 'production'` (or `'development'`).
+
+**Skills for Logfire work.** Prefer these skills over ad-hoc commands:
+
+- `/logfire:instrument` -- add Logfire instrumentation to a language/framework in this repo
+- `/logfire:instrumentation` -- same, general-purpose variant (multi-language)
+- `/logfire:dev-session` -- start a local dev session with write tokens for sending traces while debugging
+- `/logfire:debug` -- investigate errors and debug production issues using existing traces
 
 ## Standards
 
