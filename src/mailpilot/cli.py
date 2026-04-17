@@ -414,6 +414,168 @@ def contact() -> None:
     """Manage contacts."""
 
 
+@contact.command("create")
+@click.option("--email", required=True, help="Email address.")
+@click.option("--first-name", default=None, help="First name.")
+@click.option("--last-name", default=None, help="Last name.")
+@click.option("--company-id", default=None, help="Company ID.")
+def contact_create(
+    email: str,
+    first_name: str | None,
+    last_name: str | None,
+    company_id: str | None,
+) -> None:
+    """Create a new contact."""
+    from mailpilot.database import create_contact, initialize_database
+
+    domain = email.rsplit("@", maxsplit=1)[-1]
+    connection = initialize_database(_database_url())
+    try:
+        created = create_contact(
+            connection,
+            email=email,
+            domain=domain,
+            first_name=first_name,
+            last_name=last_name,
+            company_id=company_id,
+        )
+        output(created.model_dump(mode="json"))
+    finally:
+        connection.close()
+
+
+@contact.command("update")
+@click.argument("contact_id")
+@click.option("--email", default=None, help="Email address.")
+@click.option("--first-name", default=None, help="First name.")
+@click.option("--last-name", default=None, help="Last name.")
+@click.option("--company-id", default=None, help="Company ID.")
+def contact_update(
+    contact_id: str,
+    email: str | None,
+    first_name: str | None,
+    last_name: str | None,
+    company_id: str | None,
+) -> None:
+    """Update a contact."""
+    from mailpilot.database import initialize_database, update_contact
+
+    connection = initialize_database(_database_url())
+    try:
+        fields: dict[str, object] = {}
+        if email is not None:
+            fields["email"] = email
+            fields["domain"] = email.split("@")[-1]
+        if first_name is not None:
+            fields["first_name"] = first_name
+        if last_name is not None:
+            fields["last_name"] = last_name
+        if company_id is not None:
+            fields["company_id"] = company_id
+        updated = update_contact(connection, contact_id, **fields)
+        if updated is None:
+            output_error(f"contact not found: {contact_id}", "not_found")
+        output(updated.model_dump(mode="json"))
+    finally:
+        connection.close()
+
+
+@contact.command("search")
+@click.argument("query")
+@click.option("--limit", default=100, help="Maximum results.")
+def contact_search(query: str, limit: int) -> None:
+    """Search contacts by email, name, or domain."""
+    from mailpilot.database import initialize_database, search_contacts
+
+    connection = initialize_database(_database_url())
+    try:
+        contacts = search_contacts(connection, query, limit=limit)
+        output({"contacts": [c.model_dump(mode="json") for c in contacts]})
+    finally:
+        connection.close()
+
+
+@contact.command("list")
+@click.option("--limit", default=100, help="Maximum results.")
+@click.option("--domain", default=None, help="Filter by domain.")
+@click.option("--company-id", default=None, help="Filter by company ID.")
+def contact_list(limit: int, domain: str | None, company_id: str | None) -> None:
+    """List contacts."""
+    from mailpilot.database import initialize_database, list_contacts
+
+    connection = initialize_database(_database_url())
+    try:
+        contacts = list_contacts(
+            connection, limit=limit, domain=domain, company_id=company_id
+        )
+        output({"contacts": [c.model_dump(mode="json") for c in contacts]})
+    finally:
+        connection.close()
+
+
+@contact.command("view")
+@click.argument("contact_id")
+def contact_view(contact_id: str) -> None:
+    """Show a contact by ID."""
+    from mailpilot.database import get_contact, initialize_database
+
+    connection = initialize_database(_database_url())
+    try:
+        found = get_contact(connection, contact_id)
+        if found is None:
+            output_error(f"contact not found: {contact_id}", "not_found")
+        output(found.model_dump(mode="json"))
+    finally:
+        connection.close()
+
+
+@contact.command("export")
+@click.argument("file", type=click.Path())
+def contact_export(file: str) -> None:
+    """Export all contacts to a JSON file."""
+    import pathlib
+
+    from mailpilot.database import initialize_database, list_contacts
+
+    connection = initialize_database(_database_url())
+    try:
+        contacts = list_contacts(connection)
+        data = [c.model_dump(mode="json") for c in contacts]
+        pathlib.Path(file).write_text(json.dumps(data, indent=2))
+        output({"exported": len(data), "file": file})
+    finally:
+        connection.close()
+
+
+@contact.command("import")
+@click.argument("file", type=click.Path(exists=True))
+def contact_import(file: str) -> None:
+    """Import contacts from a JSON file."""
+    import pathlib
+
+    from mailpilot.database import create_contact, initialize_database
+
+    connection = initialize_database(_database_url())
+    try:
+        entries = json.loads(pathlib.Path(file).read_text())
+        count = 0
+        for entry in entries:
+            email = entry["email"]
+            domain = entry.get("domain") or email.split("@")[-1]
+            create_contact(
+                connection,
+                email=email,
+                domain=domain,
+                first_name=entry.get("first_name"),
+                last_name=entry.get("last_name"),
+                company_id=entry.get("company_id"),
+            )
+            count += 1
+        output({"imported": count, "file": file})
+    finally:
+        connection.close()
+
+
 # -- Email commands ------------------------------------------------------------
 
 
