@@ -63,7 +63,8 @@ def start_sync_loop(connection: psycopg.Connection[dict[str, Any]]) -> None:
     existing = get_sync_status(connection)
     if existing is not None and is_pid_alive(existing.pid):
         logfire.warn(
-            "sync loop already running",
+            "sync.loop.already_running",
+            pid=pid,
             existing_pid=existing.pid,
         )
         raise SystemExit(
@@ -75,7 +76,7 @@ def start_sync_loop(connection: psycopg.Connection[dict[str, Any]]) -> None:
 
     # Register this process.
     upsert_sync_status(connection, pid)
-    logfire.info("sync loop started", pid=pid)
+    logfire.info("sync.loop.start", pid=pid)
     click.echo(f"Sync loop started (pid {pid})")
     click.echo(f"Heartbeat interval: {_HEARTBEAT_INTERVAL}s")
     click.echo("Press Ctrl+C or send SIGTERM to stop")
@@ -83,7 +84,7 @@ def start_sync_loop(connection: psycopg.Connection[dict[str, Any]]) -> None:
     # Signal handlers set the shutdown event.
     def _handle_shutdown(signum: int, frame: object) -> None:
         signal_name = signal.Signals(signum).name
-        logfire.info("shutdown signal received", signal=signum)
+        logfire.info("sync.shutdown.signal_received", pid=pid, signal=signum)
         click.echo(f"\nReceived {signal_name}, shutting down...")
         shutdown_event.set()
 
@@ -96,8 +97,8 @@ def start_sync_loop(connection: psycopg.Connection[dict[str, Any]]) -> None:
             shutdown_event.wait(timeout=_HEARTBEAT_INTERVAL)
             if not shutdown_event.is_set():
                 update_sync_heartbeat(connection)
-                logfire.debug("sync heartbeat", pid=pid)
+                logfire.debug("sync.loop.heartbeat", pid=pid)
     finally:
         delete_sync_status(connection)
-        logfire.info("sync loop stopped", pid=pid)
+        logfire.info("sync.loop.stop", pid=pid)
         click.echo("Sync loop stopped")
