@@ -99,6 +99,7 @@ def main(ctx: click.Context, debug: bool) -> None:
     """MailPilot -- CRM for cold email outreach via Gmail."""
     ctx.ensure_object(dict)
     ctx.obj["debug"] = debug
+    configure_logging(debug=debug)
 
 
 # -- Status command ------------------------------------------------------------
