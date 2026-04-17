@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from mailpilot.settings import Settings, load_settings, save_settings
+from mailpilot.settings import Settings, load_settings, save_settings, set_setting
 
 
 def test_default_settings():
@@ -61,3 +61,30 @@ def test_load_settings_ignores_unknown_keys(tmp_path: Path):
     settings = load_settings(config_path=config_path)
     assert settings.logfire_environment == "production"
     assert not hasattr(settings, "unknown_key")
+
+
+def test_set_setting_persists_value(tmp_path: Path):
+    config_path = tmp_path / "config.json"
+    updated = set_setting("anthropic_api_key", "sk-new", config_path=config_path)
+    assert updated.anthropic_api_key == "sk-new"
+    reloaded = load_settings(config_path=config_path)
+    assert reloaded.anthropic_api_key == "sk-new"
+
+
+def test_set_setting_rejects_unknown_key(tmp_path: Path):
+    config_path = tmp_path / "config.json"
+    with pytest.raises(KeyError):
+        set_setting("not_a_real_field", "x", config_path=config_path)
+
+
+def test_set_setting_preserves_other_fields(tmp_path: Path):
+    config_path = tmp_path / "config.json"
+    save_settings(
+        Settings(anthropic_api_key="sk-keep", logfire_environment="production"),
+        config_path=config_path,
+    )
+    set_setting("anthropic_model", "claude-opus-4-7", config_path=config_path)
+    reloaded = load_settings(config_path=config_path)
+    assert reloaded.anthropic_api_key == "sk-keep"
+    assert reloaded.logfire_environment == "production"
+    assert reloaded.anthropic_model == "claude-opus-4-7"

@@ -70,8 +70,8 @@ def initialize_database(database_url: str) -> psycopg.Connection[dict[str, Any]]
     Returns:
         Open database connection with schema applied.
     """
-    host = database_url.rsplit("/", 1)[-1]
-    with logfire.span("db.schema.apply", database=host) as span:
+    db_name = database_url.rsplit("/", 1)[-1]
+    with logfire.span("db.schema.apply", database=db_name) as span:
         try:
             connection = cast(
                 psycopg.Connection[dict[str, Any]],
@@ -80,12 +80,12 @@ def initialize_database(database_url: str) -> psycopg.Connection[dict[str, Any]]
         except psycopg.OperationalError as exc:
             message = str(exc)
             if "does not exist" in message:
-                hint = f"run 'createdb {host}' to create it"
+                hint = f"run 'createdb {db_name}' to create it"
             elif "Connection refused" in message:
                 hint = "is PostgreSQL running? check your system's service manager"
             else:
                 hint = "check your database_url setting"
-            logfire.exception("database connection failed", database=host, hint=hint)
+            logfire.exception("database connection failed", database=db_name, hint=hint)
             raise SystemExit(f"database connection failed: {hint}") from None
         schema_sql = SCHEMA_PATH.read_text()
         connection.execute(schema_sql)  # type: ignore[arg-type]
@@ -221,17 +221,15 @@ def update_account(
     Returns:
         Updated account, or None if not found.
     """
-    if not fields:
-        return get_account(connection, account_id)
     allowed = set(Account.model_fields) - {"id", "created_at"}
     updates = {k: v for k, v in fields.items() if k in allowed}
-    if not updates:
-        return get_account(connection, account_id)
     with logfire.span(
         "db.account.update",
         account_id=account_id,
         updated_fields=sorted(updates.keys()),
     ) as span:
+        if not updates:
+            return get_account(connection, account_id)
         updates["id"] = account_id
         query = _build_update("account", updates, SQL("id = %(id)s"))
         row = connection.execute(query, updates).fetchone()
@@ -369,17 +367,15 @@ def update_company(
     Returns:
         Updated company, or None if not found.
     """
-    if not fields:
-        return get_company(connection, company_id)
     allowed = set(Company.model_fields) - {"id", "created_at"}
     updates = {k: v for k, v in fields.items() if k in allowed}
-    if not updates:
-        return get_company(connection, company_id)
     with logfire.span(
         "db.company.update",
         company_id=company_id,
         updated_fields=sorted(updates.keys()),
     ) as span:
+        if not updates:
+            return get_company(connection, company_id)
         updates["id"] = company_id
         query = _build_update("company", updates, SQL("id = %(id)s"))
         row = connection.execute(query, updates).fetchone()
@@ -580,17 +576,15 @@ def update_contact(
     Returns:
         Updated contact, or None if not found.
     """
-    if not fields:
-        return get_contact(connection, contact_id)
     allowed = set(Contact.model_fields) - {"id", "created_at"}
     updates = {k: v for k, v in fields.items() if k in allowed}
-    if not updates:
-        return get_contact(connection, contact_id)
     with logfire.span(
         "db.contact.update",
         contact_id=contact_id,
         updated_fields=sorted(updates.keys()),
     ) as span:
+        if not updates:
+            return get_contact(connection, contact_id)
         updates["id"] = contact_id
         query = _build_update("contact", updates, SQL("id = %(id)s"))
         row = connection.execute(query, updates).fetchone()
@@ -767,17 +761,15 @@ def update_workflow(
     Returns:
         Updated workflow, or None if not found.
     """
-    if not fields:
-        return get_workflow(connection, workflow_id)
     allowed = {"name", "objective", "instructions"}
     updates = {k: v for k, v in fields.items() if k in allowed}
-    if not updates:
-        return get_workflow(connection, workflow_id)
     with logfire.span(
         "db.workflow.update",
         workflow_id=workflow_id,
         updated_fields=sorted(updates.keys()),
     ) as span:
+        if not updates:
+            return get_workflow(connection, workflow_id)
         updates["id"] = workflow_id
         query = _build_update("workflow", updates, SQL("id = %(id)s"))
         row = connection.execute(query, updates).fetchone()
@@ -925,14 +917,14 @@ def update_workflow_contact(
     """
     allowed = {"status", "reason"}
     updates = {k: v for k, v in fields.items() if k in allowed}
-    if not updates:
-        return get_workflow_contact(connection, workflow_id, contact_id)
     with logfire.span(
         "db.workflow_contact.update",
         workflow_id=workflow_id,
         contact_id=contact_id,
         updated_fields=sorted(updates.keys()),
     ) as span:
+        if not updates:
+            return get_workflow_contact(connection, workflow_id, contact_id)
         updates["workflow_id"] = workflow_id
         updates["contact_id"] = contact_id
         where = SQL("workflow_id = %(workflow_id)s AND contact_id = %(contact_id)s")
@@ -1255,17 +1247,15 @@ def update_email(
     Returns:
         Updated email, or None if not found.
     """
-    if not fields:
-        return get_email(connection, email_id)
     allowed = {"workflow_id", "is_routed", "status", "contact_id"}
     updates = {k: v for k, v in fields.items() if k in allowed}
-    if not updates:
-        return get_email(connection, email_id)
     with logfire.span(
         "db.email.update",
         email_id=email_id,
         updated_fields=sorted(updates.keys()),
     ) as span:
+        if not updates:
+            return get_email(connection, email_id)
         updates["id"] = email_id
         # email table has no updated_at column -- use raw SQL instead of _build_update
         set_parts = [
