@@ -183,9 +183,8 @@ def config_get(key: str | None) -> None:
 @click.argument("value")
 def config_set(key: str, value: str) -> None:
     """Set a config value."""
-    from mailpilot.settings import Settings, get_settings, save_settings
+    from mailpilot.settings import Settings, set_setting
 
-    settings = get_settings()
     if key not in Settings.model_fields:
         output_error(f"unknown config key: {key}", "invalid_key")
 
@@ -201,10 +200,7 @@ def config_set(key: str, value: str) -> None:
     else:
         parsed_value = value
 
-    data = settings.model_dump(mode="json")
-    data[key] = parsed_value
-    updated = Settings(**{k: v for k, v in data.items() if k in Settings.model_fields})
-    save_settings(updated)
+    set_setting(key, parsed_value)
     output({"key": key, "value": parsed_value})
 
 
