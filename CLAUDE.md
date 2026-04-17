@@ -167,7 +167,7 @@ Tests use a separate database: `postgresql://localhost/mailpilot_test` (override
 
 ## Observability
 
-Logging and tracing use [Pydantic Logfire](https://pydantic.dev/logfire) (OpenTelemetry-based). All modules use `import logfire` directly -- no per-module logger variable.
+Logging and tracing use [Pydantic Logfire](https://pydantic.dev/logfire) (OpenTelemetry-based). All modules use `import logfire` directly -- no per-module logger variable. Conventions are defined in `docs/adr-07-observability-with-logfire.md`; module-level instrumentation TODOs live in `docs/logfire-instrumentation-plan.md`.
 
 - `logfire.debug("msg", key=value)` / `logfire.warn("msg", key=value)` for logging
 - `logfire.span("name")` context manager for sync/agent stage tracing
@@ -175,7 +175,7 @@ Logging and tracing use [Pydantic Logfire](https://pydantic.dev/logfire) (OpenTe
 - Token: `mailpilot config set logfire_token <TOKEN>` or `LOGFIRE_TOKEN` env var
 - Cloud send: `send_to_logfire='if-token-present'` -- console-only when no token
 
-**Cloud project.** All records land in Logfire project **`pilot`** (scope of the shared write token). That project holds records for two services distinguished by `service_name`: `mailpilot` (this repo) and `leadpilot` (sibling project). Within each service, spans are further split by `deployment_environment` (`development` | `production`), set from the `logfire_environment` setting. When querying via MCP, always pass `project='pilot'` and filter with `WHERE service_name = 'mailpilot' AND deployment_environment = 'production'` (or `'development'`).
+**Cloud project.** All records land in dedicated Logfire project **`mailpilot`** (scope of the project-scoped write token). The sibling `leadpilot` service uses its own project, so no `service_name` filter is needed when querying. Spans are split by `deployment_environment` (`development` | `production`), set from the `logfire_environment` setting. When querying via MCP, always pass `project='mailpilot'` and filter with `WHERE deployment_environment = 'production'` (or `'development'`).
 
 **Skills for Logfire work.** Prefer these skills over ad-hoc commands:
 
