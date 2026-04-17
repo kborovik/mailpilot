@@ -5,7 +5,7 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -euo pipefail -c
 MAKEFLAGS += --no-builtin-rules --no-builtin-variables
-PATH := $(abspath .venv)/bin:$(PATH)
+export PATH := $(abspath .venv)/bin:/opt/homebrew/opt/postgresql@18/bin:$(PATH)
 DATA_DIR := $(HOME)/.mailpilot
 
 default: .venv help
@@ -29,13 +29,14 @@ py-lint:
 	$(call header,Running Ruff lint)
 	uv run ruff check --fix
 
-clean: ## Export data, reset DB schema
+clean: ## Export data, re-create database
 	$(eval TS := $(shell date +%Y%m%d-%H%M%S))
 	$(call header,Exporting companies and contacts)
-	mailpilot company export $(DATA_DIR)/companies-$(TS).json
-	mailpilot contact export $(DATA_DIR)/contacts-$(TS).json
-	$(call header,Resetting database schema)
-	psql postgresql://localhost/mailpilot -c "DROP TABLE IF EXISTS task, email, workflow_contact, workflow, contact, company, account CASCADE"
+	mailpilot company export $(DATA_DIR)/companies-$(TS).json || true
+	mailpilot contact export $(DATA_DIR)/contacts-$(TS).json || true
+	$(call header,Re-creating database)
+	dropdb --if-exists mailpilot
+	createdb mailpilot
 	mailpilot status > /dev/null
 
 py-update:
