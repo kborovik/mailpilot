@@ -175,7 +175,7 @@ Logging and tracing use [Pydantic Logfire](https://pydantic.dev/logfire) (OpenTe
 - Token: `mailpilot config set logfire_token <TOKEN>` or `LOGFIRE_TOKEN` env var
 - Cloud send: `send_to_logfire='if-token-present'` -- console-only when no token
 
-**Cloud project.** All records land in Logfire project **`pilot`** (scope of the shared write token). That project holds records for two services distinguished by `service_name`: `mailpilot` (this repo) and `leadpilot` (sibling project). Within each service, spans are further split by `deployment_environment` (`development` | `production`), set from the `logfire_environment` setting. When querying via MCP, always pass `project='pilot'` and filter with `WHERE service_name = 'mailpilot' AND deployment_environment = 'production'` (or `'development'`).
+**Cloud project.** All records land in dedicated Logfire project **`mailpilot`** (scope of the project-scoped write token). The sibling `leadpilot` service uses its own project, so no `service_name` filter is needed when querying. Spans are split by `deployment_environment` (`development` | `production`), set from the `logfire_environment` setting. When querying via MCP, always pass `project='mailpilot'` and filter with `WHERE deployment_environment = 'production'` (or `'development'`).
 
 **Skills for Logfire work.** Prefer these skills over ad-hoc commands:
 

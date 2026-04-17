@@ -28,12 +28,12 @@ Pydantic Logfire is the only observability backend. No parallel `logging` module
 
 | Attribute                | Value                                      | Source                                      |
 | ------------------------ | ------------------------------------------ | ------------------------------------------- |
-| Logfire project          | `pilot`                                    | Shared with sibling project `leadpilot`     |
+| Logfire project          | `mailpilot`                                | Dedicated project -- no cross-service traffic |
 | `service_name`           | `mailpilot`                                | Set in [cli.py](../src/mailpilot/cli.py) `configure_logging()` |
 | `deployment_environment` | `development` \| `production`              | `logfire_environment` setting (default `development`) |
-| Token                    | `logfire_token` setting or `LOGFIRE_TOKEN` | Optional -- console-only when absent        |
+| Token                    | `logfire_token` setting or `LOGFIRE_TOKEN` | Scoped to the `mailpilot` project; optional -- console-only when absent |
 
-All MCP queries and dashboards MUST filter on `service_name = 'mailpilot'` because the `pilot` project also holds records for `leadpilot`.
+The project is dedicated to this service, so MCP queries and dashboards do not need a `service_name` filter. They only need `deployment_environment` to separate dev and prod traffic. The sibling `leadpilot` service uses its own project; if cross-service correlation is ever needed, query each project separately and join on shared ids in application code.
 
 ### Configuration ownership
 
@@ -129,11 +129,10 @@ except ApiError as exc:
 
 ### Investigation workflow
 
-When debugging production behavior, use the `/logfire:debug` skill, which drives the Logfire MCP. Standard filter prefix for every query:
+When debugging production behavior, use the `/logfire:debug` skill, which drives the Logfire MCP. Pass `project='mailpilot'` on every call. Standard filter prefix for production queries:
 
 ```sql
-WHERE service_name = 'mailpilot'
-  AND deployment_environment = 'production'
+WHERE deployment_environment = 'production'
 ```
 
 Queries span a maximum of 14 days (MCP limit). Include a `LIMIT` clause on every `query_run` call.
@@ -150,7 +149,7 @@ Queries span a maximum of 14 days (MCP limit). Include a `LIMIT` clause on every
 
 ### Negative
 
-- A single shared project (`pilot`) is a soft multi-tenant boundary -- every query must remember the `service_name` filter or risk cross-contamination with `leadpilot`.
+- A dedicated `mailpilot` project is a second project to provision and a second write token to rotate alongside the sibling `leadpilot` project; cross-service correlation requires two queries instead of one.
 - All structured attributes must be serializable; rich objects (e.g. Pydantic models) need explicit `.model_dump()` before being attached.
 - Logfire write token grants full send access -- it must not be checked into the repo (stored in `~/.mailpilot/config.json` or `LOGFIRE_TOKEN` env var).
 - OpenTelemetry span export is network-bound; outbound restrictions on a deployment host would require a side-channel.
