@@ -167,7 +167,7 @@ Tests use a separate database: `postgresql://localhost/mailpilot_test` (override
 
 ## Observability
 
-Logging and tracing use [Pydantic Logfire](https://pydantic.dev/logfire) (OpenTelemetry-based). All modules use `import logfire` directly -- no per-module logger variable.
+Logging and tracing use [Pydantic Logfire](https://pydantic.dev/logfire) (OpenTelemetry-based). All modules use `import logfire` directly -- no per-module logger variable. Conventions are defined in `docs/adr-07-observability-with-logfire.md`; module-level instrumentation TODOs live in `docs/logfire-instrumentation-plan.md`.
 
 - `logfire.debug("msg", key=value)` / `logfire.warn("msg", key=value)` for logging
 - `logfire.span("name")` context manager for sync/agent stage tracing
