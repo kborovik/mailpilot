@@ -288,6 +288,124 @@ def company() -> None:
     """Manage target companies."""
 
 
+@company.command("create")
+@click.option("--domain", required=True, help="Primary domain.")
+@click.option("--name", default="", help="Company name.")
+def company_create(domain: str, name: str) -> None:
+    """Create a new company."""
+    from mailpilot.database import create_company, initialize_database
+
+    connection = initialize_database(_database_url())
+    try:
+        created = create_company(connection, name=name, domain=domain)
+        output(created.model_dump(mode="json"))
+    finally:
+        connection.close()
+
+
+@company.command("update")
+@click.argument("company_id")
+@click.option("--name", default=None, help="Company name.")
+def company_update(company_id: str, name: str | None) -> None:
+    """Update a company."""
+    from mailpilot.database import initialize_database, update_company
+
+    connection = initialize_database(_database_url())
+    try:
+        fields: dict[str, object] = {}
+        if name is not None:
+            fields["name"] = name
+        updated = update_company(connection, company_id, **fields)
+        if updated is None:
+            output_error(f"company not found: {company_id}", "not_found")
+        output(updated.model_dump(mode="json"))
+    finally:
+        connection.close()
+
+
+@company.command("search")
+@click.argument("query")
+@click.option("--limit", default=100, help="Maximum results.")
+def company_search(query: str, limit: int) -> None:
+    """Search companies by name or domain."""
+    from mailpilot.database import initialize_database, search_companies
+
+    connection = initialize_database(_database_url())
+    try:
+        companies = search_companies(connection, query, limit=limit)
+        output({"companies": [c.model_dump(mode="json") for c in companies]})
+    finally:
+        connection.close()
+
+
+@company.command("list")
+@click.option("--limit", default=100, help="Maximum results.")
+def company_list(limit: int) -> None:
+    """List all companies."""
+    from mailpilot.database import initialize_database, list_companies
+
+    connection = initialize_database(_database_url())
+    try:
+        companies = list_companies(connection, limit=limit)
+        output({"companies": [c.model_dump(mode="json") for c in companies]})
+    finally:
+        connection.close()
+
+
+@company.command("view")
+@click.argument("company_id")
+def company_view(company_id: str) -> None:
+    """Show a company by ID."""
+    from mailpilot.database import get_company, initialize_database
+
+    connection = initialize_database(_database_url())
+    try:
+        found = get_company(connection, company_id)
+        if found is None:
+            output_error(f"company not found: {company_id}", "not_found")
+        output(found.model_dump(mode="json"))
+    finally:
+        connection.close()
+
+
+@company.command("export")
+@click.argument("file", type=click.Path())
+def company_export(file: str) -> None:
+    """Export all companies to a JSON file."""
+    import pathlib
+
+    from mailpilot.database import initialize_database, list_companies
+
+    connection = initialize_database(_database_url())
+    try:
+        companies = list_companies(connection)
+        data = [c.model_dump(mode="json") for c in companies]
+        pathlib.Path(file).write_text(json.dumps(data, indent=2))
+        output({"exported": len(data), "file": file})
+    finally:
+        connection.close()
+
+
+@company.command("import")
+@click.argument("file", type=click.Path(exists=True))
+def company_import(file: str) -> None:
+    """Import companies from a JSON file."""
+    import pathlib
+
+    from mailpilot.database import create_company, initialize_database
+
+    connection = initialize_database(_database_url())
+    try:
+        entries = json.loads(pathlib.Path(file).read_text())
+        count = 0
+        for entry in entries:
+            create_company(connection, name=entry["name"], domain=entry["domain"])
+            count += 1
+        output({"imported": count, "file": file})
+    finally:
+        connection.close()
+
+
 # -- Contact commands ----------------------------------------------------------
 
 
