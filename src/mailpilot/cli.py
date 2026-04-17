@@ -62,20 +62,41 @@ def output_error(message: str, code: str) -> NoReturn:
 # -- Main CLI ------------------------------------------------------------------
 
 
+def _print_completion(
+    ctx: click.Context, param: click.Parameter, value: str | None
+) -> None:
+    """Eager callback: emit the shell completion script and exit.
+
+    Runs before Click validates that a subcommand was given, so
+    ``mailpilot --completion zsh`` works without supplying a subcommand.
+    """
+    if not value or ctx.resilient_parsing:
+        return
+    from click.shell_completion import get_completion_class
+
+    comp_cls = get_completion_class(value)
+    if comp_cls is None:
+        click.echo(f"unsupported shell: {value}", err=True)
+        ctx.exit(1)
+    click.echo(comp_cls(ctx.command, {}, "mailpilot", "_MAILPILOT_COMPLETE").source())
+    ctx.exit(0)
+
+
 @click.group()
 @click.version_option()
 @click.option("--debug", is_flag=True, help="Enable debug logging.")
-@click.option("--completion", type=str, default=None, hidden=True)
+@click.option(
+    "--completion",
+    type=click.Choice(["bash", "zsh", "fish"]),
+    default=None,
+    is_eager=True,
+    expose_value=False,
+    callback=_print_completion,
+    help="Print shell completion script and exit.",
+)
 @click.pass_context
-def main(ctx: click.Context, debug: bool, completion: str | None) -> None:
+def main(ctx: click.Context, debug: bool) -> None:
     """MailPilot -- CRM for cold email outreach via Gmail."""
-    if completion:
-        from click.shell_completion import get_completion_class
-
-        comp_cls = get_completion_class(completion)
-        if comp_cls:
-            click.echo(comp_cls(main, {}, "mailpilot", "_MAILPILOT_COMPLETE").source())
-        raise SystemExit(0)
     ctx.ensure_object(dict)
     ctx.obj["debug"] = debug
 
@@ -193,6 +214,70 @@ def config_set(key: str, value: str) -> None:
 @main.group()
 def account() -> None:
     """Manage Gmail accounts."""
+
+
+@account.command("create")
+@click.option("--email", required=True, help="Gmail address.")
+@click.option("--display-name", default="", help="Display name.")
+def account_create(email: str, display_name: str) -> None:
+    """Create a new Gmail account."""
+    from mailpilot.database import create_account, initialize_database
+
+    connection = initialize_database(_database_url())
+    try:
+        created = create_account(connection, email=email, display_name=display_name)
+        output(created.model_dump(mode="json"))
+    finally:
+        connection.close()
+
+
+@account.command("list")
+def account_list() -> None:
+    """List all Gmail accounts."""
+    from mailpilot.database import initialize_database, list_accounts
+
+    connection = initialize_database(_database_url())
+    try:
+        accounts = list_accounts(connection)
+        output({"accounts": [a.model_dump(mode="json") for a in accounts]})
+    finally:
+        connection.close()
+
+
+@account.command("view")
+@click.argument("account_id")
+def account_view(account_id: str) -> None:
+    """Show a Gmail account by ID."""
+    from mailpilot.database import get_account, initialize_database
+
+    connection = initialize_database(_database_url())
+    try:
+        found = get_account(connection, account_id)
+        if found is None:
+            output_error(f"account not found: {account_id}", "not_found")
+        output(found.model_dump(mode="json"))
+    finally:
+        connection.close()
+
+
+@account.command("update")
+@click.argument("account_id")
+@click.option("--display-name", default=None, help="Display name.")
+def account_update(account_id: str, display_name: str | None) -> None:
+    """Update a Gmail account."""
+    from mailpilot.database import initialize_database, update_account
+
+    connection = initialize_database(_database_url())
+    try:
+        fields: dict[str, object] = {}
+        if display_name is not None:
+            fields["display_name"] = display_name
+        updated = update_account(connection, account_id, **fields)
+        if updated is None:
+            output_error(f"account not found: {account_id}", "not_found")
+        output(updated.model_dump(mode="json"))
+    finally:
+        connection.close()
 
 
 # -- Company commands ----------------------------------------------------------
