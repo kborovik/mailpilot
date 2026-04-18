@@ -14,6 +14,7 @@ from conftest import (
 from mailpilot.database import (
     activate_workflow,
     create_email,
+    create_or_get_contact_by_email,
     get_account,
     get_company,
     get_contact,
@@ -183,6 +184,55 @@ def test_get_contact_by_email_not_found(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     assert get_contact_by_email(database_connection, "nobody@test.com") is None
+
+
+def test_create_or_get_contact_by_email_creates_new(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    contact = create_or_get_contact_by_email(
+        database_connection,
+        email="new@example.com",
+        first_name="Alice",
+        last_name="Smith",
+    )
+    assert contact.email == "new@example.com"
+    assert contact.domain == "example.com"
+    assert contact.first_name == "Alice"
+    assert contact.last_name == "Smith"
+
+
+def test_create_or_get_contact_by_email_returns_existing(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    first = create_or_get_contact_by_email(
+        database_connection, email="dup@example.com", first_name="Bob"
+    )
+    second = create_or_get_contact_by_email(
+        database_connection, email="dup@example.com", first_name="Robert"
+    )
+    assert first.id == second.id
+    # Non-null existing name is not overwritten.
+    assert second.first_name == "Bob"
+
+
+def test_create_or_get_contact_by_email_backfills_null_names(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    created = create_or_get_contact_by_email(
+        database_connection, email="nameless@example.com"
+    )
+    assert created.first_name is None
+    assert created.last_name is None
+
+    backfilled = create_or_get_contact_by_email(
+        database_connection,
+        email="nameless@example.com",
+        first_name="Jane",
+        last_name="Doe",
+    )
+    assert backfilled.id == created.id
+    assert backfilled.first_name == "Jane"
+    assert backfilled.last_name == "Doe"
 
 
 # -- Workflow ------------------------------------------------------------------

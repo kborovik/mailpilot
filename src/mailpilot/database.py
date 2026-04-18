@@ -11,6 +11,7 @@ Convention:
 """
 
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -488,6 +489,57 @@ def get_contact_by_email(
         if row is None:
             return None
         return Contact.model_validate(row)
+
+
+def create_or_get_contact_by_email(
+    connection: psycopg.Connection[dict[str, Any]],
+    email: str,
+    first_name: str | None = None,
+    last_name: str | None = None,
+) -> Contact:
+    """Return an existing contact by email, creating one if missing.
+
+    If the contact already exists, backfills ``first_name`` / ``last_name``
+    only when the stored value is NULL and the caller provided one. Existing
+    non-null names are never overwritten.
+
+    Used during inbound sync to resolve a ``From`` header to a contact row
+    without forcing callers to branch on existence.
+
+    Args:
+        connection: Open database connection.
+        email: Contact email address.
+        first_name: Optional first name (from From header display name).
+        last_name: Optional last name (from From header display name).
+
+    Returns:
+        Existing or newly created contact.
+    """
+    with logfire.span("db.contact.create_or_get", email=email) as span:
+        existing = get_contact_by_email(connection, email)
+        if existing is not None:
+            span.set_attribute("created", False)
+            span.set_attribute("contact_id", existing.id)
+            backfill: dict[str, object] = {}
+            if existing.first_name is None and first_name is not None:
+                backfill["first_name"] = first_name
+            if existing.last_name is None and last_name is not None:
+                backfill["last_name"] = last_name
+            if not backfill:
+                return existing
+            updated = update_contact(connection, existing.id, **backfill)
+            return updated if updated is not None else existing
+        domain = email.split("@", 1)[1] if "@" in email else ""
+        created = create_contact(
+            connection,
+            email=email,
+            domain=domain,
+            first_name=first_name,
+            last_name=last_name,
+        )
+        span.set_attribute("created", True)
+        span.set_attribute("contact_id", created.id)
+        return created
 
 
 def list_contacts(
@@ -1033,6 +1085,8 @@ def create_email(
     workflow_id: str | None = None,
     status: str = "received",
     is_routed: bool = False,
+    received_at: datetime | None = None,
+    labels: list[str] | None = None,
 ) -> Email:
     """Create a new email record.
 
@@ -1048,6 +1102,8 @@ def create_email(
         workflow_id: Optional workflow FK.
         status: Email status ("sent" or "received").
         is_routed: Whether the routing pipeline has processed this email.
+        received_at: When Gmail reports the message arrived (UTC datetime).
+        labels: Gmail label IDs attached to the message.
 
     Returns:
         Created email.
@@ -1063,11 +1119,12 @@ def create_email(
             """\
             INSERT INTO email (id, account_id, direction, subject,
                 body_text, gmail_message_id, gmail_thread_id,
-                contact_id, workflow_id, status, is_routed)
+                contact_id, workflow_id, status, is_routed,
+                received_at, labels)
             VALUES (%(id)s, %(account_id)s, %(direction)s,
                 %(subject)s, %(body_text)s, %(gmail_message_id)s,
                 %(gmail_thread_id)s, %(contact_id)s, %(workflow_id)s,
-                %(status)s, %(is_routed)s)
+                %(status)s, %(is_routed)s, %(received_at)s, %(labels)s)
             RETURNING *
             """,
             {
@@ -1082,6 +1139,8 @@ def create_email(
                 "workflow_id": workflow_id,
                 "status": status,
                 "is_routed": is_routed,
+                "received_at": received_at,
+                "labels": Json(labels or []),
             },
         ).fetchone()
         connection.commit()
