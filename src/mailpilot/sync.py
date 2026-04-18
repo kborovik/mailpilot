@@ -19,6 +19,7 @@ import os
 import signal
 import threading
 from datetime import UTC, datetime, timedelta
+from email.utils import formataddr
 from typing import Any
 
 import click
@@ -459,11 +460,16 @@ def send_email(  # noqa: PLR0913
         workflow_id=workflow_id,
         contact_id=contact_id,
     ) as span:
+        from_header = (
+            formataddr((account.display_name, account.email))
+            if account.display_name
+            else account.email
+        )
         result = gmail_client.send_message(
             to=to,
             subject=subject,
             body=body,
-            from_email=account.email,
+            from_email=from_header,
             thread_id=thread_id,
             account_id=account.id,
         )

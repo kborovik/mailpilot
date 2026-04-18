@@ -572,6 +572,69 @@ def test_send_email_records_outbound_row(
     assert stored.status == "sent"
 
 
+def test_send_email_formats_from_header_with_display_name(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(
+        database_connection,
+        email="sender@example.com",
+        display_name="Alice Sender",
+    )
+    client, service = _make_send_client(account.email)
+
+    send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Hi",
+        body="Body",
+    )
+
+    # Decode the raw MIME payload Gmail received to inspect the From header.
+    import base64
+    from email import message_from_bytes
+
+    send_body = service.users.return_value.messages.return_value.send.call_args.kwargs[
+        "body"
+    ]
+    raw = base64.urlsafe_b64decode(send_body["raw"])
+    msg = message_from_bytes(raw)
+    assert msg["from"] == "Alice Sender <sender@example.com>"
+
+
+def test_send_email_from_header_falls_back_to_email_only(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(
+        database_connection,
+        email="sender@example.com",
+        display_name="",
+    )
+    client, service = _make_send_client(account.email)
+
+    send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Hi",
+        body="Body",
+    )
+
+    import base64
+    from email import message_from_bytes
+
+    send_body = service.users.return_value.messages.return_value.send.call_args.kwargs[
+        "body"
+    ]
+    raw = base64.urlsafe_b64decode(send_body["raw"])
+    msg = message_from_bytes(raw)
+    assert msg["from"] == "sender@example.com"
+
+
 def test_send_email_passes_thread_and_optional_links(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
