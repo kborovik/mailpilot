@@ -124,6 +124,15 @@ API keys and config stored in `~/.mailpilot/config.json` via `mailpilot config s
 - `logfire_token` -- Pydantic Logfire token (optional)
 - `logfire_environment` -- deployment environment tag. Literal: `development` | `production` (default: `development`). Tags every span sent to Logfire so traces from dev runs can be filtered out when investigating production behaviour.
 
+### Test Accounts
+
+Two real Google Workspace accounts are provisioned for end-to-end smoke tests against Gmail API:
+
+- `inbound@lab5.ca` -- Inbound (receives messages, used for auto-reply flows)
+- `outbound@lab5.ca` -- Outbound (sends cold email, used for campaign flows)
+
+Both are delegated via the service account in `google_application_credentials` and can be re-created with `mailpilot account create --email ... --display-name ...` after a `make clean`.
+
 ## LLM-First Code Style
 
 - Explicit, fully descriptive names (no abbreviations)
