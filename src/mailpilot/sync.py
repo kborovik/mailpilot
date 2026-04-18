@@ -411,6 +411,90 @@ def _received_at_from_message(message: dict[str, Any]) -> datetime | None:
 # -- Routing ------------------------------------------------------------------
 
 
+def send_email(  # noqa: PLR0913
+    connection: psycopg.Connection[dict[str, Any]],
+    account: Account,
+    gmail_client: GmailClient,
+    settings: Settings,
+    to: str,
+    subject: str,
+    body: str,
+    contact_id: str | None = None,
+    workflow_id: str | None = None,
+    thread_id: str | None = None,
+) -> Email:
+    """Send an outbound email through Gmail and record the DB row.
+
+    Hands the message to ``GmailClient.send_message`` first and only
+    persists the row after Gmail accepts it, so a Gmail failure never
+    leaves an orphan ``sent`` row behind. Outbound rows are marked
+    ``is_routed=True`` because they originate from an agent/CLI and need
+    no further routing.
+
+    Args:
+        connection: Open database connection.
+        account: Sending account (used for service-account delegation).
+        gmail_client: Gmail client scoped to ``account``.
+        settings: Application settings (reserved for future tuning).
+        to: Recipient email address.
+        subject: Email subject.
+        body: Plain text body.
+        contact_id: Optional contact FK.
+        workflow_id: Optional workflow FK.
+        thread_id: Optional Gmail thread ID for replies.
+
+    Returns:
+        The created ``Email`` row with ``direction="outbound"`` and
+        ``status="sent"``.
+
+    Raises:
+        RuntimeError: If the DB insert unexpectedly returns None (would
+            only happen on a duplicate Gmail message ID, which the API
+            does not reuse for fresh sends).
+    """
+    del settings  # reserved for future tuning (per-account overrides, etc.)
+    with logfire.span(
+        "sync.send_email",
+        account_id=account.id,
+        workflow_id=workflow_id,
+        contact_id=contact_id,
+    ) as span:
+        result = gmail_client.send_message(
+            to=to,
+            subject=subject,
+            body=body,
+            from_email=account.email,
+            thread_id=thread_id,
+            account_id=account.id,
+        )
+        gmail_message_id = result.get("id")
+        gmail_thread_id = result.get("threadId")
+        labels = list(result.get("labelIds") or [])
+        email = create_email(
+            connection,
+            account_id=account.id,
+            direction="outbound",
+            subject=subject,
+            body_text=body,
+            gmail_message_id=gmail_message_id,
+            gmail_thread_id=gmail_thread_id,
+            contact_id=contact_id,
+            workflow_id=workflow_id,
+            status="sent",
+            is_routed=True,
+            sent_at=datetime.now(UTC),
+            labels=labels,
+        )
+        if email is None:
+            raise RuntimeError(
+                "outbound email insert returned None for "
+                f"gmail_message_id={gmail_message_id}"
+            )
+        span.set_attribute("email_id", email.id)
+        span.set_attribute("gmail_message_id", gmail_message_id)
+        return email
+
+
 def route_email(
     connection: psycopg.Connection[dict[str, Any]],
     email: Email,

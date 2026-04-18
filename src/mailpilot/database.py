@@ -1207,6 +1207,7 @@ def create_email(
     status: str = "received",
     is_routed: bool = False,
     received_at: datetime | None = None,
+    sent_at: datetime | None = None,
     labels: list[str] | None = None,
 ) -> Email | None:
     """Create a new email record, or return None on gmail_message_id conflict.
@@ -1230,6 +1231,7 @@ def create_email(
         status: Email status ("sent" or "received").
         is_routed: Whether the routing pipeline has processed this email.
         received_at: When Gmail reports the message arrived (UTC datetime).
+        sent_at: When the outbound message was handed to Gmail (UTC datetime).
         labels: Gmail label IDs attached to the message.
 
     Returns:
@@ -1248,11 +1250,12 @@ def create_email(
             INSERT INTO email (id, account_id, direction, subject,
                 body_text, gmail_message_id, gmail_thread_id,
                 contact_id, workflow_id, status, is_routed,
-                received_at, labels)
+                received_at, sent_at, labels)
             VALUES (%(id)s, %(account_id)s, %(direction)s,
                 %(subject)s, %(body_text)s, %(gmail_message_id)s,
                 %(gmail_thread_id)s, %(contact_id)s, %(workflow_id)s,
-                %(status)s, %(is_routed)s, %(received_at)s, %(labels)s)
+                %(status)s, %(is_routed)s, %(received_at)s, %(sent_at)s,
+                %(labels)s)
             ON CONFLICT (gmail_message_id) DO NOTHING
             RETURNING *
             """,
@@ -1269,6 +1272,7 @@ def create_email(
                 "status": status,
                 "is_routed": is_routed,
                 "received_at": received_at,
+                "sent_at": sent_at,
                 "labels": Json(labels or []),
             },
         ).fetchone()
