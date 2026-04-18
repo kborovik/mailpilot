@@ -11,6 +11,7 @@ Convention:
 """
 
 import uuid
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
@@ -540,6 +541,94 @@ def create_or_get_contact_by_email(
         span.set_attribute("created", True)
         span.set_attribute("contact_id", created.id)
         return created
+
+
+def get_contacts_by_emails(
+    connection: psycopg.Connection[dict[str, Any]],
+    emails: Iterable[str],
+) -> dict[str, Contact]:
+    """Fetch contacts for a batch of email addresses in one round-trip.
+
+    Used by the sync pipeline to eliminate per-message contact lookups. The
+    caller should feed in the set of distinct sender addresses from a batch
+    of Gmail messages.
+
+    Args:
+        connection: Open database connection.
+        emails: Email addresses to look up. Duplicates are tolerated.
+
+    Returns:
+        Mapping from email to Contact for every input email that has an
+        existing row. Missing emails are simply absent from the dict.
+    """
+    unique = list(set(emails))
+    with logfire.span(
+        "db.contact.get_by_emails",
+        requested_count=len(unique),
+    ) as span:
+        if not unique:
+            span.set_attribute("hit_count", 0)
+            return {}
+        rows = connection.execute(
+            "SELECT * FROM contact WHERE email = ANY(%(emails)s)",
+            {"emails": unique},
+        ).fetchall()
+        result = {row["email"]: Contact.model_validate(row) for row in rows}
+        span.set_attribute("hit_count", len(result))
+        return result
+
+
+def create_contacts_bulk(
+    connection: psycopg.Connection[dict[str, Any]],
+    emails: Iterable[str],
+) -> dict[str, Contact]:
+    """Ensure a contact row exists for every input email, in one round-trip.
+
+    Inserts any missing rows with ``ON CONFLICT (email) DO NOTHING``, then
+    re-reads every requested email so the returned mapping covers rows
+    that were already present (either pre-existing or inserted by a
+    concurrent transaction). Safe to run in parallel from multiple sync
+    workers; no ``UniqueViolation`` can escape.
+
+    Args:
+        connection: Open database connection.
+        emails: Email addresses to ensure. Duplicates are tolerated.
+
+    Returns:
+        Mapping from email to Contact for every input email.
+    """
+    unique = list(set(emails))
+    with logfire.span(
+        "db.contact.create_bulk",
+        requested_count=len(unique),
+    ) as span:
+        if not unique:
+            span.set_attribute("inserted_count", 0)
+            return {}
+        ids = [_new_id() for _ in unique]
+        domains = [email.split("@", 1)[1] if "@" in email else "" for email in unique]
+        rows = connection.execute(
+            """\
+            INSERT INTO contact (id, email, domain)
+            SELECT id, email, domain
+            FROM unnest(%(ids)s::text[], %(emails)s::text[], %(domains)s::text[])
+                 AS t(id, email, domain)
+            ON CONFLICT (email) DO NOTHING
+            RETURNING *
+            """,
+            {"ids": ids, "emails": unique, "domains": domains},
+        ).fetchall()
+        connection.commit()
+        inserted = {row["email"]: Contact.model_validate(row) for row in rows}
+        span.set_attribute("inserted_count", len(inserted))
+        # Re-fetch any row that was not inserted by this transaction. These
+        # cover both pre-existing rows and rows inserted by a concurrent
+        # worker (ON CONFLICT DO NOTHING swallows those silently).
+        remaining = [email for email in unique if email not in inserted]
+        if remaining:
+            existing = get_contacts_by_emails(connection, remaining)
+            inserted.update(existing)
+        return inserted
 
 
 def list_contacts(

@@ -16,12 +16,14 @@ from conftest import (
 )
 from mailpilot.database import (
     activate_workflow,
+    create_contacts_bulk,
     create_email,
     create_or_get_contact_by_email,
     get_account,
     get_company,
     get_contact,
     get_contact_by_email,
+    get_contacts_by_emails,
     get_email,
     get_email_by_gmail_message_id,
     get_emails_by_gmail_thread_id,
@@ -237,6 +239,162 @@ def test_create_or_get_contact_by_email_backfills_null_names(
     assert backfilled.id == created.id
     assert backfilled.first_name == "Jane"
     assert backfilled.last_name == "Doe"
+
+
+def test_get_contacts_by_emails_empty(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    assert get_contacts_by_emails(database_connection, []) == {}
+
+
+def test_get_contacts_by_emails_returns_map_for_existing(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    alice = make_test_contact(
+        database_connection, email="alice@example.com", domain="example.com"
+    )
+    bob = make_test_contact(
+        database_connection, email="bob@example.com", domain="example.com"
+    )
+    result = get_contacts_by_emails(
+        database_connection, ["alice@example.com", "bob@example.com"]
+    )
+    assert set(result.keys()) == {"alice@example.com", "bob@example.com"}
+    assert result["alice@example.com"].id == alice.id
+    assert result["bob@example.com"].id == bob.id
+
+
+def test_get_contacts_by_emails_omits_missing(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    make_test_contact(
+        database_connection, email="alice@example.com", domain="example.com"
+    )
+    result = get_contacts_by_emails(
+        database_connection, ["alice@example.com", "ghost@example.com"]
+    )
+    assert set(result.keys()) == {"alice@example.com"}
+
+
+def test_get_contacts_by_emails_deduplicates_input(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    make_test_contact(
+        database_connection, email="alice@example.com", domain="example.com"
+    )
+    result = get_contacts_by_emails(
+        database_connection, ["alice@example.com", "alice@example.com"]
+    )
+    assert set(result.keys()) == {"alice@example.com"}
+
+
+def test_create_contacts_bulk_empty(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    assert create_contacts_bulk(database_connection, []) == {}
+
+
+def test_create_contacts_bulk_all_new(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    result = create_contacts_bulk(
+        database_connection, ["alice@example.com", "bob@other.com"]
+    )
+    assert set(result.keys()) == {"alice@example.com", "bob@other.com"}
+    assert result["alice@example.com"].domain == "example.com"
+    assert result["bob@other.com"].domain == "other.com"
+    # Rows actually persisted.
+    assert get_contact_by_email(database_connection, "alice@example.com") is not None
+    assert get_contact_by_email(database_connection, "bob@other.com") is not None
+
+
+def test_create_contacts_bulk_returns_existing_and_new(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    existing = make_test_contact(
+        database_connection, email="alice@example.com", domain="example.com"
+    )
+    result = create_contacts_bulk(
+        database_connection, ["alice@example.com", "bob@example.com"]
+    )
+    assert set(result.keys()) == {"alice@example.com", "bob@example.com"}
+    # Existing row kept its original id.
+    assert result["alice@example.com"].id == existing.id
+
+
+def test_create_contacts_bulk_deduplicates_input(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    result = create_contacts_bulk(
+        database_connection, ["alice@example.com", "alice@example.com"]
+    )
+    assert set(result.keys()) == {"alice@example.com"}
+    row = database_connection.execute(
+        "SELECT COUNT(*) AS n FROM contact WHERE email = %(email)s",
+        {"email": "alice@example.com"},
+    ).fetchone()
+    assert row is not None
+    assert row["n"] == 1
+
+
+def test_create_contacts_bulk_handles_missing_at_symbol(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    result = create_contacts_bulk(database_connection, ["weirdaddress"])
+    assert "weirdaddress" in result
+    assert result["weirdaddress"].domain == ""
+
+
+def test_create_contacts_bulk_concurrent_is_safe(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Concurrent bulk inserts with overlapping emails must converge safely."""
+    emails_a = ["alice@example.com", "bob@example.com"]
+    emails_b = ["bob@example.com", "carol@example.com"]
+    thread_count = 2
+    barrier = threading.Barrier(thread_count)
+    results: list[dict[str, Any]] = []
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+
+    def worker(emails: list[str]) -> None:
+        conn = cast(
+            psycopg.Connection[dict[str, Any]],
+            psycopg.connect(TEST_DATABASE_URL, row_factory=dict_row),  # type: ignore[arg-type]
+        )
+        try:
+            barrier.wait(timeout=5)
+            result = create_contacts_bulk(conn, emails)
+            with lock:
+                results.append({e: c.id for e, c in result.items()})
+        except BaseException as exc:
+            with lock:
+                errors.append(exc)
+        finally:
+            conn.close()
+
+    threads = [
+        threading.Thread(target=worker, args=(emails_a,)),
+        threading.Thread(target=worker, args=(emails_b,)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert errors == []
+    assert len(results) == thread_count
+
+    row = database_connection.execute(
+        "SELECT COUNT(*) AS n FROM contact WHERE email = ANY(%(emails)s)",
+        {"emails": ["alice@example.com", "bob@example.com", "carol@example.com"]},
+    ).fetchone()
+    assert row is not None
+    assert row["n"] == 3
+
+    # Both workers must agree on Bob's id (the shared row).
+    bob_ids = {r["bob@example.com"] for r in results}
+    assert len(bob_ids) == 1
 
 
 # -- Workflow ------------------------------------------------------------------

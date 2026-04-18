@@ -26,13 +26,16 @@ import logfire
 import psycopg
 
 from mailpilot.database import (
+    create_contacts_bulk,
     create_email,
     create_or_get_contact_by_email,
     delete_sync_status,
+    get_contacts_by_emails,
     get_email_by_gmail_message_id,
     get_emails_by_gmail_thread_id,
     get_sync_status,
     update_account,
+    update_contact,
     update_email,
     update_sync_heartbeat,
     upsert_sync_status,
@@ -43,7 +46,7 @@ from mailpilot.gmail import (
     get_message_headers,
     parse_sender,
 )
-from mailpilot.models import Account, Email
+from mailpilot.models import Account, Contact, Email
 from mailpilot.settings import Settings
 
 _HEARTBEAT_INTERVAL = 30  # seconds
@@ -168,14 +171,31 @@ def sync_account(
             checkpoint = gmail_client.get_profile().get("historyId") or ""
             message_ids, mode = _collect_new_message_ids(account, gmail_client)
             span.set_attribute("mode", mode)
-            stored = 0
+            # Fetch message payloads once, skipping IDs already stored. We
+            # need the full message for sender parsing, text extraction, and
+            # the final insert, so caching here avoids a second Gmail fetch.
+            fresh_messages: list[dict[str, Any]] = []
             for message_id in message_ids:
                 if get_email_by_gmail_message_id(connection, message_id) is not None:
                     continue
                 message = gmail_client.get_message(message_id)
                 if message is None:
                     continue
-                if _store_inbound_message(connection, account, message) is None:
+                fresh_messages.append(message)
+            # Resolve every distinct sender in one pair of round-trips,
+            # regardless of message count. Scales with unique senders, not
+            # with mailbox size.
+            contacts_by_email = _resolve_contacts_for_messages(
+                connection, fresh_messages
+            )
+            stored = 0
+            for message in fresh_messages:
+                if (
+                    _store_inbound_message(
+                        connection, account, message, contacts_by_email
+                    )
+                    is None
+                ):
                     continue
                 stored += 1
             update_account(
@@ -191,6 +211,77 @@ def sync_account(
             span.set_attribute("result", "failure")
             logfire.exception("sync.account.run failed", account_id=account.id)
             raise
+
+
+def _resolve_contacts_for_messages(
+    connection: psycopg.Connection[dict[str, Any]],
+    messages: list[dict[str, Any]],
+) -> dict[str, Contact]:
+    """Resolve every distinct sender in ``messages`` to a contact row.
+
+    Bulk pre-fetch pass that replaces the former per-message
+    ``create_or_get_contact_by_email`` call. Uses one SELECT to find
+    existing contacts, one INSERT for the missing ones, and an optional
+    backfill pass to populate first/last names where the From header has
+    them and the contact row does not. Round-trips scale with distinct
+    senders, not with message count.
+    """
+    best_names = _aggregate_sender_names(messages)
+    if not best_names:
+        return {}
+    senders = list(best_names)
+    with logfire.span(
+        "sync.account.resolve_contacts",
+        distinct_sender_count=len(senders),
+    ) as span:
+        contacts_by_email = get_contacts_by_emails(connection, senders)
+        missing = [email for email in senders if email not in contacts_by_email]
+        span.set_attribute("existing_count", len(contacts_by_email))
+        span.set_attribute("missing_count", len(missing))
+        if missing:
+            contacts_by_email.update(create_contacts_bulk(connection, missing))
+        _backfill_contact_names(connection, contacts_by_email, best_names)
+        return contacts_by_email
+
+
+def _aggregate_sender_names(
+    messages: list[dict[str, Any]],
+) -> dict[str, tuple[str | None, str | None]]:
+    """Collect the first non-null first/last name per sender across ``messages``."""
+    best_names: dict[str, tuple[str | None, str | None]] = {}
+    for message in messages:
+        headers = get_message_headers(message)
+        sender_email, first_name, last_name = parse_sender(headers.get("from", ""))
+        if not sender_email:
+            continue
+        current_first, current_last = best_names.get(sender_email, (None, None))
+        best_names[sender_email] = (
+            current_first or first_name,
+            current_last or last_name,
+        )
+    return best_names
+
+
+def _backfill_contact_names(
+    connection: psycopg.Connection[dict[str, Any]],
+    contacts_by_email: dict[str, Contact],
+    best_names: dict[str, tuple[str | None, str | None]],
+) -> None:
+    """Populate NULL first/last names from From-header values, in place."""
+    for email, (first_name, last_name) in best_names.items():
+        contact = contacts_by_email.get(email)
+        if contact is None:
+            continue
+        backfill: dict[str, object] = {}
+        if contact.first_name is None and first_name is not None:
+            backfill["first_name"] = first_name
+        if contact.last_name is None and last_name is not None:
+            backfill["last_name"] = last_name
+        if not backfill:
+            continue
+        updated = update_contact(connection, contact.id, **backfill)
+        if updated is not None:
+            contacts_by_email[email] = updated
 
 
 def _collect_new_message_ids(
@@ -249,6 +340,7 @@ def _store_inbound_message(
     connection: psycopg.Connection[dict[str, Any]],
     account: Account,
     message: dict[str, Any],
+    contacts_by_email: dict[str, Contact],
 ) -> Email | None:
     """Persist a Gmail message as an inbound email and route when fresh.
 
@@ -257,12 +349,17 @@ def _store_inbound_message(
     """
     headers = get_message_headers(message)
     sender_email, first_name, last_name = parse_sender(headers.get("from", ""))
-    contact = create_or_get_contact_by_email(
-        connection,
-        email=sender_email,
-        first_name=first_name,
-        last_name=last_name,
-    )
+    contact = contacts_by_email.get(sender_email)
+    if contact is None:
+        # Fallback for senders not in the pre-fetched dict (e.g. empty From
+        # header): resolve one-off so a single malformed message does not
+        # abort the whole sync.
+        contact = create_or_get_contact_by_email(
+            connection,
+            email=sender_email,
+            first_name=first_name,
+            last_name=last_name,
+        )
     received_at = _received_at_from_message(message)
     within_window = (
         received_at is not None and datetime.now(UTC) - received_at <= _RECENCY_WINDOW
