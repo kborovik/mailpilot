@@ -44,10 +44,13 @@ The CLI must be LLM Agent friendly: JSON output only. Exit codes must be meaning
 ```
 mailpilot --version
 mailpilot --debug COMMAND
+mailpilot --completion bash|zsh|fish
 
 mailpilot account create --email E [--display-name N]
 mailpilot account list
 mailpilot account view ID
+mailpilot account update ID [--display-name N]
+mailpilot account sync [--account-id ID]
 
 mailpilot company create --domain D [--name N] [opts]
 mailpilot company update ID [--name N]
@@ -90,7 +93,7 @@ mailpilot status
 
 See `src/mailpilot/schema.sql`. Requires PostgreSQL 18. Connection: `database_url` setting (default: `postgresql://localhost/mailpilot`). Schema applied automatically on first connection.
 
-Tables: `account`, `company`, `contact`, `workflow`, `workflow_contact`, `email`, `task`.
+Tables: `account`, `company`, `contact`, `workflow`, `workflow_contact`, `email`, `task`, `sync_status`.
 
 Prefer atomic single-query operations: use `UPDATE ... FROM ... RETURNING` to join, mutate, and return in one round-trip instead of SELECT-then-UPDATE.
 
@@ -114,12 +117,21 @@ API keys and config stored in `~/.mailpilot/config.json` via `mailpilot config s
 
 - `anthropic_api_key` -- Anthropic Claude API key
 - `anthropic_model` -- Anthropic model ID (default: `claude-sonnet-4-6`)
-- `google_project_id` -- Google Cloud project ID (for Pub/Sub)
+- `google_application_credentials` -- Path to service account JSON (falls back to `GOOGLE_APPLICATION_CREDENTIALS` env var). The file's `project_id` field is the source of truth for the GCP project.
 - `google_pubsub_topic` -- Pub/Sub topic name (default: `gmail-watch`)
 - `google_pubsub_subscription` -- Pub/Sub subscription name (default: `mailpilot-watch`)
 - `database_url` -- PostgreSQL connection (default: `postgresql://localhost/mailpilot`)
 - `logfire_token` -- Pydantic Logfire token (optional)
 - `logfire_environment` -- deployment environment tag. Literal: `development` | `production` (default: `development`). Tags every span sent to Logfire so traces from dev runs can be filtered out when investigating production behaviour.
+
+### Test Accounts
+
+Two real Google Workspace accounts are provisioned for end-to-end smoke tests against Gmail API:
+
+- `inbound@lab5.ca` -- Inbound (receives messages, used for auto-reply flows)
+- `outbound@lab5.ca` -- Outbound (sends cold email, used for campaign flows)
+
+Both are delegated via the service account in `google_application_credentials` and can be re-created with `mailpilot account create --email ... --display-name ...` after a `make clean`.
 
 ## LLM-First Code Style
 

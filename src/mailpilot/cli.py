@@ -273,6 +273,58 @@ def account_update(account_id: str, display_name: str | None) -> None:
         connection.close()
 
 
+@account.command("sync")
+@click.option(
+    "--account-id",
+    default=None,
+    help="Sync only the given account; omit to sync all accounts.",
+)
+def account_sync(account_id: str | None) -> None:
+    """Run a one-shot Gmail sync for one or all accounts."""
+    import logfire
+
+    from mailpilot.database import get_account, initialize_database, list_accounts
+    from mailpilot.gmail import GmailClient
+    from mailpilot.settings import get_settings
+    from mailpilot.sync import sync_account
+
+    settings = get_settings()
+    connection = initialize_database(_database_url())
+    try:
+        if account_id is not None:
+            single = get_account(connection, account_id)
+            if single is None:
+                output_error(f"account not found: {account_id}", "not_found")
+            accounts = [single]
+        else:
+            accounts = list_accounts(connection)
+
+        results: list[dict[str, object]] = []
+        total_stored = 0
+        with logfire.span("cli.account.sync", account_count=len(accounts)):
+            for acc in accounts:
+                row: dict[str, object] = {
+                    "account_id": acc.id,
+                    "email": acc.email,
+                }
+                try:
+                    client = GmailClient(acc.email)
+                    stored = sync_account(connection, acc, client, settings)
+                    row["stored"] = stored
+                    total_stored += stored
+                except Exception as exc:
+                    logfire.exception(
+                        "cli.account.sync.failed",
+                        account_id=acc.id,
+                        email=acc.email,
+                    )
+                    row["error"] = str(exc)
+                results.append(row)
+        output({"results": results, "total_stored": total_stored})
+    finally:
+        connection.close()
+
+
 # -- Company commands ----------------------------------------------------------
 
 

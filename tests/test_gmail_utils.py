@@ -1,12 +1,17 @@
 """Tests for Gmail utility functions (no service/network needed)."""
 
 import base64
+from unittest.mock import patch
 
+import pytest
+
+from mailpilot import gmail
 from mailpilot.gmail import (
     extract_text_from_message,
     get_message_headers,
     parse_sender,
 )
+from mailpilot.settings import Settings
 
 
 def _b64(text: str) -> str:
@@ -164,3 +169,50 @@ def test_parse_sender_three_part_name():
     assert email == "mj@example.com"
     assert first == "Mary"
     assert last == "Jane Watson"
+
+
+# -- credentials resolution ---------------------------------------------------
+
+
+def test_resolve_credentials_path_from_settings(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+    settings = Settings(google_application_credentials="/tmp/service-account.json")
+    with patch("mailpilot.settings.get_settings", return_value=settings):
+        assert (
+            gmail._resolve_credentials_path()  # pyright: ignore[reportPrivateUsage]
+            == "/tmp/service-account.json"
+        )
+
+
+def test_resolve_credentials_path_falls_back_to_env(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/env/key.json")
+    settings = Settings(google_application_credentials="")
+    with patch("mailpilot.settings.get_settings", return_value=settings):
+        assert (
+            gmail._resolve_credentials_path()  # pyright: ignore[reportPrivateUsage]
+            == "/env/key.json"
+        )
+
+
+def test_resolve_credentials_path_settings_wins_over_env(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/env/key.json")
+    settings = Settings(google_application_credentials="/cfg/key.json")
+    with patch("mailpilot.settings.get_settings", return_value=settings):
+        assert (
+            gmail._resolve_credentials_path()  # pyright: ignore[reportPrivateUsage]
+            == "/cfg/key.json"
+        )
+
+
+def test_resolve_credentials_path_missing(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+    settings = Settings(google_application_credentials="")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=settings),
+        pytest.raises(SystemExit, match="No service account credentials"),
+    ):
+        gmail._resolve_credentials_path()  # pyright: ignore[reportPrivateUsage]

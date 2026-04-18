@@ -53,9 +53,9 @@ class Settings(BaseSettings):
     logfire_environment: LogfireEnvironment = "development"
     anthropic_api_key: str = ""
     anthropic_model: str = DEFAULT_ANTHROPIC_MODEL
-    google_project_id: str = ""
     google_pubsub_topic: str = "gmail-watch"
     google_pubsub_subscription: str = "mailpilot-watch"
+    google_application_credentials: str = ""
 
     @classmethod
     def settings_customise_sources(
