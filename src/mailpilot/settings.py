@@ -146,5 +146,6 @@ def set_setting(key: str, value: object, config_path: Path = CONFIG_PATH) -> Set
     data[key] = value
     updated = Settings(**{k: v for k, v in data.items() if k in Settings.model_fields})
     save_settings(updated, config_path=config_path)
-    logfire.info("config.set", key=key, changed=old_value != value)
+    new_value = updated.model_dump(mode="json").get(key)
+    logfire.info("config.set", key=key, changed=old_value != new_value)
     return updated

@@ -99,7 +99,8 @@ def main(ctx: click.Context, debug: bool) -> None:
     """MailPilot -- CRM for cold email outreach via Gmail."""
     ctx.ensure_object(dict)
     ctx.obj["debug"] = debug
-    configure_logging(debug=debug)
+    if ctx.invoked_subcommand is not None:
+        configure_logging(debug=debug)
 
 
 # -- Status command ------------------------------------------------------------
@@ -108,8 +109,6 @@ def main(ctx: click.Context, debug: bool) -> None:
 @main.command()
 def status() -> None:
     """Show application state summary including sync loop status."""
-    configure_logging()
-
     from mailpilot.database import (
         get_status_counts,
         get_sync_status,
@@ -139,11 +138,8 @@ def status() -> None:
 
 
 @main.command()
-@click.pass_context
-def run(ctx: click.Context) -> None:
+def run() -> None:
     """Start the sync loop (foreground, managed by systemd)."""
-    configure_logging(debug=ctx.obj.get("debug", False))
-
     from mailpilot.database import initialize_database
     from mailpilot.sync import start_sync_loop
 

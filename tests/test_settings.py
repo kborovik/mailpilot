@@ -2,8 +2,10 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
+from logfire.testing import CaptureLogfire
 
 from mailpilot.settings import Settings, load_settings, save_settings, set_setting
 
@@ -88,3 +90,54 @@ def test_set_setting_preserves_other_fields(tmp_path: Path):
     assert reloaded.anthropic_api_key == "sk-keep"
     assert reloaded.logfire_environment == "production"
     assert reloaded.anthropic_model == "claude-opus-4-7"
+
+
+def _config_set_logs(capfire: CaptureLogfire) -> list[dict[str, Any]]:
+    return [
+        span
+        for span in capfire.exporter.exported_spans_as_dict()
+        if span["name"] == "config.set"
+    ]
+
+
+def test_set_setting_emits_telemetry_without_value(
+    capfire: CaptureLogfire, tmp_path: Path
+):
+    """config.set must log the key + changed flag but never the value itself."""
+    config_path = tmp_path / "config.json"
+    new_model = "claude-opus-4-7"
+    set_setting("anthropic_model", new_model, config_path=config_path)
+
+    logs = _config_set_logs(capfire)
+    assert len(logs) == 1
+    attrs = logs[0]["attributes"]
+    assert attrs["key"] == "anthropic_model"
+    assert attrs["changed"] is True
+    for attr_value in attrs.values():
+        assert new_model not in str(attr_value)
+
+
+def test_set_setting_does_not_leak_secret_values(
+    capfire: CaptureLogfire, tmp_path: Path
+):
+    """Sanity check: setting a secret must not appear in any exported attribute."""
+    config_path = tmp_path / "config.json"
+    secret = "sk-super-secret-do-not-leak"
+    set_setting("anthropic_api_key", secret, config_path=config_path)
+
+    for span in capfire.exporter.exported_spans_as_dict():
+        for attr_value in span.get("attributes", {}).values():
+            assert secret not in str(attr_value)
+
+
+def test_set_setting_changed_false_when_value_unchanged(
+    capfire: CaptureLogfire, tmp_path: Path
+):
+    config_path = tmp_path / "config.json"
+    set_setting("anthropic_model", "claude-opus-4-7", config_path=config_path)
+    capfire.exporter.clear()
+    set_setting("anthropic_model", "claude-opus-4-7", config_path=config_path)
+
+    logs = _config_set_logs(capfire)
+    assert len(logs) == 1
+    assert logs[0]["attributes"]["changed"] is False

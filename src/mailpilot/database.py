@@ -229,7 +229,9 @@ def update_account(
         updated_fields=sorted(updates.keys()),
     ) as span:
         if not updates:
-            return get_account(connection, account_id)
+            existing = get_account(connection, account_id)
+            span.set_attribute("hit", existing is not None)
+            return existing
         updates["id"] = account_id
         query = _build_update("account", updates, SQL("id = %(id)s"))
         row = connection.execute(query, updates).fetchone()
@@ -375,7 +377,9 @@ def update_company(
         updated_fields=sorted(updates.keys()),
     ) as span:
         if not updates:
-            return get_company(connection, company_id)
+            existing = get_company(connection, company_id)
+            span.set_attribute("hit", existing is not None)
+            return existing
         updates["id"] = company_id
         query = _build_update("company", updates, SQL("id = %(id)s"))
         row = connection.execute(query, updates).fetchone()
@@ -584,7 +588,9 @@ def update_contact(
         updated_fields=sorted(updates.keys()),
     ) as span:
         if not updates:
-            return get_contact(connection, contact_id)
+            existing = get_contact(connection, contact_id)
+            span.set_attribute("hit", existing is not None)
+            return existing
         updates["id"] = contact_id
         query = _build_update("contact", updates, SQL("id = %(id)s"))
         row = connection.execute(query, updates).fetchone()
@@ -769,7 +775,9 @@ def update_workflow(
         updated_fields=sorted(updates.keys()),
     ) as span:
         if not updates:
-            return get_workflow(connection, workflow_id)
+            existing = get_workflow(connection, workflow_id)
+            span.set_attribute("hit", existing is not None)
+            return existing
         updates["id"] = workflow_id
         query = _build_update("workflow", updates, SQL("id = %(id)s"))
         row = connection.execute(query, updates).fetchone()
@@ -822,6 +830,7 @@ def activate_workflow(
             {"id": workflow_id},
         ).fetchone()
         connection.commit()
+        span.set_attribute("result", "success")
         return Workflow.model_validate(row)
 
 
@@ -860,6 +869,7 @@ def pause_workflow(
             {"id": workflow_id},
         ).fetchone()
         connection.commit()
+        span.set_attribute("result", "success")
         return Workflow.model_validate(row)
 
 
@@ -924,7 +934,9 @@ def update_workflow_contact(
         updated_fields=sorted(updates.keys()),
     ) as span:
         if not updates:
-            return get_workflow_contact(connection, workflow_id, contact_id)
+            existing = get_workflow_contact(connection, workflow_id, contact_id)
+            span.set_attribute("hit", existing is not None)
+            return existing
         updates["workflow_id"] = workflow_id
         updates["contact_id"] = contact_id
         where = SQL("workflow_id = %(workflow_id)s AND contact_id = %(contact_id)s")
@@ -1255,7 +1267,9 @@ def update_email(
         updated_fields=sorted(updates.keys()),
     ) as span:
         if not updates:
-            return get_email(connection, email_id)
+            existing = get_email(connection, email_id)
+            span.set_attribute("hit", existing is not None)
+            return existing
         updates["id"] = email_id
         # email table has no updated_at column -- use raw SQL instead of _build_update
         set_parts = [
