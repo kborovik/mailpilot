@@ -44,10 +44,13 @@ The CLI must be LLM Agent friendly: JSON output only. Exit codes must be meaning
 ```
 mailpilot --version
 mailpilot --debug COMMAND
+mailpilot --completion bash|zsh|fish
 
 mailpilot account create --email E [--display-name N]
 mailpilot account list
 mailpilot account view ID
+mailpilot account update ID [--display-name N]
+mailpilot account sync [--account-id ID]
 
 mailpilot company create --domain D [--name N] [opts]
 mailpilot company update ID [--name N]
@@ -90,7 +93,7 @@ mailpilot status
 
 See `src/mailpilot/schema.sql`. Requires PostgreSQL 18. Connection: `database_url` setting (default: `postgresql://localhost/mailpilot`). Schema applied automatically on first connection.
 
-Tables: `account`, `company`, `contact`, `workflow`, `workflow_contact`, `email`, `task`.
+Tables: `account`, `company`, `contact`, `workflow`, `workflow_contact`, `email`, `task`, `sync_status`.
 
 Prefer atomic single-query operations: use `UPDATE ... FROM ... RETURNING` to join, mutate, and return in one round-trip instead of SELECT-then-UPDATE.
 
