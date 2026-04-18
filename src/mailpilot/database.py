@@ -800,6 +800,38 @@ def list_workflows(
         return workflows
 
 
+def search_workflows(
+    connection: psycopg.Connection[dict[str, Any]],
+    query: str,
+    limit: int = 100,
+) -> list[Workflow]:
+    """Search workflows by name or objective.
+
+    Args:
+        connection: Open database connection.
+        query: Search term (matched against name and objective).
+        limit: Maximum number of results.
+
+    Returns:
+        Matching workflows ordered by name.
+    """
+    with logfire.span("db.workflow.search", query=query, limit=limit) as span:
+        pattern = f"%{query}%"
+        rows = connection.execute(
+            """\
+            SELECT * FROM workflow
+            WHERE LOWER(name) LIKE LOWER(%(pattern)s)
+               OR LOWER(objective) LIKE LOWER(%(pattern)s)
+            ORDER BY LOWER(name)
+            LIMIT %(limit)s
+            """,
+            {"pattern": pattern, "limit": limit},
+        ).fetchall()
+        workflows = [Workflow.model_validate(row) for row in rows]
+        span.set_attribute("workflow_count", len(workflows))
+        return workflows
+
+
 def update_workflow(
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str,
