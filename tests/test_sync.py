@@ -7,6 +7,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import psycopg
+import pytest
 from googleapiclient.errors import HttpError
 
 from conftest import (
@@ -342,6 +343,85 @@ def test_sync_account_auto_creates_contact_only_once(
     emails = list_emails(database_connection, account_id=account.id)
     assert len(emails) == 2
     assert all(e.contact_id == contact.id for e in emails)
+
+
+def test_sync_account_bulk_prefetches_contacts_once(
+    database_connection: psycopg.Connection[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """sync_account must call the bulk contact helpers once regardless of message count.
+
+    Guards against the per-message N+1 fixed in #34: round-trips should
+    scale with distinct senders, not total messages.
+    """
+    import mailpilot.database as db
+    import mailpilot.sync as sync_module
+
+    account = make_test_account(database_connection, email="bulk@example.com")
+    client, service = _make_mock_client(account.email)
+    stubs = [{"id": f"m{i}", "threadId": f"t{i}"} for i in range(5)]
+    _set_list_messages(service, stubs)
+    # 5 messages but only 2 distinct senders.
+    senders = [
+        "Bob <bob@example.com>",
+        "Carol <carol@example.com>",
+        "Bob <bob@example.com>",
+        "Carol <carol@example.com>",
+        "Bob <bob@example.com>",
+    ]
+    _set_get_messages(
+        service,
+        [
+            _make_gmail_message(f"m{i}", f"t{i}", from_header=senders[i])
+            for i in range(5)
+        ],
+    )
+
+    get_calls: list[list[str]] = []
+    create_calls: list[list[str]] = []
+
+    real_get = db.get_contacts_by_emails
+    real_create = db.create_contacts_bulk
+
+    def spy_get(
+        connection: psycopg.Connection[dict[str, Any]],
+        emails: object,
+    ) -> dict[str, Any]:
+        materialized = list(emails)  # type: ignore[arg-type]
+        get_calls.append(materialized)
+        return real_get(connection, materialized)
+
+    def spy_create(
+        connection: psycopg.Connection[dict[str, Any]],
+        emails: object,
+    ) -> dict[str, Any]:
+        materialized = list(emails)  # type: ignore[arg-type]
+        create_calls.append(materialized)
+        return real_create(connection, materialized)
+
+    monkeypatch.setattr(sync_module, "get_contacts_by_emails", spy_get)
+    monkeypatch.setattr(sync_module, "create_contacts_bulk", spy_create)
+
+    # Fail loudly if the old per-message path is still reachable.
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError(
+            "create_or_get_contact_by_email must not be called from sync_account"
+        )
+
+    monkeypatch.setattr(sync_module, "create_or_get_contact_by_email", forbidden)
+
+    stored = sync_account(database_connection, account, client, make_test_settings())
+
+    assert stored == 5
+    assert len(get_calls) == 1, (
+        f"expected 1 get_contacts_by_emails call, got {get_calls}"
+    )
+    # bulk insert called at most once (may be skipped when all senders exist).
+    assert len(create_calls) <= 1
+    # Exactly 2 contact rows despite 5 messages.
+    emails_stored = list_emails(database_connection, account_id=account.id)
+    contact_ids = {e.contact_id for e in emails_stored}
+    assert len(contact_ids) == 2
 
 
 def test_sync_account_updates_account_history_and_last_synced(
