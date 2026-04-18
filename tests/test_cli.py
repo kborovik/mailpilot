@@ -241,6 +241,104 @@ def test_account_update_not_found(
     assert data["error"] == "not_found"
 
 
+# -- account sync --------------------------------------------------------------
+
+
+def test_account_sync_all_accounts(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    acc_a = _make_account(
+        id="01234567-0000-7000-0000-0000000000a1", email="a@example.com"
+    )
+    acc_b = _make_account(
+        id="01234567-0000-7000-0000-0000000000b2", email="b@example.com"
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_accounts", return_value=[acc_a, acc_b]),
+        patch("mailpilot.gmail.GmailClient") as mock_client_cls,
+        patch("mailpilot.sync.sync_account", side_effect=[3, 5]) as mock_sync,
+    ):
+        result = runner.invoke(main, ["account", "sync"])
+
+    assert result.exit_code == 0, result.output
+    assert mock_client_cls.call_count == 2
+    assert mock_sync.call_count == 2
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["total_stored"] == 8
+    assert [r["email"] for r in data["results"]] == ["a@example.com", "b@example.com"]
+    assert [r["stored"] for r in data["results"]] == [3, 5]
+
+
+def test_account_sync_single_account(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    account = _make_account(email="only@example.com")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account) as mock_get,
+        patch("mailpilot.database.list_accounts") as mock_list,
+        patch("mailpilot.gmail.GmailClient"),
+        patch("mailpilot.sync.sync_account", return_value=2),
+    ):
+        result = runner.invoke(main, ["account", "sync", "--account-id", account.id])
+
+    assert result.exit_code == 0, result.output
+    mock_get.assert_called_once_with(mock_connection, account.id)
+    mock_list.assert_not_called()
+    data = json.loads(result.output)
+    assert data["total_stored"] == 2
+    assert len(data["results"]) == 1
+    assert data["results"][0]["email"] == "only@example.com"
+
+
+def test_account_sync_unknown_id(runner: CliRunner, mock_connection: MagicMock) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=None),
+    ):
+        result = runner.invoke(main, ["account", "sync", "--account-id", "missing"])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "not_found"
+
+
+def test_account_sync_error_isolated_per_account(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    acc_a = _make_account(
+        id="01234567-0000-7000-0000-0000000000a1", email="a@example.com"
+    )
+    acc_b = _make_account(
+        id="01234567-0000-7000-0000-0000000000b2", email="b@example.com"
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_accounts", return_value=[acc_a, acc_b]),
+        patch("mailpilot.gmail.GmailClient"),
+        patch("logfire.exception"),
+        patch(
+            "mailpilot.sync.sync_account",
+            side_effect=[RuntimeError("gmail 500"), 4],
+        ),
+    ):
+        result = runner.invoke(main, ["account", "sync"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["total_stored"] == 4
+    assert data["results"][0]["error"] == "gmail 500"
+    assert "stored" not in data["results"][0]
+    assert data["results"][1]["stored"] == 4
+
+
 # -- company helpers -----------------------------------------------------------
 
 
