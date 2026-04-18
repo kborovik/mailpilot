@@ -13,7 +13,7 @@ from click.testing import CliRunner
 
 from conftest import make_test_settings
 from mailpilot.cli import main
-from mailpilot.models import Account, Company, Contact
+from mailpilot.models import Account, Company, Contact, Email
 
 _NOW = datetime(2024, 1, 1, tzinfo=UTC)
 
@@ -855,3 +855,123 @@ def test_contact_import(
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["imported"] == 2
+
+
+# -- Email ---------------------------------------------------------------------
+
+
+def _make_email(**overrides: Any) -> Email:
+    defaults: dict[str, Any] = {
+        "id": "01234567-0000-7000-0000-000000000004",
+        "account_id": "01234567-0000-7000-0000-000000000001",
+        "direction": "inbound",
+        "created_at": _NOW,
+    }
+    return Email(**{**defaults, **overrides})
+
+
+def test_email_search(runner: CliRunner, mock_connection: MagicMock) -> None:
+    email = _make_email()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.search_emails", return_value=[email]) as mock_search,
+    ):
+        result = runner.invoke(main, ["email", "search", "hello"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert len(data["emails"]) == 1
+    mock_search.assert_called_once_with(mock_connection, "hello", limit=100)
+
+
+def test_email_search_with_limit(runner: CliRunner, mock_connection: MagicMock) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.search_emails", return_value=[]) as mock_search,
+    ):
+        result = runner.invoke(main, ["email", "search", "hello", "--limit", "10"])
+    assert result.exit_code == 0
+    mock_search.assert_called_once_with(mock_connection, "hello", limit=10)
+
+
+def test_email_list(runner: CliRunner, mock_connection: MagicMock) -> None:
+    email = _make_email()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_emails", return_value=[email]) as mock_list,
+    ):
+        result = runner.invoke(main, ["email", "list"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert len(data["emails"]) == 1
+    mock_list.assert_called_once_with(
+        mock_connection, limit=100, contact_id=None, account_id=None
+    )
+
+
+def test_email_list_empty(runner: CliRunner, mock_connection: MagicMock) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_emails", return_value=[]),
+    ):
+        result = runner.invoke(main, ["email", "list"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["emails"] == []
+
+
+def test_email_list_with_filters(runner: CliRunner, mock_connection: MagicMock) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_emails", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "email",
+                "list",
+                "--limit",
+                "5",
+                "--contact-id",
+                "cid",
+                "--account-id",
+                "aid",
+            ],
+        )
+    assert result.exit_code == 0
+    mock_list.assert_called_once_with(
+        mock_connection, limit=5, contact_id="cid", account_id="aid"
+    )
+
+
+def test_email_view(runner: CliRunner, mock_connection: MagicMock) -> None:
+    email = _make_email()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_email", return_value=email),
+    ):
+        result = runner.invoke(main, ["email", "view", email.id])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["id"] == email.id
+
+
+def test_email_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_email", return_value=None),
+    ):
+        result = runner.invoke(main, ["email", "view", "nonexistent-id"])
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "not_found"

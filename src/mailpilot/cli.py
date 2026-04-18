@@ -575,3 +575,53 @@ def contact_import(file: str) -> None:
 @main.group()
 def email() -> None:
     """Manage emails."""
+
+
+@email.command("search")
+@click.argument("query")
+@click.option("--limit", default=100, help="Maximum number of results.")
+def email_search(query: str, limit: int) -> None:
+    """Search emails by subject or body."""
+    from mailpilot.database import initialize_database, search_emails
+
+    connection = initialize_database(_database_url())
+    try:
+        emails = search_emails(connection, query, limit=limit)
+        output({"emails": [e.model_dump(mode="json") for e in emails]})
+    finally:
+        connection.close()
+
+
+@email.command("list")
+@click.option("--limit", default=100, help="Maximum number of results.")
+@click.option("--contact-id", default=None, help="Filter by contact ID.")
+@click.option("--account-id", default=None, help="Filter by account ID.")
+def email_list(limit: int, contact_id: str | None, account_id: str | None) -> None:
+    """List emails with optional filters."""
+    from mailpilot.database import initialize_database, list_emails
+
+    connection = initialize_database(_database_url())
+    try:
+        emails = list_emails(
+            connection, limit=limit, contact_id=contact_id, account_id=account_id
+        )
+        output({"emails": [e.model_dump(mode="json") for e in emails]})
+    finally:
+        connection.close()
+
+
+@email.command("view")
+@click.argument("email_id")
+def email_view(email_id: str) -> None:
+    """View a single email by ID."""
+    from mailpilot.database import get_email, initialize_database
+
+    connection = initialize_database(_database_url())
+    try:
+        found = get_email(connection, email_id)
+        if found is None:
+            output_error(f"email not found: {email_id}", "not_found")
+            return
+        output(found.model_dump(mode="json"))
+    finally:
+        connection.close()
