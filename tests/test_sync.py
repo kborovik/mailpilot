@@ -395,6 +395,7 @@ def test_route_email_thread_match_assigns_workflow(
         workflow_id=workflow.id,
         is_routed=True,
     )
+    assert prior is not None
     assert prior.workflow_id == workflow.id
 
     new_email = create_email(
@@ -404,6 +405,7 @@ def test_route_email_thread_match_assigns_workflow(
         subject="reply",
         gmail_thread_id="thread-xyz",
     )
+    assert new_email is not None
 
     routed = route_email(database_connection, new_email)
 
@@ -422,6 +424,7 @@ def test_route_email_no_thread_match_leaves_unrouted(
         subject="orphan",
         gmail_thread_id="thread-orphan",
     )
+    assert new_email is not None
 
     routed = route_email(database_connection, new_email)
 

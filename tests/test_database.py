@@ -1,11 +1,14 @@
 """Integration tests for database CRUD operations (real DB)."""
 
-from typing import Any
+import threading
+from typing import Any, cast
 
 import psycopg
 import pytest
+from psycopg.rows import dict_row
 
 from conftest import (
+    TEST_DATABASE_URL,
     make_test_account,
     make_test_company,
     make_test_contact,
@@ -418,6 +421,7 @@ def test_create_and_list_emails(
         body_text="Hi there",
         gmail_message_id="msg_123",
     )
+    assert email is not None
     assert email.direction == "inbound"
     assert email.subject == "Hello"
     assert email.status == "received"
@@ -440,6 +444,7 @@ def test_create_email_with_explicit_status(
         status="sent",
         is_routed=True,
     )
+    assert email is not None
     assert email.status == "sent"
     assert email.is_routed is True
 
@@ -454,6 +459,7 @@ def test_get_email_by_gmail_message_id(
         direction="inbound",
         gmail_message_id="msg_abc",
     )
+    assert email is not None
     found = get_email_by_gmail_message_id(database_connection, "msg_abc")
     assert found is not None
     assert found.id == email.id
@@ -494,6 +500,8 @@ def test_get_emails_by_gmail_thread_id(
         gmail_thread_id="thread_other",
         subject="Unrelated",
     )
+    assert e1 is not None
+    assert e2 is not None
     results = get_emails_by_gmail_thread_id(database_connection, "thread_abc")
     assert len(results) == 2
     ids = {e.id for e in results}
@@ -516,6 +524,7 @@ def test_update_email(database_connection: psycopg.Connection[dict[str, Any]]):
         direction="inbound",
         gmail_message_id="msg_update",
     )
+    assert email is not None
     assert email.is_routed is False
     assert email.workflow_id is None
 
@@ -536,3 +545,64 @@ def test_update_email_not_found(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     assert update_email(database_connection, "nonexistent", status="bounced") is None
+
+
+def test_create_email_concurrent_same_gmail_message_id_is_safe(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Concurrent inserts for the same gmail_message_id must not raise.
+
+    Regression guard for issue #24: two workers racing on the same Gmail
+    message must land exactly one row. ON CONFLICT DO NOTHING makes the
+    loser return None instead of raising UniqueViolation.
+    """
+    account = make_test_account(database_connection)
+    account_id = account.id
+    gmail_message_id = "race-msg"
+    thread_count = 2
+    barrier = threading.Barrier(thread_count)
+    results: list[object] = []
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+
+    def worker() -> None:
+        conn = cast(
+            psycopg.Connection[dict[str, Any]],
+            psycopg.connect(TEST_DATABASE_URL, row_factory=dict_row),  # type: ignore[arg-type]
+        )
+        try:
+            barrier.wait(timeout=5)
+            result = create_email(
+                conn,
+                account_id=account_id,
+                direction="inbound",
+                gmail_message_id=gmail_message_id,
+                gmail_thread_id="race-thread",
+            )
+            with lock:
+                results.append(result)
+        except BaseException as exc:
+            with lock:
+                errors.append(exc)
+        finally:
+            conn.close()
+
+    threads = [threading.Thread(target=worker) for _ in range(thread_count)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert errors == []
+    assert len(results) == thread_count
+    winners = [r for r in results if r is not None]
+    losers = [r for r in results if r is None]
+    assert len(winners) == 1
+    assert len(losers) == thread_count - 1
+
+    row = database_connection.execute(
+        "SELECT COUNT(*) AS n FROM email WHERE gmail_message_id = %(gmid)s",
+        {"gmid": gmail_message_id},
+    ).fetchone()
+    assert row is not None
+    assert row["n"] == 1

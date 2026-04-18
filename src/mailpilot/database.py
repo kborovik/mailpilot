@@ -1119,8 +1119,14 @@ def create_email(
     is_routed: bool = False,
     received_at: datetime | None = None,
     labels: list[str] | None = None,
-) -> Email:
-    """Create a new email record.
+) -> Email | None:
+    """Create a new email record, or return None on gmail_message_id conflict.
+
+    Insert is atomic via ``ON CONFLICT (gmail_message_id) DO NOTHING``, so two
+    concurrent workers attempting to store the same Gmail message will never
+    raise ``UniqueViolation``: one wins and returns the row, the other
+    returns ``None``. Outbound rows with ``gmail_message_id=NULL`` never
+    trigger the conflict (NULLs are distinct under a UNIQUE constraint).
 
     Args:
         connection: Open database connection.
@@ -1138,7 +1144,8 @@ def create_email(
         labels: Gmail label IDs attached to the message.
 
     Returns:
-        Created email.
+        Created email, or None if another worker already stored a row with
+        the same ``gmail_message_id``.
     """
     with logfire.span(
         "db.email.create",
@@ -1157,6 +1164,7 @@ def create_email(
                 %(subject)s, %(body_text)s, %(gmail_message_id)s,
                 %(gmail_thread_id)s, %(contact_id)s, %(workflow_id)s,
                 %(status)s, %(is_routed)s, %(received_at)s, %(labels)s)
+            ON CONFLICT (gmail_message_id) DO NOTHING
             RETURNING *
             """,
             {
@@ -1176,6 +1184,9 @@ def create_email(
             },
         ).fetchone()
         connection.commit()
+        if row is None:
+            span.set_attribute("result", "conflict_skipped")
+            return None
         email = Email.model_validate(row)
         span.set_attribute("email_id", email.id)
         return email

@@ -175,7 +175,8 @@ def sync_account(
                 message = gmail_client.get_message(message_id)
                 if message is None:
                     continue
-                _store_inbound_message(connection, account, message)
+                if _store_inbound_message(connection, account, message) is None:
+                    continue
                 stored += 1
             update_account(
                 connection,
@@ -248,8 +249,12 @@ def _store_inbound_message(
     connection: psycopg.Connection[dict[str, Any]],
     account: Account,
     message: dict[str, Any],
-) -> Email:
-    """Persist a Gmail message as an inbound email and route when fresh."""
+) -> Email | None:
+    """Persist a Gmail message as an inbound email and route when fresh.
+
+    Returns None when a concurrent sync_account call for the same account
+    already stored the row (ON CONFLICT DO NOTHING in create_email).
+    """
     headers = get_message_headers(message)
     sender_email, first_name, last_name = parse_sender(headers.get("from", ""))
     contact = create_or_get_contact_by_email(
@@ -275,6 +280,13 @@ def _store_inbound_message(
         received_at=received_at,
         labels=list(message.get("labelIds", [])),
     )
+    if email is None:
+        logfire.debug(
+            "sync.account.message_skipped_conflict",
+            account_id=account.id,
+            gmail_message_id=message.get("id"),
+        )
+        return None
     logfire.debug(
         "sync.account.message_stored",
         account_id=account.id,
