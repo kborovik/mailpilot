@@ -17,6 +17,12 @@ lint: py-format py-lint py-types ## Lint Python code
 py-test: ## Run tests
 	uv run pytest -x
 
+e2e: ## Run end-to-end tests against the live Gmail API (mailpilot_e2e DB)
+	$(call header,Ensuring mailpilot_e2e database exists)
+	createdb mailpilot_e2e 2>/dev/null || true
+	$(call header,Running e2e tests)
+	uv run pytest -m e2e tests/e2e/ -v
+
 py-types:
 	$(call header,Running basedpyright typecheck)
 	uv run basedpyright
