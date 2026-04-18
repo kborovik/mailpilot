@@ -621,7 +621,6 @@ def email_view(email_id: str) -> None:
         found = get_email(connection, email_id)
         if found is None:
             output_error(f"email not found: {email_id}", "not_found")
-            return
         output(found.model_dump(mode="json"))
     finally:
         connection.close()
