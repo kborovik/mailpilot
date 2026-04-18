@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     google_project_id: str = ""
     google_pubsub_topic: str = "gmail-watch"
     google_pubsub_subscription: str = "mailpilot-watch"
+    google_application_credentials: str = ""
 
     @classmethod
     def settings_customise_sources(

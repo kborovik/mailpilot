@@ -1,8 +1,9 @@
 """Gmail API client using service account with domain-wide delegation.
 
-Authentication: service account credentials resolved via
-``GOOGLE_APPLICATION_CREDENTIALS`` env var, falling back to Application
-Default Credentials (ADC). Per-account impersonation via ``.with_subject()``.
+Authentication: service account credentials path resolved from the
+``google_application_credentials`` setting, falling back to the
+``GOOGLE_APPLICATION_CREDENTIALS`` env var. Per-account impersonation via
+``.with_subject()``.
 
 Scope: ``https://www.googleapis.com/auth/gmail.modify``
 """
@@ -63,6 +64,9 @@ def _retry_on_transient(func: Any) -> Any:
 def _resolve_credentials_path() -> str:
     """Resolve the service account credentials file path.
 
+    Reads ``google_application_credentials`` from settings first, then
+    falls back to the ``GOOGLE_APPLICATION_CREDENTIALS`` env var.
+
     Returns:
         Path to the service account JSON file.
 
@@ -71,11 +75,16 @@ def _resolve_credentials_path() -> str:
     """
     import os
 
-    path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+    from mailpilot.settings import get_settings
+
+    path = get_settings().google_application_credentials
+    if not path:
+        path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
     if not path:
         raise SystemExit(
-            "GOOGLE_APPLICATION_CREDENTIALS env var not set -- "
-            "point it to a service account JSON file"
+            "No service account credentials configured -- set via "
+            "'mailpilot config set google_application_credentials "
+            "/path/to/key.json' or the GOOGLE_APPLICATION_CREDENTIALS env var"
         )
     return path
 
@@ -84,8 +93,8 @@ def build_gmail_service(email: str) -> GmailService:
     """Build a Gmail API service instance with delegated credentials.
 
     Uses service account credentials to impersonate the given email address.
-    Credentials are resolved from ``GOOGLE_APPLICATION_CREDENTIALS`` env var
-    or Application Default Credentials (ADC).
+    Credentials are resolved from the ``google_application_credentials``
+    setting or the ``GOOGLE_APPLICATION_CREDENTIALS`` env var.
 
     Args:
         email: Gmail address to impersonate via domain-wide delegation.
