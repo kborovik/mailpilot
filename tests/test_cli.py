@@ -13,7 +13,7 @@ from click.testing import CliRunner
 
 from conftest import make_test_settings
 from mailpilot.cli import main
-from mailpilot.models import Account, Company, Contact, Email
+from mailpilot.models import Account, Company, Contact, Email, Workflow
 
 _NOW = datetime(2024, 1, 1, tzinfo=UTC)
 
@@ -1072,4 +1072,507 @@ def test_email_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> 
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["ok"] is False
+    assert data["error"] == "not_found"
+
+
+# -- workflow helpers ----------------------------------------------------------
+
+
+_WORKFLOW_ID = "01234567-0000-7000-0000-000000000005"
+_ACCOUNT_ID = "01234567-0000-7000-0000-000000000001"
+_CONTACT_ID = "01234567-0000-7000-0000-000000000006"
+
+
+def _make_workflow(**overrides: Any) -> Workflow:
+    defaults: dict[str, Any] = {
+        "id": _WORKFLOW_ID,
+        "name": "Demo outreach",
+        "type": "outbound",
+        "account_id": _ACCOUNT_ID,
+        "status": "draft",
+        "objective": "",
+        "instructions": "",
+        "created_at": _NOW,
+        "updated_at": _NOW,
+    }
+    return Workflow(**{**defaults, **overrides})
+
+
+# -- workflow create -----------------------------------------------------------
+
+
+def test_workflow_create(runner: CliRunner, mock_connection: MagicMock) -> None:
+    workflow = _make_workflow()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.create_workflow", return_value=workflow
+        ) as mock_create,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "create",
+                "--name",
+                "Demo outreach",
+                "--type",
+                "outbound",
+                "--account-id",
+                _ACCOUNT_ID,
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_create.assert_called_once_with(
+        mock_connection,
+        name="Demo outreach",
+        workflow_type="outbound",
+        account_id=_ACCOUNT_ID,
+    )
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["id"] == workflow.id
+    assert data["type"] == "outbound"
+
+
+def test_workflow_create_with_objective_and_instructions(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    workflow = _make_workflow(
+        objective="Book demo", instructions="You are a sales rep."
+    )
+    instructions_file = tmp_path / "instructions.md"
+    instructions_file.write_text("You are a sales rep.")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_workflow", return_value=_make_workflow()),
+        patch(
+            "mailpilot.database.update_workflow", return_value=workflow
+        ) as mock_update,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "create",
+                "--name",
+                "Demo outreach",
+                "--type",
+                "outbound",
+                "--account-id",
+                _ACCOUNT_ID,
+                "--objective",
+                "Book demo",
+                "--instructions-file",
+                str(instructions_file),
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_update.assert_called_once_with(
+        mock_connection,
+        _WORKFLOW_ID,
+        objective="Book demo",
+        instructions="You are a sales rep.",
+    )
+    data = json.loads(result.output)
+    assert data["objective"] == "Book demo"
+    assert data["instructions"] == "You are a sales rep."
+
+
+def test_workflow_create_rejects_invalid_type(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    result = runner.invoke(
+        main,
+        [
+            "workflow",
+            "create",
+            "--name",
+            "Bad",
+            "--type",
+            "sideways",
+            "--account-id",
+            _ACCOUNT_ID,
+        ],
+    )
+    assert result.exit_code != 0
+
+
+# -- workflow update -----------------------------------------------------------
+
+
+def test_workflow_update_name(runner: CliRunner, mock_connection: MagicMock) -> None:
+    updated = _make_workflow(name="Renamed")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.update_workflow", return_value=updated
+        ) as mock_update,
+    ):
+        result = runner.invoke(
+            main, ["workflow", "update", _WORKFLOW_ID, "--name", "Renamed"]
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_update.assert_called_once_with(mock_connection, _WORKFLOW_ID, name="Renamed")
+    data = json.loads(result.output)
+    assert data["name"] == "Renamed"
+
+
+def test_workflow_update_with_instructions_file(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    instructions_file = tmp_path / "instructions.md"
+    instructions_file.write_text("Reply politely.")
+    updated = _make_workflow(instructions="Reply politely.")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.update_workflow", return_value=updated
+        ) as mock_update,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "update",
+                _WORKFLOW_ID,
+                "--instructions-file",
+                str(instructions_file),
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_update.assert_called_once_with(
+        mock_connection, _WORKFLOW_ID, instructions="Reply politely."
+    )
+
+
+def test_workflow_update_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.update_workflow", return_value=None),
+    ):
+        result = runner.invoke(main, ["workflow", "update", "nope", "--name", "X"])
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+
+
+# -- workflow list / view / search ---------------------------------------------
+
+
+def test_workflow_list(runner: CliRunner, mock_connection: MagicMock) -> None:
+    workflows = [_make_workflow(id="id-1"), _make_workflow(id="id-2", name="Other")]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_workflows", return_value=workflows) as mock_list,
+    ):
+        result = runner.invoke(main, ["workflow", "list"])
+
+    assert result.exit_code == 0
+    mock_list.assert_called_once_with(mock_connection, account_id=None)
+    data = json.loads(result.output)
+    assert len(data["workflows"]) == 2
+
+
+def test_workflow_list_by_account(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_workflows", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(main, ["workflow", "list", "--account-id", _ACCOUNT_ID])
+
+    assert result.exit_code == 0
+    mock_list.assert_called_once_with(mock_connection, account_id=_ACCOUNT_ID)
+
+
+def test_workflow_view(runner: CliRunner, mock_connection: MagicMock) -> None:
+    workflow = _make_workflow()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=workflow),
+    ):
+        result = runner.invoke(main, ["workflow", "view", _WORKFLOW_ID])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["id"] == _WORKFLOW_ID
+
+
+def test_workflow_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=None),
+    ):
+        result = runner.invoke(main, ["workflow", "view", "nope"])
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+
+
+def test_workflow_search(runner: CliRunner, mock_connection: MagicMock) -> None:
+    workflows = [_make_workflow(name="Demo")]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.search_workflows", return_value=workflows
+        ) as mock_search,
+    ):
+        result = runner.invoke(main, ["workflow", "search", "demo", "--limit", "5"])
+
+    assert result.exit_code == 0
+    mock_search.assert_called_once_with(mock_connection, "demo", limit=5)
+    data = json.loads(result.output)
+    assert len(data["workflows"]) == 1
+
+
+# -- workflow activate / pause -------------------------------------------------
+
+
+def test_workflow_activate(runner: CliRunner, mock_connection: MagicMock) -> None:
+    activated = _make_workflow(
+        status="active",
+        objective="Book demo",
+        instructions="You are a sales rep.",
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.activate_workflow", return_value=activated
+        ) as mock_activate,
+    ):
+        result = runner.invoke(main, ["workflow", "activate", _WORKFLOW_ID])
+
+    assert result.exit_code == 0, result.output
+    mock_activate.assert_called_once_with(mock_connection, _WORKFLOW_ID)
+    data = json.loads(result.output)
+    assert data["status"] == "active"
+
+
+def test_workflow_activate_missing_objective(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.activate_workflow",
+            side_effect=ValueError("objective must be non-empty to activate"),
+        ),
+    ):
+        result = runner.invoke(main, ["workflow", "activate", _WORKFLOW_ID])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "invalid_state"
+    assert "objective" in data["message"]
+
+
+def test_workflow_pause(runner: CliRunner, mock_connection: MagicMock) -> None:
+    paused = _make_workflow(status="paused")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.pause_workflow", return_value=paused) as mock_pause,
+    ):
+        result = runner.invoke(main, ["workflow", "pause", _WORKFLOW_ID])
+
+    assert result.exit_code == 0, result.output
+    mock_pause.assert_called_once_with(mock_connection, _WORKFLOW_ID)
+    data = json.loads(result.output)
+    assert data["status"] == "paused"
+
+
+def test_workflow_pause_invalid_state(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.pause_workflow",
+            side_effect=ValueError("cannot pause workflow in status 'draft'"),
+        ),
+    ):
+        result = runner.invoke(main, ["workflow", "pause", _WORKFLOW_ID])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "invalid_state"
+
+
+# -- workflow run --------------------------------------------------------------
+
+
+def test_workflow_run(runner: CliRunner, mock_connection: MagicMock) -> None:
+    workflow = _make_workflow(
+        status="active",
+        objective="Book demo",
+        instructions="You are a sales rep.",
+    )
+    contact = Contact(
+        id=_CONTACT_ID,
+        email="lead@acme.com",
+        domain="acme.com",
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=workflow),
+        patch("mailpilot.database.get_contact", return_value=contact),
+        patch("mailpilot.agent.invoke_workflow_agent") as mock_invoke,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "run",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--contact-id",
+                _CONTACT_ID,
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_invoke.assert_called_once()
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["workflow_id"] == _WORKFLOW_ID
+    assert data["contact_id"] == _CONTACT_ID
+
+
+def test_workflow_run_workflow_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=None),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "run",
+                "--workflow-id",
+                "nope",
+                "--contact-id",
+                _CONTACT_ID,
+            ],
+        )
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+
+
+def test_workflow_run_requires_active(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    workflow = _make_workflow(status="draft")
+    contact = Contact(
+        id=_CONTACT_ID,
+        email="lead@acme.com",
+        domain="acme.com",
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=workflow),
+        patch("mailpilot.database.get_contact", return_value=contact),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "run",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--contact-id",
+                _CONTACT_ID,
+            ],
+        )
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "invalid_state"
+
+
+def test_workflow_run_requires_outbound(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    workflow = _make_workflow(type="inbound", status="active")
+    contact = Contact(
+        id=_CONTACT_ID,
+        email="lead@acme.com",
+        domain="acme.com",
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=workflow),
+        patch("mailpilot.database.get_contact", return_value=contact),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "run",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--contact-id",
+                _CONTACT_ID,
+            ],
+        )
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "invalid_state"
+
+
+def test_workflow_run_contact_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    workflow = _make_workflow(status="active")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=workflow),
+        patch("mailpilot.database.get_contact", return_value=None),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "run",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--contact-id",
+                "nope",
+            ],
+        )
+    assert result.exit_code == 1
+    data = json.loads(result.output)
     assert data["error"] == "not_found"

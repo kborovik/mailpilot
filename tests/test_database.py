@@ -31,6 +31,7 @@ from mailpilot.database import (
     pause_workflow,
     search_companies,
     search_contacts,
+    search_workflows,
     update_account,
     update_company,
     update_contact,
@@ -365,6 +366,41 @@ def test_list_workflows_by_status(
     assert drafts[0].name == "W2"
     all_workflows = list_workflows(database_connection, account_id=account.id)
     assert len(all_workflows) == 2
+
+
+def test_search_workflows_by_name(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    make_test_workflow(database_connection, account_id=account.id, name="Demo outreach")
+    make_test_workflow(
+        database_connection, account_id=account.id, name="Support auto-reply"
+    )
+    results = search_workflows(database_connection, "demo")
+    assert len(results) == 1
+    assert results[0].name == "Demo outreach"
+
+
+def test_search_workflows_by_objective(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    w1 = make_test_workflow(database_connection, account_id=account.id, name="Alpha")
+    make_test_workflow(database_connection, account_id=account.id, name="Beta")
+    update_workflow(database_connection, w1.id, objective="Book discovery call")
+    results = search_workflows(database_connection, "discovery")
+    assert len(results) == 1
+    assert results[0].id == w1.id
+
+
+def test_search_workflows_respects_limit(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    for i in range(5):
+        make_test_workflow(database_connection, account_id=account.id, name=f"Flow {i}")
+    results = search_workflows(database_connection, "flow", limit=2)
+    assert len(results) == 2
 
 
 # -- Email ---------------------------------------------------------------------
