@@ -114,7 +114,7 @@ API keys and config stored in `~/.mailpilot/config.json` via `mailpilot config s
 
 - `anthropic_api_key` -- Anthropic Claude API key
 - `anthropic_model` -- Anthropic model ID (default: `claude-sonnet-4-6`)
-- `google_project_id` -- Google Cloud project ID (for Pub/Sub)
+- `google_application_credentials` -- Path to service account JSON (falls back to `GOOGLE_APPLICATION_CREDENTIALS` env var). The file's `project_id` field is the source of truth for the GCP project.
 - `google_pubsub_topic` -- Pub/Sub topic name (default: `gmail-watch`)
 - `google_pubsub_subscription` -- Pub/Sub subscription name (default: `mailpilot-watch`)
 - `database_url` -- PostgreSQL connection (default: `postgresql://localhost/mailpilot`)

@@ -16,7 +16,6 @@ def test_default_settings():
     assert settings.anthropic_model == "claude-sonnet-4-6"
     assert settings.logfire_environment == "development"
     assert settings.google_pubsub_topic == "gmail-watch"
-    assert settings.google_application_credentials == ""
 
 
 def test_settings_from_kwargs():
