@@ -258,10 +258,10 @@ class GmailClient:
             Sent message dict with id, threadId, labelIds.
         """
         message = MIMEText(body)
-        message["to"] = to
-        message["subject"] = subject
+        message["To"] = to
+        message["Subject"] = subject
         if from_email:
-            message["from"] = from_email
+            message["From"] = from_email
         message["X-MailPilot-Version"] = _MAILPILOT_VERSION
         if account_id:
             message["X-MailPilot-Account-Id"] = account_id

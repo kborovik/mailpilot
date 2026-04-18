@@ -492,6 +492,20 @@ def send_email(  # noqa: PLR0913
             labels=labels,
         )
         if email is None:
+            # Gmail accepted the send but the DB insert returned None (would
+            # only happen on a duplicate gmail_message_id, which Gmail should
+            # never reuse). The message has been delivered; log loudly so the
+            # orphan is recoverable from traces even though the span
+            # attributes below will not be set.
+            logfire.error(
+                "sync.send_email.orphan_gmail_send",
+                account_id=account.id,
+                gmail_message_id=gmail_message_id,
+                gmail_thread_id=gmail_thread_id,
+                to=to,
+                workflow_id=workflow_id,
+                contact_id=contact_id,
+            )
             raise RuntimeError(
                 "outbound email insert returned None for "
                 f"gmail_message_id={gmail_message_id}"
