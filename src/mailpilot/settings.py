@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
+import logfire
 from pydantic import PostgresDsn
 from pydantic_settings import (
     BaseSettings,
@@ -117,3 +118,34 @@ def save_settings(settings: Settings, config_path: Path = CONFIG_PATH) -> None:
 def get_settings() -> Settings:
     """Load settings from the default config path."""
     return load_settings()
+
+
+def set_setting(key: str, value: object, config_path: Path = CONFIG_PATH) -> Settings:
+    """Update a single config key, persist, and emit telemetry.
+
+    Reads the current settings, swaps in ``value`` for ``key``, and writes
+    the result back. Emits ``config.set`` with the key name and whether the
+    value changed. Never logs the value itself (secrets live in this file).
+
+    Args:
+        key: Config field name (must be a valid ``Settings`` field).
+        value: Parsed value to store.
+        config_path: Path to the config file. Defaults to ``~/.mailpilot/config.json``.
+
+    Returns:
+        The updated ``Settings`` instance.
+
+    Raises:
+        KeyError: If ``key`` is not a valid Settings field.
+    """
+    if key not in Settings.model_fields:
+        raise KeyError(key)
+    current = load_settings(config_path=config_path)
+    data = current.model_dump(mode="json")
+    old_value = data.get(key)
+    data[key] = value
+    updated = Settings(**{k: v for k, v in data.items() if k in Settings.model_fields})
+    save_settings(updated, config_path=config_path)
+    new_value = updated.model_dump(mode="json").get(key)
+    logfire.info("config.set", key=key, changed=old_value != new_value)
+    return updated

@@ -99,6 +99,8 @@ def main(ctx: click.Context, debug: bool) -> None:
     """MailPilot -- CRM for cold email outreach via Gmail."""
     ctx.ensure_object(dict)
     ctx.obj["debug"] = debug
+    if ctx.invoked_subcommand is not None:
+        configure_logging(debug=debug)
 
 
 # -- Status command ------------------------------------------------------------
@@ -107,8 +109,6 @@ def main(ctx: click.Context, debug: bool) -> None:
 @main.command()
 def status() -> None:
     """Show application state summary including sync loop status."""
-    configure_logging()
-
     from mailpilot.database import (
         get_status_counts,
         get_sync_status,
@@ -138,11 +138,8 @@ def status() -> None:
 
 
 @main.command()
-@click.pass_context
-def run(ctx: click.Context) -> None:
+def run() -> None:
     """Start the sync loop (foreground, managed by systemd)."""
-    configure_logging(debug=ctx.obj.get("debug", False))
-
     from mailpilot.database import initialize_database
     from mailpilot.sync import start_sync_loop
 
@@ -183,9 +180,8 @@ def config_get(key: str | None) -> None:
 @click.argument("value")
 def config_set(key: str, value: str) -> None:
     """Set a config value."""
-    from mailpilot.settings import Settings, get_settings, save_settings
+    from mailpilot.settings import Settings, set_setting
 
-    settings = get_settings()
     if key not in Settings.model_fields:
         output_error(f"unknown config key: {key}", "invalid_key")
 
@@ -201,10 +197,7 @@ def config_set(key: str, value: str) -> None:
     else:
         parsed_value = value
 
-    data = settings.model_dump(mode="json")
-    data[key] = parsed_value
-    updated = Settings(**{k: v for k, v in data.items() if k in Settings.model_fields})
-    save_settings(updated)
+    set_setting(key, parsed_value)
     output({"key": key, "value": parsed_value})
 
 
