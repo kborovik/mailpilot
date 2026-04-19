@@ -33,11 +33,9 @@ from mailpilot.database import (
     delete_sync_status,
     get_contacts_by_emails,
     get_email_by_gmail_message_id,
-    get_emails_by_gmail_thread_id,
     get_sync_status,
     update_account,
     update_contact,
-    update_email,
     update_sync_heartbeat,
     upsert_sync_status,
 )
@@ -48,6 +46,7 @@ from mailpilot.gmail import (
     parse_sender,
 )
 from mailpilot.models import Account, Contact, Email
+from mailpilot.routing import route_email
 from mailpilot.settings import Settings
 
 _HEARTBEAT_INTERVAL = 30  # seconds
@@ -159,7 +158,6 @@ def sync_account(
     Returns:
         Number of newly stored email rows.
     """
-    del settings  # reserved for future tuning (recency window, etc.)
     with logfire.span(
         "sync.account.run",
         account_id=account.id,
@@ -193,7 +191,7 @@ def sync_account(
             for message in fresh_messages:
                 if (
                     _store_inbound_message(
-                        connection, account, message, contacts_by_email
+                        connection, account, message, contacts_by_email, settings
                     )
                     is None
                 ):
@@ -342,6 +340,7 @@ def _store_inbound_message(
     account: Account,
     message: dict[str, Any],
     contacts_by_email: dict[str, Contact],
+    settings: Settings,
 ) -> Email | None:
     """Persist a Gmail message as an inbound email and route when fresh.
 
@@ -393,7 +392,9 @@ def _store_inbound_message(
         within_recency_window=within_window,
     )
     if within_window:
-        email = route_email(connection, email)
+        email = route_email(
+            connection, email, sender_email=sender_email, settings=settings
+        )
     return email
 
 
@@ -409,7 +410,7 @@ def _received_at_from_message(message: dict[str, Any]) -> datetime | None:
     return datetime.fromtimestamp(ms / 1000, tz=UTC)
 
 
-# -- Routing ------------------------------------------------------------------
+# -- Send email ----------------------------------------------------------------
 
 
 def send_email(  # noqa: PLR0913
@@ -513,57 +514,3 @@ def send_email(  # noqa: PLR0913
         span.set_attribute("email_id", email.id)
         span.set_attribute("gmail_message_id", gmail_message_id)
         return email
-
-
-def route_email(
-    connection: psycopg.Connection[dict[str, Any]],
-    email: Email,
-) -> Email:
-    """Route an inbound email to a workflow via thread matching.
-
-    Implements step 1 of the ADR-04 routing pipeline. If a prior email
-    in the same Gmail thread has a non-null ``workflow_id``, assign the
-    most recent such workflow and mark the email ``is_routed``. If no
-    thread match exists, the email is left unchanged -- a future
-    classification pass (see ``mailpilot.agent.classify.classify_email``)
-    resolves it.
-
-    Args:
-        connection: Open database connection.
-        email: Newly stored inbound email to route.
-
-    Returns:
-        Possibly updated email (unchanged on no thread match).
-    """
-    with logfire.span(
-        "sync.route_email",
-        email_id=email.id,
-        account_id=email.account_id,
-    ) as span:
-        try:
-            if not email.gmail_thread_id:
-                span.set_attribute("result", "skipped")
-                return email
-            thread_emails = get_emails_by_gmail_thread_id(
-                connection, email.gmail_thread_id
-            )
-            matches = [
-                prior
-                for prior in thread_emails
-                if prior.id != email.id and prior.workflow_id is not None
-            ]
-            if not matches:
-                span.set_attribute("result", "no_match")
-                return email
-            matches.sort(key=lambda e: e.created_at, reverse=True)
-            workflow_id = matches[0].workflow_id
-            updated = update_email(
-                connection, email.id, workflow_id=workflow_id, is_routed=True
-            )
-            span.set_attribute("result", "thread_match")
-            span.set_attribute("workflow_id", workflow_id)
-            return updated if updated is not None else email
-        except Exception:
-            span.set_attribute("result", "failure")
-            logfire.exception("sync.route_email failed", email_id=email.id)
-            raise

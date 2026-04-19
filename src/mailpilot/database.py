@@ -1053,8 +1053,12 @@ def create_workflow_contact(
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str,
     contact_id: str,
-) -> WorkflowContact:
+) -> WorkflowContact | None:
     """Add a contact to a workflow.
+
+    Uses ON CONFLICT DO NOTHING so callers can safely re-invoke without
+    catching unique-constraint errors. Returns None when the row already
+    exists (same pattern as ``create_email``).
 
     Args:
         connection: Open database connection.
@@ -1062,22 +1066,26 @@ def create_workflow_contact(
         contact_id: Contact FK.
 
     Returns:
-        Created workflow-contact link.
+        Created workflow-contact link, or None if it already existed.
     """
     with logfire.span(
         "db.workflow_contact.create",
         workflow_id=workflow_id,
         contact_id=contact_id,
-    ):
+    ) as span:
         row = connection.execute(
             """\
             INSERT INTO workflow_contact (workflow_id, contact_id)
             VALUES (%(workflow_id)s, %(contact_id)s)
+            ON CONFLICT (workflow_id, contact_id) DO NOTHING
             RETURNING *
             """,
             {"workflow_id": workflow_id, "contact_id": contact_id},
         ).fetchone()
         connection.commit()
+        span.set_attribute("created", row is not None)
+        if row is None:
+            return None
         return WorkflowContact.model_validate(row)
 
 
