@@ -80,6 +80,7 @@ mailpilot workflow run --workflow-id ID --contact-id ID
 mailpilot email search QUERY [--limit N]
 mailpilot email list [--limit N] [--contact-id ID] [--account-id ID]
 mailpilot email view ID
+mailpilot email send --account-id ID --to E --subject S --body B [--contact-id ID] [--workflow-id ID] [--thread-id ID]
 
 mailpilot run
 
@@ -110,6 +111,8 @@ Function convention:
 - `search_X(connection, query, ...) -> list[X]` -- LIKE search
 
 All functions take `psycopg.Connection` as first arg, return domain models from `models.py` (never raw dicts). Use `Model.model_validate(row)` at the DB boundary. IDs are UUIDv7 via `_new_id()` (`uuid.uuid7()`). Dynamic SQL uses `psycopg.sql` (`SQL`, `Identifier`, `Placeholder`) -- never f-strings in queries.
+
+For race-safe inserts under concurrent writers, use `INSERT ... ON CONFLICT (...) DO NOTHING RETURNING *` and return `Model | None` -- `None` signals the row was inserted by a concurrent worker (see `create_email`). For bulk reads/writes, prefer `WHERE col = ANY(%s)` and `INSERT ... SELECT FROM unnest(%s::type[])` over per-row loops (see `get_contacts_by_emails` / `create_contacts_bulk`).
 
 ### Settings
 
@@ -147,6 +150,7 @@ Both are delegated via the service account in `google_application_credentials` a
 make check              # lint + tests
 make lint               # py-format + py-lint + py-types
 make py-test            # pytest -x
+make e2e                # live-Gmail smoke tests against mailpilot_e2e DB (opt-in)
 make py-format          # ruff format
 make py-lint            # ruff check --fix
 make py-types           # basedpyright
@@ -175,7 +179,7 @@ If a GitHub operation isn't covered by a skill (e.g. reviewing comments, closing
 2. Implement minimal code to pass
 3. Run: `uv run ruff check --fix` then `uv run basedpyright`
 
-Tests use a separate database: `postgresql://localhost/mailpilot_test` (override with `DATABASE_URL` env var). The `database_connection` fixture truncates all tables before each test. Use `make_test_settings()` for Settings instances and `load_fixture()` for JSON fixtures -- all in `conftest.py`. HTTP mocking uses `pytest-httpx`.
+Tests use a separate database: `postgresql://localhost/mailpilot_test` (override with `DATABASE_URL` env var). The `database_connection` fixture truncates all tables before each test. Use `make_test_settings()` for Settings instances and `load_fixture()` for JSON fixtures -- all in `conftest.py`. HTTP mocking uses `pytest-httpx`. Span-contract tests use the `capfire: CaptureLogfire` fixture (see `tests/test_database_telemetry.py`). The `e2e` pytest marker is excluded from default runs (`addopts = "-m 'not e2e'"`); live-Gmail tests live under `tests/e2e/` and run via `make e2e` against `mailpilot_e2e`.
 
 ## Observability
 
