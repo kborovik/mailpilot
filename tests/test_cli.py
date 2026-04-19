@@ -1075,6 +1075,173 @@ def test_email_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> 
     assert data["error"] == "not_found"
 
 
+# -- email send ----------------------------------------------------------------
+
+
+def test_email_send_success(runner: CliRunner, mock_connection: MagicMock) -> None:
+    account = _make_account()
+    sent = _make_email(
+        direction="outbound",
+        status="sent",
+        subject="Hi",
+        body_text="Hello",
+        gmail_message_id="gm-1",
+        gmail_thread_id="gt-1",
+        sent_at=_NOW,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.gmail.GmailClient") as mock_client_cls,
+        patch("mailpilot.sync.send_email", return_value=sent) as mock_send,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "email",
+                "send",
+                "--account-id",
+                account.id,
+                "--to",
+                "recipient@example.com",
+                "--subject",
+                "Hi",
+                "--body",
+                "Hello",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_client_cls.assert_called_once_with(account.email)
+    assert mock_send.call_count == 1
+    kwargs = mock_send.call_args.kwargs
+    assert kwargs["account"] == account
+    assert kwargs["to"] == "recipient@example.com"
+    assert kwargs["subject"] == "Hi"
+    assert kwargs["body"] == "Hello"
+    assert kwargs["contact_id"] is None
+    assert kwargs["workflow_id"] is None
+    assert kwargs["thread_id"] is None
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["id"] == sent.id
+    assert data["direction"] == "outbound"
+    assert data["status"] == "sent"
+
+
+def test_email_send_with_optional_flags(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    account = _make_account()
+    sent = _make_email(
+        direction="outbound",
+        status="sent",
+        contact_id="contact-x",
+        workflow_id="workflow-y",
+        sent_at=_NOW,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.gmail.GmailClient"),
+        patch("mailpilot.sync.send_email", return_value=sent) as mock_send,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "email",
+                "send",
+                "--account-id",
+                account.id,
+                "--to",
+                "recipient@example.com",
+                "--subject",
+                "Hello",
+                "--body",
+                "Body",
+                "--contact-id",
+                "contact-x",
+                "--workflow-id",
+                "workflow-y",
+                "--thread-id",
+                "gmail-thread-z",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    kwargs = mock_send.call_args.kwargs
+    assert kwargs["contact_id"] == "contact-x"
+    assert kwargs["workflow_id"] == "workflow-y"
+    assert kwargs["thread_id"] == "gmail-thread-z"
+
+
+def test_email_send_account_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=None),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "email",
+                "send",
+                "--account-id",
+                "missing",
+                "--to",
+                "r@example.com",
+                "--subject",
+                "s",
+                "--body",
+                "b",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "not_found"
+
+
+def test_email_send_gmail_failure_returns_error(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    account = _make_account()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.gmail.GmailClient"),
+        patch("logfire.exception"),
+        patch("mailpilot.sync.send_email", side_effect=RuntimeError("gmail 500")),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "email",
+                "send",
+                "--account-id",
+                account.id,
+                "--to",
+                "r@example.com",
+                "--subject",
+                "s",
+                "--body",
+                "b",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "send_failed"
+    assert "gmail 500" in data["message"]
+
+
 # -- workflow helpers ----------------------------------------------------------
 
 

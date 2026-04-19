@@ -30,7 +30,7 @@ from mailpilot.database import (
     upsert_sync_status,
 )
 from mailpilot.gmail import GmailClient
-from mailpilot.sync import is_pid_alive, route_email, sync_account
+from mailpilot.sync import is_pid_alive, route_email, send_email, sync_account
 
 
 def test_upsert_and_get_sync_status(
@@ -513,3 +513,181 @@ def test_route_email_no_thread_match_leaves_unrouted(
     stored = get_email(database_connection, new_email.id)
     assert stored is not None
     assert stored.is_routed is False
+
+
+# -- send_email ---------------------------------------------------------------
+
+
+def _make_send_client(
+    email: str = "sender@example.com",
+    send_result: dict[str, Any] | None = None,
+) -> tuple[GmailClient, MagicMock]:
+    service = MagicMock()
+    payload = send_result or {
+        "id": "gmail-msg-1",
+        "threadId": "gmail-thread-1",
+        "labelIds": ["SENT"],
+    }
+    service.users.return_value.messages.return_value.send.return_value.execute.return_value = payload
+    client = GmailClient.from_service(email, service)
+    return client, service
+
+
+def test_send_email_records_outbound_row(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection, email="sender@example.com")
+    client, service = _make_send_client(account.email)
+
+    before = datetime.now(UTC)
+    email = send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Hello",
+        body="Body text",
+    )
+
+    assert email.direction == "outbound"
+    assert email.status == "sent"
+    assert email.subject == "Hello"
+    assert email.body_text == "Body text"
+    assert email.gmail_message_id == "gmail-msg-1"
+    assert email.gmail_thread_id == "gmail-thread-1"
+    assert email.is_routed is True
+    assert email.sent_at is not None
+    assert email.sent_at >= before
+    # Gmail API invoked once with the expected payload.
+    send_call = service.users.return_value.messages.return_value.send
+    assert send_call.call_count == 1
+    call_kwargs = send_call.call_args.kwargs
+    assert call_kwargs["userId"] == "me"
+    assert "raw" in call_kwargs["body"]
+    # Persisted row matches the returned model.
+    stored = get_email(database_connection, email.id)
+    assert stored is not None
+    assert stored.direction == "outbound"
+    assert stored.status == "sent"
+
+
+def test_send_email_formats_from_header_with_display_name(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(
+        database_connection,
+        email="sender@example.com",
+        display_name="Alice Sender",
+    )
+    client, service = _make_send_client(account.email)
+
+    send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Hi",
+        body="Body",
+    )
+
+    # Decode the raw MIME payload Gmail received to inspect the From header.
+    import base64
+    from email import message_from_bytes
+
+    send_body = service.users.return_value.messages.return_value.send.call_args.kwargs[
+        "body"
+    ]
+    raw = base64.urlsafe_b64decode(send_body["raw"])
+    msg = message_from_bytes(raw)
+    assert msg["from"] == "Alice Sender <sender@example.com>"
+
+
+def test_send_email_from_header_falls_back_to_email_only(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(
+        database_connection,
+        email="sender@example.com",
+        display_name="",
+    )
+    client, service = _make_send_client(account.email)
+
+    send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Hi",
+        body="Body",
+    )
+
+    import base64
+    from email import message_from_bytes
+
+    send_body = service.users.return_value.messages.return_value.send.call_args.kwargs[
+        "body"
+    ]
+    raw = base64.urlsafe_b64decode(send_body["raw"])
+    msg = message_from_bytes(raw)
+    assert msg["from"] == "sender@example.com"
+
+
+def test_send_email_passes_thread_and_optional_links(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection, email="sender@example.com")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="outbound"
+    )
+    client, service = _make_send_client(
+        account.email,
+        send_result={
+            "id": "gmail-msg-2",
+            "threadId": "existing-thread",
+            "labelIds": ["SENT"],
+        },
+    )
+
+    email = send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Re: Hello",
+        body="Reply body",
+        workflow_id=workflow.id,
+        thread_id="existing-thread",
+    )
+
+    # thread_id flows through to Gmail send payload.
+    send_kwargs = service.users.return_value.messages.return_value.send.call_args.kwargs
+    assert send_kwargs["body"].get("threadId") == "existing-thread"
+    assert email.gmail_thread_id == "existing-thread"
+    assert email.workflow_id == workflow.id
+
+
+def test_send_email_propagates_gmail_errors(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection, email="sender@example.com")
+    client, service = _make_send_client(account.email)
+    service.users.return_value.messages.return_value.send.return_value.execute.side_effect = RuntimeError(
+        "gmail boom"
+    )
+
+    with pytest.raises(RuntimeError, match="gmail boom"):
+        send_email(
+            database_connection,
+            account=account,
+            gmail_client=client,
+            settings=make_test_settings(),
+            to="recipient@example.com",
+            subject="Hello",
+            body="Body",
+        )
+    # No DB row must have been created when Gmail fails.
+    assert list_emails(database_connection, account_id=account.id) == []

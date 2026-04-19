@@ -20,11 +20,16 @@ import psycopg
 import pytest
 from psycopg.rows import dict_row
 
-from mailpilot.database import create_account, initialize_database, list_accounts
+from mailpilot.database import (
+    create_account,
+    get_email,
+    initialize_database,
+    list_accounts,
+)
 from mailpilot.gmail import GmailClient
 from mailpilot.models import Account
 from mailpilot.settings import Settings, get_settings
-from mailpilot.sync import sync_account
+from mailpilot.sync import send_email, sync_account
 
 pytestmark = pytest.mark.e2e
 
@@ -32,6 +37,7 @@ E2E_DATABASE_URL = os.environ.get(
     "E2E_DATABASE_URL", "postgresql://localhost/mailpilot_e2e"
 )
 INBOUND_EMAIL = "inbound@lab5.ca"
+OUTBOUND_EMAIL = "outbound@lab5.ca"
 
 
 def _require_service_account_credentials() -> None:
@@ -114,3 +120,47 @@ def test_sync_account_inbound_does_not_raise(
         e2e_settings,
     )
     assert stored >= 0
+
+
+@pytest.fixture
+def e2e_outbound_account(
+    e2e_database_connection: psycopg.Connection[dict[str, Any]],
+) -> Account:
+    for account in list_accounts(e2e_database_connection):
+        if account.email == OUTBOUND_EMAIL:
+            return account
+    return create_account(
+        e2e_database_connection, email=OUTBOUND_EMAIL, display_name="E2E Outbound"
+    )
+
+
+def test_send_email_delivers_and_records_row(
+    e2e_database_connection: psycopg.Connection[dict[str, Any]],
+    e2e_outbound_account: Account,
+    e2e_settings: Settings,
+) -> None:
+    """Send a real email from outbound@lab5.ca to inbound@lab5.ca.
+
+    Covers the full outbound path: service account delegation, Gmail
+    ``users.messages.send``, and the outbound DB insert with
+    ``sent_at``. Does not verify inbound delivery -- that is the
+    sync test's job.
+    """
+    client = GmailClient(OUTBOUND_EMAIL)
+    email = send_email(
+        e2e_database_connection,
+        account=e2e_outbound_account,
+        gmail_client=client,
+        settings=e2e_settings,
+        to=INBOUND_EMAIL,
+        subject="mailpilot e2e smoke: send_email",
+        body="This message was sent by the mailpilot e2e smoke test.",
+    )
+    assert email.direction == "outbound"
+    assert email.status == "sent"
+    assert email.gmail_message_id
+    assert email.sent_at is not None
+    # The row must be queryable after commit.
+    stored = get_email(e2e_database_connection, email.id)
+    assert stored is not None
+    assert stored.gmail_message_id == email.gmail_message_id

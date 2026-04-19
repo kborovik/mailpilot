@@ -607,6 +607,26 @@ def test_create_email_with_explicit_status(
     assert email.is_routed is True
 
 
+def test_create_email_records_sent_at(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from datetime import UTC, datetime
+
+    account = make_test_account(database_connection)
+    sent_at = datetime(2024, 6, 1, 12, 34, 56, tzinfo=UTC)
+    email = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="Outgoing",
+        status="sent",
+        is_routed=True,
+        sent_at=sent_at,
+    )
+    assert email is not None
+    assert email.sent_at == sent_at
+
+
 def test_get_email_by_gmail_message_id(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):

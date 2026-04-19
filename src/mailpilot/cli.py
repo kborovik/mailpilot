@@ -678,6 +678,63 @@ def email_view(email_id: str) -> None:
         connection.close()
 
 
+@email.command("send")
+@click.option("--account-id", required=True, help="Sending account ID.")
+@click.option("--to", "to", required=True, help="Recipient email address.")
+@click.option("--subject", required=True, help="Email subject.")
+@click.option("--body", required=True, help="Plain text body.")
+@click.option("--contact-id", default=None, help="Link to an existing contact.")
+@click.option("--workflow-id", default=None, help="Link to a workflow.")
+@click.option("--thread-id", default=None, help="Gmail thread ID for replies.")
+def email_send(
+    account_id: str,
+    to: str,
+    subject: str,
+    body: str,
+    contact_id: str | None,
+    workflow_id: str | None,
+    thread_id: str | None,
+) -> None:
+    """Send an outbound email via the given account's Gmail mailbox."""
+    import logfire
+
+    from mailpilot.database import get_account, initialize_database
+    from mailpilot.gmail import GmailClient
+    from mailpilot.settings import get_settings
+    from mailpilot.sync import send_email
+
+    settings = get_settings()
+    connection = initialize_database(_database_url())
+    try:
+        account = get_account(connection, account_id)
+        if account is None:
+            output_error(f"account not found: {account_id}", "not_found")
+        client = GmailClient(account.email)
+        try:
+            sent = send_email(
+                connection,
+                account=account,
+                gmail_client=client,
+                settings=settings,
+                to=to,
+                subject=subject,
+                body=body,
+                contact_id=contact_id,
+                workflow_id=workflow_id,
+                thread_id=thread_id,
+            )
+        except Exception as exc:
+            logfire.exception(
+                "cli.email.send.failed",
+                account_id=account.id,
+                to=to,
+            )
+            output_error(str(exc), "send_failed")
+        output(sent.model_dump(mode="json"))
+    finally:
+        connection.close()
+
+
 # -- Workflow commands ---------------------------------------------------------
 
 
