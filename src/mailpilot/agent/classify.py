@@ -7,6 +7,8 @@ Architecturally separate from the agent to keep concerns distinct.
 
 from __future__ import annotations
 
+import json
+from functools import lru_cache
 from typing import TYPE_CHECKING
 
 import logfire
@@ -20,6 +22,9 @@ if TYPE_CHECKING:
     from mailpilot.settings import Settings
 
 
+_MAX_BODY_CHARS = 16384
+
+
 class ClassificationResult(BaseModel):
     """Structured output returned by the classifier LLM call."""
 
@@ -27,7 +32,7 @@ class ClassificationResult(BaseModel):
     reasoning: str = ""
 
 
-_SYSTEM_PROMPT = """\
+_INSTRUCTIONS = """\
 You route an inbound email to one of the candidate workflows by matching
 the email's content against each workflow's objective.
 
@@ -42,8 +47,14 @@ Candidate workflows will be provided in the user message.
 
 _AGENT: Agent[None, ClassificationResult] = Agent(
     output_type=ClassificationResult,
-    system_prompt=_SYSTEM_PROMPT,
+    instructions=_INSTRUCTIONS,
 )
+
+
+@lru_cache(maxsize=4)
+def _get_model(api_key: str, model_name: str) -> AnthropicModel:
+    """Cache the AnthropicModel/AnthropicProvider pair by (api_key, model_name)."""
+    return AnthropicModel(model_name, provider=AnthropicProvider(api_key=api_key))
 
 
 def classify_email(
@@ -94,13 +105,11 @@ def classify_email(
                 "set it via `mailpilot config set anthropic_api_key ...`",
             )
 
-        model = AnthropicModel(
-            settings.anthropic_model,
-            provider=AnthropicProvider(api_key=settings.anthropic_api_key),
-        )
+        model = _get_model(settings.anthropic_api_key, settings.anthropic_model)
         prompt = _format_prompt(subject, body, sender, active_workflows)
         result = _AGENT.run_sync(prompt, model=model)
         output = result.output
+        span.set_attribute("reasoning", output.reasoning)
         candidate_ids = {workflow.id for workflow in active_workflows}
         if output.workflow_id is None or output.workflow_id not in candidate_ids:
             span.set_attribute("result", "no_match")
@@ -117,14 +126,22 @@ def _format_prompt(
     active_workflows: list[Workflow],
 ) -> str:
     """Render the user prompt for the classifier LLM call."""
-    workflow_lines = "\n".join(
-        f"- id={workflow.id} | name={workflow.name} | objective={workflow.objective}"
-        for workflow in active_workflows
+    workflows_json = json.dumps(
+        [
+            {
+                "id": workflow.id,
+                "name": workflow.name,
+                "objective": workflow.objective,
+            }
+            for workflow in active_workflows
+        ],
+        indent=2,
     )
+    truncated_body = body[:_MAX_BODY_CHARS]
     return (
-        f"Candidate workflows:\n{workflow_lines}\n\n"
+        f"Candidate workflows (JSON):\n{workflows_json}\n\n"
         f"Email:\n"
         f"From: {sender}\n"
         f"Subject: {subject}\n\n"
-        f"{body}"
+        f"{truncated_body}"
     )

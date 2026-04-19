@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
 
 import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
@@ -167,9 +166,7 @@ def test_model_returning_unknown_id_treated_as_no_match() -> None:
     assert result is None
 
 
-def test_missing_api_key_raises(
-    database_connection: Any,  # ensures schema is applied
-) -> None:
+def test_missing_api_key_raises() -> None:
     """Without an Anthropic API key, classification must fail fast."""
     workflow = make_workflow("wf-1", "Sales", "Pricing")
     settings = make_test_settings(anthropic_api_key="")
