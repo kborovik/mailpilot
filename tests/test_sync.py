@@ -16,7 +16,6 @@ from conftest import (
     make_test_workflow,
 )
 from mailpilot.database import (
-    activate_workflow,
     create_email,
     delete_sync_status,
     get_contact_by_email,
@@ -26,11 +25,10 @@ from mailpilot.database import (
     list_emails,
     update_account,
     update_sync_heartbeat,
-    update_workflow,
     upsert_sync_status,
 )
 from mailpilot.gmail import GmailClient
-from mailpilot.sync import is_pid_alive, route_email, send_email, sync_account
+from mailpilot.sync import is_pid_alive, send_email, sync_account
 
 
 def test_upsert_and_get_sync_status(
@@ -300,7 +298,7 @@ def test_sync_account_recency_gate_marks_old_messages_routed(
     assert email.workflow_id is None
 
 
-def test_sync_account_fresh_message_stays_unrouted_without_thread(
+def test_sync_account_fresh_message_routed_as_unrouted_without_workflows(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     account = make_test_account(database_connection, email="fresh@example.com")
@@ -312,8 +310,8 @@ def test_sync_account_fresh_message_stays_unrouted_without_thread(
 
     email = get_email_by_gmail_message_id(database_connection, "fresh")
     assert email is not None
-    # No prior thread emails, classify not wired up -> deferred.
-    assert email.is_routed is False
+    # No prior thread emails, no active inbound workflows -> deliberately unrouted.
+    assert email.is_routed is True
     assert email.workflow_id is None
 
 
@@ -445,74 +443,6 @@ def test_sync_account_updates_account_history_and_last_synced(
     assert refreshed.gmail_history_id == "12345"
     assert refreshed.last_synced_at is not None
     assert refreshed.last_synced_at >= before
-
-
-# -- route_email ---------------------------------------------------------------
-
-
-def test_route_email_thread_match_assigns_workflow(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    account = make_test_account(database_connection, email="route@example.com")
-    workflow = make_test_workflow(
-        database_connection, account_id=account.id, workflow_type="inbound"
-    )
-    # Make workflow active so it has a workflow_id we can reuse.
-    update_workflow(
-        database_connection,
-        workflow.id,
-        objective="o",
-        instructions="i",
-    )
-    activate_workflow(database_connection, workflow.id)
-
-    prior = create_email(
-        database_connection,
-        account_id=account.id,
-        direction="outbound",
-        subject="prior",
-        gmail_thread_id="thread-xyz",
-        workflow_id=workflow.id,
-        is_routed=True,
-    )
-    assert prior is not None
-    assert prior.workflow_id == workflow.id
-
-    new_email = create_email(
-        database_connection,
-        account_id=account.id,
-        direction="inbound",
-        subject="reply",
-        gmail_thread_id="thread-xyz",
-    )
-    assert new_email is not None
-
-    routed = route_email(database_connection, new_email)
-
-    assert routed.workflow_id == workflow.id
-    assert routed.is_routed is True
-
-
-def test_route_email_no_thread_match_leaves_unrouted(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    account = make_test_account(database_connection, email="noroute@example.com")
-    new_email = create_email(
-        database_connection,
-        account_id=account.id,
-        direction="inbound",
-        subject="orphan",
-        gmail_thread_id="thread-orphan",
-    )
-    assert new_email is not None
-
-    routed = route_email(database_connection, new_email)
-
-    assert routed.workflow_id is None
-    assert routed.is_routed is False
-    stored = get_email(database_connection, new_email.id)
-    assert stored is not None
-    assert stored.is_routed is False
 
 
 # -- send_email ---------------------------------------------------------------
