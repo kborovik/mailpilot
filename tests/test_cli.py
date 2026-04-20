@@ -13,7 +13,7 @@ from click.testing import CliRunner
 
 from conftest import make_test_settings
 from mailpilot.cli import main
-from mailpilot.models import Account, Company, Contact, Email, Workflow
+from mailpilot.models import Account, Activity, Company, Contact, Email, Workflow
 
 _NOW = datetime(2024, 1, 1, tzinfo=UTC)
 
@@ -1743,3 +1743,178 @@ def test_workflow_run_contact_not_found(
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["error"] == "not_found"
+
+
+# -- Activity ------------------------------------------------------------------
+
+
+def _make_activity(**overrides: Any) -> Activity:
+    defaults: dict[str, Any] = {
+        "id": "01234567-0000-7000-0000-000000000010",
+        "contact_id": "01234567-0000-7000-0000-000000000003",
+        "type": "email_sent",
+        "summary": "Sent intro email",
+        "detail": {},
+        "created_at": _NOW,
+    }
+    return Activity(**{**defaults, **overrides})
+
+
+# -- activity create -----------------------------------------------------------
+
+
+def test_activity_create(runner: CliRunner, mock_connection: MagicMock) -> None:
+    activity = _make_activity()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.create_activity", return_value=activity
+        ) as mock_create,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "activity",
+                "create",
+                "--contact-id",
+                "cid-1",
+                "--type",
+                "email_sent",
+                "--summary",
+                "Sent intro",
+            ],
+        )
+
+    assert result.exit_code == 0
+    mock_create.assert_called_once_with(
+        mock_connection,
+        contact_id="cid-1",
+        activity_type="email_sent",
+        summary="Sent intro",
+        detail={},
+        company_id=None,
+    )
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["type"] == "email_sent"
+
+
+def test_activity_create_with_detail(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    activity = _make_activity(detail={"email_id": "e-1"})
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.create_activity", return_value=activity
+        ) as mock_create,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "activity",
+                "create",
+                "--contact-id",
+                "cid-1",
+                "--type",
+                "email_sent",
+                "--summary",
+                "Sent intro",
+                "--detail",
+                '{"email_id": "e-1"}',
+            ],
+        )
+
+    assert result.exit_code == 0
+    mock_create.assert_called_once_with(
+        mock_connection,
+        contact_id="cid-1",
+        activity_type="email_sent",
+        summary="Sent intro",
+        detail={"email_id": "e-1"},
+        company_id=None,
+    )
+
+
+# -- activity list -------------------------------------------------------------
+
+
+def test_activity_list(runner: CliRunner, mock_connection: MagicMock) -> None:
+    activities = [
+        _make_activity(id="id-1", summary="first"),
+        _make_activity(id="id-2", summary="second"),
+    ]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_activities", return_value=activities),
+    ):
+        result = runner.invoke(main, ["activity", "list", "--contact-id", "cid-1"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert len(data["activities"]) == 2
+
+
+def test_activity_list_empty(runner: CliRunner, mock_connection: MagicMock) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_activities", return_value=[]),
+    ):
+        result = runner.invoke(main, ["activity", "list", "--contact-id", "cid-1"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["activities"] == []
+
+
+def test_activity_list_with_filters(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_activities", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "activity",
+                "list",
+                "--contact-id",
+                "cid-1",
+                "--type",
+                "email_sent",
+                "--limit",
+                "5",
+                "--since",
+                "2024-01-01T00:00:00Z",
+            ],
+        )
+
+    assert result.exit_code == 0
+    mock_list.assert_called_once_with(
+        mock_connection,
+        contact_id="cid-1",
+        company_id=None,
+        activity_type="email_sent",
+        limit=5,
+        since="2024-01-01T00:00:00Z",
+    )
+
+
+def test_activity_list_no_filter(runner: CliRunner, mock_connection: MagicMock) -> None:
+    """activity list without --contact-id or --company-id should error."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(main, ["activity", "list"])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "missing_filter"

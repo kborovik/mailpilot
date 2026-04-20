@@ -24,6 +24,7 @@ from psycopg.types.json import Json
 
 from mailpilot.models import (
     Account,
+    Activity,
     Company,
     Contact,
     Email,
@@ -118,7 +119,8 @@ def get_status_counts(
                 (SELECT COUNT(*) FROM company) AS companies,
                 (SELECT COUNT(*) FROM contact) AS contacts,
                 (SELECT COUNT(*) FROM workflow) AS workflows,
-                (SELECT COUNT(*) FROM email) AS emails
+                (SELECT COUNT(*) FROM email) AS emails,
+                (SELECT COUNT(*) FROM activity) AS activities
             FROM (SELECT 1) AS _dummy
             """
         ).fetchone()
@@ -128,6 +130,7 @@ def get_status_counts(
             "contacts": row["contacts"],  # type: ignore[index]
             "workflows": row["workflows"],  # type: ignore[index]
             "emails": row["emails"],  # type: ignore[index]
+            "activities": row["activities"],  # type: ignore[index]
         }
 
 
@@ -1739,6 +1742,116 @@ def cancel_task(
         if row is None:
             return None
         return Task.model_validate(row)
+
+
+# -- Activity ------------------------------------------------------------------
+
+
+def create_activity(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact_id: str,
+    activity_type: str,
+    summary: str = "",
+    detail: dict[str, object] | None = None,
+    company_id: str | None = None,
+) -> Activity:
+    """Create an activity event in a contact's timeline.
+
+    Args:
+        connection: Open database connection.
+        contact_id: Contact FK (every activity relates to a contact).
+        activity_type: Activity type (email_sent, tag_added, etc.).
+        summary: One-line human-readable description.
+        detail: Type-specific JSON data (email_id, tag name, etc.).
+        company_id: Optional company FK for company-level views.
+
+    Returns:
+        Created activity.
+    """
+    with logfire.span(
+        "db.activity.create",
+        contact_id=contact_id,
+        activity_type=activity_type,
+    ) as span:
+        row = connection.execute(
+            """\
+            INSERT INTO activity (id, contact_id, company_id, type, summary, detail)
+            VALUES (%(id)s, %(contact_id)s, %(company_id)s, %(type)s,
+                    %(summary)s, %(detail)s)
+            RETURNING *
+            """,
+            {
+                "id": _new_id(),
+                "contact_id": contact_id,
+                "company_id": company_id,
+                "type": activity_type,
+                "summary": summary,
+                "detail": Json(detail or {}),
+            },
+        ).fetchone()
+        connection.commit()
+        activity = Activity.model_validate(row)
+        span.set_attribute("activity_id", activity.id)
+        return activity
+
+
+def list_activities(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact_id: str | None = None,
+    company_id: str | None = None,
+    activity_type: str | None = None,
+    limit: int = 100,
+    since: str | None = None,
+) -> list[Activity]:
+    """List activities with required contact or company filter.
+
+    At least one of ``contact_id`` or ``company_id`` must be provided.
+
+    Args:
+        connection: Open database connection.
+        contact_id: Filter by contact ID.
+        company_id: Filter by company ID.
+        activity_type: Filter by activity type.
+        limit: Maximum number of results.
+        since: ISO datetime lower bound for created_at.
+
+    Returns:
+        Activities ordered by created_at descending.
+
+    Raises:
+        ValueError: If neither contact_id nor company_id is provided.
+    """
+    if contact_id is None and company_id is None:
+        raise ValueError("at least one of contact_id or company_id is required")
+    with logfire.span(
+        "db.activity.list",
+        contact_id=contact_id,
+        company_id=company_id,
+        activity_type=activity_type,
+        limit=limit,
+    ) as span:
+        conditions: list[SQL] = []
+        params: dict[str, object] = {"limit": limit}
+        if contact_id is not None:
+            conditions.append(SQL("contact_id = %(contact_id)s"))
+            params["contact_id"] = contact_id
+        if company_id is not None:
+            conditions.append(SQL("company_id = %(company_id)s"))
+            params["company_id"] = company_id
+        if activity_type is not None:
+            conditions.append(SQL("type = %(activity_type)s"))
+            params["activity_type"] = activity_type
+        if since is not None:
+            conditions.append(SQL("created_at >= %(since)s"))
+            params["since"] = since
+        where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
+        query = SQL(
+            "SELECT * FROM activity {} ORDER BY created_at DESC LIMIT %(limit)s"
+        ).format(where)
+        rows = connection.execute(query, params).fetchall()
+        activities = [Activity.model_validate(row) for row in rows]
+        span.set_attribute("activity_count", len(activities))
+        return activities
 
 
 # -- Sync Status ---------------------------------------------------------------

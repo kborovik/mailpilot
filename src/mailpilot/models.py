@@ -136,6 +136,31 @@ class Task(BaseModel):
     created_at: datetime
 
 
+ActivityType = Literal[
+    "email_sent",
+    "email_received",
+    "note_added",
+    "tag_added",
+    "tag_removed",
+    "status_changed",
+    "workflow_assigned",
+    "workflow_completed",
+    "workflow_failed",
+]
+
+
+class Activity(BaseModel):
+    """Chronological event in a contact's relationship timeline."""
+
+    id: str
+    contact_id: str
+    company_id: str | None = None
+    type: ActivityType
+    summary: str = ""
+    detail: dict[str, object] = {}
+    created_at: datetime
+
+
 class SyncStatus(BaseModel):
     """Singleton row tracking the running sync process."""
 
