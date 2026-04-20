@@ -21,12 +21,14 @@ from mailpilot.database import (
     create_or_get_contact_by_email,
     get_account,
     get_company,
+    get_company_by_domain,
     get_contact,
     get_contact_by_email,
     get_contacts_by_emails,
     get_email,
     get_email_by_gmail_message_id,
     get_emails_by_gmail_thread_id,
+    get_last_cold_outbound,
     get_workflow,
     list_accounts,
     list_companies,
@@ -36,6 +38,7 @@ from mailpilot.database import (
     pause_workflow,
     search_companies,
     search_contacts,
+    search_emails,
     search_workflows,
     update_account,
     update_company,
@@ -784,3 +787,161 @@ def test_create_email_concurrent_same_gmail_message_id_is_safe(
     ).fetchone()
     assert row is not None
     assert row["n"] == 1
+
+
+# -- get_company_by_domain ----------------------------------------------------
+
+
+def test_get_company_by_domain(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    company = make_test_company(database_connection, name="Acme", domain="acme.com")
+    fetched = get_company_by_domain(database_connection, "acme.com")
+    assert fetched is not None
+    assert fetched.id == company.id
+    assert fetched.domain == "acme.com"
+
+
+def test_get_company_by_domain_not_found(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    assert get_company_by_domain(database_connection, "nonexistent.com") is None
+
+
+# -- get_last_cold_outbound ----------------------------------------------------
+
+
+def test_get_last_cold_outbound_returns_newest(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    contact = make_test_contact(
+        database_connection, email="r@example.com", domain="example.com"
+    )
+
+    # Older cold outbound (first in its thread).
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="old pitch",
+        contact_id=contact.id,
+        gmail_message_id="old-msg",
+        gmail_thread_id="thread-old",
+        status="sent",
+    )
+    # Newer cold outbound (first in a different thread).
+    newer = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="new pitch",
+        contact_id=contact.id,
+        gmail_message_id="new-msg",
+        gmail_thread_id="thread-new",
+        status="sent",
+    )
+    assert newer is not None
+
+    result = get_last_cold_outbound(database_connection, account.id, contact.id)
+    assert result is not None
+    assert result.id == newer.id
+
+
+def test_get_last_cold_outbound_excludes_follow_ups(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """A second outbound in the same thread is a follow-up, not cold outreach."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(
+        database_connection, email="r@example.com", domain="example.com"
+    )
+
+    # First outbound in thread (cold).
+    cold = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="initial pitch",
+        contact_id=contact.id,
+        gmail_message_id="cold-msg",
+        gmail_thread_id="thread-1",
+        status="sent",
+    )
+    assert cold is not None
+
+    # Second outbound in same thread (follow-up reply, not cold).
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="follow up",
+        contact_id=contact.id,
+        gmail_message_id="followup-msg",
+        gmail_thread_id="thread-1",
+        status="sent",
+    )
+
+    result = get_last_cold_outbound(database_connection, account.id, contact.id)
+    assert result is not None
+    # Should return the cold email, not the follow-up.
+    assert result.id == cold.id
+
+
+def test_get_last_cold_outbound_ignores_inbound(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    contact = make_test_contact(
+        database_connection, email="r@example.com", domain="example.com"
+    )
+
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="hello",
+        contact_id=contact.id,
+    )
+
+    result = get_last_cold_outbound(database_connection, account.id, contact.id)
+    assert result is None
+
+
+def test_get_last_cold_outbound_none_when_no_emails(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    contact = make_test_contact(
+        database_connection, email="r@example.com", domain="example.com"
+    )
+
+    result = get_last_cold_outbound(database_connection, account.id, contact.id)
+    assert result is None
+
+
+# -- search_emails with account_id filter --------------------------------------
+
+
+def test_search_emails_filters_by_account_id(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    a1 = make_test_account(database_connection, email="a1@example.com")
+    a2 = make_test_account(database_connection, email="a2@example.com")
+
+    create_email(
+        database_connection,
+        account_id=a1.id,
+        direction="inbound",
+        subject="pricing question",
+    )
+    create_email(
+        database_connection,
+        account_id=a2.id,
+        direction="inbound",
+        subject="pricing info",
+    )
+
+    results = search_emails(database_connection, "pricing", account_id=a1.id)
+    assert len(results) == 1
+    assert results[0].account_id == a1.id
