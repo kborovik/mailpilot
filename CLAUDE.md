@@ -2,12 +2,16 @@
 
 ## Project Overview
 
-AI email platform on Google Workspace with two objectives:
+Agent-operated CRM with Gmail as the communication layer.
 
-1. **Outbound cold email** -- discover target companies, enrich via Firecrawl + Claude, qualify via AI, find contacts via Hunter.io, verify emails via Bouncer, send and track campaigns through Gmail API.
-2. **Inbound auto-reply** -- monitor incoming emails via Pub/Sub, search a knowledge base (RAG), generate and send AI-powered replies based on predefined instructions.
+MailPilot manages contacts, companies, and communication workflows through Gmail API with service account delegation. Each email account syncs and sends independently.
 
-Both objectives operate through Gmail API with service account delegation. Each email account syncs and sends independently.
+**Two-layer intelligence model:**
+
+1. **Claude Code** -- strategic orchestrator. Creates workflows, assigns contacts, reviews outcomes, generates reports. Operates the system via CLI. Handles all long-running and analytical work.
+2. **Internal Pydantic AI agent** -- subordinate tactical executor. Handles real-time reactive work within workflows: inbound email classification, auto-replies, follow-up scheduling. Stateless, tool-based, workflow-scoped.
+
+Claude Code is the primary operator of MailPilot. The CLI is LLM-agent-friendly (JSON output, meaningful exit codes, actionable errors). The internal agent handles only time-sensitive work that cannot wait for a Claude Code session.
 
 ## Principles
 
@@ -29,7 +33,7 @@ Email body stored as plain text only (see `docs/adr-02-email-body-storage-strate
 
 ### Workflows
 
-Workflow is the central abstraction for both outbound campaigns and inbound auto-reply (see `docs/adr-03-workflow-model.md`). Each workflow is executed by a Pydantic AI agent with tool access. Inbound emails are routed via thread matching then LLM classification. Agent plans multi-step work via deferred tasks. See `docs/email-flow.md` for execution flows.
+Workflow is the central abstraction for both outbound campaigns and inbound auto-reply (see `docs/adr-03-workflow-model.md`). Each workflow is executed by a Pydantic AI agent with tool access. Inbound emails are routed via thread matching then LLM classification. Agent plans multi-step work via deferred tasks. See `docs/email-flow.md` for execution flows. See `docs/adr-08-crm-evolution.md` for the CRM evolution design.
 
 ### CLI
 
@@ -82,6 +86,23 @@ mailpilot email list [--limit N] [--contact-id ID] [--account-id ID]
 mailpilot email view ID
 mailpilot email send --account-id ID --to E --subject S --body B [--contact-id ID] [--workflow-id ID] [--thread-id ID]
 
+mailpilot activity list --contact-id ID [--type TYPE] [--limit N] [--since ISO]
+mailpilot activity list --company-id ID [--type TYPE] [--limit N] [--since ISO]
+mailpilot activity create --contact-id ID --type TYPE --summary TEXT [--detail JSON] [--company-id ID]
+
+mailpilot tag add --contact-id ID NAME
+mailpilot tag add --company-id ID NAME
+mailpilot tag remove --contact-id ID NAME
+mailpilot tag remove --company-id ID NAME
+mailpilot tag list --contact-id ID
+mailpilot tag list --company-id ID
+mailpilot tag search NAME [--type contact|company] [--limit N]
+
+mailpilot note add --contact-id ID BODY
+mailpilot note add --company-id ID BODY
+mailpilot note list --contact-id ID [--limit N]
+mailpilot note list --company-id ID [--limit N]
+
 mailpilot run
 
 mailpilot config get [KEY]
@@ -94,7 +115,7 @@ mailpilot status
 
 See `src/mailpilot/schema.sql`. Requires PostgreSQL 18. Connection: `database_url` setting (default: `postgresql://localhost/mailpilot`). Schema applied automatically on first connection.
 
-Tables: `account`, `company`, `contact`, `workflow`, `workflow_contact`, `email`, `task`, `sync_status`.
+Tables: `account`, `company`, `contact`, `workflow`, `workflow_contact`, `email`, `task`, `sync_status`, `activity`, `tag`, `note`.
 
 Prefer atomic single-query operations: use `UPDATE ... FROM ... RETURNING` to join, mutate, and return in one round-trip instead of SELECT-then-UPDATE.
 
@@ -113,6 +134,30 @@ Function convention:
 All functions take `psycopg.Connection` as first arg, return domain models from `models.py` (never raw dicts). Use `Model.model_validate(row)` at the DB boundary. IDs are UUIDv7 via `_new_id()` (`uuid.uuid7()`). Dynamic SQL uses `psycopg.sql` (`SQL`, `Identifier`, `Placeholder`) -- never f-strings in queries.
 
 For race-safe inserts under concurrent writers, use `INSERT ... ON CONFLICT (...) DO NOTHING RETURNING *` and return `Model | None` -- `None` signals the row was inserted by a concurrent worker (see `create_email`). For bulk reads/writes, prefer `WHERE col = ANY(%s)` and `INSERT ... SELECT FROM unnest(%s::type[])` over per-row loops (see `get_contacts_by_emails` / `create_contacts_bulk`).
+
+CRM entities (`activity`, `tag`, `note`) follow the same conventions. Activity is append-only (no update function). Tag uses ON CONFLICT DO NOTHING for idempotent creation. Note is append-only.
+
+### CRM Model
+
+MailPilot is a CRM with Gmail as the communication channel. Core concepts:
+
+- **Contact** -- a person with an email address. May belong to a company.
+- **Company** -- an organization identified by domain.
+- **Tag** -- flexible label on contacts or companies for segmentation. Convention: lowercase, hyphenated (e.g., `prospect`, `logistics`, `cold`). No formal pipeline stages -- tags are freeform.
+- **Note** -- freeform text annotation on a contact or company. Append-only.
+- **Activity** -- chronological event log per contact. All significant interactions (emails, notes, tags, status changes, workflow events) are recorded as activities. This is the unified timeline Claude Code queries for relationship health and reporting.
+- **Workflow** -- binds an account to agent instructions for email communication (inbound or outbound). Unchanged from prior design (see `docs/adr-03-workflow-model.md`).
+
+### Reporting
+
+All reports are generated by Claude Code querying the database via CLI commands. No built-in reporting engine. Report types:
+
+- **Activity summary**: `activity list` with time filters
+- **Relationship health**: `activity list` sorted by recency, detect cold contacts
+- **Campaign effectiveness**: join `email` + `activity` + `tag` data
+- **Pipeline snapshot**: `tag search` by stage tags (prospect, contacted, etc.)
+
+Claude Code composes these from CLI primitives. The schema is designed for efficient querying, not for specific report formats.
 
 ### Settings
 
