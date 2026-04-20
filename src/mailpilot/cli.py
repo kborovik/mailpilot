@@ -14,6 +14,19 @@ from typing import Any, NoReturn
 
 import click
 
+# Keep in sync with ActivityType in models.py and CHECK constraint in schema.sql.
+_ACTIVITY_TYPES = [
+    "email_sent",
+    "email_received",
+    "note_added",
+    "tag_added",
+    "tag_removed",
+    "status_changed",
+    "workflow_assigned",
+    "workflow_completed",
+    "workflow_failed",
+]
+
 
 def _database_url() -> str:
     """Resolve the database URL from settings at call time (not import time)."""
@@ -731,6 +744,94 @@ def email_send(
             )
             output_error(str(exc), "send_failed")
         output(sent.model_dump(mode="json"))
+    finally:
+        connection.close()
+
+
+# -- Activity commands ---------------------------------------------------------
+
+
+@main.group()
+def activity() -> None:
+    """Manage activity timeline events."""
+
+
+@activity.command("create")
+@click.option("--contact-id", required=True, help="Contact ID.")
+@click.option(
+    "--type",
+    "activity_type",
+    required=True,
+    type=click.Choice(_ACTIVITY_TYPES),
+    help="Activity type.",
+)
+@click.option("--summary", required=True, help="One-line description.")
+@click.option("--detail", default=None, help="JSON detail payload.")
+@click.option("--company-id", default=None, help="Optional company ID.")
+def activity_create(
+    contact_id: str,
+    activity_type: str,
+    summary: str,
+    detail: str | None,
+    company_id: str | None,
+) -> None:
+    """Create an activity event."""
+    from mailpilot.database import create_activity, initialize_database
+
+    detail_dict: dict[str, object] = json.loads(detail) if detail else {}
+    connection = initialize_database(_database_url())
+    try:
+        created = create_activity(
+            connection,
+            contact_id=contact_id,
+            activity_type=activity_type,
+            summary=summary,
+            detail=detail_dict,
+            company_id=company_id,
+        )
+        output(created.model_dump(mode="json"))
+    finally:
+        connection.close()
+
+
+@activity.command("list")
+@click.option("--contact-id", default=None, help="Filter by contact ID.")
+@click.option("--company-id", default=None, help="Filter by company ID.")
+@click.option(
+    "--type",
+    "activity_type",
+    default=None,
+    type=click.Choice(_ACTIVITY_TYPES),
+    help="Filter by activity type.",
+)
+@click.option("--limit", default=100, help="Maximum results.")
+@click.option("--since", default=None, help="ISO datetime lower bound.")
+def activity_list(
+    contact_id: str | None,
+    company_id: str | None,
+    activity_type: str | None,
+    limit: int,
+    since: str | None,
+) -> None:
+    """List activities (requires --contact-id or --company-id)."""
+    from mailpilot.database import initialize_database, list_activities
+
+    if contact_id is None and company_id is None:
+        output_error(
+            "at least one of --contact-id or --company-id is required",
+            "missing_filter",
+        )
+    connection = initialize_database(_database_url())
+    try:
+        activities = list_activities(
+            connection,
+            contact_id=contact_id,
+            company_id=company_id,
+            activity_type=activity_type,
+            limit=limit,
+            since=since,
+        )
+        output({"activities": [a.model_dump(mode="json") for a in activities]})
     finally:
         connection.close()
 

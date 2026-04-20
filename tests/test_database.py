@@ -1,6 +1,7 @@
 """Integration tests for database CRUD operations (real DB)."""
 
 import threading
+from datetime import UTC
 from typing import Any, cast
 
 import psycopg
@@ -10,12 +11,14 @@ from psycopg.rows import dict_row
 from conftest import (
     TEST_DATABASE_URL,
     make_test_account,
+    make_test_activity,
     make_test_company,
     make_test_contact,
     make_test_workflow,
 )
 from mailpilot.database import (
     activate_workflow,
+    create_activity,
     create_contacts_bulk,
     create_email,
     create_or_get_contact_by_email,
@@ -29,8 +32,10 @@ from mailpilot.database import (
     get_email_by_gmail_message_id,
     get_emails_by_gmail_thread_id,
     get_last_cold_outbound,
+    get_status_counts,
     get_workflow,
     list_accounts,
+    list_activities,
     list_companies,
     list_contacts,
     list_emails,
@@ -945,3 +950,151 @@ def test_search_emails_filters_by_account_id(
     results = search_emails(database_connection, "pricing", account_id=a1.id)
     assert len(results) == 1
     assert results[0].account_id == a1.id
+
+
+# -- Activity ------------------------------------------------------------------
+
+
+def test_create_activity(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    contact = make_test_contact(database_connection)
+    activity = make_test_activity(database_connection, contact_id=contact.id)
+    assert activity.contact_id == contact.id
+    assert activity.type == "email_sent"
+    assert activity.summary == "Test activity"
+    assert activity.detail == {}
+    assert activity.company_id is None
+    assert activity.id
+
+
+def test_create_activity_with_company(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    company = make_test_company(database_connection)
+    contact = make_test_contact(database_connection, company_id=company.id)
+    activity = make_test_activity(
+        database_connection,
+        contact_id=contact.id,
+        company_id=company.id,
+        activity_type="tag_added",
+        summary="Tagged as prospect",
+        detail={"tag": "prospect"},
+    )
+    assert activity.company_id == company.id
+    assert activity.type == "tag_added"
+    assert activity.detail == {"tag": "prospect"}
+
+
+def test_create_activity_with_detail(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    contact = make_test_contact(database_connection)
+    activity = create_activity(
+        database_connection,
+        contact_id=contact.id,
+        activity_type="email_sent",
+        summary="Sent intro email",
+        detail={"email_id": "e-123", "subject": "Hello"},
+    )
+    assert activity.detail == {"email_id": "e-123", "subject": "Hello"}
+
+
+def test_list_activities_by_contact(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    c1 = make_test_contact(database_connection, email="a@test.com", domain="test.com")
+    c2 = make_test_contact(database_connection, email="b@test.com", domain="test.com")
+    make_test_activity(database_connection, contact_id=c1.id, summary="first")
+    make_test_activity(database_connection, contact_id=c1.id, summary="second")
+    make_test_activity(database_connection, contact_id=c2.id, summary="other")
+
+    results = list_activities(database_connection, contact_id=c1.id)
+    assert len(results) == 2
+    # Ordered by created_at DESC
+    assert results[0].summary == "second"
+    assert results[1].summary == "first"
+
+
+def test_list_activities_by_company(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    company = make_test_company(database_connection)
+    contact = make_test_contact(database_connection, company_id=company.id)
+    make_test_activity(
+        database_connection, contact_id=contact.id, company_id=company.id
+    )
+
+    results = list_activities(database_connection, company_id=company.id)
+    assert len(results) == 1
+    assert results[0].company_id == company.id
+
+
+def test_list_activities_by_type(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    contact = make_test_contact(database_connection)
+    make_test_activity(
+        database_connection, contact_id=contact.id, activity_type="email_sent"
+    )
+    make_test_activity(
+        database_connection, contact_id=contact.id, activity_type="tag_added"
+    )
+
+    results = list_activities(
+        database_connection, contact_id=contact.id, activity_type="tag_added"
+    )
+    assert len(results) == 1
+    assert results[0].type == "tag_added"
+
+
+def test_list_activities_since(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from datetime import datetime, timedelta
+
+    contact = make_test_contact(database_connection)
+    make_test_activity(database_connection, contact_id=contact.id, summary="old")
+    # Set old activity's created_at to the past
+    database_connection.execute(
+        "UPDATE activity SET created_at = CURRENT_TIMESTAMP - interval '2 days' "
+        "WHERE summary = 'old'"
+    )
+    database_connection.commit()
+    make_test_activity(database_connection, contact_id=contact.id, summary="recent")
+
+    since = datetime.now(UTC) - timedelta(days=1)
+    results = list_activities(
+        database_connection, contact_id=contact.id, since=since.isoformat()
+    )
+    assert len(results) == 1
+    assert results[0].summary == "recent"
+
+
+def test_list_activities_with_limit(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    contact = make_test_contact(database_connection)
+    for i in range(5):
+        make_test_activity(
+            database_connection, contact_id=contact.id, summary=f"act-{i}"
+        )
+
+    results = list_activities(database_connection, contact_id=contact.id, limit=2)
+    assert len(results) == 2
+
+
+def test_list_activities_requires_filter(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    with pytest.raises(ValueError, match="contact_id or company_id"):
+        list_activities(database_connection)
+
+
+def test_status_counts_includes_activities(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    contact = make_test_contact(database_connection)
+    make_test_activity(database_connection, contact_id=contact.id)
+    counts = get_status_counts(database_connection)
+    assert counts["activities"] == 1

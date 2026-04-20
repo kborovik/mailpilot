@@ -125,3 +125,24 @@ CREATE INDEX IF NOT EXISTS idx_email_account_id ON email(account_id);
 CREATE INDEX IF NOT EXISTS idx_email_contact_id ON email(contact_id);
 CREATE INDEX IF NOT EXISTS idx_email_workflow_id ON email(workflow_id);
 CREATE INDEX IF NOT EXISTS idx_email_gmail_thread_id ON email(gmail_thread_id);
+
+CREATE TABLE IF NOT EXISTS activity (
+    id              TEXT PRIMARY KEY,
+    contact_id      TEXT NOT NULL REFERENCES contact(id),
+    company_id      TEXT REFERENCES company(id),
+    type            TEXT NOT NULL
+                    CHECK (type IN (
+                        'email_sent', 'email_received',
+                        'note_added', 'tag_added', 'tag_removed',
+                        'status_changed', 'workflow_assigned',
+                        'workflow_completed', 'workflow_failed'
+                    )),
+    summary         TEXT NOT NULL DEFAULT '',
+    detail          JSONB NOT NULL DEFAULT '{}',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_activity_contact_id ON activity(contact_id);
+CREATE INDEX IF NOT EXISTS idx_activity_company_id ON activity(company_id);
+CREATE INDEX IF NOT EXISTS idx_activity_type ON activity(type);
+CREATE INDEX IF NOT EXISTS idx_activity_created_at ON activity(created_at);

@@ -13,12 +13,13 @@ from psycopg.rows import dict_row
 
 from mailpilot.database import (
     create_account,
+    create_activity,
     create_company,
     create_contact,
     create_workflow,
     initialize_database,
 )
-from mailpilot.models import Account, Company, Contact, Workflow
+from mailpilot.models import Account, Activity, Company, Contact, Workflow
 from mailpilot.settings import Settings
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -61,7 +62,7 @@ def database_connection() -> Iterator[psycopg.Connection[dict[str, Any]]]:
         psycopg.connect(TEST_DATABASE_URL, row_factory=dict_row),  # type: ignore[arg-type]
     )
     conn.execute(
-        "TRUNCATE TABLE sync_status, task, email, workflow_contact, "
+        "TRUNCATE TABLE activity, sync_status, task, email, workflow_contact, "
         "workflow, contact, company, account CASCADE"
     )
     conn.commit()
@@ -120,4 +121,23 @@ def make_test_workflow(
         name=name,
         workflow_type=workflow_type,
         account_id=account_id,
+    )
+
+
+def make_test_activity(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact_id: str,
+    activity_type: str = "email_sent",
+    summary: str = "Test activity",
+    detail: dict[str, object] | None = None,
+    company_id: str | None = None,
+) -> Activity:
+    """Create a test activity in the database."""
+    return create_activity(
+        connection,
+        contact_id=contact_id,
+        activity_type=activity_type,
+        summary=summary,
+        detail=detail or {},
+        company_id=company_id,
     )
