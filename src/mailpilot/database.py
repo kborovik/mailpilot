@@ -356,6 +356,30 @@ def search_companies(
         return companies
 
 
+def get_company_by_domain(
+    connection: psycopg.Connection[dict[str, Any]],
+    domain: str,
+) -> Company | None:
+    """Get a company by primary domain.
+
+    Args:
+        connection: Open database connection.
+        domain: Company domain (exact match on UNIQUE column).
+
+    Returns:
+        Company if found, None otherwise.
+    """
+    with logfire.span("db.company.get_by_domain", domain=domain) as span:
+        row = connection.execute(
+            "SELECT * FROM company WHERE domain = %(domain)s",
+            {"domain": domain},
+        ).fetchone()
+        span.set_attribute("hit", row is not None)
+        if row is None:
+            return None
+        return Company.model_validate(row)
+
+
 def update_company(
     connection: psycopg.Connection[dict[str, Any]],
     company_id: str,
@@ -1362,6 +1386,7 @@ def search_emails(
     connection: psycopg.Connection[dict[str, Any]],
     query: str,
     limit: int = 100,
+    account_id: str | None = None,
 ) -> list[Email]:
     """Search emails by subject or body text.
 
@@ -1369,22 +1394,29 @@ def search_emails(
         connection: Open database connection.
         query: Search term.
         limit: Maximum number of results.
+        account_id: Filter by account ID.
 
     Returns:
         Matching emails ordered by creation time descending.
     """
-    with logfire.span("db.email.search", query=query, limit=limit) as span:
+    with logfire.span(
+        "db.email.search", query=query, limit=limit, account_id=account_id
+    ) as span:
         pattern = f"%{query}%"
-        rows = connection.execute(
-            """\
-            SELECT * FROM email
-            WHERE LOWER(subject) LIKE LOWER(%(pattern)s)
-               OR LOWER(body_text) LIKE LOWER(%(pattern)s)
-            ORDER BY created_at DESC
-            LIMIT %(limit)s
-            """,
-            {"pattern": pattern, "limit": limit},
-        ).fetchall()
+        params: dict[str, object] = {"pattern": pattern, "limit": limit}
+        account_filter = SQL("")
+        if account_id is not None:
+            account_filter = SQL("AND account_id = %(account_id)s")
+            params["account_id"] = account_id
+        query_sql = SQL(
+            "SELECT * FROM email "
+            "WHERE (LOWER(subject) LIKE LOWER(%(pattern)s) "
+            "   OR LOWER(body_text) LIKE LOWER(%(pattern)s)) "
+            "{} "
+            "ORDER BY created_at DESC "
+            "LIMIT %(limit)s"
+        ).format(account_filter)
+        rows = connection.execute(query_sql, params).fetchall()
         emails = [Email.model_validate(row) for row in rows]
         span.set_attribute("email_count", len(emails))
         return emails
@@ -1445,6 +1477,57 @@ def get_emails_by_gmail_thread_id(
         emails = [Email.model_validate(row) for row in rows]
         span.set_attribute("email_count", len(emails))
         return emails
+
+
+def get_last_cold_outbound(
+    connection: psycopg.Connection[dict[str, Any]],
+    account_id: str,
+    contact_id: str,
+) -> Email | None:
+    """Get the most recent cold outbound email to a contact.
+
+    A cold outbound email is the first outbound message in its Gmail
+    thread (no prior outbound in the same thread). This distinguishes
+    initial outreach from follow-up replies within an existing
+    conversation. Used by the ``send_email`` agent tool for cooldown
+    enforcement.
+
+    Args:
+        connection: Open database connection.
+        account_id: Sending account.
+        contact_id: Recipient contact.
+
+    Returns:
+        Most recent cold outbound email, or None if none exists.
+    """
+    with logfire.span(
+        "db.email.get_last_cold_outbound",
+        account_id=account_id,
+        contact_id=contact_id,
+    ) as span:
+        row = connection.execute(
+            """\
+            SELECT e.* FROM email e
+            WHERE e.account_id = %(account_id)s
+              AND e.contact_id = %(contact_id)s
+              AND e.direction = 'outbound'
+              AND NOT EXISTS (
+                  SELECT 1 FROM email prior
+                  WHERE prior.gmail_thread_id = e.gmail_thread_id
+                    AND prior.gmail_thread_id IS NOT NULL
+                    AND prior.account_id = e.account_id
+                    AND prior.direction = 'outbound'
+                    AND prior.created_at < e.created_at
+              )
+            ORDER BY e.created_at DESC
+            LIMIT 1
+            """,
+            {"account_id": account_id, "contact_id": contact_id},
+        ).fetchone()
+        span.set_attribute("hit", row is not None)
+        if row is None:
+            return None
+        return Email.model_validate(row)
 
 
 def update_email(
