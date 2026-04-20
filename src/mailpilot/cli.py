@@ -14,6 +14,19 @@ from typing import Any, NoReturn
 
 import click
 
+# Keep in sync with ActivityType in models.py and CHECK constraint in schema.sql.
+_ACTIVITY_TYPES = [
+    "email_sent",
+    "email_received",
+    "note_added",
+    "tag_added",
+    "tag_removed",
+    "status_changed",
+    "workflow_assigned",
+    "workflow_completed",
+    "workflow_failed",
+]
+
 
 def _database_url() -> str:
     """Resolve the database URL from settings at call time (not import time)."""
@@ -745,7 +758,13 @@ def activity() -> None:
 
 @activity.command("create")
 @click.option("--contact-id", required=True, help="Contact ID.")
-@click.option("--type", "activity_type", required=True, help="Activity type.")
+@click.option(
+    "--type",
+    "activity_type",
+    required=True,
+    type=click.Choice(_ACTIVITY_TYPES),
+    help="Activity type.",
+)
 @click.option("--summary", required=True, help="One-line description.")
 @click.option("--detail", default=None, help="JSON detail payload.")
 @click.option("--company-id", default=None, help="Optional company ID.")
@@ -778,7 +797,13 @@ def activity_create(
 @activity.command("list")
 @click.option("--contact-id", default=None, help="Filter by contact ID.")
 @click.option("--company-id", default=None, help="Filter by company ID.")
-@click.option("--type", "activity_type", default=None, help="Filter by activity type.")
+@click.option(
+    "--type",
+    "activity_type",
+    default=None,
+    type=click.Choice(_ACTIVITY_TYPES),
+    help="Filter by activity type.",
+)
 @click.option("--limit", default=100, help="Maximum results.")
 @click.option("--since", default=None, help="ISO datetime lower bound.")
 def activity_list(
