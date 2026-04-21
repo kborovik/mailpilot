@@ -21,8 +21,8 @@ from typing import Any
 
 import logfire
 import psycopg
-from pydantic_ai import Agent, RunContext
-from pydantic_ai.messages import ToolCallPart
+from pydantic_ai import Agent, RunContext, Tool
+from pydantic_ai.messages import ToolReturnPart
 
 from mailpilot import database
 from mailpilot.agent import tools as agent_tools
@@ -229,17 +229,17 @@ def _wrap_noop(
 # -- Agent construction --------------------------------------------------------
 
 
-_TOOLS = [
-    _wrap_send_email,
-    _wrap_create_task,
-    _wrap_cancel_task,
-    _wrap_update_contact_status,
-    _wrap_disable_contact,
-    _wrap_list_workflow_contacts,
-    _wrap_search_emails,
-    _wrap_read_contact,
-    _wrap_read_company,
-    _wrap_noop,
+_TOOLS: list[Tool[AgentDeps]] = [
+    Tool(_wrap_send_email, name="send_email"),
+    Tool(_wrap_create_task, name="create_task"),
+    Tool(_wrap_cancel_task, name="cancel_task"),
+    Tool(_wrap_update_contact_status, name="update_contact_status"),
+    Tool(_wrap_disable_contact, name="disable_contact"),
+    Tool(_wrap_list_workflow_contacts, name="list_workflow_contacts"),
+    Tool(_wrap_search_emails, name="search_emails"),
+    Tool(_wrap_read_contact, name="read_contact"),
+    Tool(_wrap_read_company, name="read_company"),
+    Tool(_wrap_noop, name="noop"),
 ]
 
 
@@ -325,10 +325,14 @@ def _build_user_prompt(  # noqa: PLR0913
 # -- Tool-use enforcement ------------------------------------------------------
 
 
-def _count_tool_calls(messages: list[Any]) -> int:
-    """Count tool calls in the agent's message history."""
+def _count_successful_tool_calls(messages: list[Any]) -> int:
+    """Count successful tool executions in the agent's message history.
+
+    Counts ToolReturnPart with outcome='success' rather than ToolCallPart
+    to exclude failed attempts (wrong tool name, validation errors).
+    """
     return sum(
-        isinstance(part, ToolCallPart)
+        isinstance(part, ToolReturnPart) and part.outcome == "success"
         for msg in messages
         for part in (msg.parts if hasattr(msg, "parts") else [])
     )
@@ -442,16 +446,15 @@ def invoke_workflow_agent(  # noqa: PLR0913
             result = agent.run_sync(prompt, model=model, deps=deps)  # type: ignore[arg-type]
 
             # Tool-use enforcement.
-            tool_call_count = _count_tool_calls(result.all_messages())
+            tool_call_count = _count_successful_tool_calls(result.all_messages())
             span.set_attribute("tool_call_count", tool_call_count)
 
             if tool_call_count == 0:
-                agent_output = result.output
                 logfire.warn(
                     "agent.no_tools_called",
                     workflow_id=workflow.id,
                     contact_id=contact.id,
-                    agent_output=str(agent_output),
+                    agent_output=result.output,
                 )
                 raise AgentDidNotUseToolsError(
                     f"agent completed without calling any tools: "
