@@ -74,7 +74,7 @@ mailpilot company import FILE
 mailpilot contact create --email E [--first-name F] [--last-name L] [opts]
 mailpilot contact update ID [--email E] [--first-name F] [--last-name L] [opts]
 mailpilot contact search QUERY [--limit N]
-mailpilot contact list [--limit N] [--domain D] [--company-id ID]
+mailpilot contact list [--limit N] [--domain D] [--company-id ID] [--status active|bounced|unsubscribed]
 mailpilot contact view ID
 mailpilot contact export FILE
 mailpilot contact import FILE
@@ -82,14 +82,14 @@ mailpilot contact import FILE
 mailpilot workflow create --name N --type inbound|outbound --account-id ID [--objective O] [--instructions-file F]
 mailpilot workflow update ID [--name N] [--objective O] [--instructions-file F]
 mailpilot workflow search QUERY [--limit N]
-mailpilot workflow list [--account-id ID]
+mailpilot workflow list [--account-id ID] [--status draft|active|paused] [--type inbound|outbound]
 mailpilot workflow view ID
 mailpilot workflow activate ID
 mailpilot workflow pause ID
 mailpilot workflow run --workflow-id ID --contact-id ID
 
 mailpilot email search QUERY [--limit N]
-mailpilot email list [--limit N] [--contact-id ID] [--account-id ID]
+mailpilot email list [--limit N] [--contact-id ID] [--account-id ID] [--since ISO] [--thread-id TEXT] [--direction inbound|outbound] [--workflow-id ID] [--status sent|received|bounced]
 mailpilot email view ID
 mailpilot email send --account-id ID --to E --subject S --body B [--contact-id ID] [--workflow-id ID] [--thread-id ID]
 
@@ -108,8 +108,8 @@ mailpilot tag search NAME [--type contact|company] [--limit N]
 mailpilot note add --contact-id ID --body TEXT
 mailpilot note add --company-id ID --body TEXT
 mailpilot note view ID
-mailpilot note list --contact-id ID [--limit N]
-mailpilot note list --company-id ID [--limit N]
+mailpilot note list --contact-id ID [--limit N] [--since ISO]
+mailpilot note list --company-id ID [--limit N] [--since ISO]
 
 mailpilot run
 

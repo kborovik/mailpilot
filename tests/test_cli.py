@@ -914,7 +914,23 @@ def test_contact_list_with_filters(
 
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
-        mock_connection, limit=5, domain="example.com", company_id="cid-1"
+        mock_connection, limit=5, domain="example.com", company_id="cid-1", status=None
+    )
+
+
+def test_contact_list_with_status(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_contacts", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(main, ["contact", "list", "--status", "bounced"])
+
+    assert result.exit_code == 0
+    mock_list.assert_called_once_with(
+        mock_connection, limit=100, domain=None, company_id=None, status="bounced"
     )
 
 
@@ -1093,7 +1109,15 @@ def test_email_list(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert data["ok"] is True
     assert len(data["emails"]) == 1
     mock_list.assert_called_once_with(
-        mock_connection, limit=100, contact_id=None, account_id=None
+        mock_connection,
+        limit=100,
+        contact_id=None,
+        account_id=None,
+        since=None,
+        thread_id=None,
+        direction=None,
+        workflow_id=None,
+        status=None,
     )
 
 
@@ -1134,8 +1158,73 @@ def test_email_list_with_filters(runner: CliRunner, mock_connection: MagicMock) 
         )
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
-        mock_connection, limit=5, contact_id="cid", account_id="aid"
+        mock_connection,
+        limit=5,
+        contact_id="cid",
+        account_id="aid",
+        since=None,
+        thread_id=None,
+        direction=None,
+        workflow_id=None,
+        status=None,
     )
+
+
+def test_email_list_with_new_filters(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    workflow = _make_workflow()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=workflow),
+        patch("mailpilot.database.list_emails", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "email",
+                "list",
+                "--since",
+                "2024-01-01T00:00:00Z",
+                "--thread-id",
+                "thread_abc",
+                "--direction",
+                "inbound",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--status",
+                "received",
+            ],
+        )
+    assert result.exit_code == 0
+    mock_list.assert_called_once_with(
+        mock_connection,
+        limit=100,
+        contact_id=None,
+        account_id=None,
+        since="2024-01-01T00:00:00Z",
+        thread_id="thread_abc",
+        direction="inbound",
+        workflow_id=_WORKFLOW_ID,
+        status="received",
+    )
+
+
+def test_email_list_workflow_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=None),
+    ):
+        result = runner.invoke(main, ["email", "list", "--workflow-id", "wf-missing"])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+    assert "workflow" in data["message"]
 
 
 def test_email_view(runner: CliRunner, mock_connection: MagicMock) -> None:
@@ -1629,7 +1718,9 @@ def test_workflow_list(runner: CliRunner, mock_connection: MagicMock) -> None:
         result = runner.invoke(main, ["workflow", "list"])
 
     assert result.exit_code == 0
-    mock_list.assert_called_once_with(mock_connection, account_id=None)
+    mock_list.assert_called_once_with(
+        mock_connection, account_id=None, status=None, workflow_type=None
+    )
     data = json.loads(result.output)
     assert len(data["workflows"]) == 2
 
@@ -1647,7 +1738,9 @@ def test_workflow_list_by_account(
         result = runner.invoke(main, ["workflow", "list", "--account-id", _ACCOUNT_ID])
 
     assert result.exit_code == 0
-    mock_list.assert_called_once_with(mock_connection, account_id=_ACCOUNT_ID)
+    mock_list.assert_called_once_with(
+        mock_connection, account_id=_ACCOUNT_ID, status=None, workflow_type=None
+    )
 
 
 def test_workflow_list_account_not_found(
@@ -1666,6 +1759,25 @@ def test_workflow_list_account_not_found(
     data = json.loads(result.output)
     assert data["error"] == "not_found"
     assert "account" in data["message"]
+
+
+def test_workflow_list_with_filters(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_workflows", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(
+            main,
+            ["workflow", "list", "--status", "active", "--type", "outbound"],
+        )
+
+    assert result.exit_code == 0
+    mock_list.assert_called_once_with(
+        mock_connection, account_id=None, status="active", workflow_type="outbound"
+    )
 
 
 def test_workflow_view(runner: CliRunner, mock_connection: MagicMock) -> None:
@@ -2974,7 +3086,37 @@ def test_note_list_with_limit(runner: CliRunner, mock_connection: MagicMock) -> 
 
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
-        mock_connection, entity_type="contact", entity_id="cid-1", limit=5
+        mock_connection, entity_type="contact", entity_id="cid-1", limit=5, since=None
+    )
+
+
+def test_note_list_with_since(runner: CliRunner, mock_connection: MagicMock) -> None:
+    contact = _make_contact()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_contact", return_value=contact),
+        patch("mailpilot.database.list_notes", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "note",
+                "list",
+                "--contact-id",
+                "cid-1",
+                "--since",
+                "2024-01-01T00:00:00Z",
+            ],
+        )
+
+    assert result.exit_code == 0
+    mock_list.assert_called_once_with(
+        mock_connection,
+        entity_type="contact",
+        entity_id="cid-1",
+        limit=100,
+        since="2024-01-01T00:00:00Z",
     )
 
 

@@ -176,6 +176,22 @@ def test_list_contacts_by_domain(
     assert results[0].domain == "foo.com"
 
 
+def test_list_contacts_by_status(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    c1 = make_test_contact(database_connection, email="a@foo.com", domain="foo.com")
+    c2 = make_test_contact(database_connection, email="b@bar.com", domain="bar.com")
+    from mailpilot.database import update_contact
+
+    update_contact(database_connection, c2.id, status="bounced")
+    active = list_contacts(database_connection, status="active")
+    assert len(active) == 1
+    assert active[0].id == c1.id
+    bounced = list_contacts(database_connection, status="bounced")
+    assert len(bounced) == 1
+    assert bounced[0].id == c2.id
+
+
 def test_search_contacts(database_connection: psycopg.Connection[dict[str, Any]]):
     make_test_contact(database_connection, email="alice@test.com", domain="test.com")
     make_test_contact(database_connection, email="bob@test.com", domain="test.com")
@@ -546,6 +562,30 @@ def test_list_workflows_by_status(
     assert len(all_workflows) == 2
 
 
+def test_list_workflows_by_type(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    make_test_workflow(
+        database_connection,
+        account_id=account.id,
+        name="Outreach",
+        workflow_type="outbound",
+    )
+    make_test_workflow(
+        database_connection,
+        account_id=account.id,
+        name="Auto-reply",
+        workflow_type="inbound",
+    )
+    outbound = list_workflows(database_connection, workflow_type="outbound")
+    assert len(outbound) == 1
+    assert outbound[0].name == "Outreach"
+    inbound = list_workflows(database_connection, workflow_type="inbound")
+    assert len(inbound) == 1
+    assert inbound[0].name == "Auto-reply"
+
+
 def test_search_workflows_by_name(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
@@ -801,6 +841,136 @@ def test_create_email_concurrent_same_gmail_message_id_is_safe(
     ).fetchone()
     assert row is not None
     assert row["n"] == 1
+
+
+def test_list_emails_since(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from datetime import datetime, timedelta
+
+    account = make_test_account(database_connection)
+    old = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Old",
+        gmail_message_id="msg_old",
+        received_at=datetime.now(UTC) - timedelta(days=3),
+    )
+    assert old is not None
+    recent = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Recent",
+        gmail_message_id="msg_recent",
+        received_at=datetime.now(UTC),
+    )
+    assert recent is not None
+    since = (datetime.now(UTC) - timedelta(days=1)).isoformat()
+    results = list_emails(database_connection, since=since)
+    assert len(results) == 1
+    assert results[0].subject == "Recent"
+
+
+def test_list_emails_by_thread_id(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="msg_t1",
+        gmail_thread_id="thread_a",
+        subject="Thread A",
+    )
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="msg_t2",
+        gmail_thread_id="thread_b",
+        subject="Thread B",
+    )
+    results = list_emails(database_connection, thread_id="thread_a")
+    assert len(results) == 1
+    assert results[0].subject == "Thread A"
+
+
+def test_list_emails_by_direction(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="msg_in",
+        subject="Inbound",
+    )
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        gmail_message_id="msg_out",
+        subject="Outbound",
+        status="sent",
+    )
+    results = list_emails(database_connection, direction="outbound")
+    assert len(results) == 1
+    assert results[0].subject == "Outbound"
+
+
+def test_list_emails_by_workflow_id(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        gmail_message_id="msg_wf",
+        workflow_id=workflow.id,
+        subject="Campaign",
+        status="sent",
+    )
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="msg_no_wf",
+        subject="No workflow",
+    )
+    results = list_emails(database_connection, workflow_id=workflow.id)
+    assert len(results) == 1
+    assert results[0].subject == "Campaign"
+
+
+def test_list_emails_by_status(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="msg_recv",
+        subject="Received",
+        status="received",
+    )
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        gmail_message_id="msg_sent",
+        subject="Sent",
+        status="sent",
+    )
+    results = list_emails(database_connection, status="sent")
+    assert len(results) == 1
+    assert results[0].subject == "Sent"
 
 
 # -- get_company_by_domain ----------------------------------------------------
@@ -1389,6 +1559,31 @@ def test_list_notes_with_limit(
         database_connection, entity_type="contact", entity_id=contact.id, limit=1
     )
     assert len(notes) == 1
+
+
+def test_list_notes_since(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from datetime import datetime, timedelta
+
+    contact = make_test_contact(database_connection)
+    make_test_note(
+        database_connection, entity_type="contact", entity_id=contact.id, body="old"
+    )
+    database_connection.execute(
+        "UPDATE note SET created_at = CURRENT_TIMESTAMP - interval '2 days' "
+        "WHERE body = 'old'"
+    )
+    database_connection.commit()
+    make_test_note(
+        database_connection, entity_type="contact", entity_id=contact.id, body="recent"
+    )
+    since = (datetime.now(UTC) - timedelta(days=1)).isoformat()
+    results = list_notes(
+        database_connection, entity_type="contact", entity_id=contact.id, since=since
+    )
+    assert len(results) == 1
+    assert results[0].body == "recent"
 
 
 def test_get_note(

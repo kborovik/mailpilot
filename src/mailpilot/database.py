@@ -669,6 +669,7 @@ def list_contacts(
     limit: int = 100,
     domain: str | None = None,
     company_id: str | None = None,
+    status: str | None = None,
 ) -> list[Contact]:
     """List contacts with optional filters.
 
@@ -677,6 +678,7 @@ def list_contacts(
         limit: Maximum number of contacts to return.
         domain: Filter by domain.
         company_id: Filter by company ID.
+        status: Filter by contact status ("active", "bounced", "unsubscribed").
 
     Returns:
         List of contacts ordered by email.
@@ -686,6 +688,7 @@ def list_contacts(
         limit=limit,
         domain=domain,
         company_id=company_id,
+        status=status,
     ) as span:
         conditions: list[SQL] = []
         params: dict[str, object] = {"limit": limit}
@@ -695,6 +698,9 @@ def list_contacts(
         if company_id is not None:
             conditions.append(SQL("company_id = %(company_id)s"))
             params["company_id"] = company_id
+        if status is not None:
+            conditions.append(SQL("status = %(status)s"))
+            params["status"] = status
         where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
         query = SQL("SELECT * FROM contact {} ORDER BY email LIMIT %(limit)s").format(
             where
@@ -890,13 +896,15 @@ def list_workflows(
     connection: psycopg.Connection[dict[str, Any]],
     account_id: str | None = None,
     status: str | None = None,
+    workflow_type: str | None = None,
 ) -> list[Workflow]:
-    """List workflows with optional account and status filters.
+    """List workflows with optional account, status, and type filters.
 
     Args:
         connection: Open database connection.
         account_id: Filter by account ID.
         status: Filter by workflow status (e.g., "active").
+        workflow_type: Filter by workflow type ("inbound" or "outbound").
 
     Returns:
         List of workflows ordered by creation time.
@@ -905,6 +913,7 @@ def list_workflows(
         "db.workflow.list",
         account_id=account_id,
         status=status,
+        workflow_type=workflow_type,
     ) as span:
         conditions: list[SQL] = []
         params: dict[str, object] = {}
@@ -914,6 +923,9 @@ def list_workflows(
         if status is not None:
             conditions.append(SQL("status = %(status)s"))
             params["status"] = status
+        if workflow_type is not None:
+            conditions.append(SQL("type = %(workflow_type)s"))
+            params["workflow_type"] = workflow_type
         where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
         query = SQL("SELECT * FROM workflow {} ORDER BY created_at").format(where)
         rows = connection.execute(query, params).fetchall()
@@ -1355,6 +1367,11 @@ def list_emails(
     limit: int = 100,
     contact_id: str | None = None,
     account_id: str | None = None,
+    since: str | None = None,
+    thread_id: str | None = None,
+    direction: str | None = None,
+    workflow_id: str | None = None,
+    status: str | None = None,
 ) -> list[Email]:
     """List emails with optional filters.
 
@@ -1363,6 +1380,11 @@ def list_emails(
         limit: Maximum number of emails to return.
         contact_id: Filter by contact ID.
         account_id: Filter by account ID.
+        since: ISO datetime lower bound for COALESCE(sent_at, received_at).
+        thread_id: Filter by Gmail thread ID.
+        direction: Filter by direction ("inbound" or "outbound").
+        workflow_id: Filter by workflow ID.
+        status: Filter by email status ("sent", "received", "bounced").
 
     Returns:
         List of emails ordered by creation time descending.
@@ -1372,6 +1394,11 @@ def list_emails(
         limit=limit,
         contact_id=contact_id,
         account_id=account_id,
+        since=since,
+        thread_id=thread_id,
+        direction=direction,
+        workflow_id=workflow_id,
+        status=status,
     ) as span:
         conditions: list[SQL] = []
         params: dict[str, object] = {"limit": limit}
@@ -1381,6 +1408,21 @@ def list_emails(
         if account_id is not None:
             conditions.append(SQL("account_id = %(account_id)s"))
             params["account_id"] = account_id
+        if since is not None:
+            conditions.append(SQL("COALESCE(sent_at, received_at) >= %(since)s"))
+            params["since"] = since
+        if thread_id is not None:
+            conditions.append(SQL("gmail_thread_id = %(thread_id)s"))
+            params["thread_id"] = thread_id
+        if direction is not None:
+            conditions.append(SQL("direction = %(direction)s"))
+            params["direction"] = direction
+        if workflow_id is not None:
+            conditions.append(SQL("workflow_id = %(workflow_id)s"))
+            params["workflow_id"] = workflow_id
+        if status is not None:
+            conditions.append(SQL("status = %(status)s"))
+            params["status"] = status
         where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
         query = SQL(
             "SELECT * FROM email {} ORDER BY created_at DESC LIMIT %(limit)s"
@@ -2118,6 +2160,7 @@ def list_notes(
     entity_type: str,
     entity_id: str,
     limit: int = 100,
+    since: str | None = None,
 ) -> list[Note]:
     """List notes on a contact or company.
 
@@ -2126,6 +2169,7 @@ def list_notes(
         entity_type: "contact" or "company".
         entity_id: ID of the annotated entity.
         limit: Maximum number of notes to return.
+        since: ISO datetime lower bound for created_at.
 
     Returns:
         Notes ordered by created_at descending.
@@ -2135,15 +2179,26 @@ def list_notes(
         entity_type=entity_type,
         entity_id=entity_id,
         limit=limit,
+        since=since,
     ) as span:
+        params: dict[str, object] = {
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "limit": limit,
+        }
+        since_clause = ""
+        if since is not None:
+            since_clause = "AND created_at >= %(since)s"
+            params["since"] = since
         rows = connection.execute(
-            """\
+            f"""\
             SELECT * FROM note
             WHERE entity_type = %(entity_type)s AND entity_id = %(entity_id)s
+            {since_clause}
             ORDER BY created_at DESC
             LIMIT %(limit)s
             """,
-            {"entity_type": entity_type, "entity_id": entity_id, "limit": limit},
+            params,
         ).fetchall()
         notes = [Note.model_validate(row) for row in rows]
         span.set_attribute("note_count", len(notes))
