@@ -2181,25 +2181,23 @@ def list_notes(
         limit=limit,
         since=since,
     ) as span:
+        conditions: list[SQL] = [
+            SQL("entity_type = %(entity_type)s"),
+            SQL("entity_id = %(entity_id)s"),
+        ]
         params: dict[str, object] = {
             "entity_type": entity_type,
             "entity_id": entity_id,
             "limit": limit,
         }
-        since_clause = ""
         if since is not None:
-            since_clause = "AND created_at >= %(since)s"
+            conditions.append(SQL("created_at >= %(since)s"))
             params["since"] = since
-        rows = connection.execute(
-            f"""\
-            SELECT * FROM note
-            WHERE entity_type = %(entity_type)s AND entity_id = %(entity_id)s
-            {since_clause}
-            ORDER BY created_at DESC
-            LIMIT %(limit)s
-            """,
-            params,
-        ).fetchall()
+        where = SQL("WHERE ") + SQL(" AND ").join(conditions)
+        query = SQL(
+            "SELECT * FROM note {} ORDER BY created_at DESC LIMIT %(limit)s"
+        ).format(where)
+        rows = connection.execute(query, params).fetchall()
         notes = [Note.model_validate(row) for row in rows]
         span.set_attribute("note_count", len(notes))
         return notes
