@@ -23,6 +23,7 @@ import logfire
 import psycopg
 from pydantic_ai import Agent, RunContext, Tool
 from pydantic_ai.messages import ToolReturnPart
+from pydantic_ai.models import Model
 
 from mailpilot import database
 from mailpilot.agent import tools as agent_tools
@@ -349,7 +350,7 @@ def invoke_workflow_agent(  # noqa: PLR0913
     email: Email | None = None,
     task_description: str = "",
     task_context: dict[str, Any] | None = None,
-    model_override: object | None = None,
+    model_override: Model | str | None = None,
 ) -> dict[str, Any] | None:
     """Run the workflow's Pydantic AI agent for a contact.
 
@@ -443,7 +444,7 @@ def invoke_workflow_agent(  # noqa: PLR0913
 
             span.set_attribute("prompt_length", len(prompt))
 
-            result = agent.run_sync(prompt, model=model, deps=deps)  # type: ignore[arg-type]
+            result = agent.run_sync(prompt, model=model, deps=deps)
 
             # Tool-use enforcement.
             tool_call_count = _count_successful_tool_calls(result.all_messages())
