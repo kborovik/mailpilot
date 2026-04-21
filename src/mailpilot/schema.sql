@@ -159,3 +159,14 @@ CREATE TABLE IF NOT EXISTS tag (
 
 CREATE INDEX IF NOT EXISTS idx_tag_entity ON tag(entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS idx_tag_name ON tag(name);
+
+CREATE TABLE IF NOT EXISTS note (
+    id              TEXT PRIMARY KEY,
+    entity_type     TEXT NOT NULL
+                    CHECK (entity_type IN ('contact', 'company')),
+    entity_id       TEXT NOT NULL,
+    body            TEXT NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_note_entity ON note(entity_type, entity_id);

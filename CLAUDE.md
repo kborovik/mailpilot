@@ -45,6 +45,13 @@ The CLI must be LLM Agent friendly: JSON output only. Exit codes must be meaning
 
 **Convention: GitHub CLI (`gh`) as reference.** Standard verbs: `list` (summary), `view ID` (full record), `get` (fetch from external API), `set` (update config). All IDs are UUIDv7.
 
+**Input validation in CLI commands.** All commands validate before touching the database:
+
+1. Required text fields reject empty/whitespace-only values: `output_error("X cannot be empty", "validation_error")` -- checked before `initialize_database()`.
+2. FK references (`--contact-id`, `--company-id`, `--account-id`) are validated with `get_X()` after connection, before the main operation. Return `not_found` if the entity doesn't exist.
+3. List commands with optional FK filters (`email list --contact-id`, `contact list --company-id`, etc.) validate entity existence when the filter is provided. This prevents silent empty results from typos.
+4. Use `if x is not None and get_y(...) is None:` (single `if`) to avoid ruff SIM102.
+
 ```
 mailpilot --version
 mailpilot --debug COMMAND
@@ -98,8 +105,9 @@ mailpilot tag list --contact-id ID
 mailpilot tag list --company-id ID
 mailpilot tag search NAME [--type contact|company] [--limit N]
 
-mailpilot note add --contact-id ID BODY
-mailpilot note add --company-id ID BODY
+mailpilot note add --contact-id ID --body TEXT
+mailpilot note add --company-id ID --body TEXT
+mailpilot note view ID
 mailpilot note list --contact-id ID [--limit N]
 mailpilot note list --company-id ID [--limit N]
 
@@ -225,6 +233,8 @@ If a GitHub operation isn't covered by a skill (e.g. reviewing comments, closing
 3. Run: `uv run ruff check --fix` then `uv run basedpyright`
 
 Tests use a separate database: `postgresql://localhost/mailpilot_test` (override with `DATABASE_URL` env var). The `database_connection` fixture truncates all tables before each test. Use `make_test_settings()` for Settings instances and `load_fixture()` for JSON fixtures -- all in `conftest.py`. HTTP mocking uses `pytest-httpx`. Span-contract tests use the `capfire: CaptureLogfire` fixture (see `tests/test_database_telemetry.py`). The `e2e` pytest marker is excluded from default runs (`addopts = "-m 'not e2e'"`); live-Gmail tests live under `tests/e2e/` and run via `make e2e` against `mailpilot_e2e`.
+
+**Patching gotcha for entity validation.** When a CLI command calls `get_contact()`, `get_company()`, or `get_account()` for FK validation, every test for that command must patch the `get_*` function with a valid return value. Adding FK validation to an existing command will break its tests until the patches are added.
 
 ## Observability
 
