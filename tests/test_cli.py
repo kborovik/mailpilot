@@ -1992,9 +1992,11 @@ def test_tag_add_creates_activity(
 
 
 def test_tag_add_already_exists(runner: CliRunner, mock_connection: MagicMock) -> None:
+    contact = _make_contact(id="cid-1")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_contact", return_value=contact),
         patch("mailpilot.database.create_tag", return_value=None),
     ):
         result = runner.invoke(
@@ -2005,6 +2007,44 @@ def test_tag_add_already_exists(runner: CliRunner, mock_connection: MagicMock) -
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["error"] == "already_exists"
+
+
+def test_tag_add_contact_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_contact", return_value=None),
+    ):
+        result = runner.invoke(
+            main,
+            ["tag", "add", "--contact-id", "cid-missing", "prospect"],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+    assert "contact" in data["message"]
+
+
+def test_tag_add_company_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=None),
+    ):
+        result = runner.invoke(
+            main,
+            ["tag", "add", "--company-id", "cid-missing", "prospect"],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+    assert "company" in data["message"]
 
 
 def test_tag_add_no_entity(runner: CliRunner, mock_connection: MagicMock) -> None:

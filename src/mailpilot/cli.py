@@ -864,6 +864,7 @@ def tag_add(contact_id: str | None, company_id: str | None, name: str) -> None:
     from mailpilot.database import (
         create_activity,
         create_tag,
+        get_company,
         get_contact,
         initialize_database,
     )
@@ -871,6 +872,21 @@ def tag_add(contact_id: str | None, company_id: str | None, name: str) -> None:
     entity_type, entity_id = _resolve_entity(contact_id, company_id)
     connection = initialize_database(_database_url())
     try:
+        # Validate entity exists before creating tag
+        if entity_type == "contact":
+            contact = get_contact(connection, entity_id)
+            if contact is None:
+                output_error(
+                    f"contact {entity_id} not found",
+                    "not_found",
+                )
+        else:
+            company = get_company(connection, entity_id)
+            if company is None:
+                output_error(
+                    f"company {entity_id} not found",
+                    "not_found",
+                )
         created = create_tag(
             connection,
             entity_type=entity_type,
