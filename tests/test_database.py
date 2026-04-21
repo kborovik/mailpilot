@@ -14,6 +14,7 @@ from conftest import (
     make_test_activity,
     make_test_company,
     make_test_contact,
+    make_test_note,
     make_test_tag,
     make_test_workflow,
 )
@@ -35,6 +36,7 @@ from mailpilot.database import (
     get_email_by_gmail_message_id,
     get_emails_by_gmail_thread_id,
     get_last_cold_outbound,
+    get_note,
     get_status_counts,
     get_workflow,
     list_accounts,
@@ -43,6 +45,7 @@ from mailpilot.database import (
     list_contacts,
     list_emails,
     list_entities_by_tag,
+    list_notes,
     list_tags,
     list_workflows,
     pause_workflow,
@@ -1315,3 +1318,103 @@ def test_status_counts_includes_tags(
     make_test_tag(database_connection, entity_type="contact", entity_id=contact.id)
     counts = get_status_counts(database_connection)
     assert counts["tags"] == 1
+
+
+# -- Note ---------------------------------------------------------------------
+
+
+def test_create_note(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    contact = make_test_contact(database_connection)
+    note = make_test_note(
+        database_connection, entity_type="contact", entity_id=contact.id
+    )
+    assert note.entity_type == "contact"
+    assert note.entity_id == contact.id
+    assert note.body == "Test note body"
+    assert note.id
+
+
+def test_create_note_on_company(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    company = make_test_company(database_connection)
+    note = make_test_note(
+        database_connection,
+        entity_type="company",
+        entity_id=company.id,
+        body="Company note",
+    )
+    assert note.entity_type == "company"
+    assert note.body == "Company note"
+
+
+def test_list_notes(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    contact = make_test_contact(database_connection)
+    make_test_note(
+        database_connection, entity_type="contact", entity_id=contact.id, body="first"
+    )
+    make_test_note(
+        database_connection, entity_type="contact", entity_id=contact.id, body="second"
+    )
+    notes = list_notes(database_connection, entity_type="contact", entity_id=contact.id)
+    assert len(notes) == 2
+    # Ordered by created_at DESC
+    assert notes[0].body == "second"
+    assert notes[1].body == "first"
+
+
+def test_list_notes_empty(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    contact = make_test_contact(database_connection)
+    notes = list_notes(database_connection, entity_type="contact", entity_id=contact.id)
+    assert notes == []
+
+
+def test_list_notes_with_limit(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    contact = make_test_contact(database_connection)
+    make_test_note(
+        database_connection, entity_type="contact", entity_id=contact.id, body="first"
+    )
+    make_test_note(
+        database_connection, entity_type="contact", entity_id=contact.id, body="second"
+    )
+    notes = list_notes(
+        database_connection, entity_type="contact", entity_id=contact.id, limit=1
+    )
+    assert len(notes) == 1
+
+
+def test_get_note(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    contact = make_test_contact(database_connection)
+    created = make_test_note(
+        database_connection, entity_type="contact", entity_id=contact.id
+    )
+    found = get_note(database_connection, created.id)
+    assert found is not None
+    assert found.id == created.id
+    assert found.body == "Test note body"
+
+
+def test_get_note_not_found(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    found = get_note(database_connection, "nonexistent-id")
+    assert found is None
+
+
+def test_status_counts_includes_notes(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    contact = make_test_contact(database_connection)
+    make_test_note(database_connection, entity_type="contact", entity_id=contact.id)
+    counts = get_status_counts(database_connection)
+    assert counts["notes"] == 1

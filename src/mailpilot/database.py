@@ -28,6 +28,7 @@ from mailpilot.models import (
     Company,
     Contact,
     Email,
+    Note,
     SyncStatus,
     Tag,
     Task,
@@ -122,7 +123,8 @@ def get_status_counts(
                 (SELECT COUNT(*) FROM workflow) AS workflows,
                 (SELECT COUNT(*) FROM email) AS emails,
                 (SELECT COUNT(*) FROM activity) AS activities,
-                (SELECT COUNT(*) FROM tag) AS tags
+                (SELECT COUNT(*) FROM tag) AS tags,
+                (SELECT COUNT(*) FROM note) AS notes
             FROM (SELECT 1) AS _dummy
             """
         ).fetchone()
@@ -134,6 +136,7 @@ def get_status_counts(
             "emails": row["emails"],  # type: ignore[index]
             "activities": row["activities"],  # type: ignore[index]
             "tags": row["tags"],  # type: ignore[index]
+            "notes": row["notes"],  # type: ignore[index]
         }
 
 
@@ -2064,6 +2067,111 @@ def search_tags(
         tags = [Tag.model_validate(row) for row in rows]
         span.set_attribute("tag_count", len(tags))
         return tags
+
+
+# -- Note ----------------------------------------------------------------------
+
+
+def create_note(
+    connection: psycopg.Connection[dict[str, Any]],
+    entity_type: str,
+    entity_id: str,
+    body: str,
+) -> Note:
+    """Create a freeform text note on a contact or company.
+
+    Args:
+        connection: Open database connection.
+        entity_type: "contact" or "company".
+        entity_id: ID of the annotated entity.
+        body: Note text.
+
+    Returns:
+        Created note.
+    """
+    with logfire.span(
+        "db.note.create",
+        entity_type=entity_type,
+        entity_id=entity_id,
+    ) as span:
+        row = connection.execute(
+            """\
+            INSERT INTO note (id, entity_type, entity_id, body)
+            VALUES (%(id)s, %(entity_type)s, %(entity_id)s, %(body)s)
+            RETURNING *
+            """,
+            {
+                "id": _new_id(),
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "body": body,
+            },
+        ).fetchone()
+        connection.commit()
+        note = Note.model_validate(row)
+        span.set_attribute("note_id", note.id)
+        return note
+
+
+def list_notes(
+    connection: psycopg.Connection[dict[str, Any]],
+    entity_type: str,
+    entity_id: str,
+    limit: int = 100,
+) -> list[Note]:
+    """List notes on a contact or company.
+
+    Args:
+        connection: Open database connection.
+        entity_type: "contact" or "company".
+        entity_id: ID of the annotated entity.
+        limit: Maximum number of notes to return.
+
+    Returns:
+        Notes ordered by created_at descending.
+    """
+    with logfire.span(
+        "db.note.list",
+        entity_type=entity_type,
+        entity_id=entity_id,
+        limit=limit,
+    ) as span:
+        rows = connection.execute(
+            """\
+            SELECT * FROM note
+            WHERE entity_type = %(entity_type)s AND entity_id = %(entity_id)s
+            ORDER BY created_at DESC
+            LIMIT %(limit)s
+            """,
+            {"entity_type": entity_type, "entity_id": entity_id, "limit": limit},
+        ).fetchall()
+        notes = [Note.model_validate(row) for row in rows]
+        span.set_attribute("note_count", len(notes))
+        return notes
+
+
+def get_note(
+    connection: psycopg.Connection[dict[str, Any]],
+    note_id: str,
+) -> Note | None:
+    """Get a note by ID.
+
+    Args:
+        connection: Open database connection.
+        note_id: Note ID.
+
+    Returns:
+        Note if found, None otherwise.
+    """
+    with logfire.span("db.note.get", note_id=note_id) as span:
+        row = connection.execute(
+            "SELECT * FROM note WHERE id = %(id)s",
+            {"id": note_id},
+        ).fetchone()
+        span.set_attribute("hit", row is not None)
+        if row is None:
+            return None
+        return Note.model_validate(row)
 
 
 # -- Sync Status ---------------------------------------------------------------

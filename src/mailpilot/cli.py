@@ -872,7 +872,7 @@ def tag_add(contact_id: str | None, company_id: str | None, name: str) -> None:
     entity_type, entity_id = _resolve_entity(contact_id, company_id)
     connection = initialize_database(_database_url())
     try:
-        # Validate entity exists before creating tag
+        contact = None
         if entity_type == "contact":
             contact = get_contact(connection, entity_id)
             if contact is None:
@@ -899,16 +899,14 @@ def tag_add(contact_id: str | None, company_id: str | None, name: str) -> None:
                 f"tag '{normalized}' already exists on {entity_type} {entity_id}",
                 "already_exists",
             )
-        # Create tag_added activity when tagging a contact
-        if entity_type == "contact":
-            contact = get_contact(connection, entity_id)
+        if entity_type == "contact" and contact is not None:
             create_activity(
                 connection,
                 contact_id=entity_id,
                 activity_type="tag_added",
                 summary=f"Tagged as {created.name}",
                 detail={"tag": created.name},
-                company_id=contact.company_id if contact else None,
+                company_id=contact.company_id,
             )
         output(created.model_dump(mode="json"))
     finally:
@@ -993,6 +991,85 @@ def tag_search(name: str, entity_type: str | None, limit: int) -> None:
     try:
         tags = search_tags(connection, name=name, entity_type=entity_type, limit=limit)
         output({"tags": [t.model_dump(mode="json") for t in tags]})
+    finally:
+        connection.close()
+
+
+# -- Note commands -------------------------------------------------------------
+
+
+@main.group()
+def note() -> None:
+    """Manage notes on contacts and companies."""
+
+
+@note.command("add")
+@click.option("--contact-id", default=None, help="Contact ID.")
+@click.option("--company-id", default=None, help="Company ID.")
+@click.argument("body")
+def note_add(contact_id: str | None, company_id: str | None, body: str) -> None:
+    """Add a note to a contact or company."""
+    from mailpilot.database import (
+        create_activity,
+        create_note,
+        get_company,
+        get_contact,
+        initialize_database,
+    )
+
+    entity_type, entity_id = _resolve_entity(contact_id, company_id)
+    connection = initialize_database(_database_url())
+    try:
+        contact = None
+        if entity_type == "contact":
+            contact = get_contact(connection, entity_id)
+            if contact is None:
+                output_error(
+                    f"contact {entity_id} not found",
+                    "not_found",
+                )
+        else:
+            company = get_company(connection, entity_id)
+            if company is None:
+                output_error(
+                    f"company {entity_id} not found",
+                    "not_found",
+                )
+        created = create_note(
+            connection,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            body=body,
+        )
+        if entity_type == "contact" and contact is not None:
+            create_activity(
+                connection,
+                contact_id=entity_id,
+                activity_type="note_added",
+                summary="Note added",
+                detail={"note_id": created.id},
+                company_id=contact.company_id,
+            )
+        output(created.model_dump(mode="json"))
+    finally:
+        connection.close()
+
+
+@note.command("list")
+@click.option("--contact-id", default=None, help="Contact ID.")
+@click.option("--company-id", default=None, help="Company ID.")
+@click.option("--limit", default=100, help="Maximum results.")
+def note_list(contact_id: str | None, company_id: str | None, limit: int) -> None:
+    """List notes on a contact or company."""
+    from mailpilot.database import initialize_database, list_notes
+
+    entity_type, entity_id = _resolve_entity(contact_id, company_id)
+    connection = initialize_database(_database_url())
+    try:
+        notes = list_notes(
+            connection, entity_type=entity_type, entity_id=entity_id, limit=limit
+        )
+        output({"notes": [n.model_dump(mode="json") for n in notes]})
     finally:
         connection.close()
 

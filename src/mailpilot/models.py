@@ -161,16 +161,26 @@ class Activity(BaseModel):
     created_at: datetime
 
 
-TagEntityType = Literal["contact", "company"]
+EntityType = Literal["contact", "company"]
 
 
 class Tag(BaseModel):
     """Flexible label on a contact or company for segmentation."""
 
     id: str
-    entity_type: TagEntityType
+    entity_type: EntityType
     entity_id: str
     name: str
+    created_at: datetime
+
+
+class Note(BaseModel):
+    """Freeform text annotation on a contact or company."""
+
+    id: str
+    entity_type: EntityType
+    entity_id: str
+    body: str
     created_at: datetime
 
 

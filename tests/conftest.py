@@ -16,11 +16,12 @@ from mailpilot.database import (
     create_activity,
     create_company,
     create_contact,
+    create_note,
     create_tag,
     create_workflow,
     initialize_database,
 )
-from mailpilot.models import Account, Activity, Company, Contact, Tag, Workflow
+from mailpilot.models import Account, Activity, Company, Contact, Note, Tag, Workflow
 from mailpilot.settings import Settings
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -63,8 +64,8 @@ def database_connection() -> Iterator[psycopg.Connection[dict[str, Any]]]:
         psycopg.connect(TEST_DATABASE_URL, row_factory=dict_row),  # type: ignore[arg-type]
     )
     conn.execute(
-        "TRUNCATE TABLE tag, activity, sync_status, task, email, workflow_contact, "
-        "workflow, contact, company, account CASCADE"
+        "TRUNCATE TABLE note, tag, activity, sync_status, task, email, "
+        "workflow_contact, workflow, contact, company, account CASCADE"
     )
     conn.commit()
     yield conn
@@ -159,3 +160,18 @@ def make_test_tag(
     )
     assert tag is not None, f"tag '{name}' already exists"
     return tag
+
+
+def make_test_note(
+    connection: psycopg.Connection[dict[str, Any]],
+    entity_type: str = "contact",
+    entity_id: str = "",
+    body: str = "Test note body",
+) -> Note:
+    """Create a test note in the database."""
+    return create_note(
+        connection,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        body=body,
+    )
