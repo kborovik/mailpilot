@@ -20,6 +20,7 @@ from mailpilot.agent.tools import (
     create_task,
     disable_contact,
     list_workflow_contacts,
+    noop,
     read_company,
     read_contact,
     search_emails,
@@ -501,3 +502,12 @@ def test_read_company_not_found(
 ):
     result = read_company(connection=database_connection, domain="nonexistent.com")
     assert result is None
+
+
+# -- noop ----------------------------------------------------------------------
+
+
+def test_noop() -> None:
+    result = noop(reason="no action needed")
+    assert result["acknowledged"] is True
+    assert result["reason"] == "no action needed"

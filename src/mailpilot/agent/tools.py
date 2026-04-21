@@ -331,3 +331,20 @@ def read_company(
         if company is None:
             return None
         return company.model_dump()
+
+
+def noop(reason: str) -> dict[str, Any]:
+    """Explicitly decline to act.
+
+    Call this tool when, after reviewing context, no action is appropriate.
+    You must still call a tool every turn -- noop is the explicit "do nothing"
+    signal.
+
+    Args:
+        reason: Why no action is needed.
+
+    Returns:
+        Acknowledgement dict.
+    """
+    with logfire.span("agent.tool.noop", reason=reason):
+        return {"acknowledged": True, "reason": reason}

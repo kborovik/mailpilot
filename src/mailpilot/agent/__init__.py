@@ -3,8 +3,9 @@
 This package separates agent construction from tool definitions and
 classification. Files:
 
-- ``__init__`` -- ``invoke_workflow_agent()`` entry point
-- ``tools`` -- ``@tool`` decorated functions (send_email, create_task, etc.)
+- ``__init__`` -- re-exports ``invoke_workflow_agent()``
+- ``invoke`` -- agent construction, invocation, tool-use enforcement
+- ``tools`` -- standalone tool functions (send_email, create_task, etc.)
 - ``classify`` -- ``classify_email()`` structured output (not an agent)
 """
 
@@ -13,30 +14,36 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from mailpilot.models import Email, Workflow
+    import psycopg
+
+    from mailpilot.models import Contact, Email, Workflow
+    from mailpilot.settings import Settings
 
 
-async def invoke_workflow_agent(
+def invoke_workflow_agent(  # noqa: PLR0913
+    connection: psycopg.Connection[dict[str, Any]],
+    settings: Settings,
     workflow: Workflow,
+    contact: Contact,
     email: Email | None = None,
     task_description: str = "",
     task_context: dict[str, Any] | None = None,
-) -> None:
-    """Run the workflow's Pydantic AI agent.
+    model_override: object | None = None,
+) -> dict[str, Any] | None:
+    """Run the workflow's Pydantic AI agent for a contact.
 
-    The agent is stateless -- each invocation gets fresh context from the
-    database. It makes all business decisions: what to send, when to follow
-    up, when to give up.
-
-    Three trigger types:
-        - Email arrives: ``email`` is set, agent processes the inbound message
-        - Task due: ``task_description`` + ``task_context`` are set
-        - Manual send: called from CLI with contact list via workflow
-
-    Args:
-        workflow: Workflow with instructions (system prompt) and objective.
-        email: Triggering inbound email, if any.
-        task_description: Deferred task description, if triggered by task runner.
-        task_context: Arbitrary JSON context from the task row.
+    Thin re-export that defers the heavy import to avoid circular imports
+    (agent -> tools -> sync -> routing -> agent).
     """
-    raise NotImplementedError
+    from mailpilot.agent.invoke import invoke_workflow_agent as _invoke
+
+    return _invoke(
+        connection,
+        settings,
+        workflow,
+        contact,
+        email=email,
+        task_description=task_description,
+        task_context=task_context,
+        model_override=model_override,
+    )
