@@ -146,3 +146,16 @@ CREATE INDEX IF NOT EXISTS idx_activity_contact_id ON activity(contact_id);
 CREATE INDEX IF NOT EXISTS idx_activity_company_id ON activity(company_id);
 CREATE INDEX IF NOT EXISTS idx_activity_type ON activity(type);
 CREATE INDEX IF NOT EXISTS idx_activity_created_at ON activity(created_at);
+
+CREATE TABLE IF NOT EXISTS tag (
+    id              TEXT PRIMARY KEY,
+    entity_type     TEXT NOT NULL
+                    CHECK (entity_type IN ('contact', 'company')),
+    entity_id       TEXT NOT NULL,
+    name            TEXT NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (entity_type, entity_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tag_entity ON tag(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_tag_name ON tag(name);

@@ -14,6 +14,7 @@ from conftest import (
     make_test_activity,
     make_test_company,
     make_test_contact,
+    make_test_tag,
     make_test_workflow,
 )
 from mailpilot.database import (
@@ -22,6 +23,8 @@ from mailpilot.database import (
     create_contacts_bulk,
     create_email,
     create_or_get_contact_by_email,
+    create_tag,
+    delete_tag,
     get_account,
     get_company,
     get_company_by_domain,
@@ -39,11 +42,14 @@ from mailpilot.database import (
     list_companies,
     list_contacts,
     list_emails,
+    list_entities_by_tag,
+    list_tags,
     list_workflows,
     pause_workflow,
     search_companies,
     search_contacts,
     search_emails,
+    search_tags,
     search_workflows,
     update_account,
     update_company,
@@ -1098,3 +1104,214 @@ def test_status_counts_includes_activities(
     make_test_activity(database_connection, contact_id=contact.id)
     counts = get_status_counts(database_connection)
     assert counts["activities"] == 1
+
+
+# -- Tag -----------------------------------------------------------------------
+
+
+def test_create_tag(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    contact = make_test_contact(database_connection)
+    tag = make_test_tag(
+        database_connection, entity_type="contact", entity_id=contact.id
+    )
+    assert tag.entity_type == "contact"
+    assert tag.entity_id == contact.id
+    assert tag.name == "prospect"
+    assert tag.id
+
+
+def test_create_tag_normalizes_name(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    contact = make_test_contact(database_connection)
+    tag = make_test_tag(
+        database_connection,
+        entity_type="contact",
+        entity_id=contact.id,
+        name="  PROSPECT  ",
+    )
+    assert tag.name == "prospect"
+
+
+def test_create_tag_idempotent(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    contact = make_test_contact(database_connection)
+    first = create_tag(
+        database_connection,
+        entity_type="contact",
+        entity_id=contact.id,
+        name="prospect",
+    )
+    assert first is not None
+    second = create_tag(
+        database_connection,
+        entity_type="contact",
+        entity_id=contact.id,
+        name="prospect",
+    )
+    assert second is None
+
+
+def test_create_tag_on_company(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    company = make_test_company(database_connection)
+    tag = make_test_tag(
+        database_connection,
+        entity_type="company",
+        entity_id=company.id,
+        name="logistics",
+    )
+    assert tag.entity_type == "company"
+    assert tag.name == "logistics"
+
+
+def test_delete_tag(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    contact = make_test_contact(database_connection)
+    make_test_tag(database_connection, entity_type="contact", entity_id=contact.id)
+    deleted = delete_tag(
+        database_connection,
+        entity_type="contact",
+        entity_id=contact.id,
+        name="prospect",
+    )
+    assert deleted is True
+
+
+def test_delete_tag_not_found(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    contact = make_test_contact(database_connection)
+    deleted = delete_tag(
+        database_connection,
+        entity_type="contact",
+        entity_id=contact.id,
+        name="nonexistent",
+    )
+    assert deleted is False
+
+
+def test_list_tags(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    contact = make_test_contact(database_connection)
+    make_test_tag(
+        database_connection, entity_type="contact", entity_id=contact.id, name="cold"
+    )
+    make_test_tag(
+        database_connection,
+        entity_type="contact",
+        entity_id=contact.id,
+        name="prospect",
+    )
+    tags = list_tags(database_connection, entity_type="contact", entity_id=contact.id)
+    assert len(tags) == 2
+    # Ordered by name
+    assert tags[0].name == "cold"
+    assert tags[1].name == "prospect"
+
+
+def test_list_tags_empty(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    contact = make_test_contact(database_connection)
+    tags = list_tags(database_connection, entity_type="contact", entity_id=contact.id)
+    assert tags == []
+
+
+def test_list_entities_by_tag(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    c1 = make_test_contact(database_connection, email="a@test.com", domain="test.com")
+    c2 = make_test_contact(database_connection, email="b@test.com", domain="test.com")
+    c3 = make_test_contact(database_connection, email="c@test.com", domain="test.com")
+    make_test_tag(
+        database_connection, entity_type="contact", entity_id=c1.id, name="prospect"
+    )
+    make_test_tag(
+        database_connection, entity_type="contact", entity_id=c2.id, name="prospect"
+    )
+    make_test_tag(
+        database_connection, entity_type="contact", entity_id=c3.id, name="client"
+    )
+
+    ids = list_entities_by_tag(
+        database_connection, entity_type="contact", name="prospect"
+    )
+    assert len(ids) == 2
+    assert c1.id in ids
+    assert c2.id in ids
+
+
+def test_list_entities_by_tag_with_limit(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    c1 = make_test_contact(database_connection, email="a@test.com", domain="test.com")
+    c2 = make_test_contact(database_connection, email="b@test.com", domain="test.com")
+    make_test_tag(
+        database_connection, entity_type="contact", entity_id=c1.id, name="prospect"
+    )
+    make_test_tag(
+        database_connection, entity_type="contact", entity_id=c2.id, name="prospect"
+    )
+
+    ids = list_entities_by_tag(
+        database_connection, entity_type="contact", name="prospect", limit=1
+    )
+    assert len(ids) == 1
+
+
+def test_search_tags(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    contact = make_test_contact(database_connection)
+    make_test_tag(
+        database_connection,
+        entity_type="contact",
+        entity_id=contact.id,
+        name="prospect",
+    )
+    make_test_tag(
+        database_connection, entity_type="contact", entity_id=contact.id, name="cold"
+    )
+
+    results = search_tags(database_connection, name="pro")
+    assert len(results) == 1
+    assert results[0].name == "prospect"
+
+
+def test_search_tags_with_entity_type(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    contact = make_test_contact(database_connection)
+    company = make_test_company(database_connection)
+    make_test_tag(
+        database_connection,
+        entity_type="contact",
+        entity_id=contact.id,
+        name="prospect",
+    )
+    make_test_tag(
+        database_connection,
+        entity_type="company",
+        entity_id=company.id,
+        name="prospect",
+    )
+
+    results = search_tags(database_connection, name="prospect", entity_type="contact")
+    assert len(results) == 1
+    assert results[0].entity_type == "contact"
+
+
+def test_status_counts_includes_tags(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    contact = make_test_contact(database_connection)
+    make_test_tag(database_connection, entity_type="contact", entity_id=contact.id)
+    counts = get_status_counts(database_connection)
+    assert counts["tags"] == 1

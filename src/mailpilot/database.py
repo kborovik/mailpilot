@@ -29,6 +29,7 @@ from mailpilot.models import (
     Contact,
     Email,
     SyncStatus,
+    Tag,
     Task,
     Workflow,
     WorkflowContact,
@@ -120,7 +121,8 @@ def get_status_counts(
                 (SELECT COUNT(*) FROM contact) AS contacts,
                 (SELECT COUNT(*) FROM workflow) AS workflows,
                 (SELECT COUNT(*) FROM email) AS emails,
-                (SELECT COUNT(*) FROM activity) AS activities
+                (SELECT COUNT(*) FROM activity) AS activities,
+                (SELECT COUNT(*) FROM tag) AS tags
             FROM (SELECT 1) AS _dummy
             """
         ).fetchone()
@@ -131,6 +133,7 @@ def get_status_counts(
             "workflows": row["workflows"],  # type: ignore[index]
             "emails": row["emails"],  # type: ignore[index]
             "activities": row["activities"],  # type: ignore[index]
+            "tags": row["tags"],  # type: ignore[index]
         }
 
 
@@ -1852,6 +1855,215 @@ def list_activities(
         activities = [Activity.model_validate(row) for row in rows]
         span.set_attribute("activity_count", len(activities))
         return activities
+
+
+# -- Tag -----------------------------------------------------------------------
+
+
+def create_tag(
+    connection: psycopg.Connection[dict[str, Any]],
+    entity_type: str,
+    entity_id: str,
+    name: str,
+) -> Tag | None:
+    """Create a tag on a contact or company.
+
+    Normalizes the tag name to lowercase with leading/trailing whitespace
+    stripped. Uses ON CONFLICT DO NOTHING so duplicate tags are silently
+    ignored.
+
+    Args:
+        connection: Open database connection.
+        entity_type: "contact" or "company".
+        entity_id: ID of the tagged entity.
+        name: Tag name (normalized to lowercase).
+
+    Returns:
+        Created tag, or None if the tag already exists.
+    """
+    normalized = name.strip().lower()
+    with logfire.span(
+        "db.tag.create",
+        entity_type=entity_type,
+        entity_id=entity_id,
+        name=normalized,
+    ) as span:
+        row = connection.execute(
+            """\
+            INSERT INTO tag (id, entity_type, entity_id, name)
+            VALUES (%(id)s, %(entity_type)s, %(entity_id)s, %(name)s)
+            ON CONFLICT (entity_type, entity_id, name) DO NOTHING
+            RETURNING *
+            """,
+            {
+                "id": _new_id(),
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "name": normalized,
+            },
+        ).fetchone()
+        connection.commit()
+        if row is None:
+            span.set_attribute("result", "already_exists")
+            return None
+        tag = Tag.model_validate(row)
+        span.set_attribute("tag_id", tag.id)
+        return tag
+
+
+def delete_tag(
+    connection: psycopg.Connection[dict[str, Any]],
+    entity_type: str,
+    entity_id: str,
+    name: str,
+) -> bool:
+    """Remove a tag from a contact or company.
+
+    Args:
+        connection: Open database connection.
+        entity_type: "contact" or "company".
+        entity_id: ID of the tagged entity.
+        name: Tag name (normalized to lowercase for matching).
+
+    Returns:
+        True if the tag was deleted, False if it was not found.
+    """
+    normalized = name.strip().lower()
+    with logfire.span(
+        "db.tag.delete",
+        entity_type=entity_type,
+        entity_id=entity_id,
+        name=normalized,
+    ) as span:
+        cursor = connection.execute(
+            """\
+            DELETE FROM tag
+            WHERE entity_type = %(entity_type)s
+              AND entity_id = %(entity_id)s
+              AND name = %(name)s
+            """,
+            {
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "name": normalized,
+            },
+        )
+        connection.commit()
+        deleted = cursor.rowcount > 0
+        span.set_attribute("deleted", deleted)
+        return deleted
+
+
+def list_tags(
+    connection: psycopg.Connection[dict[str, Any]],
+    entity_type: str,
+    entity_id: str,
+) -> list[Tag]:
+    """List all tags on a contact or company.
+
+    Args:
+        connection: Open database connection.
+        entity_type: "contact" or "company".
+        entity_id: ID of the tagged entity.
+
+    Returns:
+        Tags ordered by name.
+    """
+    with logfire.span(
+        "db.tag.list",
+        entity_type=entity_type,
+        entity_id=entity_id,
+    ) as span:
+        rows = connection.execute(
+            """\
+            SELECT * FROM tag
+            WHERE entity_type = %(entity_type)s AND entity_id = %(entity_id)s
+            ORDER BY name
+            """,
+            {"entity_type": entity_type, "entity_id": entity_id},
+        ).fetchall()
+        tags = [Tag.model_validate(row) for row in rows]
+        span.set_attribute("tag_count", len(tags))
+        return tags
+
+
+def list_entities_by_tag(
+    connection: psycopg.Connection[dict[str, Any]],
+    entity_type: str,
+    name: str,
+    limit: int = 100,
+) -> list[str]:
+    """Find all entities with a given tag.
+
+    Args:
+        connection: Open database connection.
+        entity_type: "contact" or "company".
+        name: Tag name to search for.
+        limit: Maximum number of entity IDs to return.
+
+    Returns:
+        Entity IDs matching the tag.
+    """
+    normalized = name.strip().lower()
+    with logfire.span(
+        "db.tag.list_entities",
+        entity_type=entity_type,
+        name=normalized,
+        limit=limit,
+    ) as span:
+        rows = connection.execute(
+            """\
+            SELECT entity_id FROM tag
+            WHERE entity_type = %(entity_type)s AND name = %(name)s
+            ORDER BY created_at
+            LIMIT %(limit)s
+            """,
+            {"entity_type": entity_type, "name": normalized, "limit": limit},
+        ).fetchall()
+        entity_ids = [row["entity_id"] for row in rows]
+        span.set_attribute("entity_count", len(entity_ids))
+        return entity_ids
+
+
+def search_tags(
+    connection: psycopg.Connection[dict[str, Any]],
+    name: str,
+    entity_type: str | None = None,
+    limit: int = 100,
+) -> list[Tag]:
+    """Search tags by name with optional entity type filter.
+
+    Args:
+        connection: Open database connection.
+        name: Tag name pattern (LIKE match).
+        entity_type: Optional filter by "contact" or "company".
+        limit: Maximum number of results.
+
+    Returns:
+        Matching tags ordered by name.
+    """
+    with logfire.span(
+        "db.tag.search",
+        name=name,
+        entity_type=entity_type,
+        limit=limit,
+    ) as span:
+        pattern = f"%{name.strip().lower()}%"
+        params: dict[str, object] = {"pattern": pattern, "limit": limit}
+        type_filter = SQL("")
+        if entity_type is not None:
+            type_filter = SQL("AND entity_type = %(entity_type)s")
+            params["entity_type"] = entity_type
+        query = SQL(
+            "SELECT * FROM tag "
+            "WHERE name LIKE %(pattern)s {} "
+            "ORDER BY name "
+            "LIMIT %(limit)s"
+        ).format(type_filter)
+        rows = connection.execute(query, params).fetchall()
+        tags = [Tag.model_validate(row) for row in rows]
+        span.set_attribute("tag_count", len(tags))
+        return tags
 
 
 # -- Sync Status ---------------------------------------------------------------

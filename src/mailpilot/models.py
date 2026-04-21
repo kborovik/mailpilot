@@ -161,6 +161,19 @@ class Activity(BaseModel):
     created_at: datetime
 
 
+TagEntityType = Literal["contact", "company"]
+
+
+class Tag(BaseModel):
+    """Flexible label on a contact or company for segmentation."""
+
+    id: str
+    entity_type: TagEntityType
+    entity_id: str
+    name: str
+    created_at: datetime
+
+
 class SyncStatus(BaseModel):
     """Singleton row tracking the running sync process."""
 
