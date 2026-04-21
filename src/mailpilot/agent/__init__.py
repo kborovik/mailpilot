@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import psycopg
+    from pydantic_ai.models import Model
 
     from mailpilot.models import Contact, Email, Workflow
     from mailpilot.settings import Settings
@@ -28,7 +29,7 @@ def invoke_workflow_agent(  # noqa: PLR0913
     email: Email | None = None,
     task_description: str = "",
     task_context: dict[str, Any] | None = None,
-    model_override: object | None = None,
+    model_override: Model[Any] | str | None = None,
 ) -> dict[str, Any] | None:
     """Run the workflow's Pydantic AI agent for a contact.
 
