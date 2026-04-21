@@ -229,6 +229,8 @@ def account_create(email: str, display_name: str) -> None:
     """Create a new Gmail account."""
     from mailpilot.database import create_account, initialize_database
 
+    if not email.strip():
+        output_error("email cannot be empty", "validation_error")
     connection = initialize_database(_database_url())
     try:
         created = create_account(connection, email=email, display_name=display_name)
@@ -353,6 +355,8 @@ def company_create(domain: str, name: str) -> None:
     """Create a new company."""
     from mailpilot.database import create_company, initialize_database
 
+    if not domain.strip():
+        output_error("domain cannot be empty", "validation_error")
     connection = initialize_database(_database_url())
     try:
         created = create_company(connection, name=name, domain=domain)
@@ -484,11 +488,17 @@ def contact_create(
     company_id: str | None,
 ) -> None:
     """Create a new contact."""
-    from mailpilot.database import create_contact, initialize_database
+    from mailpilot.database import (
+        create_contact,
+        get_company,
+        initialize_database,
+    )
 
     domain = email.rsplit("@", maxsplit=1)[-1]
     connection = initialize_database(_database_url())
     try:
+        if company_id is not None and get_company(connection, company_id) is None:
+            output_error(f"company not found: {company_id}", "not_found")
         created = create_contact(
             connection,
             email=email,
@@ -559,10 +569,12 @@ def contact_search(query: str, limit: int) -> None:
 @click.option("--company-id", default=None, help="Filter by company ID.")
 def contact_list(limit: int, domain: str | None, company_id: str | None) -> None:
     """List contacts."""
-    from mailpilot.database import initialize_database, list_contacts
+    from mailpilot.database import get_company, initialize_database, list_contacts
 
     connection = initialize_database(_database_url())
     try:
+        if company_id is not None and get_company(connection, company_id) is None:
+            output_error(f"company not found: {company_id}", "not_found")
         contacts = list_contacts(
             connection, limit=limit, domain=domain, company_id=company_id
         )
@@ -663,10 +675,19 @@ def email_search(query: str, limit: int) -> None:
 @click.option("--account-id", default=None, help="Filter by account ID.")
 def email_list(limit: int, contact_id: str | None, account_id: str | None) -> None:
     """List emails with optional filters."""
-    from mailpilot.database import initialize_database, list_emails
+    from mailpilot.database import (
+        get_account,
+        get_contact,
+        initialize_database,
+        list_emails,
+    )
 
     connection = initialize_database(_database_url())
     try:
+        if contact_id is not None and get_contact(connection, contact_id) is None:
+            output_error(f"contact not found: {contact_id}", "not_found")
+        if account_id is not None and get_account(connection, account_id) is None:
+            output_error(f"account not found: {account_id}", "not_found")
         emails = list_emails(
             connection, limit=limit, contact_id=contact_id, account_id=account_id
         )
@@ -776,11 +797,22 @@ def activity_create(
     company_id: str | None,
 ) -> None:
     """Create an activity event."""
-    from mailpilot.database import create_activity, initialize_database
+    from mailpilot.database import (
+        create_activity,
+        get_company,
+        get_contact,
+        initialize_database,
+    )
 
+    if not summary.strip():
+        output_error("summary cannot be empty", "validation_error")
     detail_dict: dict[str, object] = json.loads(detail) if detail else {}
     connection = initialize_database(_database_url())
     try:
+        if get_contact(connection, contact_id) is None:
+            output_error(f"contact not found: {contact_id}", "not_found")
+        if company_id is not None and get_company(connection, company_id) is None:
+            output_error(f"company not found: {company_id}", "not_found")
         created = create_activity(
             connection,
             contact_id=contact_id,
@@ -814,7 +846,12 @@ def activity_list(
     since: str | None,
 ) -> None:
     """List activities (requires --contact-id or --company-id)."""
-    from mailpilot.database import initialize_database, list_activities
+    from mailpilot.database import (
+        get_company,
+        get_contact,
+        initialize_database,
+        list_activities,
+    )
 
     if contact_id is None and company_id is None:
         output_error(
@@ -823,6 +860,10 @@ def activity_list(
         )
     connection = initialize_database(_database_url())
     try:
+        if contact_id is not None and get_contact(connection, contact_id) is None:
+            output_error(f"contact not found: {contact_id}", "not_found")
+        if company_id is not None and get_company(connection, company_id) is None:
+            output_error(f"company not found: {company_id}", "not_found")
         activities = list_activities(
             connection,
             contact_id=contact_id,
@@ -869,6 +910,8 @@ def tag_add(contact_id: str | None, company_id: str | None, name: str) -> None:
         initialize_database,
     )
 
+    if not name.strip():
+        output_error("tag name cannot be empty", "validation_error")
     entity_type, entity_id = _resolve_entity(contact_id, company_id)
     connection = initialize_database(_database_url())
     try:
@@ -922,6 +965,7 @@ def tag_remove(contact_id: str | None, company_id: str | None, name: str) -> Non
     from mailpilot.database import (
         create_activity,
         delete_tag,
+        get_company,
         get_contact,
         initialize_database,
     )
@@ -929,6 +973,11 @@ def tag_remove(contact_id: str | None, company_id: str | None, name: str) -> Non
     entity_type, entity_id = _resolve_entity(contact_id, company_id)
     connection = initialize_database(_database_url())
     try:
+        if entity_type == "contact":
+            if get_contact(connection, entity_id) is None:
+                output_error(f"contact {entity_id} not found", "not_found")
+        elif get_company(connection, entity_id) is None:
+            output_error(f"company {entity_id} not found", "not_found")
         deleted = delete_tag(
             connection,
             entity_type=entity_type,
@@ -962,11 +1011,21 @@ def tag_remove(contact_id: str | None, company_id: str | None, name: str) -> Non
 @click.option("--company-id", default=None, help="Company ID.")
 def tag_list(contact_id: str | None, company_id: str | None) -> None:
     """List tags on a contact or company."""
-    from mailpilot.database import initialize_database, list_tags
+    from mailpilot.database import (
+        get_company,
+        get_contact,
+        initialize_database,
+        list_tags,
+    )
 
     entity_type, entity_id = _resolve_entity(contact_id, company_id)
     connection = initialize_database(_database_url())
     try:
+        if entity_type == "contact":
+            if get_contact(connection, entity_id) is None:
+                output_error(f"contact {entity_id} not found", "not_found")
+        elif get_company(connection, entity_id) is None:
+            output_error(f"company {entity_id} not found", "not_found")
         tags = list_tags(connection, entity_type=entity_type, entity_id=entity_id)
         output({"tags": [t.model_dump(mode="json") for t in tags]})
     finally:
@@ -1006,7 +1065,7 @@ def note() -> None:
 @note.command("add")
 @click.option("--contact-id", default=None, help="Contact ID.")
 @click.option("--company-id", default=None, help="Company ID.")
-@click.argument("body")
+@click.option("--body", required=True, help="Note text.")
 def note_add(contact_id: str | None, company_id: str | None, body: str) -> None:
     """Add a note to a contact or company."""
     from mailpilot.database import (
@@ -1017,6 +1076,8 @@ def note_add(contact_id: str | None, company_id: str | None, body: str) -> None:
         initialize_database,
     )
 
+    if not body.strip():
+        output_error("note body cannot be empty", "validation_error")
     entity_type, entity_id = _resolve_entity(contact_id, company_id)
     connection = initialize_database(_database_url())
     try:
@@ -1061,15 +1122,41 @@ def note_add(contact_id: str | None, company_id: str | None, body: str) -> None:
 @click.option("--limit", default=100, help="Maximum results.")
 def note_list(contact_id: str | None, company_id: str | None, limit: int) -> None:
     """List notes on a contact or company."""
-    from mailpilot.database import initialize_database, list_notes
+    from mailpilot.database import (
+        get_company,
+        get_contact,
+        initialize_database,
+        list_notes,
+    )
 
     entity_type, entity_id = _resolve_entity(contact_id, company_id)
     connection = initialize_database(_database_url())
     try:
+        if entity_type == "contact":
+            if get_contact(connection, entity_id) is None:
+                output_error(f"contact {entity_id} not found", "not_found")
+        elif get_company(connection, entity_id) is None:
+            output_error(f"company {entity_id} not found", "not_found")
         notes = list_notes(
             connection, entity_type=entity_type, entity_id=entity_id, limit=limit
         )
         output({"notes": [n.model_dump(mode="json") for n in notes]})
+    finally:
+        connection.close()
+
+
+@note.command("view")
+@click.argument("note_id")
+def note_view(note_id: str) -> None:
+    """View a note by ID."""
+    from mailpilot.database import get_note, initialize_database
+
+    connection = initialize_database(_database_url())
+    try:
+        found = get_note(connection, note_id)
+        if found is None:
+            output_error(f"note {note_id} not found", "not_found")
+        output(found.model_dump(mode="json"))
     finally:
         connection.close()
 
@@ -1111,12 +1198,17 @@ def workflow_create(
 
     from mailpilot.database import (
         create_workflow,
+        get_account,
         initialize_database,
         update_workflow,
     )
 
+    if not name.strip():
+        output_error("workflow name cannot be empty", "validation_error")
     connection = initialize_database(_database_url())
     try:
+        if get_account(connection, account_id) is None:
+            output_error(f"account not found: {account_id}", "not_found")
         created = create_workflow(
             connection,
             name=name,
@@ -1194,10 +1286,12 @@ def workflow_search(query: str, limit: int) -> None:
 @click.option("--account-id", default=None, help="Filter by account ID.")
 def workflow_list(account_id: str | None) -> None:
     """List workflows."""
-    from mailpilot.database import initialize_database, list_workflows
+    from mailpilot.database import get_account, initialize_database, list_workflows
 
     connection = initialize_database(_database_url())
     try:
+        if account_id is not None and get_account(connection, account_id) is None:
+            output_error(f"account not found: {account_id}", "not_found")
         workflows = list_workflows(connection, account_id=account_id)
         output({"workflows": [w.model_dump(mode="json") for w in workflows]})
     finally:
