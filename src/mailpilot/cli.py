@@ -1353,11 +1353,17 @@ def workflow_pause(workflow_id: str) -> None:
 @click.option("--contact-id", required=True, help="Contact ID.")
 def workflow_run(workflow_id: str, contact_id: str) -> None:
     """Invoke the workflow agent for a single contact (outbound only)."""
-    import asyncio
-
     from mailpilot.agent import invoke_workflow_agent
-    from mailpilot.database import get_contact, get_workflow, initialize_database
+    from mailpilot.database import (
+        get_contact,
+        get_workflow,
+        get_workflow_contact,
+        initialize_database,
+    )
+    from mailpilot.exceptions import AgentDidNotUseToolsError
+    from mailpilot.settings import get_settings
 
+    settings = get_settings()
     connection = initialize_database(_database_url())
     try:
         wf = get_workflow(connection, workflow_id)
@@ -1374,14 +1380,31 @@ def workflow_run(workflow_id: str, contact_id: str) -> None:
         contact = get_contact(connection, contact_id)
         if contact is None:
             output_error(f"contact not found: {contact_id}", "not_found")
-        result = invoke_workflow_agent(wf)
-        if asyncio.iscoroutine(result):
-            asyncio.run(result)
+        if get_workflow_contact(connection, workflow_id, contact.id) is None:
+            output_error(
+                f"contact {contact_id} is not enrolled in workflow {workflow_id}",
+                "not_found",
+            )
+        try:
+            result = invoke_workflow_agent(connection, settings, wf, contact)
+        except AgentDidNotUseToolsError:
+            output_error(
+                f"agent completed without calling any tools: "
+                f"workflow={workflow_id}, contact={contact_id}",
+                "agent_no_tools",
+            )
+        if result is None:
+            output_error(
+                f"invocation skipped: advisory lock held for "
+                f"workflow={workflow_id}, contact={contact_id}",
+                "lock_held",
+            )
         output(
             {
                 "workflow_id": wf.id,
                 "contact_id": contact.id,
-                "status": "invoked",
+                "status": "completed",
+                "tool_calls": result["tool_calls"],
             }
         )
     finally:

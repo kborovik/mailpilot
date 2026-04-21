@@ -24,3 +24,7 @@ class ClassificationError(MailPilotError):
 
 class SyncError(MailPilotError):
     """Gmail sync operation failed."""
+
+
+class AgentDidNotUseToolsError(MailPilotError):
+    """Agent completed a run without calling any tools."""
