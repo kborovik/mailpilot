@@ -2,6 +2,8 @@
 
 Agent-operated CRM with Gmail as the communication layer.
 
+**[See it in action](https://lab5.ca/demo/)**
+
 ## Overview
 
 MailPilot manages contacts, companies, and communication workflows through Gmail API. It is designed to be operated by AI agents -- Claude Code as the strategic orchestrator and an internal Pydantic AI agent for real-time reactive work.
