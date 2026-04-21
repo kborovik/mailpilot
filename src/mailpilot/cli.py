@@ -836,6 +836,167 @@ def activity_list(
         connection.close()
 
 
+# -- Tag commands --------------------------------------------------------------
+
+
+@main.group()
+def tag() -> None:
+    """Manage tags on contacts and companies."""
+
+
+def _resolve_entity(contact_id: str | None, company_id: str | None) -> tuple[str, str]:
+    """Return (entity_type, entity_id) or call output_error."""
+    if contact_id and company_id:
+        output_error("specify only one of --contact-id or --company-id", "invalid_args")
+    if contact_id:
+        return ("contact", contact_id)
+    if company_id:
+        return ("company", company_id)
+    output_error("one of --contact-id or --company-id is required", "missing_filter")
+
+
+@tag.command("add")
+@click.option("--contact-id", default=None, help="Contact ID.")
+@click.option("--company-id", default=None, help="Company ID.")
+@click.argument("name")
+def tag_add(contact_id: str | None, company_id: str | None, name: str) -> None:
+    """Add a tag to a contact or company."""
+    from mailpilot.database import (
+        create_activity,
+        create_tag,
+        get_company,
+        get_contact,
+        initialize_database,
+    )
+
+    entity_type, entity_id = _resolve_entity(contact_id, company_id)
+    connection = initialize_database(_database_url())
+    try:
+        # Validate entity exists before creating tag
+        if entity_type == "contact":
+            contact = get_contact(connection, entity_id)
+            if contact is None:
+                output_error(
+                    f"contact {entity_id} not found",
+                    "not_found",
+                )
+        else:
+            company = get_company(connection, entity_id)
+            if company is None:
+                output_error(
+                    f"company {entity_id} not found",
+                    "not_found",
+                )
+        created = create_tag(
+            connection,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            name=name,
+        )
+        if created is None:
+            normalized = name.strip().lower()
+            output_error(
+                f"tag '{normalized}' already exists on {entity_type} {entity_id}",
+                "already_exists",
+            )
+        # Create tag_added activity when tagging a contact
+        if entity_type == "contact":
+            contact = get_contact(connection, entity_id)
+            create_activity(
+                connection,
+                contact_id=entity_id,
+                activity_type="tag_added",
+                summary=f"Tagged as {created.name}",
+                detail={"tag": created.name},
+                company_id=contact.company_id if contact else None,
+            )
+        output(created.model_dump(mode="json"))
+    finally:
+        connection.close()
+
+
+@tag.command("remove")
+@click.option("--contact-id", default=None, help="Contact ID.")
+@click.option("--company-id", default=None, help="Company ID.")
+@click.argument("name")
+def tag_remove(contact_id: str | None, company_id: str | None, name: str) -> None:
+    """Remove a tag from a contact or company."""
+    from mailpilot.database import (
+        create_activity,
+        delete_tag,
+        get_contact,
+        initialize_database,
+    )
+
+    entity_type, entity_id = _resolve_entity(contact_id, company_id)
+    connection = initialize_database(_database_url())
+    try:
+        deleted = delete_tag(
+            connection,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            name=name,
+        )
+        normalized = name.strip().lower()
+        if not deleted:
+            output_error(
+                f"tag '{normalized}' not found on {entity_type} {entity_id}",
+                "not_found",
+            )
+        # Create tag_removed activity when untagging a contact
+        if entity_type == "contact":
+            contact = get_contact(connection, entity_id)
+            create_activity(
+                connection,
+                contact_id=entity_id,
+                activity_type="tag_removed",
+                summary=f"Removed tag {normalized}",
+                detail={"tag": normalized},
+                company_id=contact.company_id if contact else None,
+            )
+        output({"removed": True, "tag": normalized, "entity_type": entity_type})
+    finally:
+        connection.close()
+
+
+@tag.command("list")
+@click.option("--contact-id", default=None, help="Contact ID.")
+@click.option("--company-id", default=None, help="Company ID.")
+def tag_list(contact_id: str | None, company_id: str | None) -> None:
+    """List tags on a contact or company."""
+    from mailpilot.database import initialize_database, list_tags
+
+    entity_type, entity_id = _resolve_entity(contact_id, company_id)
+    connection = initialize_database(_database_url())
+    try:
+        tags = list_tags(connection, entity_type=entity_type, entity_id=entity_id)
+        output({"tags": [t.model_dump(mode="json") for t in tags]})
+    finally:
+        connection.close()
+
+
+@tag.command("search")
+@click.argument("name")
+@click.option(
+    "--type",
+    "entity_type",
+    default=None,
+    type=click.Choice(["contact", "company"]),
+    help="Filter by entity type.",
+)
+@click.option("--limit", default=100, help="Maximum results.")
+def tag_search(name: str, entity_type: str | None, limit: int) -> None:
+    """Search tags by name."""
+    from mailpilot.database import initialize_database, search_tags
+
+    connection = initialize_database(_database_url())
+    try:
+        tags = search_tags(connection, name=name, entity_type=entity_type, limit=limit)
+        output({"tags": [t.model_dump(mode="json") for t in tags]})
+    finally:
+        connection.close()
+
+
 # -- Workflow commands ---------------------------------------------------------
 
 
