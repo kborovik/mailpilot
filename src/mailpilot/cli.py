@@ -973,8 +973,10 @@ def tag_remove(contact_id: str | None, company_id: str | None, name: str) -> Non
     entity_type, entity_id = _resolve_entity(contact_id, company_id)
     connection = initialize_database(_database_url())
     try:
+        contact = None
         if entity_type == "contact":
-            if get_contact(connection, entity_id) is None:
+            contact = get_contact(connection, entity_id)
+            if contact is None:
                 output_error(f"contact {entity_id} not found", "not_found")
         elif get_company(connection, entity_id) is None:
             output_error(f"company {entity_id} not found", "not_found")
@@ -990,16 +992,14 @@ def tag_remove(contact_id: str | None, company_id: str | None, name: str) -> Non
                 f"tag '{normalized}' not found on {entity_type} {entity_id}",
                 "not_found",
             )
-        # Create tag_removed activity when untagging a contact
-        if entity_type == "contact":
-            contact = get_contact(connection, entity_id)
+        if entity_type == "contact" and contact is not None:
             create_activity(
                 connection,
                 contact_id=entity_id,
                 activity_type="tag_removed",
                 summary=f"Removed tag {normalized}",
                 detail={"tag": normalized},
-                company_id=contact.company_id if contact else None,
+                company_id=contact.company_id,
             )
         output({"removed": True, "tag": normalized, "entity_type": entity_type})
     finally:
