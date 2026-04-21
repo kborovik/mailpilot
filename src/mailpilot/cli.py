@@ -567,7 +567,15 @@ def contact_search(query: str, limit: int) -> None:
 @click.option("--limit", default=100, help="Maximum results.")
 @click.option("--domain", default=None, help="Filter by domain.")
 @click.option("--company-id", default=None, help="Filter by company ID.")
-def contact_list(limit: int, domain: str | None, company_id: str | None) -> None:
+@click.option(
+    "--status",
+    default=None,
+    type=click.Choice(["active", "bounced", "unsubscribed"]),
+    help="Filter by contact status.",
+)
+def contact_list(
+    limit: int, domain: str | None, company_id: str | None, status: str | None
+) -> None:
     """List contacts."""
     from mailpilot.database import get_company, initialize_database, list_contacts
 
@@ -576,7 +584,7 @@ def contact_list(limit: int, domain: str | None, company_id: str | None) -> None
         if company_id is not None and get_company(connection, company_id) is None:
             output_error(f"company not found: {company_id}", "not_found")
         contacts = list_contacts(
-            connection, limit=limit, domain=domain, company_id=company_id
+            connection, limit=limit, domain=domain, company_id=company_id, status=status
         )
         output({"contacts": [c.model_dump(mode="json") for c in contacts]})
     finally:
@@ -673,11 +681,36 @@ def email_search(query: str, limit: int) -> None:
 @click.option("--limit", default=100, help="Maximum number of results.")
 @click.option("--contact-id", default=None, help="Filter by contact ID.")
 @click.option("--account-id", default=None, help="Filter by account ID.")
-def email_list(limit: int, contact_id: str | None, account_id: str | None) -> None:
+@click.option("--since", default=None, help="ISO datetime lower bound.")
+@click.option("--thread-id", default=None, help="Filter by Gmail thread ID.")
+@click.option(
+    "--direction",
+    default=None,
+    type=click.Choice(["inbound", "outbound"]),
+    help="Filter by direction.",
+)
+@click.option("--workflow-id", default=None, help="Filter by workflow ID.")
+@click.option(
+    "--status",
+    default=None,
+    type=click.Choice(["sent", "received", "bounced"]),
+    help="Filter by email status.",
+)
+def email_list(
+    limit: int,
+    contact_id: str | None,
+    account_id: str | None,
+    since: str | None,
+    thread_id: str | None,
+    direction: str | None,
+    workflow_id: str | None,
+    status: str | None,
+) -> None:
     """List emails with optional filters."""
     from mailpilot.database import (
         get_account,
         get_contact,
+        get_workflow,
         initialize_database,
         list_emails,
     )
@@ -688,8 +721,18 @@ def email_list(limit: int, contact_id: str | None, account_id: str | None) -> No
             output_error(f"contact not found: {contact_id}", "not_found")
         if account_id is not None and get_account(connection, account_id) is None:
             output_error(f"account not found: {account_id}", "not_found")
+        if workflow_id is not None and get_workflow(connection, workflow_id) is None:
+            output_error(f"workflow not found: {workflow_id}", "not_found")
         emails = list_emails(
-            connection, limit=limit, contact_id=contact_id, account_id=account_id
+            connection,
+            limit=limit,
+            contact_id=contact_id,
+            account_id=account_id,
+            since=since,
+            thread_id=thread_id,
+            direction=direction,
+            workflow_id=workflow_id,
+            status=status,
         )
         output({"emails": [e.model_dump(mode="json") for e in emails]})
     finally:
@@ -1120,7 +1163,10 @@ def note_add(contact_id: str | None, company_id: str | None, body: str) -> None:
 @click.option("--contact-id", default=None, help="Contact ID.")
 @click.option("--company-id", default=None, help="Company ID.")
 @click.option("--limit", default=100, help="Maximum results.")
-def note_list(contact_id: str | None, company_id: str | None, limit: int) -> None:
+@click.option("--since", default=None, help="ISO datetime lower bound.")
+def note_list(
+    contact_id: str | None, company_id: str | None, limit: int, since: str | None
+) -> None:
     """List notes on a contact or company."""
     from mailpilot.database import (
         get_company,
@@ -1138,7 +1184,11 @@ def note_list(contact_id: str | None, company_id: str | None, limit: int) -> Non
         elif get_company(connection, entity_id) is None:
             output_error(f"company {entity_id} not found", "not_found")
         notes = list_notes(
-            connection, entity_type=entity_type, entity_id=entity_id, limit=limit
+            connection,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            limit=limit,
+            since=since,
         )
         output({"notes": [n.model_dump(mode="json") for n in notes]})
     finally:
@@ -1284,7 +1334,22 @@ def workflow_search(query: str, limit: int) -> None:
 
 @workflow.command("list")
 @click.option("--account-id", default=None, help="Filter by account ID.")
-def workflow_list(account_id: str | None) -> None:
+@click.option(
+    "--status",
+    default=None,
+    type=click.Choice(["draft", "active", "paused"]),
+    help="Filter by workflow status.",
+)
+@click.option(
+    "--type",
+    "workflow_type",
+    default=None,
+    type=click.Choice(["inbound", "outbound"]),
+    help="Filter by workflow type.",
+)
+def workflow_list(
+    account_id: str | None, status: str | None, workflow_type: str | None
+) -> None:
     """List workflows."""
     from mailpilot.database import get_account, initialize_database, list_workflows
 
@@ -1292,7 +1357,12 @@ def workflow_list(account_id: str | None) -> None:
     try:
         if account_id is not None and get_account(connection, account_id) is None:
             output_error(f"account not found: {account_id}", "not_found")
-        workflows = list_workflows(connection, account_id=account_id)
+        workflows = list_workflows(
+            connection,
+            account_id=account_id,
+            status=status,
+            workflow_type=workflow_type,
+        )
         output({"workflows": [w.model_dump(mode="json") for w in workflows]})
     finally:
         connection.close()
