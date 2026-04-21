@@ -1479,3 +1479,117 @@ def workflow_run(workflow_id: str, contact_id: str) -> None:
         )
     finally:
         connection.close()
+
+
+# -- Workflow Contact subgroup -------------------------------------------------
+
+
+@workflow.group("contact")
+def workflow_contact() -> None:
+    """Manage contact enrollment in workflows."""
+
+
+@workflow_contact.command("add")
+@click.option("--workflow-id", required=True, help="Workflow ID.")
+@click.option("--contact-id", required=True, help="Contact ID.")
+def workflow_contact_add(workflow_id: str, contact_id: str) -> None:
+    """Enroll a contact in a workflow."""
+    from mailpilot.database import (
+        create_workflow_contact,
+        get_contact,
+        get_workflow,
+        get_workflow_contact,
+        initialize_database,
+    )
+
+    connection = initialize_database(_database_url())
+    try:
+        if get_workflow(connection, workflow_id) is None:
+            output_error(f"workflow not found: {workflow_id}", "not_found")
+        if get_contact(connection, contact_id) is None:
+            output_error(f"contact not found: {contact_id}", "not_found")
+        created = create_workflow_contact(connection, workflow_id, contact_id)
+        if created is not None:
+            output(created.model_dump(mode="json"))
+            return
+        existing = get_workflow_contact(connection, workflow_id, contact_id)
+        if existing is not None:
+            output(existing.model_dump(mode="json"))
+            return
+    finally:
+        connection.close()
+
+
+@workflow_contact.command("remove")
+@click.option("--workflow-id", required=True, help="Workflow ID.")
+@click.option("--contact-id", required=True, help="Contact ID.")
+def workflow_contact_remove(workflow_id: str, contact_id: str) -> None:
+    """Remove a contact from a workflow."""
+    from mailpilot.database import delete_workflow_contact, initialize_database
+
+    connection = initialize_database(_database_url())
+    try:
+        deleted = delete_workflow_contact(connection, workflow_id, contact_id)
+        if not deleted:
+            output_error("workflow-contact not found", "not_found")
+        output({"workflow_id": workflow_id, "contact_id": contact_id})
+    finally:
+        connection.close()
+
+
+@workflow_contact.command("list")
+@click.option("--workflow-id", required=True, help="Workflow ID.")
+@click.option(
+    "--status",
+    default=None,
+    type=click.Choice(["pending", "active", "completed", "failed"]),
+    help="Filter by enrollment status.",
+)
+@click.option("--limit", default=100, help="Maximum results.")
+def workflow_contact_list(workflow_id: str, status: str | None, limit: int) -> None:
+    """List contacts enrolled in a workflow."""
+    from mailpilot.database import (
+        get_workflow,
+        initialize_database,
+        list_workflow_contacts_enriched,
+    )
+
+    connection = initialize_database(_database_url())
+    try:
+        if get_workflow(connection, workflow_id) is None:
+            output_error(f"workflow not found: {workflow_id}", "not_found")
+        contacts = list_workflow_contacts_enriched(
+            connection, workflow_id, status=status, limit=limit
+        )
+        output({"contacts": [c.model_dump(mode="json") for c in contacts]})
+    finally:
+        connection.close()
+
+
+@workflow_contact.command("update")
+@click.option("--workflow-id", required=True, help="Workflow ID.")
+@click.option("--contact-id", required=True, help="Contact ID.")
+@click.option(
+    "--status",
+    required=True,
+    type=click.Choice(["pending", "active", "completed", "failed"]),
+    help="New enrollment status.",
+)
+@click.option("--reason", default=None, help="Status reason.")
+def workflow_contact_update(
+    workflow_id: str, contact_id: str, status: str, reason: str | None
+) -> None:
+    """Update enrollment status and reason."""
+    from mailpilot.database import initialize_database, update_workflow_contact
+
+    connection = initialize_database(_database_url())
+    try:
+        fields: dict[str, object] = {"status": status}
+        if reason is not None:
+            fields["reason"] = reason
+        updated = update_workflow_contact(connection, workflow_id, contact_id, **fields)
+        if updated is None:
+            output_error("workflow-contact not found", "not_found")
+        output(updated.model_dump(mode="json"))
+    finally:
+        connection.close()

@@ -34,6 +34,7 @@ from mailpilot.models import (
     Task,
     Workflow,
     WorkflowContact,
+    WorkflowContactDetail,
 )
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
@@ -1242,6 +1243,87 @@ def list_workflow_contacts(
         links = [WorkflowContact.model_validate(row) for row in rows]
         span.set_attribute("contact_count", len(links))
         return links
+
+
+def delete_workflow_contact(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+    contact_id: str,
+) -> bool:
+    """Remove a contact from a workflow.
+
+    Args:
+        connection: Open database connection.
+        workflow_id: Workflow FK.
+        contact_id: Contact FK.
+
+    Returns:
+        True if the row was deleted, False if not found.
+    """
+    with logfire.span(
+        "db.workflow_contact.delete",
+        workflow_id=workflow_id,
+        contact_id=contact_id,
+    ) as span:
+        cursor = connection.execute(
+            """\
+            DELETE FROM workflow_contact
+            WHERE workflow_id = %(workflow_id)s AND contact_id = %(contact_id)s
+            """,
+            {"workflow_id": workflow_id, "contact_id": contact_id},
+        )
+        connection.commit()
+        deleted = cursor.rowcount > 0
+        span.set_attribute("deleted", deleted)
+        return deleted
+
+
+def list_workflow_contacts_enriched(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+    status: str | None = None,
+    limit: int = 100,
+) -> list[WorkflowContactDetail]:
+    """List contacts in a workflow with enriched contact info.
+
+    JOINs the contact table to include email and name. Separate from
+    ``list_workflow_contacts`` to avoid breaking agent tools which
+    expect ``list[WorkflowContact]``.
+
+    Args:
+        connection: Open database connection.
+        workflow_id: Workflow FK.
+        status: Filter by contact outcome status.
+        limit: Maximum results (default 100).
+
+    Returns:
+        List of enriched workflow-contact details.
+    """
+    with logfire.span(
+        "db.workflow_contact.list_enriched",
+        workflow_id=workflow_id,
+        status=status,
+        limit=limit,
+    ) as span:
+        params: dict[str, object] = {"workflow_id": workflow_id, "limit": limit}
+        status_filter = SQL("")
+        if status is not None:
+            status_filter = SQL("AND wc.status = %(status)s")
+            params["status"] = status
+        query = SQL(
+            "SELECT wc.*, c.email AS contact_email, "
+            "TRIM(COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '')) "
+            "AS contact_name "
+            "FROM workflow_contact wc "
+            "JOIN contact c ON c.id = wc.contact_id "
+            "WHERE wc.workflow_id = %(workflow_id)s {} "
+            "ORDER BY wc.created_at "
+            "LIMIT %(limit)s"
+        ).format(status_filter)
+        rows = connection.execute(query, params).fetchall()
+        details = [WorkflowContactDetail.model_validate(row) for row in rows]
+        span.set_attribute("contact_count", len(details))
+        return details
 
 
 # -- Email ---------------------------------------------------------------------

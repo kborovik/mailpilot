@@ -25,7 +25,9 @@ from mailpilot.database import (
     create_email,
     create_or_get_contact_by_email,
     create_tag,
+    create_workflow_contact,
     delete_tag,
+    delete_workflow_contact,
     get_account,
     get_company,
     get_company_by_domain,
@@ -39,6 +41,7 @@ from mailpilot.database import (
     get_note,
     get_status_counts,
     get_workflow,
+    get_workflow_contact,
     list_accounts,
     list_activities,
     list_companies,
@@ -47,6 +50,7 @@ from mailpilot.database import (
     list_entities_by_tag,
     list_notes,
     list_tags,
+    list_workflow_contacts_enriched,
     list_workflows,
     pause_workflow,
     search_companies,
@@ -1613,3 +1617,86 @@ def test_status_counts_includes_notes(
     make_test_note(database_connection, entity_type="contact", entity_id=contact.id)
     counts = get_status_counts(database_connection)
     assert counts["notes"] == 1
+
+
+# -- WorkflowContact ----------------------------------------------------------
+
+
+def test_delete_workflow_contact(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    create_workflow_contact(database_connection, workflow.id, contact.id)
+    deleted = delete_workflow_contact(database_connection, workflow.id, contact.id)
+    assert deleted is True
+    assert get_workflow_contact(database_connection, workflow.id, contact.id) is None
+
+
+def test_delete_workflow_contact_not_found(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    deleted = delete_workflow_contact(database_connection, "nonexistent", "nonexistent")
+    assert deleted is False
+
+
+def test_list_workflow_contacts_enriched(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection, email="alice@example.com")
+    update_contact(
+        database_connection, contact.id, first_name="Alice", last_name="Smith"
+    )
+    create_workflow_contact(database_connection, workflow.id, contact.id)
+    results = list_workflow_contacts_enriched(database_connection, workflow.id)
+    assert len(results) == 1
+    detail = results[0]
+    assert detail.contact_email == "alice@example.com"
+    assert detail.contact_name == "Alice Smith"
+    assert detail.status == "pending"
+    assert detail.workflow_id == workflow.id
+    assert detail.contact_id == contact.id
+
+
+def test_list_workflow_contacts_enriched_status_filter(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from mailpilot.database import update_workflow_contact
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    c1 = make_test_contact(database_connection, email="a@example.com")
+    c2 = make_test_contact(database_connection, email="b@example.com")
+    create_workflow_contact(database_connection, workflow.id, c1.id)
+    create_workflow_contact(database_connection, workflow.id, c2.id)
+    update_workflow_contact(database_connection, workflow.id, c1.id, status="completed")
+    results = list_workflow_contacts_enriched(
+        database_connection, workflow.id, status="completed"
+    )
+    assert len(results) == 1
+    assert results[0].contact_id == c1.id
+
+
+def test_list_workflow_contacts_enriched_limit(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    c1 = make_test_contact(database_connection, email="a@example.com")
+    c2 = make_test_contact(database_connection, email="b@example.com")
+    create_workflow_contact(database_connection, workflow.id, c1.id)
+    create_workflow_contact(database_connection, workflow.id, c2.id)
+    results = list_workflow_contacts_enriched(database_connection, workflow.id, limit=1)
+    assert len(results) == 1
+
+
+def test_list_workflow_contacts_enriched_empty(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    results = list_workflow_contacts_enriched(database_connection, workflow.id)
+    assert results == []

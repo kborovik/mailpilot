@@ -87,6 +87,10 @@ mailpilot workflow view ID
 mailpilot workflow activate ID
 mailpilot workflow pause ID
 mailpilot workflow run --workflow-id ID --contact-id ID
+mailpilot workflow contact add --workflow-id ID --contact-id ID
+mailpilot workflow contact remove --workflow-id ID --contact-id ID
+mailpilot workflow contact list --workflow-id ID [--status pending|active|completed|failed] [--limit N]
+mailpilot workflow contact update --workflow-id ID --contact-id ID --status S [--reason R]
 
 mailpilot email search QUERY [--limit N]
 mailpilot email list [--limit N] [--contact-id ID] [--account-id ID] [--since ISO] [--thread-id TEXT] [--direction inbound|outbound] [--workflow-id ID] [--status sent|received|bounced]
