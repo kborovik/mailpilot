@@ -1354,7 +1354,12 @@ def workflow_pause(workflow_id: str) -> None:
 def workflow_run(workflow_id: str, contact_id: str) -> None:
     """Invoke the workflow agent for a single contact (outbound only)."""
     from mailpilot.agent import invoke_workflow_agent
-    from mailpilot.database import get_contact, get_workflow, initialize_database
+    from mailpilot.database import (
+        get_contact,
+        get_workflow,
+        get_workflow_contact,
+        initialize_database,
+    )
     from mailpilot.exceptions import AgentDidNotUseToolsError
     from mailpilot.settings import get_settings
 
@@ -1375,6 +1380,11 @@ def workflow_run(workflow_id: str, contact_id: str) -> None:
         contact = get_contact(connection, contact_id)
         if contact is None:
             output_error(f"contact not found: {contact_id}", "not_found")
+        if get_workflow_contact(connection, workflow_id, contact.id) is None:
+            output_error(
+                f"contact {contact_id} is not enrolled in workflow {workflow_id}",
+                "not_found",
+            )
         try:
             result = invoke_workflow_agent(connection, settings, wf, contact)
         except AgentDidNotUseToolsError:

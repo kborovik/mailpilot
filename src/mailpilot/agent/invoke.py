@@ -47,9 +47,24 @@ class AgentDeps:
 # -- Advisory lock -------------------------------------------------------------
 
 
-def _advisory_lock_key(workflow_id: str, contact_id: str) -> int:
-    """Compute a stable bigint key for PostgreSQL advisory locking."""
-    return zlib.crc32(f"{workflow_id}:{contact_id}".encode())
+def _to_signed_int32(value: int) -> int:
+    """Convert an unsigned 32-bit integer to a signed 32-bit integer."""
+    if value >= 0x80000000:
+        return value - 0x100000000
+    return value
+
+
+def _advisory_lock_keys(workflow_id: str, contact_id: str) -> tuple[int, int]:
+    """Compute two int32 keys for PostgreSQL two-argument advisory locking.
+
+    Uses CRC-32 of each ID independently, giving 64 bits of collision space
+    (one CRC-32 per dimension) instead of 32 bits from a single combined hash.
+    Values are converted to signed int32 to match PostgreSQL's integer type.
+    """
+    return (
+        _to_signed_int32(zlib.crc32(workflow_id.encode())),
+        _to_signed_int32(zlib.crc32(contact_id.encode())),
+    )
 
 
 def _try_acquire_advisory_lock(
@@ -61,10 +76,10 @@ def _try_acquire_advisory_lock(
 
     Returns True if lock was acquired, False if already held elsewhere.
     """
-    key = _advisory_lock_key(workflow_id, contact_id)
+    k1, k2 = _advisory_lock_keys(workflow_id, contact_id)
     row = connection.execute(
-        "SELECT pg_try_advisory_lock(%(key)s) AS acquired",
-        {"key": key},
+        "SELECT pg_try_advisory_lock(%(k1)s, %(k2)s) AS acquired",
+        {"k1": k1, "k2": k2},
     ).fetchone()
     return bool(row and row["acquired"])
 
@@ -75,10 +90,10 @@ def _release_advisory_lock(
     contact_id: str,
 ) -> None:
     """Release a session-level advisory lock."""
-    key = _advisory_lock_key(workflow_id, contact_id)
+    k1, k2 = _advisory_lock_keys(workflow_id, contact_id)
     connection.execute(
-        "SELECT pg_advisory_unlock(%(key)s)",
-        {"key": key},
+        "SELECT pg_advisory_unlock(%(k1)s, %(k2)s)",
+        {"k1": k1, "k2": k2},
     )
 
 

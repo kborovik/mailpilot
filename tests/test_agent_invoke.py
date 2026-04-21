@@ -22,7 +22,7 @@ from conftest import (
     make_test_workflow,
 )
 from mailpilot.agent.invoke import (
-    _advisory_lock_key,  # pyright: ignore[reportPrivateUsage]
+    _advisory_lock_keys,  # pyright: ignore[reportPrivateUsage]
     invoke_workflow_agent,
 )
 from mailpilot.database import (
@@ -197,8 +197,8 @@ def test_advisory_lock_skip_when_held(
 
     blocker = psycopg.connect(TEST_DATABASE_URL)
     try:
-        lock_key = _advisory_lock_key(workflow.id, contact.id)
-        blocker.execute("SELECT pg_advisory_lock(%s)", (lock_key,))
+        k1, k2 = _advisory_lock_keys(workflow.id, contact.id)
+        blocker.execute("SELECT pg_advisory_lock(%s, %s)", (k1, k2))
 
         result = invoke_workflow_agent(
             database_connection,
@@ -293,3 +293,75 @@ def test_inbound_email_trigger(
     all_text = str(captured_messages)
     assert "Question about pricing" in all_text
     assert "How much does your product cost?" in all_text
+
+
+def test_deferred_task_trigger(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """When task_description is provided, it appears in the agent prompt."""
+    _account, contact, workflow = _setup(database_connection)
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+
+    captured_messages: list[ModelMessage] = []
+    with patch("mailpilot.agent.invoke.GmailClient"):
+        invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            task_description="Follow up on demo request",
+            task_context={"days_since_last": 7},
+            model_override=_capturing_model(captured_messages),
+        )
+
+    all_text = str(captured_messages)
+    assert "Follow up on demo request" in all_text
+    assert "days_since_last" in all_text
+
+
+# -- Tests: early-exit paths ---------------------------------------------------
+
+
+def test_account_not_found_raises(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """When workflow references a deleted account, raises ValueError."""
+    _account, contact, workflow = _setup(database_connection)
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.database.get_account", return_value=None),
+        pytest.raises(ValueError, match="account not found"),
+    ):
+        invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            model_override=FunctionModel(_model_that_calls_noop),
+        )
+
+
+def test_missing_api_key_raises(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """When no model_override and no anthropic_api_key, raises ValueError."""
+    _account, contact, workflow = _setup(database_connection)
+    settings = make_test_settings(anthropic_api_key="", anthropic_model="test-model")
+
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        pytest.raises(ValueError, match="anthropic_api_key is required"),
+    ):
+        invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            # No model_override -- forces the real model path.
+        )
