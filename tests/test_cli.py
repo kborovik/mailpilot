@@ -2194,21 +2194,20 @@ def test_workflow_run(runner: CliRunner, mock_connection: MagicMock) -> None:
         created_at=_NOW,
         updated_at=_NOW,
     )
-    invoke_result = {
-        "workflow_id": _WORKFLOW_ID,
-        "contact_id": _CONTACT_ID,
-        "status": "completed",
-        "tool_calls": 2,
-    }
+    task = _make_task()
+    completed_task = _make_task(
+        status="completed",
+        result={"reasoning": "Sent intro.", "tool_calls": 2},
+    )
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=workflow),
         patch("mailpilot.database.get_contact", return_value=contact),
         patch("mailpilot.database.get_workflow_contact", return_value=wc),
-        patch(
-            "mailpilot.agent.invoke_workflow_agent", return_value=invoke_result
-        ) as mock_invoke,
+        patch("mailpilot.database.create_task", return_value=task),
+        patch("mailpilot.run.execute_task") as mock_exec,
+        patch("mailpilot.database.get_task", return_value=completed_task),
     ):
         result = runner.invoke(
             main,
@@ -2223,11 +2222,11 @@ def test_workflow_run(runner: CliRunner, mock_connection: MagicMock) -> None:
         )
 
     assert result.exit_code == 0, result.output
-    mock_invoke.assert_called_once()
+    mock_exec.assert_called_once()
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["workflow_id"] == _WORKFLOW_ID
-    assert data["contact_id"] == _CONTACT_ID
+    assert data["status"] == "completed"
+    assert data["result"]["reasoning"] == "Sent intro."
 
 
 def test_workflow_run_workflow_not_found(
@@ -2381,11 +2380,9 @@ def test_workflow_run_contact_not_enrolled(
     assert "not enrolled" in data["message"]
 
 
-def test_workflow_run_agent_no_tools(
+def test_workflow_run_agent_failed(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    from mailpilot.exceptions import AgentDidNotUseToolsError
-
     workflow = _make_workflow(status="active")
     contact = Contact(
         id=_CONTACT_ID,
@@ -2400,16 +2397,17 @@ def test_workflow_run_agent_no_tools(
         created_at=_NOW,
         updated_at=_NOW,
     )
+    task = _make_task()
+    failed_task = _make_task(status="failed", result={"reason": "agent error"})
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=workflow),
         patch("mailpilot.database.get_contact", return_value=contact),
         patch("mailpilot.database.get_workflow_contact", return_value=wc),
-        patch(
-            "mailpilot.agent.invoke_workflow_agent",
-            side_effect=AgentDidNotUseToolsError("no tools"),
-        ),
+        patch("mailpilot.database.create_task", return_value=task),
+        patch("mailpilot.run.execute_task"),
+        patch("mailpilot.database.get_task", return_value=failed_task),
     ):
         result = runner.invoke(
             main,
@@ -2422,48 +2420,10 @@ def test_workflow_run_agent_no_tools(
                 _CONTACT_ID,
             ],
         )
-    assert result.exit_code == 1
+    assert result.exit_code == 0, result.output
     data = json.loads(result.output)
-    assert data["error"] == "agent_no_tools"
-
-
-def test_workflow_run_lock_held(runner: CliRunner, mock_connection: MagicMock) -> None:
-    workflow = _make_workflow(status="active")
-    contact = Contact(
-        id=_CONTACT_ID,
-        email="lead@acme.com",
-        domain="acme.com",
-        created_at=_NOW,
-        updated_at=_NOW,
-    )
-    wc = WorkflowContact(
-        workflow_id=_WORKFLOW_ID,
-        contact_id=_CONTACT_ID,
-        created_at=_NOW,
-        updated_at=_NOW,
-    )
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_workflow", return_value=workflow),
-        patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.get_workflow_contact", return_value=wc),
-        patch("mailpilot.agent.invoke_workflow_agent", return_value=None),
-    ):
-        result = runner.invoke(
-            main,
-            [
-                "workflow",
-                "run",
-                "--workflow-id",
-                _WORKFLOW_ID,
-                "--contact-id",
-                _CONTACT_ID,
-            ],
-        )
-    assert result.exit_code == 1
-    data = json.loads(result.output)
-    assert data["error"] == "lock_held"
+    assert data["status"] == "failed"
+    assert data["result"]["reason"] == "agent error"
 
 
 # -- Activity ------------------------------------------------------------------
@@ -3911,6 +3871,7 @@ def _make_task(**overrides: Any) -> Task:
         "context": {},
         "scheduled_at": _NOW,
         "status": "pending",
+        "result": {},
         "completed_at": None,
         "created_at": _NOW,
     }

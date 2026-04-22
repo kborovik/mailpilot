@@ -1816,27 +1816,39 @@ def complete_task(
     connection: psycopg.Connection[dict[str, Any]],
     task_id: str,
     status: str = "completed",
+    result: dict[str, object] | None = None,
 ) -> Task | None:
-    """Mark a task as completed or failed.
+    """Mark a task as completed or failed, optionally storing a result.
 
     Args:
         connection: Open database connection.
         task_id: Task ID.
         status: "completed" or "failed".
+        result: Agent reasoning and outcome to persist.
 
     Returns:
         Updated task, or None if not found.
     """
+    result_json = result or {}
     with logfire.span("db.task.complete", task_id=task_id, status=status) as span:
         row = connection.execute(
             """\
-            UPDATE task SET status = %(status)s, completed_at = CURRENT_TIMESTAMP
+            UPDATE task
+            SET status = %(status)s,
+                result = %(result)s,
+                completed_at = CURRENT_TIMESTAMP
             WHERE id = %(id)s RETURNING *
             """,
-            {"id": task_id, "status": status},
+            {
+                "id": task_id,
+                "status": status,
+                "result": Json(result_json),
+            },
         ).fetchone()
         connection.commit()
         span.set_attribute("hit", row is not None)
+        if result_json:
+            span.set_attribute("result_keys", list(result_json.keys()))
         if row is None:
             return None
         return Task.model_validate(row)

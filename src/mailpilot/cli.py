@@ -1483,14 +1483,17 @@ def workflow_stop(workflow_id: str) -> None:
 @click.option("--contact-id", required=True, help="Contact ID.")
 def workflow_run(workflow_id: str, contact_id: str) -> None:
     """Invoke the workflow agent for a single contact (outbound only)."""
-    from mailpilot.agent import invoke_workflow_agent
+    from datetime import UTC, datetime
+
     from mailpilot.database import (
+        create_task,
         get_contact,
+        get_task,
         get_workflow,
         get_workflow_contact,
         initialize_database,
     )
-    from mailpilot.exceptions import AgentDidNotUseToolsError
+    from mailpilot.run import execute_task
     from mailpilot.settings import get_settings
 
     settings = get_settings()
@@ -1505,7 +1508,8 @@ def workflow_run(workflow_id: str, contact_id: str) -> None:
             )
         if wf.type != "outbound":
             output_error(
-                f"workflow run requires type=outbound (got {wf.type})", "invalid_state"
+                f"workflow run requires type=outbound (got {wf.type})",
+                "invalid_state",
             )
         contact = get_contact(connection, contact_id)
         if contact is None:
@@ -1515,28 +1519,18 @@ def workflow_run(workflow_id: str, contact_id: str) -> None:
                 f"contact {contact_id} is not enrolled in workflow {workflow_id}",
                 "not_found",
             )
-        try:
-            result = invoke_workflow_agent(connection, settings, wf, contact)
-        except AgentDidNotUseToolsError:
-            output_error(
-                f"agent completed without calling any tools: "
-                f"workflow={workflow_id}, contact={contact_id}",
-                "agent_no_tools",
-            )
-        if result is None:
-            output_error(
-                f"invocation skipped: advisory lock held for "
-                f"workflow={workflow_id}, contact={contact_id}",
-                "lock_held",
-            )
-        output(
-            {
-                "workflow_id": wf.id,
-                "contact_id": contact.id,
-                "status": "completed",
-                "tool_calls": result["tool_calls"],
-            }
+        task = create_task(
+            connection,
+            workflow_id=wf.id,
+            contact_id=contact.id,
+            description="manual outbound run",
+            scheduled_at=datetime.now(UTC).isoformat(),
         )
+        execute_task(connection, settings, task)
+        completed = get_task(connection, task.id)
+        if completed is None:
+            output_error(f"task not found after execution: {task.id}", "not_found")
+        output(completed.model_dump(mode="json"))
     finally:
         connection.close()
 

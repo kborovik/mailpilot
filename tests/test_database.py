@@ -21,6 +21,7 @@ from conftest import (
 from mailpilot.database import (
     activate_workflow,
     cancel_task,
+    complete_task,
     create_activity,
     create_contacts_bulk,
     create_email,
@@ -1830,3 +1831,30 @@ def test_create_tasks_for_routed_emails_skips_outbound(
 
     created = create_tasks_for_routed_emails(database_connection)
     assert len(created) == 0
+
+
+def test_complete_task_stores_result(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    task = create_task(
+        database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="follow up",
+        scheduled_at="2026-04-22T12:00:00Z",
+    )
+    agent_result: dict[str, object] = {
+        "reasoning": "Contact hasn't replied in 3 days, sending follow-up.",
+        "tool_calls": 1,
+    }
+    completed = complete_task(
+        database_connection, task.id, status="completed", result=agent_result
+    )
+    assert completed is not None
+    assert completed.status == "completed"
+    assert completed.result["reasoning"] == agent_result["reasoning"]
+    assert completed.result["tool_calls"] == agent_result["tool_calls"]
+    assert completed.completed_at is not None

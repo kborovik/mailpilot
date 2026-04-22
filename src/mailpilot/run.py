@@ -54,7 +54,12 @@ def execute_task(
                 task_id=task.id,
                 workflow_id=task.workflow_id,
             )
-            complete_task(connection, task.id, status="cancelled")
+            complete_task(
+                connection,
+                task.id,
+                status="cancelled",
+                result={"reason": "workflow inactive or not found"},
+            )
             return
 
         contact = get_contact(connection, task.contact_id)
@@ -64,7 +69,12 @@ def execute_task(
                 task_id=task.id,
                 contact_id=task.contact_id,
             )
-            complete_task(connection, task.id, status="cancelled")
+            complete_task(
+                connection,
+                task.id,
+                status="cancelled",
+                result={"reason": "contact disabled or not found"},
+            )
             return
 
         email = get_email(connection, task.email_id) if task.email_id else None
@@ -79,12 +89,18 @@ def execute_task(
                 task_description=task.description,
                 task_context=task.context,
             )
-        except Exception:
+        except Exception as exc:
             logfire.exception(
                 "run.task.agent_failed",
                 task_id=task.id,
             )
-            complete_task(connection, task.id, status="failed")
+            connection.rollback()
+            complete_task(
+                connection,
+                task.id,
+                status="failed",
+                result={"reason": str(exc)},
+            )
             return
 
         if result is None:
@@ -94,7 +110,7 @@ def execute_task(
             )
             return
 
-        complete_task(connection, task.id, status="completed")
+        complete_task(connection, task.id, status="completed", result=result)
 
 
 def run_loop(

@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS task (
     scheduled_at  TIMESTAMPTZ NOT NULL,
     status        TEXT NOT NULL DEFAULT 'pending'
                   CHECK (status IN ('pending', 'completed', 'failed', 'cancelled')),
+    result        JSONB NOT NULL DEFAULT '{}',
     completed_at  TIMESTAMPTZ,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

@@ -145,6 +145,7 @@ class Task(BaseModel):
     context: dict[str, object] = {}
     scheduled_at: datetime
     status: TaskStatus = "pending"
+    result: dict[str, object] = {}
     completed_at: datetime | None = None
     created_at: datetime
 

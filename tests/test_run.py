@@ -61,6 +61,7 @@ def _make_task(**overrides: Any) -> Task:
         "context": {},
         "scheduled_at": _NOW,
         "status": "pending",
+        "result": {},
         "completed_at": None,
         "created_at": _NOW,
     }
@@ -98,12 +99,13 @@ def test_execute_task_success(
     workflow = _make_workflow()
     contact = _make_contact()
 
+    agent_result = {"tool_calls": 2, "reasoning": "Sent follow-up."}
     with (
         patch("mailpilot.run.get_workflow", return_value=workflow),
         patch("mailpilot.run.get_contact", return_value=contact),
         patch(
             "mailpilot.run.invoke_workflow_agent",
-            return_value={"tool_calls": 2},
+            return_value=agent_result,
         ) as mock_invoke,
         patch("mailpilot.run.complete_task") as mock_complete,
     ):
@@ -119,7 +121,10 @@ def test_execute_task_success(
         task_context={},
     )
     mock_complete.assert_called_once_with(
-        database_connection, _TASK_ID, status="completed"
+        database_connection,
+        _TASK_ID,
+        status="completed",
+        result=agent_result,
     )
 
 
@@ -140,7 +145,10 @@ def test_execute_task_inactive_workflow(
         execute_task(database_connection, settings, task)
 
     mock_complete.assert_called_once_with(
-        database_connection, _TASK_ID, status="cancelled"
+        database_connection,
+        _TASK_ID,
+        status="cancelled",
+        result={"reason": "workflow inactive or not found"},
     )
 
 
@@ -163,7 +171,10 @@ def test_execute_task_disabled_contact(
         execute_task(database_connection, settings, task)
 
     mock_complete.assert_called_once_with(
-        database_connection, _TASK_ID, status="cancelled"
+        database_connection,
+        _TASK_ID,
+        status="cancelled",
+        result={"reason": "contact disabled or not found"},
     )
 
 
@@ -212,7 +223,10 @@ def test_execute_task_agent_error(
         execute_task(database_connection, settings, task)
 
     mock_complete.assert_called_once_with(
-        database_connection, _TASK_ID, status="failed"
+        database_connection,
+        _TASK_ID,
+        status="failed",
+        result={"reason": "LLM error"},
     )
 
 
