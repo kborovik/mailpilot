@@ -1692,6 +1692,62 @@ def test_workflow_update_with_instructions_file(
     )
 
 
+def test_workflow_update_with_inline_instructions(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    updated = _make_workflow(instructions="Be concise.")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.update_workflow", return_value=updated
+        ) as mock_update,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "update",
+                _WORKFLOW_ID,
+                "--instructions",
+                "Be concise.",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_update.assert_called_once_with(
+        mock_connection, _WORKFLOW_ID, instructions="Be concise."
+    )
+
+
+def test_workflow_update_instructions_mutual_exclusion(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    instructions_file = tmp_path / "instructions.md"
+    instructions_file.write_text("From file.")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "update",
+                _WORKFLOW_ID,
+                "--instructions",
+                "Inline text",
+                "--instructions-file",
+                str(instructions_file),
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "mutually exclusive" in data["message"]
+
+
 def test_workflow_update_not_found(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:

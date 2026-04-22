@@ -1284,6 +1284,11 @@ def workflow_create(
 @click.option("--name", default=None, help="Workflow name.")
 @click.option("--objective", default=None, help="Workflow objective.")
 @click.option(
+    "--instructions",
+    default=None,
+    help="Workflow instructions (inline text).",
+)
+@click.option(
     "--instructions-file",
     default=None,
     type=click.Path(exists=True, dir_okay=False),
@@ -1293,6 +1298,7 @@ def workflow_update(
     workflow_id: str,
     name: str | None,
     objective: str | None,
+    instructions: str | None,
     instructions_file: str | None,
 ) -> None:
     """Update a workflow."""
@@ -1300,6 +1306,11 @@ def workflow_update(
 
     from mailpilot.database import initialize_database, update_workflow
 
+    if instructions is not None and instructions_file is not None:
+        output_error(
+            "--instructions and --instructions-file are mutually exclusive",
+            "validation_error",
+        )
     connection = initialize_database(_database_url())
     try:
         fields: dict[str, object] = {}
@@ -1307,6 +1318,8 @@ def workflow_update(
             fields["name"] = name
         if objective is not None:
             fields["objective"] = objective
+        if instructions is not None:
+            fields["instructions"] = instructions
         if instructions_file is not None:
             fields["instructions"] = pathlib.Path(instructions_file).read_text()
         updated = update_workflow(connection, workflow_id, **fields)
