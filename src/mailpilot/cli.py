@@ -1241,6 +1241,12 @@ def workflow() -> None:
     type=click.Path(exists=True, dir_okay=False),
     help="Path to a file with the workflow instructions (system prompt).",
 )
+@click.option(
+    "--draft",
+    is_flag=True,
+    default=False,
+    help="Keep workflow in draft status.",
+)
 def workflow_create(
     name: str,
     workflow_type: str,
@@ -1248,11 +1254,13 @@ def workflow_create(
     objective: str | None,
     instructions: str | None,
     instructions_file: str | None,
+    draft: bool,
 ) -> None:
     """Create a new workflow."""
     import pathlib
 
     from mailpilot.database import (
+        activate_workflow,
         create_workflow,
         get_account,
         initialize_database,
@@ -1266,6 +1274,14 @@ def workflow_create(
             "--instructions and --instructions-file are mutually exclusive",
             "validation_error",
         )
+    has_objective = objective is not None
+    has_instructions = instructions is not None or instructions_file is not None
+    if not draft and not (has_objective and has_instructions):
+        output_error(
+            "cannot activate workflow without objective and instructions. "
+            "Use --draft to create without them.",
+            "validation_error",
+        )
     connection = initialize_database(_database_url())
     try:
         if get_account(connection, account_id) is None:
@@ -1276,17 +1292,18 @@ def workflow_create(
             workflow_type=workflow_type,
             account_id=account_id,
         )
+        resolved_instructions: str | None = instructions
+        if instructions_file is not None:
+            resolved_instructions = pathlib.Path(instructions_file).read_text()
         extras: dict[str, object] = {}
         if objective is not None:
             extras["objective"] = objective
-        if instructions is not None:
-            extras["instructions"] = instructions
-        if instructions_file is not None:
-            extras["instructions"] = pathlib.Path(instructions_file).read_text()
+        if resolved_instructions is not None:
+            extras["instructions"] = resolved_instructions
         if extras:
-            updated = update_workflow(connection, created.id, **extras)
-            if updated is not None:
-                created = updated
+            created = update_workflow(connection, created.id, **extras) or created
+        if not draft and has_objective and has_instructions:
+            created = activate_workflow(connection, created.id)
         output(created.model_dump(mode="json"))
     finally:
         connection.close()
