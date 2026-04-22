@@ -1536,7 +1536,9 @@ def test_workflow_create_with_objective_and_instructions(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_account", return_value=account),
         patch("mailpilot.database.create_workflow", return_value=_make_workflow()),
-        patch("mailpilot.database.update_workflow", return_value=workflow),
+        patch(
+            "mailpilot.database.update_workflow", return_value=workflow
+        ) as mock_update,
         patch(
             "mailpilot.database.activate_workflow", return_value=activated
         ) as mock_activate,
@@ -1560,6 +1562,12 @@ def test_workflow_create_with_objective_and_instructions(
         )
 
     assert result.exit_code == 0, result.output
+    mock_update.assert_called_once_with(
+        mock_connection,
+        _WORKFLOW_ID,
+        objective="Book demo",
+        instructions="You are a sales rep.",
+    )
     mock_activate.assert_called_once_with(mock_connection, _WORKFLOW_ID)
     data = json.loads(result.output)
     assert data["status"] == "active"
