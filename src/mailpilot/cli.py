@@ -1442,13 +1442,13 @@ def workflow_start(workflow_id: str) -> None:
             if "objective" in message:
                 output_error(
                     f"cannot start: objective is empty. "
-                    f"Run: workflow update {workflow_id} --objective \"...\"",
+                    f'Run: workflow update {workflow_id} --objective "..."',
                     "invalid_state",
                 )
             if "instructions" in message:
                 output_error(
                     f"cannot start: instructions are empty. "
-                    f"Run: workflow update {workflow_id} --instructions \"...\"",
+                    f'Run: workflow update {workflow_id} --instructions "..."',
                     "invalid_state",
                 )
             output_error(message, "invalid_state")
