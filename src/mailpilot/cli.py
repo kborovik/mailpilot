@@ -1231,6 +1231,11 @@ def workflow() -> None:
 @click.option("--account-id", required=True, help="Owning Gmail account ID.")
 @click.option("--objective", default=None, help="Workflow objective.")
 @click.option(
+    "--instructions",
+    default=None,
+    help="Workflow instructions (inline text).",
+)
+@click.option(
     "--instructions-file",
     default=None,
     type=click.Path(exists=True, dir_okay=False),
@@ -1241,6 +1246,7 @@ def workflow_create(
     workflow_type: str,
     account_id: str,
     objective: str | None,
+    instructions: str | None,
     instructions_file: str | None,
 ) -> None:
     """Create a new workflow."""
@@ -1255,6 +1261,11 @@ def workflow_create(
 
     if not name.strip():
         output_error("workflow name cannot be empty", "validation_error")
+    if instructions is not None and instructions_file is not None:
+        output_error(
+            "--instructions and --instructions-file are mutually exclusive",
+            "validation_error",
+        )
     connection = initialize_database(_database_url())
     try:
         if get_account(connection, account_id) is None:
@@ -1268,6 +1279,8 @@ def workflow_create(
         extras: dict[str, object] = {}
         if objective is not None:
             extras["objective"] = objective
+        if instructions is not None:
+            extras["instructions"] = instructions
         if instructions_file is not None:
             extras["instructions"] = pathlib.Path(instructions_file).read_text()
         if extras:

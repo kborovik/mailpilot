@@ -1566,6 +1566,82 @@ def test_workflow_create_with_objective_and_instructions(
     assert data["instructions"] == "You are a sales rep."
 
 
+def test_workflow_create_with_inline_instructions(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    workflow = _make_workflow(
+        objective="Book demo", instructions="You are a sales rep."
+    )
+    account = _make_account()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.database.create_workflow", return_value=_make_workflow()),
+        patch(
+            "mailpilot.database.update_workflow", return_value=workflow
+        ) as mock_update,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "create",
+                "--name",
+                "Demo outreach",
+                "--type",
+                "outbound",
+                "--account-id",
+                _ACCOUNT_ID,
+                "--objective",
+                "Book demo",
+                "--instructions",
+                "You are a sales rep.",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_update.assert_called_once_with(
+        mock_connection,
+        _WORKFLOW_ID,
+        objective="Book demo",
+        instructions="You are a sales rep.",
+    )
+
+
+def test_workflow_create_instructions_mutual_exclusion(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    instructions_file = tmp_path / "instructions.md"
+    instructions_file.write_text("From file.")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "create",
+                "--name",
+                "Test",
+                "--type",
+                "outbound",
+                "--account-id",
+                _ACCOUNT_ID,
+                "--instructions",
+                "Inline text",
+                "--instructions-file",
+                str(instructions_file),
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "mutually exclusive" in data["message"]
+
+
 def test_workflow_create_rejects_invalid_type(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
