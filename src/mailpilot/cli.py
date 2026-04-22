@@ -152,13 +152,15 @@ def status() -> None:
 
 @main.command()
 def run() -> None:
-    """Start the sync loop (foreground, managed by systemd)."""
+    """Start the execution loop (sync + task runner, foreground)."""
     from mailpilot.database import initialize_database
-    from mailpilot.sync import start_sync_loop
+    from mailpilot.run import run_loop
+    from mailpilot.settings import get_settings
 
+    settings = get_settings()
     connection = initialize_database(_database_url())
     try:
-        start_sync_loop(connection)
+        run_loop(connection, settings)
     finally:
         connection.close()
 

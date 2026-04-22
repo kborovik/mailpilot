@@ -249,3 +249,61 @@ def test_execute_task_with_email(
         task_description="follow up",
         task_context={},
     )
+
+
+def test_run_loop_single_iteration(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from conftest import make_test_settings
+    from mailpilot.run import run_loop
+
+    settings = make_test_settings()
+    task = _make_task()
+
+    call_count = 0
+
+    def stop_after_one(*args: Any, **kwargs: Any) -> None:
+        nonlocal call_count
+        call_count += 1
+        if call_count >= 1:
+            raise KeyboardInterrupt
+
+    with (
+        patch("mailpilot.run.list_accounts", return_value=[]),
+        patch("mailpilot.run.create_tasks_for_routed_emails", return_value=[]),
+        patch("mailpilot.run.list_pending_tasks", return_value=[task]),
+        patch("mailpilot.run.execute_task", side_effect=stop_after_one) as mock_exec,
+    ):
+        run_loop(database_connection, settings)
+
+    mock_exec.assert_called_once_with(database_connection, settings, task)
+
+
+def test_run_loop_sync_error_continues(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from conftest import make_test_settings
+    from mailpilot.models import Account
+    from mailpilot.run import run_loop
+
+    settings = make_test_settings()
+    account = Account(
+        id=_ACCOUNT_ID,
+        email="test@example.com",
+        display_name="Test",
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+
+    def stop_on_bridge(*args: Any, **kwargs: Any) -> list[Any]:
+        raise KeyboardInterrupt
+
+    with (
+        patch("mailpilot.run.list_accounts", return_value=[account]),
+        patch("mailpilot.run.GmailClient", side_effect=RuntimeError("auth failed")),
+        patch(
+            "mailpilot.run.create_tasks_for_routed_emails",
+            side_effect=stop_on_bridge,
+        ),
+    ):
+        run_loop(database_connection, settings)

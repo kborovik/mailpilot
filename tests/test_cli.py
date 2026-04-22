@@ -4057,3 +4057,18 @@ def test_task_cancel_not_pending(
     data = json.loads(result.output)
     assert data["error"] == "not_found"
     assert "not pending" in data["message"]
+
+
+# -- run command ---------------------------------------------------------------
+
+
+def test_run_command(runner: CliRunner, mock_connection: MagicMock) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.run.run_loop") as mock_loop,
+    ):
+        result = runner.invoke(main, ["run"])
+
+    assert result.exit_code == 0, result.output
+    mock_loop.assert_called_once_with(mock_connection, make_test_settings())
