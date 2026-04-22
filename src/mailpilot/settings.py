@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     google_pubsub_topic: str = "gmail-watch"
     google_pubsub_subscription: str = "mailpilot-watch"
     google_application_credentials: str = ""
+    run_interval: int = 30
 
     @classmethod
     def settings_customise_sources(
