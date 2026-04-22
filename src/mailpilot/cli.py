@@ -1715,3 +1715,21 @@ def task_view(task_id: str) -> None:
         output(found.model_dump(mode="json"))
     finally:
         connection.close()
+
+
+@task.command("cancel")
+@click.argument("task_id")
+def task_cancel(task_id: str) -> None:
+    """Cancel a pending task."""
+    from mailpilot.database import cancel_task, initialize_database
+
+    connection = initialize_database(_database_url())
+    try:
+        cancelled = cancel_task(connection, task_id)
+        if cancelled is None:
+            output_error(
+                f"task not found or not pending: {task_id}", "not_found"
+            )
+        output(cancelled.model_dump(mode="json"))
+    finally:
+        connection.close()

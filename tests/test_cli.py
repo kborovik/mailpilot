@@ -4021,3 +4021,39 @@ def test_task_view_not_found(
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["error"] == "not_found"
+
+
+# -- task cancel ---------------------------------------------------------------
+
+
+def test_task_cancel(runner: CliRunner, mock_connection: MagicMock) -> None:
+    cancelled = _make_task(status="cancelled")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.cancel_task", return_value=cancelled
+        ) as mock_cancel,
+    ):
+        result = runner.invoke(main, ["task", "cancel", cancelled.id])
+
+    assert result.exit_code == 0, result.output
+    mock_cancel.assert_called_once_with(mock_connection, cancelled.id)
+    data = json.loads(result.output)
+    assert data["status"] == "cancelled"
+
+
+def test_task_cancel_not_pending(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.cancel_task", return_value=None),
+    ):
+        result = runner.invoke(main, ["task", "cancel", "some-id"])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+    assert "not pending" in data["message"]
