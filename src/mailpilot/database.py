@@ -1874,6 +1874,53 @@ def cancel_task(
         return Task.model_validate(row)
 
 
+def list_tasks(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str | None = None,
+    contact_id: str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+) -> list[Task]:
+    """List tasks with optional filters.
+
+    Args:
+        connection: Open database connection.
+        workflow_id: Filter by workflow ID.
+        contact_id: Filter by contact ID.
+        status: Filter by task status.
+        limit: Maximum number of tasks to return.
+
+    Returns:
+        List of tasks ordered by scheduled_at descending.
+    """
+    with logfire.span(
+        "db.task.list",
+        workflow_id=workflow_id,
+        contact_id=contact_id,
+        status=status,
+        limit=limit,
+    ) as span:
+        conditions: list[SQL] = []
+        params: dict[str, object] = {"limit": limit}
+        if workflow_id is not None:
+            conditions.append(SQL("workflow_id = %(workflow_id)s"))
+            params["workflow_id"] = workflow_id
+        if contact_id is not None:
+            conditions.append(SQL("contact_id = %(contact_id)s"))
+            params["contact_id"] = contact_id
+        if status is not None:
+            conditions.append(SQL("status = %(status)s"))
+            params["status"] = status
+        where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
+        query = SQL(
+            "SELECT * FROM task {} ORDER BY scheduled_at DESC LIMIT %(limit)s"
+        ).format(where)
+        rows = connection.execute(query, params).fetchall()
+        tasks = [Task.model_validate(row) for row in rows]
+        span.set_attribute("task_count", len(tasks))
+        return tasks
+
+
 # -- Activity ------------------------------------------------------------------
 
 
