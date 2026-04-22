@@ -1649,3 +1649,53 @@ def workflow_contact_update(
         output(updated.model_dump(mode="json"))
     finally:
         connection.close()
+
+
+# -- Task commands -------------------------------------------------------------
+
+
+@main.group()
+def task() -> None:
+    """Manage deferred agent tasks."""
+
+
+@task.command("list")
+@click.option("--workflow-id", default=None, help="Filter by workflow ID.")
+@click.option("--contact-id", default=None, help="Filter by contact ID.")
+@click.option(
+    "--status",
+    default=None,
+    type=click.Choice(["pending", "completed", "failed", "cancelled"]),
+    help="Filter by task status.",
+)
+@click.option("--limit", default=100, help="Maximum results.")
+def task_list(
+    workflow_id: str | None,
+    contact_id: str | None,
+    status: str | None,
+    limit: int,
+) -> None:
+    """List tasks with optional filters."""
+    from mailpilot.database import (
+        get_contact,
+        get_workflow,
+        initialize_database,
+        list_tasks,
+    )
+
+    connection = initialize_database(_database_url())
+    try:
+        if workflow_id is not None and get_workflow(connection, workflow_id) is None:
+            output_error(f"workflow not found: {workflow_id}", "not_found")
+        if contact_id is not None and get_contact(connection, contact_id) is None:
+            output_error(f"contact not found: {contact_id}", "not_found")
+        tasks = list_tasks(
+            connection,
+            workflow_id=workflow_id,
+            contact_id=contact_id,
+            status=status,
+            limit=limit,
+        )
+        output({"tasks": [t.model_dump(mode="json") for t in tasks]})
+    finally:
+        connection.close()
