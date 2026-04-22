@@ -34,8 +34,10 @@ from mailpilot.database import (
     get_contacts_by_emails,
     get_email_by_gmail_message_id,
     get_sync_status,
+    list_workflows,
     update_account,
     update_contact,
+    update_email,
     update_sync_heartbeat,
     upsert_sync_status,
 )
@@ -187,11 +189,19 @@ def sync_account(
             contacts_by_email = _resolve_contacts_for_messages(
                 connection, fresh_messages
             )
+            has_active_workflows = bool(
+                list_workflows(connection, account_id=account.id, status="active")
+            )
             stored = 0
             for message in fresh_messages:
                 if (
                     _store_inbound_message(
-                        connection, account, message, contacts_by_email, settings
+                        connection,
+                        account,
+                        message,
+                        contacts_by_email,
+                        settings,
+                        has_active_workflows=has_active_workflows,
                     )
                     is None
                 ):
@@ -335,12 +345,14 @@ def _extract_added_message_ids(history: list[dict[str, Any]]) -> list[str]:
     return ids
 
 
-def _store_inbound_message(
+def _store_inbound_message(  # noqa: PLR0913
     connection: psycopg.Connection[dict[str, Any]],
     account: Account,
     message: dict[str, Any],
     contacts_by_email: dict[str, Contact],
     settings: Settings,
+    *,
+    has_active_workflows: bool,
 ) -> Email | None:
     """Persist a Gmail message as an inbound email and route when fresh.
 
@@ -391,10 +403,14 @@ def _store_inbound_message(
         gmail_message_id=message.get("id"),
         within_recency_window=within_window,
     )
-    if within_window:
+    if within_window and has_active_workflows:
         email = route_email(
             connection, email, sender_email=sender_email, settings=settings
         )
+    elif within_window:
+        updated = update_email(connection, email.id, is_routed=True)
+        if updated is not None:
+            email = updated
     return email
 
 

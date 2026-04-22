@@ -158,6 +158,8 @@ def run() -> None:
     from mailpilot.settings import get_settings
 
     settings = get_settings()
+    interval = settings.run_interval
+    click.echo(f"Starting execution loop (interval={interval}s). Press Ctrl+C to stop.")
     connection = initialize_database(_database_url())
     try:
         run_loop(connection, settings)
@@ -1729,9 +1731,7 @@ def task_cancel(task_id: str) -> None:
     try:
         cancelled = cancel_task(connection, task_id)
         if cancelled is None:
-            output_error(
-                f"task not found or not pending: {task_id}", "not_found"
-            )
+            output_error(f"task not found or not pending: {task_id}", "not_found")
         output(cancelled.model_dump(mode="json"))
     finally:
         connection.close()

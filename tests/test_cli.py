@@ -3934,9 +3934,7 @@ def test_task_list(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert len(data["tasks"]) == 1
 
 
-def test_task_list_with_filters(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
+def test_task_list_with_filters(runner: CliRunner, mock_connection: MagicMock) -> None:
     workflow = _make_workflow()
     contact = _make_contact()
     tasks = [_make_task()]
@@ -3981,9 +3979,7 @@ def test_task_list_workflow_not_found(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=None),
     ):
-        result = runner.invoke(
-            main, ["task", "list", "--workflow-id", "missing"]
-        )
+        result = runner.invoke(main, ["task", "list", "--workflow-id", "missing"])
 
     assert result.exit_code == 1
     data = json.loads(result.output)
@@ -4008,9 +4004,7 @@ def test_task_view(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert data["description"] == "follow up"
 
 
-def test_task_view_not_found(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
+def test_task_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
@@ -4031,9 +4025,7 @@ def test_task_cancel(runner: CliRunner, mock_connection: MagicMock) -> None:
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch(
-            "mailpilot.database.cancel_task", return_value=cancelled
-        ) as mock_cancel,
+        patch("mailpilot.database.cancel_task", return_value=cancelled) as mock_cancel,
     ):
         result = runner.invoke(main, ["task", "cancel", cancelled.id])
 
@@ -4043,9 +4035,7 @@ def test_task_cancel(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert data["status"] == "cancelled"
 
 
-def test_task_cancel_not_pending(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
+def test_task_cancel_not_pending(runner: CliRunner, mock_connection: MagicMock) -> None:
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
@@ -4071,4 +4061,6 @@ def test_run_command(runner: CliRunner, mock_connection: MagicMock) -> None:
         result = runner.invoke(main, ["run"])
 
     assert result.exit_code == 0, result.output
+    assert "Starting execution loop" in result.output
+    assert "Ctrl+C to stop" in result.output
     mock_loop.assert_called_once_with(mock_connection, make_test_settings())

@@ -18,7 +18,8 @@ def test_default_settings():
     assert settings.google_pubsub_topic == "gmail-watch"
 
 
-def test_run_interval_default() -> None:
+def test_run_interval_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("mailpilot.settings.CONFIG_PATH", tmp_path / "config.json")
     settings = Settings()
     assert settings.run_interval == 30
 
