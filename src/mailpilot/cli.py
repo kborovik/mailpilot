@@ -1427,10 +1427,10 @@ def workflow_view(workflow_id: str) -> None:
         connection.close()
 
 
-@workflow.command("activate")
+@workflow.command("start")
 @click.argument("workflow_id")
-def workflow_activate(workflow_id: str) -> None:
-    """Activate a workflow (requires non-empty objective and instructions)."""
+def workflow_start(workflow_id: str) -> None:
+    """Start a workflow (requires non-empty objective and instructions)."""
     from mailpilot.database import activate_workflow, initialize_database
 
     connection = initialize_database(_database_url())
@@ -1438,16 +1438,29 @@ def workflow_activate(workflow_id: str) -> None:
         try:
             activated = activate_workflow(connection, workflow_id)
         except ValueError as exc:
-            output_error(str(exc), "invalid_state")
+            message = str(exc)
+            if "objective" in message:
+                output_error(
+                    f"cannot start: objective is empty. "
+                    f"Run: workflow update {workflow_id} --objective \"...\"",
+                    "invalid_state",
+                )
+            if "instructions" in message:
+                output_error(
+                    f"cannot start: instructions are empty. "
+                    f"Run: workflow update {workflow_id} --instructions \"...\"",
+                    "invalid_state",
+                )
+            output_error(message, "invalid_state")
         output(activated.model_dump(mode="json"))
     finally:
         connection.close()
 
 
-@workflow.command("pause")
+@workflow.command("stop")
 @click.argument("workflow_id")
-def workflow_pause(workflow_id: str) -> None:
-    """Pause an active workflow."""
+def workflow_stop(workflow_id: str) -> None:
+    """Stop an active workflow."""
     from mailpilot.database import initialize_database, pause_workflow
 
     connection = initialize_database(_database_url())

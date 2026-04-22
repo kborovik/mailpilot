@@ -2074,10 +2074,10 @@ def test_workflow_search(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert len(data["workflows"]) == 1
 
 
-# -- workflow activate / pause -------------------------------------------------
+# -- workflow start / stop -----------------------------------------------------
 
 
-def test_workflow_activate(runner: CliRunner, mock_connection: MagicMock) -> None:
+def test_workflow_start(runner: CliRunner, mock_connection: MagicMock) -> None:
     activated = _make_workflow(
         status="active",
         objective="Book demo",
@@ -2090,7 +2090,7 @@ def test_workflow_activate(runner: CliRunner, mock_connection: MagicMock) -> Non
             "mailpilot.database.activate_workflow", return_value=activated
         ) as mock_activate,
     ):
-        result = runner.invoke(main, ["workflow", "activate", _WORKFLOW_ID])
+        result = runner.invoke(main, ["workflow", "start", _WORKFLOW_ID])
 
     assert result.exit_code == 0, result.output
     mock_activate.assert_called_once_with(mock_connection, _WORKFLOW_ID)
@@ -2098,7 +2098,7 @@ def test_workflow_activate(runner: CliRunner, mock_connection: MagicMock) -> Non
     assert data["status"] == "active"
 
 
-def test_workflow_activate_missing_objective(
+def test_workflow_start_missing_objective(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     with (
@@ -2109,23 +2109,43 @@ def test_workflow_activate_missing_objective(
             side_effect=ValueError("objective must be non-empty to activate"),
         ),
     ):
-        result = runner.invoke(main, ["workflow", "activate", _WORKFLOW_ID])
+        result = runner.invoke(main, ["workflow", "start", _WORKFLOW_ID])
 
     assert result.exit_code == 1
     data = json.loads(result.output)
-    assert data["ok"] is False
     assert data["error"] == "invalid_state"
-    assert "objective" in data["message"]
+    assert "workflow update" in data["message"]
+    assert "--objective" in data["message"]
 
 
-def test_workflow_pause(runner: CliRunner, mock_connection: MagicMock) -> None:
+def test_workflow_start_missing_instructions(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.activate_workflow",
+            side_effect=ValueError("instructions must be non-empty to activate"),
+        ),
+    ):
+        result = runner.invoke(main, ["workflow", "start", _WORKFLOW_ID])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "invalid_state"
+    assert "workflow update" in data["message"]
+    assert "--instructions" in data["message"]
+
+
+def test_workflow_stop(runner: CliRunner, mock_connection: MagicMock) -> None:
     paused = _make_workflow(status="paused")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.pause_workflow", return_value=paused) as mock_pause,
     ):
-        result = runner.invoke(main, ["workflow", "pause", _WORKFLOW_ID])
+        result = runner.invoke(main, ["workflow", "stop", _WORKFLOW_ID])
 
     assert result.exit_code == 0, result.output
     mock_pause.assert_called_once_with(mock_connection, _WORKFLOW_ID)
@@ -2133,7 +2153,7 @@ def test_workflow_pause(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert data["status"] == "paused"
 
 
-def test_workflow_pause_invalid_state(
+def test_workflow_stop_invalid_state(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     with (
@@ -2144,7 +2164,7 @@ def test_workflow_pause_invalid_state(
             side_effect=ValueError("cannot pause workflow in status 'draft'"),
         ),
     ):
-        result = runner.invoke(main, ["workflow", "pause", _WORKFLOW_ID])
+        result = runner.invoke(main, ["workflow", "stop", _WORKFLOW_ID])
 
     assert result.exit_code == 1
     data = json.loads(result.output)
