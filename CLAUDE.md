@@ -92,6 +92,10 @@ mailpilot workflow contact remove --workflow-id ID --contact-id ID
 mailpilot workflow contact list --workflow-id ID [--status pending|active|completed|failed] [--limit N]
 mailpilot workflow contact update --workflow-id ID --contact-id ID --status S [--reason R]
 
+mailpilot task list [--workflow-id ID] [--contact-id ID] [--status pending|completed|failed|cancelled] [--limit N]
+mailpilot task view ID
+mailpilot task cancel ID
+
 mailpilot email search QUERY [--limit N]
 mailpilot email list [--limit N] [--contact-id ID] [--account-id ID] [--since ISO] [--thread-id TEXT] [--direction inbound|outbound] [--workflow-id ID] [--status sent|received|bounced]
 mailpilot email view ID
@@ -183,6 +187,7 @@ API keys and config stored in `~/.mailpilot/config.json` via `mailpilot config s
 - `database_url` -- PostgreSQL connection (default: `postgresql://localhost/mailpilot`)
 - `logfire_token` -- Pydantic Logfire token (optional)
 - `logfire_environment` -- deployment environment tag. Literal: `development` | `production` (default: `development`). Tags every span sent to Logfire so traces from dev runs can be filtered out when investigating production behaviour.
+- `run_interval` -- Execution loop sleep interval in seconds (default: `30`).
 
 ### Test Accounts
 
