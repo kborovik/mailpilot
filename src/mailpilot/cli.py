@@ -1699,3 +1699,19 @@ def task_list(
         output({"tasks": [t.model_dump(mode="json") for t in tasks]})
     finally:
         connection.close()
+
+
+@task.command("view")
+@click.argument("task_id")
+def task_view(task_id: str) -> None:
+    """Show a task by ID."""
+    from mailpilot.database import get_task, initialize_database
+
+    connection = initialize_database(_database_url())
+    try:
+        found = get_task(connection, task_id)
+        if found is None:
+            output_error(f"task not found: {task_id}", "not_found")
+        output(found.model_dump(mode="json"))
+    finally:
+        connection.close()

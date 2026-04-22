@@ -3988,3 +3988,36 @@ def test_task_list_workflow_not_found(
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["error"] == "not_found"
+
+
+# -- task view -----------------------------------------------------------------
+
+
+def test_task_view(runner: CliRunner, mock_connection: MagicMock) -> None:
+    task_obj = _make_task()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_task", return_value=task_obj),
+    ):
+        result = runner.invoke(main, ["task", "view", task_obj.id])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["id"] == task_obj.id
+    assert data["description"] == "follow up"
+
+
+def test_task_view_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_task", return_value=None),
+    ):
+        result = runner.invoke(main, ["task", "view", "missing"])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
