@@ -20,12 +20,18 @@ from conftest import (
 )
 from mailpilot.database import (
     activate_workflow,
+    cancel_task,
+    complete_task,
     create_activity,
     create_contacts_bulk,
     create_email,
     create_or_get_contact_by_email,
     create_tag,
+    create_task,
+    create_tasks_for_routed_emails,
+    create_workflow_contact,
     delete_tag,
+    delete_workflow_contact,
     get_account,
     get_company,
     get_company_by_domain,
@@ -39,6 +45,7 @@ from mailpilot.database import (
     get_note,
     get_status_counts,
     get_workflow,
+    get_workflow_contact,
     list_accounts,
     list_activities,
     list_companies,
@@ -47,6 +54,8 @@ from mailpilot.database import (
     list_entities_by_tag,
     list_notes,
     list_tags,
+    list_tasks,
+    list_workflow_contacts_enriched,
     list_workflows,
     pause_workflow,
     search_companies,
@@ -1613,3 +1622,239 @@ def test_status_counts_includes_notes(
     make_test_note(database_connection, entity_type="contact", entity_id=contact.id)
     counts = get_status_counts(database_connection)
     assert counts["notes"] == 1
+
+
+# -- WorkflowContact ----------------------------------------------------------
+
+
+def test_delete_workflow_contact(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    create_workflow_contact(database_connection, workflow.id, contact.id)
+    deleted = delete_workflow_contact(database_connection, workflow.id, contact.id)
+    assert deleted is True
+    assert get_workflow_contact(database_connection, workflow.id, contact.id) is None
+
+
+def test_delete_workflow_contact_not_found(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    deleted = delete_workflow_contact(database_connection, "nonexistent", "nonexistent")
+    assert deleted is False
+
+
+def test_list_workflow_contacts_enriched(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection, email="alice@example.com")
+    update_contact(
+        database_connection, contact.id, first_name="Alice", last_name="Smith"
+    )
+    create_workflow_contact(database_connection, workflow.id, contact.id)
+    results = list_workflow_contacts_enriched(database_connection, workflow.id)
+    assert len(results) == 1
+    detail = results[0]
+    assert detail.contact_email == "alice@example.com"
+    assert detail.contact_name == "Alice Smith"
+    assert detail.status == "pending"
+    assert detail.workflow_id == workflow.id
+    assert detail.contact_id == contact.id
+
+
+def test_list_workflow_contacts_enriched_status_filter(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from mailpilot.database import update_workflow_contact
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    c1 = make_test_contact(database_connection, email="a@example.com")
+    c2 = make_test_contact(database_connection, email="b@example.com")
+    create_workflow_contact(database_connection, workflow.id, c1.id)
+    create_workflow_contact(database_connection, workflow.id, c2.id)
+    update_workflow_contact(database_connection, workflow.id, c1.id, status="completed")
+    results = list_workflow_contacts_enriched(
+        database_connection, workflow.id, status="completed"
+    )
+    assert len(results) == 1
+    assert results[0].contact_id == c1.id
+
+
+def test_list_workflow_contacts_enriched_limit(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    c1 = make_test_contact(database_connection, email="a@example.com")
+    c2 = make_test_contact(database_connection, email="b@example.com")
+    create_workflow_contact(database_connection, workflow.id, c1.id)
+    create_workflow_contact(database_connection, workflow.id, c2.id)
+    results = list_workflow_contacts_enriched(database_connection, workflow.id, limit=1)
+    assert len(results) == 1
+
+
+def test_list_workflow_contacts_enriched_empty(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    results = list_workflow_contacts_enriched(database_connection, workflow.id)
+    assert results == []
+
+
+# -- Task ----------------------------------------------------------------------
+
+
+def test_list_tasks(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    create_task(
+        database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="follow up",
+        scheduled_at="2026-04-22T12:00:00Z",
+    )
+    create_task(
+        database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="check reply",
+        scheduled_at="2026-04-22T13:00:00Z",
+    )
+    results = list_tasks(database_connection)
+    assert len(results) == 2
+
+
+def test_list_tasks_with_filters(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact_a = make_test_contact(database_connection, email="a@test.com")
+    contact_b = make_test_contact(database_connection, email="b@test.com")
+    create_task(
+        database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact_a.id,
+        description="task for A",
+        scheduled_at="2026-04-22T12:00:00Z",
+    )
+    task_b = create_task(
+        database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact_b.id,
+        description="task for B",
+        scheduled_at="2026-04-22T13:00:00Z",
+    )
+    cancel_task(database_connection, task_b.id)
+
+    by_contact = list_tasks(database_connection, contact_id=contact_a.id)
+    assert len(by_contact) == 1
+    assert by_contact[0].contact_id == contact_a.id
+
+    cancelled = list_tasks(database_connection, status="cancelled")
+    assert len(cancelled) == 1
+    assert cancelled[0].contact_id == contact_b.id
+
+    pending = list_tasks(database_connection, status="pending")
+    assert len(pending) == 1
+    assert pending[0].contact_id == contact_a.id
+
+
+def test_create_tasks_for_routed_emails(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from datetime import datetime
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+
+    email = create_email(
+        database_connection,
+        gmail_message_id="msg-001",
+        gmail_thread_id="thread-001",
+        account_id=account.id,
+        direction="inbound",
+        subject="Re: hello",
+        body_text="Got it",
+        labels=["INBOX"],
+        received_at=datetime(2026, 4, 22, 12, 0, 0, tzinfo=UTC),
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+    )
+    assert email is not None
+
+    created = create_tasks_for_routed_emails(database_connection)
+    assert len(created) == 1
+    assert created[0].email_id == email.id
+    assert created[0].workflow_id == workflow.id
+    assert created[0].contact_id == contact.id
+    assert created[0].description == "handle inbound email"
+
+    # Idempotent: second call creates no duplicates.
+    again = create_tasks_for_routed_emails(database_connection)
+    assert len(again) == 0
+
+
+def test_create_tasks_for_routed_emails_skips_outbound(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from datetime import datetime
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+
+    create_email(
+        database_connection,
+        gmail_message_id="msg-002",
+        gmail_thread_id="thread-002",
+        account_id=account.id,
+        direction="outbound",
+        subject="Hello",
+        body_text="Hi there",
+        labels=["SENT"],
+        sent_at=datetime(2026, 4, 22, 12, 0, 0, tzinfo=UTC),
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+    )
+
+    created = create_tasks_for_routed_emails(database_connection)
+    assert len(created) == 0
+
+
+def test_complete_task_stores_result(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    task = create_task(
+        database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="follow up",
+        scheduled_at="2026-04-22T12:00:00Z",
+    )
+    agent_result: dict[str, object] = {
+        "reasoning": "Contact hasn't replied in 3 days, sending follow-up.",
+        "tool_calls": 1,
+    }
+    completed = complete_task(
+        database_connection, task.id, status="completed", result=agent_result
+    )
+    assert completed is not None
+    assert completed.status == "completed"
+    assert completed.result["reasoning"] == agent_result["reasoning"]
+    assert completed.result["tool_calls"] == agent_result["tool_calls"]
+    assert completed.completed_at is not None

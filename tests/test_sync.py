@@ -315,6 +315,27 @@ def test_sync_account_fresh_message_routed_as_unrouted_without_workflows(
     assert email.workflow_id is None
 
 
+def test_sync_account_skips_routing_when_no_active_workflows(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """route_email must not be called when the account has zero active workflows."""
+    from unittest.mock import patch
+
+    account = make_test_account(database_connection, email="noroute@example.com")
+    client, service = _make_mock_client(account.email)
+    _set_list_messages(service, [{"id": "nr1", "threadId": "t-nr1"}])
+    _set_get_messages(service, [_make_gmail_message("nr1", "t-nr1")])
+
+    with patch("mailpilot.sync.route_email") as mock_route:
+        sync_account(database_connection, account, client, make_test_settings())
+
+    mock_route.assert_not_called()
+    email = get_email_by_gmail_message_id(database_connection, "nr1")
+    assert email is not None
+    assert email.is_routed is True
+    assert email.workflow_id is None
+
+
 def test_sync_account_auto_creates_contact_only_once(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):

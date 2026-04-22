@@ -12,7 +12,7 @@ Convention:
 
 import uuid
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -34,6 +34,7 @@ from mailpilot.models import (
     Task,
     Workflow,
     WorkflowContact,
+    WorkflowContactDetail,
 )
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
@@ -1244,6 +1245,87 @@ def list_workflow_contacts(
         return links
 
 
+def delete_workflow_contact(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+    contact_id: str,
+) -> bool:
+    """Remove a contact from a workflow.
+
+    Args:
+        connection: Open database connection.
+        workflow_id: Workflow FK.
+        contact_id: Contact FK.
+
+    Returns:
+        True if the row was deleted, False if not found.
+    """
+    with logfire.span(
+        "db.workflow_contact.delete",
+        workflow_id=workflow_id,
+        contact_id=contact_id,
+    ) as span:
+        cursor = connection.execute(
+            """\
+            DELETE FROM workflow_contact
+            WHERE workflow_id = %(workflow_id)s AND contact_id = %(contact_id)s
+            """,
+            {"workflow_id": workflow_id, "contact_id": contact_id},
+        )
+        connection.commit()
+        deleted = cursor.rowcount > 0
+        span.set_attribute("deleted", deleted)
+        return deleted
+
+
+def list_workflow_contacts_enriched(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+    status: str | None = None,
+    limit: int = 100,
+) -> list[WorkflowContactDetail]:
+    """List contacts in a workflow with enriched contact info.
+
+    JOINs the contact table to include email and name. Separate from
+    ``list_workflow_contacts`` to avoid breaking agent tools which
+    expect ``list[WorkflowContact]``.
+
+    Args:
+        connection: Open database connection.
+        workflow_id: Workflow FK.
+        status: Filter by contact outcome status.
+        limit: Maximum results (default 100).
+
+    Returns:
+        List of enriched workflow-contact details.
+    """
+    with logfire.span(
+        "db.workflow_contact.list_enriched",
+        workflow_id=workflow_id,
+        status=status,
+        limit=limit,
+    ) as span:
+        params: dict[str, object] = {"workflow_id": workflow_id, "limit": limit}
+        status_filter = SQL("")
+        if status is not None:
+            status_filter = SQL("AND wc.status = %(status)s")
+            params["status"] = status
+        query = SQL(
+            "SELECT wc.*, c.email AS contact_email, "
+            "TRIM(COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '')) "
+            "AS contact_name "
+            "FROM workflow_contact wc "
+            "JOIN contact c ON c.id = wc.contact_id "
+            "WHERE wc.workflow_id = %(workflow_id)s {} "
+            "ORDER BY wc.created_at "
+            "LIMIT %(limit)s"
+        ).format(status_filter)
+        rows = connection.execute(query, params).fetchall()
+        details = [WorkflowContactDetail.model_validate(row) for row in rows]
+        span.set_attribute("contact_count", len(details))
+        return details
+
+
 # -- Email ---------------------------------------------------------------------
 
 
@@ -1734,27 +1816,39 @@ def complete_task(
     connection: psycopg.Connection[dict[str, Any]],
     task_id: str,
     status: str = "completed",
+    result: dict[str, object] | None = None,
 ) -> Task | None:
-    """Mark a task as completed or failed.
+    """Mark a task as completed or failed, optionally storing a result.
 
     Args:
         connection: Open database connection.
         task_id: Task ID.
         status: "completed" or "failed".
+        result: Agent reasoning and outcome to persist.
 
     Returns:
         Updated task, or None if not found.
     """
+    result_json = result or {}
     with logfire.span("db.task.complete", task_id=task_id, status=status) as span:
         row = connection.execute(
             """\
-            UPDATE task SET status = %(status)s, completed_at = CURRENT_TIMESTAMP
+            UPDATE task
+            SET status = %(status)s,
+                result = %(result)s,
+                completed_at = CURRENT_TIMESTAMP
             WHERE id = %(id)s RETURNING *
             """,
-            {"id": task_id, "status": status},
+            {
+                "id": task_id,
+                "status": status,
+                "result": Json(result_json),
+            },
         ).fetchone()
         connection.commit()
         span.set_attribute("hit", row is not None)
+        if result_json:
+            span.set_attribute("result_keys", list(result_json.keys()))
         if row is None:
             return None
         return Task.model_validate(row)
@@ -1790,6 +1884,94 @@ def cancel_task(
         if row is None:
             return None
         return Task.model_validate(row)
+
+
+def list_tasks(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str | None = None,
+    contact_id: str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+) -> list[Task]:
+    """List tasks with optional filters.
+
+    Args:
+        connection: Open database connection.
+        workflow_id: Filter by workflow ID.
+        contact_id: Filter by contact ID.
+        status: Filter by task status.
+        limit: Maximum number of tasks to return.
+
+    Returns:
+        List of tasks ordered by scheduled_at descending.
+    """
+    with logfire.span(
+        "db.task.list",
+        workflow_id=workflow_id,
+        contact_id=contact_id,
+        status=status,
+        limit=limit,
+    ) as span:
+        conditions: list[SQL] = []
+        params: dict[str, object] = {"limit": limit}
+        if workflow_id is not None:
+            conditions.append(SQL("workflow_id = %(workflow_id)s"))
+            params["workflow_id"] = workflow_id
+        if contact_id is not None:
+            conditions.append(SQL("contact_id = %(contact_id)s"))
+            params["contact_id"] = contact_id
+        if status is not None:
+            conditions.append(SQL("status = %(status)s"))
+            params["status"] = status
+        where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
+        query = SQL(
+            "SELECT * FROM task {} ORDER BY scheduled_at DESC LIMIT %(limit)s"
+        ).format(where)
+        rows = connection.execute(query, params).fetchall()
+        tasks = [Task.model_validate(row) for row in rows]
+        span.set_attribute("task_count", len(tasks))
+        return tasks
+
+
+def create_tasks_for_routed_emails(
+    connection: psycopg.Connection[dict[str, Any]],
+) -> list[Task]:
+    """Create immediate tasks for routed inbound emails without tasks.
+
+    Finds inbound emails with workflow_id set but no corresponding task
+    row, and creates a task with scheduled_at=now() for each.
+
+    Args:
+        connection: Open database connection.
+
+    Returns:
+        List of newly created tasks.
+    """
+    with logfire.span("db.task.bridge_routed_emails") as span:
+        unmatched = connection.execute(
+            """\
+            SELECT e.id, e.workflow_id, e.contact_id FROM email e
+            WHERE e.workflow_id IS NOT NULL
+              AND e.direction = 'inbound'
+              AND e.contact_id IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM task t WHERE t.email_id = e.id)
+            ORDER BY e.created_at
+            """
+        ).fetchall()
+        tasks: list[Task] = []
+        for email_row in unmatched:
+            now = datetime.now(UTC).isoformat()
+            t = create_task(
+                connection,
+                workflow_id=email_row["workflow_id"],
+                contact_id=email_row["contact_id"],
+                description="handle inbound email",
+                scheduled_at=now,
+                email_id=email_row["id"],
+            )
+            tasks.append(t)
+        span.set_attribute("task_count", len(tasks))
+        return tasks
 
 
 # -- Activity ------------------------------------------------------------------

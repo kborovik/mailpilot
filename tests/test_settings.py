@@ -18,6 +18,12 @@ def test_default_settings():
     assert settings.google_pubsub_topic == "gmail-watch"
 
 
+def test_run_interval_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("mailpilot.settings.CONFIG_PATH", tmp_path / "config.json")
+    settings = Settings()
+    assert settings.run_interval == 30
+
+
 def test_settings_from_kwargs():
     settings = Settings(logfire_environment="production", anthropic_api_key="sk-test")
     assert settings.logfire_environment == "production"

@@ -152,13 +152,17 @@ def status() -> None:
 
 @main.command()
 def run() -> None:
-    """Start the sync loop (foreground, managed by systemd)."""
+    """Start the execution loop (sync + task runner, foreground)."""
     from mailpilot.database import initialize_database
-    from mailpilot.sync import start_sync_loop
+    from mailpilot.run import run_loop
+    from mailpilot.settings import get_settings
 
+    settings = get_settings()
+    interval = settings.run_interval
+    click.echo(f"Starting execution loop (interval={interval}s). Press Ctrl+C to stop.")
     connection = initialize_database(_database_url())
     try:
-        start_sync_loop(connection)
+        run_loop(connection, settings)
     finally:
         connection.close()
 
@@ -1231,22 +1235,36 @@ def workflow() -> None:
 @click.option("--account-id", required=True, help="Owning Gmail account ID.")
 @click.option("--objective", default=None, help="Workflow objective.")
 @click.option(
+    "--instructions",
+    default=None,
+    help="Workflow instructions (inline text).",
+)
+@click.option(
     "--instructions-file",
     default=None,
     type=click.Path(exists=True, dir_okay=False),
     help="Path to a file with the workflow instructions (system prompt).",
+)
+@click.option(
+    "--draft",
+    is_flag=True,
+    default=False,
+    help="Keep workflow in draft status.",
 )
 def workflow_create(
     name: str,
     workflow_type: str,
     account_id: str,
     objective: str | None,
+    instructions: str | None,
     instructions_file: str | None,
+    draft: bool,
 ) -> None:
     """Create a new workflow."""
     import pathlib
 
     from mailpilot.database import (
+        activate_workflow,
         create_workflow,
         get_account,
         initialize_database,
@@ -1255,6 +1273,19 @@ def workflow_create(
 
     if not name.strip():
         output_error("workflow name cannot be empty", "validation_error")
+    if instructions is not None and instructions_file is not None:
+        output_error(
+            "--instructions and --instructions-file are mutually exclusive",
+            "validation_error",
+        )
+    has_objective = objective is not None
+    has_instructions = instructions is not None or instructions_file is not None
+    if not draft and not (has_objective and has_instructions):
+        output_error(
+            "cannot activate workflow without objective and instructions. "
+            "Use --draft to create without them.",
+            "validation_error",
+        )
     connection = initialize_database(_database_url())
     try:
         if get_account(connection, account_id) is None:
@@ -1265,15 +1296,18 @@ def workflow_create(
             workflow_type=workflow_type,
             account_id=account_id,
         )
+        resolved_instructions: str | None = instructions
+        if instructions_file is not None:
+            resolved_instructions = pathlib.Path(instructions_file).read_text()
         extras: dict[str, object] = {}
         if objective is not None:
             extras["objective"] = objective
-        if instructions_file is not None:
-            extras["instructions"] = pathlib.Path(instructions_file).read_text()
+        if resolved_instructions is not None:
+            extras["instructions"] = resolved_instructions
         if extras:
-            updated = update_workflow(connection, created.id, **extras)
-            if updated is not None:
-                created = updated
+            created = update_workflow(connection, created.id, **extras) or created
+        if not draft and has_objective and has_instructions:
+            created = activate_workflow(connection, created.id)
         output(created.model_dump(mode="json"))
     finally:
         connection.close()
@@ -1284,6 +1318,11 @@ def workflow_create(
 @click.option("--name", default=None, help="Workflow name.")
 @click.option("--objective", default=None, help="Workflow objective.")
 @click.option(
+    "--instructions",
+    default=None,
+    help="Workflow instructions (inline text).",
+)
+@click.option(
     "--instructions-file",
     default=None,
     type=click.Path(exists=True, dir_okay=False),
@@ -1293,6 +1332,7 @@ def workflow_update(
     workflow_id: str,
     name: str | None,
     objective: str | None,
+    instructions: str | None,
     instructions_file: str | None,
 ) -> None:
     """Update a workflow."""
@@ -1300,6 +1340,11 @@ def workflow_update(
 
     from mailpilot.database import initialize_database, update_workflow
 
+    if instructions is not None and instructions_file is not None:
+        output_error(
+            "--instructions and --instructions-file are mutually exclusive",
+            "validation_error",
+        )
     connection = initialize_database(_database_url())
     try:
         fields: dict[str, object] = {}
@@ -1307,6 +1352,8 @@ def workflow_update(
             fields["name"] = name
         if objective is not None:
             fields["objective"] = objective
+        if instructions is not None:
+            fields["instructions"] = instructions
         if instructions_file is not None:
             fields["instructions"] = pathlib.Path(instructions_file).read_text()
         updated = update_workflow(connection, workflow_id, **fields)
@@ -1384,10 +1431,10 @@ def workflow_view(workflow_id: str) -> None:
         connection.close()
 
 
-@workflow.command("activate")
+@workflow.command("start")
 @click.argument("workflow_id")
-def workflow_activate(workflow_id: str) -> None:
-    """Activate a workflow (requires non-empty objective and instructions)."""
+def workflow_start(workflow_id: str) -> None:
+    """Start a workflow (requires non-empty objective and instructions)."""
     from mailpilot.database import activate_workflow, initialize_database
 
     connection = initialize_database(_database_url())
@@ -1395,16 +1442,29 @@ def workflow_activate(workflow_id: str) -> None:
         try:
             activated = activate_workflow(connection, workflow_id)
         except ValueError as exc:
-            output_error(str(exc), "invalid_state")
+            message = str(exc)
+            if "objective" in message:
+                output_error(
+                    f"cannot start: objective is empty. "
+                    f'Run: workflow update {workflow_id} --objective "..."',
+                    "invalid_state",
+                )
+            if "instructions" in message:
+                output_error(
+                    f"cannot start: instructions are empty. "
+                    f'Run: workflow update {workflow_id} --instructions "..."',
+                    "invalid_state",
+                )
+            output_error(message, "invalid_state")
         output(activated.model_dump(mode="json"))
     finally:
         connection.close()
 
 
-@workflow.command("pause")
+@workflow.command("stop")
 @click.argument("workflow_id")
-def workflow_pause(workflow_id: str) -> None:
-    """Pause an active workflow."""
+def workflow_stop(workflow_id: str) -> None:
+    """Stop an active workflow."""
     from mailpilot.database import initialize_database, pause_workflow
 
     connection = initialize_database(_database_url())
@@ -1423,14 +1483,17 @@ def workflow_pause(workflow_id: str) -> None:
 @click.option("--contact-id", required=True, help="Contact ID.")
 def workflow_run(workflow_id: str, contact_id: str) -> None:
     """Invoke the workflow agent for a single contact (outbound only)."""
-    from mailpilot.agent import invoke_workflow_agent
+    from datetime import UTC, datetime
+
     from mailpilot.database import (
+        create_task,
         get_contact,
+        get_task,
         get_workflow,
         get_workflow_contact,
         initialize_database,
     )
-    from mailpilot.exceptions import AgentDidNotUseToolsError
+    from mailpilot.run import execute_task
     from mailpilot.settings import get_settings
 
     settings = get_settings()
@@ -1445,7 +1508,8 @@ def workflow_run(workflow_id: str, contact_id: str) -> None:
             )
         if wf.type != "outbound":
             output_error(
-                f"workflow run requires type=outbound (got {wf.type})", "invalid_state"
+                f"workflow run requires type=outbound (got {wf.type})",
+                "invalid_state",
             )
         contact = get_contact(connection, contact_id)
         if contact is None:
@@ -1455,27 +1519,213 @@ def workflow_run(workflow_id: str, contact_id: str) -> None:
                 f"contact {contact_id} is not enrolled in workflow {workflow_id}",
                 "not_found",
             )
-        try:
-            result = invoke_workflow_agent(connection, settings, wf, contact)
-        except AgentDidNotUseToolsError:
-            output_error(
-                f"agent completed without calling any tools: "
-                f"workflow={workflow_id}, contact={contact_id}",
-                "agent_no_tools",
-            )
-        if result is None:
-            output_error(
-                f"invocation skipped: advisory lock held for "
-                f"workflow={workflow_id}, contact={contact_id}",
-                "lock_held",
-            )
-        output(
-            {
-                "workflow_id": wf.id,
-                "contact_id": contact.id,
-                "status": "completed",
-                "tool_calls": result["tool_calls"],
-            }
+        task = create_task(
+            connection,
+            workflow_id=wf.id,
+            contact_id=contact.id,
+            description="manual outbound run",
+            scheduled_at=datetime.now(UTC).isoformat(),
         )
+        execute_task(connection, settings, task)
+        completed = get_task(connection, task.id)
+        if completed is None:
+            output_error(f"task not found after execution: {task.id}", "not_found")
+        output(completed.model_dump(mode="json"))
+    finally:
+        connection.close()
+
+
+# -- Workflow Contact subgroup -------------------------------------------------
+
+
+@workflow.group("contact")
+def workflow_contact() -> None:
+    """Manage contact enrollment in workflows."""
+
+
+@workflow_contact.command("add")
+@click.option("--workflow-id", required=True, help="Workflow ID.")
+@click.option("--contact-id", required=True, help="Contact ID.")
+def workflow_contact_add(workflow_id: str, contact_id: str) -> None:
+    """Enroll a contact in a workflow."""
+    from mailpilot.database import (
+        create_workflow_contact,
+        get_contact,
+        get_workflow,
+        get_workflow_contact,
+        initialize_database,
+    )
+
+    connection = initialize_database(_database_url())
+    try:
+        if get_workflow(connection, workflow_id) is None:
+            output_error(f"workflow not found: {workflow_id}", "not_found")
+        if get_contact(connection, contact_id) is None:
+            output_error(f"contact not found: {contact_id}", "not_found")
+        created = create_workflow_contact(connection, workflow_id, contact_id)
+        if created is not None:
+            output(created.model_dump(mode="json"))
+            return
+        existing = get_workflow_contact(connection, workflow_id, contact_id)
+        if existing is not None:
+            output(existing.model_dump(mode="json"))
+            return
+    finally:
+        connection.close()
+
+
+@workflow_contact.command("remove")
+@click.option("--workflow-id", required=True, help="Workflow ID.")
+@click.option("--contact-id", required=True, help="Contact ID.")
+def workflow_contact_remove(workflow_id: str, contact_id: str) -> None:
+    """Remove a contact from a workflow."""
+    from mailpilot.database import delete_workflow_contact, initialize_database
+
+    connection = initialize_database(_database_url())
+    try:
+        deleted = delete_workflow_contact(connection, workflow_id, contact_id)
+        if not deleted:
+            output_error("workflow-contact not found", "not_found")
+        output({"workflow_id": workflow_id, "contact_id": contact_id})
+    finally:
+        connection.close()
+
+
+@workflow_contact.command("list")
+@click.option("--workflow-id", required=True, help="Workflow ID.")
+@click.option(
+    "--status",
+    default=None,
+    type=click.Choice(["pending", "active", "completed", "failed"]),
+    help="Filter by enrollment status.",
+)
+@click.option("--limit", default=100, help="Maximum results.")
+def workflow_contact_list(workflow_id: str, status: str | None, limit: int) -> None:
+    """List contacts enrolled in a workflow."""
+    from mailpilot.database import (
+        get_workflow,
+        initialize_database,
+        list_workflow_contacts_enriched,
+    )
+
+    connection = initialize_database(_database_url())
+    try:
+        if get_workflow(connection, workflow_id) is None:
+            output_error(f"workflow not found: {workflow_id}", "not_found")
+        contacts = list_workflow_contacts_enriched(
+            connection, workflow_id, status=status, limit=limit
+        )
+        output({"contacts": [c.model_dump(mode="json") for c in contacts]})
+    finally:
+        connection.close()
+
+
+@workflow_contact.command("update")
+@click.option("--workflow-id", required=True, help="Workflow ID.")
+@click.option("--contact-id", required=True, help="Contact ID.")
+@click.option(
+    "--status",
+    required=True,
+    type=click.Choice(["pending", "active", "completed", "failed"]),
+    help="New enrollment status.",
+)
+@click.option("--reason", default=None, help="Status reason.")
+def workflow_contact_update(
+    workflow_id: str, contact_id: str, status: str, reason: str | None
+) -> None:
+    """Update enrollment status and reason."""
+    from mailpilot.database import initialize_database, update_workflow_contact
+
+    connection = initialize_database(_database_url())
+    try:
+        fields: dict[str, object] = {"status": status}
+        if reason is not None:
+            fields["reason"] = reason
+        updated = update_workflow_contact(connection, workflow_id, contact_id, **fields)
+        if updated is None:
+            output_error("workflow-contact not found", "not_found")
+        output(updated.model_dump(mode="json"))
+    finally:
+        connection.close()
+
+
+# -- Task commands -------------------------------------------------------------
+
+
+@main.group()
+def task() -> None:
+    """Manage deferred agent tasks."""
+
+
+@task.command("list")
+@click.option("--workflow-id", default=None, help="Filter by workflow ID.")
+@click.option("--contact-id", default=None, help="Filter by contact ID.")
+@click.option(
+    "--status",
+    default=None,
+    type=click.Choice(["pending", "completed", "failed", "cancelled"]),
+    help="Filter by task status.",
+)
+@click.option("--limit", default=100, help="Maximum results.")
+def task_list(
+    workflow_id: str | None,
+    contact_id: str | None,
+    status: str | None,
+    limit: int,
+) -> None:
+    """List tasks with optional filters."""
+    from mailpilot.database import (
+        get_contact,
+        get_workflow,
+        initialize_database,
+        list_tasks,
+    )
+
+    connection = initialize_database(_database_url())
+    try:
+        if workflow_id is not None and get_workflow(connection, workflow_id) is None:
+            output_error(f"workflow not found: {workflow_id}", "not_found")
+        if contact_id is not None and get_contact(connection, contact_id) is None:
+            output_error(f"contact not found: {contact_id}", "not_found")
+        tasks = list_tasks(
+            connection,
+            workflow_id=workflow_id,
+            contact_id=contact_id,
+            status=status,
+            limit=limit,
+        )
+        output({"tasks": [t.model_dump(mode="json") for t in tasks]})
+    finally:
+        connection.close()
+
+
+@task.command("view")
+@click.argument("task_id")
+def task_view(task_id: str) -> None:
+    """Show a task by ID."""
+    from mailpilot.database import get_task, initialize_database
+
+    connection = initialize_database(_database_url())
+    try:
+        found = get_task(connection, task_id)
+        if found is None:
+            output_error(f"task not found: {task_id}", "not_found")
+        output(found.model_dump(mode="json"))
+    finally:
+        connection.close()
+
+
+@task.command("cancel")
+@click.argument("task_id")
+def task_cancel(task_id: str) -> None:
+    """Cancel a pending task."""
+    from mailpilot.database import cancel_task, initialize_database
+
+    connection = initialize_database(_database_url())
+    try:
+        cancelled = cancel_task(connection, task_id)
+        if cancelled is None:
+            output_error(f"task not found or not pending: {task_id}", "not_found")
+        output(cancelled.model_dump(mode="json"))
     finally:
         connection.close()

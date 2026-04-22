@@ -95,6 +95,19 @@ class WorkflowContact(BaseModel):
     updated_at: datetime
 
 
+class WorkflowContactDetail(BaseModel):
+    """Enriched workflow-contact with contact info for list display."""
+
+    workflow_id: str
+    contact_id: str
+    contact_email: str
+    contact_name: str
+    status: ContactOutcome
+    reason: str
+    created_at: datetime
+    updated_at: datetime
+
+
 EmailDirection = Literal["inbound", "outbound"]
 
 
@@ -132,6 +145,7 @@ class Task(BaseModel):
     context: dict[str, object] = {}
     scheduled_at: datetime
     status: TaskStatus = "pending"
+    result: dict[str, object] = {}
     completed_at: datetime | None = None
     created_at: datetime
 

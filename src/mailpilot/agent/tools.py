@@ -204,12 +204,18 @@ def update_contact_status(
     Returns:
         Dict with updated status, or error if workflow_contact not found.
     """
+    valid_statuses = ("active", "completed", "failed")
     with logfire.span(
         "agent.tool.update_contact_status",
         workflow_id=workflow_id,
         contact_id=contact_id,
         status=status,
     ):
+        if status not in valid_statuses:
+            return {
+                "error": "invalid_status",
+                "message": f"status must be one of {valid_statuses}, got: {status}",
+            }
         wc = database.update_workflow_contact(
             connection, workflow_id, contact_id, status=status, reason=reason
         )

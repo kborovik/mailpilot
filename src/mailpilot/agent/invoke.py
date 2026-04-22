@@ -259,11 +259,18 @@ _TOOLS: list[Tool[AgentDeps]] = [
 ]
 
 
+_SYSTEM_PREFIX = (
+    "Respond in plain text only. No markdown, no tables, no bullet "
+    "points, no bold/italic, no emojis. Keep your final summary brief "
+    "(2-3 sentences).\n\n"
+)
+
+
 def _build_agent(workflow: Workflow) -> Agent[AgentDeps, str]:
     """Build a Pydantic AI agent for a workflow."""
     return Agent(
         deps_type=AgentDeps,
-        instructions=workflow.instructions,
+        instructions=_SYSTEM_PREFIX + workflow.instructions,
         tools=_TOOLS,
     )
 
@@ -478,11 +485,13 @@ def invoke_workflow_agent(  # noqa: PLR0913
                 )
 
             span.set_attribute("result", "completed")
+            span.set_attribute("agent_reasoning", result.output)
             return {
                 "workflow_id": workflow.id,
                 "contact_id": contact.id,
                 "status": "completed",
                 "tool_calls": tool_call_count,
+                "reasoning": result.output,
             }
 
         finally:
