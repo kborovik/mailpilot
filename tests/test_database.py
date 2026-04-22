@@ -27,6 +27,7 @@ from mailpilot.database import (
     create_or_get_contact_by_email,
     create_tag,
     create_task,
+    create_tasks_for_routed_emails,
     create_workflow_contact,
     delete_tag,
     delete_workflow_contact,
@@ -1766,3 +1767,66 @@ def test_list_tasks_with_filters(
     pending = list_tasks(database_connection, status="pending")
     assert len(pending) == 1
     assert pending[0].contact_id == contact_a.id
+
+
+def test_create_tasks_for_routed_emails(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from datetime import datetime
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+
+    email = create_email(
+        database_connection,
+        gmail_message_id="msg-001",
+        gmail_thread_id="thread-001",
+        account_id=account.id,
+        direction="inbound",
+        subject="Re: hello",
+        body_text="Got it",
+        labels=["INBOX"],
+        received_at=datetime(2026, 4, 22, 12, 0, 0, tzinfo=UTC),
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+    )
+    assert email is not None
+
+    created = create_tasks_for_routed_emails(database_connection)
+    assert len(created) == 1
+    assert created[0].email_id == email.id
+    assert created[0].workflow_id == workflow.id
+    assert created[0].contact_id == contact.id
+    assert created[0].description == "handle inbound email"
+
+    # Idempotent: second call creates no duplicates.
+    again = create_tasks_for_routed_emails(database_connection)
+    assert len(again) == 0
+
+
+def test_create_tasks_for_routed_emails_skips_outbound(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from datetime import datetime
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+
+    create_email(
+        database_connection,
+        gmail_message_id="msg-002",
+        gmail_thread_id="thread-002",
+        account_id=account.id,
+        direction="outbound",
+        subject="Hello",
+        body_text="Hi there",
+        labels=["SENT"],
+        sent_at=datetime(2026, 4, 22, 12, 0, 0, tzinfo=UTC),
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+    )
+
+    created = create_tasks_for_routed_emails(database_connection)
+    assert len(created) == 0

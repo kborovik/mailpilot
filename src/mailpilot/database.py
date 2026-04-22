@@ -12,7 +12,7 @@ Convention:
 
 import uuid
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -1917,6 +1917,47 @@ def list_tasks(
         ).format(where)
         rows = connection.execute(query, params).fetchall()
         tasks = [Task.model_validate(row) for row in rows]
+        span.set_attribute("task_count", len(tasks))
+        return tasks
+
+
+def create_tasks_for_routed_emails(
+    connection: psycopg.Connection[dict[str, Any]],
+) -> list[Task]:
+    """Create immediate tasks for routed inbound emails without tasks.
+
+    Finds inbound emails with workflow_id set but no corresponding task
+    row, and creates a task with scheduled_at=now() for each.
+
+    Args:
+        connection: Open database connection.
+
+    Returns:
+        List of newly created tasks.
+    """
+    with logfire.span("db.task.bridge_routed_emails") as span:
+        unmatched = connection.execute(
+            """\
+            SELECT e.id, e.workflow_id, e.contact_id FROM email e
+            WHERE e.workflow_id IS NOT NULL
+              AND e.direction = 'inbound'
+              AND e.contact_id IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM task t WHERE t.email_id = e.id)
+            ORDER BY e.created_at
+            """
+        ).fetchall()
+        tasks: list[Task] = []
+        for email_row in unmatched:
+            now = datetime.now(UTC).isoformat()
+            t = create_task(
+                connection,
+                workflow_id=email_row["workflow_id"],
+                contact_id=email_row["contact_id"],
+                description="handle inbound email",
+                scheduled_at=now,
+                email_id=email_row["id"],
+            )
+            tasks.append(t)
         span.set_attribute("task_count", len(tasks))
         return tasks
 
