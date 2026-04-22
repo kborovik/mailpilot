@@ -65,10 +65,14 @@ def output(data: dict[str, Any]) -> None:
 
 def output_error(message: str, code: str) -> NoReturn:
     """Print structured JSON error to stderr and exit."""
-    click.echo(
-        json.dumps({"error": code, "message": message, "ok": False}, indent=2),
-        err=True,
-    )
+    from opentelemetry import trace
+
+    payload: dict[str, object] = {"error": code, "message": message, "ok": False}
+    current = trace.get_current_span()
+    ctx = current.get_span_context() if current else None
+    if ctx is not None and ctx.is_valid:
+        payload["trace_id"] = format(ctx.trace_id, "032x")
+    click.echo(json.dumps(payload, indent=2), err=True)
     raise SystemExit(1)
 
 
@@ -320,7 +324,7 @@ def account_sync(account_id: str | None) -> None:
 
         results: list[dict[str, object]] = []
         total_stored = 0
-        with logfire.span("cli.account.sync", account_count=len(accounts)):
+        with logfire.span("cli.account.sync", account_count=len(accounts)) as span:
             for acc in accounts:
                 row: dict[str, object] = {
                     "account_id": acc.id,
@@ -332,6 +336,15 @@ def account_sync(account_id: str | None) -> None:
                     row["stored"] = stored
                     total_stored += stored
                 except Exception as exc:
+                    from mailpilot.sync import sync_errors
+
+                    sync_errors.add(
+                        1,
+                        attributes={
+                            "account_id": acc.id,
+                            "reason": "cli_sync_exception",
+                        },
+                    )
                     logfire.exception(
                         "cli.account.sync.failed",
                         account_id=acc.id,
@@ -339,6 +352,11 @@ def account_sync(account_id: str | None) -> None:
                     )
                     row["error"] = str(exc)
                 results.append(row)
+            account_succeeded = sum(1 for r in results if "error" not in r)
+            account_failed = sum(1 for r in results if "error" in r)
+            span.set_attribute("total_stored", total_stored)
+            span.set_attribute("account_succeeded", account_succeeded)
+            span.set_attribute("account_failed", account_failed)
         output({"results": results, "total_stored": total_stored})
     finally:
         connection.close()

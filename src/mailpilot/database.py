@@ -93,6 +93,7 @@ def initialize_database(database_url: str) -> psycopg.Connection[dict[str, Any]]
                 hint = "check your database_url setting"
             logfire.exception("database connection failed", database=db_name, hint=hint)
             raise SystemExit(f"database connection failed: {hint}") from None
+        logfire.instrument_psycopg(connection)
         schema_sql = SCHEMA_PATH.read_text()
         connection.execute(schema_sql)  # type: ignore[arg-type]
         connection.autocommit = False
@@ -159,19 +160,16 @@ def create_account(
     Returns:
         Created account.
     """
-    with logfire.span("db.account.create", email=email) as span:
-        row = connection.execute(
-            """\
-            INSERT INTO account (id, email, display_name)
-            VALUES (%(id)s, %(email)s, %(display_name)s)
-            RETURNING *
-            """,
-            {"id": _new_id(), "email": email, "display_name": display_name},
-        ).fetchone()
-        connection.commit()
-        account = Account.model_validate(row)
-        span.set_attribute("account_id", account.id)
-        return account
+    row = connection.execute(
+        """\
+        INSERT INTO account (id, email, display_name)
+        VALUES (%(id)s, %(email)s, %(display_name)s)
+        RETURNING *
+        """,
+        {"id": _new_id(), "email": email, "display_name": display_name},
+    ).fetchone()
+    connection.commit()
+    return Account.model_validate(row)
 
 
 def get_account(
@@ -187,15 +185,13 @@ def get_account(
     Returns:
         Account if found, None otherwise.
     """
-    with logfire.span("db.account.get", account_id=account_id) as span:
-        row = connection.execute(
-            "SELECT * FROM account WHERE id = %(id)s",
-            {"id": account_id},
-        ).fetchone()
-        span.set_attribute("hit", row is not None)
-        if row is None:
-            return None
-        return Account.model_validate(row)
+    row = connection.execute(
+        "SELECT * FROM account WHERE id = %(id)s",
+        {"id": account_id},
+    ).fetchone()
+    if row is None:
+        return None
+    return Account.model_validate(row)
 
 
 def list_accounts(
@@ -209,13 +205,8 @@ def list_accounts(
     Returns:
         List of accounts ordered by creation time.
     """
-    with logfire.span("db.account.list") as span:
-        rows = connection.execute(
-            "SELECT * FROM account ORDER BY created_at"
-        ).fetchall()
-        accounts = [Account.model_validate(row) for row in rows]
-        span.set_attribute("account_count", len(accounts))
-        return accounts
+    rows = connection.execute("SELECT * FROM account ORDER BY created_at").fetchall()
+    return [Account.model_validate(row) for row in rows]
 
 
 def update_account(
@@ -235,23 +226,15 @@ def update_account(
     """
     allowed = set(Account.model_fields) - {"id", "created_at"}
     updates = {k: v for k, v in fields.items() if k in allowed}
-    with logfire.span(
-        "db.account.update",
-        account_id=account_id,
-        updated_fields=sorted(updates.keys()),
-    ) as span:
-        if not updates:
-            existing = get_account(connection, account_id)
-            span.set_attribute("hit", existing is not None)
-            return existing
-        updates["id"] = account_id
-        query = _build_update("account", updates, SQL("id = %(id)s"))
-        row = connection.execute(query, updates).fetchone()
-        connection.commit()
-        span.set_attribute("hit", row is not None)
-        if row is None:
-            return None
-        return Account.model_validate(row)
+    if not updates:
+        return get_account(connection, account_id)
+    updates["id"] = account_id
+    query = _build_update("account", updates, SQL("id = %(id)s"))
+    row = connection.execute(query, updates).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Account.model_validate(row)
 
 
 # -- Company -------------------------------------------------------------------
@@ -272,19 +255,16 @@ def create_company(
     Returns:
         Created company.
     """
-    with logfire.span("db.company.create", domain=domain) as span:
-        row = connection.execute(
-            """\
-            INSERT INTO company (id, name, domain)
-            VALUES (%(id)s, %(name)s, %(domain)s)
-            RETURNING *
-            """,
-            {"id": _new_id(), "name": name, "domain": domain},
-        ).fetchone()
-        connection.commit()
-        company = Company.model_validate(row)
-        span.set_attribute("company_id", company.id)
-        return company
+    row = connection.execute(
+        """\
+        INSERT INTO company (id, name, domain)
+        VALUES (%(id)s, %(name)s, %(domain)s)
+        RETURNING *
+        """,
+        {"id": _new_id(), "name": name, "domain": domain},
+    ).fetchone()
+    connection.commit()
+    return Company.model_validate(row)
 
 
 def get_company(
@@ -300,15 +280,13 @@ def get_company(
     Returns:
         Company if found, None otherwise.
     """
-    with logfire.span("db.company.get", company_id=company_id) as span:
-        row = connection.execute(
-            "SELECT * FROM company WHERE id = %(id)s",
-            {"id": company_id},
-        ).fetchone()
-        span.set_attribute("hit", row is not None)
-        if row is None:
-            return None
-        return Company.model_validate(row)
+    row = connection.execute(
+        "SELECT * FROM company WHERE id = %(id)s",
+        {"id": company_id},
+    ).fetchone()
+    if row is None:
+        return None
+    return Company.model_validate(row)
 
 
 def list_companies(
@@ -324,14 +302,11 @@ def list_companies(
     Returns:
         List of companies ordered by name.
     """
-    with logfire.span("db.company.list", limit=limit) as span:
-        rows = connection.execute(
-            "SELECT * FROM company ORDER BY LOWER(name) LIMIT %(limit)s",
-            {"limit": limit},
-        ).fetchall()
-        companies = [Company.model_validate(row) for row in rows]
-        span.set_attribute("company_count", len(companies))
-        return companies
+    rows = connection.execute(
+        "SELECT * FROM company ORDER BY LOWER(name) LIMIT %(limit)s",
+        {"limit": limit},
+    ).fetchall()
+    return [Company.model_validate(row) for row in rows]
 
 
 def search_companies(
@@ -349,21 +324,18 @@ def search_companies(
     Returns:
         Matching companies ordered by name.
     """
-    with logfire.span("db.company.search", query=query, limit=limit) as span:
-        pattern = f"%{query}%"
-        rows = connection.execute(
-            """\
-            SELECT * FROM company
-            WHERE LOWER(name) LIKE LOWER(%(pattern)s)
-               OR LOWER(domain) LIKE LOWER(%(pattern)s)
-            ORDER BY LOWER(name)
-            LIMIT %(limit)s
-            """,
-            {"pattern": pattern, "limit": limit},
-        ).fetchall()
-        companies = [Company.model_validate(row) for row in rows]
-        span.set_attribute("company_count", len(companies))
-        return companies
+    pattern = f"%{query}%"
+    rows = connection.execute(
+        """\
+        SELECT * FROM company
+        WHERE LOWER(name) LIKE LOWER(%(pattern)s)
+           OR LOWER(domain) LIKE LOWER(%(pattern)s)
+        ORDER BY LOWER(name)
+        LIMIT %(limit)s
+        """,
+        {"pattern": pattern, "limit": limit},
+    ).fetchall()
+    return [Company.model_validate(row) for row in rows]
 
 
 def get_company_by_domain(
@@ -379,15 +351,13 @@ def get_company_by_domain(
     Returns:
         Company if found, None otherwise.
     """
-    with logfire.span("db.company.get_by_domain", domain=domain) as span:
-        row = connection.execute(
-            "SELECT * FROM company WHERE domain = %(domain)s",
-            {"domain": domain},
-        ).fetchone()
-        span.set_attribute("hit", row is not None)
-        if row is None:
-            return None
-        return Company.model_validate(row)
+    row = connection.execute(
+        "SELECT * FROM company WHERE domain = %(domain)s",
+        {"domain": domain},
+    ).fetchone()
+    if row is None:
+        return None
+    return Company.model_validate(row)
 
 
 def update_company(
@@ -407,23 +377,15 @@ def update_company(
     """
     allowed = set(Company.model_fields) - {"id", "created_at"}
     updates = {k: v for k, v in fields.items() if k in allowed}
-    with logfire.span(
-        "db.company.update",
-        company_id=company_id,
-        updated_fields=sorted(updates.keys()),
-    ) as span:
-        if not updates:
-            existing = get_company(connection, company_id)
-            span.set_attribute("hit", existing is not None)
-            return existing
-        updates["id"] = company_id
-        query = _build_update("company", updates, SQL("id = %(id)s"))
-        row = connection.execute(query, updates).fetchone()
-        connection.commit()
-        span.set_attribute("hit", row is not None)
-        if row is None:
-            return None
-        return Company.model_validate(row)
+    if not updates:
+        return get_company(connection, company_id)
+    updates["id"] = company_id
+    query = _build_update("company", updates, SQL("id = %(id)s"))
+    row = connection.execute(query, updates).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Company.model_validate(row)
 
 
 # -- Contact -------------------------------------------------------------------
@@ -450,32 +412,24 @@ def create_contact(
     Returns:
         Created contact.
     """
-    with logfire.span(
-        "db.contact.create",
-        email=email,
-        domain=domain,
-        company_id=company_id,
-    ) as span:
-        row = connection.execute(
-            """\
-            INSERT INTO contact (id, email, domain, company_id, first_name, last_name)
-            VALUES (%(id)s, %(email)s, %(domain)s, %(company_id)s,
-                    %(first_name)s, %(last_name)s)
-            RETURNING *
-            """,
-            {
-                "id": _new_id(),
-                "email": email,
-                "domain": domain,
-                "company_id": company_id,
-                "first_name": first_name,
-                "last_name": last_name,
-            },
-        ).fetchone()
-        connection.commit()
-        contact = Contact.model_validate(row)
-        span.set_attribute("contact_id", contact.id)
-        return contact
+    row = connection.execute(
+        """\
+        INSERT INTO contact (id, email, domain, company_id, first_name, last_name)
+        VALUES (%(id)s, %(email)s, %(domain)s, %(company_id)s,
+                %(first_name)s, %(last_name)s)
+        RETURNING *
+        """,
+        {
+            "id": _new_id(),
+            "email": email,
+            "domain": domain,
+            "company_id": company_id,
+            "first_name": first_name,
+            "last_name": last_name,
+        },
+    ).fetchone()
+    connection.commit()
+    return Contact.model_validate(row)
 
 
 def get_contact(
@@ -491,15 +445,13 @@ def get_contact(
     Returns:
         Contact if found, None otherwise.
     """
-    with logfire.span("db.contact.get", contact_id=contact_id) as span:
-        row = connection.execute(
-            "SELECT * FROM contact WHERE id = %(id)s",
-            {"id": contact_id},
-        ).fetchone()
-        span.set_attribute("hit", row is not None)
-        if row is None:
-            return None
-        return Contact.model_validate(row)
+    row = connection.execute(
+        "SELECT * FROM contact WHERE id = %(id)s",
+        {"id": contact_id},
+    ).fetchone()
+    if row is None:
+        return None
+    return Contact.model_validate(row)
 
 
 def get_contact_by_email(
@@ -515,15 +467,13 @@ def get_contact_by_email(
     Returns:
         Contact if found, None otherwise.
     """
-    with logfire.span("db.contact.get_by_email", email=email) as span:
-        row = connection.execute(
-            "SELECT * FROM contact WHERE email = %(email)s",
-            {"email": email},
-        ).fetchone()
-        span.set_attribute("hit", row is not None)
-        if row is None:
-            return None
-        return Contact.model_validate(row)
+    row = connection.execute(
+        "SELECT * FROM contact WHERE email = %(email)s",
+        {"email": email},
+    ).fetchone()
+    if row is None:
+        return None
+    return Contact.model_validate(row)
 
 
 def create_or_get_contact_by_email(
@@ -550,31 +500,25 @@ def create_or_get_contact_by_email(
     Returns:
         Existing or newly created contact.
     """
-    with logfire.span("db.contact.create_or_get", email=email) as span:
-        existing = get_contact_by_email(connection, email)
-        if existing is not None:
-            span.set_attribute("created", False)
-            span.set_attribute("contact_id", existing.id)
-            backfill: dict[str, object] = {}
-            if existing.first_name is None and first_name is not None:
-                backfill["first_name"] = first_name
-            if existing.last_name is None and last_name is not None:
-                backfill["last_name"] = last_name
-            if not backfill:
-                return existing
-            updated = update_contact(connection, existing.id, **backfill)
-            return updated if updated is not None else existing
-        domain = email.split("@", 1)[1] if "@" in email else ""
-        created = create_contact(
-            connection,
-            email=email,
-            domain=domain,
-            first_name=first_name,
-            last_name=last_name,
-        )
-        span.set_attribute("created", True)
-        span.set_attribute("contact_id", created.id)
-        return created
+    existing = get_contact_by_email(connection, email)
+    if existing is not None:
+        backfill: dict[str, object] = {}
+        if existing.first_name is None and first_name is not None:
+            backfill["first_name"] = first_name
+        if existing.last_name is None and last_name is not None:
+            backfill["last_name"] = last_name
+        if not backfill:
+            return existing
+        updated = update_contact(connection, existing.id, **backfill)
+        return updated if updated is not None else existing
+    domain = email.split("@", 1)[1] if "@" in email else ""
+    return create_contact(
+        connection,
+        email=email,
+        domain=domain,
+        first_name=first_name,
+        last_name=last_name,
+    )
 
 
 def get_contacts_by_emails(
@@ -596,20 +540,13 @@ def get_contacts_by_emails(
         existing row. Missing emails are simply absent from the dict.
     """
     unique = list(set(emails))
-    with logfire.span(
-        "db.contact.get_by_emails",
-        requested_count=len(unique),
-    ) as span:
-        if not unique:
-            span.set_attribute("hit_count", 0)
-            return {}
-        rows = connection.execute(
-            "SELECT * FROM contact WHERE email = ANY(%(emails)s)",
-            {"emails": unique},
-        ).fetchall()
-        result = {row["email"]: Contact.model_validate(row) for row in rows}
-        span.set_attribute("hit_count", len(result))
-        return result
+    if not unique:
+        return {}
+    rows = connection.execute(
+        "SELECT * FROM contact WHERE email = ANY(%(emails)s)",
+        {"emails": unique},
+    ).fetchall()
+    return {row["email"]: Contact.model_validate(row) for row in rows}
 
 
 def create_contacts_bulk(
@@ -632,37 +569,31 @@ def create_contacts_bulk(
         Mapping from email to Contact for every input email.
     """
     unique = list(set(emails))
-    with logfire.span(
-        "db.contact.create_bulk",
-        requested_count=len(unique),
-    ) as span:
-        if not unique:
-            span.set_attribute("inserted_count", 0)
-            return {}
-        ids = [_new_id() for _ in unique]
-        domains = [email.split("@", 1)[1] if "@" in email else "" for email in unique]
-        rows = connection.execute(
-            """\
-            INSERT INTO contact (id, email, domain)
-            SELECT id, email, domain
-            FROM unnest(%(ids)s::text[], %(emails)s::text[], %(domains)s::text[])
-                 AS t(id, email, domain)
-            ON CONFLICT (email) DO NOTHING
-            RETURNING *
-            """,
-            {"ids": ids, "emails": unique, "domains": domains},
-        ).fetchall()
-        connection.commit()
-        inserted = {row["email"]: Contact.model_validate(row) for row in rows}
-        span.set_attribute("inserted_count", len(inserted))
-        # Re-fetch any row that was not inserted by this transaction. These
-        # cover both pre-existing rows and rows inserted by a concurrent
-        # worker (ON CONFLICT DO NOTHING swallows those silently).
-        remaining = [email for email in unique if email not in inserted]
-        if remaining:
-            existing = get_contacts_by_emails(connection, remaining)
-            inserted.update(existing)
-        return inserted
+    if not unique:
+        return {}
+    ids = [_new_id() for _ in unique]
+    domains = [email.split("@", 1)[1] if "@" in email else "" for email in unique]
+    rows = connection.execute(
+        """\
+        INSERT INTO contact (id, email, domain)
+        SELECT id, email, domain
+        FROM unnest(%(ids)s::text[], %(emails)s::text[], %(domains)s::text[])
+             AS t(id, email, domain)
+        ON CONFLICT (email) DO NOTHING
+        RETURNING *
+        """,
+        {"ids": ids, "emails": unique, "domains": domains},
+    ).fetchall()
+    connection.commit()
+    inserted = {row["email"]: Contact.model_validate(row) for row in rows}
+    # Re-fetch any row that was not inserted by this transaction. These
+    # cover both pre-existing rows and rows inserted by a concurrent
+    # worker (ON CONFLICT DO NOTHING swallows those silently).
+    remaining = [email for email in unique if email not in inserted]
+    if remaining:
+        existing = get_contacts_by_emails(connection, remaining)
+        inserted.update(existing)
+    return inserted
 
 
 def list_contacts(
@@ -684,32 +615,21 @@ def list_contacts(
     Returns:
         List of contacts ordered by email.
     """
-    with logfire.span(
-        "db.contact.list",
-        limit=limit,
-        domain=domain,
-        company_id=company_id,
-        status=status,
-    ) as span:
-        conditions: list[SQL] = []
-        params: dict[str, object] = {"limit": limit}
-        if domain is not None:
-            conditions.append(SQL("domain = %(domain)s"))
-            params["domain"] = domain
-        if company_id is not None:
-            conditions.append(SQL("company_id = %(company_id)s"))
-            params["company_id"] = company_id
-        if status is not None:
-            conditions.append(SQL("status = %(status)s"))
-            params["status"] = status
-        where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
-        query = SQL("SELECT * FROM contact {} ORDER BY email LIMIT %(limit)s").format(
-            where
-        )
-        rows = connection.execute(query, params).fetchall()
-        contacts = [Contact.model_validate(row) for row in rows]
-        span.set_attribute("contact_count", len(contacts))
-        return contacts
+    conditions: list[SQL] = []
+    params: dict[str, object] = {"limit": limit}
+    if domain is not None:
+        conditions.append(SQL("domain = %(domain)s"))
+        params["domain"] = domain
+    if company_id is not None:
+        conditions.append(SQL("company_id = %(company_id)s"))
+        params["company_id"] = company_id
+    if status is not None:
+        conditions.append(SQL("status = %(status)s"))
+        params["status"] = status
+    where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
+    query = SQL("SELECT * FROM contact {} ORDER BY email LIMIT %(limit)s").format(where)
+    rows = connection.execute(query, params).fetchall()
+    return [Contact.model_validate(row) for row in rows]
 
 
 def search_contacts(
@@ -727,23 +647,20 @@ def search_contacts(
     Returns:
         Matching contacts ordered by email.
     """
-    with logfire.span("db.contact.search", query=query, limit=limit) as span:
-        pattern = f"%{query}%"
-        rows = connection.execute(
-            """\
-            SELECT * FROM contact
-            WHERE LOWER(email) LIKE LOWER(%(pattern)s)
-               OR LOWER(COALESCE(first_name, '')) LIKE LOWER(%(pattern)s)
-               OR LOWER(COALESCE(last_name, '')) LIKE LOWER(%(pattern)s)
-               OR LOWER(domain) LIKE LOWER(%(pattern)s)
-            ORDER BY email
-            LIMIT %(limit)s
-            """,
-            {"pattern": pattern, "limit": limit},
-        ).fetchall()
-        contacts = [Contact.model_validate(row) for row in rows]
-        span.set_attribute("contact_count", len(contacts))
-        return contacts
+    pattern = f"%{query}%"
+    rows = connection.execute(
+        """\
+        SELECT * FROM contact
+        WHERE LOWER(email) LIKE LOWER(%(pattern)s)
+           OR LOWER(COALESCE(first_name, '')) LIKE LOWER(%(pattern)s)
+           OR LOWER(COALESCE(last_name, '')) LIKE LOWER(%(pattern)s)
+           OR LOWER(domain) LIKE LOWER(%(pattern)s)
+        ORDER BY email
+        LIMIT %(limit)s
+        """,
+        {"pattern": pattern, "limit": limit},
+    ).fetchall()
+    return [Contact.model_validate(row) for row in rows]
 
 
 def update_contact(
@@ -763,23 +680,15 @@ def update_contact(
     """
     allowed = set(Contact.model_fields) - {"id", "created_at"}
     updates = {k: v for k, v in fields.items() if k in allowed}
-    with logfire.span(
-        "db.contact.update",
-        contact_id=contact_id,
-        updated_fields=sorted(updates.keys()),
-    ) as span:
-        if not updates:
-            existing = get_contact(connection, contact_id)
-            span.set_attribute("hit", existing is not None)
-            return existing
-        updates["id"] = contact_id
-        query = _build_update("contact", updates, SQL("id = %(id)s"))
-        row = connection.execute(query, updates).fetchone()
-        connection.commit()
-        span.set_attribute("hit", row is not None)
-        if row is None:
-            return None
-        return Contact.model_validate(row)
+    if not updates:
+        return get_contact(connection, contact_id)
+    updates["id"] = contact_id
+    query = _build_update("contact", updates, SQL("id = %(id)s"))
+    row = connection.execute(query, updates).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Contact.model_validate(row)
 
 
 def disable_contact(
@@ -802,27 +711,21 @@ def disable_contact(
     Returns:
         Updated contact, or None if not found.
     """
-    with logfire.span(
-        "db.contact.disable",
-        contact_id=contact_id,
-        status=status,
-    ) as span:
-        row = connection.execute(
-            """\
-            UPDATE contact
-            SET status = %(status)s,
-                status_reason = %(status_reason)s,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = %(id)s
-            RETURNING *
-            """,
-            {"id": contact_id, "status": status, "status_reason": status_reason},
-        ).fetchone()
-        connection.commit()
-        span.set_attribute("hit", row is not None)
-        if row is None:
-            return None
-        return Contact.model_validate(row)
+    row = connection.execute(
+        """\
+        UPDATE contact
+        SET status = %(status)s,
+            status_reason = %(status_reason)s,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = %(id)s
+        RETURNING *
+        """,
+        {"id": contact_id, "status": status, "status_reason": status_reason},
+    ).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Contact.model_validate(row)
 
 
 # -- Workflow ------------------------------------------------------------------
@@ -845,28 +748,21 @@ def create_workflow(
     Returns:
         Created workflow.
     """
-    with logfire.span(
-        "db.workflow.create",
-        account_id=account_id,
-        workflow_type=workflow_type,
-    ) as span:
-        row = connection.execute(
-            """\
-            INSERT INTO workflow (id, name, type, account_id)
-            VALUES (%(id)s, %(name)s, %(type)s, %(account_id)s)
-            RETURNING *
-            """,
-            {
-                "id": _new_id(),
-                "name": name,
-                "type": workflow_type,
-                "account_id": account_id,
-            },
-        ).fetchone()
-        connection.commit()
-        workflow = Workflow.model_validate(row)
-        span.set_attribute("workflow_id", workflow.id)
-        return workflow
+    row = connection.execute(
+        """\
+        INSERT INTO workflow (id, name, type, account_id)
+        VALUES (%(id)s, %(name)s, %(type)s, %(account_id)s)
+        RETURNING *
+        """,
+        {
+            "id": _new_id(),
+            "name": name,
+            "type": workflow_type,
+            "account_id": account_id,
+        },
+    ).fetchone()
+    connection.commit()
+    return Workflow.model_validate(row)
 
 
 def get_workflow(
@@ -882,15 +778,13 @@ def get_workflow(
     Returns:
         Workflow if found, None otherwise.
     """
-    with logfire.span("db.workflow.get", workflow_id=workflow_id) as span:
-        row = connection.execute(
-            "SELECT * FROM workflow WHERE id = %(id)s",
-            {"id": workflow_id},
-        ).fetchone()
-        span.set_attribute("hit", row is not None)
-        if row is None:
-            return None
-        return Workflow.model_validate(row)
+    row = connection.execute(
+        "SELECT * FROM workflow WHERE id = %(id)s",
+        {"id": workflow_id},
+    ).fetchone()
+    if row is None:
+        return None
+    return Workflow.model_validate(row)
 
 
 def list_workflows(
@@ -910,29 +804,21 @@ def list_workflows(
     Returns:
         List of workflows ordered by creation time.
     """
-    with logfire.span(
-        "db.workflow.list",
-        account_id=account_id,
-        status=status,
-        workflow_type=workflow_type,
-    ) as span:
-        conditions: list[SQL] = []
-        params: dict[str, object] = {}
-        if account_id is not None:
-            conditions.append(SQL("account_id = %(account_id)s"))
-            params["account_id"] = account_id
-        if status is not None:
-            conditions.append(SQL("status = %(status)s"))
-            params["status"] = status
-        if workflow_type is not None:
-            conditions.append(SQL("type = %(workflow_type)s"))
-            params["workflow_type"] = workflow_type
-        where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
-        query = SQL("SELECT * FROM workflow {} ORDER BY created_at").format(where)
-        rows = connection.execute(query, params).fetchall()
-        workflows = [Workflow.model_validate(row) for row in rows]
-        span.set_attribute("workflow_count", len(workflows))
-        return workflows
+    conditions: list[SQL] = []
+    params: dict[str, object] = {}
+    if account_id is not None:
+        conditions.append(SQL("account_id = %(account_id)s"))
+        params["account_id"] = account_id
+    if status is not None:
+        conditions.append(SQL("status = %(status)s"))
+        params["status"] = status
+    if workflow_type is not None:
+        conditions.append(SQL("type = %(workflow_type)s"))
+        params["workflow_type"] = workflow_type
+    where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
+    query = SQL("SELECT * FROM workflow {} ORDER BY created_at").format(where)
+    rows = connection.execute(query, params).fetchall()
+    return [Workflow.model_validate(row) for row in rows]
 
 
 def search_workflows(
@@ -950,21 +836,18 @@ def search_workflows(
     Returns:
         Matching workflows ordered by name.
     """
-    with logfire.span("db.workflow.search", query=query, limit=limit) as span:
-        pattern = f"%{query}%"
-        rows = connection.execute(
-            """\
-            SELECT * FROM workflow
-            WHERE LOWER(name) LIKE LOWER(%(pattern)s)
-               OR LOWER(objective) LIKE LOWER(%(pattern)s)
-            ORDER BY LOWER(name)
-            LIMIT %(limit)s
-            """,
-            {"pattern": pattern, "limit": limit},
-        ).fetchall()
-        workflows = [Workflow.model_validate(row) for row in rows]
-        span.set_attribute("workflow_count", len(workflows))
-        return workflows
+    pattern = f"%{query}%"
+    rows = connection.execute(
+        """\
+        SELECT * FROM workflow
+        WHERE LOWER(name) LIKE LOWER(%(pattern)s)
+           OR LOWER(objective) LIKE LOWER(%(pattern)s)
+        ORDER BY LOWER(name)
+        LIMIT %(limit)s
+        """,
+        {"pattern": pattern, "limit": limit},
+    ).fetchall()
+    return [Workflow.model_validate(row) for row in rows]
 
 
 def update_workflow(
@@ -988,23 +871,15 @@ def update_workflow(
     """
     allowed = {"name", "objective", "instructions"}
     updates = {k: v for k, v in fields.items() if k in allowed}
-    with logfire.span(
-        "db.workflow.update",
-        workflow_id=workflow_id,
-        updated_fields=sorted(updates.keys()),
-    ) as span:
-        if not updates:
-            existing = get_workflow(connection, workflow_id)
-            span.set_attribute("hit", existing is not None)
-            return existing
-        updates["id"] = workflow_id
-        query = _build_update("workflow", updates, SQL("id = %(id)s"))
-        row = connection.execute(query, updates).fetchone()
-        connection.commit()
-        span.set_attribute("hit", row is not None)
-        if row is None:
-            return None
-        return Workflow.model_validate(row)
+    if not updates:
+        return get_workflow(connection, workflow_id)
+    updates["id"] = workflow_id
+    query = _build_update("workflow", updates, SQL("id = %(id)s"))
+    row = connection.execute(query, updates).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Workflow.model_validate(row)
 
 
 def activate_workflow(
@@ -1027,30 +902,26 @@ def activate_workflow(
         ValueError: If workflow not found, already active, or missing
             objective/instructions.
     """
-    with logfire.span("db.workflow.activate", workflow_id=workflow_id) as span:
-        workflow = get_workflow(connection, workflow_id)
-        if workflow is None:
-            raise ValueError(f"workflow {workflow_id} not found")
-        if workflow.status == "active":
-            raise ValueError("workflow is already active")
-        if not workflow.objective.strip():
-            raise ValueError("objective must be non-empty to activate")
-        if not workflow.instructions.strip():
-            raise ValueError("instructions must be non-empty to activate")
-        span.set_attribute("account_id", workflow.account_id)
-        span.set_attribute("prior_status", workflow.status)
-        row = connection.execute(
-            """\
-            UPDATE workflow
-            SET status = 'active', updated_at = CURRENT_TIMESTAMP
-            WHERE id = %(id)s
-            RETURNING *
-            """,
-            {"id": workflow_id},
-        ).fetchone()
-        connection.commit()
-        span.set_attribute("result", "success")
-        return Workflow.model_validate(row)
+    workflow = get_workflow(connection, workflow_id)
+    if workflow is None:
+        raise ValueError(f"workflow {workflow_id} not found")
+    if workflow.status == "active":
+        raise ValueError("workflow is already active")
+    if not workflow.objective.strip():
+        raise ValueError("objective must be non-empty to activate")
+    if not workflow.instructions.strip():
+        raise ValueError("instructions must be non-empty to activate")
+    row = connection.execute(
+        """\
+        UPDATE workflow
+        SET status = 'active', updated_at = CURRENT_TIMESTAMP
+        WHERE id = %(id)s
+        RETURNING *
+        """,
+        {"id": workflow_id},
+    ).fetchone()
+    connection.commit()
+    return Workflow.model_validate(row)
 
 
 def pause_workflow(
@@ -1071,25 +942,22 @@ def pause_workflow(
     Raises:
         ValueError: If workflow not found or not active.
     """
-    with logfire.span("db.workflow.pause", workflow_id=workflow_id) as span:
-        workflow = get_workflow(connection, workflow_id)
-        if workflow is None:
-            raise ValueError(f"workflow {workflow_id} not found")
-        if workflow.status != "active":
-            raise ValueError(f"cannot pause workflow in status '{workflow.status}'")
-        span.set_attribute("account_id", workflow.account_id)
-        row = connection.execute(
-            """\
-            UPDATE workflow
-            SET status = 'paused', updated_at = CURRENT_TIMESTAMP
-            WHERE id = %(id)s
-            RETURNING *
-            """,
-            {"id": workflow_id},
-        ).fetchone()
-        connection.commit()
-        span.set_attribute("result", "success")
-        return Workflow.model_validate(row)
+    workflow = get_workflow(connection, workflow_id)
+    if workflow is None:
+        raise ValueError(f"workflow {workflow_id} not found")
+    if workflow.status != "active":
+        raise ValueError(f"cannot pause workflow in status '{workflow.status}'")
+    row = connection.execute(
+        """\
+        UPDATE workflow
+        SET status = 'paused', updated_at = CURRENT_TIMESTAMP
+        WHERE id = %(id)s
+        RETURNING *
+        """,
+        {"id": workflow_id},
+    ).fetchone()
+    connection.commit()
+    return Workflow.model_validate(row)
 
 
 # -- Workflow Contact ----------------------------------------------------------
@@ -1114,25 +982,19 @@ def create_workflow_contact(
     Returns:
         Created workflow-contact link, or None if it already existed.
     """
-    with logfire.span(
-        "db.workflow_contact.create",
-        workflow_id=workflow_id,
-        contact_id=contact_id,
-    ) as span:
-        row = connection.execute(
-            """\
-            INSERT INTO workflow_contact (workflow_id, contact_id)
-            VALUES (%(workflow_id)s, %(contact_id)s)
-            ON CONFLICT (workflow_id, contact_id) DO NOTHING
-            RETURNING *
-            """,
-            {"workflow_id": workflow_id, "contact_id": contact_id},
-        ).fetchone()
-        connection.commit()
-        span.set_attribute("created", row is not None)
-        if row is None:
-            return None
-        return WorkflowContact.model_validate(row)
+    row = connection.execute(
+        """\
+        INSERT INTO workflow_contact (workflow_id, contact_id)
+        VALUES (%(workflow_id)s, %(contact_id)s)
+        ON CONFLICT (workflow_id, contact_id) DO NOTHING
+        RETURNING *
+        """,
+        {"workflow_id": workflow_id, "contact_id": contact_id},
+    ).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return WorkflowContact.model_validate(row)
 
 
 def update_workflow_contact(
@@ -1154,26 +1016,17 @@ def update_workflow_contact(
     """
     allowed = {"status", "reason"}
     updates = {k: v for k, v in fields.items() if k in allowed}
-    with logfire.span(
-        "db.workflow_contact.update",
-        workflow_id=workflow_id,
-        contact_id=contact_id,
-        updated_fields=sorted(updates.keys()),
-    ) as span:
-        if not updates:
-            existing = get_workflow_contact(connection, workflow_id, contact_id)
-            span.set_attribute("hit", existing is not None)
-            return existing
-        updates["workflow_id"] = workflow_id
-        updates["contact_id"] = contact_id
-        where = SQL("workflow_id = %(workflow_id)s AND contact_id = %(contact_id)s")
-        query = _build_update("workflow_contact", updates, where)
-        row = connection.execute(query, updates).fetchone()
-        connection.commit()
-        span.set_attribute("hit", row is not None)
-        if row is None:
-            return None
-        return WorkflowContact.model_validate(row)
+    if not updates:
+        return get_workflow_contact(connection, workflow_id, contact_id)
+    updates["workflow_id"] = workflow_id
+    updates["contact_id"] = contact_id
+    where = SQL("workflow_id = %(workflow_id)s AND contact_id = %(contact_id)s")
+    query = _build_update("workflow_contact", updates, where)
+    row = connection.execute(query, updates).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return WorkflowContact.model_validate(row)
 
 
 def get_workflow_contact(
@@ -1191,22 +1044,16 @@ def get_workflow_contact(
     Returns:
         WorkflowContact if found, None otherwise.
     """
-    with logfire.span(
-        "db.workflow_contact.get",
-        workflow_id=workflow_id,
-        contact_id=contact_id,
-    ) as span:
-        row = connection.execute(
-            """\
-            SELECT * FROM workflow_contact
-            WHERE workflow_id = %(workflow_id)s AND contact_id = %(contact_id)s
-            """,
-            {"workflow_id": workflow_id, "contact_id": contact_id},
-        ).fetchone()
-        span.set_attribute("hit", row is not None)
-        if row is None:
-            return None
-        return WorkflowContact.model_validate(row)
+    row = connection.execute(
+        """\
+        SELECT * FROM workflow_contact
+        WHERE workflow_id = %(workflow_id)s AND contact_id = %(contact_id)s
+        """,
+        {"workflow_id": workflow_id, "contact_id": contact_id},
+    ).fetchone()
+    if row is None:
+        return None
+    return WorkflowContact.model_validate(row)
 
 
 def list_workflow_contacts(
@@ -1224,25 +1071,18 @@ def list_workflow_contacts(
     Returns:
         List of workflow-contact links.
     """
-    with logfire.span(
-        "db.workflow_contact.list",
-        workflow_id=workflow_id,
-        status=status,
-    ) as span:
-        params: dict[str, object] = {"workflow_id": workflow_id}
-        status_filter = SQL("")
-        if status is not None:
-            status_filter = SQL("AND status = %(status)s")
-            params["status"] = status
-        query = SQL(
-            "SELECT * FROM workflow_contact "
-            "WHERE workflow_id = %(workflow_id)s {} "
-            "ORDER BY created_at"
-        ).format(status_filter)
-        rows = connection.execute(query, params).fetchall()
-        links = [WorkflowContact.model_validate(row) for row in rows]
-        span.set_attribute("contact_count", len(links))
-        return links
+    params: dict[str, object] = {"workflow_id": workflow_id}
+    status_filter = SQL("")
+    if status is not None:
+        status_filter = SQL("AND status = %(status)s")
+        params["status"] = status
+    query = SQL(
+        "SELECT * FROM workflow_contact "
+        "WHERE workflow_id = %(workflow_id)s {} "
+        "ORDER BY created_at"
+    ).format(status_filter)
+    rows = connection.execute(query, params).fetchall()
+    return [WorkflowContact.model_validate(row) for row in rows]
 
 
 def delete_workflow_contact(
@@ -1260,22 +1100,15 @@ def delete_workflow_contact(
     Returns:
         True if the row was deleted, False if not found.
     """
-    with logfire.span(
-        "db.workflow_contact.delete",
-        workflow_id=workflow_id,
-        contact_id=contact_id,
-    ) as span:
-        cursor = connection.execute(
-            """\
-            DELETE FROM workflow_contact
-            WHERE workflow_id = %(workflow_id)s AND contact_id = %(contact_id)s
-            """,
-            {"workflow_id": workflow_id, "contact_id": contact_id},
-        )
-        connection.commit()
-        deleted = cursor.rowcount > 0
-        span.set_attribute("deleted", deleted)
-        return deleted
+    cursor = connection.execute(
+        """\
+        DELETE FROM workflow_contact
+        WHERE workflow_id = %(workflow_id)s AND contact_id = %(contact_id)s
+        """,
+        {"workflow_id": workflow_id, "contact_id": contact_id},
+    )
+    connection.commit()
+    return cursor.rowcount > 0
 
 
 def list_workflow_contacts_enriched(
@@ -1299,31 +1132,23 @@ def list_workflow_contacts_enriched(
     Returns:
         List of enriched workflow-contact details.
     """
-    with logfire.span(
-        "db.workflow_contact.list_enriched",
-        workflow_id=workflow_id,
-        status=status,
-        limit=limit,
-    ) as span:
-        params: dict[str, object] = {"workflow_id": workflow_id, "limit": limit}
-        status_filter = SQL("")
-        if status is not None:
-            status_filter = SQL("AND wc.status = %(status)s")
-            params["status"] = status
-        query = SQL(
-            "SELECT wc.*, c.email AS contact_email, "
-            "TRIM(COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '')) "
-            "AS contact_name "
-            "FROM workflow_contact wc "
-            "JOIN contact c ON c.id = wc.contact_id "
-            "WHERE wc.workflow_id = %(workflow_id)s {} "
-            "ORDER BY wc.created_at "
-            "LIMIT %(limit)s"
-        ).format(status_filter)
-        rows = connection.execute(query, params).fetchall()
-        details = [WorkflowContactDetail.model_validate(row) for row in rows]
-        span.set_attribute("contact_count", len(details))
-        return details
+    params: dict[str, object] = {"workflow_id": workflow_id, "limit": limit}
+    status_filter = SQL("")
+    if status is not None:
+        status_filter = SQL("AND wc.status = %(status)s")
+        params["status"] = status
+    query = SQL(
+        "SELECT wc.*, c.email AS contact_email, "
+        "TRIM(COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '')) "
+        "AS contact_name "
+        "FROM workflow_contact wc "
+        "JOIN contact c ON c.id = wc.contact_id "
+        "WHERE wc.workflow_id = %(workflow_id)s {} "
+        "ORDER BY wc.created_at "
+        "LIMIT %(limit)s"
+    ).format(status_filter)
+    rows = connection.execute(query, params).fetchall()
+    return [WorkflowContactDetail.model_validate(row) for row in rows]
 
 
 # -- Email ---------------------------------------------------------------------
@@ -1373,51 +1198,41 @@ def create_email(
         Created email, or None if another worker already stored a row with
         the same ``gmail_message_id``.
     """
-    with logfire.span(
-        "db.email.create",
-        account_id=account_id,
-        direction=direction,
-        contact_id=contact_id,
-        workflow_id=workflow_id,
-    ) as span:
-        row = connection.execute(
-            """\
-            INSERT INTO email (id, account_id, direction, subject,
-                body_text, gmail_message_id, gmail_thread_id,
-                contact_id, workflow_id, status, is_routed,
-                received_at, sent_at, labels)
-            VALUES (%(id)s, %(account_id)s, %(direction)s,
-                %(subject)s, %(body_text)s, %(gmail_message_id)s,
-                %(gmail_thread_id)s, %(contact_id)s, %(workflow_id)s,
-                %(status)s, %(is_routed)s, %(received_at)s, %(sent_at)s,
-                %(labels)s)
-            ON CONFLICT (gmail_message_id) DO NOTHING
-            RETURNING *
-            """,
-            {
-                "id": _new_id(),
-                "account_id": account_id,
-                "direction": direction,
-                "subject": subject,
-                "body_text": body_text,
-                "gmail_message_id": gmail_message_id,
-                "gmail_thread_id": gmail_thread_id,
-                "contact_id": contact_id,
-                "workflow_id": workflow_id,
-                "status": status,
-                "is_routed": is_routed,
-                "received_at": received_at,
-                "sent_at": sent_at,
-                "labels": Json(labels or []),
-            },
-        ).fetchone()
-        connection.commit()
-        if row is None:
-            span.set_attribute("result", "conflict_skipped")
-            return None
-        email = Email.model_validate(row)
-        span.set_attribute("email_id", email.id)
-        return email
+    row = connection.execute(
+        """\
+        INSERT INTO email (id, account_id, direction, subject,
+            body_text, gmail_message_id, gmail_thread_id,
+            contact_id, workflow_id, status, is_routed,
+            received_at, sent_at, labels)
+        VALUES (%(id)s, %(account_id)s, %(direction)s,
+            %(subject)s, %(body_text)s, %(gmail_message_id)s,
+            %(gmail_thread_id)s, %(contact_id)s, %(workflow_id)s,
+            %(status)s, %(is_routed)s, %(received_at)s, %(sent_at)s,
+            %(labels)s)
+        ON CONFLICT (gmail_message_id) DO NOTHING
+        RETURNING *
+        """,
+        {
+            "id": _new_id(),
+            "account_id": account_id,
+            "direction": direction,
+            "subject": subject,
+            "body_text": body_text,
+            "gmail_message_id": gmail_message_id,
+            "gmail_thread_id": gmail_thread_id,
+            "contact_id": contact_id,
+            "workflow_id": workflow_id,
+            "status": status,
+            "is_routed": is_routed,
+            "received_at": received_at,
+            "sent_at": sent_at,
+            "labels": Json(labels or []),
+        },
+    ).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Email.model_validate(row)
 
 
 def get_email(
@@ -1433,15 +1248,13 @@ def get_email(
     Returns:
         Email if found, None otherwise.
     """
-    with logfire.span("db.email.get", email_id=email_id) as span:
-        row = connection.execute(
-            "SELECT * FROM email WHERE id = %(id)s",
-            {"id": email_id},
-        ).fetchone()
-        span.set_attribute("hit", row is not None)
-        if row is None:
-            return None
-        return Email.model_validate(row)
+    row = connection.execute(
+        "SELECT * FROM email WHERE id = %(id)s",
+        {"id": email_id},
+    ).fetchone()
+    if row is None:
+        return None
+    return Email.model_validate(row)
 
 
 def list_emails(
@@ -1471,48 +1284,35 @@ def list_emails(
     Returns:
         List of emails ordered by creation time descending.
     """
-    with logfire.span(
-        "db.email.list",
-        limit=limit,
-        contact_id=contact_id,
-        account_id=account_id,
-        since=since,
-        thread_id=thread_id,
-        direction=direction,
-        workflow_id=workflow_id,
-        status=status,
-    ) as span:
-        conditions: list[SQL] = []
-        params: dict[str, object] = {"limit": limit}
-        if contact_id is not None:
-            conditions.append(SQL("contact_id = %(contact_id)s"))
-            params["contact_id"] = contact_id
-        if account_id is not None:
-            conditions.append(SQL("account_id = %(account_id)s"))
-            params["account_id"] = account_id
-        if since is not None:
-            conditions.append(SQL("COALESCE(sent_at, received_at) >= %(since)s"))
-            params["since"] = since
-        if thread_id is not None:
-            conditions.append(SQL("gmail_thread_id = %(thread_id)s"))
-            params["thread_id"] = thread_id
-        if direction is not None:
-            conditions.append(SQL("direction = %(direction)s"))
-            params["direction"] = direction
-        if workflow_id is not None:
-            conditions.append(SQL("workflow_id = %(workflow_id)s"))
-            params["workflow_id"] = workflow_id
-        if status is not None:
-            conditions.append(SQL("status = %(status)s"))
-            params["status"] = status
-        where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
-        query = SQL(
-            "SELECT * FROM email {} ORDER BY created_at DESC LIMIT %(limit)s"
-        ).format(where)
-        rows = connection.execute(query, params).fetchall()
-        emails = [Email.model_validate(row) for row in rows]
-        span.set_attribute("email_count", len(emails))
-        return emails
+    conditions: list[SQL] = []
+    params: dict[str, object] = {"limit": limit}
+    if contact_id is not None:
+        conditions.append(SQL("contact_id = %(contact_id)s"))
+        params["contact_id"] = contact_id
+    if account_id is not None:
+        conditions.append(SQL("account_id = %(account_id)s"))
+        params["account_id"] = account_id
+    if since is not None:
+        conditions.append(SQL("COALESCE(sent_at, received_at) >= %(since)s"))
+        params["since"] = since
+    if thread_id is not None:
+        conditions.append(SQL("gmail_thread_id = %(thread_id)s"))
+        params["thread_id"] = thread_id
+    if direction is not None:
+        conditions.append(SQL("direction = %(direction)s"))
+        params["direction"] = direction
+    if workflow_id is not None:
+        conditions.append(SQL("workflow_id = %(workflow_id)s"))
+        params["workflow_id"] = workflow_id
+    if status is not None:
+        conditions.append(SQL("status = %(status)s"))
+        params["status"] = status
+    where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
+    query = SQL(
+        "SELECT * FROM email {} ORDER BY created_at DESC LIMIT %(limit)s"
+    ).format(where)
+    rows = connection.execute(query, params).fetchall()
+    return [Email.model_validate(row) for row in rows]
 
 
 def search_emails(
@@ -1532,27 +1332,22 @@ def search_emails(
     Returns:
         Matching emails ordered by creation time descending.
     """
-    with logfire.span(
-        "db.email.search", query=query, limit=limit, account_id=account_id
-    ) as span:
-        pattern = f"%{query}%"
-        params: dict[str, object] = {"pattern": pattern, "limit": limit}
-        account_filter = SQL("")
-        if account_id is not None:
-            account_filter = SQL("AND account_id = %(account_id)s")
-            params["account_id"] = account_id
-        query_sql = SQL(
-            "SELECT * FROM email "
-            "WHERE (LOWER(subject) LIKE LOWER(%(pattern)s) "
-            "   OR LOWER(body_text) LIKE LOWER(%(pattern)s)) "
-            "{} "
-            "ORDER BY created_at DESC "
-            "LIMIT %(limit)s"
-        ).format(account_filter)
-        rows = connection.execute(query_sql, params).fetchall()
-        emails = [Email.model_validate(row) for row in rows]
-        span.set_attribute("email_count", len(emails))
-        return emails
+    pattern = f"%{query}%"
+    params: dict[str, object] = {"pattern": pattern, "limit": limit}
+    account_filter = SQL("")
+    if account_id is not None:
+        account_filter = SQL("AND account_id = %(account_id)s")
+        params["account_id"] = account_id
+    query_sql = SQL(
+        "SELECT * FROM email "
+        "WHERE (LOWER(subject) LIKE LOWER(%(pattern)s) "
+        "   OR LOWER(body_text) LIKE LOWER(%(pattern)s)) "
+        "{} "
+        "ORDER BY created_at DESC "
+        "LIMIT %(limit)s"
+    ).format(account_filter)
+    rows = connection.execute(query_sql, params).fetchall()
+    return [Email.model_validate(row) for row in rows]
 
 
 def get_email_by_gmail_message_id(
@@ -1568,18 +1363,13 @@ def get_email_by_gmail_message_id(
     Returns:
         Email if found, None otherwise.
     """
-    with logfire.span(
-        "db.email.get_by_gmail_message_id",
-        gmail_message_id=gmail_message_id,
-    ) as span:
-        row = connection.execute(
-            "SELECT * FROM email WHERE gmail_message_id = %(gmail_message_id)s",
-            {"gmail_message_id": gmail_message_id},
-        ).fetchone()
-        span.set_attribute("hit", row is not None)
-        if row is None:
-            return None
-        return Email.model_validate(row)
+    row = connection.execute(
+        "SELECT * FROM email WHERE gmail_message_id = %(gmail_message_id)s",
+        {"gmail_message_id": gmail_message_id},
+    ).fetchone()
+    if row is None:
+        return None
+    return Email.model_validate(row)
 
 
 def get_emails_by_gmail_thread_id(
@@ -1595,21 +1385,15 @@ def get_emails_by_gmail_thread_id(
     Returns:
         Emails in the thread ordered by creation time.
     """
-    with logfire.span(
-        "db.email.get_by_gmail_thread_id",
-        gmail_thread_id=gmail_thread_id,
-    ) as span:
-        rows = connection.execute(
-            """\
-            SELECT * FROM email
-            WHERE gmail_thread_id = %(gmail_thread_id)s
-            ORDER BY created_at
-            """,
-            {"gmail_thread_id": gmail_thread_id},
-        ).fetchall()
-        emails = [Email.model_validate(row) for row in rows]
-        span.set_attribute("email_count", len(emails))
-        return emails
+    rows = connection.execute(
+        """\
+        SELECT * FROM email
+        WHERE gmail_thread_id = %(gmail_thread_id)s
+        ORDER BY created_at
+        """,
+        {"gmail_thread_id": gmail_thread_id},
+    ).fetchall()
+    return [Email.model_validate(row) for row in rows]
 
 
 def get_last_cold_outbound(
@@ -1633,34 +1417,28 @@ def get_last_cold_outbound(
     Returns:
         Most recent cold outbound email, or None if none exists.
     """
-    with logfire.span(
-        "db.email.get_last_cold_outbound",
-        account_id=account_id,
-        contact_id=contact_id,
-    ) as span:
-        row = connection.execute(
-            """\
-            SELECT e.* FROM email e
-            WHERE e.account_id = %(account_id)s
-              AND e.contact_id = %(contact_id)s
-              AND e.direction = 'outbound'
-              AND NOT EXISTS (
-                  SELECT 1 FROM email prior
-                  WHERE prior.gmail_thread_id = e.gmail_thread_id
-                    AND prior.gmail_thread_id IS NOT NULL
-                    AND prior.account_id = e.account_id
-                    AND prior.direction = 'outbound'
-                    AND prior.created_at < e.created_at
-              )
-            ORDER BY e.created_at DESC
-            LIMIT 1
-            """,
-            {"account_id": account_id, "contact_id": contact_id},
-        ).fetchone()
-        span.set_attribute("hit", row is not None)
-        if row is None:
-            return None
-        return Email.model_validate(row)
+    row = connection.execute(
+        """\
+        SELECT e.* FROM email e
+        WHERE e.account_id = %(account_id)s
+          AND e.contact_id = %(contact_id)s
+          AND e.direction = 'outbound'
+          AND NOT EXISTS (
+              SELECT 1 FROM email prior
+              WHERE prior.gmail_thread_id = e.gmail_thread_id
+                AND prior.gmail_thread_id IS NOT NULL
+                AND prior.account_id = e.account_id
+                AND prior.direction = 'outbound'
+                AND prior.created_at < e.created_at
+          )
+        ORDER BY e.created_at DESC
+        LIMIT 1
+        """,
+        {"account_id": account_id, "contact_id": contact_id},
+    ).fetchone()
+    if row is None:
+        return None
+    return Email.model_validate(row)
 
 
 def update_email(
@@ -1680,32 +1458,22 @@ def update_email(
     """
     allowed = {"workflow_id", "is_routed", "status", "contact_id"}
     updates = {k: v for k, v in fields.items() if k in allowed}
-    with logfire.span(
-        "db.email.update",
-        email_id=email_id,
-        updated_fields=sorted(updates.keys()),
-    ) as span:
-        if not updates:
-            existing = get_email(connection, email_id)
-            span.set_attribute("hit", existing is not None)
-            return existing
-        updates["id"] = email_id
-        # email table has no updated_at column -- use raw SQL instead of _build_update
-        set_parts = [
-            SQL("{} = {}").format(Identifier(k), Placeholder(k))
-            for k in updates
-            if k != "id"
-        ]
-        set_clause = SQL(", ").join(set_parts)
-        query = SQL("UPDATE email SET {} WHERE id = %(id)s RETURNING *").format(
-            set_clause
-        )
-        row = connection.execute(query, updates).fetchone()
-        connection.commit()
-        span.set_attribute("hit", row is not None)
-        if row is None:
-            return None
-        return Email.model_validate(row)
+    if not updates:
+        return get_email(connection, email_id)
+    updates["id"] = email_id
+    # email table has no updated_at column -- use raw SQL instead of _build_update
+    set_parts = [
+        SQL("{} = {}").format(Identifier(k), Placeholder(k))
+        for k in updates
+        if k != "id"
+    ]
+    set_clause = SQL(", ").join(set_parts)
+    query = SQL("UPDATE email SET {} WHERE id = %(id)s RETURNING *").format(set_clause)
+    row = connection.execute(query, updates).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Email.model_validate(row)
 
 
 # -- Task ----------------------------------------------------------------------
@@ -1734,34 +1502,26 @@ def create_task(
     Returns:
         Created task.
     """
-    with logfire.span(
-        "db.task.create",
-        workflow_id=workflow_id,
-        contact_id=contact_id,
-        email_id=email_id,
-    ) as span:
-        row = connection.execute(
-            """\
-            INSERT INTO task (id, workflow_id, contact_id, email_id,
-                description, context, scheduled_at)
-            VALUES (%(id)s, %(workflow_id)s, %(contact_id)s, %(email_id)s,
-                    %(description)s, %(context)s, %(scheduled_at)s)
-            RETURNING *
-            """,
-            {
-                "id": _new_id(),
-                "workflow_id": workflow_id,
-                "contact_id": contact_id,
-                "email_id": email_id,
-                "description": description,
-                "context": Json(context or {}),
-                "scheduled_at": scheduled_at,
-            },
-        ).fetchone()
-        connection.commit()
-        task = Task.model_validate(row)
-        span.set_attribute("task_id", task.id)
-        return task
+    row = connection.execute(
+        """\
+        INSERT INTO task (id, workflow_id, contact_id, email_id,
+            description, context, scheduled_at)
+        VALUES (%(id)s, %(workflow_id)s, %(contact_id)s, %(email_id)s,
+                %(description)s, %(context)s, %(scheduled_at)s)
+        RETURNING *
+        """,
+        {
+            "id": _new_id(),
+            "workflow_id": workflow_id,
+            "contact_id": contact_id,
+            "email_id": email_id,
+            "description": description,
+            "context": Json(context or {}),
+            "scheduled_at": scheduled_at,
+        },
+    ).fetchone()
+    connection.commit()
+    return Task.model_validate(row)
 
 
 def get_task(
@@ -1777,15 +1537,13 @@ def get_task(
     Returns:
         Task if found, None otherwise.
     """
-    with logfire.span("db.task.get", task_id=task_id) as span:
-        row = connection.execute(
-            "SELECT * FROM task WHERE id = %(id)s",
-            {"id": task_id},
-        ).fetchone()
-        span.set_attribute("hit", row is not None)
-        if row is None:
-            return None
-        return Task.model_validate(row)
+    row = connection.execute(
+        "SELECT * FROM task WHERE id = %(id)s",
+        {"id": task_id},
+    ).fetchone()
+    if row is None:
+        return None
+    return Task.model_validate(row)
 
 
 def list_pending_tasks(
@@ -1799,17 +1557,14 @@ def list_pending_tasks(
     Returns:
         Pending tasks where scheduled_at <= now(), ordered by scheduled_at.
     """
-    with logfire.span("db.task.list_pending") as span:
-        rows = connection.execute(
-            """\
-            SELECT * FROM task
-            WHERE scheduled_at <= CURRENT_TIMESTAMP AND status = 'pending'
-            ORDER BY scheduled_at
-            """
-        ).fetchall()
-        tasks = [Task.model_validate(row) for row in rows]
-        span.set_attribute("task_count", len(tasks))
-        return tasks
+    rows = connection.execute(
+        """\
+        SELECT * FROM task
+        WHERE scheduled_at <= CURRENT_TIMESTAMP AND status = 'pending'
+        ORDER BY scheduled_at
+        """
+    ).fetchall()
+    return [Task.model_validate(row) for row in rows]
 
 
 def complete_task(
@@ -1830,28 +1585,24 @@ def complete_task(
         Updated task, or None if not found.
     """
     result_json = result or {}
-    with logfire.span("db.task.complete", task_id=task_id, status=status) as span:
-        row = connection.execute(
-            """\
-            UPDATE task
-            SET status = %(status)s,
-                result = %(result)s,
-                completed_at = CURRENT_TIMESTAMP
-            WHERE id = %(id)s RETURNING *
-            """,
-            {
-                "id": task_id,
-                "status": status,
-                "result": Json(result_json),
-            },
-        ).fetchone()
-        connection.commit()
-        span.set_attribute("hit", row is not None)
-        if result_json:
-            span.set_attribute("result_keys", list(result_json.keys()))
-        if row is None:
-            return None
-        return Task.model_validate(row)
+    row = connection.execute(
+        """\
+        UPDATE task
+        SET status = %(status)s,
+            result = %(result)s,
+            completed_at = CURRENT_TIMESTAMP
+        WHERE id = %(id)s RETURNING *
+        """,
+        {
+            "id": task_id,
+            "status": status,
+            "result": Json(result_json),
+        },
+    ).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Task.model_validate(row)
 
 
 def cancel_task(
@@ -1870,20 +1621,18 @@ def cancel_task(
     Returns:
         Cancelled task, or None if not found or not pending.
     """
-    with logfire.span("db.task.cancel", task_id=task_id) as span:
-        row = connection.execute(
-            """\
-            UPDATE task SET status = 'cancelled', completed_at = CURRENT_TIMESTAMP
-            WHERE id = %(id)s AND status = 'pending'
-            RETURNING *
-            """,
-            {"id": task_id},
-        ).fetchone()
-        connection.commit()
-        span.set_attribute("hit", row is not None)
-        if row is None:
-            return None
-        return Task.model_validate(row)
+    row = connection.execute(
+        """\
+        UPDATE task SET status = 'cancelled', completed_at = CURRENT_TIMESTAMP
+        WHERE id = %(id)s AND status = 'pending'
+        RETURNING *
+        """,
+        {"id": task_id},
+    ).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Task.model_validate(row)
 
 
 def list_tasks(
@@ -1905,32 +1654,23 @@ def list_tasks(
     Returns:
         List of tasks ordered by scheduled_at descending.
     """
-    with logfire.span(
-        "db.task.list",
-        workflow_id=workflow_id,
-        contact_id=contact_id,
-        status=status,
-        limit=limit,
-    ) as span:
-        conditions: list[SQL] = []
-        params: dict[str, object] = {"limit": limit}
-        if workflow_id is not None:
-            conditions.append(SQL("workflow_id = %(workflow_id)s"))
-            params["workflow_id"] = workflow_id
-        if contact_id is not None:
-            conditions.append(SQL("contact_id = %(contact_id)s"))
-            params["contact_id"] = contact_id
-        if status is not None:
-            conditions.append(SQL("status = %(status)s"))
-            params["status"] = status
-        where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
-        query = SQL(
-            "SELECT * FROM task {} ORDER BY scheduled_at DESC LIMIT %(limit)s"
-        ).format(where)
-        rows = connection.execute(query, params).fetchall()
-        tasks = [Task.model_validate(row) for row in rows]
-        span.set_attribute("task_count", len(tasks))
-        return tasks
+    conditions: list[SQL] = []
+    params: dict[str, object] = {"limit": limit}
+    if workflow_id is not None:
+        conditions.append(SQL("workflow_id = %(workflow_id)s"))
+        params["workflow_id"] = workflow_id
+    if contact_id is not None:
+        conditions.append(SQL("contact_id = %(contact_id)s"))
+        params["contact_id"] = contact_id
+    if status is not None:
+        conditions.append(SQL("status = %(status)s"))
+        params["status"] = status
+    where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
+    query = SQL(
+        "SELECT * FROM task {} ORDER BY scheduled_at DESC LIMIT %(limit)s"
+    ).format(where)
+    rows = connection.execute(query, params).fetchall()
+    return [Task.model_validate(row) for row in rows]
 
 
 def create_tasks_for_routed_emails(
@@ -1947,31 +1687,29 @@ def create_tasks_for_routed_emails(
     Returns:
         List of newly created tasks.
     """
-    with logfire.span("db.task.bridge_routed_emails") as span:
-        unmatched = connection.execute(
-            """\
-            SELECT e.id, e.workflow_id, e.contact_id FROM email e
-            WHERE e.workflow_id IS NOT NULL
-              AND e.direction = 'inbound'
-              AND e.contact_id IS NOT NULL
-              AND NOT EXISTS (SELECT 1 FROM task t WHERE t.email_id = e.id)
-            ORDER BY e.created_at
-            """
-        ).fetchall()
-        tasks: list[Task] = []
-        for email_row in unmatched:
-            now = datetime.now(UTC).isoformat()
-            t = create_task(
-                connection,
-                workflow_id=email_row["workflow_id"],
-                contact_id=email_row["contact_id"],
-                description="handle inbound email",
-                scheduled_at=now,
-                email_id=email_row["id"],
-            )
-            tasks.append(t)
-        span.set_attribute("task_count", len(tasks))
-        return tasks
+    unmatched = connection.execute(
+        """\
+        SELECT e.id, e.workflow_id, e.contact_id FROM email e
+        WHERE e.workflow_id IS NOT NULL
+          AND e.direction = 'inbound'
+          AND e.contact_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM task t WHERE t.email_id = e.id)
+        ORDER BY e.created_at
+        """
+    ).fetchall()
+    tasks: list[Task] = []
+    for email_row in unmatched:
+        now = datetime.now(UTC).isoformat()
+        t = create_task(
+            connection,
+            workflow_id=email_row["workflow_id"],
+            contact_id=email_row["contact_id"],
+            description="handle inbound email",
+            scheduled_at=now,
+            email_id=email_row["id"],
+        )
+        tasks.append(t)
+    return tasks
 
 
 # -- Activity ------------------------------------------------------------------
@@ -1998,31 +1736,24 @@ def create_activity(
     Returns:
         Created activity.
     """
-    with logfire.span(
-        "db.activity.create",
-        contact_id=contact_id,
-        activity_type=activity_type,
-    ) as span:
-        row = connection.execute(
-            """\
-            INSERT INTO activity (id, contact_id, company_id, type, summary, detail)
-            VALUES (%(id)s, %(contact_id)s, %(company_id)s, %(type)s,
-                    %(summary)s, %(detail)s)
-            RETURNING *
-            """,
-            {
-                "id": _new_id(),
-                "contact_id": contact_id,
-                "company_id": company_id,
-                "type": activity_type,
-                "summary": summary,
-                "detail": Json(detail or {}),
-            },
-        ).fetchone()
-        connection.commit()
-        activity = Activity.model_validate(row)
-        span.set_attribute("activity_id", activity.id)
-        return activity
+    row = connection.execute(
+        """\
+        INSERT INTO activity (id, contact_id, company_id, type, summary, detail)
+        VALUES (%(id)s, %(contact_id)s, %(company_id)s, %(type)s,
+                %(summary)s, %(detail)s)
+        RETURNING *
+        """,
+        {
+            "id": _new_id(),
+            "contact_id": contact_id,
+            "company_id": company_id,
+            "type": activity_type,
+            "summary": summary,
+            "detail": Json(detail or {}),
+        },
+    ).fetchone()
+    connection.commit()
+    return Activity.model_validate(row)
 
 
 def list_activities(
@@ -2053,35 +1784,26 @@ def list_activities(
     """
     if contact_id is None and company_id is None:
         raise ValueError("at least one of contact_id or company_id is required")
-    with logfire.span(
-        "db.activity.list",
-        contact_id=contact_id,
-        company_id=company_id,
-        activity_type=activity_type,
-        limit=limit,
-    ) as span:
-        conditions: list[SQL] = []
-        params: dict[str, object] = {"limit": limit}
-        if contact_id is not None:
-            conditions.append(SQL("contact_id = %(contact_id)s"))
-            params["contact_id"] = contact_id
-        if company_id is not None:
-            conditions.append(SQL("company_id = %(company_id)s"))
-            params["company_id"] = company_id
-        if activity_type is not None:
-            conditions.append(SQL("type = %(activity_type)s"))
-            params["activity_type"] = activity_type
-        if since is not None:
-            conditions.append(SQL("created_at >= %(since)s"))
-            params["since"] = since
-        where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
-        query = SQL(
-            "SELECT * FROM activity {} ORDER BY created_at DESC LIMIT %(limit)s"
-        ).format(where)
-        rows = connection.execute(query, params).fetchall()
-        activities = [Activity.model_validate(row) for row in rows]
-        span.set_attribute("activity_count", len(activities))
-        return activities
+    conditions: list[SQL] = []
+    params: dict[str, object] = {"limit": limit}
+    if contact_id is not None:
+        conditions.append(SQL("contact_id = %(contact_id)s"))
+        params["contact_id"] = contact_id
+    if company_id is not None:
+        conditions.append(SQL("company_id = %(company_id)s"))
+        params["company_id"] = company_id
+    if activity_type is not None:
+        conditions.append(SQL("type = %(activity_type)s"))
+        params["activity_type"] = activity_type
+    if since is not None:
+        conditions.append(SQL("created_at >= %(since)s"))
+        params["since"] = since
+    where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
+    query = SQL(
+        "SELECT * FROM activity {} ORDER BY created_at DESC LIMIT %(limit)s"
+    ).format(where)
+    rows = connection.execute(query, params).fetchall()
+    return [Activity.model_validate(row) for row in rows]
 
 
 # -- Tag -----------------------------------------------------------------------
@@ -2109,33 +1831,24 @@ def create_tag(
         Created tag, or None if the tag already exists.
     """
     normalized = name.strip().lower()
-    with logfire.span(
-        "db.tag.create",
-        entity_type=entity_type,
-        entity_id=entity_id,
-        name=normalized,
-    ) as span:
-        row = connection.execute(
-            """\
-            INSERT INTO tag (id, entity_type, entity_id, name)
-            VALUES (%(id)s, %(entity_type)s, %(entity_id)s, %(name)s)
-            ON CONFLICT (entity_type, entity_id, name) DO NOTHING
-            RETURNING *
-            """,
-            {
-                "id": _new_id(),
-                "entity_type": entity_type,
-                "entity_id": entity_id,
-                "name": normalized,
-            },
-        ).fetchone()
-        connection.commit()
-        if row is None:
-            span.set_attribute("result", "already_exists")
-            return None
-        tag = Tag.model_validate(row)
-        span.set_attribute("tag_id", tag.id)
-        return tag
+    row = connection.execute(
+        """\
+        INSERT INTO tag (id, entity_type, entity_id, name)
+        VALUES (%(id)s, %(entity_type)s, %(entity_id)s, %(name)s)
+        ON CONFLICT (entity_type, entity_id, name) DO NOTHING
+        RETURNING *
+        """,
+        {
+            "id": _new_id(),
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "name": normalized,
+        },
+    ).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Tag.model_validate(row)
 
 
 def delete_tag(
@@ -2156,29 +1869,21 @@ def delete_tag(
         True if the tag was deleted, False if it was not found.
     """
     normalized = name.strip().lower()
-    with logfire.span(
-        "db.tag.delete",
-        entity_type=entity_type,
-        entity_id=entity_id,
-        name=normalized,
-    ) as span:
-        cursor = connection.execute(
-            """\
-            DELETE FROM tag
-            WHERE entity_type = %(entity_type)s
-              AND entity_id = %(entity_id)s
-              AND name = %(name)s
-            """,
-            {
-                "entity_type": entity_type,
-                "entity_id": entity_id,
-                "name": normalized,
-            },
-        )
-        connection.commit()
-        deleted = cursor.rowcount > 0
-        span.set_attribute("deleted", deleted)
-        return deleted
+    cursor = connection.execute(
+        """\
+        DELETE FROM tag
+        WHERE entity_type = %(entity_type)s
+          AND entity_id = %(entity_id)s
+          AND name = %(name)s
+        """,
+        {
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "name": normalized,
+        },
+    )
+    connection.commit()
+    return cursor.rowcount > 0
 
 
 def list_tags(
@@ -2196,22 +1901,15 @@ def list_tags(
     Returns:
         Tags ordered by name.
     """
-    with logfire.span(
-        "db.tag.list",
-        entity_type=entity_type,
-        entity_id=entity_id,
-    ) as span:
-        rows = connection.execute(
-            """\
-            SELECT * FROM tag
-            WHERE entity_type = %(entity_type)s AND entity_id = %(entity_id)s
-            ORDER BY name
-            """,
-            {"entity_type": entity_type, "entity_id": entity_id},
-        ).fetchall()
-        tags = [Tag.model_validate(row) for row in rows]
-        span.set_attribute("tag_count", len(tags))
-        return tags
+    rows = connection.execute(
+        """\
+        SELECT * FROM tag
+        WHERE entity_type = %(entity_type)s AND entity_id = %(entity_id)s
+        ORDER BY name
+        """,
+        {"entity_type": entity_type, "entity_id": entity_id},
+    ).fetchall()
+    return [Tag.model_validate(row) for row in rows]
 
 
 def list_entities_by_tag(
@@ -2232,24 +1930,16 @@ def list_entities_by_tag(
         Entity IDs matching the tag.
     """
     normalized = name.strip().lower()
-    with logfire.span(
-        "db.tag.list_entities",
-        entity_type=entity_type,
-        name=normalized,
-        limit=limit,
-    ) as span:
-        rows = connection.execute(
-            """\
-            SELECT entity_id FROM tag
-            WHERE entity_type = %(entity_type)s AND name = %(name)s
-            ORDER BY created_at
-            LIMIT %(limit)s
-            """,
-            {"entity_type": entity_type, "name": normalized, "limit": limit},
-        ).fetchall()
-        entity_ids = [row["entity_id"] for row in rows]
-        span.set_attribute("entity_count", len(entity_ids))
-        return entity_ids
+    rows = connection.execute(
+        """\
+        SELECT entity_id FROM tag
+        WHERE entity_type = %(entity_type)s AND name = %(name)s
+        ORDER BY created_at
+        LIMIT %(limit)s
+        """,
+        {"entity_type": entity_type, "name": normalized, "limit": limit},
+    ).fetchall()
+    return [row["entity_id"] for row in rows]
 
 
 def search_tags(
@@ -2269,28 +1959,17 @@ def search_tags(
     Returns:
         Matching tags ordered by name.
     """
-    with logfire.span(
-        "db.tag.search",
-        name=name,
-        entity_type=entity_type,
-        limit=limit,
-    ) as span:
-        pattern = f"%{name.strip().lower()}%"
-        params: dict[str, object] = {"pattern": pattern, "limit": limit}
-        type_filter = SQL("")
-        if entity_type is not None:
-            type_filter = SQL("AND entity_type = %(entity_type)s")
-            params["entity_type"] = entity_type
-        query = SQL(
-            "SELECT * FROM tag "
-            "WHERE name LIKE %(pattern)s {} "
-            "ORDER BY name "
-            "LIMIT %(limit)s"
-        ).format(type_filter)
-        rows = connection.execute(query, params).fetchall()
-        tags = [Tag.model_validate(row) for row in rows]
-        span.set_attribute("tag_count", len(tags))
-        return tags
+    pattern = f"%{name.strip().lower()}%"
+    params: dict[str, object] = {"pattern": pattern, "limit": limit}
+    type_filter = SQL("")
+    if entity_type is not None:
+        type_filter = SQL("AND entity_type = %(entity_type)s")
+        params["entity_type"] = entity_type
+    query = SQL(
+        "SELECT * FROM tag WHERE name LIKE %(pattern)s {} ORDER BY name LIMIT %(limit)s"
+    ).format(type_filter)
+    rows = connection.execute(query, params).fetchall()
+    return [Tag.model_validate(row) for row in rows]
 
 
 # -- Note ----------------------------------------------------------------------
@@ -2313,28 +1992,21 @@ def create_note(
     Returns:
         Created note.
     """
-    with logfire.span(
-        "db.note.create",
-        entity_type=entity_type,
-        entity_id=entity_id,
-    ) as span:
-        row = connection.execute(
-            """\
-            INSERT INTO note (id, entity_type, entity_id, body)
-            VALUES (%(id)s, %(entity_type)s, %(entity_id)s, %(body)s)
-            RETURNING *
-            """,
-            {
-                "id": _new_id(),
-                "entity_type": entity_type,
-                "entity_id": entity_id,
-                "body": body,
-            },
-        ).fetchone()
-        connection.commit()
-        note = Note.model_validate(row)
-        span.set_attribute("note_id", note.id)
-        return note
+    row = connection.execute(
+        """\
+        INSERT INTO note (id, entity_type, entity_id, body)
+        VALUES (%(id)s, %(entity_type)s, %(entity_id)s, %(body)s)
+        RETURNING *
+        """,
+        {
+            "id": _new_id(),
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "body": body,
+        },
+    ).fetchone()
+    connection.commit()
+    return Note.model_validate(row)
 
 
 def list_notes(
@@ -2356,33 +2028,24 @@ def list_notes(
     Returns:
         Notes ordered by created_at descending.
     """
-    with logfire.span(
-        "db.note.list",
-        entity_type=entity_type,
-        entity_id=entity_id,
-        limit=limit,
-        since=since,
-    ) as span:
-        conditions: list[SQL] = [
-            SQL("entity_type = %(entity_type)s"),
-            SQL("entity_id = %(entity_id)s"),
-        ]
-        params: dict[str, object] = {
-            "entity_type": entity_type,
-            "entity_id": entity_id,
-            "limit": limit,
-        }
-        if since is not None:
-            conditions.append(SQL("created_at >= %(since)s"))
-            params["since"] = since
-        where = SQL("WHERE ") + SQL(" AND ").join(conditions)
-        query = SQL(
-            "SELECT * FROM note {} ORDER BY created_at DESC LIMIT %(limit)s"
-        ).format(where)
-        rows = connection.execute(query, params).fetchall()
-        notes = [Note.model_validate(row) for row in rows]
-        span.set_attribute("note_count", len(notes))
-        return notes
+    conditions: list[SQL] = [
+        SQL("entity_type = %(entity_type)s"),
+        SQL("entity_id = %(entity_id)s"),
+    ]
+    params: dict[str, object] = {
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "limit": limit,
+    }
+    if since is not None:
+        conditions.append(SQL("created_at >= %(since)s"))
+        params["since"] = since
+    where = SQL("WHERE ") + SQL(" AND ").join(conditions)
+    query = SQL(
+        "SELECT * FROM note {} ORDER BY created_at DESC LIMIT %(limit)s"
+    ).format(where)
+    rows = connection.execute(query, params).fetchall()
+    return [Note.model_validate(row) for row in rows]
 
 
 def get_note(
@@ -2398,15 +2061,13 @@ def get_note(
     Returns:
         Note if found, None otherwise.
     """
-    with logfire.span("db.note.get", note_id=note_id) as span:
-        row = connection.execute(
-            "SELECT * FROM note WHERE id = %(id)s",
-            {"id": note_id},
-        ).fetchone()
-        span.set_attribute("hit", row is not None)
-        if row is None:
-            return None
-        return Note.model_validate(row)
+    row = connection.execute(
+        "SELECT * FROM note WHERE id = %(id)s",
+        {"id": note_id},
+    ).fetchone()
+    if row is None:
+        return None
+    return Note.model_validate(row)
 
 
 # -- Sync Status ---------------------------------------------------------------
@@ -2425,21 +2086,20 @@ def upsert_sync_status(
     Returns:
         Current sync status.
     """
-    with logfire.span("db.sync_status.upsert", pid=pid):
-        row = connection.execute(
-            """\
-            INSERT INTO sync_status (id, pid)
-            VALUES ('singleton', %(pid)s)
-            ON CONFLICT (id) DO UPDATE
-                SET pid = %(pid)s,
-                    started_at = CURRENT_TIMESTAMP,
-                    heartbeat_at = CURRENT_TIMESTAMP
-            RETURNING *
-            """,
-            {"pid": pid},
-        ).fetchone()
-        connection.commit()
-        return SyncStatus.model_validate(row)
+    row = connection.execute(
+        """\
+        INSERT INTO sync_status (id, pid)
+        VALUES ('singleton', %(pid)s)
+        ON CONFLICT (id) DO UPDATE
+            SET pid = %(pid)s,
+                started_at = CURRENT_TIMESTAMP,
+                heartbeat_at = CURRENT_TIMESTAMP
+        RETURNING *
+        """,
+        {"pid": pid},
+    ).fetchone()
+    connection.commit()
+    return SyncStatus.model_validate(row)
 
 
 def get_sync_status(
@@ -2453,14 +2113,12 @@ def get_sync_status(
     Returns:
         SyncStatus if sync is registered, None otherwise.
     """
-    with logfire.span("db.sync_status.get") as span:
-        row = connection.execute(
-            "SELECT * FROM sync_status WHERE id = 'singleton'"
-        ).fetchone()
-        span.set_attribute("hit", row is not None)
-        if row is None:
-            return None
-        return SyncStatus.model_validate(row)
+    row = connection.execute(
+        "SELECT * FROM sync_status WHERE id = 'singleton'"
+    ).fetchone()
+    if row is None:
+        return None
+    return SyncStatus.model_validate(row)
 
 
 def delete_sync_status(
@@ -2471,9 +2129,8 @@ def delete_sync_status(
     Args:
         connection: Open database connection.
     """
-    with logfire.span("db.sync_status.delete"):
-        connection.execute("DELETE FROM sync_status WHERE id = 'singleton'")
-        connection.commit()
+    connection.execute("DELETE FROM sync_status WHERE id = 'singleton'")
+    connection.commit()
 
 
 def update_sync_heartbeat(
@@ -2484,12 +2141,11 @@ def update_sync_heartbeat(
     Args:
         connection: Open database connection.
     """
-    with logfire.span("db.sync_status.heartbeat"):
-        connection.execute(
-            """\
-            UPDATE sync_status
-            SET heartbeat_at = CURRENT_TIMESTAMP
-            WHERE id = 'singleton'
-            """
-        )
-        connection.commit()
+    connection.execute(
+        """\
+        UPDATE sync_status
+        SET heartbeat_at = CURRENT_TIMESTAMP
+        WHERE id = 'singleton'
+        """
+    )
+    connection.commit()

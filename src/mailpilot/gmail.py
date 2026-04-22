@@ -34,29 +34,58 @@ _MAILPILOT_VERSION = version("mailpilot")
 
 
 def _retry_on_transient(func: Any) -> Any:
-    """Retry decorator with exponential backoff for transient Gmail API errors."""
+    """Retry decorator with exponential backoff for transient Gmail API errors.
+
+    Wraps every invocation in a ``logfire.span("gmail.<method>")`` so that
+    Gmail API latency is visible in traces. Transient retries are recorded
+    as span events; the final ``attempts`` count and any error ``status``
+    are set as span attributes.
+    """
 
     @wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         from googleapiclient.errors import HttpError
 
-        last_error: Exception | None = None
-        for attempt in range(_MAX_RETRIES):
-            try:
-                return func(*args, **kwargs)
-            except HttpError as exc:
-                if exc.resp.status not in _TRANSIENT_STATUS_CODES:
-                    raise
-                last_error = exc
-                backoff = min(2**attempt, _MAX_BACKOFF)
-                logfire.warn(
-                    "gmail api transient error, retrying",
-                    status=exc.resp.status,
-                    attempt=attempt + 1,
-                    backoff=backoff,
-                )
-                time.sleep(backoff)
-        raise last_error  # type: ignore[misc]
+        # Resolve user_id from the GmailClient instance (first positional arg).
+        user_id = getattr(args[0], "email", "") if args else ""
+        span_name = f"gmail.{func.__name__}"
+
+        with logfire.span(span_name, method=func.__name__, user_id=user_id) as span:
+            last_error: Exception | None = None
+            backoff = 0.0
+            for attempt in range(_MAX_RETRIES):
+                try:
+                    result = func(*args, **kwargs)
+                    span.set_attribute("attempts", attempt + 1)
+                    return result
+                except HttpError as exc:
+                    if exc.resp.status not in _TRANSIENT_STATUS_CODES:
+                        span.set_attribute("status", exc.resp.status)
+                        span.set_attribute("attempts", attempt + 1)
+                        raise
+                    last_error = exc
+                    backoff = min(2**attempt, _MAX_BACKOFF)
+                    logfire.warn(
+                        "gmail api transient error, retrying",
+                        status=exc.resp.status,
+                        attempt=attempt + 1,
+                        backoff=backoff,
+                    )
+                    time.sleep(backoff)
+            # All retries exhausted -- emit a dedicated error log for alerting.
+            logfire.error(
+                "gmail.retry.exhausted",
+                method=func.__name__,
+                status=last_error.resp.status,  # pyright: ignore[reportOptionalMemberAccess]
+                attempts=_MAX_RETRIES,
+                last_backoff=backoff,
+            )
+            span.set_attribute("attempts", _MAX_RETRIES)
+            span.set_attribute(
+                "status",
+                last_error.resp.status,  # pyright: ignore[reportOptionalMemberAccess]
+            )
+            raise last_error  # type: ignore[misc]
 
     return wrapper
 
