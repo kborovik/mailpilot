@@ -77,27 +77,25 @@ def initialize_database(database_url: str) -> psycopg.Connection[dict[str, Any]]
         Open database connection with schema applied.
     """
     db_name = database_url.rsplit("/", 1)[-1]
-    with logfire.span("db.schema.apply", _level="debug", database=db_name) as span:
-        try:
-            connection = cast(
-                psycopg.Connection[dict[str, Any]],
-                psycopg.connect(database_url, row_factory=dict_row, autocommit=True),  # type: ignore[arg-type]
-            )
-        except psycopg.OperationalError as exc:
-            message = str(exc)
-            if "does not exist" in message:
-                hint = f"run 'createdb {db_name}' to create it"
-            elif "Connection refused" in message:
-                hint = "is PostgreSQL running? check your system's service manager"
-            else:
-                hint = "check your database_url setting"
-            logfire.exception("database connection failed", database=db_name, hint=hint)
-            raise SystemExit(f"database connection failed: {hint}") from None
-        schema_sql = SCHEMA_PATH.read_text()
-        connection.execute(schema_sql)  # type: ignore[arg-type]
-        connection.autocommit = False
-        span.set_attribute("schema_applied", True)
-        return connection
+    try:
+        connection = cast(
+            psycopg.Connection[dict[str, Any]],
+            psycopg.connect(database_url, row_factory=dict_row, autocommit=True),  # type: ignore[arg-type]
+        )
+    except psycopg.OperationalError as exc:
+        message = str(exc)
+        if "does not exist" in message:
+            hint = f"run 'createdb {db_name}' to create it"
+        elif "Connection refused" in message:
+            hint = "is PostgreSQL running? check your system's service manager"
+        else:
+            hint = "check your database_url setting"
+        logfire.exception("database connection failed", database=db_name, hint=hint)
+        raise SystemExit(f"database connection failed: {hint}") from None
+    schema_sql = SCHEMA_PATH.read_text()
+    connection.execute(schema_sql)  # type: ignore[arg-type]
+    connection.autocommit = False
+    return connection
 
 
 # -- Status --------------------------------------------------------------------

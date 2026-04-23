@@ -1,8 +1,7 @@
 """ADR-07 span-emission contract tests for database.py.
 
-Manual ``db.*`` CRUD spans were removed in favour of ``instrument_psycopg``
-auto-instrumentation.  These tests verify the remaining hand-written spans
-(``db.schema.apply``, ``database connection failed``) still emit correctly.
+Verifies that ``database connection failed`` error log is emitted when
+the database connection fails (e.g. database does not exist).
 """
 
 from typing import Any
@@ -32,7 +31,3 @@ def test_initialize_database_error_emits_error_span(capfire: CaptureLogfire):
     assert attrs["database"] == "mailpilot_does_not_exist_xyz"
     assert "createdb" in attrs["hint"]
     assert attrs["logfire.span_type"] == "log"
-
-    schema_spans = _db_spans(capfire, "db.schema.apply")
-    assert len(schema_spans) == 1
-    assert any(e["name"] == "exception" for e in schema_spans[0].get("events", []))
