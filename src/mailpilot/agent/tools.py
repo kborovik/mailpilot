@@ -37,6 +37,37 @@ from mailpilot.sync import send_email as sync_send_email
 _COOLDOWN_DAYS = 30
 
 
+def _activate_contact_if_pending(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+    contact_id: str,
+) -> None:
+    """Transition workflow_contact from pending to active after successful send.
+
+    No-op if the workflow_contact row does not exist, or if the current status
+    is anything other than ``pending``.
+
+    Args:
+        connection: Open database connection.
+        workflow_id: Current workflow FK.
+        contact_id: Contact FK.
+    """
+    with logfire.span(
+        "agent.auto_activate_contact",
+        workflow_id=workflow_id,
+        contact_id=contact_id,
+    ):
+        wc = database.get_workflow_contact(connection, workflow_id, contact_id)
+        if wc is not None and wc.status == "pending":
+            database.update_workflow_contact(
+                connection,
+                workflow_id,
+                contact_id,
+                status="active",
+                reason="email sent",
+            )
+
+
 def send_email(  # noqa: PLR0913
     connection: psycopg.Connection[dict[str, Any]],
     account: Account,
@@ -115,6 +146,10 @@ def send_email(  # noqa: PLR0913
             cc=cc,
             bcc=bcc,
         )
+
+        if contact_id is not None:
+            _activate_contact_if_pending(connection, workflow_id, contact_id)
+
         return {
             "id": email.id,
             "gmail_message_id": email.gmail_message_id,
@@ -219,6 +254,9 @@ def reply_email(  # noqa: PLR0913
             cc=cc,
             bcc=bcc,
         )
+
+        _activate_contact_if_pending(connection, workflow_id, contact.id)
+
         return {
             "id": email.id,
             "gmail_message_id": email.gmail_message_id,

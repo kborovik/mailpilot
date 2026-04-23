@@ -228,6 +228,104 @@ def test_send_email_passes_cc_and_bcc(
     assert call_kwargs["bcc"] == "bcc@example.com"
 
 
+def test_send_email_activates_pending_contact(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Successful send transitions workflow_contact from pending to active."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(
+        database_connection, email="recipient@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    create_workflow_contact(database_connection, workflow.id, contact.id)
+    gmail_client = _make_gmail_client(account)
+
+    result = send_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        to="recipient@example.com",
+        subject="Hello",
+        body="Hi there",
+    )
+
+    assert "error" not in result
+    wc = get_workflow_contact(database_connection, workflow.id, contact.id)
+    assert wc is not None
+    assert wc.status == "active"
+    assert wc.reason == "email sent"
+
+
+def test_send_email_does_not_change_non_pending_status(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Send does not overwrite active/completed/failed status."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(
+        database_connection, email="recipient@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    create_workflow_contact(database_connection, workflow.id, contact.id)
+    # Set to completed before send.
+    update_contact_status(
+        connection=database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        status="completed",
+        reason="meeting booked",
+    )
+    gmail_client = _make_gmail_client(account)
+
+    result = send_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        to="recipient@example.com",
+        subject="Follow up",
+        body="Checking in",
+    )
+
+    assert "error" not in result
+    wc = get_workflow_contact(database_connection, workflow.id, contact.id)
+    assert wc is not None
+    assert wc.status == "completed"
+    assert wc.reason == "meeting booked"
+
+
+def test_send_email_no_error_without_workflow_contact(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Send succeeds even if contact has no workflow_contact row."""
+    account = make_test_account(database_connection)
+    make_test_contact(
+        database_connection, email="recipient@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    # No create_workflow_contact call -- ad-hoc send.
+    gmail_client = _make_gmail_client(account)
+
+    result = send_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        to="recipient@example.com",
+        subject="Hello",
+        body="Hi",
+    )
+
+    assert "error" not in result
+    assert result["gmail_message_id"] == "gmail-msg-1"
+
+
 # -- reply_email ---------------------------------------------------------------
 
 
@@ -456,6 +554,138 @@ def test_reply_email_no_contact(
 
     assert result["error"] == "no_contact"
     gmail_client.send_message.assert_not_called()
+
+
+def test_reply_email_activates_pending_contact(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Successful reply transitions workflow_contact from pending to active."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(
+        database_connection, email="sender@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    create_workflow_contact(database_connection, workflow.id, contact.id)
+
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Question",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        gmail_message_id="inbound-activate",
+        gmail_thread_id="thread-activate",
+    )
+    assert inbound is not None
+
+    gmail_client = _make_gmail_client(account)
+
+    result = reply_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        email_id=inbound.id,
+        body="Here is the answer.",
+    )
+
+    assert "error" not in result
+    wc = get_workflow_contact(database_connection, workflow.id, contact.id)
+    assert wc is not None
+    assert wc.status == "active"
+    assert wc.reason == "email sent"
+
+
+def test_reply_email_does_not_change_non_pending_status(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Reply does not overwrite active/completed/failed status."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(
+        database_connection, email="sender@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    create_workflow_contact(database_connection, workflow.id, contact.id)
+    update_contact_status(
+        connection=database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        status="failed",
+        reason="no response",
+    )
+
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Late reply",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        gmail_message_id="inbound-noop",
+        gmail_thread_id="thread-noop",
+    )
+    assert inbound is not None
+
+    gmail_client = _make_gmail_client(account)
+
+    result = reply_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        email_id=inbound.id,
+        body="Follow up.",
+    )
+
+    assert "error" not in result
+    wc = get_workflow_contact(database_connection, workflow.id, contact.id)
+    assert wc is not None
+    assert wc.status == "failed"
+    assert wc.reason == "no response"
+
+
+def test_reply_email_no_error_without_workflow_contact(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Reply succeeds even if contact has no workflow_contact row."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(
+        database_connection, email="sender@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    # No create_workflow_contact -- ad-hoc reply.
+
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Ad hoc",
+        contact_id=contact.id,
+        gmail_message_id="inbound-adhoc",
+        gmail_thread_id="thread-adhoc",
+    )
+    assert inbound is not None
+
+    gmail_client = _make_gmail_client(account)
+
+    result = reply_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        email_id=inbound.id,
+        body="Quick reply.",
+    )
+
+    assert "error" not in result
+    assert result["gmail_message_id"] == "gmail-msg-1"
 
 
 # -- create_task ---------------------------------------------------------------
