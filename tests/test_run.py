@@ -321,3 +321,38 @@ def test_run_loop_sync_error_continues(
         ),
     ):
         run_loop(database_connection, settings)
+
+
+def test_run_loop_keyboard_interrupt_not_error_span(
+    database_connection: psycopg.Connection[dict[str, Any]],
+    capfire: Any,
+) -> None:
+    """KeyboardInterrupt during iteration must not produce ERROR spans."""
+    from conftest import make_test_settings
+    from mailpilot.run import run_loop
+
+    settings = make_test_settings()
+
+    def raise_interrupt(*args: Any, **kwargs: Any) -> None:
+        raise KeyboardInterrupt
+
+    with (
+        patch("mailpilot.run._sync_all_accounts", side_effect=raise_interrupt),
+        patch("mailpilot.run.create_tasks_for_routed_emails"),
+        patch("mailpilot.run.list_pending_tasks", return_value=[]),
+    ):
+        run_loop(database_connection, settings)
+
+    iteration_spans = [
+        s
+        for s in capfire.exporter.exported_spans_as_dict()
+        if s["name"] == "run.loop.iteration"
+    ]
+    assert len(iteration_spans) == 1
+    # KeyboardInterrupt must not appear as an exception event on the span.
+    exception_events = [
+        e for e in iteration_spans[0].get("events", []) if e["name"] == "exception"
+    ]
+    assert exception_events == [], (
+        "KeyboardInterrupt recorded as exception on run.loop.iteration span"
+    )
