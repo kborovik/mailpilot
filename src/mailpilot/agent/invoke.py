@@ -403,11 +403,12 @@ def invoke_workflow_agent(  # noqa: PLR0913
                     f"account not found for workflow: {workflow.account_id}"
                 )
 
-            # Load email history between account and contact.
+            # Load email history scoped to this workflow + contact.
             email_history = database.list_emails(
                 connection,
                 contact_id=contact.id,
                 account_id=account.id,
+                workflow_id=workflow.id,
             )
 
             # Build agent and deps.

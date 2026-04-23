@@ -234,6 +234,7 @@ def test_email_history_loaded(
         gmail_thread_id="thread-hist-1",
         account_id=account.id,
         contact_id=contact.id,
+        workflow_id=workflow.id,
         direction="outbound",
         subject="Previous outreach",
         body_text="Hi, interested in a demo?",
@@ -251,6 +252,75 @@ def test_email_history_loaded(
 
     all_text = str(captured_messages)
     assert "Previous outreach" in all_text
+
+
+def test_email_history_scoped_to_workflow(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Agent only sees emails from its own workflow, not other workflows."""
+    account, contact, workflow = _setup(database_connection)
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+
+    from mailpilot.database import create_email
+
+    # Email belonging to THIS workflow -- should appear.
+    create_email(
+        database_connection,
+        gmail_message_id="msg-same-wf",
+        gmail_thread_id="thread-same-wf",
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        direction="outbound",
+        subject="Same workflow outreach",
+        body_text="This should be visible.",
+    )
+
+    # Email belonging to a DIFFERENT workflow -- should NOT appear.
+    other_workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="Other workflow"
+    )
+    _activate(database_connection, other_workflow.id)
+    create_email(
+        database_connection,
+        gmail_message_id="msg-other-wf",
+        gmail_thread_id="thread-other-wf",
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=other_workflow.id,
+        direction="outbound",
+        subject="Other workflow outreach",
+        body_text="This should NOT be visible.",
+    )
+
+    # Email with NO workflow -- should NOT appear.
+    create_email(
+        database_connection,
+        gmail_message_id="msg-no-wf",
+        gmail_thread_id="thread-no-wf",
+        account_id=account.id,
+        contact_id=contact.id,
+        direction="inbound",
+        subject="Unrelated inbound",
+        body_text="This should NOT be visible either.",
+    )
+
+    captured_messages: list[ModelMessage] = []
+    with patch("mailpilot.agent.invoke.GmailClient"):
+        invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            model_override=_capturing_model(captured_messages),
+        )
+
+    all_text = str(captured_messages)
+    assert "Same workflow outreach" in all_text
+    assert "Other workflow outreach" not in all_text
+    assert "Unrelated inbound" not in all_text
 
 
 # -- Tests: trigger context ----------------------------------------------------
