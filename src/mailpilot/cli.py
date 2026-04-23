@@ -52,7 +52,9 @@ def configure_logging(debug: bool = False) -> None:
         ),
         send_to_logfire="if-token-present",
         inspect_arguments=False,
+        metrics=logfire.MetricsOptions(collect_in_spans=True),
     )
+    logfire.instrument_pydantic_ai()
 
 
 # -- JSON output pattern -------------------------------------------------------
