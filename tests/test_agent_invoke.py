@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import psycopg
 import pytest
+from logfire.testing import CaptureLogfire
 from pydantic_ai.messages import (
     ModelMessage,
     ModelResponse,
@@ -365,3 +366,39 @@ def test_missing_api_key_raises(
             contact,
             # No model_override -- forces the real model path.
         )
+
+
+# -- Tests: usage attributes on span ------------------------------------------
+
+
+def test_invoke_span_has_usage_attributes(
+    database_connection: psycopg.Connection[dict[str, Any]],
+    capfire: CaptureLogfire,
+) -> None:
+    """agent.invoke span includes input_tokens, output_tokens, llm_requests."""
+    _account, contact, workflow = _setup(database_connection)
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    with patch("mailpilot.agent.invoke.GmailClient"):
+        invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            model_override=FunctionModel(_model_that_calls_noop),
+        )
+
+    invoke_spans = [
+        s
+        for s in capfire.exporter.exported_spans_as_dict()
+        if s["name"] == "agent.invoke"
+    ]
+    assert len(invoke_spans) == 1
+    attrs = invoke_spans[0]["attributes"]
+    assert "input_tokens" in attrs
+    assert "output_tokens" in attrs
+    assert "llm_requests" in attrs
+    assert attrs["input_tokens"] >= 0
+    assert attrs["output_tokens"] >= 0
+    assert attrs["llm_requests"] >= 1

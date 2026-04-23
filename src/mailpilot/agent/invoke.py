@@ -22,7 +22,6 @@ from typing import Any
 import logfire
 import psycopg
 from pydantic_ai import Agent, RunContext, Tool
-from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.models import Model
 
 from mailpilot import database
@@ -345,22 +344,6 @@ def _build_user_prompt(  # noqa: PLR0913
     return "\n".join(sections)
 
 
-# -- Tool-use enforcement ------------------------------------------------------
-
-
-def _count_successful_tool_calls(messages: list[Any]) -> int:
-    """Count successful tool executions in the agent's message history.
-
-    Counts ToolReturnPart with outcome='success' rather than ToolCallPart
-    to exclude failed attempts (wrong tool name, validation errors).
-    """
-    return sum(
-        isinstance(part, ToolReturnPart) and part.outcome == "success"
-        for msg in messages
-        for part in (msg.parts if hasattr(msg, "parts") else [])
-    )
-
-
 # -- Main entry point ----------------------------------------------------------
 
 
@@ -468,8 +451,14 @@ def invoke_workflow_agent(  # noqa: PLR0913
 
             result = agent.run_sync(prompt, model=model, deps=deps)
 
+            # Usage tracking.
+            usage = result.usage()
+            span.set_attribute("input_tokens", usage.input_tokens)
+            span.set_attribute("output_tokens", usage.output_tokens)
+            span.set_attribute("llm_requests", usage.requests)
+
             # Tool-use enforcement.
-            tool_call_count = _count_successful_tool_calls(result.all_messages())
+            tool_call_count = usage.tool_calls
             span.set_attribute("tool_call_count", tool_call_count)
 
             if tool_call_count == 0:
