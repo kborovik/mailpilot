@@ -77,7 +77,7 @@ def initialize_database(database_url: str) -> psycopg.Connection[dict[str, Any]]
         Open database connection with schema applied.
     """
     db_name = database_url.rsplit("/", 1)[-1]
-    with logfire.span("db.schema.apply", database=db_name) as span:
+    with logfire.span("db.schema.apply", _level="debug", database=db_name) as span:
         try:
             connection = cast(
                 psycopg.Connection[dict[str, Any]],
@@ -93,7 +93,6 @@ def initialize_database(database_url: str) -> psycopg.Connection[dict[str, Any]]
                 hint = "check your database_url setting"
             logfire.exception("database connection failed", database=db_name, hint=hint)
             raise SystemExit(f"database connection failed: {hint}") from None
-        logfire.instrument_psycopg(connection)
         schema_sql = SCHEMA_PATH.read_text()
         connection.execute(schema_sql)  # type: ignore[arg-type]
         connection.autocommit = False

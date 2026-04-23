@@ -306,7 +306,6 @@ class GmailClient:
             .send(userId=user_id, body=send_body)
             .execute()
         )
-        logfire.info("gmail message sent", message_id=result.get("id"), to=to)
         return result
 
     @_retry_on_transient
@@ -404,11 +403,6 @@ class GmailClient:
         }
         result: dict[str, Any] = (
             self._service.users().watch(userId=user_id, body=body).execute()
-        )
-        logfire.info(
-            "gmail watch registered",
-            topic=topic_name,
-            expiration=result.get("expiration"),
         )
         return result
 

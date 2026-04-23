@@ -418,22 +418,10 @@ def _store_inbound_message(  # noqa: PLR0913
         labels=list(message.get("labelIds", [])),
     )
     if email is None:
-        logfire.debug(
-            "sync.account.message_skipped_conflict",
-            account_id=account.id,
-            gmail_message_id=message.get("id"),
-        )
         return None
     sync_messages_stored.add(
         1,
         attributes={"within_recency_window": within_window},
-    )
-    logfire.debug(
-        "sync.account.message_stored",
-        account_id=account.id,
-        email_id=email.id,
-        gmail_message_id=message.get("id"),
-        within_recency_window=within_window,
     )
     if within_window and has_active_workflows:
         email = route_email(
