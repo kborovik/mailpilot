@@ -1830,7 +1830,7 @@ def test_list_tasks_with_filters(
 def test_create_tasks_for_routed_emails(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    from datetime import datetime
+    from datetime import timedelta
 
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
@@ -1845,7 +1845,7 @@ def test_create_tasks_for_routed_emails(
         subject="Re: hello",
         body_text="Got it",
         labels=["INBOX"],
-        received_at=datetime(2026, 4, 22, 12, 0, 0, tzinfo=UTC),
+        received_at=workflow.created_at + timedelta(minutes=5),
         contact_id=contact.id,
         workflow_id=workflow.id,
     )
@@ -1866,7 +1866,7 @@ def test_create_tasks_for_routed_emails(
 def test_create_tasks_for_routed_emails_skips_outbound(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    from datetime import datetime
+    from datetime import timedelta
 
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
@@ -1881,13 +1881,61 @@ def test_create_tasks_for_routed_emails_skips_outbound(
         subject="Hello",
         body_text="Hi there",
         labels=["SENT"],
-        sent_at=datetime(2026, 4, 22, 12, 0, 0, tzinfo=UTC),
+        sent_at=workflow.created_at + timedelta(minutes=5),
         contact_id=contact.id,
         workflow_id=workflow.id,
     )
 
     created = create_tasks_for_routed_emails(database_connection)
     assert len(created) == 0
+
+
+def test_create_tasks_for_routed_emails_skips_historical(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Emails received before the workflow was created should not be bridged."""
+    from datetime import timedelta
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+
+    contact = make_test_contact(database_connection)
+
+    # Email received BEFORE the workflow was created -- should be skipped.
+    historical_email = create_email(
+        database_connection,
+        gmail_message_id="msg-hist",
+        gmail_thread_id="thread-hist",
+        account_id=account.id,
+        direction="inbound",
+        subject="Old message",
+        body_text="From last month",
+        labels=["INBOX"],
+        received_at=workflow.created_at - timedelta(days=30),
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+    )
+    assert historical_email is not None
+
+    # Email received AFTER the workflow was created -- should be bridged.
+    recent_email = create_email(
+        database_connection,
+        gmail_message_id="msg-recent",
+        gmail_thread_id="thread-recent",
+        account_id=account.id,
+        direction="inbound",
+        subject="New message",
+        body_text="Just now",
+        labels=["INBOX"],
+        received_at=workflow.created_at + timedelta(minutes=5),
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+    )
+    assert recent_email is not None
+
+    created = create_tasks_for_routed_emails(database_connection)
+    assert len(created) == 1
+    assert created[0].email_id == recent_email.id
 
 
 def test_complete_task_stores_result(
