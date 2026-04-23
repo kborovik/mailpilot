@@ -10,6 +10,7 @@ wire from ``RunContext[AgentDeps]``.
 
 Tools per ADR-03:
     - ``send_email`` -- send via Gmail API with contact status + cooldown guards
+    - ``reply_email`` -- reply in-thread with auto-resolved recipient and subject
     - ``create_task`` -- schedule deferred work
     - ``cancel_task`` -- cancel a pending task
     - ``update_contact_status`` -- report per-workflow outcome
@@ -115,6 +116,110 @@ def send_email(  # noqa: PLR0913
             contact_id=contact_id,
             workflow_id=workflow_id,
             thread_id=thread_id,
+            cc=cc,
+            bcc=bcc,
+        )
+        return {
+            "id": email.id,
+            "gmail_message_id": email.gmail_message_id,
+            "gmail_thread_id": email.gmail_thread_id,
+        }
+
+
+def reply_email(  # noqa: PLR0913
+    connection: psycopg.Connection[dict[str, Any]],
+    account: Account,
+    gmail_client: object,
+    settings: Settings,
+    workflow_id: str,
+    email_id: str,
+    body: str,
+    cc: str | None = None,
+    bcc: str | None = None,
+) -> dict[str, Any]:
+    """Reply to an existing email in-thread.
+
+    Resolves recipient, subject, and thread_id automatically from the
+    original email. No cooldown check -- replies are always allowed.
+
+    Guards:
+    1. Original email must exist
+    2. Original email must have a gmail_thread_id
+    3. Original email must have a contact_id
+    4. Contact must exist
+    5. Contact must be active (not bounced/unsubscribed)
+
+    Args:
+        connection: Open database connection.
+        account: Sending account.
+        gmail_client: Gmail client scoped to account.
+        settings: Application settings.
+        workflow_id: Current workflow FK.
+        email_id: ID of the email being replied to.
+        body: Reply body (plain text).
+        cc: CC recipient(s), comma-separated.
+        bcc: BCC recipient(s), comma-separated.
+
+    Returns:
+        Dict with sent message details (id, gmail_message_id, gmail_thread_id),
+        or error dict if blocked by guard.
+    """
+    with logfire.span(
+        "agent.tool.reply_email", email_id=email_id, workflow_id=workflow_id
+    ):
+        # Guard 1: original email must exist.
+        original = database.get_email(connection, email_id)
+        if original is None:
+            return {
+                "error": "not_found",
+                "message": f"email not found: {email_id}",
+            }
+
+        # Guard 2: original email must have a gmail_thread_id.
+        if original.gmail_thread_id is None:
+            return {
+                "error": "no_thread",
+                "message": f"email has no gmail_thread_id: {email_id}",
+            }
+
+        # Guard 3: original email must have a contact.
+        if original.contact_id is None:
+            return {
+                "error": "no_contact",
+                "message": f"email has no contact_id: {email_id}",
+            }
+
+        # Guard 4: contact must exist.
+        contact = database.get_contact(connection, original.contact_id)
+        if contact is None:
+            return {
+                "error": "not_found",
+                "message": f"contact not found: {original.contact_id}",
+            }
+
+        # Guard 5: contact must be active.
+        if contact.status != "active":
+            return {
+                "error": "contact_disabled",
+                "message": f"contact is {contact.status}: {contact.status_reason}",
+            }
+
+        # Derive subject: prepend "Re: " unless already prefixed.
+        subject = original.subject
+        if not subject.lower().startswith("re: "):
+            subject = f"Re: {subject}"
+
+        email = sync_send_email(
+            connection=connection,
+            account=account,
+            gmail_client=gmail_client,  # type: ignore[arg-type]
+            settings=settings,
+            to=contact.email,
+            subject=subject,
+            body=body,
+            contact_id=contact.id,
+            workflow_id=workflow_id,
+            thread_id=original.gmail_thread_id,
             cc=cc,
             bcc=bcc,
         )

@@ -23,6 +23,7 @@ from mailpilot.agent.tools import (
     noop,
     read_company,
     read_contact,
+    reply_email,
     search_emails,
     send_email,
     update_contact_status,
@@ -268,6 +269,236 @@ def test_send_email_passes_cc_and_bcc(
     call_kwargs = gmail_client.send_message.call_args.kwargs
     assert call_kwargs["cc"] == "cc@example.com"
     assert call_kwargs["bcc"] == "bcc@example.com"
+
+
+# -- reply_email ---------------------------------------------------------------
+
+
+def test_reply_email_resolves_thread_and_recipient(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    contact = make_test_contact(
+        database_connection, email="sender@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+
+    # Simulate an inbound email that the agent wants to reply to.
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Question about pricing",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        gmail_message_id="inbound-msg-1",
+        gmail_thread_id="thread-abc",
+    )
+    assert inbound is not None
+
+    gmail_client = _make_gmail_client(account)
+
+    result = reply_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        email_id=inbound.id,
+        body="Here is the pricing info.",
+    )
+
+    assert "error" not in result
+    assert result["gmail_message_id"] == "gmail-msg-1"
+    assert result["gmail_thread_id"] == "gmail-thread-1"
+    assert "id" in result
+
+    # Verify send_message was called with resolved values.
+    gmail_client.send_message.assert_called_once()
+    call_kwargs = gmail_client.send_message.call_args.kwargs
+    assert call_kwargs["to"] == "sender@example.com"
+    assert call_kwargs["subject"] == "Re: Question about pricing"
+    assert call_kwargs["thread_id"] == "thread-abc"
+
+
+def test_reply_email_not_found(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    gmail_client = _make_gmail_client(account)
+
+    result = reply_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        email_id="nonexistent-email-id",
+        body="Hello",
+    )
+
+    assert result["error"] == "not_found"
+    gmail_client.send_message.assert_not_called()
+
+
+def test_reply_email_blocked_contact(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from mailpilot.database import disable_contact as db_disable_contact
+
+    account = make_test_account(database_connection)
+    contact = make_test_contact(
+        database_connection, email="bounced@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Hello",
+        contact_id=contact.id,
+        gmail_message_id="inbound-bounced",
+        gmail_thread_id="thread-bounced",
+    )
+    assert inbound is not None
+
+    # Disable the contact after the email was received.
+    db_disable_contact(database_connection, contact.id, "bounced", "hard bounce")
+
+    gmail_client = _make_gmail_client(account)
+
+    result = reply_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        email_id=inbound.id,
+        body="Reply text",
+    )
+
+    assert result["error"] == "contact_disabled"
+    assert "bounced" in result["message"]
+    gmail_client.send_message.assert_not_called()
+
+
+def test_reply_email_preserves_existing_re_prefix(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    contact = make_test_contact(
+        database_connection, email="thread@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Re: Original topic",
+        contact_id=contact.id,
+        gmail_message_id="inbound-re",
+        gmail_thread_id="thread-re",
+    )
+    assert inbound is not None
+
+    gmail_client = _make_gmail_client(account)
+
+    result = reply_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        email_id=inbound.id,
+        body="Continuing the thread.",
+    )
+
+    assert "error" not in result
+    call_kwargs = gmail_client.send_message.call_args.kwargs
+    # Should NOT double-prefix to "Re: Re: Original topic".
+    assert call_kwargs["subject"] == "Re: Original topic"
+
+
+def test_reply_email_no_thread_id(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Reply should fail when the original email has no gmail_thread_id."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(
+        database_connection, email="nothreadid@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+
+    # Create an inbound email without a gmail_thread_id.
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="No thread",
+        contact_id=contact.id,
+        gmail_message_id="inbound-no-thread",
+        gmail_thread_id=None,
+    )
+    assert inbound is not None
+
+    gmail_client = _make_gmail_client(account)
+
+    result = reply_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        email_id=inbound.id,
+        body="Attempting reply",
+    )
+
+    assert result["error"] == "no_thread"
+    gmail_client.send_message.assert_not_called()
+
+
+def test_reply_email_no_contact(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Reply should fail when the original email has no contact_id."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+
+    # Create an inbound email without a contact_id.
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="No contact",
+        contact_id=None,
+        gmail_message_id="inbound-no-contact",
+        gmail_thread_id="thread-no-contact",
+    )
+    assert inbound is not None
+
+    gmail_client = _make_gmail_client(account)
+
+    result = reply_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        email_id=inbound.id,
+        body="Attempting reply",
+    )
+
+    assert result["error"] == "no_contact"
+    gmail_client.send_message.assert_not_called()
 
 
 # -- create_task ---------------------------------------------------------------
