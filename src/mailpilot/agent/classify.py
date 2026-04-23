@@ -108,6 +108,9 @@ def classify_email(
         model = _get_model(settings.anthropic_api_key, settings.anthropic_model)
         prompt = _format_prompt(subject, body, sender, active_workflows)
         result = _AGENT.run_sync(prompt, model=model)
+        usage = result.usage()
+        span.set_attribute("input_tokens", usage.input_tokens)
+        span.set_attribute("output_tokens", usage.output_tokens)
         output = result.output
         span.set_attribute("reasoning", output.reasoning)
         candidate_ids = {workflow.id for workflow in active_workflows}

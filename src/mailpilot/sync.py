@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 import signal
 import threading
+import time
 from datetime import UTC, datetime, timedelta
 from email.utils import formataddr
 from typing import Any
@@ -54,6 +55,22 @@ from mailpilot.settings import Settings
 _HEARTBEAT_INTERVAL = 30  # seconds
 _RECENCY_WINDOW = timedelta(days=7)
 _FULL_SYNC_MAX_RESULTS = 100
+
+# -- Metrics -------------------------------------------------------------------
+
+sync_messages_stored = logfire.metric_counter(
+    "sync.messages.stored",
+    description="Inbound messages persisted",
+)
+sync_account_duration = logfire.metric_histogram(
+    "sync.account.duration_ms",
+    unit="ms",
+    description="Wall time of sync_account per run",
+)
+sync_errors = logfire.metric_counter(
+    "sync.errors",
+    description="Errors during per-account sync",
+)
 
 
 def is_pid_alive(pid: int) -> bool:
@@ -160,6 +177,7 @@ def sync_account(
     Returns:
         Number of newly stored email rows.
     """
+    start = time.monotonic()
     with logfire.span(
         "sync.account.run",
         account_id=account.id,
@@ -172,17 +190,21 @@ def sync_account(
             checkpoint = gmail_client.get_profile().get("historyId") or ""
             message_ids, mode = _collect_new_message_ids(account, gmail_client)
             span.set_attribute("mode", mode)
+            span.set_attribute("fetched_count", len(message_ids))
             # Fetch message payloads once, skipping IDs already stored. We
             # need the full message for sender parsing, text extraction, and
             # the final insert, so caching here avoids a second Gmail fetch.
             fresh_messages: list[dict[str, Any]] = []
+            duplicate_skipped_count = 0
             for message_id in message_ids:
                 if get_email_by_gmail_message_id(connection, message_id) is not None:
+                    duplicate_skipped_count += 1
                     continue
                 message = gmail_client.get_message(message_id)
                 if message is None:
                     continue
                 fresh_messages.append(message)
+            span.set_attribute("duplicate_skipped_count", duplicate_skipped_count)
             # Resolve every distinct sender in one pair of round-trips,
             # regardless of message count. Scales with unique senders, not
             # with mailbox size.
@@ -213,11 +235,17 @@ def sync_account(
                 gmail_history_id=checkpoint or account.gmail_history_id,
                 last_synced_at=datetime.now(UTC),
             )
-            span.set_attribute("message_count", stored)
-            span.set_attribute("result", "success")
+            span.set_attribute("stored_count", stored)
+            duration_ms = (time.monotonic() - start) * 1000
+            sync_account_duration.record(
+                duration_ms,
+                attributes={"account_id": account.id, "mode": mode},
+            )
             return stored
         except Exception:
-            span.set_attribute("result", "failure")
+            sync_errors.add(
+                1, attributes={"account_id": account.id, "reason": "sync_exception"}
+            )
             logfire.exception("sync.account.run failed", account_id=account.id)
             raise
 
@@ -390,18 +418,10 @@ def _store_inbound_message(  # noqa: PLR0913
         labels=list(message.get("labelIds", [])),
     )
     if email is None:
-        logfire.debug(
-            "sync.account.message_skipped_conflict",
-            account_id=account.id,
-            gmail_message_id=message.get("id"),
-        )
         return None
-    logfire.debug(
-        "sync.account.message_stored",
-        account_id=account.id,
-        email_id=email.id,
-        gmail_message_id=message.get("id"),
-        within_recency_window=within_window,
+    sync_messages_stored.add(
+        1,
+        attributes={"within_recency_window": within_window},
     )
     if within_window and has_active_workflows:
         email = route_email(

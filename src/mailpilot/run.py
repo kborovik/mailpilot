@@ -132,17 +132,18 @@ def run_loop(
         settings: Application settings.
     """
     logfire.info("run.loop.start", interval=settings.run_interval)
-    try:
-        while True:
-            with logfire.span("run.loop.iteration"):
+    while True:
+        with logfire.span("run.loop.iteration"):
+            try:
                 _sync_all_accounts(connection, settings)
                 create_tasks_for_routed_emails(connection)
                 pending = list_pending_tasks(connection)
                 for pending_task in pending:
                     execute_task(connection, settings, pending_task)
-            time.sleep(settings.run_interval)
-    except KeyboardInterrupt:
-        logfire.info("run.loop.stop")
+            except KeyboardInterrupt:
+                logfire.info("run.loop.stop")
+                return
+        time.sleep(settings.run_interval)
 
 
 def _sync_all_accounts(

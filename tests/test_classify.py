@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
+from logfire.testing import CaptureLogfire
 from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
@@ -178,3 +180,28 @@ def test_missing_api_key_raises() -> None:
             active_workflows=[workflow],
             settings=settings,
         )
+
+
+def test_classify_span_has_usage_attributes(capfire: CaptureLogfire) -> None:
+    """agent.classify_email span includes input_tokens, output_tokens."""
+    workflow = make_workflow(
+        "wf-sales-1",
+        "Sales inbound",
+        "Handle inbound pricing and demo requests",
+    )
+    run_classify(
+        [workflow],
+        function_model_returning(workflow_id="wf-sales-1", reasoning="pricing"),
+    )
+
+    classify_spans: list[dict[str, Any]] = [
+        s
+        for s in capfire.exporter.exported_spans_as_dict()
+        if s["name"] == "agent.classify_email"
+    ]
+    assert len(classify_spans) == 1
+    attrs = classify_spans[0]["attributes"]
+    assert "input_tokens" in attrs
+    assert "output_tokens" in attrs
+    assert attrs["input_tokens"] >= 0
+    assert attrs["output_tokens"] >= 0
