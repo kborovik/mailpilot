@@ -126,6 +126,27 @@ def _wrap_send_email(  # noqa: PLR0913
     )
 
 
+def _wrap_reply_email(
+    ctx: RunContext[AgentDeps],
+    email_id: str,
+    body: str,
+    cc: str | None = None,
+    bcc: str | None = None,
+) -> dict[str, Any]:
+    """Reply to an existing email in-thread."""
+    return agent_tools.reply_email(
+        connection=ctx.deps.connection,
+        account=ctx.deps.account,
+        gmail_client=ctx.deps.gmail_client,
+        settings=ctx.deps.settings,
+        workflow_id=ctx.deps.workflow_id,
+        email_id=email_id,
+        body=body,
+        cc=cc,
+        bcc=bcc,
+    )
+
+
 def _wrap_create_task(  # noqa: PLR0913
     ctx: RunContext[AgentDeps],
     contact_id: str,
@@ -250,6 +271,7 @@ def _wrap_noop(
 
 _TOOLS: list[Tool[AgentDeps]] = [
     Tool(_wrap_send_email, name="send_email"),
+    Tool(_wrap_reply_email, name="reply_email"),
     Tool(_wrap_create_task, name="create_task"),
     Tool(_wrap_cancel_task, name="cancel_task"),
     Tool(_wrap_update_contact_status, name="update_contact_status"),
