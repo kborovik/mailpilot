@@ -1695,9 +1695,10 @@ def create_tasks_for_routed_emails(
     unmatched = connection.execute(
         """\
         SELECT e.id, e.workflow_id, e.contact_id FROM email e
-        WHERE e.workflow_id IS NOT NULL
-          AND e.direction = 'inbound'
+        JOIN workflow w ON w.id = e.workflow_id
+        WHERE e.direction = 'inbound'
           AND e.contact_id IS NOT NULL
+          AND e.received_at >= w.created_at
           AND NOT EXISTS (SELECT 1 FROM task t WHERE t.email_id = e.id)
         ORDER BY e.created_at
         """
