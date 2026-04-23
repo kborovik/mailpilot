@@ -198,6 +198,8 @@ Two real Google Workspace accounts are provisioned for end-to-end smoke tests ag
 
 Both are delegated via the service account in `google_application_credentials` and can be re-created with `mailpilot account create --email ... --display-name ...` after a `make clean`.
 
+**Full smoke test:** Use `/smoke-test` to run a phased end-to-end test that exercises the complete agent loop: entity setup, outbound email send via agent, inbound sync + routing, inbound agent reply, and round-trip verification. See `.claude/skills/smoke-test/SKILL.md`.
+
 ## LLM-First Code Style
 
 - Explicit, fully descriptive names (no abbreviations)
