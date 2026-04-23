@@ -1686,6 +1686,11 @@ def create_tasks_for_routed_emails(
     Finds inbound emails with workflow_id set but no corresponding task
     row, and creates a task with scheduled_at=now() for each.
 
+    Uses ``e.created_at`` (DB insert time) rather than ``e.received_at``
+    (Gmail timestamp) to filter historical emails. An email can be received
+    by Gmail before a workflow exists but synced into our DB after -- using
+    ``received_at`` would incorrectly skip such emails.
+
     Args:
         connection: Open database connection.
 
@@ -1698,7 +1703,7 @@ def create_tasks_for_routed_emails(
         JOIN workflow w ON w.id = e.workflow_id
         WHERE e.direction = 'inbound'
           AND e.contact_id IS NOT NULL
-          AND e.received_at >= w.created_at
+          AND e.created_at >= w.created_at
           AND NOT EXISTS (SELECT 1 FROM task t WHERE t.email_id = e.id)
         ORDER BY e.created_at
         """

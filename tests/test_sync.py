@@ -642,3 +642,59 @@ def test_send_email_propagates_gmail_errors(
         )
     # No DB row must have been created when Gmail fails.
     assert list_emails(database_connection, account_id=account.id) == []
+
+
+def test_send_email_passes_cc_and_bcc(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection, email="sender@example.com")
+    client, service = _make_send_client(account.email)
+
+    send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Hello",
+        body="Body text",
+        cc="cc1@example.com,cc2@example.com",
+        bcc="bcc@example.com",
+    )
+
+    # Decode MIME payload and verify Cc and Bcc headers.
+    from email import message_from_bytes
+
+    send_body = service.users.return_value.messages.return_value.send.call_args.kwargs[
+        "body"
+    ]
+    raw = base64.urlsafe_b64decode(send_body["raw"])
+    msg = message_from_bytes(raw)
+    assert msg["cc"] == "cc1@example.com,cc2@example.com"
+    assert msg["bcc"] == "bcc@example.com"
+
+
+def test_send_email_passes_multiple_to_recipients(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection, email="sender@example.com")
+    client, service = _make_send_client(account.email)
+
+    send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="a@example.com,b@example.com",
+        subject="Group email",
+        body="Body",
+    )
+
+    from email import message_from_bytes
+
+    send_body = service.users.return_value.messages.return_value.send.call_args.kwargs[
+        "body"
+    ]
+    raw = base64.urlsafe_b64decode(send_body["raw"])
+    msg = message_from_bytes(raw)
+    assert msg["to"] == "a@example.com,b@example.com"

@@ -781,20 +781,30 @@ def email_view(email_id: str) -> None:
 
 @email.command("send")
 @click.option("--account-id", required=True, help="Sending account ID.")
-@click.option("--to", "to", required=True, help="Recipient email address.")
+@click.option(
+    "--to",
+    "to",
+    required=True,
+    multiple=True,
+    help="Recipient email address (repeatable).",
+)
 @click.option("--subject", required=True, help="Email subject.")
 @click.option("--body", required=True, help="Plain text body.")
 @click.option("--contact-id", default=None, help="Link to an existing contact.")
 @click.option("--workflow-id", default=None, help="Link to a workflow.")
 @click.option("--thread-id", default=None, help="Gmail thread ID for replies.")
+@click.option("--cc", default=None, help="CC recipient(s), comma-separated.")
+@click.option("--bcc", default=None, help="BCC recipient(s), comma-separated.")
 def email_send(
     account_id: str,
-    to: str,
+    to: tuple[str, ...],
     subject: str,
     body: str,
     contact_id: str | None,
     workflow_id: str | None,
     thread_id: str | None,
+    cc: str | None,
+    bcc: str | None,
 ) -> None:
     """Send an outbound email via the given account's Gmail mailbox."""
     import logfire
@@ -804,6 +814,7 @@ def email_send(
     from mailpilot.settings import get_settings
     from mailpilot.sync import send_email
 
+    to_joined = ",".join(to)
     settings = get_settings()
     connection = initialize_database(_database_url())
     try:
@@ -817,12 +828,14 @@ def email_send(
                 account=account,
                 gmail_client=client,
                 settings=settings,
-                to=to,
+                to=to_joined,
                 subject=subject,
                 body=body,
                 contact_id=contact_id,
                 workflow_id=workflow_id,
                 thread_id=thread_id,
+                cc=cc,
+                bcc=bcc,
             )
         except Exception as exc:
             logfire.exception(

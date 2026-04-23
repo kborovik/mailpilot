@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import psycopg
 import pytest
@@ -366,6 +366,48 @@ def test_inbound_email_trigger(
     assert "How much does your product cost?" in all_text
 
 
+def test_inbound_email_trigger_includes_email_id_and_sender(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Inbound email trigger includes email ID and sender so agent can reply."""
+    account, contact, workflow = _setup(database_connection)
+    update_workflow(database_connection, workflow.id, type="inbound")
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+
+    from mailpilot.database import create_email
+
+    email = create_email(
+        database_connection,
+        gmail_message_id="msg-thread-test",
+        gmail_thread_id="thread-abc-123",
+        account_id=account.id,
+        contact_id=contact.id,
+        direction="inbound",
+        subject="Re: proposal",
+        body_text="Looks good, let's proceed.",
+    )
+    assert email is not None
+
+    captured_messages: list[ModelMessage] = []
+    with patch("mailpilot.agent.invoke.GmailClient"):
+        invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            email=email,
+            model_override=_capturing_model(captured_messages),
+        )
+
+    all_text = str(captured_messages)
+    assert email.id in all_text
+    assert "lead@acme.com" in all_text
+    # Thread ID should NOT be exposed -- reply_email resolves it internally.
+    assert "thread-abc-123" not in all_text
+
+
 def test_deferred_task_trigger(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
@@ -472,3 +514,60 @@ def test_invoke_span_has_usage_attributes(
     assert attrs["input_tokens"] >= 0
     assert attrs["output_tokens"] >= 0
     assert attrs["llm_requests"] >= 1
+
+
+# -- Tests: reply_email tool ---------------------------------------------------
+
+
+def test_agent_calls_reply_email(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Agent can call reply_email tool to reply in-thread."""
+    account, contact, workflow = _setup(database_connection)
+    update_workflow(database_connection, workflow.id, type="inbound")
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+
+    from mailpilot.database import create_email
+
+    inbound = create_email(
+        database_connection,
+        gmail_message_id="msg-reply-invoke",
+        gmail_thread_id="thread-reply-invoke",
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        direction="inbound",
+        subject="Need help",
+        body_text="Can you assist?",
+    )
+    assert inbound is not None
+
+    model = _model_that_calls_tool(
+        "reply_email",
+        {"email_id": inbound.id, "body": "Sure, happy to help!"},
+    )
+    with patch("mailpilot.agent.invoke.GmailClient") as mock_cls:
+        mock_client = MagicMock()
+        mock_client.send_message.return_value = {
+            "id": "sent-1",
+            "threadId": "thread-reply-invoke",
+            "labelIds": ["SENT"],
+        }
+        mock_cls.return_value = mock_client
+        result = invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            email=inbound,
+            model_override=model,
+        )
+
+    assert result is not None
+    mock_client.send_message.assert_called_once()
+    call_kwargs = mock_client.send_message.call_args.kwargs
+    assert call_kwargs["to"] == contact.email
+    assert call_kwargs["subject"] == "Re: Need help"
+    assert call_kwargs["thread_id"] == "thread-reply-invoke"

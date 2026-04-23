@@ -101,14 +101,15 @@ def _release_advisory_lock(
 # standalone tool functions in agent/tools.py.
 
 
-def _wrap_send_email(
+def _wrap_send_email(  # noqa: PLR0913
     ctx: RunContext[AgentDeps],
     to: str,
     subject: str,
     body: str,
-    thread_id: str | None = None,
+    cc: str | None = None,
+    bcc: str | None = None,
 ) -> dict[str, Any]:
-    """Send an email via Gmail API."""
+    """Send a new outbound email. For replies, use reply_email instead."""
     return agent_tools.send_email(
         connection=ctx.deps.connection,
         account=ctx.deps.account,
@@ -118,7 +119,29 @@ def _wrap_send_email(
         to=to,
         subject=subject,
         body=body,
-        thread_id=thread_id,
+        cc=cc,
+        bcc=bcc,
+    )
+
+
+def _wrap_reply_email(
+    ctx: RunContext[AgentDeps],
+    email_id: str,
+    body: str,
+    cc: str | None = None,
+    bcc: str | None = None,
+) -> dict[str, Any]:
+    """Reply to an existing email in-thread."""
+    return agent_tools.reply_email(
+        connection=ctx.deps.connection,
+        account=ctx.deps.account,
+        gmail_client=ctx.deps.gmail_client,
+        settings=ctx.deps.settings,
+        workflow_id=ctx.deps.workflow_id,
+        email_id=email_id,
+        body=body,
+        cc=cc,
+        bcc=bcc,
     )
 
 
@@ -246,6 +269,7 @@ def _wrap_noop(
 
 _TOOLS: list[Tool[AgentDeps]] = [
     Tool(_wrap_send_email, name="send_email"),
+    Tool(_wrap_reply_email, name="reply_email"),
     Tool(_wrap_create_task, name="create_task"),
     Tool(_wrap_cancel_task, name="cancel_task"),
     Tool(_wrap_update_contact_status, name="update_contact_status"),
@@ -297,12 +321,12 @@ def _format_trigger(
     email: Email | None,
     task_description: str,
     task_context: dict[str, Any] | None,
+    contact_email: str = "",
 ) -> str:
     """Format the trigger context section of the prompt."""
     if email is not None:
-        return (
-            f"\nNew inbound email:\nSubject: {email.subject}\nBody:\n{email.body_text}"
-        )
+        header = f"\nNew inbound email:\nEmail ID: {email.id}\nFrom: {contact_email}"
+        return f"{header}\nSubject: {email.subject}\nBody:\n{email.body_text}"
     if task_description:
         lines = ["\nDeferred task:", f"Description: {task_description}"]
         if task_context:
@@ -339,7 +363,11 @@ def _build_user_prompt(  # noqa: PLR0913
         sections.append(f"Domain: {contact.domain}")
 
     sections.append(_format_email_history(email_history))
-    sections.append(_format_trigger(email, task_description, task_context))
+    sections.append(
+        _format_trigger(
+            email, task_description, task_context, contact_email=contact.email
+        )
+    )
 
     return "\n".join(sections)
 
