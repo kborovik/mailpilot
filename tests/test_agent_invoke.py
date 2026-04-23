@@ -366,10 +366,10 @@ def test_inbound_email_trigger(
     assert "How much does your product cost?" in all_text
 
 
-def test_inbound_email_trigger_includes_thread_id(
+def test_inbound_email_trigger_includes_email_id_and_sender(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """Inbound email trigger includes gmail_thread_id so agent can reply in-thread."""
+    """Inbound email trigger includes email ID and sender so agent can reply."""
     account, contact, workflow = _setup(database_connection)
     update_workflow(database_connection, workflow.id, type="inbound")
     settings = make_test_settings(
@@ -388,6 +388,7 @@ def test_inbound_email_trigger_includes_thread_id(
         subject="Re: proposal",
         body_text="Looks good, let's proceed.",
     )
+    assert email is not None
 
     captured_messages: list[ModelMessage] = []
     with patch("mailpilot.agent.invoke.GmailClient"):
@@ -401,7 +402,10 @@ def test_inbound_email_trigger_includes_thread_id(
         )
 
     all_text = str(captured_messages)
-    assert "thread-abc-123" in all_text
+    assert email.id in all_text
+    assert "lead@acme.com" in all_text
+    # Thread ID should NOT be exposed -- reply_email resolves it internally.
+    assert "thread-abc-123" not in all_text
 
 
 def test_deferred_task_trigger(

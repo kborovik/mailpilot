@@ -323,10 +323,11 @@ def _format_trigger(
     email: Email | None,
     task_description: str,
     task_context: dict[str, Any] | None,
+    contact_email: str = "",
 ) -> str:
     """Format the trigger context section of the prompt."""
     if email is not None:
-        header = f"\nNew inbound email:\nThread ID: {email.gmail_thread_id}"
+        header = f"\nNew inbound email:\nEmail ID: {email.id}\nFrom: {contact_email}"
         return f"{header}\nSubject: {email.subject}\nBody:\n{email.body_text}"
     if task_description:
         lines = ["\nDeferred task:", f"Description: {task_description}"]
@@ -364,7 +365,11 @@ def _build_user_prompt(  # noqa: PLR0913
         sections.append(f"Domain: {contact.domain}")
 
     sections.append(_format_email_history(email_history))
-    sections.append(_format_trigger(email, task_description, task_context))
+    sections.append(
+        _format_trigger(
+            email, task_description, task_context, contact_email=contact.email
+        )
+    )
 
     return "\n".join(sections)
 
