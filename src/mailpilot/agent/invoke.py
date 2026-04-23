@@ -304,9 +304,8 @@ def _format_trigger(
 ) -> str:
     """Format the trigger context section of the prompt."""
     if email is not None:
-        return (
-            f"\nNew inbound email:\nSubject: {email.subject}\nBody:\n{email.body_text}"
-        )
+        header = f"\nNew inbound email:\nThread ID: {email.gmail_thread_id}"
+        return f"{header}\nSubject: {email.subject}\nBody:\n{email.body_text}"
     if task_description:
         lines = ["\nDeferred task:", f"Description: {task_description}"]
         if task_context:

@@ -366,6 +366,44 @@ def test_inbound_email_trigger(
     assert "How much does your product cost?" in all_text
 
 
+def test_inbound_email_trigger_includes_thread_id(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Inbound email trigger includes gmail_thread_id so agent can reply in-thread."""
+    account, contact, workflow = _setup(database_connection)
+    update_workflow(database_connection, workflow.id, type="inbound")
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+
+    from mailpilot.database import create_email
+
+    email = create_email(
+        database_connection,
+        gmail_message_id="msg-thread-test",
+        gmail_thread_id="thread-abc-123",
+        account_id=account.id,
+        contact_id=contact.id,
+        direction="inbound",
+        subject="Re: proposal",
+        body_text="Looks good, let's proceed.",
+    )
+
+    captured_messages: list[ModelMessage] = []
+    with patch("mailpilot.agent.invoke.GmailClient"):
+        invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            email=email,
+            model_override=_capturing_model(captured_messages),
+        )
+
+    all_text = str(captured_messages)
+    assert "thread-abc-123" in all_text
+
+
 def test_deferred_task_trigger(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
