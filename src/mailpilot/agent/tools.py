@@ -46,6 +46,8 @@ def send_email(  # noqa: PLR0913
     subject: str,
     body: str,
     thread_id: str | None = None,
+    cc: str | None = None,
+    bcc: str | None = None,
 ) -> dict[str, Any]:
     """Send an email via Gmail API.
 
@@ -66,6 +68,8 @@ def send_email(  # noqa: PLR0913
         subject: Email subject.
         body: Email body (plain text).
         thread_id: Gmail thread ID for threading replies.
+        cc: CC recipient(s), comma-separated.
+        bcc: BCC recipient(s), comma-separated.
 
     Returns:
         Dict with sent message details (id, gmail_message_id, gmail_thread_id),
@@ -111,6 +115,8 @@ def send_email(  # noqa: PLR0913
             contact_id=contact_id,
             workflow_id=workflow_id,
             thread_id=thread_id,
+            cc=cc,
+            bcc=bcc,
         )
         return {
             "id": email.id,

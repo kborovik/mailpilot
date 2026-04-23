@@ -101,12 +101,14 @@ def _release_advisory_lock(
 # standalone tool functions in agent/tools.py.
 
 
-def _wrap_send_email(
+def _wrap_send_email(  # noqa: PLR0913
     ctx: RunContext[AgentDeps],
     to: str,
     subject: str,
     body: str,
     thread_id: str | None = None,
+    cc: str | None = None,
+    bcc: str | None = None,
 ) -> dict[str, Any]:
     """Send an email via Gmail API."""
     return agent_tools.send_email(
@@ -119,6 +121,8 @@ def _wrap_send_email(
         subject=subject,
         body=body,
         thread_id=thread_id,
+        cc=cc,
+        bcc=bcc,
     )
 
 

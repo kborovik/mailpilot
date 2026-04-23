@@ -1455,6 +1455,87 @@ def test_email_send_gmail_failure_returns_error(
     assert "gmail 500" in data["message"]
 
 
+def test_email_send_with_cc_and_bcc(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    account = _make_account()
+    sent = _make_email(
+        direction="outbound",
+        status="sent",
+        sent_at=_NOW,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.gmail.GmailClient"),
+        patch("mailpilot.sync.send_email", return_value=sent) as mock_send,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "email",
+                "send",
+                "--account-id",
+                account.id,
+                "--to",
+                "recipient@example.com",
+                "--subject",
+                "Hello",
+                "--body",
+                "Body",
+                "--cc",
+                "cc@example.com",
+                "--bcc",
+                "bcc@example.com",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    kwargs = mock_send.call_args.kwargs
+    assert kwargs["cc"] == "cc@example.com"
+    assert kwargs["bcc"] == "bcc@example.com"
+
+
+def test_email_send_with_multiple_to(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    account = _make_account()
+    sent = _make_email(
+        direction="outbound",
+        status="sent",
+        sent_at=_NOW,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.gmail.GmailClient"),
+        patch("mailpilot.sync.send_email", return_value=sent) as mock_send,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "email",
+                "send",
+                "--account-id",
+                account.id,
+                "--to",
+                "a@example.com",
+                "--to",
+                "b@example.com",
+                "--subject",
+                "Hello",
+                "--body",
+                "Body",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    kwargs = mock_send.call_args.kwargs
+    assert kwargs["to"] == "a@example.com,b@example.com"
+
+
 # -- workflow helpers ----------------------------------------------------------
 
 

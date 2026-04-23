@@ -270,17 +270,21 @@ class GmailClient:
         from_email: str = "",
         thread_id: str | None = None,
         account_id: str = "",
+        cc: str | None = None,
+        bcc: str | None = None,
         user_id: str = "me",
     ) -> dict[str, Any]:
         """Send an email message via Gmail API.
 
         Args:
-            to: Recipient email address.
+            to: Recipient email address(es), comma-separated for multiple.
             subject: Email subject.
             body: Email body (plain text).
             from_email: Sender email (for From header).
             thread_id: Gmail thread ID for threading replies.
             account_id: MailPilot account ID for traceability header.
+            cc: CC recipient(s), comma-separated.
+            bcc: BCC recipient(s), comma-separated.
             user_id: Gmail user ID.
 
         Returns:
@@ -291,6 +295,10 @@ class GmailClient:
         message["Subject"] = subject
         if from_email:
             message["From"] = from_email
+        if cc:
+            message["Cc"] = cc
+        if bcc:
+            message["Bcc"] = bcc
         message["X-MailPilot-Version"] = _MAILPILOT_VERSION
         if account_id:
             message["X-MailPilot-Account-Id"] = account_id

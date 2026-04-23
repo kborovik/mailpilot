@@ -237,6 +237,39 @@ def test_send_email_unknown_contact_succeeds(
     assert result["gmail_message_id"] == "gmail-msg-1"
 
 
+def test_send_email_passes_cc_and_bcc(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    make_test_contact(
+        database_connection, email="recipient@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    gmail_client = _make_gmail_client(account)
+
+    result = send_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        to="recipient@example.com",
+        subject="Hello",
+        body="Hi there",
+        cc="cc@example.com",
+        bcc="bcc@example.com",
+    )
+
+    assert "error" not in result
+    assert result["gmail_message_id"] == "gmail-msg-1"
+    # Verify cc and bcc were passed through to sync.send_email.
+    gmail_client.send_message.assert_called_once()
+    call_kwargs = gmail_client.send_message.call_args.kwargs
+    assert call_kwargs["cc"] == "cc@example.com"
+    assert call_kwargs["bcc"] == "bcc@example.com"
+
+
 # -- create_task ---------------------------------------------------------------
 
 

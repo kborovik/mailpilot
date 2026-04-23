@@ -460,6 +460,8 @@ def send_email(  # noqa: PLR0913
     contact_id: str | None = None,
     workflow_id: str | None = None,
     thread_id: str | None = None,
+    cc: str | None = None,
+    bcc: str | None = None,
 ) -> Email:
     """Send an outbound email through Gmail and record the DB row.
 
@@ -474,12 +476,14 @@ def send_email(  # noqa: PLR0913
         account: Sending account (used for service-account delegation).
         gmail_client: Gmail client scoped to ``account``.
         settings: Application settings (reserved for future tuning).
-        to: Recipient email address.
+        to: Recipient email address(es), comma-separated for multiple.
         subject: Email subject.
         body: Plain text body.
         contact_id: Optional contact FK.
         workflow_id: Optional workflow FK.
         thread_id: Optional Gmail thread ID for replies.
+        cc: Optional CC recipient(s), comma-separated.
+        bcc: Optional BCC recipient(s), comma-separated.
 
     Returns:
         The created ``Email`` row with ``direction="outbound"`` and
@@ -509,6 +513,8 @@ def send_email(  # noqa: PLR0913
             from_email=from_header,
             thread_id=thread_id,
             account_id=account.id,
+            cc=cc,
+            bcc=bcc,
         )
         gmail_message_id = result.get("id")
         gmail_thread_id = result.get("threadId")
