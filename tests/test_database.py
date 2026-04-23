@@ -1893,16 +1893,14 @@ def test_create_tasks_for_routed_emails_skips_outbound(
 def test_create_tasks_for_routed_emails_skips_historical(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """Emails received before the workflow was created should not be bridged."""
-    from datetime import timedelta
+    """Emails stored in DB before the workflow was created should not be bridged."""
+    from datetime import datetime, timedelta
 
     account = make_test_account(database_connection)
-    workflow = make_test_workflow(database_connection, account_id=account.id)
-
     contact = make_test_contact(database_connection)
 
-    # Email received BEFORE the workflow was created -- should be skipped.
-    historical_email = create_email(
+    # Create email FIRST (simulates full sync storing historical email).
+    pre_existing_email = create_email(
         database_connection,
         gmail_message_id="msg-hist",
         gmail_thread_id="thread-hist",
@@ -1911,13 +1909,22 @@ def test_create_tasks_for_routed_emails_skips_historical(
         subject="Old message",
         body_text="From last month",
         labels=["INBOX"],
-        received_at=workflow.created_at - timedelta(days=30),
+        received_at=datetime.now(UTC) - timedelta(days=30),
         contact_id=contact.id,
-        workflow_id=workflow.id,
     )
-    assert historical_email is not None
+    assert pre_existing_email is not None
 
-    # Email received AFTER the workflow was created -- should be bridged.
+    # Create workflow AFTER the email was stored.
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+
+    # Simulate routing: set workflow_id on the pre-existing email.
+    database_connection.execute(
+        "UPDATE email SET workflow_id = %s WHERE id = %s",
+        (workflow.id, pre_existing_email.id),
+    )
+    database_connection.commit()
+
+    # Email stored AFTER the workflow was created -- should be bridged.
     recent_email = create_email(
         database_connection,
         gmail_message_id="msg-recent",
@@ -1927,7 +1934,7 @@ def test_create_tasks_for_routed_emails_skips_historical(
         subject="New message",
         body_text="Just now",
         labels=["INBOX"],
-        received_at=workflow.created_at + timedelta(minutes=5),
+        received_at=datetime.now(UTC),
         contact_id=contact.id,
         workflow_id=workflow.id,
     )
@@ -1936,6 +1943,44 @@ def test_create_tasks_for_routed_emails_skips_historical(
     created = create_tasks_for_routed_emails(database_connection)
     assert len(created) == 1
     assert created[0].email_id == recent_email.id
+
+
+def test_create_tasks_for_routed_emails_bridges_email_synced_after_workflow(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Email received by Gmail before workflow but synced after should be bridged.
+
+    This is the race condition from the smoke test: outbound sends email,
+    then inbound workflow is created, then sync stores the email. The email's
+    received_at (Gmail timestamp) predates the workflow, but created_at
+    (DB insert time) is after the workflow.
+    """
+    from datetime import timedelta
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+
+    # Email received by Gmail BEFORE workflow, but synced/stored AFTER.
+    # created_at is auto-set to now() which is after workflow.created_at.
+    email = create_email(
+        database_connection,
+        gmail_message_id="msg-race",
+        gmail_thread_id="thread-race",
+        account_id=account.id,
+        direction="inbound",
+        subject="Recent email with old Gmail timestamp",
+        body_text="Arrived just before workflow was created",
+        labels=["INBOX"],
+        received_at=workflow.created_at - timedelta(seconds=17),
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+    )
+    assert email is not None
+
+    created = create_tasks_for_routed_emails(database_connection)
+    assert len(created) == 1
+    assert created[0].email_id == email.id
 
 
 def test_complete_task_stores_result(
