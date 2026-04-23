@@ -86,7 +86,7 @@ def send_email(  # noqa: PLR0913
             # Guard 2: cooldown (new conversations only).
             if thread_id is None:
                 last = database.get_last_cold_outbound(
-                    connection, account.id, contact.id
+                    connection, account.id, contact.id, workflow_id
                 )
                 if last is not None and last.created_at > datetime.now(UTC) - timedelta(
                     days=_COOLDOWN_DAYS

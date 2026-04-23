@@ -1011,6 +1011,7 @@ def test_get_last_cold_outbound_returns_newest(
     contact = make_test_contact(
         database_connection, email="r@example.com", domain="example.com"
     )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
 
     # Older cold outbound (first in its thread).
     create_email(
@@ -1019,6 +1020,7 @@ def test_get_last_cold_outbound_returns_newest(
         direction="outbound",
         subject="old pitch",
         contact_id=contact.id,
+        workflow_id=workflow.id,
         gmail_message_id="old-msg",
         gmail_thread_id="thread-old",
         status="sent",
@@ -1030,13 +1032,16 @@ def test_get_last_cold_outbound_returns_newest(
         direction="outbound",
         subject="new pitch",
         contact_id=contact.id,
+        workflow_id=workflow.id,
         gmail_message_id="new-msg",
         gmail_thread_id="thread-new",
         status="sent",
     )
     assert newer is not None
 
-    result = get_last_cold_outbound(database_connection, account.id, contact.id)
+    result = get_last_cold_outbound(
+        database_connection, account.id, contact.id, workflow.id
+    )
     assert result is not None
     assert result.id == newer.id
 
@@ -1049,6 +1054,7 @@ def test_get_last_cold_outbound_excludes_follow_ups(
     contact = make_test_contact(
         database_connection, email="r@example.com", domain="example.com"
     )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
 
     # First outbound in thread (cold).
     cold = create_email(
@@ -1057,6 +1063,7 @@ def test_get_last_cold_outbound_excludes_follow_ups(
         direction="outbound",
         subject="initial pitch",
         contact_id=contact.id,
+        workflow_id=workflow.id,
         gmail_message_id="cold-msg",
         gmail_thread_id="thread-1",
         status="sent",
@@ -1070,12 +1077,15 @@ def test_get_last_cold_outbound_excludes_follow_ups(
         direction="outbound",
         subject="follow up",
         contact_id=contact.id,
+        workflow_id=workflow.id,
         gmail_message_id="followup-msg",
         gmail_thread_id="thread-1",
         status="sent",
     )
 
-    result = get_last_cold_outbound(database_connection, account.id, contact.id)
+    result = get_last_cold_outbound(
+        database_connection, account.id, contact.id, workflow.id
+    )
     assert result is not None
     # Should return the cold email, not the follow-up.
     assert result.id == cold.id
@@ -1088,6 +1098,7 @@ def test_get_last_cold_outbound_ignores_inbound(
     contact = make_test_contact(
         database_connection, email="r@example.com", domain="example.com"
     )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
 
     create_email(
         database_connection,
@@ -1097,7 +1108,9 @@ def test_get_last_cold_outbound_ignores_inbound(
         contact_id=contact.id,
     )
 
-    result = get_last_cold_outbound(database_connection, account.id, contact.id)
+    result = get_last_cold_outbound(
+        database_connection, account.id, contact.id, workflow.id
+    )
     assert result is None
 
 
@@ -1108,9 +1121,53 @@ def test_get_last_cold_outbound_none_when_no_emails(
     contact = make_test_contact(
         database_connection, email="r@example.com", domain="example.com"
     )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
 
-    result = get_last_cold_outbound(database_connection, account.id, contact.id)
+    result = get_last_cold_outbound(
+        database_connection, account.id, contact.id, workflow.id
+    )
     assert result is None
+
+
+def test_get_last_cold_outbound_scoped_to_workflow(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Cooldown is per workflow -- a different workflow can send independently."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(
+        database_connection, email="r@example.com", domain="example.com"
+    )
+    wf_a = make_test_workflow(
+        database_connection, account_id=account.id, name="Campaign A"
+    )
+    wf_b = make_test_workflow(
+        database_connection, account_id=account.id, name="Campaign B"
+    )
+
+    # Cold outbound from workflow A.
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="pitch A",
+        contact_id=contact.id,
+        workflow_id=wf_a.id,
+        gmail_message_id="msg-a",
+        gmail_thread_id="thread-a",
+        status="sent",
+    )
+
+    # Workflow A has a cold outbound.
+    result_a = get_last_cold_outbound(
+        database_connection, account.id, contact.id, wf_a.id
+    )
+    assert result_a is not None
+
+    # Workflow B has no cold outbound -- cooldown does not apply.
+    result_b = get_last_cold_outbound(
+        database_connection, account.id, contact.id, wf_b.id
+    )
+    assert result_b is None
 
 
 # -- search_emails with account_id filter --------------------------------------

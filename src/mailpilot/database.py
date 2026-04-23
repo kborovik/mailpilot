@@ -1399,19 +1399,22 @@ def get_last_cold_outbound(
     connection: psycopg.Connection[dict[str, Any]],
     account_id: str,
     contact_id: str,
+    workflow_id: str,
 ) -> Email | None:
-    """Get the most recent cold outbound email to a contact.
+    """Get the most recent cold outbound email to a contact within a workflow.
 
     A cold outbound email is the first outbound message in its Gmail
     thread (no prior outbound in the same thread). This distinguishes
     initial outreach from follow-up replies within an existing
     conversation. Used by the ``send_email`` agent tool for cooldown
-    enforcement.
+    enforcement. Scoped to a single workflow so that independent
+    campaigns can each send their first outreach independently.
 
     Args:
         connection: Open database connection.
         account_id: Sending account.
         contact_id: Recipient contact.
+        workflow_id: Workflow scope for cooldown.
 
     Returns:
         Most recent cold outbound email, or None if none exists.
@@ -1421,6 +1424,7 @@ def get_last_cold_outbound(
         SELECT e.* FROM email e
         WHERE e.account_id = %(account_id)s
           AND e.contact_id = %(contact_id)s
+          AND e.workflow_id = %(workflow_id)s
           AND e.direction = 'outbound'
           AND NOT EXISTS (
               SELECT 1 FROM email prior
@@ -1433,7 +1437,11 @@ def get_last_cold_outbound(
         ORDER BY e.created_at DESC
         LIMIT 1
         """,
-        {"account_id": account_id, "contact_id": contact_id},
+        {
+            "account_id": account_id,
+            "contact_id": contact_id,
+            "workflow_id": workflow_id,
+        },
     ).fetchone()
     if row is None:
         return None
