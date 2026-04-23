@@ -204,16 +204,15 @@ def test_output_error_includes_trace_id_when_span_active():
 def test_output_error_omits_trace_id_without_span():
     """Error JSON omits trace_id gracefully when no span is active."""
     runner = CliRunner()
-    # Invoke a command that will fail without a database -- output_error fires
-    # before any span is opened by the command.
-    result = runner.invoke(main, ["account", "view", "nonexistent"])
+    # Use a validation path that fires output_error before initialize_database()
+    # so no DB connection is attempted and no logfire.warn() pollutes stderr.
+    result = runner.invoke(main, ["account", "create", "--email", ""])
     # The command exits with code 1 (output_error called).
     assert result.exit_code == 1
     # Error output is on stderr -- CliRunner mixes it when mix_stderr is True.
     data = json.loads(result.output)
     assert data["ok"] is False
-    # trace_id may or may not be present depending on logfire state;
-    # the key point is no crash.
+    assert "trace_id" not in data
 
 
 def test_output_error_trace_id_format():
