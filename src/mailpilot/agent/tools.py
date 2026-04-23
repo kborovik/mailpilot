@@ -46,18 +46,17 @@ def send_email(  # noqa: PLR0913
     to: str,
     subject: str,
     body: str,
-    thread_id: str | None = None,
     cc: str | None = None,
     bcc: str | None = None,
 ) -> dict[str, Any]:
-    """Send an email via Gmail API.
+    """Send a new outbound email via Gmail API.
+
+    For replies to existing emails, use ``reply_email`` instead.
 
     Guards:
     1. Contact must be active (not bounced/unsubscribed) -- hard block
-    2. Cooldown on unsolicited outreach only:
-       - Reply (thread_id provided): always allowed
-       - New conversation (no thread_id): blocked if last unsolicited outbound
-         to this contact from this account was within cooldown period (30 days)
+    2. Cooldown: blocked if last unsolicited outbound to this contact from
+       this account was within cooldown period (30 days)
 
     Args:
         connection: Open database connection.
@@ -68,7 +67,6 @@ def send_email(  # noqa: PLR0913
         to: Recipient email address.
         subject: Email subject.
         body: Email body (plain text).
-        thread_id: Gmail thread ID for threading replies.
         cc: CC recipient(s), comma-separated.
         bcc: BCC recipient(s), comma-separated.
 
@@ -88,22 +86,21 @@ def send_email(  # noqa: PLR0913
                     "message": f"contact is {contact.status}: {contact.status_reason}",
                 }
 
-            # Guard 2: cooldown (new conversations only).
-            if thread_id is None:
-                last = database.get_last_cold_outbound(
-                    connection, account.id, contact.id, workflow_id
-                )
-                if last is not None and last.created_at > datetime.now(UTC) - timedelta(
-                    days=_COOLDOWN_DAYS
-                ):
-                    sent_at = last.created_at.isoformat()
-                    return {
-                        "error": "cooldown",
-                        "message": (
-                            f"last unsolicited email sent {sent_at}; "
-                            f"cooldown is {_COOLDOWN_DAYS} days"
-                        ),
-                    }
+            # Guard 2: cooldown.
+            last = database.get_last_cold_outbound(
+                connection, account.id, contact.id, workflow_id
+            )
+            if last is not None and last.created_at > datetime.now(UTC) - timedelta(
+                days=_COOLDOWN_DAYS
+            ):
+                sent_at = last.created_at.isoformat()
+                return {
+                    "error": "cooldown",
+                    "message": (
+                        f"last unsolicited email sent {sent_at}; "
+                        f"cooldown is {_COOLDOWN_DAYS} days"
+                    ),
+                }
 
         email = sync_send_email(
             connection=connection,
@@ -115,7 +112,6 @@ def send_email(  # noqa: PLR0913
             body=body,
             contact_id=contact_id,
             workflow_id=workflow_id,
-            thread_id=thread_id,
             cc=cc,
             bcc=bcc,
         )

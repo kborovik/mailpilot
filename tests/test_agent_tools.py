@@ -171,49 +171,6 @@ def test_send_email_blocked_by_cooldown(
     gmail_client.send_message.assert_not_called()
 
 
-def test_send_email_reply_bypasses_cooldown(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    account = make_test_account(database_connection)
-    contact = make_test_contact(
-        database_connection, email="reply@example.com", domain="example.com"
-    )
-    workflow = make_test_workflow(database_connection, account_id=account.id)
-    _activate(database_connection, workflow.id)
-
-    # Recent cold outbound (first in its thread).
-    create_email(
-        database_connection,
-        account_id=account.id,
-        direction="outbound",
-        subject="cold pitch",
-        contact_id=contact.id,
-        workflow_id=workflow.id,
-        gmail_message_id="cold-msg",
-        gmail_thread_id="cold-thread",
-        status="sent",
-        sent_at=datetime.now(UTC) - timedelta(days=5),
-    )
-
-    gmail_client = _make_gmail_client(account)
-
-    result = send_email(
-        connection=database_connection,
-        account=account,
-        gmail_client=gmail_client,
-        settings=make_test_settings(),
-        workflow_id=workflow.id,
-        to="reply@example.com",
-        subject="Re: your question",
-        body="Here's the answer",
-        thread_id="existing-thread",
-    )
-
-    # Reply with thread_id should bypass cooldown.
-    assert "error" not in result
-    assert result["gmail_message_id"] == "gmail-msg-1"
-
-
 def test_send_email_unknown_contact_succeeds(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
