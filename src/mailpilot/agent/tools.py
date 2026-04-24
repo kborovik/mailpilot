@@ -253,6 +253,7 @@ def reply_email(  # noqa: PLR0913
             thread_id=original.gmail_thread_id,
             cc=cc,
             bcc=bcc,
+            in_reply_to=original.rfc2822_message_id,
         )
 
         _activate_contact_if_pending(connection, workflow_id, contact.id)

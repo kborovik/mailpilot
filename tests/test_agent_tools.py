@@ -688,6 +688,89 @@ def test_reply_email_no_error_without_workflow_contact(
     assert result["gmail_message_id"] == "gmail-msg-1"
 
 
+def test_reply_email_passes_in_reply_to_from_original(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """reply_email looks up the original email's message_id and passes it
+    as in_reply_to so the MIME message gets In-Reply-To/References headers."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(
+        database_connection, email="sender@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+
+    original_mid = "<CABx-orig@mail.gmail.com>"
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Question",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        gmail_message_id="inbound-irt",
+        gmail_thread_id="thread-irt",
+        rfc2822_message_id=original_mid,
+    )
+    assert inbound is not None
+
+    gmail_client = _make_gmail_client(account)
+
+    reply_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        email_id=inbound.id,
+        body="Here is the info.",
+    )
+
+    gmail_client.send_message.assert_called_once()
+    call_kwargs = gmail_client.send_message.call_args.kwargs
+    assert call_kwargs["in_reply_to"] == original_mid
+
+
+def test_reply_email_omits_in_reply_to_when_original_has_no_message_id(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """When the original email has no message_id, in_reply_to is not passed."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(
+        database_connection, email="sender@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="No MID",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        gmail_message_id="inbound-no-mid",
+        gmail_thread_id="thread-no-mid",
+    )
+    assert inbound is not None
+
+    gmail_client = _make_gmail_client(account)
+
+    reply_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        email_id=inbound.id,
+        body="Reply without MID.",
+    )
+
+    gmail_client.send_message.assert_called_once()
+    call_kwargs = gmail_client.send_message.call_args.kwargs
+    assert call_kwargs.get("in_reply_to") is None
+
+
 # -- create_task ---------------------------------------------------------------
 
 

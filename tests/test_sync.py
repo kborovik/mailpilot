@@ -116,9 +116,16 @@ def _make_gmail_message(
     body: str = "Body of the email",
     received_at: datetime | None = None,
     label_ids: list[str] | None = None,
+    rfc_message_id: str | None = None,
 ) -> dict[str, Any]:
     received_at = received_at or datetime.now(UTC)
     body_b64 = base64.urlsafe_b64encode(body.encode()).decode()
+    headers = [
+        {"name": "From", "value": from_header},
+        {"name": "Subject", "value": subject},
+    ]
+    if rfc_message_id is not None:
+        headers.append({"name": "Message-ID", "value": rfc_message_id})
     return {
         "id": message_id,
         "threadId": thread_id,
@@ -126,10 +133,7 @@ def _make_gmail_message(
         "labelIds": label_ids or ["INBOX"],
         "payload": {
             "mimeType": "text/plain",
-            "headers": [
-                {"name": "From", "value": from_header},
-                {"name": "Subject", "value": subject},
-            ],
+            "headers": headers,
             "body": {"data": body_b64},
         },
     }
@@ -782,3 +786,134 @@ def test_send_email_passes_multiple_to_recipients(
     raw = base64.urlsafe_b64decode(send_body["raw"])
     msg = message_from_bytes(raw)
     assert msg["to"] == "a@example.com,b@example.com"
+
+
+# -- Message-ID / In-Reply-To threading ----------------------------------------
+
+
+def test_sync_stores_message_id_from_inbound_email(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Sync extracts the RFC 2822 Message-ID header and stores it."""
+    account = make_test_account(database_connection, email="sync-mid@example.com")
+    client, service = _make_mock_client(account.email)
+    rfc_mid = "<CABx123@mail.gmail.com>"
+    _set_list_messages(service, [{"id": "m-mid", "threadId": "t-mid"}])
+    _set_get_messages(
+        service,
+        [_make_gmail_message("m-mid", "t-mid", rfc_message_id=rfc_mid)],
+    )
+
+    sync_account(database_connection, account, client, make_test_settings())
+
+    email = get_email_by_gmail_message_id(database_connection, "m-mid")
+    assert email is not None
+    assert email.rfc2822_message_id == rfc_mid
+
+
+def test_sync_stores_none_when_message_id_absent(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """When a message has no Message-ID header, message_id stays None."""
+    account = make_test_account(database_connection, email="sync-nomid@example.com")
+    client, service = _make_mock_client(account.email)
+    _set_list_messages(service, [{"id": "m-nomid", "threadId": "t-nomid"}])
+    _set_get_messages(
+        service,
+        [_make_gmail_message("m-nomid", "t-nomid")],
+    )
+
+    sync_account(database_connection, account, client, make_test_settings())
+
+    email = get_email_by_gmail_message_id(database_connection, "m-nomid")
+    assert email is not None
+    assert email.rfc2822_message_id is None
+
+
+def test_send_email_sets_in_reply_to_and_references_headers(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """When in_reply_to is provided, the MIME message includes threading headers."""
+    from email import message_from_bytes
+
+    account = make_test_account(database_connection, email="reply-hdr@example.com")
+    client, service = _make_send_client(account.email)
+    original_mid = "<orig-123@mail.gmail.com>"
+
+    send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Re: Hello",
+        body="Reply body",
+        thread_id="existing-thread",
+        in_reply_to=original_mid,
+    )
+
+    send_body = service.users.return_value.messages.return_value.send.call_args.kwargs[
+        "body"
+    ]
+    raw = base64.urlsafe_b64decode(send_body["raw"])
+    msg = message_from_bytes(raw)
+    assert msg["In-Reply-To"] == original_mid
+    assert msg["References"] == original_mid
+
+
+def test_send_email_omits_threading_headers_without_in_reply_to(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Without in_reply_to, no In-Reply-To or References headers are set."""
+    from email import message_from_bytes
+
+    account = make_test_account(database_connection, email="no-irt@example.com")
+    client, service = _make_send_client(account.email)
+
+    send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Hello",
+        body="New message",
+    )
+
+    send_body = service.users.return_value.messages.return_value.send.call_args.kwargs[
+        "body"
+    ]
+    raw = base64.urlsafe_b64decode(send_body["raw"])
+    msg = message_from_bytes(raw)
+    assert msg["In-Reply-To"] is None
+    assert msg["References"] is None
+
+
+def test_send_email_always_uses_utf8_base64_encoding(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """All outbound emails use UTF-8 with base64 encoding for consistent
+    rendering across mail clients, regardless of body content."""
+    from email import message_from_bytes
+
+    account = make_test_account(database_connection, email="enc@example.com")
+    client, service = _make_send_client(account.email)
+
+    # Pure ASCII body -- should still use utf-8/base64, not us-ascii/7bit.
+    send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Hello",
+        body="Plain ASCII body with no special characters.",
+    )
+
+    send_body = service.users.return_value.messages.return_value.send.call_args.kwargs[
+        "body"
+    ]
+    raw = base64.urlsafe_b64decode(send_body["raw"])
+    msg = message_from_bytes(raw)
+    assert msg.get_content_charset() == "utf-8"
+    assert msg["Content-Transfer-Encoding"] == "base64"

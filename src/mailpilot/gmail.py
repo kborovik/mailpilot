@@ -272,6 +272,7 @@ class GmailClient:
         account_id: str = "",
         cc: str | None = None,
         bcc: str | None = None,
+        in_reply_to: str | None = None,
         user_id: str = "me",
     ) -> dict[str, Any]:
         """Send an email message via Gmail API.
@@ -285,12 +286,15 @@ class GmailClient:
             account_id: MailPilot account ID for traceability header.
             cc: CC recipient(s), comma-separated.
             bcc: BCC recipient(s), comma-separated.
+            in_reply_to: RFC 2822 Message-ID of the email being replied to.
+                Sets In-Reply-To and References headers for cross-client
+                thread grouping.
             user_id: Gmail user ID.
 
         Returns:
             Sent message dict with id, threadId, labelIds.
         """
-        message = MIMEText(body)
+        message = MIMEText(body, _charset="utf-8")
         message["To"] = to
         message["Subject"] = subject
         if from_email:
@@ -299,6 +303,9 @@ class GmailClient:
             message["Cc"] = cc
         if bcc:
             message["Bcc"] = bcc
+        if in_reply_to:
+            message["In-Reply-To"] = in_reply_to
+            message["References"] = in_reply_to
         message["X-MailPilot-Version"] = _MAILPILOT_VERSION
         if account_id:
             message["X-MailPilot-Account-Id"] = account_id

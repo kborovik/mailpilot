@@ -1166,6 +1166,7 @@ def create_email(
     received_at: datetime | None = None,
     sent_at: datetime | None = None,
     labels: list[str] | None = None,
+    rfc2822_message_id: str | None = None,
 ) -> Email | None:
     """Create a new email record, or return None on gmail_message_id conflict.
 
@@ -1190,6 +1191,7 @@ def create_email(
         received_at: When Gmail reports the message arrived (UTC datetime).
         sent_at: When the outbound message was handed to Gmail (UTC datetime).
         labels: Gmail label IDs attached to the message.
+        rfc2822_message_id: RFC 2822 Message-ID header value.
 
     Returns:
         Created email, or None if another worker already stored a row with
@@ -1200,12 +1202,12 @@ def create_email(
         INSERT INTO email (id, account_id, direction, subject,
             body_text, gmail_message_id, gmail_thread_id,
             contact_id, workflow_id, status, is_routed,
-            received_at, sent_at, labels)
+            received_at, sent_at, labels, rfc2822_message_id)
         VALUES (%(id)s, %(account_id)s, %(direction)s,
             %(subject)s, %(body_text)s, %(gmail_message_id)s,
             %(gmail_thread_id)s, %(contact_id)s, %(workflow_id)s,
             %(status)s, %(is_routed)s, %(received_at)s, %(sent_at)s,
-            %(labels)s)
+            %(labels)s, %(rfc2822_message_id)s)
         ON CONFLICT (gmail_message_id) DO NOTHING
         RETURNING *
         """,
@@ -1224,6 +1226,7 @@ def create_email(
             "received_at": received_at,
             "sent_at": sent_at,
             "labels": Json(labels or []),
+            "rfc2822_message_id": rfc2822_message_id,
         },
     ).fetchone()
     connection.commit()

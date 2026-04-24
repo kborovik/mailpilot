@@ -426,6 +426,7 @@ def _store_inbound_message(  # noqa: PLR0913
         is_routed=not within_window,
         received_at=received_at,
         labels=list(message.get("labelIds", [])),
+        rfc2822_message_id=headers.get("message-id"),
     )
     if email is None:
         return None
@@ -480,6 +481,7 @@ def send_email(  # noqa: PLR0913
     thread_id: str | None = None,
     cc: str | None = None,
     bcc: str | None = None,
+    in_reply_to: str | None = None,
 ) -> Email:
     """Send an outbound email through Gmail and record the DB row.
 
@@ -502,6 +504,9 @@ def send_email(  # noqa: PLR0913
         thread_id: Optional Gmail thread ID for replies.
         cc: Optional CC recipient(s), comma-separated.
         bcc: Optional BCC recipient(s), comma-separated.
+        in_reply_to: RFC 2822 Message-ID of the email being replied to.
+            Sets In-Reply-To and References MIME headers for cross-client
+            thread grouping.
 
     Returns:
         The created ``Email`` row with ``direction="outbound"`` and
@@ -533,6 +538,7 @@ def send_email(  # noqa: PLR0913
             account_id=account.id,
             cc=cc,
             bcc=bcc,
+            in_reply_to=in_reply_to,
         )
         gmail_message_id = result.get("id")
         gmail_thread_id = result.get("threadId")
