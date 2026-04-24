@@ -191,19 +191,17 @@ def sync_account(
             message_ids, mode = _collect_new_message_ids(account, gmail_client)
             span.set_attribute("mode", mode)
             span.set_attribute("fetched_count", len(message_ids))
-            # Fetch message payloads once, skipping IDs already stored. We
-            # need the full message for sender parsing, text extraction, and
-            # the final insert, so caching here avoids a second Gmail fetch.
-            fresh_messages: list[dict[str, Any]] = []
+            # Filter out message IDs already stored, then batch-fetch the
+            # remaining payloads.  Scales with 1-2 HTTP round-trips instead
+            # of N individual get_message calls (#68).
+            new_ids: list[str] = []
             duplicate_skipped_count = 0
             for message_id in message_ids:
                 if get_email_by_gmail_message_id(connection, message_id) is not None:
                     duplicate_skipped_count += 1
-                    continue
-                message = gmail_client.get_message(message_id)
-                if message is None:
-                    continue
-                fresh_messages.append(message)
+                else:
+                    new_ids.append(message_id)
+            fresh_messages = gmail_client.get_messages_batch(new_ids)
             span.set_attribute("duplicate_skipped_count", duplicate_skipped_count)
             # Resolve every distinct sender in one pair of round-trips,
             # regardless of message count. Scales with unique senders, not
@@ -211,9 +209,19 @@ def sync_account(
             contacts_by_email = _resolve_contacts_for_messages(
                 connection, fresh_messages
             )
-            has_active_workflows = bool(
-                list_workflows(connection, account_id=account.id, status="active")
+            active_workflows = list_workflows(
+                connection, account_id=account.id, status="active"
             )
+            has_active_workflows = bool(active_workflows)
+            # Compute the earliest created_at among active inbound
+            # workflows. Emails received before this timestamp can never
+            # produce tasks (create_tasks_for_routed_emails filters on
+            # received_at >= w.created_at), so classifying them via LLM
+            # is pure waste.
+            inbound_created = [
+                w.created_at for w in active_workflows if w.type == "inbound"
+            ]
+            earliest_workflow_at = min(inbound_created) if inbound_created else None
             stored = 0
             for message in fresh_messages:
                 if (
@@ -224,6 +232,7 @@ def sync_account(
                         contacts_by_email,
                         settings,
                         has_active_workflows=has_active_workflows,
+                        earliest_workflow_at=earliest_workflow_at,
                     )
                     is None
                 ):
@@ -381,6 +390,7 @@ def _store_inbound_message(  # noqa: PLR0913
     settings: Settings,
     *,
     has_active_workflows: bool,
+    earliest_workflow_at: datetime | None = None,
 ) -> Email | None:
     """Persist a Gmail message as an inbound email and route when fresh.
 
@@ -423,7 +433,15 @@ def _store_inbound_message(  # noqa: PLR0913
         1,
         attributes={"within_recency_window": within_window},
     )
-    if within_window and has_active_workflows:
+    # Skip LLM classification for emails older than the earliest active
+    # inbound workflow -- they can never produce tasks and classifying
+    # them wastes tokens (#65).
+    predates_workflows = (
+        earliest_workflow_at is not None
+        and received_at is not None
+        and received_at < earliest_workflow_at
+    )
+    if within_window and has_active_workflows and not predates_workflows:
         email = route_email(
             connection, email, sender_email=sender_email, settings=settings
         )

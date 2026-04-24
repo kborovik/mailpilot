@@ -154,10 +154,31 @@ def _set_list_messages(service: MagicMock, stubs: list[dict[str, str]]) -> None:
     }
 
 
-def _set_get_messages(
-    service: MagicMock, messages: list[dict[str, Any] | None]
-) -> None:
-    service.users.return_value.messages.return_value.get.return_value.execute.side_effect = messages
+def _set_get_messages(service: MagicMock, messages: list[dict[str, Any]]) -> None:
+    """Mock get_messages_batch by simulating new_batch_http_request.
+
+    Builds an id-keyed lookup from the supplied messages so the batch
+    callback returns the right payload for each request_id.
+    """
+    by_id: dict[str, dict[str, Any]] = {m["id"]: m for m in messages}
+
+    def _make_batch() -> MagicMock:
+        callbacks: list[tuple[str, object, object]] = []
+
+        def fake_add(request: object, callback: object, request_id: str) -> None:
+            callbacks.append((request_id, request, callback))
+
+        def fake_execute() -> None:
+            for request_id, _request, callback in callbacks:
+                data = by_id.get(request_id)
+                callback(request_id, data, None)  # type: ignore[operator]
+
+        batch = MagicMock()
+        batch.add = fake_add
+        batch.execute = fake_execute
+        return batch
+
+    service.new_batch_http_request.side_effect = _make_batch
 
 
 def _set_history(
@@ -269,13 +290,14 @@ def test_sync_account_skips_duplicate_messages(
     )
     client, service = _make_mock_client(account.email)
     _set_list_messages(service, [{"id": "m1", "threadId": "t1"}])
-    # get_message should NOT be called for the duplicate; supply nothing.
+    # Duplicate filtered before batch fetch; supply no batch messages.
     _set_get_messages(service, [])
 
     stored = sync_account(database_connection, account, client, make_test_settings())
 
     assert stored == 0
-    service.users.return_value.messages.return_value.get.assert_not_called()
+    # All IDs were duplicates -> batch fetch receives empty list -> no HTTP call.
+    service.new_batch_http_request.assert_not_called()
 
 
 def test_sync_account_recency_gate_marks_old_messages_routed(
@@ -334,6 +356,68 @@ def test_sync_account_skips_routing_when_no_active_workflows(
     assert email is not None
     assert email.is_routed is True
     assert email.workflow_id is None
+
+
+def test_sync_account_skips_classification_for_emails_before_earliest_workflow(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Emails older than the earliest active workflow skip LLM classification."""
+    from unittest.mock import patch
+
+    from mailpilot.database import activate_workflow, update_workflow
+
+    account = make_test_account(database_connection, email="hist@example.com")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="inbound"
+    )
+    update_workflow(
+        database_connection,
+        workflow.id,
+        objective="Handle inquiries",
+        instructions="Reply helpfully",
+    )
+    activate_workflow(database_connection, workflow.id)
+
+    client, service = _make_mock_client(account.email)
+    # Email received 2 days ago (within 7-day recency window) but 1 hour
+    # before the workflow was created -- should skip classification.
+    email_time = workflow.created_at - timedelta(hours=1)
+    _set_list_messages(service, [{"id": "pre-wf", "threadId": "t-pre-wf"}])
+    _set_get_messages(
+        service,
+        [_make_gmail_message("pre-wf", "t-pre-wf", received_at=email_time)],
+    )
+
+    with patch("mailpilot.sync.route_email") as mock_route:
+        stored = sync_account(
+            database_connection, account, client, make_test_settings()
+        )
+
+    assert stored == 1
+    mock_route.assert_not_called()
+    email = get_email_by_gmail_message_id(database_connection, "pre-wf")
+    assert email is not None
+    assert email.is_routed is True
+    assert email.workflow_id is None
+
+
+def test_sync_account_uses_batch_fetch(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """sync_account fetches messages via get_messages_batch, not get_message."""
+    account = make_test_account(database_connection, email="batch@example.com")
+    client, service = _make_mock_client(account.email)
+    stubs = [{"id": f"m{i}", "threadId": f"t{i}"} for i in range(3)]
+    _set_list_messages(service, stubs)
+    _set_get_messages(
+        service, [_make_gmail_message(f"m{i}", f"t{i}") for i in range(3)]
+    )
+
+    stored = sync_account(database_connection, account, client, make_test_settings())
+
+    assert stored == 3
+    # Batch method must have been used, not per-message get.
+    service.new_batch_http_request.assert_called()
 
 
 def test_sync_account_auto_creates_contact_only_once(

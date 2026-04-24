@@ -414,6 +414,85 @@ class GmailClient:
         )
         return result
 
+    _BATCH_SIZE = 100
+    """Maximum messages per ``new_batch_http_request()`` call."""
+
+    @_retry_on_transient
+    def get_messages_batch(
+        self,
+        message_ids: list[str],
+        user_id: str = "me",
+        format_: str = "full",
+    ) -> list[dict[str, Any]]:
+        """Fetch multiple messages in batched HTTP requests.
+
+        Uses ``new_batch_http_request()`` to multiplex up to 100 individual
+        gets into a single HTTP round-trip.  Deleted/404 messages are
+        silently skipped (same semantics as ``get_message`` returning None).
+
+        Args:
+            message_ids: Gmail message IDs to fetch.
+            user_id: Gmail user ID.
+            format_: Message format (full, metadata, minimal, raw).
+
+        Returns:
+            List of successfully fetched message dicts (order not guaranteed).
+        """
+        if not message_ids:
+            return []
+
+        results: list[dict[str, Any]] = []
+        failed_ids: list[str] = []
+        total_batches = (len(message_ids) + self._BATCH_SIZE - 1) // self._BATCH_SIZE
+
+        def _callback(
+            request_id: str,
+            response: dict[str, Any] | None,
+            exception: Exception | None,
+        ) -> None:
+            if exception is not None:
+                from googleapiclient.errors import HttpError
+
+                if isinstance(exception, HttpError) and exception.resp.status == 404:
+                    logfire.debug(
+                        "gmail message not found (deleted)",
+                        message_id=request_id,
+                    )
+                    return
+                logfire.warn(
+                    "gmail batch message error",
+                    message_id=request_id,
+                    error=str(exception),
+                )
+                failed_ids.append(request_id)
+                return
+            if response is not None:
+                results.append(response)
+
+        for batch_index, start in enumerate(
+            range(0, len(message_ids), self._BATCH_SIZE)
+        ):
+            chunk = message_ids[start : start + self._BATCH_SIZE]
+            with logfire.span(
+                "gmail.get_messages_batch.chunk",
+                count=len(chunk),
+                batch_index=batch_index,
+                total_batches=total_batches,
+                user_id=user_id,
+            ) as span:
+                batch = self._service.new_batch_http_request()
+                for msg_id in chunk:
+                    request = (
+                        self._service.users()
+                        .messages()
+                        .get(userId=user_id, id=msg_id, format=format_)
+                    )
+                    batch.add(request, callback=_callback, request_id=msg_id)
+                batch.execute()
+                span.set_attribute("failed_count", len(failed_ids))
+
+        return results
+
     def create_label_if_not_exists(
         self,
         label_name: str,
