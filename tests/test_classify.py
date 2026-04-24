@@ -201,7 +201,10 @@ def test_classify_span_has_usage_attributes(capfire: CaptureLogfire) -> None:
     ]
     assert len(classify_spans) == 1
     attrs = classify_spans[0]["attributes"]
+    assert "model" in attrs
     assert "input_tokens" in attrs
     assert "output_tokens" in attrs
+    assert "total_tokens" in attrs
     assert attrs["input_tokens"] >= 0
     assert attrs["output_tokens"] >= 0
+    assert attrs["total_tokens"] == attrs["input_tokens"] + attrs["output_tokens"]

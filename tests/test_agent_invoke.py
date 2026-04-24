@@ -508,11 +508,14 @@ def test_invoke_span_has_usage_attributes(
     ]
     assert len(invoke_spans) == 1
     attrs = invoke_spans[0]["attributes"]
+    assert "model" in attrs
     assert "input_tokens" in attrs
     assert "output_tokens" in attrs
+    assert "total_tokens" in attrs
     assert "llm_requests" in attrs
     assert attrs["input_tokens"] >= 0
     assert attrs["output_tokens"] >= 0
+    assert attrs["total_tokens"] == attrs["input_tokens"] + attrs["output_tokens"]
     assert attrs["llm_requests"] >= 1
 
 

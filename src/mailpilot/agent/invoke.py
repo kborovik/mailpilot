@@ -482,8 +482,10 @@ def invoke_workflow_agent(  # noqa: PLR0913
 
             # Usage tracking.
             usage = result.usage()
+            span.set_attribute("model", settings.anthropic_model)
             span.set_attribute("input_tokens", usage.input_tokens)
             span.set_attribute("output_tokens", usage.output_tokens)
+            span.set_attribute("total_tokens", usage.input_tokens + usage.output_tokens)
             span.set_attribute("llm_requests", usage.requests)
 
             # Tool-use enforcement.
