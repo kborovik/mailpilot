@@ -119,6 +119,8 @@ Note: Are span attributes sufficient to debug a failure without reading code? Is
 
 **Why this works:** The inbound workflow was created in Phase 0 before the outbound agent sent the email in Phase 1. The email's `received_at` timestamp is after the workflow's `created_at`, so the `predates_workflows` check passes and LLM classification runs.
 
+**Old messages from prior tests.** Email messages are never deleted from Gmail -- `make clean` only resets the database, not the mailboxes. Sync will store messages from prior smoke test runs alongside the current run's email. This is expected and intentional: old messages exercise the routing flow (they should route as `unrouted` or `thread_match` to prior workflows that no longer exist in the DB). Use the `--since` filter and unique `[ST-HHMMSS]` subject prefix to isolate the current run's email from prior test messages.
+
 1. Enroll the outbound contact in the inbound workflow:
    ```
    mailpilot workflow contact add --workflow-id <INBOUND_WORKFLOW_ID> --contact-id <OUTBOUND_CONTACT_ID>
@@ -207,6 +209,8 @@ Note: Is the task lifecycle (create -> execute -> complete) fully traceable from
 - Note whether the reply `thread_id` matches the original outbound email's `thread_id`. Gmail assigns different thread IDs per account, so a mismatch here is expected Gmail behavior, not a bug.
 
 **On failure:** Report "reply not received after 3 sync attempts." Phases 1-3 passed, so this is a delivery or sync issue on the return path.
+
+**Expected: old messages route as `unrouted`.** The outbound account sync will store messages from prior smoke test runs. These old messages will appear as `unrouted` in routing spans because their original workflows no longer exist in the clean database. This is correct behavior -- the routing flow correctly identifies them as unroutable. Do not flag these as deficiencies in the report.
 
 ### Logfire: Phase 4
 
