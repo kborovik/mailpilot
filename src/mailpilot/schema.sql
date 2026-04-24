@@ -89,6 +89,8 @@ CREATE TABLE IF NOT EXISTS email (
     status            TEXT NOT NULL DEFAULT 'received'
                       CHECK (status IN ('sent', 'received', 'bounced')),
     is_routed         BOOLEAN NOT NULL DEFAULT FALSE,
+    sender            TEXT NOT NULL DEFAULT '',
+    recipients        JSONB NOT NULL DEFAULT '{}',
     sent_at           TIMESTAMPTZ,
     received_at       TIMESTAMPTZ,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP

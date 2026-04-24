@@ -720,6 +720,10 @@ def email_search(query: str, limit: int) -> None:
     type=click.Choice(["sent", "received", "bounced"]),
     help="Filter by email status.",
 )
+@click.option("--from", "sender", default=None, help="Filter by sender email address.")
+@click.option(
+    "--to", "recipient", default=None, help="Filter by recipient email address."
+)
 def email_list(
     limit: int,
     contact_id: str | None,
@@ -729,6 +733,8 @@ def email_list(
     direction: str | None,
     workflow_id: str | None,
     status: str | None,
+    sender: str | None,
+    recipient: str | None,
 ) -> None:
     """List emails with optional filters."""
     from mailpilot.database import (
@@ -757,6 +763,8 @@ def email_list(
             direction=direction,
             workflow_id=workflow_id,
             status=status,
+            sender=sender,
+            recipient=recipient,
         )
         output({"emails": [e.model_dump(mode="json") for e in emails]})
     finally:

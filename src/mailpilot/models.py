@@ -128,6 +128,8 @@ class Email(BaseModel):
     labels: list[str] = []
     status: str = "received"
     is_routed: bool = False
+    sender: str = ""
+    recipients: dict[str, list[str]] = {}
     sent_at: datetime | None = None
     received_at: datetime | None = None
     created_at: datetime
