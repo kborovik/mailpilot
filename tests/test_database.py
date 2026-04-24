@@ -44,6 +44,7 @@ from mailpilot.database import (
     get_last_cold_outbound,
     get_note,
     get_status_counts,
+    get_unprocessed_inbound_email,
     get_workflow,
     get_workflow_contact,
     list_accounts,
@@ -1981,6 +1982,98 @@ def test_create_tasks_for_routed_emails_bridges_email_synced_after_workflow(
     created = create_tasks_for_routed_emails(database_connection)
     assert len(created) == 1
     assert created[0].email_id == email.id
+
+
+def test_get_unprocessed_inbound_email(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from datetime import timedelta
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+
+    # No emails yet -- returns None.
+    result = get_unprocessed_inbound_email(database_connection, workflow.id, contact.id)
+    assert result is None
+
+    # Create an inbound email for this contact+workflow.
+    email = create_email(
+        database_connection,
+        gmail_message_id="msg-unproc-1",
+        gmail_thread_id="thread-unproc-1",
+        account_id=account.id,
+        direction="inbound",
+        subject="Question",
+        body_text="Can you help?",
+        labels=["INBOX"],
+        received_at=workflow.created_at + timedelta(minutes=5),
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+    )
+    assert email is not None
+
+    # Now returns the email.
+    result = get_unprocessed_inbound_email(database_connection, workflow.id, contact.id)
+    assert result is not None
+    assert result.id == email.id
+
+    # Create a task for that email -- it becomes "processed".
+    create_task(
+        database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="handle inbound email",
+        scheduled_at="2026-04-22T12:00:00Z",
+        email_id=email.id,
+    )
+
+    # Now returns None (email has a task).
+    result = get_unprocessed_inbound_email(database_connection, workflow.id, contact.id)
+    assert result is None
+
+
+def test_get_unprocessed_inbound_email_returns_most_recent(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from datetime import timedelta
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+
+    older = create_email(
+        database_connection,
+        gmail_message_id="msg-older",
+        gmail_thread_id="thread-older",
+        account_id=account.id,
+        direction="inbound",
+        subject="First",
+        body_text="First msg",
+        labels=["INBOX"],
+        received_at=workflow.created_at + timedelta(minutes=1),
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+    )
+    assert older is not None
+    newer = create_email(
+        database_connection,
+        gmail_message_id="msg-newer",
+        gmail_thread_id="thread-newer",
+        account_id=account.id,
+        direction="inbound",
+        subject="Second",
+        body_text="Second msg",
+        labels=["INBOX"],
+        received_at=workflow.created_at + timedelta(minutes=10),
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+    )
+    assert newer is not None
+
+    result = get_unprocessed_inbound_email(database_connection, workflow.id, contact.id)
+    assert result is not None
+    assert result.id == newer.id
 
 
 def test_complete_task_stores_result(

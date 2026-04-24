@@ -1678,6 +1678,43 @@ def list_tasks(
     return [Task.model_validate(row) for row in rows]
 
 
+def get_unprocessed_inbound_email(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+    contact_id: str,
+) -> Email | None:
+    """Return the most recent inbound email for a contact+workflow without a task.
+
+    Uses the same filtering logic as ``create_tasks_for_routed_emails`` but
+    scoped to a single contact and returning at most one email.
+
+    Args:
+        connection: Open database connection.
+        workflow_id: Workflow FK.
+        contact_id: Contact FK.
+
+    Returns:
+        The most recent unprocessed inbound email, or None.
+    """
+    row = connection.execute(
+        """\
+        SELECT e.* FROM email e
+        JOIN workflow w ON w.id = e.workflow_id
+        WHERE e.direction = 'inbound'
+          AND e.workflow_id = %(workflow_id)s
+          AND e.contact_id = %(contact_id)s
+          AND e.created_at >= w.created_at
+          AND NOT EXISTS (SELECT 1 FROM task t WHERE t.email_id = e.id)
+        ORDER BY e.created_at DESC
+        LIMIT 1
+        """,
+        {"workflow_id": workflow_id, "contact_id": contact_id},
+    ).fetchone()
+    if row is None:
+        return None
+    return Email.model_validate(row)
+
+
 def create_tasks_for_routed_emails(
     connection: psycopg.Connection[dict[str, Any]],
 ) -> list[Task]:

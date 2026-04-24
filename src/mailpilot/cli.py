@@ -1515,13 +1515,14 @@ def workflow_stop(workflow_id: str) -> None:
 @click.option("--workflow-id", required=True, help="Workflow ID.")
 @click.option("--contact-id", required=True, help="Contact ID.")
 def workflow_run(workflow_id: str, contact_id: str) -> None:
-    """Invoke the workflow agent for a single contact (outbound only)."""
+    """Invoke the workflow agent for a single contact."""
     from datetime import UTC, datetime
 
     from mailpilot.database import (
         create_task,
         get_contact,
         get_task,
+        get_unprocessed_inbound_email,
         get_workflow,
         get_workflow_contact,
         initialize_database,
@@ -1539,11 +1540,6 @@ def workflow_run(workflow_id: str, contact_id: str) -> None:
             output_error(
                 f"workflow is not active (status={wf.status})", "invalid_state"
             )
-        if wf.type != "outbound":
-            output_error(
-                f"workflow run requires type=outbound (got {wf.type})",
-                "invalid_state",
-            )
         contact = get_contact(connection, contact_id)
         if contact is None:
             output_error(f"contact not found: {contact_id}", "not_found")
@@ -1552,12 +1548,19 @@ def workflow_run(workflow_id: str, contact_id: str) -> None:
                 f"contact {contact_id} is not enrolled in workflow {workflow_id}",
                 "not_found",
             )
+        email_id: str | None = None
+        if wf.type == "inbound":
+            unprocessed = get_unprocessed_inbound_email(connection, wf.id, contact.id)
+            if unprocessed is not None:
+                email_id = unprocessed.id
+        description = f"manual {wf.type} run"
         task = create_task(
             connection,
             workflow_id=wf.id,
             contact_id=contact.id,
-            description="manual outbound run",
+            description=description,
             scheduled_at=datetime.now(UTC).isoformat(),
+            email_id=email_id,
         )
         execute_task(connection, settings, task)
         completed = get_task(connection, task.id)
