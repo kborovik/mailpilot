@@ -23,6 +23,7 @@ from conftest import (
     make_test_workflow,
 )
 from mailpilot.agent.invoke import (
+    _SYSTEM_PREFIX,  # pyright: ignore[reportPrivateUsage]
     _advisory_lock_keys,  # pyright: ignore[reportPrivateUsage]
     invoke_workflow_agent,
 )
@@ -574,3 +575,16 @@ def test_agent_calls_reply_email(
     assert call_kwargs["to"] == contact.email
     assert call_kwargs["subject"] == "Re: Need help"
     assert call_kwargs["thread_id"] == "thread-reply-invoke"
+
+
+# -- Tests: system prefix content ----------------------------------------------
+
+
+def test_system_prefix_guides_contact_status_update() -> None:
+    """System prefix must instruct agents to update contact status."""
+    assert "update_contact_status" in _SYSTEM_PREFIX
+
+
+def test_system_prefix_allows_markdown_in_emails() -> None:
+    """System prefix must not prohibit markdown in email content."""
+    assert "No markdown" not in _SYSTEM_PREFIX

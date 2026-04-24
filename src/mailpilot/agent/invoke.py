@@ -283,9 +283,10 @@ _TOOLS: list[Tool[AgentDeps]] = [
 
 
 _SYSTEM_PREFIX = (
-    "Respond in plain text only. No markdown, no tables, no bullet "
-    "points, no bold/italic, no emojis. Keep your final summary brief "
-    "(2-3 sentences).\n\n"
+    "Keep your final summary brief (2-3 sentences, plain text, no emojis).\n"
+    "Email bodies may use Markdown formatting (headers, bold, tables).\n"
+    "After completing the workflow objective for a contact, call "
+    "update_contact_status with status='completed' and a brief reason.\n\n"
 )
 
 

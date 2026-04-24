@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import psycopg
+from logfire.testing import CaptureLogfire
 from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
@@ -623,3 +624,76 @@ def test_route_email_workflow_contact_idempotent(
 
     assert routed.workflow_id == workflow.id
     assert routed.is_routed is True
+
+
+# -- Span contract: route_method attribute ------------------------------------
+
+
+def _routing_spans(capfire: CaptureLogfire) -> list[dict[str, Any]]:
+    return [
+        s
+        for s in capfire.exporter.exported_spans_as_dict()
+        if s["name"] == "routing.route_email"
+    ]
+
+
+def test_route_email_span_has_route_method_thread_match(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """routing.route_email span must set route_method='thread_match'."""
+    account = make_test_account(database_connection, email="rmtm@example.com")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="inbound"
+    )
+    _activate_workflow(database_connection, workflow.id)
+
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="prior",
+        gmail_thread_id="t-rmtm",
+        workflow_id=workflow.id,
+        is_routed=True,
+    )
+    new_email = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="reply",
+        gmail_thread_id="t-rmtm",
+    )
+    assert new_email is not None
+
+    route_email(
+        database_connection, new_email, "sender@example.com", make_test_settings()
+    )
+
+    spans = _routing_spans(capfire)
+    assert len(spans) == 1
+    assert spans[0]["attributes"]["route_method"] == "thread_match"
+
+
+def test_route_email_span_has_route_method_unrouted(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """routing.route_email span must set route_method='unrouted'."""
+    account = make_test_account(database_connection, email="rmur@example.com")
+    new_email = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="orphan",
+        gmail_thread_id="t-rmur",
+    )
+    assert new_email is not None
+
+    route_email(
+        database_connection, new_email, "nobody@example.com", make_test_settings()
+    )
+
+    spans = _routing_spans(capfire)
+    assert len(spans) == 1
+    assert spans[0]["attributes"]["route_method"] == "unrouted"

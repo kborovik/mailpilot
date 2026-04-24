@@ -72,14 +72,17 @@ def route_email(
             workflow_id = _try_thread_match(connection, email)
             if workflow_id is not None:
                 span.set_attribute("result", "thread_match")
+                span.set_attribute("route_method", "thread_match")
                 span.set_attribute("workflow_id", workflow_id)
             else:
                 workflow_id = _try_classify(connection, email, sender_email, settings)
                 if workflow_id is not None:
                     span.set_attribute("result", "classified")
+                    span.set_attribute("route_method", "classified")
                     span.set_attribute("workflow_id", workflow_id)
                 else:
                     span.set_attribute("result", "unrouted")
+                    span.set_attribute("route_method", "unrouted")
 
             updated = update_email(
                 connection, email.id, workflow_id=workflow_id, is_routed=True
