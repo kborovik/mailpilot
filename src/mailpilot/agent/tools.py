@@ -26,7 +26,6 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import logfire
 import psycopg
 
 from mailpilot import database
@@ -52,20 +51,15 @@ def _activate_contact_if_pending(
         workflow_id: Current workflow FK.
         contact_id: Contact FK.
     """
-    with logfire.span(
-        "agent.auto_activate_contact",
-        workflow_id=workflow_id,
-        contact_id=contact_id,
-    ):
-        wc = database.get_workflow_contact(connection, workflow_id, contact_id)
-        if wc is not None and wc.status == "pending":
-            database.update_workflow_contact(
-                connection,
-                workflow_id,
-                contact_id,
-                status="active",
-                reason="email sent",
-            )
+    wc = database.get_workflow_contact(connection, workflow_id, contact_id)
+    if wc is not None and wc.status == "pending":
+        database.update_workflow_contact(
+            connection,
+            workflow_id,
+            contact_id,
+            status="active",
+            reason="email sent",
+        )
 
 
 def send_email(  # noqa: PLR0913
@@ -105,56 +99,55 @@ def send_email(  # noqa: PLR0913
         Dict with sent message details (id, gmail_message_id, gmail_thread_id),
         or error dict if blocked by guard.
     """
-    with logfire.span("agent.tool.send_email", to=to, workflow_id=workflow_id):
-        # Guard 1: contact status check.
-        contact = database.get_contact_by_email(connection, to)
-        contact_id: str | None = None
-        if contact is not None:
-            contact_id = contact.id
-            if contact.status != "active":
-                return {
-                    "error": "contact_disabled",
-                    "message": f"contact is {contact.status}: {contact.status_reason}",
-                }
+    # Guard 1: contact status check.
+    contact = database.get_contact_by_email(connection, to)
+    contact_id: str | None = None
+    if contact is not None:
+        contact_id = contact.id
+        if contact.status != "active":
+            return {
+                "error": "contact_disabled",
+                "message": f"contact is {contact.status}: {contact.status_reason}",
+            }
 
-            # Guard 2: cooldown.
-            last = database.get_last_cold_outbound(
-                connection, account.id, contact.id, workflow_id
-            )
-            if last is not None and last.created_at > datetime.now(UTC) - timedelta(
-                days=_COOLDOWN_DAYS
-            ):
-                sent_at = last.created_at.isoformat()
-                return {
-                    "error": "cooldown",
-                    "message": (
-                        f"last unsolicited email sent {sent_at}; "
-                        f"cooldown is {_COOLDOWN_DAYS} days"
-                    ),
-                }
-
-        email = sync_send_email(
-            connection=connection,
-            account=account,
-            gmail_client=gmail_client,  # type: ignore[arg-type]
-            settings=settings,
-            to=to,
-            subject=subject,
-            body=body,
-            contact_id=contact_id,
-            workflow_id=workflow_id,
-            cc=cc,
-            bcc=bcc,
+        # Guard 2: cooldown.
+        last = database.get_last_cold_outbound(
+            connection, account.id, contact.id, workflow_id
         )
+        if last is not None and last.created_at > datetime.now(UTC) - timedelta(
+            days=_COOLDOWN_DAYS
+        ):
+            sent_at = last.created_at.isoformat()
+            return {
+                "error": "cooldown",
+                "message": (
+                    f"last unsolicited email sent {sent_at}; "
+                    f"cooldown is {_COOLDOWN_DAYS} days"
+                ),
+            }
 
-        if contact_id is not None:
-            _activate_contact_if_pending(connection, workflow_id, contact_id)
+    email = sync_send_email(
+        connection=connection,
+        account=account,
+        gmail_client=gmail_client,  # type: ignore[arg-type]
+        settings=settings,
+        to=to,
+        subject=subject,
+        body=body,
+        contact_id=contact_id,
+        workflow_id=workflow_id,
+        cc=cc,
+        bcc=bcc,
+    )
 
-        return {
-            "id": email.id,
-            "gmail_message_id": email.gmail_message_id,
-            "gmail_thread_id": email.gmail_thread_id,
-        }
+    if contact_id is not None:
+        _activate_contact_if_pending(connection, workflow_id, contact_id)
+
+    return {
+        "id": email.id,
+        "gmail_message_id": email.gmail_message_id,
+        "gmail_thread_id": email.gmail_thread_id,
+    }
 
 
 def reply_email(  # noqa: PLR0913
@@ -195,74 +188,71 @@ def reply_email(  # noqa: PLR0913
         Dict with sent message details (id, gmail_message_id, gmail_thread_id),
         or error dict if blocked by guard.
     """
-    with logfire.span(
-        "agent.tool.reply_email", email_id=email_id, workflow_id=workflow_id
-    ):
-        # Guard 1: original email must exist.
-        original = database.get_email(connection, email_id)
-        if original is None:
-            return {
-                "error": "not_found",
-                "message": f"email not found: {email_id}",
-            }
-
-        # Guard 2: original email must have a gmail_thread_id.
-        if original.gmail_thread_id is None:
-            return {
-                "error": "no_thread",
-                "message": f"email has no gmail_thread_id: {email_id}",
-            }
-
-        # Guard 3: original email must have a contact.
-        if original.contact_id is None:
-            return {
-                "error": "no_contact",
-                "message": f"email has no contact_id: {email_id}",
-            }
-
-        # Guard 4: contact must exist.
-        contact = database.get_contact(connection, original.contact_id)
-        if contact is None:
-            return {
-                "error": "not_found",
-                "message": f"contact not found: {original.contact_id}",
-            }
-
-        # Guard 5: contact must be active.
-        if contact.status != "active":
-            return {
-                "error": "contact_disabled",
-                "message": f"contact is {contact.status}: {contact.status_reason}",
-            }
-
-        # Derive subject: prepend "Re: " unless already prefixed.
-        subject = original.subject
-        if not subject.lower().startswith("re: "):
-            subject = f"Re: {subject}"
-
-        email = sync_send_email(
-            connection=connection,
-            account=account,
-            gmail_client=gmail_client,  # type: ignore[arg-type]
-            settings=settings,
-            to=contact.email,
-            subject=subject,
-            body=body,
-            contact_id=contact.id,
-            workflow_id=workflow_id,
-            thread_id=original.gmail_thread_id,
-            cc=cc,
-            bcc=bcc,
-            in_reply_to=original.rfc2822_message_id,
-        )
-
-        _activate_contact_if_pending(connection, workflow_id, contact.id)
-
+    # Guard 1: original email must exist.
+    original = database.get_email(connection, email_id)
+    if original is None:
         return {
-            "id": email.id,
-            "gmail_message_id": email.gmail_message_id,
-            "gmail_thread_id": email.gmail_thread_id,
+            "error": "not_found",
+            "message": f"email not found: {email_id}",
         }
+
+    # Guard 2: original email must have a gmail_thread_id.
+    if original.gmail_thread_id is None:
+        return {
+            "error": "no_thread",
+            "message": f"email has no gmail_thread_id: {email_id}",
+        }
+
+    # Guard 3: original email must have a contact.
+    if original.contact_id is None:
+        return {
+            "error": "no_contact",
+            "message": f"email has no contact_id: {email_id}",
+        }
+
+    # Guard 4: contact must exist.
+    contact = database.get_contact(connection, original.contact_id)
+    if contact is None:
+        return {
+            "error": "not_found",
+            "message": f"contact not found: {original.contact_id}",
+        }
+
+    # Guard 5: contact must be active.
+    if contact.status != "active":
+        return {
+            "error": "contact_disabled",
+            "message": f"contact is {contact.status}: {contact.status_reason}",
+        }
+
+    # Derive subject: prepend "Re: " unless already prefixed.
+    subject = original.subject
+    if not subject.lower().startswith("re: "):
+        subject = f"Re: {subject}"
+
+    email = sync_send_email(
+        connection=connection,
+        account=account,
+        gmail_client=gmail_client,  # type: ignore[arg-type]
+        settings=settings,
+        to=contact.email,
+        subject=subject,
+        body=body,
+        contact_id=contact.id,
+        workflow_id=workflow_id,
+        thread_id=original.gmail_thread_id,
+        cc=cc,
+        bcc=bcc,
+        in_reply_to=original.rfc2822_message_id,
+    )
+
+    _activate_contact_if_pending(connection, workflow_id, contact.id)
+
+    return {
+        "id": email.id,
+        "gmail_message_id": email.gmail_message_id,
+        "gmail_thread_id": email.gmail_thread_id,
+    }
 
 
 def create_task(  # noqa: PLR0913
@@ -288,19 +278,16 @@ def create_task(  # noqa: PLR0913
     Returns:
         Dict with created task ID.
     """
-    with logfire.span(
-        "agent.tool.create_task", workflow_id=workflow_id, contact_id=contact_id
-    ):
-        task = database.create_task(
-            connection,
-            workflow_id=workflow_id,
-            contact_id=contact_id,
-            description=description,
-            scheduled_at=scheduled_at,
-            context=context,
-            email_id=email_id,
-        )
-        return {"id": task.id}
+    task = database.create_task(
+        connection,
+        workflow_id=workflow_id,
+        contact_id=contact_id,
+        description=description,
+        scheduled_at=scheduled_at,
+        context=context,
+        email_id=email_id,
+    )
+    return {"id": task.id}
 
 
 def cancel_task(
@@ -319,14 +306,13 @@ def cancel_task(
     Returns:
         Dict with cancelled task ID and status, or error if not found/not pending.
     """
-    with logfire.span("agent.tool.cancel_task", task_id=task_id):
-        task = database.cancel_task(connection, task_id)
-        if task is None:
-            return {
-                "error": "not_found",
-                "message": f"task not found or not pending: {task_id}",
-            }
-        return {"id": task.id, "status": task.status}
+    task = database.cancel_task(connection, task_id)
+    if task is None:
+        return {
+            "error": "not_found",
+            "message": f"task not found or not pending: {task_id}",
+        }
+    return {"id": task.id, "status": task.status}
 
 
 def update_contact_status(
@@ -351,26 +337,20 @@ def update_contact_status(
         Dict with updated status, or error if workflow_contact not found.
     """
     valid_statuses = ("active", "completed", "failed")
-    with logfire.span(
-        "agent.tool.update_contact_status",
-        workflow_id=workflow_id,
-        contact_id=contact_id,
-        status=status,
-    ):
-        if status not in valid_statuses:
-            return {
-                "error": "invalid_status",
-                "message": f"status must be one of {valid_statuses}, got: {status}",
-            }
-        wc = database.update_workflow_contact(
-            connection, workflow_id, contact_id, status=status, reason=reason
-        )
-        if wc is None:
-            return {
-                "error": "not_found",
-                "message": f"workflow_contact not found: {workflow_id}/{contact_id}",
-            }
-        return {"status": wc.status, "reason": wc.reason}
+    if status not in valid_statuses:
+        return {
+            "error": "invalid_status",
+            "message": f"status must be one of {valid_statuses}, got: {status}",
+        }
+    wc = database.update_workflow_contact(
+        connection, workflow_id, contact_id, status=status, reason=reason
+    )
+    if wc is None:
+        return {
+            "error": "not_found",
+            "message": f"workflow_contact not found: {workflow_id}/{contact_id}",
+        }
+    return {"status": wc.status, "reason": wc.reason}
 
 
 def disable_contact(
@@ -393,15 +373,12 @@ def disable_contact(
     Returns:
         Dict with updated contact status, or error if not found.
     """
-    with logfire.span(
-        "agent.tool.disable_contact", contact_id=contact_id, status=status
-    ):
-        updated = database.disable_contact(
-            connection, contact_id, status=status, status_reason=reason
-        )
-        if updated is None:
-            return {"error": "not_found", "message": f"contact not found: {contact_id}"}
-        return {"id": updated.id, "status": updated.status}
+    updated = database.disable_contact(
+        connection, contact_id, status=status, status_reason=reason
+    )
+    if updated is None:
+        return {"error": "not_found", "message": f"contact not found: {contact_id}"}
+    return {"id": updated.id, "status": updated.status}
 
 
 def list_workflow_contacts(
@@ -420,9 +397,8 @@ def list_workflow_contacts(
     Returns:
         List of workflow-contact records with status and reason.
     """
-    with logfire.span("agent.tool.list_workflow_contacts", workflow_id=workflow_id):
-        contacts = database.list_workflow_contacts(connection, workflow_id)
-        return [wc.model_dump() for wc in contacts]
+    contacts = database.list_workflow_contacts(connection, workflow_id)
+    return [wc.model_dump() for wc in contacts]
 
 
 def search_emails(
@@ -440,9 +416,8 @@ def search_emails(
     Returns:
         List of matching email summaries.
     """
-    with logfire.span("agent.tool.search_emails", account_id=account_id, query=query):
-        emails = database.search_emails(connection, query, account_id=account_id)
-        return [e.model_dump() for e in emails]
+    emails = database.search_emails(connection, query, account_id=account_id)
+    return [e.model_dump() for e in emails]
 
 
 def read_contact(
@@ -458,11 +433,10 @@ def read_contact(
     Returns:
         Contact details or None if not found.
     """
-    with logfire.span("agent.tool.read_contact", email=email):
-        contact = database.get_contact_by_email(connection, email)
-        if contact is None:
-            return None
-        return contact.model_dump()
+    contact = database.get_contact_by_email(connection, email)
+    if contact is None:
+        return None
+    return contact.model_dump()
 
 
 def read_company(
@@ -478,11 +452,10 @@ def read_company(
     Returns:
         Company details or None if not found.
     """
-    with logfire.span("agent.tool.read_company", domain=domain):
-        company = database.get_company_by_domain(connection, domain)
-        if company is None:
-            return None
-        return company.model_dump()
+    company = database.get_company_by_domain(connection, domain)
+    if company is None:
+        return None
+    return company.model_dump()
 
 
 def noop(reason: str) -> dict[str, Any]:
@@ -498,5 +471,4 @@ def noop(reason: str) -> dict[str, Any]:
     Returns:
         Acknowledgement dict.
     """
-    with logfire.span("agent.tool.noop", reason=reason):
-        return {"acknowledged": True, "reason": reason}
+    return {"acknowledged": True, "reason": reason}

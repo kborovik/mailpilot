@@ -252,7 +252,7 @@ Tests use a separate database: `postgresql://localhost/mailpilot_test` (override
 Logging and tracing use [Pydantic Logfire](https://pydantic.dev/logfire) (OpenTelemetry-based). All modules use `import logfire` directly -- no per-module logger variable. Conventions are defined in `docs/adr-07-observability-with-logfire.md`; module-level instrumentation TODOs live in `docs/logfire-instrumentation-plan.md`.
 
 - `logfire.debug("msg", key=value)` / `logfire.warn("msg", key=value)` for logging
-- `logfire.span("name")` context manager for sync/agent stage tracing
+- `logfire.span("name")` context manager for sync stage tracing (not in agent tools -- `instrument_pydantic_ai()` handles tool spans automatically)
 - `configure_logging()` in `cli.py` enables console output only with `--debug` flag
 - Token: `mailpilot config set logfire_token <TOKEN>` or `LOGFIRE_TOKEN` env var
 - Cloud send: `send_to_logfire='if-token-present'` -- console-only when no token
