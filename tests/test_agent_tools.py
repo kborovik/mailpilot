@@ -7,6 +7,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import psycopg
+from logfire.testing import CaptureLogfire
 
 from conftest import (
     make_test_account,
@@ -1047,3 +1048,58 @@ def test_noop() -> None:
     result = noop(reason="no action needed")
     assert result["acknowledged"] is True
     assert result["reason"] == "no action needed"
+
+
+# -- Span contract: no duplicate agent.tool.* spans ---------------------------
+
+
+def test_no_custom_agent_tool_spans(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Agent tools must not emit custom agent.tool.* spans.
+
+    Pydantic AI's instrument_pydantic_ai() already creates a 'running tool'
+    span per tool call with tool arguments. Custom spans duplicate that.
+    See issue #72.
+    """
+    # Exercise a representative tool that previously emitted agent.tool.read_contact.
+    read_contact(connection=database_connection, email="nobody@example.com")
+
+    span_names = [s["name"] for s in capfire.exporter.exported_spans_as_dict()]
+    agent_tool_spans = [n for n in span_names if n.startswith("agent.tool.")]
+    assert agent_tool_spans == [], f"unexpected custom spans: {agent_tool_spans}"
+
+
+def test_no_custom_auto_activate_span(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """_activate_contact_if_pending must not emit agent.auto_activate_contact span.
+
+    The helper's DB work is already captured by the parent tool span.
+    See issue #72.
+    """
+    account = make_test_account(database_connection)
+    contact = make_test_contact(
+        database_connection, email="activate@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    create_workflow_contact(database_connection, workflow.id, contact.id)
+
+    gmail_client = _make_gmail_client(account)
+
+    send_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        to="activate@example.com",
+        subject="Hello",
+        body="Hi",
+    )
+
+    span_names = [s["name"] for s in capfire.exporter.exported_spans_as_dict()]
+    assert "agent.auto_activate_contact" not in span_names
