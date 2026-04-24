@@ -216,3 +216,171 @@ def test_resolve_credentials_path_missing(monkeypatch: pytest.MonkeyPatch):
         pytest.raises(SystemExit, match="No service account credentials"),
     ):
         gmail._resolve_credentials_path()  # pyright: ignore[reportPrivateUsage]
+
+
+# -- get_messages_batch --------------------------------------------------------
+
+
+def test_get_messages_batch_returns_fetched_messages():
+    from unittest.mock import MagicMock
+
+    from mailpilot.gmail import GmailClient
+
+    service = MagicMock()
+    client = GmailClient.from_service("test@example.com", service)
+
+    msg1 = {"id": "m1", "threadId": "t1", "payload": {}}
+    msg2 = {"id": "m2", "threadId": "t2", "payload": {}}
+
+    # Simulate new_batch_http_request: capture callbacks, invoke them.
+    callbacks: list[tuple[str, object, object]] = []
+
+    def fake_add(request: object, callback: object, request_id: str) -> None:
+        callbacks.append((request_id, request, callback))
+
+    batch = MagicMock()
+    batch.add = fake_add
+
+    def fake_execute() -> None:
+        for request_id, _request, callback in callbacks:
+            data = msg1 if request_id == "m1" else msg2
+            callback(request_id, data, None)  # type: ignore[operator]
+
+    batch.execute = fake_execute
+    service.new_batch_http_request.return_value = batch
+
+    results = client.get_messages_batch(["m1", "m2"])
+
+    assert len(results) == 2
+    assert results[0]["id"] == "m1"
+    assert results[1]["id"] == "m2"
+
+
+def test_get_messages_batch_skips_404_errors():
+    from unittest.mock import MagicMock
+
+    from googleapiclient.errors import HttpError
+
+    from mailpilot.gmail import GmailClient
+
+    service = MagicMock()
+    client = GmailClient.from_service("test@example.com", service)
+
+    msg1 = {"id": "m1", "threadId": "t1", "payload": {}}
+    resp_404 = MagicMock()
+    resp_404.status = 404
+    error_404 = HttpError(resp=resp_404, content=b"Not Found")
+
+    callbacks: list[tuple[str, object, object]] = []
+
+    def fake_add(request: object, callback: object, request_id: str) -> None:
+        callbacks.append((request_id, request, callback))
+
+    batch = MagicMock()
+    batch.add = fake_add
+
+    def fake_execute() -> None:
+        for request_id, _request, callback in callbacks:
+            if request_id == "m1":
+                callback(request_id, msg1, None)  # type: ignore[operator]
+            else:
+                callback(request_id, None, error_404)  # type: ignore[operator]
+
+    batch.execute = fake_execute
+    service.new_batch_http_request.return_value = batch
+
+    results = client.get_messages_batch(["m1", "m2"])
+
+    assert len(results) == 1
+    assert results[0]["id"] == "m1"
+
+
+def test_get_messages_batch_empty_list():
+    from unittest.mock import MagicMock
+
+    from mailpilot.gmail import GmailClient
+
+    service = MagicMock()
+    client = GmailClient.from_service("test@example.com", service)
+
+    results = client.get_messages_batch([])
+
+    assert results == []
+    service.new_batch_http_request.assert_not_called()
+
+
+def test_get_messages_batch_skips_non_404_errors():
+    from unittest.mock import MagicMock
+
+    from googleapiclient.errors import HttpError
+
+    from mailpilot.gmail import GmailClient
+
+    service = MagicMock()
+    client = GmailClient.from_service("test@example.com", service)
+
+    msg1 = {"id": "m1", "threadId": "t1", "payload": {}}
+    resp_403 = MagicMock()
+    resp_403.status = 403
+    error_403 = HttpError(resp=resp_403, content=b"Forbidden")
+
+    callbacks: list[tuple[str, object, object]] = []
+
+    def fake_add(request: object, callback: object, request_id: str) -> None:
+        callbacks.append((request_id, request, callback))
+
+    batch = MagicMock()
+    batch.add = fake_add
+
+    def fake_execute() -> None:
+        for request_id, _request, callback in callbacks:
+            if request_id == "m1":
+                callback(request_id, msg1, None)  # type: ignore[operator]
+            else:
+                callback(request_id, None, error_403)  # type: ignore[operator]
+
+    batch.execute = fake_execute
+    service.new_batch_http_request.return_value = batch
+
+    results = client.get_messages_batch(["m1", "m2"])
+
+    assert len(results) == 1
+    assert results[0]["id"] == "m1"
+
+
+def test_get_messages_batch_chunks_large_lists():
+    from unittest.mock import MagicMock
+
+    from mailpilot.gmail import GmailClient
+
+    service = MagicMock()
+    client = GmailClient.from_service("test@example.com", service)
+
+    # 150 message IDs -> should produce 2 batches (100 + 50).
+    message_ids = [f"m{i}" for i in range(150)]
+
+    batch_execute_count = 0
+
+    def make_batch() -> MagicMock:
+        batch_callbacks: list[tuple[str, object, object]] = []
+
+        def fake_add(request: object, callback: object, request_id: str) -> None:
+            batch_callbacks.append((request_id, request, callback))
+
+        def fake_execute() -> None:
+            nonlocal batch_execute_count
+            batch_execute_count += 1
+            for request_id, _request, callback in batch_callbacks:
+                callback(request_id, {"id": request_id, "payload": {}}, None)  # type: ignore[operator]
+
+        batch = MagicMock()
+        batch.add = fake_add
+        batch.execute = fake_execute
+        return batch
+
+    service.new_batch_http_request.side_effect = [make_batch(), make_batch()]
+
+    results = client.get_messages_batch(message_ids)
+
+    assert len(results) == 150
+    assert batch_execute_count == 2
