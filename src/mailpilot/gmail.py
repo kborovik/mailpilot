@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import base64
 import time
-from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
 from email.utils import parseaddr
 from functools import wraps
 from importlib.metadata import version
@@ -264,9 +264,9 @@ class GmailClient:
     @_retry_on_transient
     def send_message(
         self,
+        message: MIMEBase,
         to: str,
         subject: str,
-        body: str,
         from_email: str = "",
         thread_id: str | None = None,
         account_id: str = "",
@@ -278,9 +278,9 @@ class GmailClient:
         """Send an email message via Gmail API.
 
         Args:
+            message: Pre-built MIME message (e.g. multipart/alternative).
             to: Recipient email address(es), comma-separated for multiple.
             subject: Email subject.
-            body: Email body (plain text).
             from_email: Sender email (for From header).
             thread_id: Gmail thread ID for threading replies.
             account_id: MailPilot account ID for traceability header.
@@ -294,7 +294,6 @@ class GmailClient:
         Returns:
             Sent message dict with id, threadId, labelIds.
         """
-        message = MIMEText(body, _charset="utf-8")
         message["To"] = to
         message["Subject"] = subject
         if from_email:

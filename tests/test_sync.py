@@ -557,6 +557,27 @@ def test_sync_account_updates_account_history_and_last_synced(
 # -- send_email ---------------------------------------------------------------
 
 
+def _get_sent_mime(
+    service: MagicMock,
+) -> tuple[Any, list[Any]]:
+    """Extract the sent MIME message and its parts from a Gmail mock.
+
+    Returns:
+        Tuple of (outer_message, parts_list). The outer message is
+        a multipart/alternative; parts_list has [plain_part, html_part].
+    """
+    from email import message_from_bytes
+
+    send_body = service.users.return_value.messages.return_value.send.call_args.kwargs[
+        "body"
+    ]
+    raw = base64.urlsafe_b64decode(send_body["raw"])
+    msg = message_from_bytes(raw)
+    payload = msg.get_payload()
+    assert isinstance(payload, list)
+    return msg, list(payload)
+
+
 def _make_send_client(
     email: str = "sender@example.com",
     send_result: dict[str, Any] | None = None,
@@ -889,17 +910,14 @@ def test_send_email_omits_threading_headers_without_in_reply_to(
     assert msg["References"] is None
 
 
-def test_send_email_always_uses_utf8_base64_encoding(
+def test_send_email_parts_use_utf8_charset(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """All outbound emails use UTF-8 with base64 encoding for consistent
-    rendering across mail clients, regardless of body content."""
-    from email import message_from_bytes
-
+    """Both plain text and HTML parts use UTF-8 charset for consistent
+    rendering across mail clients."""
     account = make_test_account(database_connection, email="enc@example.com")
     client, service = _make_send_client(account.email)
 
-    # Pure ASCII body -- should still use utf-8/base64, not us-ascii/7bit.
     send_email(
         database_connection,
         account=account,
@@ -910,10 +928,66 @@ def test_send_email_always_uses_utf8_base64_encoding(
         body="Plain ASCII body with no special characters.",
     )
 
-    send_body = service.users.return_value.messages.return_value.send.call_args.kwargs[
-        "body"
-    ]
-    raw = base64.urlsafe_b64decode(send_body["raw"])
-    msg = message_from_bytes(raw)
-    assert msg.get_content_charset() == "utf-8"
-    assert msg["Content-Transfer-Encoding"] == "base64"
+    msg, parts = _get_sent_mime(service)
+    assert msg.get_content_type() == "multipart/alternative"
+    assert parts[0].get_content_charset() == "utf-8"
+    assert parts[1].get_content_charset() == "utf-8"
+
+
+def test_send_email_produces_multipart_alternative(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """send_email builds multipart/alternative with plain text and HTML parts."""
+    account = make_test_account(database_connection, email="mp@example.com")
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    client, service = _make_send_client(account.email)
+
+    send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Hello",
+        body="**Bold** and a [link](https://lab5.ca)",
+        workflow_id=workflow.id,
+    )
+
+    msg, parts = _get_sent_mime(service)
+    assert msg.get_content_type() == "multipart/alternative"
+    assert len(parts) == 2
+    plain_part = parts[0]
+    html_part = parts[1]
+    assert plain_part.get_content_type() == "text/plain"
+    assert html_part.get_content_type() == "text/html"
+    html_raw = html_part.get_payload(decode=True)
+    assert isinstance(html_raw, bytes)
+    html_body = html_raw.decode()
+    assert "<strong>" in html_body
+    assert "lab5.ca" in html_body
+    plain_raw = plain_part.get_payload(decode=True)
+    assert isinstance(plain_raw, bytes)
+    plain_body = plain_raw.decode()
+    assert "**" not in plain_body
+    assert "Bold" in plain_body
+
+
+def test_send_email_stores_plain_text_in_db(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """body_text in DB contains stripped plain text, not Markdown."""
+    account = make_test_account(database_connection, email="db@example.com")
+    client, _service = _make_send_client(account.email)
+
+    email = send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Hello",
+        body="**Bold** text",
+    )
+
+    assert "**" not in email.body_text
+    assert "Bold" in email.body_text

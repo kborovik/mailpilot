@@ -524,15 +524,43 @@ def send_email(  # noqa: PLR0913
         workflow_id=workflow_id,
         contact_id=contact_id,
     ) as span:
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+
+        from mailpilot.database import get_workflow
+        from mailpilot.email_renderer import (
+            get_theme,
+            render_email_html,
+            strip_markdown,
+        )
+
         from_header = (
             formataddr((account.display_name, account.email))
             if account.display_name
             else account.email
         )
+
+        # Look up theme from workflow
+        theme_name: str | None = None
+        if workflow_id is not None:
+            workflow = get_workflow(connection, workflow_id)
+            if workflow is not None:
+                theme_name = workflow.theme
+        theme = get_theme(theme_name)
+
+        # Render HTML and strip to plain text
+        html_body = render_email_html(body, theme)
+        plain_body = strip_markdown(body)
+
+        # Build multipart/alternative MIME
+        mime_message = MIMEMultipart("alternative")
+        mime_message.attach(MIMEText(plain_body, "plain", "utf-8"))
+        mime_message.attach(MIMEText(html_body, "html", "utf-8"))
+
         result = gmail_client.send_message(
+            message=mime_message,
             to=to,
             subject=subject,
-            body=body,
             from_email=from_header,
             thread_id=thread_id,
             account_id=account.id,
@@ -548,7 +576,7 @@ def send_email(  # noqa: PLR0913
             account_id=account.id,
             direction="outbound",
             subject=subject,
-            body_text=body,
+            body_text=plain_body,
             gmail_message_id=gmail_message_id,
             gmail_thread_id=gmail_thread_id,
             contact_id=contact_id,
