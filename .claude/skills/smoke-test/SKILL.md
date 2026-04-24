@@ -19,7 +19,9 @@ All commands below use `uv run mailpilot`. Parse JSON output from every command 
 
 ## Phase 0: Clean Slate
 
-**Goal:** Deterministic starting state.
+**Goal:** Deterministic starting state with all entities and both workflows created upfront.
+
+**Why workflows are created here:** The `predates_workflows` optimization in sync skips LLM classification for emails whose `received_at` predates the inbound workflow's `created_at`. Creating the inbound workflow before the outbound agent sends the email guarantees the email's `received_at` will be after the workflow's `created_at`, so routing works correctly.
 
 1. Run `make clean` to drop and re-apply the schema.
 2. Create accounts:
@@ -39,12 +41,33 @@ All commands below use `uv run mailpilot`. Parse JSON output from every command 
    mailpilot contact create --email outbound@lab5.ca --first-name Outbound --last-name Smoke --company-id <COMPANY_ID>
    ```
    Save both contact IDs. The "inbound contact" is the recipient of outbound email. The "outbound contact" lets the inbound workflow track the sender.
+5. Create outbound workflow (creates in `active` status automatically -- no separate `start` needed):
+   ```
+   mailpilot workflow create \
+     --name "Outbound Smoke Test" \
+     --type outbound \
+     --account-id <OUTBOUND_ACCOUNT_ID> \
+     --objective "Send an email to the contact about <RANDOM_TOPIC>" \
+     --instructions "You are a sales representative for Lab5. Send a brief email to the contact about <RANDOM_TOPIC>. Keep it under 3 sentences. Subject line MUST be exactly '<SUBJECT>' (the unique subject you generated for this run). Do not create follow-up tasks."
+   ```
+   Replace `<SUBJECT>` and `<RANDOM_TOPIC>` with the unique subject and topic you invented for this run. Save the workflow ID.
+6. Create inbound workflow:
+   ```
+   mailpilot workflow create \
+     --name "Inbound Smoke Test" \
+     --type inbound \
+     --account-id <INBOUND_ACCOUNT_ID> \
+     --objective "Respond to incoming emails professionally" \
+     --instructions "You are a professional assistant for Lab5. Reply to the incoming email about the same topic they raised, acknowledging receipt and expressing interest. Keep it under 3 sentences. Subject line must preserve the existing thread subject exactly. Do not create follow-up tasks."
+   ```
+   Save the workflow ID.
 
 ### Gate 0
 
 - `mailpilot account list` returns exactly 2 accounts.
 - `mailpilot contact list` returns exactly 2 contacts.
 - `mailpilot company list` returns exactly 1 company.
+- `mailpilot workflow list` returns exactly 2 workflows (both `active`).
 
 **On failure:** Stop. Report which entity failed to create and the error message.
 
@@ -58,21 +81,11 @@ Query spans for `db.status.counts` and any errors. Note whether entity creation 
 
 **Goal:** The outbound agent composes and sends an email from `outbound@lab5.ca` to `inbound@lab5.ca`.
 
-1. Create outbound workflow (creates in `active` status automatically -- no separate `start` needed):
-   ```
-   mailpilot workflow create \
-     --name "Outbound Smoke Test" \
-     --type outbound \
-     --account-id <OUTBOUND_ACCOUNT_ID> \
-     --objective "Send an email to the contact about <RANDOM_TOPIC>" \
-     --instructions "You are a sales representative for Lab5. Send a brief email to the contact about <RANDOM_TOPIC>. Keep it under 3 sentences. Subject line MUST be exactly '<SUBJECT>' (the unique subject you generated for this run). Do not create follow-up tasks."
-   ```
-   Replace `<SUBJECT>` and `<RANDOM_TOPIC>` with the unique subject and topic you invented for this run. Save the workflow ID.
-2. Enroll the inbound contact:
+1. Enroll the inbound contact in the outbound workflow:
    ```
    mailpilot workflow contact add --workflow-id <OUTBOUND_WORKFLOW_ID> --contact-id <INBOUND_CONTACT_ID>
    ```
-3. Run the agent:
+2. Run the agent:
    ```
    mailpilot workflow run --workflow-id <OUTBOUND_WORKFLOW_ID> --contact-id <INBOUND_CONTACT_ID>
    ```
@@ -100,22 +113,18 @@ Note: Are span attributes sufficient to debug a failure without reading code? Is
 
 ---
 
-## Phase 2: Inbound Workflow Setup + Sync + Routing
+## Phase 2: Inbound Sync + Routing
 
-**Goal:** Create the inbound workflow before syncing so the LLM classifier can route the email, then sync and verify routing.
+**Goal:** Sync the inbound account and verify the email is routed to the inbound workflow.
 
-**Why this ordering matters:** `route_email` during sync classifies emails against active workflows only. If no active inbound workflow exists at sync time, the email is stored as unrouted (`workflow_id=NULL`) and will never be bridged to a task.
+**Why this works:** The inbound workflow was created in Phase 0 before the outbound agent sent the email in Phase 1. The email's `received_at` timestamp is after the workflow's `created_at`, so the `predates_workflows` check passes and LLM classification runs.
 
-1. Create inbound workflow (creates in `active` status automatically -- no separate `start` needed):
+**Old messages from prior tests.** Email messages are never deleted from Gmail -- `make clean` only resets the database, not the mailboxes. Sync will store messages from prior smoke test runs alongside the current run's email. This is expected and intentional: old messages exercise the routing flow (they should route as `unrouted` or `thread_match` to prior workflows that no longer exist in the DB). Use the `--since` filter and unique `[ST-HHMMSS]` subject prefix to isolate the current run's email from prior test messages.
+
+1. Enroll the outbound contact in the inbound workflow:
    ```
-   mailpilot workflow create \
-     --name "Inbound Smoke Test" \
-     --type inbound \
-     --account-id <INBOUND_ACCOUNT_ID> \
-     --objective "Respond to incoming emails professionally" \
-     --instructions "You are a professional assistant for Lab5. Reply to the incoming email about the same topic they raised, acknowledging receipt and expressing interest. Keep it under 3 sentences. Subject line must preserve the existing thread subject exactly. Do not create follow-up tasks."
+   mailpilot workflow contact add --workflow-id <INBOUND_WORKFLOW_ID> --contact-id <OUTBOUND_CONTACT_ID>
    ```
-   Save the workflow ID.
 2. **Time-boxed sync retry loop** (up to 3 attempts, 15 seconds apart):
    ```
    mailpilot account sync --account-id <INBOUND_ACCOUNT_ID>
@@ -152,46 +161,34 @@ Note: Can you reconstruct the full sync-to-route pipeline from spans alone? What
 
 ## Phase 3: Inbound Agent Response
 
-**Goal:** The execution loop bridges the routed email to a task and the inbound agent sends a reply.
+**Goal:** The inbound agent replies to the routed email.
 
-1. Set a short run interval:
+1. Run the inbound agent directly:
    ```
-   mailpilot config set run_interval 5
+   mailpilot workflow run --workflow-id <INBOUND_WORKFLOW_ID> --contact-id <OUTBOUND_CONTACT_ID>
    ```
-2. Run the execution loop with a timeout (30 seconds is enough for multiple iterations):
-   ```
-   timeout 30 mailpilot run
-   ```
-   This command will exit with code 124 (timeout) -- that is expected and not an error.
-3. Restore the default run interval:
-   ```
-   mailpilot config set run_interval 30
-   ```
-
-**Note:** Unlike outbound (`workflow run`), inbound agent invocation only happens through the execution loop (`mailpilot run`). The loop syncs accounts, bridges routed emails to tasks via `create_tasks_for_routed_emails`, and executes pending tasks.
+   This uses the `workflow run` inbound support to find the unprocessed inbound email via `get_unprocessed_inbound_email`, create a task with the email attached, and execute the agent.
 
 ### Gate 3
 
-- `mailpilot task list --workflow-id <INBOUND_WORKFLOW_ID>` shows at least 1 task with `"status": "completed"`.
+- The `workflow run` output shows `"status": "completed"` and `"tool_calls"` >= 1.
+- The task has `email_id` set (the unprocessed email was found and attached).
 - `mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound` shows at least 1 reply email.
-- Note the reply email's `thread_id`. **Known limitation:** the `send_email` agent tool currently cannot reply in-thread (no `thread_id` / `In-Reply-To` / `References` support), so the reply will be sent as a new Gmail thread. Record the mismatch but do not fail the gate on this.
-- Note how many total tasks were created. **Known issue:** `create_tasks_for_routed_emails` may bridge old historical emails to tasks (not just the smoke test email). Record the count of stale pending tasks.
+- The reply email's `thread_id` matches the inbound email's `thread_id` (agent used `reply_email` to reply in-thread).
 
-**On failure:** Stop. Check `mailpilot task list --workflow-id <INBOUND_WORKFLOW_ID> --status failed` for agent errors. If no tasks exist at all, the email-to-task bridge did not fire -- verify the email has `workflow_id` set via `mailpilot email view <EMAIL_ID>`.
+**On failure:** Stop. Check the `workflow run` output for errors. If `email_id` is null, the email was not found by `get_unprocessed_inbound_email` -- verify the email has `workflow_id` set via `mailpilot email view <EMAIL_ID>` and that the contact is enrolled in the workflow.
 
 ### Logfire: Phase 3
 
 Query for these span families and review:
 
-- `run.loop.iteration` -- How many iterations ran? Duration of each.
 - `run.execute_task` -- Task execution: `task_id`, `workflow_id`, `contact_id`. Did it complete or fail?
 - `agent.invoke` -- Inbound agent invocation: `trigger` should be `email`. Check `tool_call_count`, `agent_reasoning`, token usage.
-- `agent.tool.send_email` -- Reply sent: check `to`. Note: `thread_id` will be missing (known limitation -- `send_email` does not support in-thread replies yet).
+- `agent.tool.reply_email` -- Reply sent: check `email_id`, `workflow_id`. Verify the agent used `reply_email` (in-thread) rather than `send_email` (new thread).
 - `agent.tool.update_contact_status` -- Did the agent update the contact's workflow status?
 - `agent.tool.noop` -- If called, why? The agent should have replied, not nooped.
-- `run.sync.account_failed` -- Any sync errors during the loop?
 
-Note: Is the task lifecycle (bridge -> execute -> complete) fully traceable from spans? Are error paths well-instrumented?
+Note: Is the task lifecycle (create -> execute -> complete) fully traceable from spans? Are error paths well-instrumented?
 
 ---
 
@@ -209,9 +206,11 @@ Note: Is the task lifecycle (bridge -> execute -> complete) fully traceable from
 ### Gate 4
 
 - The reply email appears in `email list` for the outbound account matching the unique subject.
-- Note whether the reply `thread_id` matches the original outbound email's `thread_id`. **Expected mismatch** due to the same `send_email` threading limitation noted in Gate 3.
+- Note whether the reply `thread_id` matches the original outbound email's `thread_id`. Gmail assigns different thread IDs per account, so a mismatch here is expected Gmail behavior, not a bug.
 
 **On failure:** Report "reply not received after 3 sync attempts." Phases 1-3 passed, so this is a delivery or sync issue on the return path.
+
+**Expected: old messages route as `unrouted`.** The outbound account sync will store messages from prior smoke test runs. These old messages will appear as `unrouted` in routing spans because their original workflows no longer exist in the clean database. This is correct behavior -- the routing flow correctly identifies them as unroutable. Do not flag these as deficiencies in the report.
 
 ### Logfire: Phase 4
 
@@ -245,12 +244,12 @@ Entities:
 Emails:
   Outbound sent:     <id> | subject: <unique subject>
   Inbound received:  <id> | routed to: <inbound_workflow_id>
-  Inbound reply:     <id> | thread: <thread_id> (MISMATCH expected)
-  Outbound received: <id> | thread: <thread_id> (MISMATCH expected)
+  Inbound reply:     <id> | thread: <thread_id> (in-thread via reply_email)
+  Outbound received: <id> | thread: <thread_id>
 
 Tasks:
   Outbound task: <id> (completed)
-  Inbound task:  <id> (completed)
+  Inbound task:  <id> (completed, email_id set)
 
 All data left in database for inspection.
 ```
@@ -370,9 +369,9 @@ Before running this smoke test, verify:
 
 Expected total duration: 2-3 minutes.
 
-- Phase 0: ~5 seconds
-- Phase 1: ~10 seconds
+- Phase 0: ~10 seconds (entities + workflows)
+- Phase 1: ~10 seconds (outbound agent)
 - Phase 2: ~15-60 seconds (Gmail delivery + sync retries)
-- Phase 3: ~30 seconds (execution loop timeout)
+- Phase 3: ~10 seconds (inbound agent via workflow run)
 - Phase 4: ~15-60 seconds (reply delivery + sync retries)
 - Phase 5: ~1 second

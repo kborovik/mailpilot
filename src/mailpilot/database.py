@@ -733,6 +733,7 @@ def create_workflow(
     name: str,
     workflow_type: str,
     account_id: str,
+    theme: str = "blue",
 ) -> Workflow:
     """Create a new workflow.
 
@@ -741,14 +742,15 @@ def create_workflow(
         name: Workflow name.
         workflow_type: "inbound" or "outbound".
         account_id: Account FK.
+        theme: Email color theme (default "blue").
 
     Returns:
         Created workflow.
     """
     row = connection.execute(
         """\
-        INSERT INTO workflow (id, name, type, account_id)
-        VALUES (%(id)s, %(name)s, %(type)s, %(account_id)s)
+        INSERT INTO workflow (id, name, type, account_id, theme)
+        VALUES (%(id)s, %(name)s, %(type)s, %(account_id)s, %(theme)s)
         RETURNING *
         """,
         {
@@ -756,6 +758,7 @@ def create_workflow(
             "name": name,
             "type": workflow_type,
             "account_id": account_id,
+            "theme": theme,
         },
     ).fetchone()
     connection.commit()
@@ -866,7 +869,7 @@ def update_workflow(
     Returns:
         Updated workflow, or None if not found.
     """
-    allowed = {"name", "objective", "instructions"}
+    allowed = {"name", "objective", "instructions", "theme"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return get_workflow(connection, workflow_id)
@@ -1166,6 +1169,7 @@ def create_email(
     received_at: datetime | None = None,
     sent_at: datetime | None = None,
     labels: list[str] | None = None,
+    rfc2822_message_id: str | None = None,
 ) -> Email | None:
     """Create a new email record, or return None on gmail_message_id conflict.
 
@@ -1190,6 +1194,7 @@ def create_email(
         received_at: When Gmail reports the message arrived (UTC datetime).
         sent_at: When the outbound message was handed to Gmail (UTC datetime).
         labels: Gmail label IDs attached to the message.
+        rfc2822_message_id: RFC 2822 Message-ID header value.
 
     Returns:
         Created email, or None if another worker already stored a row with
@@ -1200,12 +1205,12 @@ def create_email(
         INSERT INTO email (id, account_id, direction, subject,
             body_text, gmail_message_id, gmail_thread_id,
             contact_id, workflow_id, status, is_routed,
-            received_at, sent_at, labels)
+            received_at, sent_at, labels, rfc2822_message_id)
         VALUES (%(id)s, %(account_id)s, %(direction)s,
             %(subject)s, %(body_text)s, %(gmail_message_id)s,
             %(gmail_thread_id)s, %(contact_id)s, %(workflow_id)s,
             %(status)s, %(is_routed)s, %(received_at)s, %(sent_at)s,
-            %(labels)s)
+            %(labels)s, %(rfc2822_message_id)s)
         ON CONFLICT (gmail_message_id) DO NOTHING
         RETURNING *
         """,
@@ -1224,6 +1229,7 @@ def create_email(
             "received_at": received_at,
             "sent_at": sent_at,
             "labels": Json(labels or []),
+            "rfc2822_message_id": rfc2822_message_id,
         },
     ).fetchone()
     connection.commit()
@@ -1676,6 +1682,43 @@ def list_tasks(
     ).format(where)
     rows = connection.execute(query, params).fetchall()
     return [Task.model_validate(row) for row in rows]
+
+
+def get_unprocessed_inbound_email(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+    contact_id: str,
+) -> Email | None:
+    """Return the most recent inbound email for a contact+workflow without a task.
+
+    Uses the same filtering logic as ``create_tasks_for_routed_emails`` but
+    scoped to a single contact and returning at most one email.
+
+    Args:
+        connection: Open database connection.
+        workflow_id: Workflow FK.
+        contact_id: Contact FK.
+
+    Returns:
+        The most recent unprocessed inbound email, or None.
+    """
+    row = connection.execute(
+        """\
+        SELECT e.* FROM email e
+        JOIN workflow w ON w.id = e.workflow_id
+        WHERE e.direction = 'inbound'
+          AND e.workflow_id = %(workflow_id)s
+          AND e.contact_id = %(contact_id)s
+          AND e.created_at >= w.created_at
+          AND NOT EXISTS (SELECT 1 FROM task t WHERE t.email_id = e.id)
+        ORDER BY e.created_at DESC
+        LIMIT 1
+        """,
+        {"workflow_id": workflow_id, "contact_id": contact_id},
+    ).fetchone()
+    if row is None:
+        return None
+    return Email.model_validate(row)
 
 
 def create_tasks_for_routed_emails(

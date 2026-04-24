@@ -1256,6 +1256,29 @@ def workflow() -> None:
     """Manage workflows (inbound + outbound)."""
 
 
+def _resolve_instructions(
+    instructions: str | None, instructions_file: str | None
+) -> str | None:
+    """Return final instructions text from inline or file source."""
+    import pathlib
+
+    if instructions_file is not None:
+        return pathlib.Path(instructions_file).read_text()
+    return instructions
+
+
+def _validate_theme(theme: str) -> None:
+    """Exit with validation_error if theme is not a recognized name."""
+    from mailpilot.email_renderer import THEME_NAMES
+
+    if theme not in THEME_NAMES:
+        output_error(
+            f"invalid theme '{theme}', must be one of: "
+            f"{', '.join(sorted(THEME_NAMES))}",
+            "validation_error",
+        )
+
+
 @workflow.command("create")
 @click.option("--name", required=True, help="Workflow name.")
 @click.option(
@@ -1279,6 +1302,11 @@ def workflow() -> None:
     help="Path to a file with the workflow instructions (system prompt).",
 )
 @click.option(
+    "--theme",
+    default=None,
+    help="Email color theme (blue, green, orange, purple, red, slate).",
+)
+@click.option(
     "--draft",
     is_flag=True,
     default=False,
@@ -1291,11 +1319,10 @@ def workflow_create(
     objective: str | None,
     instructions: str | None,
     instructions_file: str | None,
+    theme: str | None,
     draft: bool,
 ) -> None:
     """Create a new workflow."""
-    import pathlib
-
     from mailpilot.database import (
         activate_workflow,
         create_workflow,
@@ -1306,6 +1333,8 @@ def workflow_create(
 
     if not name.strip():
         output_error("workflow name cannot be empty", "validation_error")
+    if theme is not None:
+        _validate_theme(theme)
     if instructions is not None and instructions_file is not None:
         output_error(
             "--instructions and --instructions-file are mutually exclusive",
@@ -1319,6 +1348,7 @@ def workflow_create(
             "Use --draft to create without them.",
             "validation_error",
         )
+    resolved = _resolve_instructions(instructions, instructions_file)
     connection = initialize_database(_database_url())
     try:
         if get_account(connection, account_id) is None:
@@ -1328,15 +1358,13 @@ def workflow_create(
             name=name,
             workflow_type=workflow_type,
             account_id=account_id,
+            theme=theme or "blue",
         )
-        resolved_instructions: str | None = instructions
-        if instructions_file is not None:
-            resolved_instructions = pathlib.Path(instructions_file).read_text()
         extras: dict[str, object] = {}
         if objective is not None:
             extras["objective"] = objective
-        if resolved_instructions is not None:
-            extras["instructions"] = resolved_instructions
+        if resolved is not None:
+            extras["instructions"] = resolved
         if extras:
             created = update_workflow(connection, created.id, **extras) or created
         if not draft and has_objective and has_instructions:
@@ -1361,23 +1389,30 @@ def workflow_create(
     type=click.Path(exists=True, dir_okay=False),
     help="Path to a file with the workflow instructions (system prompt).",
 )
+@click.option(
+    "--theme",
+    default=None,
+    help="Email color theme (blue, green, orange, purple, red, slate).",
+)
 def workflow_update(
     workflow_id: str,
     name: str | None,
     objective: str | None,
     instructions: str | None,
     instructions_file: str | None,
+    theme: str | None,
 ) -> None:
     """Update a workflow."""
-    import pathlib
-
     from mailpilot.database import initialize_database, update_workflow
 
+    if theme is not None:
+        _validate_theme(theme)
     if instructions is not None and instructions_file is not None:
         output_error(
             "--instructions and --instructions-file are mutually exclusive",
             "validation_error",
         )
+    resolved = _resolve_instructions(instructions, instructions_file)
     connection = initialize_database(_database_url())
     try:
         fields: dict[str, object] = {}
@@ -1385,10 +1420,10 @@ def workflow_update(
             fields["name"] = name
         if objective is not None:
             fields["objective"] = objective
-        if instructions is not None:
-            fields["instructions"] = instructions
-        if instructions_file is not None:
-            fields["instructions"] = pathlib.Path(instructions_file).read_text()
+        if resolved is not None:
+            fields["instructions"] = resolved
+        if theme is not None:
+            fields["theme"] = theme
         updated = update_workflow(connection, workflow_id, **fields)
         if updated is None:
             output_error(f"workflow not found: {workflow_id}", "not_found")
@@ -1515,13 +1550,14 @@ def workflow_stop(workflow_id: str) -> None:
 @click.option("--workflow-id", required=True, help="Workflow ID.")
 @click.option("--contact-id", required=True, help="Contact ID.")
 def workflow_run(workflow_id: str, contact_id: str) -> None:
-    """Invoke the workflow agent for a single contact (outbound only)."""
+    """Invoke the workflow agent for a single contact."""
     from datetime import UTC, datetime
 
     from mailpilot.database import (
         create_task,
         get_contact,
         get_task,
+        get_unprocessed_inbound_email,
         get_workflow,
         get_workflow_contact,
         initialize_database,
@@ -1539,11 +1575,6 @@ def workflow_run(workflow_id: str, contact_id: str) -> None:
             output_error(
                 f"workflow is not active (status={wf.status})", "invalid_state"
             )
-        if wf.type != "outbound":
-            output_error(
-                f"workflow run requires type=outbound (got {wf.type})",
-                "invalid_state",
-            )
         contact = get_contact(connection, contact_id)
         if contact is None:
             output_error(f"contact not found: {contact_id}", "not_found")
@@ -1552,12 +1583,19 @@ def workflow_run(workflow_id: str, contact_id: str) -> None:
                 f"contact {contact_id} is not enrolled in workflow {workflow_id}",
                 "not_found",
             )
+        email_id: str | None = None
+        if wf.type == "inbound":
+            unprocessed = get_unprocessed_inbound_email(connection, wf.id, contact.id)
+            if unprocessed is not None:
+                email_id = unprocessed.id
+        description = f"manual {wf.type} run"
         task = create_task(
             connection,
             workflow_id=wf.id,
             contact_id=contact.id,
-            description="manual outbound run",
+            description=description,
             scheduled_at=datetime.now(UTC).isoformat(),
+            email_id=email_id,
         )
         execute_task(connection, settings, task)
         completed = get_task(connection, task.id)

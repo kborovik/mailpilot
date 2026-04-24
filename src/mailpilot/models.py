@@ -77,6 +77,7 @@ class Workflow(BaseModel):
     status: WorkflowStatus = "draft"
     objective: str = ""
     instructions: str = ""
+    theme: str = "blue"
     created_at: datetime
     updated_at: datetime
 
@@ -117,6 +118,7 @@ class Email(BaseModel):
     id: str
     gmail_message_id: str | None = None
     gmail_thread_id: str | None = None
+    rfc2822_message_id: str | None = None
     account_id: str
     contact_id: str | None = None
     workflow_id: str | None = None

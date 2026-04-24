@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import base64
 import time
-from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
 from email.utils import parseaddr
 from functools import wraps
 from importlib.metadata import version
@@ -264,33 +264,36 @@ class GmailClient:
     @_retry_on_transient
     def send_message(
         self,
+        message: MIMEBase,
         to: str,
         subject: str,
-        body: str,
         from_email: str = "",
         thread_id: str | None = None,
         account_id: str = "",
         cc: str | None = None,
         bcc: str | None = None,
+        in_reply_to: str | None = None,
         user_id: str = "me",
     ) -> dict[str, Any]:
         """Send an email message via Gmail API.
 
         Args:
+            message: Pre-built MIME message (e.g. multipart/alternative).
             to: Recipient email address(es), comma-separated for multiple.
             subject: Email subject.
-            body: Email body (plain text).
             from_email: Sender email (for From header).
             thread_id: Gmail thread ID for threading replies.
             account_id: MailPilot account ID for traceability header.
             cc: CC recipient(s), comma-separated.
             bcc: BCC recipient(s), comma-separated.
+            in_reply_to: RFC 2822 Message-ID of the email being replied to.
+                Sets In-Reply-To and References headers for cross-client
+                thread grouping.
             user_id: Gmail user ID.
 
         Returns:
             Sent message dict with id, threadId, labelIds.
         """
-        message = MIMEText(body)
         message["To"] = to
         message["Subject"] = subject
         if from_email:
@@ -299,6 +302,9 @@ class GmailClient:
             message["Cc"] = cc
         if bcc:
             message["Bcc"] = bcc
+        if in_reply_to:
+            message["In-Reply-To"] = in_reply_to
+            message["References"] = in_reply_to
         message["X-MailPilot-Version"] = _MAILPILOT_VERSION
         if account_id:
             message["X-MailPilot-Account-Id"] = account_id

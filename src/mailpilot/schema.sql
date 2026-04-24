@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS workflow (
     name              TEXT NOT NULL,
     objective         TEXT NOT NULL DEFAULT '',
     instructions      TEXT NOT NULL DEFAULT '',
+    theme             TEXT NOT NULL DEFAULT 'blue',
     status            TEXT NOT NULL DEFAULT 'draft'
                       CHECK (status IN ('draft', 'active', 'paused')),
     created_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -77,6 +78,7 @@ CREATE TABLE IF NOT EXISTS email (
     id                TEXT PRIMARY KEY,
     gmail_message_id  TEXT UNIQUE,
     gmail_thread_id   TEXT,
+    rfc2822_message_id TEXT,
     account_id        TEXT NOT NULL REFERENCES account(id),
     contact_id        TEXT REFERENCES contact(id),
     workflow_id       TEXT REFERENCES workflow(id),

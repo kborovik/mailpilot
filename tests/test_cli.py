@@ -1553,6 +1553,7 @@ def _make_workflow(**overrides: Any) -> Workflow:
         "status": "draft",
         "objective": "",
         "instructions": "",
+        "theme": "blue",
         "created_at": _NOW,
         "updated_at": _NOW,
     }
@@ -1594,6 +1595,7 @@ def test_workflow_create(runner: CliRunner, mock_connection: MagicMock) -> None:
         name="Demo outreach",
         workflow_type="outbound",
         account_id=_ACCOUNT_ID,
+        theme="blue",
     )
     data = json.loads(result.output)
     assert data["ok"] is True
@@ -1917,6 +1919,78 @@ def test_workflow_create_missing_fields_without_draft(
     assert "--draft" in data["message"]
 
 
+def test_workflow_create_with_theme(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    workflow = _make_workflow(theme="green")
+    account = _make_account()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch(
+            "mailpilot.database.create_workflow", return_value=workflow
+        ) as mock_create,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "create",
+                "--name",
+                "Themed",
+                "--type",
+                "outbound",
+                "--account-id",
+                _ACCOUNT_ID,
+                "--theme",
+                "green",
+                "--draft",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_create.assert_called_once_with(
+        mock_connection,
+        name="Themed",
+        workflow_type="outbound",
+        account_id=_ACCOUNT_ID,
+        theme="green",
+    )
+    data = json.loads(result.output)
+    assert data["theme"] == "green"
+
+
+def test_workflow_create_invalid_theme(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "create",
+                "--name",
+                "Bad",
+                "--type",
+                "outbound",
+                "--account-id",
+                _ACCOUNT_ID,
+                "--theme",
+                "rainbow",
+                "--draft",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "rainbow" in data["message"]
+
+
 # -- workflow update -----------------------------------------------------------
 
 
@@ -2037,6 +2111,42 @@ def test_workflow_update_not_found(
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["error"] == "not_found"
+
+
+def test_workflow_update_theme(runner: CliRunner, mock_connection: MagicMock) -> None:
+    updated = _make_workflow(theme="orange")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.update_workflow", return_value=updated
+        ) as mock_update,
+    ):
+        result = runner.invoke(
+            main, ["workflow", "update", _WORKFLOW_ID, "--theme", "orange"]
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_update.assert_called_once_with(mock_connection, _WORKFLOW_ID, theme="orange")
+    data = json.loads(result.output)
+    assert data["theme"] == "orange"
+
+
+def test_workflow_update_invalid_theme(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(
+            main, ["workflow", "update", _WORKFLOW_ID, "--theme", "rainbow"]
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "rainbow" in data["message"]
 
 
 # -- workflow list / view / search ---------------------------------------------
@@ -2367,7 +2477,7 @@ def test_workflow_run_requires_active(
     assert data["error"] == "invalid_state"
 
 
-def test_workflow_run_requires_outbound(
+def test_workflow_run_inbound_with_email(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     workflow = _make_workflow(type="inbound", status="active")
@@ -2378,11 +2488,36 @@ def test_workflow_run_requires_outbound(
         created_at=_NOW,
         updated_at=_NOW,
     )
+    wc = WorkflowContact(
+        workflow_id=_WORKFLOW_ID,
+        contact_id=_CONTACT_ID,
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    inbound_email = _make_email(
+        contact_id=_CONTACT_ID,
+        workflow_id=_WORKFLOW_ID,
+        direction="inbound",
+    )
+    task = _make_task(email_id=inbound_email.id)
+    completed_task = _make_task(
+        status="completed",
+        email_id=inbound_email.id,
+        result={"reasoning": "Replied to inquiry.", "tool_calls": 1},
+    )
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=workflow),
         patch("mailpilot.database.get_contact", return_value=contact),
+        patch("mailpilot.database.get_workflow_contact", return_value=wc),
+        patch(
+            "mailpilot.database.get_unprocessed_inbound_email",
+            return_value=inbound_email,
+        ),
+        patch("mailpilot.database.create_task", return_value=task) as mock_create,
+        patch("mailpilot.run.execute_task") as mock_exec,
+        patch("mailpilot.database.get_task", return_value=completed_task),
     ):
         result = runner.invoke(
             main,
@@ -2395,9 +2530,72 @@ def test_workflow_run_requires_outbound(
                 _CONTACT_ID,
             ],
         )
-    assert result.exit_code == 1
+
+    assert result.exit_code == 0, result.output
+    mock_exec.assert_called_once()
+    # Task created with email_id from the unprocessed inbound email
+    call_kwargs = mock_create.call_args[1]
+    assert call_kwargs["email_id"] == inbound_email.id
+    assert call_kwargs["description"] == "manual inbound run"
     data = json.loads(result.output)
-    assert data["error"] == "invalid_state"
+    assert data["ok"] is True
+    assert data["status"] == "completed"
+
+
+def test_workflow_run_inbound_no_email(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    workflow = _make_workflow(type="inbound", status="active")
+    contact = Contact(
+        id=_CONTACT_ID,
+        email="lead@acme.com",
+        domain="acme.com",
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    wc = WorkflowContact(
+        workflow_id=_WORKFLOW_ID,
+        contact_id=_CONTACT_ID,
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    task = _make_task()
+    completed_task = _make_task(
+        status="completed",
+        result={"reasoning": "No new email, reviewed history.", "tool_calls": 1},
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=workflow),
+        patch("mailpilot.database.get_contact", return_value=contact),
+        patch("mailpilot.database.get_workflow_contact", return_value=wc),
+        patch("mailpilot.database.get_unprocessed_inbound_email", return_value=None),
+        patch("mailpilot.database.create_task", return_value=task) as mock_create,
+        patch("mailpilot.run.execute_task") as mock_exec,
+        patch("mailpilot.database.get_task", return_value=completed_task),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "run",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--contact-id",
+                _CONTACT_ID,
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_exec.assert_called_once()
+    # Task created without email_id when no unprocessed email exists
+    call_kwargs = mock_create.call_args[1]
+    assert call_kwargs["email_id"] is None
+    assert call_kwargs["description"] == "manual inbound run"
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["status"] == "completed"
 
 
 def test_workflow_run_contact_not_found(
