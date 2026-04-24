@@ -77,6 +77,7 @@ class Workflow(BaseModel):
     status: WorkflowStatus = "draft"
     objective: str = ""
     instructions: str = ""
+    theme: str = "blue"
     created_at: datetime
     updated_at: datetime
 

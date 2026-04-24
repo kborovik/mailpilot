@@ -733,6 +733,7 @@ def create_workflow(
     name: str,
     workflow_type: str,
     account_id: str,
+    theme: str = "blue",
 ) -> Workflow:
     """Create a new workflow.
 
@@ -741,14 +742,15 @@ def create_workflow(
         name: Workflow name.
         workflow_type: "inbound" or "outbound".
         account_id: Account FK.
+        theme: Email color theme (default "blue").
 
     Returns:
         Created workflow.
     """
     row = connection.execute(
         """\
-        INSERT INTO workflow (id, name, type, account_id)
-        VALUES (%(id)s, %(name)s, %(type)s, %(account_id)s)
+        INSERT INTO workflow (id, name, type, account_id, theme)
+        VALUES (%(id)s, %(name)s, %(type)s, %(account_id)s, %(theme)s)
         RETURNING *
         """,
         {
@@ -756,6 +758,7 @@ def create_workflow(
             "name": name,
             "type": workflow_type,
             "account_id": account_id,
+            "theme": theme,
         },
     ).fetchone()
     connection.commit()
@@ -866,7 +869,7 @@ def update_workflow(
     Returns:
         Updated workflow, or None if not found.
     """
-    allowed = {"name", "objective", "instructions"}
+    allowed = {"name", "objective", "instructions", "theme"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return get_workflow(connection, workflow_id)

@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS workflow (
     name              TEXT NOT NULL,
     objective         TEXT NOT NULL DEFAULT '',
     instructions      TEXT NOT NULL DEFAULT '',
+    theme             TEXT NOT NULL DEFAULT 'blue',
     status            TEXT NOT NULL DEFAULT 'draft'
                       CHECK (status IN ('draft', 'active', 'paused')),
     created_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,

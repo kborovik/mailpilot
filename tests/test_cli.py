@@ -1553,6 +1553,7 @@ def _make_workflow(**overrides: Any) -> Workflow:
         "status": "draft",
         "objective": "",
         "instructions": "",
+        "theme": "blue",
         "created_at": _NOW,
         "updated_at": _NOW,
     }
@@ -1594,6 +1595,7 @@ def test_workflow_create(runner: CliRunner, mock_connection: MagicMock) -> None:
         name="Demo outreach",
         workflow_type="outbound",
         account_id=_ACCOUNT_ID,
+        theme="blue",
     )
     data = json.loads(result.output)
     assert data["ok"] is True
@@ -1917,6 +1919,78 @@ def test_workflow_create_missing_fields_without_draft(
     assert "--draft" in data["message"]
 
 
+def test_workflow_create_with_theme(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    workflow = _make_workflow(theme="green")
+    account = _make_account()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch(
+            "mailpilot.database.create_workflow", return_value=workflow
+        ) as mock_create,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "create",
+                "--name",
+                "Themed",
+                "--type",
+                "outbound",
+                "--account-id",
+                _ACCOUNT_ID,
+                "--theme",
+                "green",
+                "--draft",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_create.assert_called_once_with(
+        mock_connection,
+        name="Themed",
+        workflow_type="outbound",
+        account_id=_ACCOUNT_ID,
+        theme="green",
+    )
+    data = json.loads(result.output)
+    assert data["theme"] == "green"
+
+
+def test_workflow_create_invalid_theme(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "create",
+                "--name",
+                "Bad",
+                "--type",
+                "outbound",
+                "--account-id",
+                _ACCOUNT_ID,
+                "--theme",
+                "rainbow",
+                "--draft",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "rainbow" in data["message"]
+
+
 # -- workflow update -----------------------------------------------------------
 
 
@@ -2037,6 +2111,42 @@ def test_workflow_update_not_found(
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["error"] == "not_found"
+
+
+def test_workflow_update_theme(runner: CliRunner, mock_connection: MagicMock) -> None:
+    updated = _make_workflow(theme="orange")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.update_workflow", return_value=updated
+        ) as mock_update,
+    ):
+        result = runner.invoke(
+            main, ["workflow", "update", _WORKFLOW_ID, "--theme", "orange"]
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_update.assert_called_once_with(mock_connection, _WORKFLOW_ID, theme="orange")
+    data = json.loads(result.output)
+    assert data["theme"] == "orange"
+
+
+def test_workflow_update_invalid_theme(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(
+            main, ["workflow", "update", _WORKFLOW_ID, "--theme", "rainbow"]
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "rainbow" in data["message"]
 
 
 # -- workflow list / view / search ---------------------------------------------
