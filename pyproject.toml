@@ -13,6 +13,7 @@ dependencies = [
     "google-auth>=2.40.0,<3.0.0",
     "google-cloud-pubsub>=2.29.0,<3.0.0",
     "logfire>=4.0.0,<5.0.0",
+    "mistune>=3.1.0,<4.0.0",
     "psycopg[binary]>=3.2.0,<4.0.0",
     "pydantic-ai-slim[anthropic]>=1.10.0,<2.0.0",
     "pydantic-settings>=2.7.0,<3.0.0",
