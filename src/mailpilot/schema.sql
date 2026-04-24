@@ -83,6 +83,8 @@ CREATE TABLE IF NOT EXISTS email (
     contact_id        TEXT REFERENCES contact(id),
     workflow_id       TEXT REFERENCES workflow(id),
     direction         TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound')),
+    sender            TEXT NOT NULL DEFAULT '',
+    recipients        JSONB NOT NULL DEFAULT '{}',
     subject           TEXT NOT NULL DEFAULT '',
     body_text         TEXT NOT NULL DEFAULT '',
     labels            JSONB NOT NULL DEFAULT '[]',

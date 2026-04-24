@@ -1120,6 +1120,8 @@ def test_email_list(runner: CliRunner, mock_connection: MagicMock) -> None:
         direction=None,
         workflow_id=None,
         status=None,
+        sender=None,
+        recipient=None,
     )
 
 
@@ -1169,6 +1171,8 @@ def test_email_list_with_filters(runner: CliRunner, mock_connection: MagicMock) 
         direction=None,
         workflow_id=None,
         status=None,
+        sender=None,
+        recipient=None,
     )
 
 
@@ -1210,6 +1214,8 @@ def test_email_list_with_new_filters(
         direction="inbound",
         workflow_id=_WORKFLOW_ID,
         status="received",
+        sender=None,
+        recipient=None,
     )
 
 
@@ -1286,6 +1292,41 @@ def test_email_list_account_not_found(
     data = json.loads(result.output)
     assert data["error"] == "not_found"
     assert "account" in data["message"]
+
+
+def test_email_list_with_from_and_to_filters(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_emails", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "email",
+                "list",
+                "--from",
+                "alice@example.com",
+                "--to",
+                "bob@example.com",
+            ],
+        )
+    assert result.exit_code == 0
+    mock_list.assert_called_once_with(
+        mock_connection,
+        limit=100,
+        contact_id=None,
+        account_id=None,
+        since=None,
+        thread_id=None,
+        direction=None,
+        workflow_id=None,
+        status=None,
+        sender="alice@example.com",
+        recipient="bob@example.com",
+    )
 
 
 # -- email send ----------------------------------------------------------------

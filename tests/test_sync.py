@@ -12,6 +12,7 @@ from googleapiclient.errors import HttpError
 
 from conftest import (
     make_test_account,
+    make_test_contact,
     make_test_settings,
     make_test_workflow,
 )
@@ -117,6 +118,7 @@ def _make_gmail_message(
     received_at: datetime | None = None,
     label_ids: list[str] | None = None,
     rfc_message_id: str | None = None,
+    extra_headers: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     received_at = received_at or datetime.now(UTC)
     body_b64 = base64.urlsafe_b64encode(body.encode()).decode()
@@ -126,6 +128,8 @@ def _make_gmail_message(
     ]
     if rfc_message_id is not None:
         headers.append({"name": "Message-ID", "value": rfc_message_id})
+    if extra_headers is not None:
+        headers.extend(extra_headers)
     return {
         "id": message_id,
         "threadId": thread_id,
@@ -991,3 +995,118 @@ def test_send_email_stores_plain_text_in_db(
 
     assert "**" not in email.body_text
     assert "Bold" in email.body_text
+
+
+# -- sender / recipients on send and sync -------------------------------------
+
+
+def test_send_email_stores_sender_and_recipients(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection, email="Outbound@Lab5.ca")
+    client, _service = _make_send_client(account.email)
+
+    email = send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="Alice@Example.com",
+        subject="Hi",
+        body="Body",
+        cc="Bob@Example.com",
+        bcc="Secret@Example.com",
+    )
+
+    assert email.sender == "outbound@lab5.ca"
+    assert email.recipients == {
+        "to": ["alice@example.com"],
+        "cc": ["bob@example.com"],
+        "bcc": ["secret@example.com"],
+    }
+
+
+def test_send_email_stores_multiple_to_recipients(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection, email="sender@example.com")
+    client, _service = _make_send_client(account.email)
+
+    email = send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="a@example.com,b@example.com",
+        subject="Hi",
+        body="Body",
+    )
+
+    assert email.recipients["to"] == ["a@example.com", "b@example.com"]
+    assert "cc" not in email.recipients
+    assert "bcc" not in email.recipients
+
+
+def test_extract_recipients_from_headers():
+    from mailpilot.sync import (
+        _extract_recipients,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    headers = {
+        "to": "Alice <alice@example.com>, Bob <bob@example.com>",
+        "cc": "Carol <carol@example.com>",
+    }
+    result = _extract_recipients(headers)
+    assert result == {
+        "to": ["alice@example.com", "bob@example.com"],
+        "cc": ["carol@example.com"],
+    }
+    assert "bcc" not in result
+
+
+def test_extract_recipients_empty_headers():
+    from mailpilot.sync import (
+        _extract_recipients,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    result = _extract_recipients({})
+    assert result == {}
+
+
+def test_sync_stores_sender_and_recipients(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Inbound sync populates sender and recipients from Gmail headers."""
+    account = make_test_account(database_connection, email="inbox@lab5.ca")
+    message = _make_gmail_message(
+        message_id="msg_sr_1",
+        thread_id="thread_sr_1",
+        from_header="Alice <alice@example.com>",
+        subject="Test sender/recipients",
+        extra_headers=[
+            {"name": "To", "value": "inbox@lab5.ca"},
+            {"name": "Cc", "value": "dev@lab5.ca"},
+        ],
+    )
+
+    from mailpilot.sync import (
+        _store_inbound_message,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    contact = make_test_contact(
+        database_connection, email="alice@example.com", domain="example.com"
+    )
+    email = _store_inbound_message(
+        database_connection,
+        account,
+        message,
+        contacts_by_email={"alice@example.com": contact},
+        settings=make_test_settings(),
+        has_active_workflows=False,
+    )
+    assert email is not None
+    assert email.sender == "alice@example.com"
+    assert email.recipients == {
+        "to": ["inbox@lab5.ca"],
+        "cc": ["dev@lab5.ca"],
+    }

@@ -20,7 +20,7 @@ import signal
 import threading
 import time
 from datetime import UTC, datetime, timedelta
-from email.utils import formataddr
+from email.utils import formataddr, getaddresses
 from typing import Any
 
 import click
@@ -382,6 +382,29 @@ def _extract_added_message_ids(history: list[dict[str, Any]]) -> list[str]:
     return ids
 
 
+def _extract_recipients(headers: dict[str, str]) -> dict[str, list[str]]:
+    """Extract recipient addresses from email headers.
+
+    Parses To, Cc, and Bcc headers into a dict of lowercase addresses
+    grouped by type. Empty lists are omitted from the result.
+
+    Args:
+        headers: Lowercase-keyed header dict from ``get_message_headers()``.
+
+    Returns:
+        Dict like ``{"to": ["a@x.com"], "cc": ["b@x.com"]}``.
+    """
+    result: dict[str, list[str]] = {}
+    for key in ("to", "cc", "bcc"):
+        raw = headers.get(key, "")
+        if not raw:
+            continue
+        addresses = [addr.lower() for _name, addr in getaddresses([raw]) if addr]
+        if addresses:
+            result[key] = addresses
+    return result
+
+
 def _store_inbound_message(  # noqa: PLR0913
     connection: psycopg.Connection[dict[str, Any]],
     account: Account,
@@ -414,6 +437,7 @@ def _store_inbound_message(  # noqa: PLR0913
     within_window = (
         received_at is not None and datetime.now(UTC) - received_at <= _RECENCY_WINDOW
     )
+    inbound_recipients = _extract_recipients(headers)
     email = create_email(
         connection,
         account_id=account.id,
@@ -427,6 +451,8 @@ def _store_inbound_message(  # noqa: PLR0913
         received_at=received_at,
         labels=list(message.get("labelIds", [])),
         rfc2822_message_id=headers.get("message-id"),
+        sender=sender_email.lower(),
+        recipients=inbound_recipients,
     )
     if email is None:
         return None
@@ -571,6 +597,17 @@ def send_email(  # noqa: PLR0913
         gmail_message_id = result.get("id")
         gmail_thread_id = result.get("threadId")
         labels = list(result.get("labelIds") or [])
+        outbound_recipients: dict[str, list[str]] = {
+            "to": [a.strip().lower() for a in to.split(",") if a.strip()],
+        }
+        if cc:
+            outbound_recipients["cc"] = [
+                a.strip().lower() for a in cc.split(",") if a.strip()
+            ]
+        if bcc:
+            outbound_recipients["bcc"] = [
+                a.strip().lower() for a in bcc.split(",") if a.strip()
+            ]
         email = create_email(
             connection,
             account_id=account.id,
@@ -585,6 +622,8 @@ def send_email(  # noqa: PLR0913
             is_routed=True,
             sent_at=datetime.now(UTC),
             labels=labels,
+            sender=account.email.lower(),
+            recipients=outbound_recipients,
         )
         if email is None:
             # Gmail accepted the send but the DB insert returned None (would

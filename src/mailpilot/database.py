@@ -1170,6 +1170,8 @@ def create_email(
     sent_at: datetime | None = None,
     labels: list[str] | None = None,
     rfc2822_message_id: str | None = None,
+    sender: str = "",
+    recipients: dict[str, list[str]] | None = None,
 ) -> Email | None:
     """Create a new email record, or return None on gmail_message_id conflict.
 
@@ -1195,6 +1197,9 @@ def create_email(
         sent_at: When the outbound message was handed to Gmail (UTC datetime).
         labels: Gmail label IDs attached to the message.
         rfc2822_message_id: RFC 2822 Message-ID header value.
+        sender: Sender email address (lowercase).
+        recipients: Recipient addresses grouped by type
+            (``{"to": [...], "cc": [...], "bcc": [...]}``)
 
     Returns:
         Created email, or None if another worker already stored a row with
@@ -1205,12 +1210,14 @@ def create_email(
         INSERT INTO email (id, account_id, direction, subject,
             body_text, gmail_message_id, gmail_thread_id,
             contact_id, workflow_id, status, is_routed,
-            received_at, sent_at, labels, rfc2822_message_id)
+            received_at, sent_at, labels, rfc2822_message_id,
+            sender, recipients)
         VALUES (%(id)s, %(account_id)s, %(direction)s,
             %(subject)s, %(body_text)s, %(gmail_message_id)s,
             %(gmail_thread_id)s, %(contact_id)s, %(workflow_id)s,
             %(status)s, %(is_routed)s, %(received_at)s, %(sent_at)s,
-            %(labels)s, %(rfc2822_message_id)s)
+            %(labels)s, %(rfc2822_message_id)s,
+            %(sender)s, %(recipients)s)
         ON CONFLICT (gmail_message_id) DO NOTHING
         RETURNING *
         """,
@@ -1230,6 +1237,8 @@ def create_email(
             "sent_at": sent_at,
             "labels": Json(labels or []),
             "rfc2822_message_id": rfc2822_message_id,
+            "sender": sender,
+            "recipients": Json(recipients or {}),
         },
     ).fetchone()
     connection.commit()
@@ -1270,6 +1279,8 @@ def list_emails(
     direction: str | None = None,
     workflow_id: str | None = None,
     status: str | None = None,
+    sender: str | None = None,
+    recipient: str | None = None,
 ) -> list[Email]:
     """List emails with optional filters.
 
@@ -1283,6 +1294,9 @@ def list_emails(
         direction: Filter by direction ("inbound" or "outbound").
         workflow_id: Filter by workflow ID.
         status: Filter by email status ("sent", "received", "bounced").
+        sender: Filter by sender email address (case-insensitive).
+        recipient: Filter by recipient address in recipients JSONB
+            (case-insensitive, matches to/cc/bcc).
 
     Returns:
         List of emails ordered by creation time descending.
@@ -1310,6 +1324,14 @@ def list_emails(
     if status is not None:
         conditions.append(SQL("status = %(status)s"))
         params["status"] = status
+    if sender is not None:
+        conditions.append(SQL("LOWER(sender) = LOWER(%(sender)s)"))
+        params["sender"] = sender
+    if recipient is not None:
+        conditions.append(
+            SQL("LOWER(recipients::text) LIKE LOWER(%(recipient_pattern)s)")
+        )
+        params["recipient_pattern"] = f"%{recipient}%"
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
         "SELECT * FROM email {} ORDER BY created_at DESC LIMIT %(limit)s"
@@ -1324,7 +1346,7 @@ def search_emails(
     limit: int = 100,
     account_id: str | None = None,
 ) -> list[Email]:
-    """Search emails by subject or body text.
+    """Search emails by subject, body text, sender, or recipients.
 
     Args:
         connection: Open database connection.
@@ -1344,7 +1366,9 @@ def search_emails(
     query_sql = SQL(
         "SELECT * FROM email "
         "WHERE (LOWER(subject) LIKE LOWER(%(pattern)s) "
-        "   OR LOWER(body_text) LIKE LOWER(%(pattern)s)) "
+        "   OR LOWER(body_text) LIKE LOWER(%(pattern)s) "
+        "   OR LOWER(sender) LIKE LOWER(%(pattern)s) "
+        "   OR LOWER(recipients::text) LIKE LOWER(%(pattern)s)) "
         "{} "
         "ORDER BY created_at DESC "
         "LIMIT %(limit)s"

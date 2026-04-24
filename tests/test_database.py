@@ -1198,6 +1198,149 @@ def test_search_emails_filters_by_account_id(
     assert results[0].account_id == a1.id
 
 
+# -- sender / recipients columns -----------------------------------------------
+
+
+def test_create_email_with_sender_and_recipients(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    recipients = {"to": ["alice@example.com"], "cc": ["bob@example.com"]}
+    email = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="Hello",
+        status="sent",
+        sender="outbound@lab5.ca",
+        recipients=recipients,
+    )
+    assert email is not None
+    assert email.sender == "outbound@lab5.ca"
+    assert email.recipients == recipients
+
+
+def test_create_email_defaults_sender_and_recipients(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    email = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+    )
+    assert email is not None
+    assert email.sender == ""
+    assert email.recipients == {}
+
+
+def test_search_emails_matches_sender(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Unrelated subject",
+        sender="alice@example.com",
+        gmail_message_id="msg_sender_search",
+    )
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Another email",
+        sender="bob@example.com",
+        gmail_message_id="msg_sender_search_2",
+    )
+    results = search_emails(database_connection, "alice@example.com")
+    assert len(results) == 1
+    assert results[0].sender == "alice@example.com"
+
+
+def test_search_emails_matches_recipients(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="Outgoing",
+        status="sent",
+        recipients={"to": ["kb@lab5.ca"], "cc": ["dev@lab5.ca"]},
+        gmail_message_id="msg_recip_search",
+    )
+    results = search_emails(database_connection, "kb@lab5.ca")
+    assert len(results) == 1
+    assert "kb@lab5.ca" in results[0].recipients["to"]
+
+
+def test_list_emails_filter_by_sender(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        sender="alice@example.com",
+        gmail_message_id="msg_from_alice",
+    )
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        sender="bob@example.com",
+        gmail_message_id="msg_from_bob",
+    )
+    results = list_emails(database_connection, sender="alice@example.com")
+    assert len(results) == 1
+    assert results[0].sender == "alice@example.com"
+
+
+def test_list_emails_filter_by_recipient(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        status="sent",
+        recipients={"to": ["kb@lab5.ca"]},
+        gmail_message_id="msg_to_kb",
+    )
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        status="sent",
+        recipients={"to": ["other@lab5.ca"]},
+        gmail_message_id="msg_to_other",
+    )
+    results = list_emails(database_connection, recipient="kb@lab5.ca")
+    assert len(results) == 1
+    assert "kb@lab5.ca" in results[0].recipients["to"]
+
+
+def test_list_emails_filter_by_recipient_matches_cc(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        status="sent",
+        recipients={"to": ["main@example.com"], "cc": ["kb@lab5.ca"]},
+        gmail_message_id="msg_cc_kb",
+    )
+    results = list_emails(database_connection, recipient="kb@lab5.ca")
+    assert len(results) == 1
+
+
 # -- Activity ------------------------------------------------------------------
 
 

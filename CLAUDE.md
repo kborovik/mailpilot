@@ -35,6 +35,10 @@ Email body stored as plain text only (see `docs/adr-02-email-body-storage-strate
 
 Workflow is the central abstraction for both outbound campaigns and inbound auto-reply (see `docs/adr-03-workflow-model.md`). Each workflow is executed by a Pydantic AI agent with tool access. Inbound emails are routed via thread matching then LLM classification. Agent plans multi-step work via deferred tasks. See `docs/email-flow.md` for execution flows. See `docs/adr-08-crm-evolution.md` for the CRM evolution design.
 
+### Email Rendering
+
+`email_renderer.py` provides Markdown-to-HTML email rendering with inline styles and theme support. `EmailTheme` defines color palettes; six built-in themes: blue, green, orange, purple, red, slate. `THEME_NAMES` is the validation set used by CLI `--theme` options.
+
 ### CLI
 
 The CLI must be LLM Agent friendly: JSON output only. Exit codes must be meaningful. Error messages must be actionable. The CLI is a thin dispatcher -- no domain logic or logging. All `logfire` calls belong in sync/agent modules where decisions happen. CLI only does `logfire.configure()` and `output()`.
@@ -97,7 +101,7 @@ mailpilot task view ID
 mailpilot task cancel ID
 
 mailpilot email search QUERY [--limit N]
-mailpilot email list [--limit N] [--contact-id ID] [--account-id ID] [--since ISO] [--thread-id TEXT] [--direction inbound|outbound] [--workflow-id ID] [--status sent|received|bounced]
+mailpilot email list [--limit N] [--contact-id ID] [--account-id ID] [--since ISO] [--thread-id TEXT] [--direction inbound|outbound] [--workflow-id ID] [--status sent|received|bounced] [--from ADDR] [--to ADDR]
 mailpilot email view ID
 mailpilot email send --account-id ID --to E [--to E2 ...] --subject S --body B [--contact-id ID] [--workflow-id ID] [--thread-id ID] [--cc E] [--bcc E]
 
@@ -243,7 +247,7 @@ If a GitHub operation isn't covered by a skill (e.g. reviewing comments, closing
 2. Implement minimal code to pass
 3. Run: `uv run ruff check --fix` then `uv run basedpyright`
 
-Tests use a separate database: `postgresql://localhost/mailpilot_test` (override with `DATABASE_URL` env var). The `database_connection` fixture truncates all tables before each test. Use `make_test_settings()` for Settings instances and `load_fixture()` for JSON fixtures -- all in `conftest.py`. HTTP mocking uses `pytest-httpx`. Span-contract tests use the `capfire: CaptureLogfire` fixture (see `tests/test_database_telemetry.py`). The `e2e` pytest marker is excluded from default runs (`addopts = "-m 'not e2e'"`); live-Gmail tests live under `tests/e2e/` and run via `make e2e` against `mailpilot_e2e`.
+Tests use a separate database: `postgresql://localhost/mailpilot_test` (override with `DATABASE_URL` env var). The `database_connection` fixture truncates all tables before each test. Use `make_test_settings()` for Settings instances and `load_fixture()` for JSON fixtures -- all in `conftest.py`. HTTP mocking uses `pytest-httpx`. Span-contract tests use the `capfire: CaptureLogfire` fixture from `logfire.testing` (see `tests/test_database_telemetry.py`). The `e2e` pytest marker is excluded from default runs (`addopts = "-m 'not e2e'"`); live-Gmail tests live under `tests/e2e/` and run via `make e2e` against `mailpilot_e2e`.
 
 **Patching gotcha for entity validation.** When a CLI command calls `get_contact()`, `get_company()`, or `get_account()` for FK validation, every test for that command must patch the `get_*` function with a valid return value. Adding FK validation to an existing command will break its tests until the patches are added.
 
