@@ -20,6 +20,7 @@ Claude Code is the primary operator of MailPilot. The CLI is LLM-agent-friendly 
 - Agent-driven, not system-driven. The system provides tools and scheduling; LLM agents make all business decisions (what to send, when to follow up, when to give up).
 - Type-safety is non-negotiable. basedpyright strict mode.
 - TDD for ALL changes.
+- Background loops wake on events, not on timers. When a real-time mechanism exists (Pub/Sub callback, PG `LISTEN/NOTIFY`, signal handler), the main loop's `wait()` MUST be on a shared `wakeup_event` that those mechanisms set. Periodic timers are the upper-bound fallback, not the primary trigger -- otherwise the real-time path silently degrades to polling and the test suite cannot tell the difference. Clear the wakeup event BEFORE processing so events arriving mid-iteration re-trigger the next wait. See `start_sync_loop` in `src/mailpilot/sync.py` for the canonical shape.
 
 ## Architecture
 

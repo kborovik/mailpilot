@@ -139,6 +139,11 @@ def start_sync_loop(
     """
     pid = os.getpid()
     shutdown_event = threading.Event()
+    # Single wakeup event the main loop blocks on. Pub/Sub callback,
+    # PG LISTEN thread, and signal handler all set it. ``run_interval``
+    # is the upper-bound fallback, not the primary trigger -- otherwise
+    # the real-time delivery path silently degrades to polling.
+    wakeup_event = threading.Event()
 
     _check_stale_sync_status(connection, pid)
     upsert_sync_status(connection, pid)
@@ -147,16 +152,18 @@ def start_sync_loop(
     click.echo(f"Interval: {settings.run_interval}s")
     click.echo("Press Ctrl+C or send SIGTERM to stop")
 
-    # Signal handlers set the shutdown event. After the first signal
-    # we restore the default handlers so a second Ctrl+C / SIGTERM
-    # always exits, even if the main thread is blocked in a C-level
-    # call (e.g. gRPC inside Pub/Sub setup) where shutdown_event is
-    # never observed.
+    # Signal handlers set both events. shutdown_event tells the loop
+    # to stop; wakeup_event unblocks any in-flight wait so the stop is
+    # observed immediately. After the first signal we restore the
+    # default handlers so a second Ctrl+C / SIGTERM always exits, even
+    # if the main thread is blocked in a C-level call (e.g. gRPC inside
+    # Pub/Sub setup) where the events are never observed.
     def _handle_shutdown(signum: int, frame: object) -> None:
         signal_name = signal.Signals(signum).name
         logfire.info("sync.shutdown.signal_received", pid=pid, signal=signum)
         click.echo(f"\nReceived {signal_name}, shutting down...")
         shutdown_event.set()
+        wakeup_event.set()
         signal.signal(signal.SIGINT, signal.SIG_DFL)
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
 
@@ -168,25 +175,28 @@ def start_sync_loop(
     subscriber_future = None
     if settings.google_application_credentials:
         subscriber_future = _start_pubsub_logging_errors(
-            connection, settings, sync_queue
+            connection, settings, sync_queue, wakeup_event
         )
 
     # Start PG LISTEN thread (instant task execution on INSERT).
-    task_ready = threading.Event()
     database_url = str(settings.database_url)
-    listener_thread = _start_task_listener(database_url, task_ready, shutdown_event)
+    listener_thread = _start_task_listener(database_url, wakeup_event, shutdown_event)
 
     # Main loop.
     last_watch_renewal = 0.0
     try:
         while not shutdown_event.is_set():
-            shutdown_event.wait(timeout=settings.run_interval)
+            wakeup_event.wait(timeout=settings.run_interval)
             if shutdown_event.is_set():
                 break
+            # Clear before processing, not after. Events that arrive
+            # mid-iteration must re-set wakeup_event so the next wait
+            # returns immediately; clearing afterwards would lose them.
+            wakeup_event.clear()
             update_sync_heartbeat(connection)
             logfire.debug("sync.loop.heartbeat", pid=pid)
 
-            _run_periodic_iteration(connection, settings, sync_queue, task_ready)
+            _run_periodic_iteration(connection, settings, sync_queue)
 
             # Hourly watch renewal.
             now = time.monotonic()
@@ -209,6 +219,7 @@ def _start_pubsub_logging_errors(
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
     sync_queue: queue.Queue[str],
+    wakeup_event: threading.Event,
 ) -> Any:
     """Set up Pub/Sub infrastructure and start the subscriber.
 
@@ -224,7 +235,7 @@ def _start_pubsub_logging_errors(
     try:
         setup_pubsub(settings)
         renew_watches(connection, settings)
-        callback = make_notification_callback(sync_queue)
+        callback = make_notification_callback(sync_queue, wakeup_event)
         future = start_subscriber(settings, callback)
         click.echo("Pub/Sub subscriber started")
         return future
@@ -236,13 +247,14 @@ def _start_pubsub_logging_errors(
 
 def _start_task_listener(
     database_url: str,
-    task_ready: threading.Event,
+    wakeup_event: threading.Event,
     shutdown_event: threading.Event,
 ) -> threading.Thread:
     """Start a daemon thread that listens for PG NOTIFY on task_pending.
 
-    When a notification arrives, sets ``task_ready`` so the main loop
-    can drain the task queue immediately.
+    When a notification arrives, sets ``wakeup_event`` so the main loop
+    drains the task queue immediately instead of waiting for the next
+    periodic timer tick.
     """
 
     def _listen() -> None:
@@ -251,7 +263,7 @@ def _start_task_listener(
             listen_conn.execute("LISTEN task_pending")
             while not shutdown_event.is_set():
                 for _notify in listen_conn.notifies(timeout=30.0):
-                    task_ready.set()
+                    wakeup_event.set()
                     break
         except Exception:
             logfire.exception("sync.task_listener.error")
@@ -267,7 +279,6 @@ def _run_periodic_iteration(
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
     sync_queue: queue.Queue[str],
-    task_ready: threading.Event,
 ) -> None:
     """Run one iteration of the periodic sync + task drain cycle."""
     with logfire.span("sync.loop.iteration"):
@@ -280,7 +291,6 @@ def _run_periodic_iteration(
         # Bridge routed emails to tasks and drain the queue.
         create_tasks_for_routed_emails(connection)
         _drain_pending_tasks(connection, settings)
-        task_ready.clear()
 
 
 def _drain_sync_queue(

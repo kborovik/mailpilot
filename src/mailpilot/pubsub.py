@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import json
 import queue
+import threading
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -171,15 +172,21 @@ def start_subscriber(
 
 def make_notification_callback(
     sync_queue: queue.Queue[str],
+    wakeup_event: threading.Event | None = None,
 ) -> Any:
     """Create a Pub/Sub message callback that enqueues account emails.
 
     The callback decodes the Gmail notification, extracts the emailAddress,
-    and puts it on the sync queue for the main loop to process. Always
-    acks the message (nacking malformed messages causes infinite redelivery).
+    puts it on the sync queue, and (when ``wakeup_event`` is supplied)
+    signals the main loop so it drains the queue immediately instead of
+    waiting for the periodic timer. Always acks the message -- nacking
+    malformed messages causes infinite redelivery.
 
     Args:
         sync_queue: Queue to put account email addresses onto.
+        wakeup_event: Event the main loop blocks on between iterations.
+            Setting it short-circuits the periodic timer so Pub/Sub
+            notifications drive sync in real time.
 
     Returns:
         Callback function compatible with SubscriberClient.subscribe().
@@ -199,6 +206,8 @@ def make_notification_callback(
                 email=email_address,
             )
             sync_queue.put(email_address)
+            if wakeup_event is not None:
+                wakeup_event.set()
             message.ack()
 
     return callback

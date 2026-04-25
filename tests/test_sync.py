@@ -120,10 +120,10 @@ def test_start_sync_loop_registers_pid_and_shuts_down(
         patch("mailpilot.sync.signal.signal"),
     ):
         mock_shutdown = MagicMock()
-        mock_shutdown.is_set.return_value = False
-        mock_shutdown.wait.side_effect = [False, True]  # one iteration then stop
         mock_shutdown.is_set.side_effect = [False, True]
-        mock_event_cls.return_value = mock_shutdown
+        mock_wakeup = MagicMock()
+        mock_wakeup.wait.return_value = False  # timer fired, not event-driven
+        mock_event_cls.side_effect = [mock_shutdown, mock_wakeup]
 
         start_sync_loop(database_connection, settings)
 
@@ -171,8 +171,9 @@ def test_start_sync_loop_signal_handler_escalates_to_default(
     ):
         mock_shutdown = MagicMock()
         mock_shutdown.is_set.side_effect = [False, False, True]
-        mock_shutdown.wait.return_value = False
-        mock_event_cls.return_value = mock_shutdown
+        mock_wakeup = MagicMock()
+        mock_wakeup.wait.return_value = False
+        mock_event_cls.side_effect = [mock_shutdown, mock_wakeup]
 
         start_sync_loop(database_connection, settings)
 
@@ -203,8 +204,9 @@ def test_start_sync_loop_calls_pubsub_when_configured(
     ):
         mock_shutdown = MagicMock()
         mock_shutdown.is_set.side_effect = [False, True]
-        mock_shutdown.wait.return_value = True
-        mock_event_cls.return_value = mock_shutdown
+        mock_wakeup = MagicMock()
+        mock_wakeup.wait.return_value = True
+        mock_event_cls.side_effect = [mock_shutdown, mock_wakeup]
 
         start_sync_loop(database_connection, settings)
 
@@ -229,12 +231,52 @@ def test_start_sync_loop_skips_pubsub_when_no_credentials(
     ):
         mock_shutdown = MagicMock()
         mock_shutdown.is_set.side_effect = [False, True]
-        mock_shutdown.wait.return_value = True
-        mock_event_cls.return_value = mock_shutdown
+        mock_wakeup = MagicMock()
+        mock_wakeup.wait.return_value = True
+        mock_event_cls.side_effect = [mock_shutdown, mock_wakeup]
 
         start_sync_loop(database_connection, settings)
 
     mock_pubsub.assert_not_called()
+
+
+def test_start_sync_loop_wires_wakeup_event_to_pubsub_and_listener(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Pub/Sub setup and PG listener share one wakeup_event with the main loop.
+
+    Without this wiring, notifications would never wake the main loop --
+    real-time delivery via Pub/Sub and instant task execution via PG
+    LISTEN/NOTIFY would degenerate to plain run_interval polling.
+    """
+    settings = make_test_settings(google_application_credentials="/tmp/creds.json")
+
+    with (
+        patch("mailpilot.sync.threading.Event") as mock_event_cls,
+        patch("mailpilot.sync._start_task_listener") as mock_listener,
+        patch(
+            "mailpilot.sync._start_pubsub_logging_errors",
+            return_value=None,
+        ) as mock_pubsub,
+        patch("mailpilot.sync._run_periodic_iteration"),
+        patch("mailpilot.sync.signal.signal"),
+    ):
+        mock_shutdown = MagicMock()
+        # while-check False, post-wait check False (run iteration), while-check True (exit)
+        mock_shutdown.is_set.side_effect = [False, False, True]
+        mock_wakeup = MagicMock()
+        mock_wakeup.wait.return_value = False
+        mock_event_cls.side_effect = [mock_shutdown, mock_wakeup]
+
+        start_sync_loop(database_connection, settings)
+
+    # Both the Pub/Sub setup and the PG listener received the wakeup_event.
+    assert mock_wakeup in mock_pubsub.call_args.args
+    assert mock_wakeup in mock_listener.call_args.args
+    # The main loop waited on wakeup_event (with run_interval as fallback).
+    mock_wakeup.wait.assert_called_with(timeout=settings.run_interval)
+    # The wait was cleared so events during processing re-trigger.
+    mock_wakeup.clear.assert_called()
 
 
 # -- sync_account --------------------------------------------------------------

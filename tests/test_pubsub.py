@@ -177,6 +177,34 @@ def test_notification_callback_decodes_and_enqueues() -> None:
     message.ack.assert_called_once()
 
 
+def test_notification_callback_sets_wakeup_event() -> None:
+    """Pub/Sub notifications must wake the main loop, not just enqueue.
+
+    Without setting wakeup_event, real-time delivery degenerates to plain
+    run_interval polling -- the notification sits in the queue until the
+    next periodic timer fires.
+    """
+    import queue
+    import threading
+
+    from mailpilot.pubsub import make_notification_callback
+
+    sync_queue: queue.Queue[str] = queue.Queue()
+    wakeup_event = threading.Event()
+    callback = make_notification_callback(sync_queue, wakeup_event)
+
+    message = MagicMock()
+    message.data = base64.urlsafe_b64encode(
+        json.dumps({"emailAddress": "user@example.com"}).encode()
+    )
+
+    callback(message)
+
+    assert wakeup_event.is_set()
+    assert sync_queue.get_nowait() == "user@example.com"
+    message.ack.assert_called_once()
+
+
 def test_notification_callback_acks_on_decode_error() -> None:
     import queue
 

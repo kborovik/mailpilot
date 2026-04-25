@@ -1,6 +1,6 @@
 ---
 name: smoke-test
-description: Run a full end-to-end smoke test of the MailPilot system between outbound@lab5.ca and inbound@lab5.ca. Exercises the complete agent loop -- entity setup, outbound email send, inbound sync, email routing, inbound agent reply, and round-trip verification. Use when you need to verify the system works end-to-end after changes.
+description: End-to-end MailPilot smoke test against real Gmail (outbound@lab5.ca <-> inbound@lab5.ca). Drives the full production loop: entity setup, outbound agent send, background `mailpilot run` for sync/routing/task-drain, inbound agent reply, round-trip verification. Use whenever the user says "smoke test", "run end-to-end", "verify the system works", or after non-trivial changes to sync, routing, agent execution, or Pub/Sub code -- even if they don't explicitly invoke the skill by name.
 ---
 
 # Smoke Test
@@ -91,15 +91,13 @@ Query spans for `db.status.counts` and any errors. Note whether entity creation 
 
 **Goal:** Start `mailpilot run` in the background so subsequent phases get sync, routing, and task execution for free.
 
-1. Lower `run_interval` so the periodic-sync fallback fires quickly during the test:
-   ```
-   mailpilot config set run_interval 5
-   ```
-2. Start the sync loop in the background. Use `Bash` with `run_in_background: true` and capture the bash_id:
+**Do not modify `run_interval`.** The smoke test must run against the user's configured interval (default 30s) to emulate production behavior. Sync arrives in real time via Pub/Sub; the periodic fallback is only used if Pub/Sub fails.
+
+1. Start the sync loop in the background. Use `Bash` with `run_in_background: true` and capture the bash_id:
    ```
    uv run mailpilot run
    ```
-3. Wait briefly (~3 seconds) for startup, then read the background output and confirm:
+2. Wait briefly (~3 seconds) for startup, then read the background output and confirm:
    - `Sync loop started (pid <pid>)` is printed.
    - `Pub/Sub subscriber started` is printed (or a `Warning: Pub/Sub setup failed` if credentials are missing -- in that case, periodic sync alone will be slower but still functional).
 
