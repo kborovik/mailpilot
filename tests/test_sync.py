@@ -2,6 +2,7 @@
 
 import base64
 import os
+import signal
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -114,7 +115,7 @@ def test_start_sync_loop_registers_pid_and_shuts_down(
     with (
         patch("mailpilot.sync.threading.Event") as mock_event_cls,
         patch("mailpilot.sync._start_task_listener"),
-        patch("mailpilot.sync._maybe_start_pubsub", return_value=None),
+        patch("mailpilot.sync._start_pubsub_logging_errors", return_value=None),
         patch("mailpilot.sync._run_periodic_iteration"),
         patch("mailpilot.sync.signal.signal"),
     ):
@@ -130,6 +131,58 @@ def test_start_sync_loop_registers_pid_and_shuts_down(
     assert get_sync_status(database_connection) is None
 
 
+def test_start_sync_loop_signal_handler_escalates_to_default(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """First signal sets shutdown_event; subsequent signals get SIG_DFL.
+
+    Without escalation, a process blocked in C-level code (e.g. gRPC
+    inside Pub/Sub setup) cannot be killed with Ctrl+C because the
+    handler only sets a Python-level event that no one is reading.
+    Restoring SIG_DFL after the first signal lets a second Ctrl+C kill
+    the process immediately.
+    """
+    settings = make_test_settings()
+
+    handlers: dict[int, Any] = {}
+
+    def fake_signal(signum: int, handler: Any) -> Any:
+        previous = handlers.get(signum)
+        handlers[signum] = handler
+        return previous
+
+    captured_handler: list[Any] = []
+
+    def capture_then_run(*_args: Any, **_kwargs: Any) -> None:
+        # Invoke the registered SIGINT handler once, as if the user
+        # pressed Ctrl+C while we were inside this iteration.
+        captured_handler.append(handlers[signal.SIGINT])
+        handlers[signal.SIGINT](signal.SIGINT, None)
+
+    with (
+        patch("mailpilot.sync.threading.Event") as mock_event_cls,
+        patch("mailpilot.sync._start_task_listener"),
+        patch("mailpilot.sync._start_pubsub_logging_errors", return_value=None),
+        patch(
+            "mailpilot.sync._run_periodic_iteration",
+            side_effect=capture_then_run,
+        ),
+        patch("mailpilot.sync.signal.signal", side_effect=fake_signal),
+    ):
+        mock_shutdown = MagicMock()
+        mock_shutdown.is_set.side_effect = [False, False, True]
+        mock_shutdown.wait.return_value = False
+        mock_event_cls.return_value = mock_shutdown
+
+        start_sync_loop(database_connection, settings)
+
+    # The handler ran (proves it was registered and invoked).
+    assert captured_handler, "shutdown handler was never invoked"
+    # After the first signal, SIGINT and SIGTERM were restored to default.
+    assert handlers[signal.SIGINT] is signal.SIG_DFL
+    assert handlers[signal.SIGTERM] is signal.SIG_DFL
+
+
 def test_start_sync_loop_calls_pubsub_when_configured(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
@@ -142,7 +195,7 @@ def test_start_sync_loop_calls_pubsub_when_configured(
         patch("mailpilot.sync.threading.Event") as mock_event_cls,
         patch("mailpilot.sync._start_task_listener"),
         patch(
-            "mailpilot.sync._maybe_start_pubsub",
+            "mailpilot.sync._start_pubsub_logging_errors",
             return_value=None,
         ) as mock_pubsub,
         patch("mailpilot.sync._run_periodic_iteration"),
@@ -168,7 +221,7 @@ def test_start_sync_loop_skips_pubsub_when_no_credentials(
         patch("mailpilot.sync.threading.Event") as mock_event_cls,
         patch("mailpilot.sync._start_task_listener"),
         patch(
-            "mailpilot.sync._maybe_start_pubsub",
+            "mailpilot.sync._start_pubsub_logging_errors",
             return_value=None,
         ) as mock_pubsub,
         patch("mailpilot.sync._run_periodic_iteration"),

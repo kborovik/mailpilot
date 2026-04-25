@@ -26,6 +26,7 @@ def test_setup_pubsub_creates_topic_and_subscription() -> None:
     )
     with (
         patch("mailpilot.pubsub._resolve_project_id", return_value="my-project"),
+        patch("mailpilot.pubsub._load_credentials", return_value=MagicMock()),
         patch("mailpilot.pubsub.PublisherClient") as mock_pub_cls,
         patch("mailpilot.pubsub.SubscriberClient") as mock_sub_cls,
     ):
@@ -43,6 +44,51 @@ def test_setup_pubsub_creates_topic_and_subscription() -> None:
         assert call_kwargs[1]["topic"] == "projects/my-project/topics/test-topic"
 
 
+def test_setup_pubsub_passes_service_account_credentials() -> None:
+    """Pub/Sub clients must use the configured service account, not ADC.
+
+    Regression: instantiating PublisherClient()/SubscriberClient() with
+    no credentials silently falls back to gcloud user ADC, which on a
+    developer machine can be expired and traps the sync loop in a
+    600-second gRPC retry before failing.
+    """
+    from mailpilot.pubsub import setup_pubsub
+
+    settings = make_test_settings(
+        google_application_credentials="/tmp/creds.json",
+    )
+    sentinel = MagicMock(name="service_account_credentials")
+    with (
+        patch("mailpilot.pubsub._resolve_project_id", return_value="my-project"),
+        patch("mailpilot.pubsub._load_credentials", return_value=sentinel) as mock_load,
+        patch("mailpilot.pubsub.PublisherClient") as mock_pub_cls,
+        patch("mailpilot.pubsub.SubscriberClient") as mock_sub_cls,
+    ):
+        setup_pubsub(settings)
+
+    mock_load.assert_called_once_with(settings)
+    mock_pub_cls.assert_called_once_with(credentials=sentinel)
+    mock_sub_cls.assert_called_once_with(credentials=sentinel)
+
+
+def test_start_subscriber_passes_service_account_credentials() -> None:
+    """start_subscriber must use the configured service account, not ADC."""
+    from mailpilot.pubsub import start_subscriber
+
+    settings = make_test_settings(
+        google_application_credentials="/tmp/creds.json",
+    )
+    sentinel = MagicMock(name="service_account_credentials")
+    with (
+        patch("mailpilot.pubsub._resolve_project_id", return_value="my-project"),
+        patch("mailpilot.pubsub._load_credentials", return_value=sentinel),
+        patch("mailpilot.pubsub.SubscriberClient") as mock_sub_cls,
+    ):
+        start_subscriber(settings, MagicMock())
+
+    mock_sub_cls.assert_called_once_with(credentials=sentinel)
+
+
 def test_setup_pubsub_idempotent_when_already_exists() -> None:
     from google.api_core.exceptions import AlreadyExists
 
@@ -53,6 +99,7 @@ def test_setup_pubsub_idempotent_when_already_exists() -> None:
     )
     with (
         patch("mailpilot.pubsub._resolve_project_id", return_value="my-project"),
+        patch("mailpilot.pubsub._load_credentials", return_value=MagicMock()),
         patch("mailpilot.pubsub.PublisherClient") as mock_pub_cls,
         patch("mailpilot.pubsub.SubscriberClient") as mock_sub_cls,
     ):
@@ -72,6 +119,7 @@ def test_setup_pubsub_sets_iam_policy() -> None:
     )
     with (
         patch("mailpilot.pubsub._resolve_project_id", return_value="my-project"),
+        patch("mailpilot.pubsub._load_credentials", return_value=MagicMock()),
         patch("mailpilot.pubsub.PublisherClient") as mock_pub_cls,
         patch("mailpilot.pubsub.SubscriberClient"),
     ):
@@ -95,6 +143,7 @@ def test_start_subscriber_returns_future() -> None:
     callback = MagicMock()
     with (
         patch("mailpilot.pubsub._resolve_project_id", return_value="my-project"),
+        patch("mailpilot.pubsub._load_credentials", return_value=MagicMock()),
         patch("mailpilot.pubsub.SubscriberClient") as mock_sub_cls,
     ):
         mock_future = MagicMock()

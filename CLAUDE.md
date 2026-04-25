@@ -211,6 +211,7 @@ Both are delegated via the service account in `google_application_credentials` a
 - Type hints on all functions, parameters, and return values
 - Docstrings on public functions (Google convention)
 - Import order: stdlib, third-party, local
+- Python 3.14 unparenthesized `except E1, E2:` is intentional. The project pins `requires-python = ">=3.14"` and ruff is configured for `target-version = "py314"`. Do not rewrite to the parenthesized tuple form.
 
 ## Commands
 

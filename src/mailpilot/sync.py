@@ -147,12 +147,18 @@ def start_sync_loop(
     click.echo(f"Interval: {settings.run_interval}s")
     click.echo("Press Ctrl+C or send SIGTERM to stop")
 
-    # Signal handlers set the shutdown event.
+    # Signal handlers set the shutdown event. After the first signal
+    # we restore the default handlers so a second Ctrl+C / SIGTERM
+    # always exits, even if the main thread is blocked in a C-level
+    # call (e.g. gRPC inside Pub/Sub setup) where shutdown_event is
+    # never observed.
     def _handle_shutdown(signum: int, frame: object) -> None:
         signal_name = signal.Signals(signum).name
         logfire.info("sync.shutdown.signal_received", pid=pid, signal=signum)
         click.echo(f"\nReceived {signal_name}, shutting down...")
         shutdown_event.set()
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
 
     signal.signal(signal.SIGTERM, _handle_shutdown)
     signal.signal(signal.SIGINT, _handle_shutdown)
@@ -161,7 +167,9 @@ def start_sync_loop(
     sync_queue: queue.Queue[str] = queue.Queue()
     subscriber_future = None
     if settings.google_application_credentials:
-        subscriber_future = _maybe_start_pubsub(connection, settings, sync_queue)
+        subscriber_future = _start_pubsub_logging_errors(
+            connection, settings, sync_queue
+        )
 
     # Start PG LISTEN thread (instant task execution on INSERT).
     task_ready = threading.Event()
@@ -183,7 +191,7 @@ def start_sync_loop(
             # Hourly watch renewal.
             now = time.monotonic()
             if now - last_watch_renewal >= _WATCH_RENEWAL_INTERVAL:
-                _renew_watches_safe(connection, settings)
+                _renew_watches_logging_errors(connection, settings)
                 last_watch_renewal = now
     finally:
         # Graceful shutdown.
@@ -197,7 +205,7 @@ def start_sync_loop(
         click.echo("Sync loop stopped")
 
 
-def _maybe_start_pubsub(
+def _start_pubsub_logging_errors(
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
     sync_queue: queue.Queue[str],
@@ -335,7 +343,7 @@ def _drain_pending_tasks(
         execute_task(connection, settings, task)
 
 
-def _renew_watches_safe(
+def _renew_watches_logging_errors(
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
 ) -> None:

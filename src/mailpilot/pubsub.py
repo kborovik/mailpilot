@@ -22,6 +22,9 @@ StreamingPullFuture = Any
 _WATCH_RENEWAL_THRESHOLD = timedelta(hours=24)
 
 
+_PUBSUB_SCOPES = ["https://www.googleapis.com/auth/pubsub"]
+
+
 def _resolve_project_id(settings: Settings) -> str:
     """Read the GCP project ID from the service account JSON file.
 
@@ -49,6 +52,30 @@ def _resolve_project_id(settings: Settings) -> str:
     return project_id
 
 
+def _load_credentials(settings: Settings) -> Any:
+    """Load service account credentials scoped for Pub/Sub.
+
+    The Pub/Sub clients otherwise fall back to Application Default
+    Credentials (gcloud user login), which on a developer machine can
+    be expired and produces a 600-second retry loop on the first RPC
+    before failing. Loading the configured service account file
+    directly mirrors how ``GmailClient`` authenticates and avoids that
+    trap entirely.
+    """
+    from google.oauth2.service_account import Credentials
+
+    path = settings.google_application_credentials
+    if not path:
+        raise SystemExit(
+            "google_application_credentials not configured -- set via "
+            "'mailpilot config set google_application_credentials "
+            "/path/to/key.json'"
+        )
+    return Credentials.from_service_account_file(  # type: ignore[no-untyped-call]
+        path, scopes=_PUBSUB_SCOPES
+    )
+
+
 def _topic_path(project_id: str, settings: Settings) -> str:
     return f"projects/{project_id}/topics/{settings.google_pubsub_topic}"
 
@@ -73,29 +100,42 @@ def setup_pubsub(settings: Settings) -> None:
     project_id = _resolve_project_id(settings)
     topic = _topic_path(project_id, settings)
     subscription = _subscription_path(project_id, settings)
+    credentials = _load_credentials(settings)
 
-    with logfire.span("pubsub.setup", topic=topic, subscription=subscription):
-        publisher = PublisherClient()
-        subscriber = SubscriberClient()
+    publisher = PublisherClient(credentials=credentials)
+    subscriber = SubscriberClient(credentials=credentials)
 
-        # Create topic.
+    # Per-RPC spans rather than a single wrapper around the whole setup.
+    # Logfire only flushes a span when it ends, so wrapping multiple slow
+    # RPCs together hides which one is hanging until the whole block
+    # finishes. Each RPC closes on its own and gets its own attributes.
+    with logfire.span("pubsub.create_topic", topic=topic):
         try:
             publisher.create_topic(name=topic)
             logfire.info("pubsub.topic.created", topic=topic)
         except AlreadyExists:
             logfire.debug("pubsub.topic.exists", topic=topic)
 
-        # Set IAM policy: allow Gmail to publish.
+    with logfire.span("pubsub.set_iam_policy", topic=topic):
         policy = publisher.get_iam_policy(request={"resource": topic})
-        binding = policy_pb2.Binding(
-            role="roles/pubsub.publisher",
-            members=["serviceAccount:gmail-api-push@system.gserviceaccount.com"],
+        gmail_publisher = "serviceAccount:gmail-api-push@system.gserviceaccount.com"
+        already_bound = any(
+            b.role == "roles/pubsub.publisher" and gmail_publisher in b.members
+            for b in policy.bindings
         )
-        policy.bindings.append(binding)
-        publisher.set_iam_policy(request={"resource": topic, "policy": policy})
-        logfire.info("pubsub.iam.updated", topic=topic)
+        if already_bound:
+            logfire.debug("pubsub.iam.already_set", topic=topic)
+        else:
+            policy.bindings.append(
+                policy_pb2.Binding(
+                    role="roles/pubsub.publisher",
+                    members=[gmail_publisher],
+                )
+            )
+            publisher.set_iam_policy(request={"resource": topic, "policy": policy})
+            logfire.info("pubsub.iam.updated", topic=topic)
 
-        # Create subscription.
+    with logfire.span("pubsub.create_subscription", subscription=subscription):
         try:
             subscriber.create_subscription(
                 name=subscription,
@@ -123,7 +163,7 @@ def start_subscriber(
     project_id = _resolve_project_id(settings)
     subscription = _subscription_path(project_id, settings)
 
-    subscriber = SubscriberClient()
+    subscriber = SubscriberClient(credentials=_load_credentials(settings))
     future = subscriber.subscribe(subscription, callback=callback)
     logfire.info("pubsub.subscriber.started", subscription=subscription)
     return future
@@ -190,17 +230,21 @@ def renew_watches(
     accounts = list_accounts(connection)
     renewed = 0
 
-    with logfire.span(
-        "pubsub.renew_watches",
-        account_count=len(accounts),
-    ) as span:
-        for account in accounts:
-            if (
-                account.watch_expiration is not None
-                and account.watch_expiration > threshold
-            ):
-                continue
+    # Per-account spans rather than a single wrapper. A hung Gmail
+    # watch call would otherwise block the wrapper span from flushing
+    # and hide which account is the offender.
+    for account in accounts:
+        if (
+            account.watch_expiration is not None
+            and account.watch_expiration > threshold
+        ):
+            continue
 
+        with logfire.span(
+            "pubsub.watch_account",
+            account_id=account.id,
+            email=account.email,
+        ):
             try:
                 client = GmailClient(account.email)
                 result = client.watch(topic)
@@ -226,7 +270,5 @@ def renew_watches(
                     account_id=account.id,
                     email=account.email,
                 )
-
-        span.set_attribute("renewed_count", renewed)
 
     return renewed
