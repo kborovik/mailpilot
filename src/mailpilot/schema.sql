@@ -83,6 +83,33 @@ CREATE TABLE IF NOT EXISTS enrollment (
 
 CREATE INDEX IF NOT EXISTS idx_enrollment_contact_id ON enrollment(contact_id);
 
+CREATE TABLE IF NOT EXISTS email (
+    id                TEXT PRIMARY KEY,
+    gmail_message_id  TEXT UNIQUE,
+    gmail_thread_id   TEXT,
+    rfc2822_message_id TEXT,
+    account_id        TEXT NOT NULL REFERENCES account(id),
+    contact_id        TEXT REFERENCES contact(id),
+    workflow_id       TEXT REFERENCES workflow(id),
+    direction         TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound')),
+    sender            TEXT NOT NULL DEFAULT '',
+    recipients        JSONB NOT NULL DEFAULT '{}',
+    subject           TEXT NOT NULL DEFAULT '',
+    body_text         TEXT NOT NULL DEFAULT '',
+    labels            JSONB NOT NULL DEFAULT '[]',
+    status            TEXT NOT NULL DEFAULT 'received'
+                      CHECK (status IN ('sent', 'received', 'bounced')),
+    is_routed         BOOLEAN NOT NULL DEFAULT FALSE,
+    sent_at           TIMESTAMPTZ,
+    received_at       TIMESTAMPTZ,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_email_account_id ON email(account_id);
+CREATE INDEX IF NOT EXISTS idx_email_contact_id ON email(contact_id);
+CREATE INDEX IF NOT EXISTS idx_email_workflow_id ON email(workflow_id);
+CREATE INDEX IF NOT EXISTS idx_email_gmail_thread_id ON email(gmail_thread_id);
+
 CREATE TABLE IF NOT EXISTS task (
     id            TEXT PRIMARY KEY,
     workflow_id   TEXT NOT NULL REFERENCES workflow(id),
@@ -116,33 +143,6 @@ CREATE TRIGGER task_pending_trigger
     AFTER INSERT ON task
     FOR EACH ROW
     EXECUTE FUNCTION notify_task_pending();
-
-CREATE TABLE IF NOT EXISTS email (
-    id                TEXT PRIMARY KEY,
-    gmail_message_id  TEXT UNIQUE,
-    gmail_thread_id   TEXT,
-    rfc2822_message_id TEXT,
-    account_id        TEXT NOT NULL REFERENCES account(id),
-    contact_id        TEXT REFERENCES contact(id),
-    workflow_id       TEXT REFERENCES workflow(id),
-    direction         TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound')),
-    sender            TEXT NOT NULL DEFAULT '',
-    recipients        JSONB NOT NULL DEFAULT '{}',
-    subject           TEXT NOT NULL DEFAULT '',
-    body_text         TEXT NOT NULL DEFAULT '',
-    labels            JSONB NOT NULL DEFAULT '[]',
-    status            TEXT NOT NULL DEFAULT 'received'
-                      CHECK (status IN ('sent', 'received', 'bounced')),
-    is_routed         BOOLEAN NOT NULL DEFAULT FALSE,
-    sent_at           TIMESTAMPTZ,
-    received_at       TIMESTAMPTZ,
-    created_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_email_account_id ON email(account_id);
-CREATE INDEX IF NOT EXISTS idx_email_contact_id ON email(contact_id);
-CREATE INDEX IF NOT EXISTS idx_email_workflow_id ON email(workflow_id);
-CREATE INDEX IF NOT EXISTS idx_email_gmail_thread_id ON email(gmail_thread_id);
 
 CREATE TABLE IF NOT EXISTS activity (
     id              TEXT PRIMARY KEY,
