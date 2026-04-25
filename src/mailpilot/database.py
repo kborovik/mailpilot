@@ -206,6 +206,28 @@ def list_accounts(
     return [Account.model_validate(row) for row in rows]
 
 
+def get_account_by_email(
+    connection: psycopg.Connection[dict[str, Any]],
+    email: str,
+) -> Account | None:
+    """Get an account by email address (case-insensitive).
+
+    Args:
+        connection: Open database connection.
+        email: Email address to look up.
+
+    Returns:
+        Account if found, None otherwise.
+    """
+    row = connection.execute(
+        "SELECT * FROM account WHERE LOWER(email) = LOWER(%(email)s)",
+        {"email": email},
+    ).fetchone()
+    if row is None:
+        return None
+    return Account.model_validate(row)
+
+
 def update_account(
     connection: psycopg.Connection[dict[str, Any]],
     account_id: str,

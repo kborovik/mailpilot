@@ -4,7 +4,7 @@ import base64
 import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import psycopg
 import pytest
@@ -29,7 +29,7 @@ from mailpilot.database import (
     upsert_sync_status,
 )
 from mailpilot.gmail import GmailClient
-from mailpilot.sync import is_pid_alive, send_email, sync_account
+from mailpilot.sync import is_pid_alive, send_email, start_sync_loop, sync_account
 
 
 def test_upsert_and_get_sync_status(
@@ -100,6 +100,88 @@ def test_heartbeat_staleness(
     status = upsert_sync_status(database_connection, os.getpid())
     stale_threshold = datetime.now(tz=UTC) - timedelta(minutes=2)
     assert status.heartbeat_at > stale_threshold
+
+
+# -- start_sync_loop -----------------------------------------------------------
+
+
+def test_start_sync_loop_registers_pid_and_shuts_down(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Loop registers PID, runs one iteration, then shuts down cleanly."""
+    settings = make_test_settings()
+
+    with (
+        patch("mailpilot.sync.threading.Event") as mock_event_cls,
+        patch("mailpilot.sync._start_task_listener"),
+        patch("mailpilot.sync._maybe_start_pubsub", return_value=None),
+        patch("mailpilot.sync._run_periodic_iteration"),
+        patch("mailpilot.sync.signal.signal"),
+    ):
+        mock_shutdown = MagicMock()
+        mock_shutdown.is_set.return_value = False
+        mock_shutdown.wait.side_effect = [False, True]  # one iteration then stop
+        mock_shutdown.is_set.side_effect = [False, True]
+        mock_event_cls.return_value = mock_shutdown
+
+        start_sync_loop(database_connection, settings)
+
+    # Verify PID was registered then cleaned up
+    assert get_sync_status(database_connection) is None
+
+
+def test_start_sync_loop_calls_pubsub_when_configured(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """When google credentials are set, Pub/Sub setup is attempted."""
+    settings = make_test_settings(
+        google_application_credentials="/tmp/creds.json",
+    )
+
+    with (
+        patch("mailpilot.sync.threading.Event") as mock_event_cls,
+        patch("mailpilot.sync._start_task_listener"),
+        patch(
+            "mailpilot.sync._maybe_start_pubsub",
+            return_value=None,
+        ) as mock_pubsub,
+        patch("mailpilot.sync._run_periodic_iteration"),
+        patch("mailpilot.sync.signal.signal"),
+    ):
+        mock_shutdown = MagicMock()
+        mock_shutdown.is_set.side_effect = [False, True]
+        mock_shutdown.wait.return_value = True
+        mock_event_cls.return_value = mock_shutdown
+
+        start_sync_loop(database_connection, settings)
+
+    mock_pubsub.assert_called_once()
+
+
+def test_start_sync_loop_skips_pubsub_when_no_credentials(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """When google credentials are empty, Pub/Sub setup is skipped."""
+    settings = make_test_settings(google_application_credentials="")
+
+    with (
+        patch("mailpilot.sync.threading.Event") as mock_event_cls,
+        patch("mailpilot.sync._start_task_listener"),
+        patch(
+            "mailpilot.sync._maybe_start_pubsub",
+            return_value=None,
+        ) as mock_pubsub,
+        patch("mailpilot.sync._run_periodic_iteration"),
+        patch("mailpilot.sync.signal.signal"),
+    ):
+        mock_shutdown = MagicMock()
+        mock_shutdown.is_set.side_effect = [False, True]
+        mock_shutdown.wait.return_value = True
+        mock_event_cls.return_value = mock_shutdown
+
+        start_sync_loop(database_connection, settings)
+
+    mock_pubsub.assert_not_called()
 
 
 # -- sync_account --------------------------------------------------------------

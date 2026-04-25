@@ -175,3 +175,18 @@ CREATE TABLE IF NOT EXISTS note (
 );
 
 CREATE INDEX IF NOT EXISTS idx_note_entity ON note(entity_type, entity_id);
+
+-- PG NOTIFY trigger: fires on every task INSERT so the sync loop can
+-- drain the task queue immediately instead of waiting for the next poll.
+CREATE OR REPLACE FUNCTION notify_task_pending() RETURNS trigger AS $$
+BEGIN
+    PERFORM pg_notify('task_pending', '');
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS task_pending_trigger ON task;
+CREATE TRIGGER task_pending_trigger
+    AFTER INSERT ON task
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_task_pending();

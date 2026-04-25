@@ -4337,11 +4337,9 @@ def test_run_command(runner: CliRunner, mock_connection: MagicMock) -> None:
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.run.run_loop") as mock_loop,
+        patch("mailpilot.sync.start_sync_loop") as mock_loop,
     ):
         result = runner.invoke(main, ["run"])
 
     assert result.exit_code == 0, result.output
-    assert "Starting execution loop" in result.output
-    assert "Ctrl+C to stop" in result.output
     mock_loop.assert_called_once_with(mock_connection, make_test_settings())

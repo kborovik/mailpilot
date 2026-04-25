@@ -1,10 +1,16 @@
 """Sync loop lifecycle and per-account Gmail sync pipeline.
 
-Runs as a foreground process managed by systemd. Provides the lifecycle
-shell (``start_sync_loop``) plus the per-account sync entry point
-(``sync_account``) that is invoked from the Pub/Sub callback for each
-inbound notification. The Pub/Sub subscriber and watch renewal are not
-yet wired up.
+Runs as a foreground process managed by systemd. Provides the unified
+lifecycle entry point (``start_sync_loop``) plus the per-account sync
+entry point (``sync_account``).
+
+The sync loop integrates:
+
+- **Pub/Sub subscriber** for real-time Gmail notifications
+- **PG LISTEN/NOTIFY** for instant task execution on INSERT
+- **Periodic sync** as a fallback (every ``run_interval`` seconds)
+- **Watch renewal** (hourly)
+- **Task execution** via ``execute_task()`` from ``run.py``
 
 Usage::
 
@@ -16,6 +22,7 @@ Usage::
 from __future__ import annotations
 
 import os
+import queue
 import signal
 import threading
 import time
@@ -31,10 +38,14 @@ from mailpilot.database import (
     create_contacts_bulk,
     create_email,
     create_or_get_contact_by_email,
+    create_tasks_for_routed_emails,
     delete_sync_status,
+    get_account_by_email,
     get_contacts_by_emails,
     get_email_by_gmail_message_id,
     get_sync_status,
+    list_accounts,
+    list_pending_tasks,
     list_workflows,
     update_account,
     update_contact,
@@ -55,6 +66,7 @@ from mailpilot.settings import Settings
 _HEARTBEAT_INTERVAL = 30  # seconds
 _RECENCY_WINDOW = timedelta(days=7)
 _FULL_SYNC_MAX_RESULTS = 100
+_WATCH_RENEWAL_INTERVAL = 3600  # seconds (1 hour)
 
 # -- Metrics -------------------------------------------------------------------
 
@@ -84,23 +96,11 @@ def is_pid_alive(pid: int) -> bool:
     return True
 
 
-def start_sync_loop(connection: psycopg.Connection[dict[str, Any]]) -> None:
-    """Run the sync loop (blocks until SIGTERM/SIGINT).
-
-    Lifecycle:
-    1. Check for stale sync_status row (dead PID) and overwrite
-    2. Register current PID in sync_status
-    3. Register SIGTERM/SIGINT handlers
-    4. Loop: heartbeat every 30s, check shutdown event
-    5. On shutdown: delete sync_status row
-
-    Args:
-        connection: Open database connection.
-    """
-    pid = os.getpid()
-    shutdown_event = threading.Event()
-
-    # Check for stale sync_status from a crashed process.
+def _check_stale_sync_status(
+    connection: psycopg.Connection[dict[str, Any]],
+    pid: int,
+) -> None:
+    """Check for stale sync_status from a crashed process."""
     existing = get_sync_status(connection)
     if existing is not None and is_pid_alive(existing.pid):
         logfire.warn(
@@ -115,11 +115,36 @@ def start_sync_loop(connection: psycopg.Connection[dict[str, Any]]) -> None:
     if existing is not None:
         click.echo(f"Removing stale sync status (pid {existing.pid} is dead)")
 
-    # Register this process.
+
+def start_sync_loop(
+    connection: psycopg.Connection[dict[str, Any]],
+    settings: Settings,
+) -> None:
+    """Run the unified sync loop (blocks until SIGTERM/SIGINT).
+
+    Integrates Pub/Sub subscriber, PG LISTEN/NOTIFY for tasks, periodic
+    account sync, task execution, and watch renewal into a single process.
+
+    Lifecycle:
+    1. Check for stale sync_status row (dead PID) and overwrite
+    2. Register current PID in sync_status
+    3. Start Pub/Sub subscriber (if credentials configured)
+    4. Start PG LISTEN thread for task notifications
+    5. Loop: periodic sync + task drain + heartbeat
+    6. On shutdown: stop subscriber, clean up
+
+    Args:
+        connection: Open database connection.
+        settings: Application settings.
+    """
+    pid = os.getpid()
+    shutdown_event = threading.Event()
+
+    _check_stale_sync_status(connection, pid)
     upsert_sync_status(connection, pid)
     logfire.info("sync.loop.start", pid=pid)
     click.echo(f"Sync loop started (pid {pid})")
-    click.echo(f"Heartbeat interval: {_HEARTBEAT_INTERVAL}s")
+    click.echo(f"Interval: {settings.run_interval}s")
     click.echo("Press Ctrl+C or send SIGTERM to stop")
 
     # Signal handlers set the shutdown event.
@@ -132,17 +157,199 @@ def start_sync_loop(connection: psycopg.Connection[dict[str, Any]]) -> None:
     signal.signal(signal.SIGTERM, _handle_shutdown)
     signal.signal(signal.SIGINT, _handle_shutdown)
 
-    # Main loop: heartbeat until shutdown.
+    # Start Pub/Sub subscriber (real-time Gmail notifications).
+    sync_queue: queue.Queue[str] = queue.Queue()
+    subscriber_future = None
+    if settings.google_application_credentials:
+        subscriber_future = _maybe_start_pubsub(connection, settings, sync_queue)
+
+    # Start PG LISTEN thread (instant task execution on INSERT).
+    task_ready = threading.Event()
+    database_url = str(settings.database_url)
+    listener_thread = _start_task_listener(database_url, task_ready, shutdown_event)
+
+    # Main loop.
+    last_watch_renewal = 0.0
     try:
         while not shutdown_event.is_set():
-            shutdown_event.wait(timeout=_HEARTBEAT_INTERVAL)
-            if not shutdown_event.is_set():
-                update_sync_heartbeat(connection)
-                logfire.debug("sync.loop.heartbeat", pid=pid)
+            shutdown_event.wait(timeout=settings.run_interval)
+            if shutdown_event.is_set():
+                break
+            update_sync_heartbeat(connection)
+            logfire.debug("sync.loop.heartbeat", pid=pid)
+
+            _run_periodic_iteration(connection, settings, sync_queue, task_ready)
+
+            # Hourly watch renewal.
+            now = time.monotonic()
+            if now - last_watch_renewal >= _WATCH_RENEWAL_INTERVAL:
+                _renew_watches_safe(connection, settings)
+                last_watch_renewal = now
     finally:
+        # Graceful shutdown.
+        if subscriber_future is not None:
+            subscriber_future.cancel()
+            logfire.info("sync.pubsub.subscriber.stopped")
+        shutdown_event.set()  # signal listener thread
+        listener_thread.join(timeout=5)
         delete_sync_status(connection)
         logfire.info("sync.loop.stop", pid=pid)
         click.echo("Sync loop stopped")
+
+
+def _maybe_start_pubsub(
+    connection: psycopg.Connection[dict[str, Any]],
+    settings: Settings,
+    sync_queue: queue.Queue[str],
+) -> Any:
+    """Set up Pub/Sub infrastructure and start the subscriber.
+
+    Returns the StreamingPullFuture, or None on failure.
+    """
+    from mailpilot.pubsub import (
+        make_notification_callback,
+        renew_watches,
+        setup_pubsub,
+        start_subscriber,
+    )
+
+    try:
+        setup_pubsub(settings)
+        renew_watches(connection, settings)
+        callback = make_notification_callback(sync_queue)
+        future = start_subscriber(settings, callback)
+        click.echo("Pub/Sub subscriber started")
+        return future
+    except Exception:
+        logfire.exception("sync.pubsub.setup_failed")
+        click.echo("Warning: Pub/Sub setup failed, running in polling-only mode")
+        return None
+
+
+def _start_task_listener(
+    database_url: str,
+    task_ready: threading.Event,
+    shutdown_event: threading.Event,
+) -> threading.Thread:
+    """Start a daemon thread that listens for PG NOTIFY on task_pending.
+
+    When a notification arrives, sets ``task_ready`` so the main loop
+    can drain the task queue immediately.
+    """
+
+    def _listen() -> None:
+        listen_conn = psycopg.connect(database_url, autocommit=True)
+        try:
+            listen_conn.execute("LISTEN task_pending")
+            while not shutdown_event.is_set():
+                for _notify in listen_conn.notifies(timeout=30.0):
+                    task_ready.set()
+                    break
+        except Exception:
+            logfire.exception("sync.task_listener.error")
+        finally:
+            listen_conn.close()
+
+    thread = threading.Thread(target=_listen, daemon=True)
+    thread.start()
+    return thread
+
+
+def _run_periodic_iteration(
+    connection: psycopg.Connection[dict[str, Any]],
+    settings: Settings,
+    sync_queue: queue.Queue[str],
+    task_ready: threading.Event,
+) -> None:
+    """Run one iteration of the periodic sync + task drain cycle."""
+    with logfire.span("sync.loop.iteration"):
+        # Sync accounts from Pub/Sub notifications.
+        _drain_sync_queue(connection, settings, sync_queue)
+
+        # Periodic sync of all accounts.
+        _sync_all_accounts(connection, settings)
+
+        # Bridge routed emails to tasks and drain the queue.
+        create_tasks_for_routed_emails(connection)
+        _drain_pending_tasks(connection, settings)
+        task_ready.clear()
+
+
+def _drain_sync_queue(
+    connection: psycopg.Connection[dict[str, Any]],
+    settings: Settings,
+    sync_queue: queue.Queue[str],
+) -> None:
+    """Sync accounts that received Pub/Sub notifications."""
+    synced: set[str] = set()
+    while not sync_queue.empty():
+        try:
+            email = sync_queue.get_nowait()
+        except queue.Empty:
+            break
+        if email in synced:
+            continue
+        account = get_account_by_email(connection, email)
+        if account is None:
+            logfire.debug("sync.notification.unknown_email", email=email)
+            continue
+        try:
+            client = GmailClient(account.email)
+            sync_account(connection, account, client, settings)
+            synced.add(email)
+        except Exception:
+            logfire.exception(
+                "sync.notification.sync_failed",
+                account_id=account.id,
+                email=account.email,
+            )
+
+
+def _sync_all_accounts(
+    connection: psycopg.Connection[dict[str, Any]],
+    settings: Settings,
+) -> None:
+    """Sync all Gmail accounts. Errors per account are logged, not raised."""
+    accounts = list_accounts(connection)
+    for account in accounts:
+        try:
+            client = GmailClient(account.email)
+            sync_account(connection, account, client, settings)
+        except Exception:
+            logfire.exception(
+                "sync.account.sync_failed",
+                account_id=account.id,
+                email=account.email,
+            )
+
+
+def _drain_pending_tasks(
+    connection: psycopg.Connection[dict[str, Any]],
+    settings: Settings,
+) -> None:
+    """Execute all pending tasks that are due."""
+    from mailpilot.run import execute_task
+
+    pending = list_pending_tasks(connection)
+    for task in pending:
+        execute_task(connection, settings, task)
+
+
+def _renew_watches_safe(
+    connection: psycopg.Connection[dict[str, Any]],
+    settings: Settings,
+) -> None:
+    """Renew Gmail watches, catching and logging errors."""
+    if not settings.google_application_credentials:
+        return
+    try:
+        from mailpilot.pubsub import renew_watches
+
+        renewed = renew_watches(connection, settings)
+        if renewed > 0:
+            logfire.info("sync.watches.renewed", count=renewed)
+    except Exception:
+        logfire.exception("sync.watches.renewal_failed")
 
 
 # -- Per-account sync ---------------------------------------------------------
