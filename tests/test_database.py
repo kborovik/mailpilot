@@ -33,6 +33,7 @@ from mailpilot.database import (
     delete_tag,
     delete_workflow_contact,
     get_account,
+    get_account_by_email,
     get_company,
     get_company_by_domain,
     get_contact,
@@ -111,6 +112,58 @@ def test_update_account_not_found(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     assert update_account(database_connection, "nonexistent", display_name="X") is None
+
+
+def test_get_account_by_email(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection, email="user@example.com")
+    fetched = get_account_by_email(database_connection, "user@example.com")
+    assert fetched is not None
+    assert fetched.id == account.id
+
+
+def test_get_account_by_email_not_found(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    assert get_account_by_email(database_connection, "nobody@example.com") is None
+
+
+def test_get_account_by_email_case_insensitive(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection, email="User@Example.com")
+    fetched = get_account_by_email(database_connection, "user@example.com")
+    assert fetched is not None
+    assert fetched.id == account.id
+
+
+def test_task_insert_emits_notify(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """PG trigger on task INSERT fires NOTIFY task_pending."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+
+    listen_conn = cast(
+        psycopg.Connection[dict[str, Any]],
+        psycopg.connect(TEST_DATABASE_URL, row_factory=dict_row, autocommit=True),  # type: ignore[arg-type]
+    )
+    try:
+        listen_conn.execute("LISTEN task_pending")
+        create_task(
+            database_connection,
+            workflow_id=workflow.id,
+            contact_id=contact.id,
+            description="test task",
+            scheduled_at="2026-01-01T00:00:00Z",
+        )
+        notifications = list(listen_conn.notifies(timeout=2.0))
+        assert len(notifications) >= 1
+        assert notifications[0].channel == "task_pending"
+    finally:
+        listen_conn.close()
 
 
 # -- Company -------------------------------------------------------------------

@@ -384,3 +384,20 @@ def test_get_messages_batch_chunks_large_lists():
 
     assert len(results) == 150
     assert batch_execute_count == 2
+
+
+# -- stop_watch ----------------------------------------------------------------
+
+
+def test_stop_watch_calls_users_stop():
+    from unittest.mock import MagicMock
+
+    from mailpilot.gmail import GmailClient
+
+    service = MagicMock()
+    client = GmailClient.from_service("test@example.com", service)
+
+    client.stop_watch()
+
+    service.users().stop.assert_called_once_with(userId="me")
+    service.users().stop().execute.assert_called_once()

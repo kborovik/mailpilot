@@ -20,6 +20,7 @@ Claude Code is the primary operator of MailPilot. The CLI is LLM-agent-friendly 
 - Agent-driven, not system-driven. The system provides tools and scheduling; LLM agents make all business decisions (what to send, when to follow up, when to give up).
 - Type-safety is non-negotiable. basedpyright strict mode.
 - TDD for ALL changes.
+- Background loops wake on events, not on timers. When a real-time mechanism exists (Pub/Sub callback, PG `LISTEN/NOTIFY`, signal handler), the main loop's `wait()` MUST be on a shared `wakeup_event` that those mechanisms set. Periodic timers are the upper-bound fallback, not the primary trigger -- otherwise the real-time path silently degrades to polling and the test suite cannot tell the difference. Clear the wakeup event BEFORE processing so events arriving mid-iteration re-trigger the next wait. See `start_sync_loop` in `src/mailpilot/sync.py` for the canonical shape.
 
 ## Architecture
 
@@ -211,6 +212,7 @@ Both are delegated via the service account in `google_application_credentials` a
 - Type hints on all functions, parameters, and return values
 - Docstrings on public functions (Google convention)
 - Import order: stdlib, third-party, local
+- Python 3.14 unparenthesized `except E1, E2:` is intentional. The project pins `requires-python = ">=3.14"` and ruff is configured for `target-version = "py314"`. Do not rewrite to the parenthesized tuple form.
 
 ## Commands
 

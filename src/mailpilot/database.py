@@ -92,8 +92,16 @@ def initialize_database(database_url: str) -> psycopg.Connection[dict[str, Any]]
             hint = "check your database_url setting"
         logfire.exception("database connection failed", database=db_name, hint=hint)
         raise SystemExit(f"database connection failed: {hint}") from None
-    schema_sql = SCHEMA_PATH.read_text()
-    connection.execute(schema_sql)  # type: ignore[arg-type]
+    # Skip the schema apply when the database is already initialized.
+    # schema.sql contains DROP TRIGGER + CREATE TRIGGER on the task table
+    # which takes AccessExclusiveLock and deadlocks against the sync loop's
+    # INSERT INTO task (RowExclusiveLock). New columns/tables added to the
+    # schema still flow through the canonical `make clean` workflow, which
+    # drops everything and re-applies on an empty database.
+    probe = connection.execute("SELECT to_regclass('account') AS oid").fetchone()  # type: ignore[union-attr]
+    if probe is None or probe.get("oid") is None:
+        schema_sql = SCHEMA_PATH.read_text()
+        connection.execute(schema_sql)  # type: ignore[arg-type]
     connection.autocommit = False
     return connection
 
@@ -204,6 +212,28 @@ def list_accounts(
     """
     rows = connection.execute("SELECT * FROM account ORDER BY created_at").fetchall()
     return [Account.model_validate(row) for row in rows]
+
+
+def get_account_by_email(
+    connection: psycopg.Connection[dict[str, Any]],
+    email: str,
+) -> Account | None:
+    """Get an account by email address (case-insensitive).
+
+    Args:
+        connection: Open database connection.
+        email: Email address to look up.
+
+    Returns:
+        Account if found, None otherwise.
+    """
+    row = connection.execute(
+        "SELECT * FROM account WHERE LOWER(email) = LOWER(%(email)s)",
+        {"email": email},
+    ).fetchone()
+    if row is None:
+        return None
+    return Account.model_validate(row)
 
 
 def update_account(

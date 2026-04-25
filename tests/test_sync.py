@@ -2,9 +2,10 @@
 
 import base64
 import os
+import signal
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import psycopg
 import pytest
@@ -29,7 +30,7 @@ from mailpilot.database import (
     upsert_sync_status,
 )
 from mailpilot.gmail import GmailClient
-from mailpilot.sync import is_pid_alive, send_email, sync_account
+from mailpilot.sync import is_pid_alive, send_email, start_sync_loop, sync_account
 
 
 def test_upsert_and_get_sync_status(
@@ -100,6 +101,182 @@ def test_heartbeat_staleness(
     status = upsert_sync_status(database_connection, os.getpid())
     stale_threshold = datetime.now(tz=UTC) - timedelta(minutes=2)
     assert status.heartbeat_at > stale_threshold
+
+
+# -- start_sync_loop -----------------------------------------------------------
+
+
+def test_start_sync_loop_registers_pid_and_shuts_down(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Loop registers PID, runs one iteration, then shuts down cleanly."""
+    settings = make_test_settings()
+
+    with (
+        patch("mailpilot.sync.threading.Event") as mock_event_cls,
+        patch("mailpilot.sync._start_task_listener"),
+        patch("mailpilot.sync._start_pubsub_logging_errors", return_value=None),
+        patch("mailpilot.sync._run_periodic_iteration"),
+        patch("mailpilot.sync.signal.signal"),
+    ):
+        mock_shutdown = MagicMock()
+        mock_shutdown.is_set.side_effect = [False, True]
+        mock_wakeup = MagicMock()
+        mock_wakeup.wait.return_value = False  # timer fired, not event-driven
+        mock_event_cls.side_effect = [mock_shutdown, mock_wakeup]
+
+        start_sync_loop(database_connection, settings)
+
+    # Verify PID was registered then cleaned up
+    assert get_sync_status(database_connection) is None
+
+
+def test_start_sync_loop_signal_handler_escalates_to_default(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """First signal sets shutdown_event; subsequent signals get SIG_DFL.
+
+    Without escalation, a process blocked in C-level code (e.g. gRPC
+    inside Pub/Sub setup) cannot be killed with Ctrl+C because the
+    handler only sets a Python-level event that no one is reading.
+    Restoring SIG_DFL after the first signal lets a second Ctrl+C kill
+    the process immediately.
+    """
+    settings = make_test_settings()
+
+    handlers: dict[int, Any] = {}
+
+    def fake_signal(signum: int, handler: Any) -> Any:
+        previous = handlers.get(signum)
+        handlers[signum] = handler
+        return previous
+
+    captured_handler: list[Any] = []
+
+    def capture_then_run(*_args: Any, **_kwargs: Any) -> None:
+        # Invoke the registered SIGINT handler once, as if the user
+        # pressed Ctrl+C while we were inside this iteration.
+        captured_handler.append(handlers[signal.SIGINT])
+        handlers[signal.SIGINT](signal.SIGINT, None)
+
+    with (
+        patch("mailpilot.sync.threading.Event") as mock_event_cls,
+        patch("mailpilot.sync._start_task_listener"),
+        patch("mailpilot.sync._start_pubsub_logging_errors", return_value=None),
+        patch(
+            "mailpilot.sync._run_periodic_iteration",
+            side_effect=capture_then_run,
+        ),
+        patch("mailpilot.sync.signal.signal", side_effect=fake_signal),
+    ):
+        mock_shutdown = MagicMock()
+        mock_shutdown.is_set.side_effect = [False, False, True]
+        mock_wakeup = MagicMock()
+        mock_wakeup.wait.return_value = False
+        mock_event_cls.side_effect = [mock_shutdown, mock_wakeup]
+
+        start_sync_loop(database_connection, settings)
+
+    # The handler ran (proves it was registered and invoked).
+    assert captured_handler, "shutdown handler was never invoked"
+    # After the first signal, SIGINT and SIGTERM were restored to default.
+    assert handlers[signal.SIGINT] is signal.SIG_DFL
+    assert handlers[signal.SIGTERM] is signal.SIG_DFL
+
+
+def test_start_sync_loop_calls_pubsub_when_configured(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """When google credentials are set, Pub/Sub setup is attempted."""
+    settings = make_test_settings(
+        google_application_credentials="/tmp/creds.json",
+    )
+
+    with (
+        patch("mailpilot.sync.threading.Event") as mock_event_cls,
+        patch("mailpilot.sync._start_task_listener"),
+        patch(
+            "mailpilot.sync._start_pubsub_logging_errors",
+            return_value=None,
+        ) as mock_pubsub,
+        patch("mailpilot.sync._run_periodic_iteration"),
+        patch("mailpilot.sync.signal.signal"),
+    ):
+        mock_shutdown = MagicMock()
+        mock_shutdown.is_set.side_effect = [False, True]
+        mock_wakeup = MagicMock()
+        mock_wakeup.wait.return_value = True
+        mock_event_cls.side_effect = [mock_shutdown, mock_wakeup]
+
+        start_sync_loop(database_connection, settings)
+
+    mock_pubsub.assert_called_once()
+
+
+def test_start_sync_loop_skips_pubsub_when_no_credentials(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """When google credentials are empty, Pub/Sub setup is skipped."""
+    settings = make_test_settings(google_application_credentials="")
+
+    with (
+        patch("mailpilot.sync.threading.Event") as mock_event_cls,
+        patch("mailpilot.sync._start_task_listener"),
+        patch(
+            "mailpilot.sync._start_pubsub_logging_errors",
+            return_value=None,
+        ) as mock_pubsub,
+        patch("mailpilot.sync._run_periodic_iteration"),
+        patch("mailpilot.sync.signal.signal"),
+    ):
+        mock_shutdown = MagicMock()
+        mock_shutdown.is_set.side_effect = [False, True]
+        mock_wakeup = MagicMock()
+        mock_wakeup.wait.return_value = True
+        mock_event_cls.side_effect = [mock_shutdown, mock_wakeup]
+
+        start_sync_loop(database_connection, settings)
+
+    mock_pubsub.assert_not_called()
+
+
+def test_start_sync_loop_wires_wakeup_event_to_pubsub_and_listener(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Pub/Sub setup and PG listener share one wakeup_event with the main loop.
+
+    Without this wiring, notifications would never wake the main loop --
+    real-time delivery via Pub/Sub and instant task execution via PG
+    LISTEN/NOTIFY would degenerate to plain run_interval polling.
+    """
+    settings = make_test_settings(google_application_credentials="/tmp/creds.json")
+
+    with (
+        patch("mailpilot.sync.threading.Event") as mock_event_cls,
+        patch("mailpilot.sync._start_task_listener") as mock_listener,
+        patch(
+            "mailpilot.sync._start_pubsub_logging_errors",
+            return_value=None,
+        ) as mock_pubsub,
+        patch("mailpilot.sync._run_periodic_iteration"),
+        patch("mailpilot.sync.signal.signal"),
+    ):
+        mock_shutdown = MagicMock()
+        # while-check False, post-wait check False (run iteration), while-check True (exit)
+        mock_shutdown.is_set.side_effect = [False, False, True]
+        mock_wakeup = MagicMock()
+        mock_wakeup.wait.return_value = False
+        mock_event_cls.side_effect = [mock_shutdown, mock_wakeup]
+
+        start_sync_loop(database_connection, settings)
+
+    # Both the Pub/Sub setup and the PG listener received the wakeup_event.
+    assert mock_wakeup in mock_pubsub.call_args.args
+    assert mock_wakeup in mock_listener.call_args.args
+    # The main loop waited on wakeup_event (with run_interval as fallback).
+    mock_wakeup.wait.assert_called_with(timeout=settings.run_interval)
+    # The wait was cleared so events during processing re-trigger.
+    mock_wakeup.clear.assert_called()
 
 
 # -- sync_account --------------------------------------------------------------
@@ -941,11 +1118,18 @@ def test_send_email_parts_use_utf8_charset(
 def test_send_email_produces_multipart_alternative(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """send_email builds multipart/alternative with plain text and HTML parts."""
+    """send_email builds multipart/alternative with plain text and HTML parts.
+
+    The plaintext part is the agent's Markdown source verbatim. Markdown is
+    designed to be readable as plain text; reducing tables to tab-separated
+    columns and stripping bold/italic markers loses information without
+    benefit, especially for clients that fall back to text/plain.
+    """
     account = make_test_account(database_connection, email="mp@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     client, service = _make_send_client(account.email)
 
+    body = "**Bold** and a [link](https://lab5.ca)"
     send_email(
         database_connection,
         account=account,
@@ -953,7 +1137,7 @@ def test_send_email_produces_multipart_alternative(
         settings=make_test_settings(),
         to="recipient@example.com",
         subject="Hello",
-        body="**Bold** and a [link](https://lab5.ca)",
+        body=body,
         workflow_id=workflow.id,
     )
 
@@ -972,16 +1156,44 @@ def test_send_email_produces_multipart_alternative(
     plain_raw = plain_part.get_payload(decode=True)
     assert isinstance(plain_raw, bytes)
     plain_body = plain_raw.decode()
-    assert "**" not in plain_body
-    assert "Bold" in plain_body
+    assert plain_body == body
 
 
-def test_send_email_stores_plain_text_in_db(
+def test_send_email_preserves_markdown_table_in_plaintext(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """body_text in DB contains stripped plain text, not Markdown."""
+    """Markdown tables stay as ``|``-bordered tables in the text/plain part.
+
+    Earlier behavior reduced tables to tab-separated rows, which was
+    unreadable in mail clients that surface text/plain.
+    """
+    account = make_test_account(database_connection, email="t@example.com")
+    client, service = _make_send_client(account.email)
+    body = "| col1 | col2 |\n|------|------|\n| a | b |"
+
+    send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Hello",
+        body=body,
+    )
+
+    _msg, parts = _get_sent_mime(service)
+    plain_raw = parts[0].get_payload(decode=True)
+    assert isinstance(plain_raw, bytes)
+    assert plain_raw.decode() == body
+
+
+def test_send_email_stores_markdown_in_db(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """body_text in DB stores the agent's Markdown source verbatim."""
     account = make_test_account(database_connection, email="db@example.com")
     client, _service = _make_send_client(account.email)
+    body = "**Bold** text"
 
     email = send_email(
         database_connection,
@@ -990,11 +1202,10 @@ def test_send_email_stores_plain_text_in_db(
         settings=make_test_settings(),
         to="recipient@example.com",
         subject="Hello",
-        body="**Bold** text",
+        body=body,
     )
 
-    assert "**" not in email.body_text
-    assert "Bold" in email.body_text
+    assert email.body_text == body
 
 
 # -- sender / recipients on send and sync -------------------------------------

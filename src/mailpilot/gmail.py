@@ -420,6 +420,15 @@ class GmailClient:
         )
         return result
 
+    @_retry_on_transient
+    def stop_watch(self, user_id: str = "me") -> None:
+        """Stop Gmail push notifications for this account.
+
+        Args:
+            user_id: Gmail user ID (default "me" for delegated user).
+        """
+        self._service.users().stop(userId=user_id).execute()
+
     _BATCH_SIZE = 100
     """Maximum messages per ``new_batch_http_request()`` call."""
 
