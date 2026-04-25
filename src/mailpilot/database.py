@@ -28,13 +28,13 @@ from mailpilot.models import (
     Company,
     Contact,
     Email,
+    Enrollment,
+    EnrollmentDetail,
     Note,
     SyncStatus,
     Tag,
     Task,
     Workflow,
-    WorkflowContact,
-    WorkflowContactDetail,
 )
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
@@ -990,15 +990,15 @@ def pause_workflow(
     return Workflow.model_validate(row)
 
 
-# -- Workflow Contact ----------------------------------------------------------
+# -- Enrollment ----------------------------------------------------------------
 
 
-def create_workflow_contact(
+def create_enrollment(
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str,
     contact_id: str,
-) -> WorkflowContact | None:
-    """Add a contact to a workflow.
+) -> Enrollment | None:
+    """Enroll a contact in a workflow.
 
     Uses ON CONFLICT DO NOTHING so callers can safely re-invoke without
     catching unique-constraint errors. Returns None when the row already
@@ -1010,11 +1010,11 @@ def create_workflow_contact(
         contact_id: Contact FK.
 
     Returns:
-        Created workflow-contact link, or None if it already existed.
+        Created enrollment, or None if it already existed.
     """
     row = connection.execute(
         """\
-        INSERT INTO workflow_contact (workflow_id, contact_id)
+        INSERT INTO enrollment (workflow_id, contact_id)
         VALUES (%(workflow_id)s, %(contact_id)s)
         ON CONFLICT (workflow_id, contact_id) DO NOTHING
         RETURNING *
@@ -1024,16 +1024,16 @@ def create_workflow_contact(
     connection.commit()
     if row is None:
         return None
-    return WorkflowContact.model_validate(row)
+    return Enrollment.model_validate(row)
 
 
-def update_workflow_contact(
+def update_enrollment(
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str,
     contact_id: str,
     **fields: object,
-) -> WorkflowContact | None:
-    """Update a workflow-contact link.
+) -> Enrollment | None:
+    """Update an enrollment.
 
     Args:
         connection: Open database connection.
@@ -1042,29 +1042,29 @@ def update_workflow_contact(
         **fields: Fields to update (status, reason).
 
     Returns:
-        Updated workflow-contact, or None if not found.
+        Updated enrollment, or None if not found.
     """
     allowed = {"status", "reason"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
-        return get_workflow_contact(connection, workflow_id, contact_id)
+        return get_enrollment(connection, workflow_id, contact_id)
     updates["workflow_id"] = workflow_id
     updates["contact_id"] = contact_id
     where = SQL("workflow_id = %(workflow_id)s AND contact_id = %(contact_id)s")
-    query = _build_update("workflow_contact", updates, where)
+    query = _build_update("enrollment", updates, where)
     row = connection.execute(query, updates).fetchone()
     connection.commit()
     if row is None:
         return None
-    return WorkflowContact.model_validate(row)
+    return Enrollment.model_validate(row)
 
 
-def get_workflow_contact(
+def get_enrollment(
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str,
     contact_id: str,
-) -> WorkflowContact | None:
-    """Get a workflow-contact link.
+) -> Enrollment | None:
+    """Get an enrollment by composite key.
 
     Args:
         connection: Open database connection.
@@ -1072,34 +1072,34 @@ def get_workflow_contact(
         contact_id: Contact FK.
 
     Returns:
-        WorkflowContact if found, None otherwise.
+        Enrollment if found, None otherwise.
     """
     row = connection.execute(
         """\
-        SELECT * FROM workflow_contact
+        SELECT * FROM enrollment
         WHERE workflow_id = %(workflow_id)s AND contact_id = %(contact_id)s
         """,
         {"workflow_id": workflow_id, "contact_id": contact_id},
     ).fetchone()
     if row is None:
         return None
-    return WorkflowContact.model_validate(row)
+    return Enrollment.model_validate(row)
 
 
-def list_workflow_contacts(
+def list_enrollments(
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str,
     status: str | None = None,
-) -> list[WorkflowContact]:
-    """List contacts in a workflow with optional status filter.
+) -> list[Enrollment]:
+    """List enrollments in a workflow with optional status filter.
 
     Args:
         connection: Open database connection.
         workflow_id: Workflow FK.
-        status: Filter by contact outcome status.
+        status: Filter by enrollment status.
 
     Returns:
-        List of workflow-contact links.
+        List of enrollments.
     """
     params: dict[str, object] = {"workflow_id": workflow_id}
     status_filter = SQL("")
@@ -1107,20 +1107,20 @@ def list_workflow_contacts(
         status_filter = SQL("AND status = %(status)s")
         params["status"] = status
     query = SQL(
-        "SELECT * FROM workflow_contact "
+        "SELECT * FROM enrollment "
         "WHERE workflow_id = %(workflow_id)s {} "
         "ORDER BY created_at"
     ).format(status_filter)
     rows = connection.execute(query, params).fetchall()
-    return [WorkflowContact.model_validate(row) for row in rows]
+    return [Enrollment.model_validate(row) for row in rows]
 
 
-def delete_workflow_contact(
+def delete_enrollment(
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str,
     contact_id: str,
 ) -> bool:
-    """Remove a contact from a workflow.
+    """Remove an enrollment.
 
     Args:
         connection: Open database connection.
@@ -1132,7 +1132,7 @@ def delete_workflow_contact(
     """
     cursor = connection.execute(
         """\
-        DELETE FROM workflow_contact
+        DELETE FROM enrollment
         WHERE workflow_id = %(workflow_id)s AND contact_id = %(contact_id)s
         """,
         {"workflow_id": workflow_id, "contact_id": contact_id},
@@ -1141,44 +1141,56 @@ def delete_workflow_contact(
     return cursor.rowcount > 0
 
 
-def list_workflow_contacts_enriched(
+def list_enrollments_detailed(
     connection: psycopg.Connection[dict[str, Any]],
-    workflow_id: str,
+    workflow_id: str | None = None,
+    contact_id: str | None = None,
     status: str | None = None,
     limit: int = 100,
-) -> list[WorkflowContactDetail]:
-    """List contacts in a workflow with enriched contact info.
+) -> list[EnrollmentDetail]:
+    """List enrollments with denormalised contact info for display.
 
     JOINs the contact table to include email and name. Separate from
-    ``list_workflow_contacts`` to avoid breaking agent tools which
-    expect ``list[WorkflowContact]``.
+    ``list_enrollments`` to avoid breaking agent tools which expect
+    ``list[Enrollment]``. Both ``workflow_id`` and ``contact_id`` are
+    optional independent filters; either or both can be supplied.
 
     Args:
         connection: Open database connection.
-        workflow_id: Workflow FK.
-        status: Filter by contact outcome status.
+        workflow_id: Optional workflow FK filter.
+        contact_id: Optional contact FK filter.
+        status: Filter by enrollment status.
         limit: Maximum results (default 100).
 
     Returns:
-        List of enriched workflow-contact details.
+        List of enrollment details.
     """
-    params: dict[str, object] = {"workflow_id": workflow_id, "limit": limit}
-    status_filter = SQL("")
+    params: dict[str, object] = {"limit": limit}
+    where_parts: list[Composed | SQL] = []
+    if workflow_id is not None:
+        where_parts.append(SQL("e.workflow_id = %(workflow_id)s"))
+        params["workflow_id"] = workflow_id
+    if contact_id is not None:
+        where_parts.append(SQL("e.contact_id = %(contact_id)s"))
+        params["contact_id"] = contact_id
     if status is not None:
-        status_filter = SQL("AND wc.status = %(status)s")
+        where_parts.append(SQL("e.status = %(status)s"))
         params["status"] = status
+    where_clause = (
+        SQL("WHERE ") + SQL(" AND ").join(where_parts) if where_parts else SQL("")
+    )
     query = SQL(
-        "SELECT wc.*, c.email AS contact_email, "
+        "SELECT e.*, c.email AS contact_email, "
         "TRIM(COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '')) "
         "AS contact_name "
-        "FROM workflow_contact wc "
-        "JOIN contact c ON c.id = wc.contact_id "
-        "WHERE wc.workflow_id = %(workflow_id)s {} "
-        "ORDER BY wc.created_at "
+        "FROM enrollment e "
+        "JOIN contact c ON c.id = e.contact_id "
+        "{} "
+        "ORDER BY e.created_at "
         "LIMIT %(limit)s"
-    ).format(status_filter)
+    ).format(where_clause)
     rows = connection.execute(query, params).fetchall()
-    return [WorkflowContactDetail.model_validate(row) for row in rows]
+    return [EnrollmentDetail.model_validate(row) for row in rows]
 
 
 # -- Email ---------------------------------------------------------------------

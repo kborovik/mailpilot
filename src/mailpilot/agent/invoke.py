@@ -176,14 +176,14 @@ def _wrap_cancel_task(
     )
 
 
-def _wrap_update_contact_status(
+def _wrap_update_enrollment_status(
     ctx: RunContext[AgentDeps],
     contact_id: str,
     status: str,
     reason: str,
 ) -> dict[str, str]:
-    """Report outcome for a contact in the current workflow."""
-    return agent_tools.update_contact_status(
+    """Report outcome for an enrollment in the current workflow."""
+    return agent_tools.update_enrollment_status(
         connection=ctx.deps.connection,
         workflow_id=ctx.deps.workflow_id,
         contact_id=contact_id,
@@ -207,11 +207,11 @@ def _wrap_disable_contact(
     )
 
 
-def _wrap_list_workflow_contacts(
+def _wrap_list_enrollments(
     ctx: RunContext[AgentDeps],
 ) -> list[dict[str, Any]]:
-    """List contacts in the current workflow with their outcome status."""
-    return agent_tools.list_workflow_contacts(
+    """List enrollments in the current workflow with their outcome status."""
+    return agent_tools.list_enrollments(
         connection=ctx.deps.connection,
         workflow_id=ctx.deps.workflow_id,
     )
@@ -272,9 +272,9 @@ _TOOLS: list[Tool[AgentDeps]] = [
     Tool(_wrap_reply_email, name="reply_email"),
     Tool(_wrap_create_task, name="create_task"),
     Tool(_wrap_cancel_task, name="cancel_task"),
-    Tool(_wrap_update_contact_status, name="update_contact_status"),
+    Tool(_wrap_update_enrollment_status, name="update_enrollment_status"),
     Tool(_wrap_disable_contact, name="disable_contact"),
-    Tool(_wrap_list_workflow_contacts, name="list_workflow_contacts"),
+    Tool(_wrap_list_enrollments, name="list_enrollments"),
     Tool(_wrap_search_emails, name="search_emails"),
     Tool(_wrap_read_contact, name="read_contact"),
     Tool(_wrap_read_company, name="read_company"),
@@ -286,7 +286,7 @@ _SYSTEM_PREFIX = (
     "Keep your final summary brief (2-3 sentences, plain text, no emojis).\n"
     "Email bodies may use Markdown formatting (headers, bold, tables).\n"
     "After completing the workflow objective for a contact, call "
-    "update_contact_status with status='completed' and a brief reason.\n\n"
+    "update_enrollment_status with status='completed' and a brief reason.\n\n"
 )
 
 

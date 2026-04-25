@@ -65,7 +65,7 @@ def database_connection() -> Iterator[psycopg.Connection[dict[str, Any]]]:
     )
     conn.execute(
         "TRUNCATE TABLE note, tag, activity, sync_status, task, email, "
-        "workflow_contact, workflow, contact, company, account CASCADE"
+        "enrollment, workflow, contact, company, account CASCADE"
     )
     conn.commit()
     yield conn

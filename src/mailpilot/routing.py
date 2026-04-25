@@ -7,7 +7,7 @@ Three-step pipeline that assigns inbound emails to the correct workflow:
 3. **Unrouted** -- store with is_routed=True, workflow_id=NULL
 
 Also handles bounce detection (mailer-daemon/postmaster senders and
-bounce-related Gmail labels) and creates ``workflow_contact`` entries
+bounce-related Gmail labels) and creates ``enrollment`` entries
 on successful routing.
 """
 
@@ -20,7 +20,7 @@ import psycopg
 
 from mailpilot.agent.classify import classify_email
 from mailpilot.database import (
-    create_workflow_contact,
+    create_enrollment,
     disable_contact,
     get_emails_by_gmail_thread_id,
     list_workflows,
@@ -42,7 +42,7 @@ def route_email(
 
     Runs bounce detection, then the three-step routing pipeline
     (thread match -> LLM classification -> unrouted). Creates a
-    ``workflow_contact`` entry when routing to a workflow.
+    ``enrollment`` entry when routing to a workflow.
 
     Idempotent: emails with ``is_routed=True`` are returned unchanged.
 
@@ -90,7 +90,7 @@ def route_email(
             result = updated if updated is not None else email
 
             if workflow_id is not None and result.contact_id is not None:
-                _ensure_workflow_contact(connection, workflow_id, result.contact_id)
+                _ensure_enrollment(connection, workflow_id, result.contact_id)
 
             return result
         except Exception:
@@ -217,10 +217,10 @@ def _try_classify(
     )
 
 
-def _ensure_workflow_contact(
+def _ensure_enrollment(
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str,
     contact_id: str,
 ) -> None:
-    """Create a workflow_contact entry if not already present."""
-    create_workflow_contact(connection, workflow_id, contact_id)
+    """Create an enrollment entry if not already present."""
+    create_enrollment(connection, workflow_id, contact_id)

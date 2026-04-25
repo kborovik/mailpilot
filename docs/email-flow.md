@@ -55,17 +55,17 @@ Lightweight LLM call to route unmatched emails:
 Run the workflow's Pydantic AI agent:
 
 - **Input**: workflow instructions (system prompt) + email content + contact email history (cross-workflow)
-- **Tools available**: `send_email()`, `create_task()`, `update_contact_status()`, `search_emails()`, `read_contact()`, `read_company()`
-- **Agent decides**: reply, create follow-up task, update contact status, or take no action
+- **Tools available**: `send_email()`, `create_task()`, `update_enrollment_status()`, `search_emails()`, `read_contact()`, `read_company()`
+- **Agent decides**: reply, create follow-up task, update enrollment status, or take no action
 - **Stateless**: no persistent conversation, no cleanup
 
 ---
 
 ## Outbound Email Flow
 
-### 1. Initiate -- `workflow run`
+### 1. Initiate -- `enrollment run`
 
-CLI entry point: `mailpilot workflow run --workflow-id ID --contact-id ID`
+CLI entry point: `mailpilot enrollment run --workflow-id ID --contact-id ID`
 
 - **Input**: workflow ID + contact ID
 - **Action**: load workflow, verify status is `active` and type is `outbound`

@@ -19,12 +19,12 @@ from mailpilot.models import (
     Company,
     Contact,
     Email,
+    Enrollment,
+    EnrollmentDetail,
     Note,
     Tag,
     Task,
     Workflow,
-    WorkflowContact,
-    WorkflowContactDetail,
 )
 
 _NOW = datetime(2024, 1, 1, tzinfo=UTC)
@@ -2404,10 +2404,10 @@ def test_workflow_stop_invalid_state(
     assert data["error"] == "invalid_state"
 
 
-# -- workflow run --------------------------------------------------------------
+# -- enrollment run ------------------------------------------------------------
 
 
-def test_workflow_run(runner: CliRunner, mock_connection: MagicMock) -> None:
+def test_enrollment_run(runner: CliRunner, mock_connection: MagicMock) -> None:
     """Manual run invokes the agent directly -- no task row, no NOTIFY race.
 
     Going through ``create_task`` triggers ``pg_notify('task_pending')``,
@@ -2426,7 +2426,7 @@ def test_workflow_run(runner: CliRunner, mock_connection: MagicMock) -> None:
         created_at=_NOW,
         updated_at=_NOW,
     )
-    wc = WorkflowContact(
+    wc = Enrollment(
         workflow_id=_WORKFLOW_ID,
         contact_id=_CONTACT_ID,
         created_at=_NOW,
@@ -2437,7 +2437,7 @@ def test_workflow_run(runner: CliRunner, mock_connection: MagicMock) -> None:
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=workflow),
         patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.get_workflow_contact", return_value=wc),
+        patch("mailpilot.database.get_enrollment", return_value=wc),
         patch("mailpilot.database.create_task") as mock_create_task,
         patch(
             "mailpilot.agent.invoke_workflow_agent",
@@ -2453,7 +2453,7 @@ def test_workflow_run(runner: CliRunner, mock_connection: MagicMock) -> None:
         result = runner.invoke(
             main,
             [
-                "workflow",
+                "enrollment",
                 "run",
                 "--workflow-id",
                 _WORKFLOW_ID,
@@ -2472,7 +2472,7 @@ def test_workflow_run(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert data["result"]["tool_calls"] == 2
 
 
-def test_workflow_run_workflow_not_found(
+def test_enrollment_run_workflow_not_found(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     with (
@@ -2483,7 +2483,7 @@ def test_workflow_run_workflow_not_found(
         result = runner.invoke(
             main,
             [
-                "workflow",
+                "enrollment",
                 "run",
                 "--workflow-id",
                 "nope",
@@ -2496,7 +2496,7 @@ def test_workflow_run_workflow_not_found(
     assert data["error"] == "not_found"
 
 
-def test_workflow_run_requires_active(
+def test_enrollment_run_requires_active(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     workflow = _make_workflow(status="draft")
@@ -2516,7 +2516,7 @@ def test_workflow_run_requires_active(
         result = runner.invoke(
             main,
             [
-                "workflow",
+                "enrollment",
                 "run",
                 "--workflow-id",
                 _WORKFLOW_ID,
@@ -2529,7 +2529,7 @@ def test_workflow_run_requires_active(
     assert data["error"] == "invalid_state"
 
 
-def test_workflow_run_inbound_with_email(
+def test_enrollment_run_inbound_with_email(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     """Inbound manual run forwards the unprocessed email to the agent."""
@@ -2541,7 +2541,7 @@ def test_workflow_run_inbound_with_email(
         created_at=_NOW,
         updated_at=_NOW,
     )
-    wc = WorkflowContact(
+    wc = Enrollment(
         workflow_id=_WORKFLOW_ID,
         contact_id=_CONTACT_ID,
         created_at=_NOW,
@@ -2557,7 +2557,7 @@ def test_workflow_run_inbound_with_email(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=workflow),
         patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.get_workflow_contact", return_value=wc),
+        patch("mailpilot.database.get_enrollment", return_value=wc),
         patch(
             "mailpilot.database.get_unprocessed_inbound_email",
             return_value=inbound_email,
@@ -2576,7 +2576,7 @@ def test_workflow_run_inbound_with_email(
         result = runner.invoke(
             main,
             [
-                "workflow",
+                "enrollment",
                 "run",
                 "--workflow-id",
                 _WORKFLOW_ID,
@@ -2596,7 +2596,7 @@ def test_workflow_run_inbound_with_email(
     assert data["status"] == "completed"
 
 
-def test_workflow_run_inbound_no_email(
+def test_enrollment_run_inbound_no_email(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     """Inbound manual run with no unprocessed email still invokes the agent."""
@@ -2608,7 +2608,7 @@ def test_workflow_run_inbound_no_email(
         created_at=_NOW,
         updated_at=_NOW,
     )
-    wc = WorkflowContact(
+    wc = Enrollment(
         workflow_id=_WORKFLOW_ID,
         contact_id=_CONTACT_ID,
         created_at=_NOW,
@@ -2619,7 +2619,7 @@ def test_workflow_run_inbound_no_email(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=workflow),
         patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.get_workflow_contact", return_value=wc),
+        patch("mailpilot.database.get_enrollment", return_value=wc),
         patch("mailpilot.database.get_unprocessed_inbound_email", return_value=None),
         patch(
             "mailpilot.agent.invoke_workflow_agent",
@@ -2635,7 +2635,7 @@ def test_workflow_run_inbound_no_email(
         result = runner.invoke(
             main,
             [
-                "workflow",
+                "enrollment",
                 "run",
                 "--workflow-id",
                 _WORKFLOW_ID,
@@ -2654,7 +2654,7 @@ def test_workflow_run_inbound_no_email(
     assert data["status"] == "completed"
 
 
-def test_workflow_run_contact_not_found(
+def test_enrollment_run_contact_not_found(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     workflow = _make_workflow(status="active")
@@ -2667,7 +2667,7 @@ def test_workflow_run_contact_not_found(
         result = runner.invoke(
             main,
             [
-                "workflow",
+                "enrollment",
                 "run",
                 "--workflow-id",
                 _WORKFLOW_ID,
@@ -2680,7 +2680,7 @@ def test_workflow_run_contact_not_found(
     assert data["error"] == "not_found"
 
 
-def test_workflow_run_contact_not_enrolled(
+def test_enrollment_run_contact_not_enrolled(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     workflow = _make_workflow(status="active")
@@ -2696,12 +2696,12 @@ def test_workflow_run_contact_not_enrolled(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=workflow),
         patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.get_workflow_contact", return_value=None),
+        patch("mailpilot.database.get_enrollment", return_value=None),
     ):
         result = runner.invoke(
             main,
             [
-                "workflow",
+                "enrollment",
                 "run",
                 "--workflow-id",
                 _WORKFLOW_ID,
@@ -2715,7 +2715,7 @@ def test_workflow_run_contact_not_enrolled(
     assert "not enrolled" in data["message"]
 
 
-def test_workflow_run_agent_failed(
+def test_enrollment_run_agent_failed(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     """Agent exceptions surface as a failed result envelope."""
@@ -2727,7 +2727,7 @@ def test_workflow_run_agent_failed(
         created_at=_NOW,
         updated_at=_NOW,
     )
-    wc = WorkflowContact(
+    wc = Enrollment(
         workflow_id=_WORKFLOW_ID,
         contact_id=_CONTACT_ID,
         created_at=_NOW,
@@ -2738,7 +2738,7 @@ def test_workflow_run_agent_failed(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=workflow),
         patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.get_workflow_contact", return_value=wc),
+        patch("mailpilot.database.get_enrollment", return_value=wc),
         patch(
             "mailpilot.agent.invoke_workflow_agent",
             side_effect=RuntimeError("agent error"),
@@ -2747,7 +2747,7 @@ def test_workflow_run_agent_failed(
         result = runner.invoke(
             main,
             [
-                "workflow",
+                "enrollment",
                 "run",
                 "--workflow-id",
                 _WORKFLOW_ID,
@@ -3767,10 +3767,10 @@ def test_note_list_company_not_found(
     assert "company" in data["message"]
 
 
-# -- Workflow Contact commands -------------------------------------------------
+# -- Enrollment commands -------------------------------------------------------
 
 
-def _make_workflow_contact(**overrides: Any) -> WorkflowContact:
+def _make_enrollment(**overrides: Any) -> Enrollment:
     defaults: dict[str, Any] = {
         "workflow_id": _WORKFLOW_ID,
         "contact_id": _CONTACT_ID,
@@ -3779,10 +3779,10 @@ def _make_workflow_contact(**overrides: Any) -> WorkflowContact:
         "created_at": _NOW,
         "updated_at": _NOW,
     }
-    return WorkflowContact(**{**defaults, **overrides})
+    return Enrollment(**{**defaults, **overrides})
 
 
-def _make_workflow_contact_detail(**overrides: Any) -> WorkflowContactDetail:
+def _make_enrollment_detail(**overrides: Any) -> EnrollmentDetail:
     defaults: dict[str, Any] = {
         "workflow_id": _WORKFLOW_ID,
         "contact_id": _CONTACT_ID,
@@ -3793,28 +3793,27 @@ def _make_workflow_contact_detail(**overrides: Any) -> WorkflowContactDetail:
         "created_at": _NOW,
         "updated_at": _NOW,
     }
-    return WorkflowContactDetail(**{**defaults, **overrides})
+    return EnrollmentDetail(**{**defaults, **overrides})
 
 
-# -- workflow contact add ------------------------------------------------------
+# -- enrollment add ------------------------------------------------------------
 
 
-def test_workflow_contact_add(runner: CliRunner, mock_connection: MagicMock) -> None:
-    wc = _make_workflow_contact()
+def test_enrollment_add(runner: CliRunner, mock_connection: MagicMock) -> None:
+    enrollment = _make_enrollment()
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=_make_workflow()),
         patch("mailpilot.database.get_contact", return_value=_make_contact()),
         patch(
-            "mailpilot.database.create_workflow_contact", return_value=wc
+            "mailpilot.database.create_enrollment", return_value=enrollment
         ) as mock_create,
     ):
         result = runner.invoke(
             main,
             [
-                "workflow",
-                "contact",
+                "enrollment",
                 "add",
                 "--workflow-id",
                 _WORKFLOW_ID,
@@ -3832,24 +3831,23 @@ def test_workflow_contact_add(runner: CliRunner, mock_connection: MagicMock) -> 
     assert data["status"] == "pending"
 
 
-def test_workflow_contact_add_idempotent(
+def test_enrollment_add_idempotent(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     """When enrollment already exists, return existing row (no error)."""
-    existing = _make_workflow_contact(status="active")
+    existing = _make_enrollment(status="active")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=_make_workflow()),
         patch("mailpilot.database.get_contact", return_value=_make_contact()),
-        patch("mailpilot.database.create_workflow_contact", return_value=None),
-        patch("mailpilot.database.get_workflow_contact", return_value=existing),
+        patch("mailpilot.database.create_enrollment", return_value=None),
+        patch("mailpilot.database.get_enrollment", return_value=existing),
     ):
         result = runner.invoke(
             main,
             [
-                "workflow",
-                "contact",
+                "enrollment",
                 "add",
                 "--workflow-id",
                 _WORKFLOW_ID,
@@ -3864,7 +3862,7 @@ def test_workflow_contact_add_idempotent(
     assert data["status"] == "active"
 
 
-def test_workflow_contact_add_workflow_not_found(
+def test_enrollment_add_workflow_not_found(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     with (
@@ -3875,8 +3873,7 @@ def test_workflow_contact_add_workflow_not_found(
         result = runner.invoke(
             main,
             [
-                "workflow",
-                "contact",
+                "enrollment",
                 "add",
                 "--workflow-id",
                 "wf-missing",
@@ -3891,7 +3888,7 @@ def test_workflow_contact_add_workflow_not_found(
     assert "workflow" in data["message"]
 
 
-def test_workflow_contact_add_contact_not_found(
+def test_enrollment_add_contact_not_found(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     with (
@@ -3903,8 +3900,7 @@ def test_workflow_contact_add_contact_not_found(
         result = runner.invoke(
             main,
             [
-                "workflow",
-                "contact",
+                "enrollment",
                 "add",
                 "--workflow-id",
                 _WORKFLOW_ID,
@@ -3919,22 +3915,19 @@ def test_workflow_contact_add_contact_not_found(
     assert "contact" in data["message"]
 
 
-# -- workflow contact remove ---------------------------------------------------
+# -- enrollment remove ---------------------------------------------------------
 
 
-def test_workflow_contact_remove(runner: CliRunner, mock_connection: MagicMock) -> None:
+def test_enrollment_remove(runner: CliRunner, mock_connection: MagicMock) -> None:
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch(
-            "mailpilot.database.delete_workflow_contact", return_value=True
-        ) as mock_delete,
+        patch("mailpilot.database.delete_enrollment", return_value=True) as mock_delete,
     ):
         result = runner.invoke(
             main,
             [
-                "workflow",
-                "contact",
+                "enrollment",
                 "remove",
                 "--workflow-id",
                 _WORKFLOW_ID,
@@ -3951,19 +3944,18 @@ def test_workflow_contact_remove(runner: CliRunner, mock_connection: MagicMock) 
     assert data["contact_id"] == _CONTACT_ID
 
 
-def test_workflow_contact_remove_not_found(
+def test_enrollment_remove_not_found(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.delete_workflow_contact", return_value=False),
+        patch("mailpilot.database.delete_enrollment", return_value=False),
     ):
         result = runner.invoke(
             main,
             [
-                "workflow",
-                "contact",
+                "enrollment",
                 "remove",
                 "--workflow-id",
                 _WORKFLOW_ID,
@@ -3975,38 +3967,99 @@ def test_workflow_contact_remove_not_found(
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["error"] == "not_found"
-    assert "workflow-contact" in data["message"]
+    assert "enrollment" in data["message"]
 
 
-# -- workflow contact list -----------------------------------------------------
+# -- enrollment view -----------------------------------------------------------
 
 
-def test_workflow_contact_list(runner: CliRunner, mock_connection: MagicMock) -> None:
-    detail = _make_workflow_contact_detail()
+def test_enrollment_view_returns_record(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    enrollment = _make_enrollment()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_enrollment", return_value=enrollment) as mock_get,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "view",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--contact-id",
+                _CONTACT_ID,
+            ],
+        )
+
+    assert result.exit_code == 0
+    mock_get.assert_called_once_with(mock_connection, _WORKFLOW_ID, _CONTACT_ID)
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["workflow_id"] == _WORKFLOW_ID
+    assert data["contact_id"] == _CONTACT_ID
+
+
+def test_enrollment_view_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_enrollment", return_value=None),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "view",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--contact-id",
+                _CONTACT_ID,
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+
+
+# -- enrollment list -----------------------------------------------------------
+
+
+def test_enrollment_list(runner: CliRunner, mock_connection: MagicMock) -> None:
+    detail = _make_enrollment_detail()
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=_make_workflow()),
         patch(
-            "mailpilot.database.list_workflow_contacts_enriched", return_value=[detail]
+            "mailpilot.database.list_enrollments_detailed", return_value=[detail]
         ) as mock_list,
     ):
         result = runner.invoke(
             main,
-            ["workflow", "contact", "list", "--workflow-id", _WORKFLOW_ID],
+            ["enrollment", "list", "--workflow-id", _WORKFLOW_ID],
         )
 
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
-        mock_connection, _WORKFLOW_ID, status=None, limit=100
+        mock_connection,
+        workflow_id=_WORKFLOW_ID,
+        contact_id=None,
+        status=None,
+        limit=100,
     )
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert len(data["contacts"]) == 1
-    assert data["contacts"][0]["contact_email"] == "alice@example.com"
+    assert len(data["enrollments"]) == 1
+    assert data["enrollments"][0]["contact_email"] == "alice@example.com"
 
 
-def test_workflow_contact_list_with_status(
+def test_enrollment_list_with_status(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     with (
@@ -4014,14 +4067,13 @@ def test_workflow_contact_list_with_status(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=_make_workflow()),
         patch(
-            "mailpilot.database.list_workflow_contacts_enriched", return_value=[]
+            "mailpilot.database.list_enrollments_detailed", return_value=[]
         ) as mock_list,
     ):
         result = runner.invoke(
             main,
             [
-                "workflow",
-                "contact",
+                "enrollment",
                 "list",
                 "--workflow-id",
                 _WORKFLOW_ID,
@@ -4032,11 +4084,15 @@ def test_workflow_contact_list_with_status(
 
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
-        mock_connection, _WORKFLOW_ID, status="completed", limit=100
+        mock_connection,
+        workflow_id=_WORKFLOW_ID,
+        contact_id=None,
+        status="completed",
+        limit=100,
     )
 
 
-def test_workflow_contact_list_with_limit(
+def test_enrollment_list_with_limit(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     with (
@@ -4044,14 +4100,13 @@ def test_workflow_contact_list_with_limit(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=_make_workflow()),
         patch(
-            "mailpilot.database.list_workflow_contacts_enriched", return_value=[]
+            "mailpilot.database.list_enrollments_detailed", return_value=[]
         ) as mock_list,
     ):
         result = runner.invoke(
             main,
             [
-                "workflow",
-                "contact",
+                "enrollment",
                 "list",
                 "--workflow-id",
                 _WORKFLOW_ID,
@@ -4062,11 +4117,41 @@ def test_workflow_contact_list_with_limit(
 
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
-        mock_connection, _WORKFLOW_ID, status=None, limit=5
+        mock_connection,
+        workflow_id=_WORKFLOW_ID,
+        contact_id=None,
+        status=None,
+        limit=5,
     )
 
 
-def test_workflow_contact_list_workflow_not_found(
+def test_enrollment_list_filters_by_contact(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_contact", return_value=_make_contact()),
+        patch(
+            "mailpilot.database.list_enrollments_detailed", return_value=[]
+        ) as mock_list,
+    ):
+        result = runner.invoke(
+            main,
+            ["enrollment", "list", "--contact-id", _CONTACT_ID],
+        )
+
+    assert result.exit_code == 0
+    mock_list.assert_called_once_with(
+        mock_connection,
+        workflow_id=None,
+        contact_id=_CONTACT_ID,
+        status=None,
+        limit=100,
+    )
+
+
+def test_enrollment_list_workflow_not_found(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     with (
@@ -4076,7 +4161,7 @@ def test_workflow_contact_list_workflow_not_found(
     ):
         result = runner.invoke(
             main,
-            ["workflow", "contact", "list", "--workflow-id", "wf-missing"],
+            ["enrollment", "list", "--workflow-id", "wf-missing"],
         )
 
     assert result.exit_code == 1
@@ -4085,23 +4170,22 @@ def test_workflow_contact_list_workflow_not_found(
     assert "workflow" in data["message"]
 
 
-# -- workflow contact update ---------------------------------------------------
+# -- enrollment update ---------------------------------------------------------
 
 
-def test_workflow_contact_update(runner: CliRunner, mock_connection: MagicMock) -> None:
-    updated = _make_workflow_contact(status="completed", reason="Demo booked")
+def test_enrollment_update(runner: CliRunner, mock_connection: MagicMock) -> None:
+    updated = _make_enrollment(status="completed", reason="Demo booked")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch(
-            "mailpilot.database.update_workflow_contact", return_value=updated
+            "mailpilot.database.update_enrollment", return_value=updated
         ) as mock_update,
     ):
         result = runner.invoke(
             main,
             [
-                "workflow",
-                "contact",
+                "enrollment",
                 "update",
                 "--workflow-id",
                 _WORKFLOW_ID,
@@ -4128,22 +4212,21 @@ def test_workflow_contact_update(runner: CliRunner, mock_connection: MagicMock) 
     assert data["reason"] == "Demo booked"
 
 
-def test_workflow_contact_update_without_reason(
+def test_enrollment_update_without_reason(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    updated = _make_workflow_contact(status="failed")
+    updated = _make_enrollment(status="failed")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch(
-            "mailpilot.database.update_workflow_contact", return_value=updated
+            "mailpilot.database.update_enrollment", return_value=updated
         ) as mock_update,
     ):
         result = runner.invoke(
             main,
             [
-                "workflow",
-                "contact",
+                "enrollment",
                 "update",
                 "--workflow-id",
                 _WORKFLOW_ID,
@@ -4163,19 +4246,18 @@ def test_workflow_contact_update_without_reason(
     )
 
 
-def test_workflow_contact_update_not_found(
+def test_enrollment_update_not_found(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.update_workflow_contact", return_value=None),
+        patch("mailpilot.database.update_enrollment", return_value=None),
     ):
         result = runner.invoke(
             main,
             [
-                "workflow",
-                "contact",
+                "enrollment",
                 "update",
                 "--workflow-id",
                 _WORKFLOW_ID,

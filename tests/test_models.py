@@ -10,9 +10,9 @@ from mailpilot.models import (
     Company,
     Contact,
     Email,
+    Enrollment,
     Task,
     Workflow,
-    WorkflowContact,
 )
 
 NOW = datetime.now(tz=UTC)
@@ -73,12 +73,12 @@ def test_workflow_invalid_type_raises():
         )
 
 
-def test_workflow_contact_defaults():
-    wc = WorkflowContact(
+def test_enrollment_defaults():
+    enrollment = Enrollment(
         workflow_id="w1", contact_id="c1", created_at=NOW, updated_at=NOW
     )
-    assert wc.status == "pending"
-    assert wc.reason == ""
+    assert enrollment.status == "pending"
+    assert enrollment.reason == ""
 
 
 def test_email_direction_literal():

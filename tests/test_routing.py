@@ -20,7 +20,7 @@ from mailpilot.database import (
     activate_workflow,
     create_email,
     get_email,
-    get_workflow_contact,
+    get_enrollment,
     update_workflow,
 )
 from mailpilot.routing import (
@@ -527,10 +527,10 @@ def test_route_email_bounce_no_outbound_in_thread_still_marks_routed(
     assert routed.is_routed is True
 
 
-# -- workflow_contact creation --------------------------------------------------
+# -- enrollment creation -------------------------------------------------------
 
 
-def test_route_email_creates_workflow_contact_on_route(
+def test_route_email_creates_enrollment_on_route(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     account = make_test_account(database_connection, email="wcreate@example.com")
@@ -542,7 +542,7 @@ def test_route_email_creates_workflow_contact_on_route(
     )
     _activate_workflow(database_connection, workflow.id)
 
-    # Thread match path -> routes to workflow -> should create workflow_contact.
+    # Thread match path -> routes to workflow -> should create enrollment.
     create_email(
         database_connection,
         account_id=account.id,
@@ -567,15 +567,15 @@ def test_route_email_creates_workflow_contact_on_route(
         database_connection, new_email, "sender@example.com", make_test_settings()
     )
 
-    wc = get_workflow_contact(database_connection, workflow.id, contact.id)
-    assert wc is not None
-    assert wc.status == "pending"
+    enrollment = get_enrollment(database_connection, workflow.id, contact.id)
+    assert enrollment is not None
+    assert enrollment.status == "pending"
 
 
-def test_route_email_workflow_contact_idempotent(
+def test_route_email_enrollment_idempotent(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """Routing a second email in the same thread doesn't fail on duplicate workflow_contact."""
+    """Routing a second email in the same thread doesn't fail on duplicate enrollment."""
     account = make_test_account(database_connection, email="wcidem@example.com")
     contact = make_test_contact(
         database_connection, email="repeat@example.com", domain="example.com"
@@ -595,7 +595,7 @@ def test_route_email_workflow_contact_idempotent(
         is_routed=True,
     )
 
-    # First inbound -> creates workflow_contact.
+    # First inbound -> creates enrollment.
     email1 = create_email(
         database_connection,
         account_id=account.id,
@@ -607,7 +607,7 @@ def test_route_email_workflow_contact_idempotent(
     assert email1 is not None
     route_email(database_connection, email1, "repeat@example.com", make_test_settings())
 
-    # Second inbound -> should NOT raise on duplicate workflow_contact.
+    # Second inbound -> should NOT raise on duplicate enrollment.
     email2 = create_email(
         database_connection,
         account_id=account.id,
