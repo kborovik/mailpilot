@@ -2408,6 +2408,12 @@ def test_workflow_stop_invalid_state(
 
 
 def test_workflow_run(runner: CliRunner, mock_connection: MagicMock) -> None:
+    """Manual run invokes the agent directly -- no task row, no NOTIFY race.
+
+    Going through ``create_task`` triggers ``pg_notify('task_pending')``,
+    which races a parallel ``mailpilot run`` loop for the same task.
+    Synchronous CLI runs bypass the queue entirely.
+    """
     workflow = _make_workflow(
         status="active",
         objective="Book demo",
@@ -2426,20 +2432,23 @@ def test_workflow_run(runner: CliRunner, mock_connection: MagicMock) -> None:
         created_at=_NOW,
         updated_at=_NOW,
     )
-    task = _make_task()
-    completed_task = _make_task(
-        status="completed",
-        result={"reasoning": "Sent intro.", "tool_calls": 2},
-    )
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=workflow),
         patch("mailpilot.database.get_contact", return_value=contact),
         patch("mailpilot.database.get_workflow_contact", return_value=wc),
-        patch("mailpilot.database.create_task", return_value=task),
-        patch("mailpilot.run.execute_task") as mock_exec,
-        patch("mailpilot.database.get_task", return_value=completed_task),
+        patch("mailpilot.database.create_task") as mock_create_task,
+        patch(
+            "mailpilot.agent.invoke_workflow_agent",
+            return_value={
+                "workflow_id": _WORKFLOW_ID,
+                "contact_id": _CONTACT_ID,
+                "status": "completed",
+                "tool_calls": 2,
+                "reasoning": "Sent intro.",
+            },
+        ) as mock_invoke,
     ):
         result = runner.invoke(
             main,
@@ -2454,11 +2463,13 @@ def test_workflow_run(runner: CliRunner, mock_connection: MagicMock) -> None:
         )
 
     assert result.exit_code == 0, result.output
-    mock_exec.assert_called_once()
+    mock_invoke.assert_called_once()
+    mock_create_task.assert_not_called()
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["status"] == "completed"
     assert data["result"]["reasoning"] == "Sent intro."
+    assert data["result"]["tool_calls"] == 2
 
 
 def test_workflow_run_workflow_not_found(
@@ -2521,6 +2532,7 @@ def test_workflow_run_requires_active(
 def test_workflow_run_inbound_with_email(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
+    """Inbound manual run forwards the unprocessed email to the agent."""
     workflow = _make_workflow(type="inbound", status="active")
     contact = Contact(
         id=_CONTACT_ID,
@@ -2540,12 +2552,6 @@ def test_workflow_run_inbound_with_email(
         workflow_id=_WORKFLOW_ID,
         direction="inbound",
     )
-    task = _make_task(email_id=inbound_email.id)
-    completed_task = _make_task(
-        status="completed",
-        email_id=inbound_email.id,
-        result={"reasoning": "Replied to inquiry.", "tool_calls": 1},
-    )
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
@@ -2556,9 +2562,16 @@ def test_workflow_run_inbound_with_email(
             "mailpilot.database.get_unprocessed_inbound_email",
             return_value=inbound_email,
         ),
-        patch("mailpilot.database.create_task", return_value=task) as mock_create,
-        patch("mailpilot.run.execute_task") as mock_exec,
-        patch("mailpilot.database.get_task", return_value=completed_task),
+        patch(
+            "mailpilot.agent.invoke_workflow_agent",
+            return_value={
+                "workflow_id": _WORKFLOW_ID,
+                "contact_id": _CONTACT_ID,
+                "status": "completed",
+                "tool_calls": 1,
+                "reasoning": "Replied to inquiry.",
+            },
+        ) as mock_invoke,
     ):
         result = runner.invoke(
             main,
@@ -2573,11 +2586,11 @@ def test_workflow_run_inbound_with_email(
         )
 
     assert result.exit_code == 0, result.output
-    mock_exec.assert_called_once()
-    # Task created with email_id from the unprocessed inbound email
-    call_kwargs = mock_create.call_args[1]
-    assert call_kwargs["email_id"] == inbound_email.id
-    assert call_kwargs["description"] == "manual inbound run"
+    mock_invoke.assert_called_once()
+    # Agent invoked with the unprocessed email attached
+    call_kwargs = mock_invoke.call_args[1]
+    assert call_kwargs["email"] == inbound_email
+    assert call_kwargs["task_description"] == "manual inbound run"
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["status"] == "completed"
@@ -2586,6 +2599,7 @@ def test_workflow_run_inbound_with_email(
 def test_workflow_run_inbound_no_email(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
+    """Inbound manual run with no unprocessed email still invokes the agent."""
     workflow = _make_workflow(type="inbound", status="active")
     contact = Contact(
         id=_CONTACT_ID,
@@ -2600,11 +2614,6 @@ def test_workflow_run_inbound_no_email(
         created_at=_NOW,
         updated_at=_NOW,
     )
-    task = _make_task()
-    completed_task = _make_task(
-        status="completed",
-        result={"reasoning": "No new email, reviewed history.", "tool_calls": 1},
-    )
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
@@ -2612,9 +2621,16 @@ def test_workflow_run_inbound_no_email(
         patch("mailpilot.database.get_contact", return_value=contact),
         patch("mailpilot.database.get_workflow_contact", return_value=wc),
         patch("mailpilot.database.get_unprocessed_inbound_email", return_value=None),
-        patch("mailpilot.database.create_task", return_value=task) as mock_create,
-        patch("mailpilot.run.execute_task") as mock_exec,
-        patch("mailpilot.database.get_task", return_value=completed_task),
+        patch(
+            "mailpilot.agent.invoke_workflow_agent",
+            return_value={
+                "workflow_id": _WORKFLOW_ID,
+                "contact_id": _CONTACT_ID,
+                "status": "completed",
+                "tool_calls": 1,
+                "reasoning": "No new email, reviewed history.",
+            },
+        ) as mock_invoke,
     ):
         result = runner.invoke(
             main,
@@ -2629,11 +2645,10 @@ def test_workflow_run_inbound_no_email(
         )
 
     assert result.exit_code == 0, result.output
-    mock_exec.assert_called_once()
-    # Task created without email_id when no unprocessed email exists
-    call_kwargs = mock_create.call_args[1]
-    assert call_kwargs["email_id"] is None
-    assert call_kwargs["description"] == "manual inbound run"
+    mock_invoke.assert_called_once()
+    call_kwargs = mock_invoke.call_args[1]
+    assert call_kwargs["email"] is None
+    assert call_kwargs["task_description"] == "manual inbound run"
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["status"] == "completed"
@@ -2703,6 +2718,7 @@ def test_workflow_run_contact_not_enrolled(
 def test_workflow_run_agent_failed(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
+    """Agent exceptions surface as a failed result envelope."""
     workflow = _make_workflow(status="active")
     contact = Contact(
         id=_CONTACT_ID,
@@ -2717,17 +2733,16 @@ def test_workflow_run_agent_failed(
         created_at=_NOW,
         updated_at=_NOW,
     )
-    task = _make_task()
-    failed_task = _make_task(status="failed", result={"reason": "agent error"})
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=workflow),
         patch("mailpilot.database.get_contact", return_value=contact),
         patch("mailpilot.database.get_workflow_contact", return_value=wc),
-        patch("mailpilot.database.create_task", return_value=task),
-        patch("mailpilot.run.execute_task"),
-        patch("mailpilot.database.get_task", return_value=failed_task),
+        patch(
+            "mailpilot.agent.invoke_workflow_agent",
+            side_effect=RuntimeError("agent error"),
+        ),
     ):
         result = runner.invoke(
             main,

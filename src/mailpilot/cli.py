@@ -1556,19 +1556,21 @@ def workflow_stop(workflow_id: str) -> None:
 @click.option("--workflow-id", required=True, help="Workflow ID.")
 @click.option("--contact-id", required=True, help="Contact ID.")
 def workflow_run(workflow_id: str, contact_id: str) -> None:
-    """Invoke the workflow agent for a single contact."""
-    from datetime import UTC, datetime
+    """Invoke the workflow agent for a single contact synchronously.
 
+    Manual runs invoke the agent directly. Going through ``create_task``
+    would fire ``pg_notify('task_pending')``, which a parallel ``mailpilot
+    run`` listener thread translates into a competing drain of the same
+    row. Tasks are for deferred work; CLI runs are immediate.
+    """
+    from mailpilot.agent import invoke_workflow_agent
     from mailpilot.database import (
-        create_task,
         get_contact,
-        get_task,
         get_unprocessed_inbound_email,
         get_workflow,
         get_workflow_contact,
         initialize_database,
     )
-    from mailpilot.run import execute_task
     from mailpilot.settings import get_settings
 
     settings = get_settings()
@@ -1589,25 +1591,39 @@ def workflow_run(workflow_id: str, contact_id: str) -> None:
                 f"contact {contact_id} is not enrolled in workflow {workflow_id}",
                 "not_found",
             )
-        email_id: str | None = None
+        email = None
         if wf.type == "inbound":
-            unprocessed = get_unprocessed_inbound_email(connection, wf.id, contact.id)
-            if unprocessed is not None:
-                email_id = unprocessed.id
+            email = get_unprocessed_inbound_email(connection, wf.id, contact.id)
         description = f"manual {wf.type} run"
-        task = create_task(
-            connection,
-            workflow_id=wf.id,
-            contact_id=contact.id,
-            description=description,
-            scheduled_at=datetime.now(UTC).isoformat(),
-            email_id=email_id,
-        )
-        execute_task(connection, settings, task)
-        completed = get_task(connection, task.id)
-        if completed is None:
-            output_error(f"task not found after execution: {task.id}", "not_found")
-        output(completed.model_dump(mode="json"))
+        envelope: dict[str, object] = {
+            "workflow_id": wf.id,
+            "contact_id": contact.id,
+        }
+        try:
+            result = invoke_workflow_agent(
+                connection,
+                settings,
+                wf,
+                contact,
+                email=email,
+                task_description=description,
+            )
+        except Exception as exc:
+            envelope["status"] = "failed"
+            envelope["result"] = {"reason": str(exc)}
+            output(envelope)
+            return
+        if result is None:
+            envelope["status"] = "skipped"
+            envelope["result"] = {"reason": "agent lock held"}
+            output(envelope)
+            return
+        envelope["status"] = "completed"
+        envelope["result"] = {
+            "reasoning": result.get("reasoning", ""),
+            "tool_calls": result.get("tool_calls", 0),
+        }
+        output(envelope)
     finally:
         connection.close()
 

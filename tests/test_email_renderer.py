@@ -4,7 +4,6 @@ from mailpilot.email_renderer import (
     THEMES,
     get_theme,
     render_email_html,
-    strip_markdown,
 )
 
 
@@ -103,53 +102,3 @@ def test_render_inline_code():
     html = render_email_html("Use `cmd` here", get_theme("blue"))
     assert "<code" in html
     assert "cmd" in html
-
-
-def test_strip_removes_bold_markers():
-    assert "bold" in strip_markdown("**bold** text")
-    assert "**" not in strip_markdown("**bold** text")
-
-
-def test_strip_removes_italic_markers():
-    assert "italic" in strip_markdown("*italic* text")
-    result = strip_markdown("*italic* text")
-    assert result.startswith("italic")
-
-
-def test_strip_removes_heading_markers():
-    result = strip_markdown("## Title\n\nBody")
-    assert "##" not in result
-    assert "TITLE" in result
-
-
-def test_strip_renders_link_with_url():
-    result = strip_markdown("[Lab5](https://lab5.ca)")
-    assert "Lab5" in result
-    assert "https://lab5.ca" in result
-
-
-def test_strip_renders_table_rows():
-    md = "| Model | Flow |\n|-------|------|\n| WS48 | 150 |"
-    result = strip_markdown(md)
-    assert "Model" in result
-    assert "WS48" in result
-    assert "150" in result
-
-
-def test_strip_removes_hr_markers():
-    result = strip_markdown("above\n\n---\n\nbelow")
-    assert "---" not in result
-    assert "above" in result
-    assert "below" in result
-
-
-def test_strip_removes_code_backticks():
-    result = strip_markdown("Use `cmd` here")
-    assert "`" not in result
-    assert "cmd" in result
-
-
-def test_strip_preserves_list_format():
-    result = strip_markdown("- one\n- two")
-    assert "one" in result
-    assert "two" in result

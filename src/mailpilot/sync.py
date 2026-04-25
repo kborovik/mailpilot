@@ -779,11 +779,7 @@ def send_email(  # noqa: PLR0913
         from email.mime.text import MIMEText
 
         from mailpilot.database import get_workflow
-        from mailpilot.email_renderer import (
-            get_theme,
-            render_email_html,
-            strip_markdown,
-        )
+        from mailpilot.email_renderer import get_theme, render_email_html
 
         from_header = (
             formataddr((account.display_name, account.email))
@@ -799,9 +795,13 @@ def send_email(  # noqa: PLR0913
                 theme_name = workflow.theme
         theme = get_theme(theme_name)
 
-        # Render HTML and strip to plain text
+        # The agent's Markdown source is the text/plain part verbatim.
+        # Markdown is designed to be readable as plain text; the previous
+        # ``strip_markdown`` reduction stripped table borders and bold
+        # markers, leaving recipients on text/plain-only clients with
+        # tab-soup tables.
         html_body = render_email_html(body, theme)
-        plain_body = strip_markdown(body)
+        plain_body = body
 
         # Build multipart/alternative MIME
         mime_message = MIMEMultipart("alternative")

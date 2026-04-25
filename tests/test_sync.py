@@ -1118,11 +1118,18 @@ def test_send_email_parts_use_utf8_charset(
 def test_send_email_produces_multipart_alternative(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """send_email builds multipart/alternative with plain text and HTML parts."""
+    """send_email builds multipart/alternative with plain text and HTML parts.
+
+    The plaintext part is the agent's Markdown source verbatim. Markdown is
+    designed to be readable as plain text; reducing tables to tab-separated
+    columns and stripping bold/italic markers loses information without
+    benefit, especially for clients that fall back to text/plain.
+    """
     account = make_test_account(database_connection, email="mp@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     client, service = _make_send_client(account.email)
 
+    body = "**Bold** and a [link](https://lab5.ca)"
     send_email(
         database_connection,
         account=account,
@@ -1130,7 +1137,7 @@ def test_send_email_produces_multipart_alternative(
         settings=make_test_settings(),
         to="recipient@example.com",
         subject="Hello",
-        body="**Bold** and a [link](https://lab5.ca)",
+        body=body,
         workflow_id=workflow.id,
     )
 
@@ -1149,16 +1156,44 @@ def test_send_email_produces_multipart_alternative(
     plain_raw = plain_part.get_payload(decode=True)
     assert isinstance(plain_raw, bytes)
     plain_body = plain_raw.decode()
-    assert "**" not in plain_body
-    assert "Bold" in plain_body
+    assert plain_body == body
 
 
-def test_send_email_stores_plain_text_in_db(
+def test_send_email_preserves_markdown_table_in_plaintext(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """body_text in DB contains stripped plain text, not Markdown."""
+    """Markdown tables stay as ``|``-bordered tables in the text/plain part.
+
+    Earlier behavior reduced tables to tab-separated rows, which was
+    unreadable in mail clients that surface text/plain.
+    """
+    account = make_test_account(database_connection, email="t@example.com")
+    client, service = _make_send_client(account.email)
+    body = "| col1 | col2 |\n|------|------|\n| a | b |"
+
+    send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Hello",
+        body=body,
+    )
+
+    _msg, parts = _get_sent_mime(service)
+    plain_raw = parts[0].get_payload(decode=True)
+    assert isinstance(plain_raw, bytes)
+    assert plain_raw.decode() == body
+
+
+def test_send_email_stores_markdown_in_db(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """body_text in DB stores the agent's Markdown source verbatim."""
     account = make_test_account(database_connection, email="db@example.com")
     client, _service = _make_send_client(account.email)
+    body = "**Bold** text"
 
     email = send_email(
         database_connection,
@@ -1167,11 +1202,10 @@ def test_send_email_stores_plain_text_in_db(
         settings=make_test_settings(),
         to="recipient@example.com",
         subject="Hello",
-        body="**Bold** text",
+        body=body,
     )
 
-    assert "**" not in email.body_text
-    assert "Bold" in email.body_text
+    assert email.body_text == body
 
 
 # -- sender / recipients on send and sync -------------------------------------

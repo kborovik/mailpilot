@@ -128,7 +128,7 @@ Query spans for `db.status.counts` and any errors. Note whether entity creation 
 - The `workflow run` output shows `"status": "completed"` and `"tool_calls"` >= 1.
 - `mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound` returns at least 1 email.
 - The outbound email subject matches the unique subject you generated for this run.
-- The outbound email `body_text` contains Markdown formatting: at least a `|` character (table) and `**` or `#` (formatting).
+- The outbound email `body_text` preserves the agent's Markdown source verbatim: at least a `|` character (table border) and `**` or `#` (bold or heading marker). The text/plain part of outbound mail is the Markdown source itself, not a stripped reduction.
 - `mailpilot workflow contact list --workflow-id <OUTBOUND_WORKFLOW_ID>` shows contact status is `completed`.
 
 **On failure:** Stop. Report the `workflow run` output. Run `mailpilot task list --workflow-id <OUTBOUND_WORKFLOW_ID>` for task details. Common cause: missing `anthropic_api_key` -- check with `mailpilot config get anthropic_api_key`.
@@ -221,7 +221,7 @@ Note: Can you reconstruct the full sync-to-route pipeline from spans alone? What
 - A task exists for the inbound workflow with `email_id` set to the routed email's ID and `status = "completed"`.
 - `mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound` shows at least 1 reply email since `<TEST_START_ISO>`.
 - The reply email's `thread_id` matches the inbound email's `thread_id` (agent used `reply_email` to reply in-thread).
-- The reply email `body_text` contains Markdown formatting: at least a `|` character (table).
+- The reply email `body_text` preserves the agent's Markdown source verbatim: at least a `|` character (table border). The text/plain part is the Markdown source itself, not a stripped reduction.
 - `mailpilot workflow contact list --workflow-id <INBOUND_WORKFLOW_ID>` shows contact status is `completed`.
 
 **On failure:** Stop. If the task was never created, the run loop did not bridge the routed email -- check that Phase 2's email has `workflow_id` set and that the background `mailpilot run` is still alive. If the task exists but stayed `pending`, the task drain or PG `LISTEN/NOTIFY` is not firing -- read the captured stdout/stderr of the background bash. If the task is `failed`, run `mailpilot task view <TASK_ID>` for the failure reason.
