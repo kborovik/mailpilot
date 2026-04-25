@@ -91,12 +91,13 @@ mailpilot workflow list [--account-id ID] [--status draft|active|paused] [--type
 mailpilot workflow view ID
 mailpilot workflow start ID
 mailpilot workflow stop ID
-mailpilot workflow run --workflow-id ID --contact-id ID
+
 mailpilot enrollment add --workflow-id ID --contact-id ID
 mailpilot enrollment remove --workflow-id ID --contact-id ID
 mailpilot enrollment view --workflow-id ID --contact-id ID
 mailpilot enrollment list [--workflow-id ID] [--contact-id ID] [--status pending|active|completed|failed] [--limit N]
 mailpilot enrollment update --workflow-id ID --contact-id ID --status S [--reason R]
+mailpilot enrollment run --workflow-id ID --contact-id ID
 
 mailpilot task list [--workflow-id ID] [--contact-id ID] [--status pending|completed|failed|cancelled] [--limit N]
 mailpilot task view ID

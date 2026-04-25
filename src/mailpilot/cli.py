@@ -1552,11 +1552,50 @@ def workflow_stop(workflow_id: str) -> None:
         connection.close()
 
 
-@workflow.command("run")
+# -- Enrollment commands -------------------------------------------------------
+
+
+@main.group()
+def enrollment() -> None:
+    """Manage contact enrollments in workflows."""
+
+
+@enrollment.command("add")
 @click.option("--workflow-id", required=True, help="Workflow ID.")
 @click.option("--contact-id", required=True, help="Contact ID.")
-def workflow_run(workflow_id: str, contact_id: str) -> None:
-    """Invoke the workflow agent for a single contact synchronously.
+def enrollment_add(workflow_id: str, contact_id: str) -> None:
+    """Enroll a contact in a workflow."""
+    from mailpilot.database import (
+        create_enrollment,
+        get_contact,
+        get_enrollment,
+        get_workflow,
+        initialize_database,
+    )
+
+    connection = initialize_database(_database_url())
+    try:
+        if get_workflow(connection, workflow_id) is None:
+            output_error(f"workflow not found: {workflow_id}", "not_found")
+        if get_contact(connection, contact_id) is None:
+            output_error(f"contact not found: {contact_id}", "not_found")
+        created = create_enrollment(connection, workflow_id, contact_id)
+        if created is not None:
+            output(created.model_dump(mode="json"))
+            return
+        existing = get_enrollment(connection, workflow_id, contact_id)
+        if existing is not None:
+            output(existing.model_dump(mode="json"))
+            return
+    finally:
+        connection.close()
+
+
+@enrollment.command("run")
+@click.option("--workflow-id", required=True, help="Workflow ID.")
+@click.option("--contact-id", required=True, help="Contact ID.")
+def enrollment_run(workflow_id: str, contact_id: str) -> None:
+    """Invoke the workflow agent for an enrollment synchronously.
 
     Manual runs invoke the agent directly. Going through ``create_task``
     would fire ``pg_notify('task_pending')``, which a parallel ``mailpilot
@@ -1624,45 +1663,6 @@ def workflow_run(workflow_id: str, contact_id: str) -> None:
             "tool_calls": result.get("tool_calls", 0),
         }
         output(envelope)
-    finally:
-        connection.close()
-
-
-# -- Enrollment commands -------------------------------------------------------
-
-
-@main.group()
-def enrollment() -> None:
-    """Manage contact enrollments in workflows."""
-
-
-@enrollment.command("add")
-@click.option("--workflow-id", required=True, help="Workflow ID.")
-@click.option("--contact-id", required=True, help="Contact ID.")
-def enrollment_add(workflow_id: str, contact_id: str) -> None:
-    """Enroll a contact in a workflow."""
-    from mailpilot.database import (
-        create_enrollment,
-        get_contact,
-        get_enrollment,
-        get_workflow,
-        initialize_database,
-    )
-
-    connection = initialize_database(_database_url())
-    try:
-        if get_workflow(connection, workflow_id) is None:
-            output_error(f"workflow not found: {workflow_id}", "not_found")
-        if get_contact(connection, contact_id) is None:
-            output_error(f"contact not found: {contact_id}", "not_found")
-        created = create_enrollment(connection, workflow_id, contact_id)
-        if created is not None:
-            output(created.model_dump(mode="json"))
-            return
-        existing = get_enrollment(connection, workflow_id, contact_id)
-        if existing is not None:
-            output(existing.model_dump(mode="json"))
-            return
     finally:
         connection.close()
 

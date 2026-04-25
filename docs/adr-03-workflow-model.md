@@ -119,7 +119,7 @@ See `docs/adr-04-email-routing.md`. Inbound emails are routed to workflows via t
 
 A workflow is scoped: **account (1) -> workflow (N) -> contact (M via enrollment)**. The `enrollment` join table binds contacts to workflows and tracks per-enrollment outcome. The `reason` field holds the agent's explanation ("meeting booked for Tuesday", "contact explicitly declined", "no response after 3 follow-ups").
 
-- **Outbound**: contacts are added before sending. `workflow run` requires the contact to be enrolled.
+- **Outbound**: contacts are added before sending. `enrollment run` requires the contact to be enrolled.
 - **Inbound**: contacts are enrolled automatically when classification routes an email.
 
 A contact can be enrolled in multiple workflows (different accounts, different campaigns). The composite PK `(workflow_id, contact_id)` prevents duplicates within the same workflow.
@@ -226,7 +226,7 @@ The agent is invoked by three types of events:
 | ------------- | -------------------- | --------------------------------- |
 | Email arrives | Pub/Sub sync         | New email + workflow instructions |
 | Task due      | Periodic task runner | Task description + context        |
-| Manual run    | `mailpilot workflow run` | Contact + instructions            |
+| Manual run    | `mailpilot enrollment run` | Contact + instructions          |
 
 ### Concurrency
 

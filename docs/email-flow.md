@@ -63,9 +63,9 @@ Run the workflow's Pydantic AI agent:
 
 ## Outbound Email Flow
 
-### 1. Initiate -- `workflow run`
+### 1. Initiate -- `enrollment run`
 
-CLI entry point: `mailpilot workflow run --workflow-id ID --contact-id ID`
+CLI entry point: `mailpilot enrollment run --workflow-id ID --contact-id ID`
 
 - **Input**: workflow ID + contact ID
 - **Action**: load workflow, verify status is `active` and type is `outbound`

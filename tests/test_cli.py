@@ -2404,10 +2404,10 @@ def test_workflow_stop_invalid_state(
     assert data["error"] == "invalid_state"
 
 
-# -- workflow run --------------------------------------------------------------
+# -- enrollment run ------------------------------------------------------------
 
 
-def test_workflow_run(runner: CliRunner, mock_connection: MagicMock) -> None:
+def test_enrollment_run(runner: CliRunner, mock_connection: MagicMock) -> None:
     """Manual run invokes the agent directly -- no task row, no NOTIFY race.
 
     Going through ``create_task`` triggers ``pg_notify('task_pending')``,
@@ -2453,7 +2453,7 @@ def test_workflow_run(runner: CliRunner, mock_connection: MagicMock) -> None:
         result = runner.invoke(
             main,
             [
-                "workflow",
+                "enrollment",
                 "run",
                 "--workflow-id",
                 _WORKFLOW_ID,
@@ -2472,7 +2472,7 @@ def test_workflow_run(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert data["result"]["tool_calls"] == 2
 
 
-def test_workflow_run_workflow_not_found(
+def test_enrollment_run_workflow_not_found(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     with (
@@ -2483,7 +2483,7 @@ def test_workflow_run_workflow_not_found(
         result = runner.invoke(
             main,
             [
-                "workflow",
+                "enrollment",
                 "run",
                 "--workflow-id",
                 "nope",
@@ -2496,7 +2496,7 @@ def test_workflow_run_workflow_not_found(
     assert data["error"] == "not_found"
 
 
-def test_workflow_run_requires_active(
+def test_enrollment_run_requires_active(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     workflow = _make_workflow(status="draft")
@@ -2516,7 +2516,7 @@ def test_workflow_run_requires_active(
         result = runner.invoke(
             main,
             [
-                "workflow",
+                "enrollment",
                 "run",
                 "--workflow-id",
                 _WORKFLOW_ID,
@@ -2529,7 +2529,7 @@ def test_workflow_run_requires_active(
     assert data["error"] == "invalid_state"
 
 
-def test_workflow_run_inbound_with_email(
+def test_enrollment_run_inbound_with_email(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     """Inbound manual run forwards the unprocessed email to the agent."""
@@ -2576,7 +2576,7 @@ def test_workflow_run_inbound_with_email(
         result = runner.invoke(
             main,
             [
-                "workflow",
+                "enrollment",
                 "run",
                 "--workflow-id",
                 _WORKFLOW_ID,
@@ -2596,7 +2596,7 @@ def test_workflow_run_inbound_with_email(
     assert data["status"] == "completed"
 
 
-def test_workflow_run_inbound_no_email(
+def test_enrollment_run_inbound_no_email(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     """Inbound manual run with no unprocessed email still invokes the agent."""
@@ -2635,7 +2635,7 @@ def test_workflow_run_inbound_no_email(
         result = runner.invoke(
             main,
             [
-                "workflow",
+                "enrollment",
                 "run",
                 "--workflow-id",
                 _WORKFLOW_ID,
@@ -2654,7 +2654,7 @@ def test_workflow_run_inbound_no_email(
     assert data["status"] == "completed"
 
 
-def test_workflow_run_contact_not_found(
+def test_enrollment_run_contact_not_found(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     workflow = _make_workflow(status="active")
@@ -2667,7 +2667,7 @@ def test_workflow_run_contact_not_found(
         result = runner.invoke(
             main,
             [
-                "workflow",
+                "enrollment",
                 "run",
                 "--workflow-id",
                 _WORKFLOW_ID,
@@ -2680,7 +2680,7 @@ def test_workflow_run_contact_not_found(
     assert data["error"] == "not_found"
 
 
-def test_workflow_run_contact_not_enrolled(
+def test_enrollment_run_contact_not_enrolled(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     workflow = _make_workflow(status="active")
@@ -2701,7 +2701,7 @@ def test_workflow_run_contact_not_enrolled(
         result = runner.invoke(
             main,
             [
-                "workflow",
+                "enrollment",
                 "run",
                 "--workflow-id",
                 _WORKFLOW_ID,
@@ -2715,7 +2715,7 @@ def test_workflow_run_contact_not_enrolled(
     assert "not enrolled" in data["message"]
 
 
-def test_workflow_run_agent_failed(
+def test_enrollment_run_agent_failed(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     """Agent exceptions surface as a failed result envelope."""
@@ -2747,7 +2747,7 @@ def test_workflow_run_agent_failed(
         result = runner.invoke(
             main,
             [
-                "workflow",
+                "enrollment",
                 "run",
                 "--workflow-id",
                 _WORKFLOW_ID,
