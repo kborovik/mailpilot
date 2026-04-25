@@ -527,6 +527,183 @@ def test_route_email_bounce_no_outbound_in_thread_still_marks_routed(
     assert routed.is_routed is True
 
 
+# -- Self-sender guard ---------------------------------------------------------
+
+
+def test_route_email_self_sender_skips_thread_match(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Inbound email from a managed account.email is not thread-matched (#83).
+
+    Reproduces the runaway agent-to-agent reply loop: two MailPilot accounts
+    end up on the same Gmail thread, the inbound side replies, and that reply
+    arrives on the outbound account as a fresh inbound email. Without this
+    guard, _try_thread_match would route it to the outbound workflow and
+    enqueue another agent task.
+    """
+    outbound_account = make_test_account(database_connection, email="outbound@lab5.ca")
+    inbound_account = make_test_account(
+        database_connection, email="inbound@lab5.ca", display_name="Inbound"
+    )
+    workflow = make_test_workflow(
+        database_connection,
+        account_id=outbound_account.id,
+        workflow_type="outbound",
+    )
+    _activate_workflow(database_connection, workflow.id)
+
+    # Original outbound send: workflow owns the thread on outbound_account.
+    create_email(
+        database_connection,
+        account_id=outbound_account.id,
+        direction="outbound",
+        subject="hello",
+        gmail_thread_id="t-loop",
+        workflow_id=workflow.id,
+        is_routed=True,
+    )
+
+    # Reply from the inbound MailPilot account arrives on outbound's mailbox.
+    echo = create_email(
+        database_connection,
+        account_id=outbound_account.id,
+        direction="inbound",
+        subject="Re: hello",
+        gmail_thread_id="t-loop",
+    )
+    assert echo is not None
+
+    routed = route_email(
+        database_connection, echo, inbound_account.email, make_test_settings()
+    )
+
+    assert routed.workflow_id is None
+    assert routed.is_routed is True
+
+
+def test_route_email_self_sender_creates_no_workflow_contact(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Self-sender short-circuit must not create a workflow_contact row."""
+    outbound_account = make_test_account(database_connection, email="outbound2@lab5.ca")
+    inbound_account = make_test_account(
+        database_connection, email="inbound2@lab5.ca", display_name="Inbound"
+    )
+    contact = make_test_contact(
+        database_connection, email=inbound_account.email, domain="lab5.ca"
+    )
+    workflow = make_test_workflow(
+        database_connection,
+        account_id=outbound_account.id,
+        workflow_type="outbound",
+    )
+    _activate_workflow(database_connection, workflow.id)
+
+    create_email(
+        database_connection,
+        account_id=outbound_account.id,
+        direction="outbound",
+        subject="hello",
+        gmail_thread_id="t-loop2",
+        workflow_id=workflow.id,
+        is_routed=True,
+    )
+
+    echo = create_email(
+        database_connection,
+        account_id=outbound_account.id,
+        direction="inbound",
+        subject="Re: hello",
+        gmail_thread_id="t-loop2",
+        contact_id=contact.id,
+    )
+    assert echo is not None
+
+    route_email(database_connection, echo, inbound_account.email, make_test_settings())
+
+    wc = get_workflow_contact(database_connection, workflow.id, contact.id)
+    assert wc is None
+
+
+def test_route_email_self_sender_case_insensitive(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Sender match is case-insensitive (Gmail may upper-case the From header)."""
+    outbound_account = make_test_account(database_connection, email="ob3@lab5.ca")
+    make_test_account(database_connection, email="ib3@lab5.ca", display_name="Inbound")
+    workflow = make_test_workflow(
+        database_connection,
+        account_id=outbound_account.id,
+        workflow_type="outbound",
+    )
+    _activate_workflow(database_connection, workflow.id)
+
+    create_email(
+        database_connection,
+        account_id=outbound_account.id,
+        direction="outbound",
+        subject="hi",
+        gmail_thread_id="t-case",
+        workflow_id=workflow.id,
+        is_routed=True,
+    )
+
+    echo = create_email(
+        database_connection,
+        account_id=outbound_account.id,
+        direction="inbound",
+        subject="Re: hi",
+        gmail_thread_id="t-case",
+    )
+    assert echo is not None
+
+    routed = route_email(database_connection, echo, "IB3@LAB5.CA", make_test_settings())
+
+    assert routed.workflow_id is None
+    assert routed.is_routed is True
+
+
+def test_route_email_span_has_route_method_self_sender(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """routing.route_email span must set route_method='self_sender'."""
+    outbound_account = make_test_account(database_connection, email="span-ob@lab5.ca")
+    make_test_account(
+        database_connection, email="span-ib@lab5.ca", display_name="Inbound"
+    )
+    workflow = make_test_workflow(
+        database_connection,
+        account_id=outbound_account.id,
+        workflow_type="outbound",
+    )
+    _activate_workflow(database_connection, workflow.id)
+
+    create_email(
+        database_connection,
+        account_id=outbound_account.id,
+        direction="outbound",
+        subject="prior",
+        gmail_thread_id="t-self-span",
+        workflow_id=workflow.id,
+        is_routed=True,
+    )
+    echo = create_email(
+        database_connection,
+        account_id=outbound_account.id,
+        direction="inbound",
+        subject="echo",
+        gmail_thread_id="t-self-span",
+    )
+    assert echo is not None
+
+    route_email(database_connection, echo, "span-ib@lab5.ca", make_test_settings())
+
+    spans = _routing_spans(capfire)
+    assert len(spans) == 1
+    assert spans[0]["attributes"]["route_method"] == "self_sender"
+
+
 # -- workflow_contact creation --------------------------------------------------
 
 

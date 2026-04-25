@@ -7,8 +7,9 @@ Three-step pipeline that assigns inbound emails to the correct workflow:
 3. **Unrouted** -- store with is_routed=True, workflow_id=NULL
 
 Also handles bounce detection (mailer-daemon/postmaster senders and
-bounce-related Gmail labels) and creates ``workflow_contact`` entries
-on successful routing.
+bounce-related Gmail labels), the self-sender guard that breaks
+agent-to-agent reply loops between managed accounts (#83), and creates
+``workflow_contact`` entries on successful routing.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from mailpilot.agent.classify import classify_email
 from mailpilot.database import (
     create_workflow_contact,
     disable_contact,
+    get_account_by_email,
     get_emails_by_gmail_thread_id,
     list_workflows,
     update_email,
@@ -68,6 +70,12 @@ def route_email(
             if _is_bounce(sender_email, email.labels):
                 span.set_attribute("result", "bounce")
                 return _handle_bounce(connection, email)
+
+            if _is_self_sender(connection, sender_email):
+                span.set_attribute("result", "self_sender")
+                span.set_attribute("route_method", "self_sender")
+                updated = update_email(connection, email.id, is_routed=True)
+                return updated if updated is not None else email
 
             workflow_id = _try_thread_match(connection, email)
             if workflow_id is not None:
@@ -166,6 +174,29 @@ def _handle_bounce(
 
         updated = update_email(connection, email.id, is_routed=True)
         return updated if updated is not None else email
+
+
+# -- Self-sender guard ---------------------------------------------------------
+
+
+def _is_self_sender(
+    connection: psycopg.Connection[dict[str, Any]],
+    sender_email: str,
+) -> bool:
+    """Check if the sender is one of our managed MailPilot accounts.
+
+    When two managed accounts share a Gmail thread (e.g. an outbound campaign
+    account replying to an inbound auto-reply account on the same domain),
+    each side's reply round-trips into the other's mailbox as a fresh inbound
+    email. Without this guard, ``_try_thread_match`` would link the echo to
+    the local workflow and ``create_tasks_for_routed_emails`` would enqueue
+    another agent task -- the runaway loop reported in #83.
+
+    Match is case-insensitive (Gmail may normalise display-cased addresses).
+    """
+    if not sender_email:
+        return False
+    return get_account_by_email(connection, sender_email) is not None
 
 
 # -- Three-step routing pipeline -----------------------------------------------

@@ -22,6 +22,15 @@ When an inbound email arrives for an account, route it through a three-step pipe
   email arrives
        |
        v
+  bounce? ------------> yes ----------> mark original outbound bounced
+       |                                disable contact, is_routed = true
+       | no
+       v
+  sender is managed   --> yes --------> is_routed = true, workflow_id = NULL
+  account?  (self-sender guard)        (skip pipeline -- internal echo)
+       |
+       | no
+       v
   1. thread match -----> found? -----> route to workflow
        |                                     |
        | no match                            v
@@ -70,6 +79,16 @@ The `email` table has `is_routed BOOLEAN NOT NULL DEFAULT FALSE`. Semantics:
 - An email with `is_routed = TRUE` and `workflow_id = NULL` is a deliberate "unrouted" decision, not a missing classification
 - An email with `is_routed = FALSE` has not yet been processed by the routing pipeline
 
+### Self-Sender Guard
+
+When the inbound email's `From` address matches a row in `account` (case-insensitive), short-circuit the pipeline: mark the email `is_routed = TRUE`, leave `workflow_id = NULL`, and skip thread match, classification, and `workflow_contact` creation.
+
+Why: when two MailPilot-managed accounts share a Gmail thread (e.g. an outbound campaign account and an inbound auto-reply account on the same domain), each side's reply round-trips into the other's mailbox as a fresh inbound email. Without this guard, thread match links the echo to the local workflow, `create_tasks_for_routed_emails` enqueues another agent task, the agent fires, and the cycle repeats unbounded -- the bug reported in #83 (12 `agent.invoke` spans in ~3 minutes during smoke test).
+
+The guard runs after bounce detection but before thread match, so genuine bounces are still processed normally.
+
+Trade-off: a real human at one of our managed addresses replying through Gmail UI is also ignored. Acceptable -- they can operate the CRM directly.
+
 ### Bounce Detection
 
 When a bounce notification is detected during sync:
@@ -95,6 +114,7 @@ Bounce detection relies on Gmail bounce notification emails and labels. The exac
 - `is_routed` flag prevents non-deterministic re-classification on re-sync
 - Paused workflow exclusion from classification is consistent with "no new work" semantics
 - Bounce detection feeds into global contact status for cross-workflow protection
+- Self-sender guard prevents agent-to-agent reply loops between managed accounts on shared Gmail threads (#83)
 - Auto-contact creation ensures every email has a `contact_id` for history queries and cooldown checks
 - Recency gate prevents stale emails from triggering agent actions during full sync
 
