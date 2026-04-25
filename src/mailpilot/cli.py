@@ -1566,9 +1566,9 @@ def workflow_run(workflow_id: str, contact_id: str) -> None:
     from mailpilot.agent import invoke_workflow_agent
     from mailpilot.database import (
         get_contact,
+        get_enrollment,
         get_unprocessed_inbound_email,
         get_workflow,
-        get_workflow_contact,
         initialize_database,
     )
     from mailpilot.settings import get_settings
@@ -1586,7 +1586,7 @@ def workflow_run(workflow_id: str, contact_id: str) -> None:
         contact = get_contact(connection, contact_id)
         if contact is None:
             output_error(f"contact not found: {contact_id}", "not_found")
-        if get_workflow_contact(connection, workflow_id, contact.id) is None:
+        if get_enrollment(connection, workflow_id, contact.id) is None:
             output_error(
                 f"contact {contact_id} is not enrolled in workflow {workflow_id}",
                 "not_found",
@@ -1628,24 +1628,24 @@ def workflow_run(workflow_id: str, contact_id: str) -> None:
         connection.close()
 
 
-# -- Workflow Contact subgroup -------------------------------------------------
+# -- Enrollment commands -------------------------------------------------------
 
 
-@workflow.group("contact")
-def workflow_contact() -> None:
-    """Manage contact enrollment in workflows."""
+@main.group()
+def enrollment() -> None:
+    """Manage contact enrollments in workflows."""
 
 
-@workflow_contact.command("add")
+@enrollment.command("add")
 @click.option("--workflow-id", required=True, help="Workflow ID.")
 @click.option("--contact-id", required=True, help="Contact ID.")
-def workflow_contact_add(workflow_id: str, contact_id: str) -> None:
+def enrollment_add(workflow_id: str, contact_id: str) -> None:
     """Enroll a contact in a workflow."""
     from mailpilot.database import (
-        create_workflow_contact,
+        create_enrollment,
         get_contact,
+        get_enrollment,
         get_workflow,
-        get_workflow_contact,
         initialize_database,
     )
 
@@ -1655,11 +1655,11 @@ def workflow_contact_add(workflow_id: str, contact_id: str) -> None:
             output_error(f"workflow not found: {workflow_id}", "not_found")
         if get_contact(connection, contact_id) is None:
             output_error(f"contact not found: {contact_id}", "not_found")
-        created = create_workflow_contact(connection, workflow_id, contact_id)
+        created = create_enrollment(connection, workflow_id, contact_id)
         if created is not None:
             output(created.model_dump(mode="json"))
             return
-        existing = get_workflow_contact(connection, workflow_id, contact_id)
+        existing = get_enrollment(connection, workflow_id, contact_id)
         if existing is not None:
             output(existing.model_dump(mode="json"))
             return
@@ -1667,25 +1667,43 @@ def workflow_contact_add(workflow_id: str, contact_id: str) -> None:
         connection.close()
 
 
-@workflow_contact.command("remove")
+@enrollment.command("remove")
 @click.option("--workflow-id", required=True, help="Workflow ID.")
 @click.option("--contact-id", required=True, help="Contact ID.")
-def workflow_contact_remove(workflow_id: str, contact_id: str) -> None:
-    """Remove a contact from a workflow."""
-    from mailpilot.database import delete_workflow_contact, initialize_database
+def enrollment_remove(workflow_id: str, contact_id: str) -> None:
+    """Remove an enrollment."""
+    from mailpilot.database import delete_enrollment, initialize_database
 
     connection = initialize_database(_database_url())
     try:
-        deleted = delete_workflow_contact(connection, workflow_id, contact_id)
+        deleted = delete_enrollment(connection, workflow_id, contact_id)
         if not deleted:
-            output_error("workflow-contact not found", "not_found")
+            output_error("enrollment not found", "not_found")
         output({"workflow_id": workflow_id, "contact_id": contact_id})
     finally:
         connection.close()
 
 
-@workflow_contact.command("list")
+@enrollment.command("view")
 @click.option("--workflow-id", required=True, help="Workflow ID.")
+@click.option("--contact-id", required=True, help="Contact ID.")
+def enrollment_view(workflow_id: str, contact_id: str) -> None:
+    """View an enrollment by composite key."""
+    from mailpilot.database import get_enrollment, initialize_database
+
+    connection = initialize_database(_database_url())
+    try:
+        record = get_enrollment(connection, workflow_id, contact_id)
+        if record is None:
+            output_error("enrollment not found", "not_found")
+        output(record.model_dump(mode="json"))
+    finally:
+        connection.close()
+
+
+@enrollment.command("list")
+@click.option("--workflow-id", default=None, help="Filter by workflow ID.")
+@click.option("--contact-id", default=None, help="Filter by contact ID.")
 @click.option(
     "--status",
     default=None,
@@ -1693,27 +1711,39 @@ def workflow_contact_remove(workflow_id: str, contact_id: str) -> None:
     help="Filter by enrollment status.",
 )
 @click.option("--limit", default=100, help="Maximum results.")
-def workflow_contact_list(workflow_id: str, status: str | None, limit: int) -> None:
-    """List contacts enrolled in a workflow."""
+def enrollment_list(
+    workflow_id: str | None,
+    contact_id: str | None,
+    status: str | None,
+    limit: int,
+) -> None:
+    """List enrollments. Filter by workflow, contact, or both."""
     from mailpilot.database import (
+        get_contact,
         get_workflow,
         initialize_database,
-        list_workflow_contacts_enriched,
+        list_enrollments_detailed,
     )
 
     connection = initialize_database(_database_url())
     try:
-        if get_workflow(connection, workflow_id) is None:
+        if workflow_id is not None and get_workflow(connection, workflow_id) is None:
             output_error(f"workflow not found: {workflow_id}", "not_found")
-        contacts = list_workflow_contacts_enriched(
-            connection, workflow_id, status=status, limit=limit
+        if contact_id is not None and get_contact(connection, contact_id) is None:
+            output_error(f"contact not found: {contact_id}", "not_found")
+        rows = list_enrollments_detailed(
+            connection,
+            workflow_id=workflow_id,
+            contact_id=contact_id,
+            status=status,
+            limit=limit,
         )
-        output({"contacts": [c.model_dump(mode="json") for c in contacts]})
+        output({"enrollments": [r.model_dump(mode="json") for r in rows]})
     finally:
         connection.close()
 
 
-@workflow_contact.command("update")
+@enrollment.command("update")
 @click.option("--workflow-id", required=True, help="Workflow ID.")
 @click.option("--contact-id", required=True, help="Contact ID.")
 @click.option(
@@ -1723,20 +1753,20 @@ def workflow_contact_list(workflow_id: str, status: str | None, limit: int) -> N
     help="New enrollment status.",
 )
 @click.option("--reason", default=None, help="Status reason.")
-def workflow_contact_update(
+def enrollment_update(
     workflow_id: str, contact_id: str, status: str, reason: str | None
 ) -> None:
     """Update enrollment status and reason."""
-    from mailpilot.database import initialize_database, update_workflow_contact
+    from mailpilot.database import initialize_database, update_enrollment
 
     connection = initialize_database(_database_url())
     try:
         fields: dict[str, object] = {"status": status}
         if reason is not None:
             fields["reason"] = reason
-        updated = update_workflow_contact(connection, workflow_id, contact_id, **fields)
+        updated = update_enrollment(connection, workflow_id, contact_id, **fields)
         if updated is None:
-            output_error("workflow-contact not found", "not_found")
+            output_error("enrollment not found", "not_found")
         output(updated.model_dump(mode="json"))
     finally:
         connection.close()

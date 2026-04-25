@@ -18,7 +18,7 @@ Claude Code needs:
 - Freeform annotations on contacts and companies
 - Efficient query paths for reporting (activity summaries, campaign effectiveness, pipeline snapshots)
 
-The existing schema (account, company, contact, workflow, workflow_contact, email, task, sync_status) lacks these CRM capabilities.
+The existing schema (account, company, contact, workflow, enrollment, email, task, sync_status) lacks these CRM capabilities.
 
 ## Decision
 

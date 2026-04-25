@@ -13,10 +13,10 @@ Tools per ADR-03:
     - ``reply_email`` -- reply in-thread with auto-resolved recipient and subject
     - ``create_task`` -- schedule deferred work
     - ``cancel_task`` -- cancel a pending task
-    - ``update_contact_status`` -- report per-workflow outcome
+    - ``update_enrollment_status`` -- report per-workflow outcome
     - ``disable_contact`` -- set global contact block (bounced/unsubscribed)
     - ``search_emails`` -- query email history
-    - ``list_workflow_contacts`` -- list contacts in workflow with status
+    - ``list_enrollments`` -- list enrollments in workflow with status
     - ``read_contact`` -- CRM contact lookup
     - ``read_company`` -- CRM company lookup
 """
@@ -36,14 +36,14 @@ from mailpilot.sync import send_email as sync_send_email
 _COOLDOWN_DAYS = 30
 
 
-def _activate_contact_if_pending(
+def _activate_enrollment_if_pending(
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str,
     contact_id: str,
 ) -> None:
-    """Transition workflow_contact from pending to active after successful send.
+    """Transition enrollment from pending to active after successful send.
 
-    No-op if the workflow_contact row does not exist, or if the current status
+    No-op if the enrollment row does not exist, or if the current status
     is anything other than ``pending``.
 
     Args:
@@ -51,9 +51,9 @@ def _activate_contact_if_pending(
         workflow_id: Current workflow FK.
         contact_id: Contact FK.
     """
-    wc = database.get_workflow_contact(connection, workflow_id, contact_id)
-    if wc is not None and wc.status == "pending":
-        database.update_workflow_contact(
+    enrollment = database.get_enrollment(connection, workflow_id, contact_id)
+    if enrollment is not None and enrollment.status == "pending":
+        database.update_enrollment(
             connection,
             workflow_id,
             contact_id,
@@ -141,7 +141,7 @@ def send_email(  # noqa: PLR0913
     )
 
     if contact_id is not None:
-        _activate_contact_if_pending(connection, workflow_id, contact_id)
+        _activate_enrollment_if_pending(connection, workflow_id, contact_id)
 
     return {
         "id": email.id,
@@ -246,7 +246,7 @@ def reply_email(  # noqa: PLR0913
         in_reply_to=original.rfc2822_message_id,
     )
 
-    _activate_contact_if_pending(connection, workflow_id, contact.id)
+    _activate_enrollment_if_pending(connection, workflow_id, contact.id)
 
     return {
         "id": email.id,
@@ -315,14 +315,14 @@ def cancel_task(
     return {"id": task.id, "status": task.status}
 
 
-def update_contact_status(
+def update_enrollment_status(
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str,
     contact_id: str,
     status: str,
     reason: str,
 ) -> dict[str, str]:
-    """Report outcome for a contact in the current workflow.
+    """Report outcome for an enrollment in the current workflow.
 
     The agent -- not the system -- decides success or failure.
 
@@ -334,7 +334,7 @@ def update_contact_status(
         reason: Agent's explanation (e.g., "meeting booked", "no response").
 
     Returns:
-        Dict with updated status, or error if workflow_contact not found.
+        Dict with updated status, or error if enrollment not found.
     """
     valid_statuses = ("active", "completed", "failed")
     if status not in valid_statuses:
@@ -342,15 +342,15 @@ def update_contact_status(
             "error": "invalid_status",
             "message": f"status must be one of {valid_statuses}, got: {status}",
         }
-    wc = database.update_workflow_contact(
+    enrollment = database.update_enrollment(
         connection, workflow_id, contact_id, status=status, reason=reason
     )
-    if wc is None:
+    if enrollment is None:
         return {
             "error": "not_found",
-            "message": f"workflow_contact not found: {workflow_id}/{contact_id}",
+            "message": f"enrollment not found: {workflow_id}/{contact_id}",
         }
-    return {"status": wc.status, "reason": wc.reason}
+    return {"status": enrollment.status, "reason": enrollment.reason}
 
 
 def disable_contact(
@@ -381,11 +381,11 @@ def disable_contact(
     return {"id": updated.id, "status": updated.status}
 
 
-def list_workflow_contacts(
+def list_enrollments(
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str,
 ) -> list[dict[str, Any]]:
-    """List contacts in a workflow with their outcome status.
+    """List enrollments in a workflow with their outcome status.
 
     Lets the agent coordinate across contacts (e.g., skip person B if
     person A at the same company already completed the objective).
@@ -395,10 +395,10 @@ def list_workflow_contacts(
         workflow_id: Workflow ID.
 
     Returns:
-        List of workflow-contact records with status and reason.
+        List of enrollment records with status and reason.
     """
-    contacts = database.list_workflow_contacts(connection, workflow_id)
-    return [wc.model_dump() for wc in contacts]
+    enrollments = database.list_enrollments(connection, workflow_id)
+    return [e.model_dump() for e in enrollments]
 
 
 def search_emails(

@@ -29,7 +29,7 @@ from mailpilot.agent.invoke import (
 )
 from mailpilot.database import (
     activate_workflow,
-    create_workflow_contact,
+    create_enrollment,
     update_workflow,
 )
 from mailpilot.exceptions import AgentDidNotUseToolsError
@@ -56,7 +56,7 @@ def _setup(
     contact = make_test_contact(connection, email="lead@acme.com", domain="acme.com")
     workflow = make_test_workflow(connection, account_id=account.id)
     _activate(connection, workflow.id)
-    create_workflow_contact(connection, workflow.id, contact.id)
+    create_enrollment(connection, workflow.id, contact.id)
     return account, contact, workflow
 
 
@@ -582,7 +582,7 @@ def test_agent_calls_reply_email(
 
 def test_system_prefix_guides_contact_status_update() -> None:
     """System prefix must instruct agents to update contact status."""
-    assert "update_contact_status" in _SYSTEM_PREFIX
+    assert "update_enrollment_status" in _SYSTEM_PREFIX
 
 
 def test_system_prefix_allows_markdown_in_emails() -> None:

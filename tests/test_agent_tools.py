@@ -20,22 +20,22 @@ from mailpilot.agent.tools import (
     cancel_task,
     create_task,
     disable_contact,
-    list_workflow_contacts,
+    list_enrollments,
     noop,
     read_company,
     read_contact,
     reply_email,
     search_emails,
     send_email,
-    update_contact_status,
+    update_enrollment_status,
 )
 from mailpilot.database import (
     activate_workflow,
     create_email,
-    create_workflow_contact,
+    create_enrollment,
     get_contact,
+    get_enrollment,
     get_task,
-    get_workflow_contact,
     update_workflow,
 )
 from mailpilot.database import (
@@ -232,14 +232,14 @@ def test_send_email_passes_cc_and_bcc(
 def test_send_email_activates_pending_contact(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """Successful send transitions workflow_contact from pending to active."""
+    """Successful send transitions enrollment from pending to active."""
     account = make_test_account(database_connection)
     contact = make_test_contact(
         database_connection, email="recipient@example.com", domain="example.com"
     )
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
-    create_workflow_contact(database_connection, workflow.id, contact.id)
+    create_enrollment(database_connection, workflow.id, contact.id)
     gmail_client = _make_gmail_client(account)
 
     result = send_email(
@@ -254,7 +254,7 @@ def test_send_email_activates_pending_contact(
     )
 
     assert "error" not in result
-    wc = get_workflow_contact(database_connection, workflow.id, contact.id)
+    wc = get_enrollment(database_connection, workflow.id, contact.id)
     assert wc is not None
     assert wc.status == "active"
     assert wc.reason == "email sent"
@@ -270,9 +270,9 @@ def test_send_email_does_not_change_non_pending_status(
     )
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
-    create_workflow_contact(database_connection, workflow.id, contact.id)
+    create_enrollment(database_connection, workflow.id, contact.id)
     # Set to completed before send.
-    update_contact_status(
+    update_enrollment_status(
         connection=database_connection,
         workflow_id=workflow.id,
         contact_id=contact.id,
@@ -293,23 +293,23 @@ def test_send_email_does_not_change_non_pending_status(
     )
 
     assert "error" not in result
-    wc = get_workflow_contact(database_connection, workflow.id, contact.id)
+    wc = get_enrollment(database_connection, workflow.id, contact.id)
     assert wc is not None
     assert wc.status == "completed"
     assert wc.reason == "meeting booked"
 
 
-def test_send_email_no_error_without_workflow_contact(
+def test_send_email_no_error_without_enrollment(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """Send succeeds even if contact has no workflow_contact row."""
+    """Send succeeds even if contact has no enrollment row."""
     account = make_test_account(database_connection)
     make_test_contact(
         database_connection, email="recipient@example.com", domain="example.com"
     )
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
-    # No create_workflow_contact call -- ad-hoc send.
+    # No create_enrollment call -- ad-hoc send.
     gmail_client = _make_gmail_client(account)
 
     result = send_email(
@@ -560,14 +560,14 @@ def test_reply_email_no_contact(
 def test_reply_email_activates_pending_contact(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """Successful reply transitions workflow_contact from pending to active."""
+    """Successful reply transitions enrollment from pending to active."""
     account = make_test_account(database_connection)
     contact = make_test_contact(
         database_connection, email="sender@example.com", domain="example.com"
     )
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
-    create_workflow_contact(database_connection, workflow.id, contact.id)
+    create_enrollment(database_connection, workflow.id, contact.id)
 
     inbound = create_email(
         database_connection,
@@ -594,7 +594,7 @@ def test_reply_email_activates_pending_contact(
     )
 
     assert "error" not in result
-    wc = get_workflow_contact(database_connection, workflow.id, contact.id)
+    wc = get_enrollment(database_connection, workflow.id, contact.id)
     assert wc is not None
     assert wc.status == "active"
     assert wc.reason == "email sent"
@@ -610,8 +610,8 @@ def test_reply_email_does_not_change_non_pending_status(
     )
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
-    create_workflow_contact(database_connection, workflow.id, contact.id)
-    update_contact_status(
+    create_enrollment(database_connection, workflow.id, contact.id)
+    update_enrollment_status(
         connection=database_connection,
         workflow_id=workflow.id,
         contact_id=contact.id,
@@ -644,23 +644,23 @@ def test_reply_email_does_not_change_non_pending_status(
     )
 
     assert "error" not in result
-    wc = get_workflow_contact(database_connection, workflow.id, contact.id)
+    wc = get_enrollment(database_connection, workflow.id, contact.id)
     assert wc is not None
     assert wc.status == "failed"
     assert wc.reason == "no response"
 
 
-def test_reply_email_no_error_without_workflow_contact(
+def test_reply_email_no_error_without_enrollment(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """Reply succeeds even if contact has no workflow_contact row."""
+    """Reply succeeds even if contact has no enrollment row."""
     account = make_test_account(database_connection)
     contact = make_test_contact(
         database_connection, email="sender@example.com", domain="example.com"
     )
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
-    # No create_workflow_contact -- ad-hoc reply.
+    # No create_enrollment -- ad-hoc reply.
 
     inbound = create_email(
         database_connection,
@@ -857,18 +857,18 @@ def test_cancel_task_not_found(
     assert result["error"] == "not_found"
 
 
-# -- update_contact_status -----------------------------------------------------
+# -- update_enrollment_status -----------------------------------------------------
 
 
-def test_update_contact_status_success(
+def test_update_enrollment_status_success(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     account = make_test_account(database_connection)
     contact = make_test_contact(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
-    create_workflow_contact(database_connection, workflow.id, contact.id)
+    create_enrollment(database_connection, workflow.id, contact.id)
 
-    result = update_contact_status(
+    result = update_enrollment_status(
         connection=database_connection,
         workflow_id=workflow.id,
         contact_id=contact.id,
@@ -877,16 +877,16 @@ def test_update_contact_status_success(
     )
 
     assert result["status"] == "completed"
-    wc = get_workflow_contact(database_connection, workflow.id, contact.id)
+    wc = get_enrollment(database_connection, workflow.id, contact.id)
     assert wc is not None
     assert wc.status == "completed"
     assert wc.reason == "meeting booked"
 
 
-def test_update_contact_status_not_found(
+def test_update_enrollment_status_not_found(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    result = update_contact_status(
+    result = update_enrollment_status(
         connection=database_connection,
         workflow_id="nonexistent",
         contact_id="nonexistent",
@@ -932,35 +932,31 @@ def test_disable_contact_not_found(
     assert result["error"] == "not_found"
 
 
-# -- list_workflow_contacts ----------------------------------------------------
+# -- list_enrollments ----------------------------------------------------
 
 
-def test_list_workflow_contacts_success(
+def test_list_enrollments_success(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     account = make_test_account(database_connection)
     contact = make_test_contact(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
-    create_workflow_contact(database_connection, workflow.id, contact.id)
+    create_enrollment(database_connection, workflow.id, contact.id)
 
-    result = list_workflow_contacts(
-        connection=database_connection, workflow_id=workflow.id
-    )
+    result = list_enrollments(connection=database_connection, workflow_id=workflow.id)
 
     assert len(result) == 1
     assert result[0]["contact_id"] == contact.id
     assert result[0]["status"] == "pending"
 
 
-def test_list_workflow_contacts_empty(
+def test_list_enrollments_empty(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
 
-    result = list_workflow_contacts(
-        connection=database_connection, workflow_id=workflow.id
-    )
+    result = list_enrollments(connection=database_connection, workflow_id=workflow.id)
 
     assert result == []
 
@@ -1075,7 +1071,7 @@ def test_no_custom_auto_activate_span(
     capfire: CaptureLogfire,
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """_activate_contact_if_pending must not emit agent.auto_activate_contact span.
+    """_activate_enrollment_if_pending must not emit agent.auto_activate_contact span.
 
     The helper's DB work is already captured by the parent tool span.
     See issue #72.
@@ -1086,7 +1082,7 @@ def test_no_custom_auto_activate_span(
     )
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
-    create_workflow_contact(database_connection, workflow.id, contact.id)
+    create_enrollment(database_connection, workflow.id, contact.id)
 
     gmail_client = _make_gmail_client(account)
 

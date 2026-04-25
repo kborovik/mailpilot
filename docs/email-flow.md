@@ -55,8 +55,8 @@ Lightweight LLM call to route unmatched emails:
 Run the workflow's Pydantic AI agent:
 
 - **Input**: workflow instructions (system prompt) + email content + contact email history (cross-workflow)
-- **Tools available**: `send_email()`, `create_task()`, `update_contact_status()`, `search_emails()`, `read_contact()`, `read_company()`
-- **Agent decides**: reply, create follow-up task, update contact status, or take no action
+- **Tools available**: `send_email()`, `create_task()`, `update_enrollment_status()`, `search_emails()`, `read_contact()`, `read_company()`
+- **Agent decides**: reply, create follow-up task, update enrollment status, or take no action
 - **Stateless**: no persistent conversation, no cleanup
 
 ---

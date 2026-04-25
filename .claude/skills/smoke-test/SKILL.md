@@ -116,7 +116,7 @@ Query spans for `db.status.counts` and any errors. Note whether entity creation 
 
 1. Enroll the inbound contact in the outbound workflow:
    ```
-   mailpilot workflow contact add --workflow-id <OUTBOUND_WORKFLOW_ID> --contact-id <INBOUND_CONTACT_ID>
+   mailpilot enrollment add --workflow-id <OUTBOUND_WORKFLOW_ID> --contact-id <INBOUND_CONTACT_ID>
    ```
 2. Run the agent:
    ```
@@ -129,7 +129,7 @@ Query spans for `db.status.counts` and any errors. Note whether entity creation 
 - `mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound` returns at least 1 email.
 - The outbound email subject matches the unique subject you generated for this run.
 - The outbound email `body_text` preserves the agent's Markdown source verbatim: at least a `|` character (table border) and `**` or `#` (bold or heading marker). The text/plain part of outbound mail is the Markdown source itself, not a stripped reduction.
-- `mailpilot workflow contact list --workflow-id <OUTBOUND_WORKFLOW_ID>` shows contact status is `completed`.
+- `mailpilot enrollment list --workflow-id <OUTBOUND_WORKFLOW_ID>` shows enrollment status is `completed`.
 
 **On failure:** Stop. Report the `workflow run` output. Run `mailpilot task list --workflow-id <OUTBOUND_WORKFLOW_ID>` for task details. Common cause: missing `anthropic_api_key` -- check with `mailpilot config get anthropic_api_key`.
 
@@ -157,7 +157,7 @@ Note: Are span attributes sufficient to debug a failure without reading code? Is
 
 1. Enroll the outbound contact in the inbound workflow (so the inbound agent can mark them completed):
    ```
-   mailpilot workflow contact add --workflow-id <INBOUND_WORKFLOW_ID> --contact-id <OUTBOUND_CONTACT_ID>
+   mailpilot enrollment add --workflow-id <INBOUND_WORKFLOW_ID> --contact-id <OUTBOUND_CONTACT_ID>
    ```
 2. **Poll for the routed inbound email** (up to 12 attempts, 5 seconds apart -- ~60 seconds total). Do NOT call `mailpilot account sync`; rely on the background `mailpilot run` loop:
    ```
@@ -222,7 +222,7 @@ Note: Can you reconstruct the full sync-to-route pipeline from spans alone? What
 - `mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound` shows at least 1 reply email since `<TEST_START_ISO>`.
 - The reply email's `thread_id` matches the inbound email's `thread_id` (agent used `reply_email` to reply in-thread).
 - The reply email `body_text` preserves the agent's Markdown source verbatim: at least a `|` character (table border). The text/plain part is the Markdown source itself, not a stripped reduction.
-- `mailpilot workflow contact list --workflow-id <INBOUND_WORKFLOW_ID>` shows contact status is `completed`.
+- `mailpilot enrollment list --workflow-id <INBOUND_WORKFLOW_ID>` shows enrollment status is `completed`.
 
 **On failure:** Stop. If the task was never created, the run loop did not bridge the routed email -- check that Phase 2's email has `workflow_id` set and that the background `mailpilot run` is still alive. If the task exists but stayed `pending`, the task drain or PG `LISTEN/NOTIFY` is not firing -- read the captured stdout/stderr of the background bash. If the task is `failed`, run `mailpilot task view <TASK_ID>` for the failure reason.
 
@@ -232,7 +232,7 @@ Query for these span families and review:
 
 - `run.execute_task` -- Task execution: `task_id`, `workflow_id`, `contact_id`. Did it complete or fail?
 - `agent.invoke` -- Inbound agent invocation: `trigger` should be `email`. Check `tool_call_count`, `agent_reasoning`, token usage.
-- `running tool` -- Check `gen_ai.tool.name` for `reply_email` (in-thread) rather than `send_email` (new thread). Verify `update_contact_status` was called.
+- `running tool` -- Check `gen_ai.tool.name` for `reply_email` (in-thread) rather than `send_email` (new thread). Verify `update_enrollment_status` was called.
 - Any `noop` tool call -- If called, why? The agent should have replied, not nooped.
 
 Note: Is the task lifecycle (create -> execute -> complete) fully traceable from spans? Are error paths well-instrumented?

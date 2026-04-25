@@ -82,28 +82,28 @@ class Workflow(BaseModel):
     updated_at: datetime
 
 
-ContactOutcome = Literal["pending", "active", "completed", "failed"]
+EnrollmentStatus = Literal["pending", "active", "completed", "failed"]
 
 
-class WorkflowContact(BaseModel):
-    """Per-contact outcome tracking within a workflow."""
+class Enrollment(BaseModel):
+    """A contact's participation in a workflow with lifecycle outcome."""
 
     workflow_id: str
     contact_id: str
-    status: ContactOutcome = "pending"
+    status: EnrollmentStatus = "pending"
     reason: str = ""
     created_at: datetime
     updated_at: datetime
 
 
-class WorkflowContactDetail(BaseModel):
-    """Enriched workflow-contact with contact info for list display."""
+class EnrollmentDetail(BaseModel):
+    """Enrollment with denormalised contact info for list display."""
 
     workflow_id: str
     contact_id: str
     contact_email: str
     contact_name: str
-    status: ContactOutcome
+    status: EnrollmentStatus
     reason: str
     created_at: datetime
     updated_at: datetime

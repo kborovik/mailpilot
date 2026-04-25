@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS company (
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE INDEX IF NOT EXISTS idx_company_name ON company(LOWER(name));
+
 CREATE TABLE IF NOT EXISTS contact (
     id                    TEXT PRIMARY KEY,
     email                 TEXT UNIQUE NOT NULL,
@@ -48,6 +50,9 @@ CREATE TABLE IF NOT EXISTS contact (
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE INDEX IF NOT EXISTS idx_contact_domain ON contact(domain);
+CREATE INDEX IF NOT EXISTS idx_contact_company_id ON contact(company_id);
+
 CREATE TABLE IF NOT EXISTS workflow (
     id                TEXT PRIMARY KEY,
     account_id        TEXT NOT NULL REFERENCES account(id),
@@ -63,7 +68,9 @@ CREATE TABLE IF NOT EXISTS workflow (
     UNIQUE (account_id, name)
 );
 
-CREATE TABLE IF NOT EXISTS workflow_contact (
+CREATE INDEX IF NOT EXISTS idx_workflow_account_id ON workflow(account_id);
+
+CREATE TABLE IF NOT EXISTS enrollment (
     workflow_id   TEXT NOT NULL REFERENCES workflow(id),
     contact_id    TEXT NOT NULL REFERENCES contact(id),
     status        TEXT NOT NULL DEFAULT 'pending'
@@ -73,6 +80,42 @@ CREATE TABLE IF NOT EXISTS workflow_contact (
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (workflow_id, contact_id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_enrollment_contact_id ON enrollment(contact_id);
+
+CREATE TABLE IF NOT EXISTS task (
+    id            TEXT PRIMARY KEY,
+    workflow_id   TEXT NOT NULL REFERENCES workflow(id),
+    contact_id    TEXT NOT NULL REFERENCES contact(id),
+    email_id      TEXT REFERENCES email(id),
+    description   TEXT NOT NULL,
+    context       JSONB NOT NULL DEFAULT '{}',
+    scheduled_at  TIMESTAMPTZ NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'pending'
+                  CHECK (status IN ('pending', 'completed', 'failed', 'cancelled')),
+    result        JSONB NOT NULL DEFAULT '{}',
+    completed_at  TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_workflow_id ON task(workflow_id);
+CREATE INDEX IF NOT EXISTS idx_task_contact_id ON task(contact_id);
+CREATE INDEX IF NOT EXISTS idx_task_scheduled_at ON task(scheduled_at) WHERE status = 'pending';
+
+-- PG NOTIFY trigger: fires on every task INSERT so the sync loop can
+-- drain the task queue immediately instead of waiting for the next poll.
+CREATE OR REPLACE FUNCTION notify_task_pending() RETURNS trigger AS $$
+BEGIN
+    PERFORM pg_notify('task_pending', '');
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS task_pending_trigger ON task;
+CREATE TRIGGER task_pending_trigger
+    AFTER INSERT ON task
+    FOR EACH ROW
+    EXECUTE FUNCTION notify_task_pending();
 
 CREATE TABLE IF NOT EXISTS email (
     id                TEXT PRIMARY KEY,
@@ -96,36 +139,6 @@ CREATE TABLE IF NOT EXISTS email (
     created_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS task (
-    id            TEXT PRIMARY KEY,
-    workflow_id   TEXT NOT NULL REFERENCES workflow(id),
-    contact_id    TEXT NOT NULL REFERENCES contact(id),
-    email_id      TEXT REFERENCES email(id),
-    description   TEXT NOT NULL,
-    context       JSONB NOT NULL DEFAULT '{}',
-    scheduled_at  TIMESTAMPTZ NOT NULL,
-    status        TEXT NOT NULL DEFAULT 'pending'
-                  CHECK (status IN ('pending', 'completed', 'failed', 'cancelled')),
-    result        JSONB NOT NULL DEFAULT '{}',
-    completed_at  TIMESTAMPTZ,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS sync_status (
-    id            TEXT PRIMARY KEY DEFAULT 'singleton',
-    pid           INTEGER NOT NULL,
-    started_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    heartbeat_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_company_name ON company(LOWER(name));
-CREATE INDEX IF NOT EXISTS idx_contact_domain ON contact(domain);
-CREATE INDEX IF NOT EXISTS idx_contact_company_id ON contact(company_id);
-CREATE INDEX IF NOT EXISTS idx_workflow_account_id ON workflow(account_id);
-CREATE INDEX IF NOT EXISTS idx_workflow_contact_contact_id ON workflow_contact(contact_id);
-CREATE INDEX IF NOT EXISTS idx_task_workflow_id ON task(workflow_id);
-CREATE INDEX IF NOT EXISTS idx_task_contact_id ON task(contact_id);
-CREATE INDEX IF NOT EXISTS idx_task_scheduled_at ON task(scheduled_at) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_email_account_id ON email(account_id);
 CREATE INDEX IF NOT EXISTS idx_email_contact_id ON email(contact_id);
 CREATE INDEX IF NOT EXISTS idx_email_workflow_id ON email(workflow_id);
@@ -176,17 +189,9 @@ CREATE TABLE IF NOT EXISTS note (
 
 CREATE INDEX IF NOT EXISTS idx_note_entity ON note(entity_type, entity_id);
 
--- PG NOTIFY trigger: fires on every task INSERT so the sync loop can
--- drain the task queue immediately instead of waiting for the next poll.
-CREATE OR REPLACE FUNCTION notify_task_pending() RETURNS trigger AS $$
-BEGIN
-    PERFORM pg_notify('task_pending', '');
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-DROP TRIGGER IF EXISTS task_pending_trigger ON task;
-CREATE TRIGGER task_pending_trigger
-    AFTER INSERT ON task
-    FOR EACH ROW
-    EXECUTE FUNCTION notify_task_pending();
+CREATE TABLE IF NOT EXISTS sync_status (
+    id            TEXT PRIMARY KEY DEFAULT 'singleton',
+    pid           INTEGER NOT NULL,
+    started_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    heartbeat_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

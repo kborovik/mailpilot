@@ -92,10 +92,11 @@ mailpilot workflow view ID
 mailpilot workflow start ID
 mailpilot workflow stop ID
 mailpilot workflow run --workflow-id ID --contact-id ID
-mailpilot workflow contact add --workflow-id ID --contact-id ID
-mailpilot workflow contact remove --workflow-id ID --contact-id ID
-mailpilot workflow contact list --workflow-id ID [--status pending|active|completed|failed] [--limit N]
-mailpilot workflow contact update --workflow-id ID --contact-id ID --status S [--reason R]
+mailpilot enrollment add --workflow-id ID --contact-id ID
+mailpilot enrollment remove --workflow-id ID --contact-id ID
+mailpilot enrollment view --workflow-id ID --contact-id ID
+mailpilot enrollment list [--workflow-id ID] [--contact-id ID] [--status pending|active|completed|failed] [--limit N]
+mailpilot enrollment update --workflow-id ID --contact-id ID --status S [--reason R]
 
 mailpilot task list [--workflow-id ID] [--contact-id ID] [--status pending|completed|failed|cancelled] [--limit N]
 mailpilot task view ID
@@ -136,7 +137,7 @@ mailpilot status
 
 See `src/mailpilot/schema.sql`. Requires PostgreSQL 18. Connection: `database_url` setting (default: `postgresql://localhost/mailpilot`). Schema applied automatically on first connection.
 
-Tables: `account`, `company`, `contact`, `workflow`, `workflow_contact`, `email`, `task`, `sync_status`, `activity`, `tag`, `note`.
+Tables: `account`, `company`, `contact`, `workflow`, `enrollment`, `email`, `task`, `sync_status`, `activity`, `tag`, `note`.
 
 Prefer atomic single-query operations: use `UPDATE ... FROM ... RETURNING` to join, mutate, and return in one round-trip instead of SELECT-then-UPDATE.
 
