@@ -88,6 +88,8 @@ CREATE TABLE IF NOT EXISTS email (
     gmail_message_id  TEXT UNIQUE,
     gmail_thread_id   TEXT,
     rfc2822_message_id TEXT,
+    in_reply_to       TEXT,
+    references_header TEXT,
     account_id        TEXT NOT NULL REFERENCES account(id),
     contact_id        TEXT REFERENCES contact(id),
     workflow_id       TEXT REFERENCES workflow(id),
@@ -109,6 +111,7 @@ CREATE INDEX IF NOT EXISTS idx_email_account_id ON email(account_id);
 CREATE INDEX IF NOT EXISTS idx_email_contact_id ON email(contact_id);
 CREATE INDEX IF NOT EXISTS idx_email_workflow_id ON email(workflow_id);
 CREATE INDEX IF NOT EXISTS idx_email_gmail_thread_id ON email(gmail_thread_id);
+CREATE INDEX IF NOT EXISTS idx_email_rfc2822_message_id ON email(rfc2822_message_id);
 
 CREATE TABLE IF NOT EXISTS task (
     id            TEXT PRIMARY KEY,

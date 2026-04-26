@@ -683,6 +683,8 @@ def _store_inbound_message(  # noqa: PLR0913
         received_at=received_at,
         labels=list(message.get("labelIds", [])),
         rfc2822_message_id=headers.get("message-id"),
+        in_reply_to=headers.get("in-reply-to"),
+        references_header=headers.get("references"),
         sender=sender_email.lower(),
         recipients=inbound_recipients,
     )

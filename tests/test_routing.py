@@ -697,3 +697,256 @@ def test_route_email_span_has_route_method_unrouted(
     spans = _routing_spans(capfire)
     assert len(spans) == 1
     assert spans[0]["attributes"]["route_method"] == "unrouted"
+
+
+# -- RFC 2822 In-Reply-To fallback (Defect 2) ---------------------------------
+
+
+def test_route_email_falls_back_to_rfc_message_id_match(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """When the Gmail thread differs (Gmail re-threads on recipient side) the
+    inbound's In-Reply-To must still resolve to the prior outbound's workflow.
+    """
+    account = make_test_account(database_connection, email="rfc1@example.com")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="inbound"
+    )
+    _activate_workflow(database_connection, workflow.id)
+
+    # Prior outbound has the original Gmail thread id and a known Message-ID.
+    prior = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="initial",
+        gmail_thread_id="thread-outbound",
+        rfc2822_message_id="<original@mailpilot.test>",
+        workflow_id=workflow.id,
+        is_routed=True,
+    )
+    assert prior is not None
+
+    # Reply lands with a NEW gmail_thread_id (Gmail re-threaded on the
+    # recipient side) but cites the original via In-Reply-To.
+    reply = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Re: initial",
+        gmail_thread_id="thread-reply-different",
+        in_reply_to="<original@mailpilot.test>",
+    )
+    assert reply is not None
+
+    routed = route_email(
+        database_connection, reply, "alice@example.com", make_test_settings()
+    )
+
+    assert routed.workflow_id == workflow.id
+    assert routed.is_routed is True
+
+
+def test_route_email_falls_back_via_references_header(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """References header (multi-id chain) is also walked for the fallback."""
+    account = make_test_account(database_connection, email="rfc2@example.com")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="inbound"
+    )
+    _activate_workflow(database_connection, workflow.id)
+
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="initial",
+        gmail_thread_id="thread-out",
+        rfc2822_message_id="<root@mailpilot.test>",
+        workflow_id=workflow.id,
+        is_routed=True,
+    )
+
+    # Inbound only carries References, no In-Reply-To.
+    reply = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Re: initial",
+        gmail_thread_id="thread-reply-x",
+        references_header="<unrelated@mailpilot.test> <root@mailpilot.test>",
+    )
+    assert reply is not None
+
+    routed = route_email(
+        database_connection, reply, "alice@example.com", make_test_settings()
+    )
+
+    assert routed.workflow_id == workflow.id
+
+
+def test_route_email_rfc_match_scoped_to_account(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """An RFC match in a different account must NOT leak the workflow."""
+    account_a = make_test_account(database_connection, email="acc-a@example.com")
+    account_b = make_test_account(database_connection, email="acc-b@example.com")
+    workflow_a = make_test_workflow(
+        database_connection, account_id=account_a.id, workflow_type="inbound"
+    )
+    _activate_workflow(database_connection, workflow_a.id)
+
+    # Outbound row exists on account A under workflow A.
+    create_email(
+        database_connection,
+        account_id=account_a.id,
+        direction="outbound",
+        subject="initial",
+        gmail_thread_id="thread-cross",
+        rfc2822_message_id="<shared@mailpilot.test>",
+        workflow_id=workflow_a.id,
+        is_routed=True,
+    )
+
+    # Inbound on account B cites the same Message-ID but must NOT pick up
+    # account A's workflow.
+    reply = create_email(
+        database_connection,
+        account_id=account_b.id,
+        direction="inbound",
+        subject="Re: initial",
+        gmail_thread_id="thread-cross-b",
+        in_reply_to="<shared@mailpilot.test>",
+    )
+    assert reply is not None
+
+    routed = route_email(
+        database_connection, reply, "alice@example.com", make_test_settings()
+    )
+
+    assert routed.workflow_id is None
+    assert routed.is_routed is True
+
+
+def test_route_email_span_has_route_method_rfc_message_id_match(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """routing.route_email span must set route_method='rfc_message_id_match'."""
+    account = make_test_account(database_connection, email="rfcspan@example.com")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="inbound"
+    )
+    _activate_workflow(database_connection, workflow.id)
+
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="initial",
+        gmail_thread_id="thread-x",
+        rfc2822_message_id="<orig-span@mailpilot.test>",
+        workflow_id=workflow.id,
+        is_routed=True,
+    )
+    reply = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Re: initial",
+        gmail_thread_id="thread-y",
+        in_reply_to="<orig-span@mailpilot.test>",
+    )
+    assert reply is not None
+
+    route_email(database_connection, reply, "alice@example.com", make_test_settings())
+
+    spans = _routing_spans(capfire)
+    assert len(spans) == 1
+    assert spans[0]["attributes"]["route_method"] == "rfc_message_id_match"
+    assert spans[0]["attributes"]["workflow_id"] == workflow.id
+
+
+def test_route_email_thread_match_takes_precedence_over_rfc(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """When both signals are present, thread match wins (cheaper, no
+    cross-side ambiguity)."""
+    account = make_test_account(database_connection, email="prec@example.com")
+    workflow_thread = make_test_workflow(
+        database_connection,
+        account_id=account.id,
+        name="Thread WF",
+        workflow_type="inbound",
+    )
+    workflow_rfc = make_test_workflow(
+        database_connection,
+        account_id=account.id,
+        name="RFC WF",
+        workflow_type="inbound",
+    )
+    _activate_workflow(database_connection, workflow_thread.id)
+    _activate_workflow(database_connection, workflow_rfc.id)
+
+    # Same Gmail thread -> thread WF.
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="thread parent",
+        gmail_thread_id="thread-shared",
+        rfc2822_message_id="<thread-parent@mailpilot.test>",
+        workflow_id=workflow_thread.id,
+        is_routed=True,
+    )
+    # Different Gmail thread, but its Message-ID is what reply cites -> RFC WF.
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="rfc parent",
+        gmail_thread_id="thread-other",
+        rfc2822_message_id="<rfc-parent@mailpilot.test>",
+        workflow_id=workflow_rfc.id,
+        is_routed=True,
+    )
+
+    reply = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Re: ambiguous",
+        gmail_thread_id="thread-shared",
+        in_reply_to="<rfc-parent@mailpilot.test>",
+    )
+    assert reply is not None
+
+    routed = route_email(
+        database_connection, reply, "alice@example.com", make_test_settings()
+    )
+
+    assert routed.workflow_id == workflow_thread.id
+
+
+def test_route_email_rfc_match_no_referenced_ids_falls_through(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """No In-Reply-To and no References -> RFC step yields nothing, classify runs."""
+    account = make_test_account(database_connection, email="rfcnone@example.com")
+    new_email = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="bare",
+        gmail_thread_id="t-bare",
+    )
+    assert new_email is not None
+
+    routed = route_email(
+        database_connection, new_email, "alice@example.com", make_test_settings()
+    )
+
+    # No active workflows -> unrouted, but importantly no exception raised.
+    assert routed.is_routed is True
+    assert routed.workflow_id is None
