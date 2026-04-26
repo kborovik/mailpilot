@@ -153,3 +153,75 @@ def send_email(  # noqa: PLR0913
         _activate_enrollment_if_pending(connection, workflow_id, contact_id)
 
     return email
+
+
+def reply_email(  # noqa: PLR0913
+    connection: psycopg.Connection[dict[str, Any]],
+    account: Account,
+    gmail_client: GmailClient,
+    settings: Settings,
+    *,
+    email_id: str,
+    body: str,
+    workflow_id: str | None = None,
+    cc: str | None = None,
+    bcc: str | None = None,
+) -> Email:
+    """Reply to an existing email in-thread.
+
+    Auto-derives recipient (contact.email), subject ("Re: " prefixed
+    unless already prefixed), thread_id, and In-Reply-To from the
+    original. No cooldown -- replies are always allowed. Activates a
+    matching pending enrollment when ``workflow_id`` is set.
+
+    Raises:
+        OriginalNotFoundError: ``email_id`` does not exist.
+        OriginalMissingThreadError: original has no ``gmail_thread_id``.
+        OriginalMissingContactError: original has no ``contact_id``.
+        ContactMissingError: ``original.contact_id`` does not resolve.
+        ContactDisabledError: contact is bounced/unsubscribed.
+    """
+    original = database.get_email(connection, email_id)
+    if original is None:
+        raise OriginalNotFoundError(f"email not found: {email_id}")
+    if original.gmail_thread_id is None:
+        raise OriginalMissingThreadError(
+            f"email has no gmail_thread_id: {email_id}"
+        )
+    if original.contact_id is None:
+        raise OriginalMissingContactError(
+            f"email has no contact_id: {email_id}"
+        )
+
+    contact = database.get_contact(connection, original.contact_id)
+    if contact is None:
+        raise ContactMissingError(f"contact not found: {original.contact_id}")
+    if contact.status != "active":
+        raise ContactDisabledError(
+            f"contact is {contact.status}: {contact.status_reason}"
+        )
+
+    subject = original.subject
+    if not subject.lower().startswith("re: "):
+        subject = f"Re: {subject}"
+
+    email = sync_send_email(
+        connection=connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=settings,
+        to=contact.email,
+        subject=subject,
+        body=body,
+        contact_id=contact.id,
+        workflow_id=workflow_id,
+        thread_id=original.gmail_thread_id,
+        cc=cc,
+        bcc=bcc,
+        in_reply_to=original.rfc2822_message_id,
+    )
+
+    if workflow_id is not None:
+        _activate_enrollment_if_pending(connection, workflow_id, contact.id)
+
+    return email
