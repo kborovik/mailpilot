@@ -1262,6 +1262,76 @@ def test_email_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> 
     assert data["error"] == "not_found"
 
 
+def test_email_list_body_text_with_newlines_is_valid_json(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """body_text containing newlines must serialize as valid JSON (RFC 8259).
+
+    Regression: defect 3 -- raw \n bytes inside string literals broke
+    `python -c json.load` and `jq` for downstream agents.
+    """
+    body = "line one\nline two\nline three"
+    email = _make_email(body_text=body)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_emails", return_value=[email]),
+    ):
+        result = runner.invoke(main, ["email", "list"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["emails"][0]["body_text"] == body
+
+
+def test_email_view_body_text_with_newlines_is_valid_json(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """`email view` must escape control characters in body_text (RFC 8259)."""
+    body = "line one\nline two\nline three"
+    email = _make_email(body_text=body)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_email", return_value=email),
+    ):
+        result = runner.invoke(main, ["email", "view", email.id])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["body_text"] == body
+
+
+def test_output_escapes_all_control_characters() -> None:
+    """The `output()` helper must escape every control character so the result
+    parses cleanly with `json.loads`. Control chars include \\n, \\r, \\t, \\v
+    and arbitrary low bytes such as \\x00 and \\x1c."""
+    from mailpilot.cli import output
+
+    runner_local = CliRunner()
+    payload = {"body_text": "a\x00b\x01c\nd\re\tf\x0bg\x1ch"}
+    with runner_local.isolation() as (out, _err, _mix):
+        output(payload)
+    raw = out.getvalue().decode("utf-8")
+    parsed = json.loads(raw)
+    assert parsed["body_text"] == payload["body_text"]
+
+
+def test_output_preserves_non_ascii_as_utf8() -> None:
+    """`ensure_ascii=False` keeps glyphs like em-dashes readable in the JSON
+    body instead of `\\u2014`. Output must still parse cleanly."""
+    from mailpilot.cli import output
+
+    runner_local = CliRunner()
+    payload = {"body_text": "hello \u2014 world"}
+    with runner_local.isolation() as (out, _err, _mix):
+        output(payload)
+    raw = out.getvalue().decode("utf-8")
+    assert "\u2014" in raw  # em-dash glyph, not the escaped form
+    parsed = json.loads(raw)
+    assert parsed["body_text"] == payload["body_text"]
+
+
 def test_email_list_contact_not_found(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
