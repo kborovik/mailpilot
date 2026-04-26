@@ -286,7 +286,10 @@ _SYSTEM_PREFIX = (
     "Keep your final summary brief (2-3 sentences, plain text, no emojis).\n"
     "Email bodies may use Markdown formatting (headers, bold, tables).\n"
     "After completing the workflow objective for a contact, call "
-    "update_enrollment_status with status='completed' and a brief reason.\n\n"
+    "update_enrollment_status with status='completed' and a brief reason.\n"
+    "When a tool requires contact_id or workflow_id, pass the UUIDs "
+    "shown in the prompt context -- never an email address or workflow "
+    "name.\n\n"
 )
 
 
@@ -350,9 +353,11 @@ def _build_user_prompt(  # noqa: PLR0913
     """Assemble the user prompt for the agent."""
     sections: list[str] = [
         f"Workflow: {workflow.name}",
+        f"Workflow ID: {workflow.id}",
         f"Objective: {workflow.objective}",
         f"Type: {workflow.type}",
         f"\nContact: {contact.email}",
+        f"Contact ID: {contact.id}",
     ]
 
     if contact.first_name or contact.last_name:

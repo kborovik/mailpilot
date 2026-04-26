@@ -23,9 +23,11 @@ Tools per ADR-03:
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import logfire
 import psycopg
 
 from mailpilot import database
@@ -34,6 +36,52 @@ from mailpilot.settings import Settings
 from mailpilot.sync import send_email as sync_send_email
 
 _COOLDOWN_DAYS = 30
+
+
+def _is_uuid(value: str) -> bool:
+    """Return True if the string parses as a UUID."""
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _resolve_contact_id(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact_id_or_email: str,
+) -> str | None:
+    """Coerce a tool argument into a contact UUID.
+
+    Pydantic AI agents occasionally pass a contact's email string where a
+    UUID is required. Rather than silently no-op (matching zero rows), we
+    accept either form:
+
+    - If ``contact_id_or_email`` is already a UUID, return it as-is.
+    - If it looks like an email and matches a contact row, log a warning
+      and return that contact's UUID.
+    - Otherwise return ``None`` so the caller can surface an actionable
+      error to the agent.
+
+    Args:
+        connection: Open database connection.
+        contact_id_or_email: Either a contact UUID or an email address.
+
+    Returns:
+        Resolved contact UUID, or None if the input cannot be resolved.
+    """
+    if _is_uuid(contact_id_or_email):
+        return contact_id_or_email
+    if "@" in contact_id_or_email:
+        contact = database.get_contact_by_email(connection, contact_id_or_email)
+        if contact is not None:
+            logfire.warn(
+                "agent.tool.contact_id_resolved_from_email",
+                contact_id_or_email=contact_id_or_email,
+                resolved_contact_id=contact.id,
+            )
+            return contact.id
+    return None
 
 
 def _activate_enrollment_if_pending(
@@ -326,15 +374,21 @@ def update_enrollment_status(
 
     The agent -- not the system -- decides success or failure.
 
+    ``contact_id`` must be the contact UUID exposed in the workflow context.
+    As a fallback, an email string is accepted if it matches an existing
+    contact (a warning is logged); anything else returns
+    ``invalid_contact_id`` so the agent can self-correct.
+
     Args:
         connection: Open database connection.
         workflow_id: Current workflow FK.
-        contact_id: Contact ID.
+        contact_id: Contact UUID. An email is accepted as a best-effort fallback.
         status: "active", "completed", or "failed".
         reason: Agent's explanation (e.g., "meeting booked", "no response").
 
     Returns:
-        Dict with updated status, or error if enrollment not found.
+        Dict with updated status, or error if input is invalid or the
+        enrollment is not found.
     """
     valid_statuses = ("active", "completed", "failed")
     if status not in valid_statuses:
@@ -342,13 +396,26 @@ def update_enrollment_status(
             "error": "invalid_status",
             "message": f"status must be one of {valid_statuses}, got: {status}",
         }
+    resolved_contact_id = _resolve_contact_id(connection, contact_id)
+    if resolved_contact_id is None:
+        return {
+            "error": "invalid_contact_id",
+            "message": (
+                f"contact_id '{contact_id}' is not a UUID; "
+                "pass the contact UUID exposed in the workflow context"
+            ),
+        }
     enrollment = database.update_enrollment(
-        connection, workflow_id, contact_id, status=status, reason=reason
+        connection,
+        workflow_id,
+        resolved_contact_id,
+        status=status,
+        reason=reason,
     )
     if enrollment is None:
         return {
             "error": "not_found",
-            "message": f"enrollment not found: {workflow_id}/{contact_id}",
+            "message": f"enrollment not found: {workflow_id}/{resolved_contact_id}",
         }
     return {"status": enrollment.status, "reason": enrollment.reason}
 
@@ -364,20 +431,38 @@ def disable_contact(
     This is a hard block across all workflows. The send_email tool checks
     contact status before sending.
 
+    ``contact_id`` must be the contact UUID exposed in the workflow context.
+    As a fallback, an email string is accepted if it matches an existing
+    contact (a warning is logged); anything else returns
+    ``invalid_contact_id`` so the agent can self-correct.
+
     Args:
         connection: Open database connection.
-        contact_id: Contact ID.
+        contact_id: Contact UUID. An email is accepted as a best-effort fallback.
         status: "bounced" or "unsubscribed".
         reason: Explanation (e.g., "hard bounce", "replied: do not contact").
 
     Returns:
-        Dict with updated contact status, or error if not found.
+        Dict with updated contact status, or error if input is invalid or
+        the contact is not found.
     """
+    resolved_contact_id = _resolve_contact_id(connection, contact_id)
+    if resolved_contact_id is None:
+        return {
+            "error": "invalid_contact_id",
+            "message": (
+                f"contact_id '{contact_id}' is not a UUID; "
+                "pass the contact UUID exposed in the workflow context"
+            ),
+        }
     updated = database.disable_contact(
-        connection, contact_id, status=status, status_reason=reason
+        connection, resolved_contact_id, status=status, status_reason=reason
     )
     if updated is None:
-        return {"error": "not_found", "message": f"contact not found: {contact_id}"}
+        return {
+            "error": "invalid_contact_id",
+            "message": f"contact not found: {contact_id}",
+        }
     return {"id": updated.id, "status": updated.status}
 
 

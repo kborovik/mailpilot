@@ -886,10 +886,92 @@ def test_update_enrollment_status_success(
 def test_update_enrollment_status_not_found(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
+    """A valid-looking UUID with no enrollment row returns not_found."""
+    # Use a real UUID format so we exercise the not_found path, not
+    # the invalid_contact_id guard.
+    fake_uuid = "00000000-0000-7000-8000-000000000000"
     result = update_enrollment_status(
         connection=database_connection,
-        workflow_id="nonexistent",
-        contact_id="nonexistent",
+        workflow_id="00000000-0000-7000-8000-000000000001",
+        contact_id=fake_uuid,
+        status="completed",
+        reason="done",
+    )
+
+    assert result["error"] == "not_found"
+
+
+def test_update_enrollment_status_resolves_email_to_uuid(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """When contact_id is an email matching an enrolled contact, resolve it."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(
+        database_connection, email="enrolled@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    create_enrollment(database_connection, workflow.id, contact.id)
+
+    result = update_enrollment_status(
+        connection=database_connection,
+        workflow_id=workflow.id,
+        contact_id="enrolled@example.com",
+        status="completed",
+        reason="meeting booked",
+    )
+
+    assert "error" not in result
+    assert result["status"] == "completed"
+    wc = get_enrollment(database_connection, workflow.id, contact.id)
+    assert wc is not None
+    assert wc.status == "completed"
+    assert wc.reason == "meeting booked"
+
+
+def test_update_enrollment_status_unresolvable_string_returns_error(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """A non-UUID, non-resolvable contact_id returns actionable error,
+    no DB mutation."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(
+        database_connection, email="enrolled@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    create_enrollment(database_connection, workflow.id, contact.id)
+
+    result = update_enrollment_status(
+        connection=database_connection,
+        workflow_id=workflow.id,
+        contact_id="not-a-uuid-or-email",
+        status="completed",
+        reason="done",
+    )
+
+    assert result["error"] == "invalid_contact_id"
+    assert "not-a-uuid-or-email" in result["message"]
+    assert "UUID" in result["message"]
+    # Existing enrollment must remain pending (not mutated).
+    wc = get_enrollment(database_connection, workflow.id, contact.id)
+    assert wc is not None
+    assert wc.status == "pending"
+
+
+def test_update_enrollment_status_email_not_enrolled_returns_not_found(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """An email matching a contact that is not enrolled returns not_found."""
+    account = make_test_account(database_connection)
+    # Contact exists, but is not enrolled in this workflow.
+    make_test_contact(
+        database_connection, email="stranger@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+
+    result = update_enrollment_status(
+        connection=database_connection,
+        workflow_id=workflow.id,
+        contact_id="stranger@example.com",
         status="completed",
         reason="done",
     )
@@ -929,7 +1011,29 @@ def test_disable_contact_not_found(
         reason="hard bounce",
     )
 
-    assert result["error"] == "not_found"
+    assert result["error"] == "invalid_contact_id"
+
+
+def test_disable_contact_resolves_email_to_uuid(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """When contact_id is an email matching an existing contact, resolve it."""
+    contact = make_test_contact(
+        database_connection, email="bouncey@example.com", domain="example.com"
+    )
+
+    result = disable_contact(
+        connection=database_connection,
+        contact_id="bouncey@example.com",
+        status="bounced",
+        reason="hard bounce",
+    )
+
+    assert "error" not in result
+    assert result["status"] == "bounced"
+    updated = get_contact(database_connection, contact.id)
+    assert updated is not None
+    assert updated.status == "bounced"
 
 
 # -- list_enrollments ----------------------------------------------------

@@ -367,6 +367,31 @@ def test_inbound_email_trigger(
     assert "How much does your product cost?" in all_text
 
 
+def test_prompt_includes_contact_uuid(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Agent prompt exposes contact UUID so tools that take contact_id can use it."""
+    _account, contact, workflow = _setup(database_connection)
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+
+    captured_messages: list[ModelMessage] = []
+    with patch("mailpilot.agent.invoke.GmailClient"):
+        invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            model_override=_capturing_model(captured_messages),
+        )
+
+    all_text = str(captured_messages)
+    # The contact's UUID must appear so the agent can pass it to
+    # update_enrollment_status / disable_contact instead of the email string.
+    assert contact.id in all_text
+
+
 def test_inbound_email_trigger_includes_email_id_and_sender(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
