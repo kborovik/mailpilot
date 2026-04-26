@@ -185,13 +185,9 @@ def reply_email(  # noqa: PLR0913
     if original is None:
         raise OriginalNotFoundError(f"email not found: {email_id}")
     if original.gmail_thread_id is None:
-        raise OriginalMissingThreadError(
-            f"email has no gmail_thread_id: {email_id}"
-        )
+        raise OriginalMissingThreadError(f"email has no gmail_thread_id: {email_id}")
     if original.contact_id is None:
-        raise OriginalMissingContactError(
-            f"email has no contact_id: {email_id}"
-        )
+        raise OriginalMissingContactError(f"email has no contact_id: {email_id}")
 
     contact = database.get_contact(connection, original.contact_id)
     if contact is None:
