@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import psycopg
 import pytest
 from googleapiclient.errors import HttpError
+from logfire.testing import CaptureLogfire
 
 from conftest import (
     make_test_account,
@@ -1362,3 +1363,129 @@ def test_sync_stores_in_reply_to_and_references_headers(
     assert email.references_header == "<root@mailpilot.test> <orig@mailpilot.test>"
 
 
+# -- D5: routing observability -------------------------------------------------
+
+
+def _spans_named(capfire: CaptureLogfire, name: str) -> list[dict[str, Any]]:
+    return [s for s in capfire.exporter.exported_spans_as_dict() if s["name"] == name]
+
+
+def test_sync_emits_route_skipped_span_when_no_active_workflows(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """No active workflows -> emit routing.route_email_skipped span (D5)."""
+    from mailpilot.sync import (
+        _store_inbound_message,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    account = make_test_account(database_connection, email="d5none@example.com")
+    contact = make_test_contact(
+        database_connection, email="alice@example.com", domain="example.com"
+    )
+    message = _make_gmail_message(
+        message_id="msg_d5_none",
+        thread_id="thread_d5_none",
+        from_header="Alice <alice@example.com>",
+    )
+
+    email = _store_inbound_message(
+        database_connection,
+        account,
+        message,
+        contacts_by_email={"alice@example.com": contact},
+        settings=make_test_settings(),
+        has_active_workflows=False,
+    )
+    assert email is not None
+    assert email.is_routed is True
+
+    skipped = _spans_named(capfire, "routing.route_email_skipped")
+    routed = _spans_named(capfire, "routing.route_email")
+    assert len(routed) == 0
+    assert len(skipped) == 1
+    attrs = skipped[0]["attributes"]
+    assert attrs["email_id"] == email.id
+    assert attrs["account_id"] == account.id
+    assert attrs["reason"] == "no_active_workflows"
+
+
+def test_sync_emits_route_skipped_span_outside_recency_window(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Old inbound (outside recency window) -> emit routing.route_email_skipped."""
+    from mailpilot.sync import (
+        _store_inbound_message,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    account = make_test_account(database_connection, email="d5old@example.com")
+    contact = make_test_contact(
+        database_connection, email="alice@example.com", domain="example.com"
+    )
+    old_time = datetime.now(UTC) - timedelta(days=30)
+    message = _make_gmail_message(
+        message_id="msg_d5_old",
+        thread_id="thread_d5_old",
+        from_header="Alice <alice@example.com>",
+        received_at=old_time,
+    )
+
+    email = _store_inbound_message(
+        database_connection,
+        account,
+        message,
+        contacts_by_email={"alice@example.com": contact},
+        settings=make_test_settings(),
+        has_active_workflows=True,
+    )
+    assert email is not None
+    assert email.is_routed is True
+
+    skipped = _spans_named(capfire, "routing.route_email_skipped")
+    routed = _spans_named(capfire, "routing.route_email")
+    assert len(routed) == 0
+    assert len(skipped) == 1
+    assert skipped[0]["attributes"]["reason"] == "outside_recency_window"
+
+
+def test_sync_emits_route_skipped_span_when_predates_workflows(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Email older than the earliest active workflow -> route_email_skipped."""
+    from mailpilot.sync import (
+        _store_inbound_message,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    account = make_test_account(database_connection, email="d5pre@example.com")
+    contact = make_test_contact(
+        database_connection, email="alice@example.com", domain="example.com"
+    )
+    now = datetime.now(UTC)
+    earliest_workflow_at = now - timedelta(hours=1)
+    received = now - timedelta(days=2)  # within window but before workflow
+    message = _make_gmail_message(
+        message_id="msg_d5_pre",
+        thread_id="thread_d5_pre",
+        from_header="Alice <alice@example.com>",
+        received_at=received,
+    )
+
+    email = _store_inbound_message(
+        database_connection,
+        account,
+        message,
+        contacts_by_email={"alice@example.com": contact},
+        settings=make_test_settings(),
+        has_active_workflows=True,
+        earliest_workflow_at=earliest_workflow_at,
+    )
+    assert email is not None
+    assert email.is_routed is True
+
+    skipped = _spans_named(capfire, "routing.route_email_skipped")
+    routed = _spans_named(capfire, "routing.route_email")
+    assert len(routed) == 0
+    assert len(skipped) == 1
+    assert skipped[0]["attributes"]["reason"] == "predates_workflows"

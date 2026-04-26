@@ -700,10 +700,38 @@ def _store_inbound_message(  # noqa: PLR0913
             connection, email, sender_email=sender_email, settings=settings
         )
     elif within_window:
+        # Within recency window but no LLM classification will run. Record
+        # the skip with a reason so observability stays complete -- every
+        # inbound delivery produces either a routing.route_email span or a
+        # routing.route_email_skipped span (D5).
+        skip_reason = (
+            "predates_workflows" if predates_workflows else "no_active_workflows"
+        )
+        _emit_route_skipped_span(email, skip_reason)
         updated = update_email(connection, email.id, is_routed=True)
         if updated is not None:
             email = updated
+    else:
+        # Outside the 7-day recency window -- create_email already set
+        # is_routed=True, so emit the skip span and return.
+        _emit_route_skipped_span(email, "outside_recency_window")
     return email
+
+
+def _emit_route_skipped_span(email: Email, reason: str) -> None:
+    """Emit a ``routing.route_email_skipped`` span for an inbound email.
+
+    Mirrors the attribute shape of ``routing.route_email`` so dashboards
+    that filter on ``email_id`` / ``account_id`` keep working when an
+    inbound delivery skips the routing pipeline (D5).
+    """
+    with logfire.span(
+        "routing.route_email_skipped",
+        email_id=email.id,
+        account_id=email.account_id,
+        reason=reason,
+    ):
+        pass
 
 
 def _received_at_from_message(message: dict[str, Any]) -> datetime | None:
