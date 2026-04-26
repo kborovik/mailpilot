@@ -30,24 +30,6 @@ import psycopg
 from mailpilot import database, email_ops
 from mailpilot.models import Account
 from mailpilot.settings import Settings
-from mailpilot.sync import send_email as sync_send_email
-
-
-def _activate_enrollment_if_pending(
-    connection: psycopg.Connection[dict[str, Any]],
-    workflow_id: str,
-    contact_id: str,
-) -> None:
-    """Transition enrollment from pending to active after successful send."""
-    enrollment = database.get_enrollment(connection, workflow_id, contact_id)
-    if enrollment is not None and enrollment.status == "pending":
-        database.update_enrollment(
-            connection,
-            workflow_id,
-            contact_id,
-            status="active",
-            reason="email sent",
-        )
 
 
 def send_email(  # noqa: PLR0913
@@ -101,92 +83,24 @@ def reply_email(  # noqa: PLR0913
     cc: str | None = None,
     bcc: str | None = None,
 ) -> dict[str, Any]:
-    """Reply to an existing email in-thread.
+    """Agent tool: reply in-thread. Wraps :func:`email_ops.reply_email`.
 
-    Resolves recipient, subject, and thread_id automatically from the
-    original email. No cooldown check -- replies are always allowed.
-
-    Guards:
-    1. Original email must exist
-    2. Original email must have a gmail_thread_id
-    3. Original email must have a contact_id
-    4. Contact must exist
-    5. Contact must be active (not bounced/unsubscribed)
-
-    Args:
-        connection: Open database connection.
-        account: Sending account.
-        gmail_client: Gmail client scoped to account.
-        settings: Application settings.
-        workflow_id: Current workflow FK.
-        email_id: ID of the email being replied to.
-        body: Reply body (plain text).
-        cc: CC recipient(s), comma-separated.
-        bcc: BCC recipient(s), comma-separated.
-
-    Returns:
-        Dict with sent message details (id, gmail_message_id, gmail_thread_id),
-        or error dict if blocked by guard.
+    Converts typed policy exceptions into the LLM-facing error dict.
     """
-    # Guard 1: original email must exist.
-    original = database.get_email(connection, email_id)
-    if original is None:
-        return {
-            "error": "not_found",
-            "message": f"email not found: {email_id}",
-        }
-
-    # Guard 2: original email must have a gmail_thread_id.
-    if original.gmail_thread_id is None:
-        return {
-            "error": "no_thread",
-            "message": f"email has no gmail_thread_id: {email_id}",
-        }
-
-    # Guard 3: original email must have a contact.
-    if original.contact_id is None:
-        return {
-            "error": "no_contact",
-            "message": f"email has no contact_id: {email_id}",
-        }
-
-    # Guard 4: contact must exist.
-    contact = database.get_contact(connection, original.contact_id)
-    if contact is None:
-        return {
-            "error": "not_found",
-            "message": f"contact not found: {original.contact_id}",
-        }
-
-    # Guard 5: contact must be active.
-    if contact.status != "active":
-        return {
-            "error": "contact_disabled",
-            "message": f"contact is {contact.status}: {contact.status_reason}",
-        }
-
-    # Derive subject: prepend "Re: " unless already prefixed.
-    subject = original.subject
-    if not subject.lower().startswith("re: "):
-        subject = f"Re: {subject}"
-
-    email = sync_send_email(
-        connection=connection,
-        account=account,
-        gmail_client=gmail_client,  # type: ignore[arg-type]
-        settings=settings,
-        to=contact.email,
-        subject=subject,
-        body=body,
-        contact_id=contact.id,
-        workflow_id=workflow_id,
-        thread_id=original.gmail_thread_id,
-        cc=cc,
-        bcc=bcc,
-        in_reply_to=original.rfc2822_message_id,
-    )
-
-    _activate_enrollment_if_pending(connection, workflow_id, contact.id)
+    try:
+        email = email_ops.reply_email(
+            connection,
+            account,
+            gmail_client,  # type: ignore[arg-type]
+            settings,
+            email_id=email_id,
+            body=body,
+            workflow_id=workflow_id,
+            cc=cc,
+            bcc=bcc,
+        )
+    except email_ops.EmailOpsError as exc:
+        return {"error": exc.code, "message": str(exc)}
 
     return {
         "id": email.id,
