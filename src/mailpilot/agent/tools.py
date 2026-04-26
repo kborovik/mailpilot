@@ -91,8 +91,10 @@ def _activate_enrollment_if_pending(
 ) -> None:
     """Transition enrollment from pending to active after successful send.
 
-    No-op if the enrollment row does not exist, or if the current status
-    is anything other than ``pending``.
+    Sending is a transport action; enrollment lifecycle is owned by the
+    agent's explicit ``update_enrollment_status`` calls. We only nudge
+    ``pending`` -> ``active`` so a freshly enrolled contact reflects that
+    work has begun. ``active``/``completed``/``failed`` are never overwritten.
 
     Args:
         connection: Open database connection.
@@ -125,6 +127,12 @@ def send_email(  # noqa: PLR0913
     """Send a new outbound email via Gmail API.
 
     For replies to existing emails, use ``reply_email`` instead.
+
+    Enrollment side-effect: a successful send transitions a ``pending``
+    enrollment to ``active`` ("email sent"). It never overwrites a
+    terminal status (``active``/``completed``/``failed``) -- to mark the
+    enrollment ``completed`` or ``failed`` after sending, call
+    ``update_enrollment_status`` explicitly in the same turn.
 
     Guards:
     1. Contact must be active (not bounced/unsubscribed) -- hard block
@@ -213,6 +221,12 @@ def reply_email(  # noqa: PLR0913
 
     Resolves recipient, subject, and thread_id automatically from the
     original email. No cooldown check -- replies are always allowed.
+
+    Enrollment side-effect: a successful reply transitions a ``pending``
+    enrollment to ``active`` ("email sent"). It never overwrites a
+    terminal status (``active``/``completed``/``failed``) -- to mark the
+    enrollment ``completed`` or ``failed`` after replying, call
+    ``update_enrollment_status`` explicitly in the same turn.
 
     Guards:
     1. Original email must exist
