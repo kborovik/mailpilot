@@ -2,6 +2,27 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+from typing import Any
+from unittest.mock import MagicMock
+
+import psycopg
+import pytest
+
+from conftest import (
+    make_test_account,
+    make_test_contact,
+    make_test_settings,
+    make_test_workflow,
+)
+from mailpilot.database import (
+    activate_workflow,
+    create_email,
+    create_enrollment,
+    get_enrollment,
+    update_workflow,
+)
+from mailpilot.database import disable_contact as db_disable_contact
 from mailpilot.email_ops import (
     ContactDisabledError,
     ContactMissingError,
@@ -10,7 +31,11 @@ from mailpilot.email_ops import (
     OriginalMissingContactError,
     OriginalMissingThreadError,
     OriginalNotFoundError,
+    send_email,
 )
+from mailpilot.models import Account, Email
+
+# -- Exception hierarchy -------------------------------------------------------
 
 
 def test_exception_codes_match_agent_tool_strings() -> None:
@@ -40,3 +65,194 @@ def test_exception_str_carries_message() -> None:
     exc = ContactDisabledError("contact is bounced: hard fail")
     assert str(exc) == "contact is bounced: hard fail"
     assert exc.code == "contact_disabled"
+
+
+# -- Helpers -------------------------------------------------------------------
+
+
+def _activate(connection: psycopg.Connection[dict[str, Any]], workflow_id: str) -> None:
+    update_workflow(
+        connection,
+        workflow_id,
+        objective="Test objective",
+        instructions="Test instructions",
+    )
+    activate_workflow(connection, workflow_id)
+
+
+def _make_gmail_client(account: Account) -> MagicMock:
+    del account
+    client = MagicMock()
+    client.send_message.return_value = {
+        "id": "gmail-msg-1",
+        "threadId": "gmail-thread-1",
+        "labelIds": ["SENT"],
+    }
+    return client
+
+
+# -- send_email ----------------------------------------------------------------
+
+
+def test_send_email_returns_email_row(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    account = make_test_account(database_connection)
+    make_test_contact(
+        database_connection, email="recipient@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    gmail_client = _make_gmail_client(account)
+
+    email = send_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Hello",
+        body="Hi there",
+        workflow_id=workflow.id,
+    )
+
+    assert isinstance(email, Email)
+    assert email.gmail_message_id == "gmail-msg-1"
+    assert email.gmail_thread_id == "gmail-thread-1"
+    gmail_client.send_message.assert_called_once()
+
+
+def test_send_email_unknown_contact_succeeds(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """No contact row -> no guards fire, send proceeds."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    gmail_client = _make_gmail_client(account)
+
+    email = send_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        to="brand-new@example.com",
+        subject="Hi",
+        body="Body",
+        workflow_id=workflow.id,
+    )
+    assert email.gmail_message_id == "gmail-msg-1"
+
+
+def test_send_email_raises_contact_disabled_when_bounced(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    account = make_test_account(database_connection)
+    contact = make_test_contact(
+        database_connection, email="recipient@example.com", domain="example.com"
+    )
+    db_disable_contact(database_connection, contact.id, "bounced", "hard fail")
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    gmail_client = _make_gmail_client(account)
+
+    with pytest.raises(ContactDisabledError) as excinfo:
+        send_email(
+            connection=database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=make_test_settings(),
+            to="recipient@example.com",
+            subject="Hello",
+            body="Hi",
+            workflow_id=workflow.id,
+        )
+    assert "bounced" in str(excinfo.value)
+    gmail_client.send_message.assert_not_called()
+
+
+def test_send_email_raises_cooldown_when_recent_cold_send(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    account = make_test_account(database_connection)
+    contact = make_test_contact(
+        database_connection, email="recipient@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="Earlier",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        gmail_message_id="prior-1",
+        gmail_thread_id="prior-thread-1",
+        sent_at=datetime.now(UTC) - timedelta(days=5),
+    )
+    gmail_client = _make_gmail_client(account)
+
+    with pytest.raises(CooldownError) as excinfo:
+        send_email(
+            connection=database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=make_test_settings(),
+            to="recipient@example.com",
+            subject="Hello",
+            body="Hi",
+            workflow_id=workflow.id,
+        )
+    assert "cooldown" in str(excinfo.value).lower()
+    gmail_client.send_message.assert_not_called()
+
+
+def test_send_email_activates_pending_enrollment(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    account = make_test_account(database_connection)
+    contact = make_test_contact(
+        database_connection, email="recipient@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    create_enrollment(database_connection, workflow.id, contact.id)
+    gmail_client = _make_gmail_client(account)
+
+    send_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Hello",
+        body="Hi",
+        workflow_id=workflow.id,
+    )
+
+    enrollment = get_enrollment(database_connection, workflow.id, contact.id)
+    assert enrollment is not None
+    assert enrollment.status == "active"
+
+
+def test_send_email_no_workflow_id_skips_enrollment(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """workflow_id=None is allowed (CLI ad-hoc send); no enrollment touched."""
+    account = make_test_account(database_connection)
+    make_test_contact(
+        database_connection, email="recipient@example.com", domain="example.com"
+    )
+    gmail_client = _make_gmail_client(account)
+
+    email = send_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Hello",
+        body="Hi",
+    )
+    assert email.gmail_message_id == "gmail-msg-1"

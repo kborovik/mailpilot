@@ -13,6 +13,19 @@ JSON for the CLI.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+import psycopg
+
+from mailpilot import database
+from mailpilot.gmail import GmailClient
+from mailpilot.models import Account, Email
+from mailpilot.settings import Settings
+from mailpilot.sync import send_email as sync_send_email
+
+_COOLDOWN_DAYS = 30
+
 
 class EmailOpsError(Exception):
     """Base class for email policy violations.
@@ -58,3 +71,85 @@ class ContactMissingError(EmailOpsError):
     """Reply target's contact_id no longer resolves to a contact row."""
 
     code = "not_found"
+
+
+def _activate_enrollment_if_pending(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+    contact_id: str,
+) -> None:
+    enrollment = database.get_enrollment(connection, workflow_id, contact_id)
+    if enrollment is not None and enrollment.status == "pending":
+        database.update_enrollment(
+            connection,
+            workflow_id,
+            contact_id,
+            status="active",
+            reason="email sent",
+        )
+
+
+def send_email(  # noqa: PLR0913
+    connection: psycopg.Connection[dict[str, Any]],
+    account: Account,
+    gmail_client: GmailClient,
+    settings: Settings,
+    *,
+    to: str,
+    subject: str,
+    body: str,
+    workflow_id: str | None = None,
+    cc: str | None = None,
+    bcc: str | None = None,
+) -> Email:
+    """Send a new outbound email. Applies all policy guards.
+
+    Auto-resolves contact_id from ``to``. If the contact exists, applies
+    contact-status and 30-day cold-outbound cooldown guards. The cooldown
+    query is workflow-scoped, so it runs only when ``workflow_id`` is set
+    (ad-hoc CLI sends without a workflow have no cooldown context).
+    Activates a pending enrollment when both ``workflow_id`` and a
+    resolved contact are present.
+
+    Raises:
+        ContactDisabledError: contact is bounced/unsubscribed.
+        CooldownError: prior unsolicited send within 30 days.
+    """
+    contact = database.get_contact_by_email(connection, to)
+    contact_id: str | None = None
+    if contact is not None:
+        contact_id = contact.id
+        if contact.status != "active":
+            raise ContactDisabledError(
+                f"contact is {contact.status}: {contact.status_reason}"
+            )
+        if workflow_id is not None:
+            last = database.get_last_cold_outbound(
+                connection, account.id, contact.id, workflow_id
+            )
+            if last is not None and last.created_at > datetime.now(UTC) - timedelta(
+                days=_COOLDOWN_DAYS
+            ):
+                raise CooldownError(
+                    f"last unsolicited email sent {last.created_at.isoformat()}; "
+                    f"cooldown is {_COOLDOWN_DAYS} days"
+                )
+
+    email = sync_send_email(
+        connection=connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=settings,
+        to=to,
+        subject=subject,
+        body=body,
+        contact_id=contact_id,
+        workflow_id=workflow_id,
+        cc=cc,
+        bcc=bcc,
+    )
+
+    if workflow_id is not None and contact_id is not None:
+        _activate_enrollment_if_pending(connection, workflow_id, contact_id)
+
+    return email
