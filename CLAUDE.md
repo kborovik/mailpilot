@@ -106,7 +106,8 @@ mailpilot task cancel ID
 mailpilot email search QUERY [--limit N]
 mailpilot email list [--limit N] [--contact-id ID] [--account-id ID] [--since ISO] [--thread-id TEXT] [--direction inbound|outbound] [--workflow-id ID] [--status sent|received|bounced] [--from ADDR] [--to ADDR]
 mailpilot email view ID
-mailpilot email send --account-id ID --to E [--to E2 ...] --subject S --body B [--contact-id ID] [--workflow-id ID] [--thread-id ID] [--cc E] [--bcc E]
+mailpilot email send  --account-id ID --to E [--to E2 ...] --subject S --body B [--workflow-id ID] [--cc E] [--bcc E]
+mailpilot email reply --account-id ID --email-id ID --body B [--workflow-id ID] [--cc E] [--bcc E]
 
 mailpilot activity list --contact-id ID [--type TYPE] [--limit N] [--since ISO]
 mailpilot activity list --company-id ID [--type TYPE] [--limit N] [--since ISO]
