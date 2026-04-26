@@ -119,6 +119,8 @@ class Email(BaseModel):
     gmail_message_id: str | None = None
     gmail_thread_id: str | None = None
     rfc2822_message_id: str | None = None
+    in_reply_to: str | None = None
+    references_header: str | None = None
     account_id: str
     contact_id: str | None = None
     workflow_id: str | None = None

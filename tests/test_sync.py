@@ -1321,3 +1321,44 @@ def test_sync_stores_sender_and_recipients(
         "to": ["inbox@lab5.ca"],
         "cc": ["dev@lab5.ca"],
     }
+
+
+def test_sync_stores_in_reply_to_and_references_headers(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Inbound sync persists In-Reply-To / References for routing fallback."""
+    account = make_test_account(database_connection, email="hdr@example.com")
+    message = _make_gmail_message(
+        message_id="msg_hdr_1",
+        thread_id="thread_hdr_1",
+        from_header="Alice <alice@example.com>",
+        subject="Re: hello",
+        extra_headers=[
+            {"name": "In-Reply-To", "value": "<orig@mailpilot.test>"},
+            {
+                "name": "References",
+                "value": "<root@mailpilot.test> <orig@mailpilot.test>",
+            },
+        ],
+    )
+
+    from mailpilot.sync import (
+        _store_inbound_message,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    contact = make_test_contact(
+        database_connection, email="alice@example.com", domain="example.com"
+    )
+    email = _store_inbound_message(
+        database_connection,
+        account,
+        message,
+        contacts_by_email={"alice@example.com": contact},
+        settings=make_test_settings(),
+        has_active_workflows=False,
+    )
+    assert email is not None
+    assert email.in_reply_to == "<orig@mailpilot.test>"
+    assert email.references_header == "<root@mailpilot.test> <orig@mailpilot.test>"
+
+

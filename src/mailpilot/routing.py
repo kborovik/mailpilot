@@ -1,10 +1,14 @@
 """Email routing pipeline (ADR-04).
 
-Three-step pipeline that assigns inbound emails to the correct workflow:
+Pipeline that assigns inbound emails to the correct workflow:
 
 1. **Thread match** -- prior email in same Gmail thread has a workflow_id
-2. **LLM classification** -- single-turn call against active inbound workflows
-3. **Unrouted** -- store with is_routed=True, workflow_id=NULL
+2. **RFC 2822 message-id match** -- inbound In-Reply-To / References headers
+   cite a stored email's ``rfc2822_message_id`` (covers Gmail recipient-side
+   re-threading, where the same conversation has different ``threadId`` on
+   each side)
+3. **LLM classification** -- single-turn call against active inbound workflows
+4. **Unrouted** -- store with is_routed=True, workflow_id=NULL
 
 Also handles bounce detection (mailer-daemon/postmaster senders and
 bounce-related Gmail labels) and creates ``enrollment`` entries
@@ -22,6 +26,7 @@ from mailpilot.agent.classify import classify_email
 from mailpilot.database import (
     create_enrollment,
     disable_contact,
+    find_email_by_rfc2822_message_id,
     get_emails_by_gmail_thread_id,
     list_workflows,
     update_email,
@@ -70,19 +75,27 @@ def route_email(
                 return _handle_bounce(connection, email)
 
             workflow_id = _try_thread_match(connection, email)
+            route_method: str
             if workflow_id is not None:
-                span.set_attribute("result", "thread_match")
-                span.set_attribute("route_method", "thread_match")
-                span.set_attribute("workflow_id", workflow_id)
+                route_method = "thread_match"
             else:
-                workflow_id = _try_classify(connection, email, sender_email, settings)
+                workflow_id = _try_rfc_message_id_match(connection, email)
                 if workflow_id is not None:
-                    span.set_attribute("result", "classified")
-                    span.set_attribute("route_method", "classified")
-                    span.set_attribute("workflow_id", workflow_id)
+                    route_method = "rfc_message_id_match"
                 else:
-                    span.set_attribute("result", "unrouted")
-                    span.set_attribute("route_method", "unrouted")
+                    workflow_id = _try_classify(
+                        connection, email, sender_email, settings
+                    )
+                    route_method = (
+                        "classified" if workflow_id is not None else "unrouted"
+                    )
+            span.set_attribute(
+                "result",
+                route_method if workflow_id is not None else "unrouted",
+            )
+            span.set_attribute("route_method", route_method)
+            if workflow_id is not None:
+                span.set_attribute("workflow_id", workflow_id)
 
             updated = update_email(
                 connection, email.id, workflow_id=workflow_id, is_routed=True
@@ -195,6 +208,60 @@ def _try_thread_match(
         return None
     matches.sort(key=lambda e: e.created_at, reverse=True)
     return matches[0].workflow_id
+
+
+def _try_rfc_message_id_match(
+    connection: psycopg.Connection[dict[str, Any]],
+    email: Email,
+) -> str | None:
+    """Step 1b: match via RFC 2822 In-Reply-To / References headers.
+
+    Gmail re-threads on the recipient side: a reply that lands on the
+    outbound mailbox can have a fresh ``threadId`` even though it cites
+    our original send via ``In-Reply-To`` and ``References``. When the
+    Gmail-thread lookup returns no match, walk the cited message-ids and
+    look them up against ``email.rfc2822_message_id`` within the same
+    account.
+
+    Returns the matching email's ``workflow_id`` or ``None``. Scope is
+    intentionally restricted to the inbound email's own ``account_id`` so
+    cross-account collisions on a shared Message-ID cannot leak workflow
+    assignments.
+    """
+    referenced_ids = _collect_referenced_message_ids(email)
+    if not referenced_ids:
+        return None
+    parent = find_email_by_rfc2822_message_id(
+        connection, email.account_id, referenced_ids
+    )
+    if parent is None or parent.workflow_id is None:
+        return None
+    return parent.workflow_id
+
+
+def _collect_referenced_message_ids(email: Email) -> list[str]:
+    """Return message-ids cited by an inbound email's threading headers.
+
+    Combines the parent ``In-Reply-To`` value with every entry in the
+    whitespace-separated ``References`` chain. Duplicates are dropped
+    while preserving the order that the original headers used (parent
+    first, then ancestors). Returns an empty list when neither header
+    is populated.
+    """
+    candidates: list[str] = []
+    if email.in_reply_to:
+        candidates.extend(email.in_reply_to.split())
+    if email.references_header:
+        candidates.extend(email.references_header.split())
+    seen: set[str] = set()
+    unique: list[str] = []
+    for raw in candidates:
+        token = raw.strip()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        unique.append(token)
+    return unique
 
 
 def _try_classify(
