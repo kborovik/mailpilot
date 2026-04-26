@@ -48,7 +48,7 @@ The CLI must be LLM Agent friendly: JSON output only. Exit codes must be meaning
 
 **Settings-first parameter passing.** CLI commands never pass config values (API keys) as separate function arguments. Instead: (1) load `Settings` via `get_settings()`, (2) pass the `Settings` instance to sync/agent functions. These functions read all config from `settings`. Only operational params (`limit`, `scope`, `on_progress`) stay as function arguments.
 
-**Convention: GitHub CLI (`gh`) as reference.** Standard verbs: `list` (summary), `view ID` (full record), `get` (fetch from external API), `set` (update config). All IDs are UUIDv7.
+**Verbs: GitHub CLI (`gh`) as default guidance, not a rule.** Common verbs: `list` (summary), `view ID` (full record), `get` (fetch from external API), `set` (update config). The primary concern is LLM-agent ease-of-operation and fewer mistakes -- when a domain-specific verb (e.g., `reply`) reduces parameters or ambiguity for the operator, prefer it over forcing a `gh`-style alternative. All IDs are UUIDv7.
 
 **Input validation in CLI commands.** All commands validate before touching the database:
 
