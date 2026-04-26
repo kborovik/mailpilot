@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import base64
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import psycopg
+from logfire.testing import CaptureLogfire
 
 from conftest import make_test_account, make_test_settings
 from mailpilot.database import get_account, update_account
@@ -159,6 +159,12 @@ def test_start_subscriber_returns_future() -> None:
 
 
 def test_notification_callback_decodes_and_enqueues() -> None:
+    """Gmail Pub/Sub Message.data is already-decoded raw JSON bytes.
+
+    The google-cloud-pubsub client library performs the transport-layer
+    base64 decode before invoking the callback. Re-decoding inside the
+    callback raises binascii.Error on every real notification -- see #82.
+    """
     import queue
 
     from mailpilot.pubsub import make_notification_callback
@@ -167,9 +173,9 @@ def test_notification_callback_decodes_and_enqueues() -> None:
     callback = make_notification_callback(sync_queue)
 
     message = MagicMock()
-    message.data = base64.urlsafe_b64encode(
-        json.dumps({"emailAddress": "user@example.com", "historyId": "12345"}).encode()
-    )
+    message.data = json.dumps(
+        {"emailAddress": "user@example.com", "historyId": "12345"}
+    ).encode()
 
     callback(message)
 
@@ -194,9 +200,7 @@ def test_notification_callback_sets_wakeup_event() -> None:
     callback = make_notification_callback(sync_queue, wakeup_event)
 
     message = MagicMock()
-    message.data = base64.urlsafe_b64encode(
-        json.dumps({"emailAddress": "user@example.com"}).encode()
-    )
+    message.data = json.dumps({"emailAddress": "user@example.com"}).encode()
 
     callback(message)
 
@@ -214,7 +218,7 @@ def test_notification_callback_acks_on_decode_error() -> None:
     callback = make_notification_callback(sync_queue)
 
     message = MagicMock()
-    message.data = b"not-valid-base64-json!!!"
+    message.data = b"not-valid-json{"
 
     callback(message)
 
@@ -231,12 +235,81 @@ def test_notification_callback_acks_on_missing_email_field() -> None:
     callback = make_notification_callback(sync_queue)
 
     message = MagicMock()
-    message.data = base64.urlsafe_b64encode(json.dumps({"historyId": "12345"}).encode())
+    message.data = json.dumps({"historyId": "12345"}).encode()
 
     callback(message)
 
     assert sync_queue.empty()
     message.ack.assert_called_once()
+
+
+def test_notification_callback_decode_error_attaches_diagnostics(
+    capfire: CaptureLogfire,
+) -> None:
+    """Decode-error span must carry enough context to diagnose without re-running.
+
+    Without these attributes, decode regressions (like #82) are invisible:
+    the operator sees a count of `pubsub.notification.decode_error` spans
+    but cannot tell what payload caused them or what exception was raised.
+    """
+    import queue
+
+    from mailpilot.pubsub import make_notification_callback
+
+    sync_queue: queue.Queue[str] = queue.Queue()
+    callback = make_notification_callback(sync_queue)
+
+    message = MagicMock()
+    message.data = b"not-valid-json{"
+    message.message_id = "msg-abc-123"
+
+    callback(message)
+
+    error_spans = [
+        span
+        for span in capfire.exporter.exported_spans_as_dict()
+        if span["name"] == "pubsub.notification.decode_error"
+    ]
+    assert len(error_spans) == 1
+    attrs = error_spans[0]["attributes"]
+    assert attrs["pubsub_message_id"] == "msg-abc-123"
+    assert attrs["payload_size_bytes"] == len(b"not-valid-json{")
+    assert "not-valid-json" in attrs["payload_excerpt"]
+
+
+def test_notification_callback_decode_error_records_exception(
+    capfire: CaptureLogfire,
+) -> None:
+    """logfire.exception must capture the underlying exception type and message.
+
+    Switching from logfire.warn to logfire.exception is what attaches
+    exception.type / exception.message via OTEL exception events. Without
+    them, debugging a decode regression requires reproducing the bug.
+    """
+    import queue
+
+    from mailpilot.pubsub import make_notification_callback
+
+    sync_queue: queue.Queue[str] = queue.Queue()
+    callback = make_notification_callback(sync_queue)
+
+    message = MagicMock()
+    message.data = b"not-valid-json{"
+    message.message_id = "msg-abc-123"
+
+    callback(message)
+
+    error_spans = [
+        span
+        for span in capfire.exporter.exported_spans_as_dict()
+        if span["name"] == "pubsub.notification.decode_error"
+    ]
+    assert len(error_spans) == 1
+    events = error_spans[0].get("events") or []
+    exception_events = [e for e in events if e.get("name") == "exception"]
+    assert len(exception_events) == 1
+    event_attrs = exception_events[0]["attributes"]
+    assert "JSONDecodeError" in event_attrs["exception.type"]
 
 
 # -- renew_watches -------------------------------------------------------------
