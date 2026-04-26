@@ -6,7 +6,6 @@ that enqueues account emails for sync, and periodic watch renewal.
 
 from __future__ import annotations
 
-import base64
 import json
 import queue
 import threading
@@ -195,10 +194,20 @@ def make_notification_callback(
     def callback(message: Any) -> None:
         with logfire.span("pubsub.notification"):
             try:
-                data = json.loads(base64.urlsafe_b64decode(message.data))
+                # Message.data is already-decoded raw bytes from the pubsub
+                # client; re-decoding raises binascii.Error on real Gmail
+                # watch payloads (see #82).
+                data = json.loads(message.data)
                 email_address = data["emailAddress"]
-            except json.JSONDecodeError, KeyError, Exception:
-                logfire.warn("pubsub.notification.decode_error")
+            except json.JSONDecodeError, KeyError, UnicodeDecodeError:
+                logfire.exception(
+                    "pubsub.notification.decode_error",
+                    pubsub_message_id=message.message_id,
+                    payload_size_bytes=len(message.data),
+                    payload_excerpt=message.data[:200].decode(
+                        "utf-8", errors="replace"
+                    ),
+                )
                 message.ack()
                 return
             logfire.debug(
