@@ -1348,7 +1348,7 @@ def test_email_send_success(runner: CliRunner, mock_connection: MagicMock) -> No
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_account", return_value=account),
         patch("mailpilot.gmail.GmailClient") as mock_client_cls,
-        patch("mailpilot.sync.send_email", return_value=sent) as mock_send,
+        patch("mailpilot.email_ops.send_email", return_value=sent) as mock_send,
     ):
         result = runner.invoke(
             main,
@@ -1374,9 +1374,7 @@ def test_email_send_success(runner: CliRunner, mock_connection: MagicMock) -> No
     assert kwargs["to"] == "recipient@example.com"
     assert kwargs["subject"] == "Hi"
     assert kwargs["body"] == "Hello"
-    assert kwargs["contact_id"] is None
     assert kwargs["workflow_id"] is None
-    assert kwargs["thread_id"] is None
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["id"] == sent.id
@@ -1384,23 +1382,24 @@ def test_email_send_success(runner: CliRunner, mock_connection: MagicMock) -> No
     assert data["status"] == "sent"
 
 
-def test_email_send_with_optional_flags(
+def test_email_send_with_workflow_id(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     account = _make_account()
+    workflow = _make_workflow(account_id=account.id)
     sent = _make_email(
         direction="outbound",
         status="sent",
-        contact_id="contact-x",
-        workflow_id="workflow-y",
+        workflow_id=workflow.id,
         sent_at=_NOW,
     )
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.database.get_workflow", return_value=workflow),
         patch("mailpilot.gmail.GmailClient"),
-        patch("mailpilot.sync.send_email", return_value=sent) as mock_send,
+        patch("mailpilot.email_ops.send_email", return_value=sent) as mock_send,
     ):
         result = runner.invoke(
             main,
@@ -1415,20 +1414,14 @@ def test_email_send_with_optional_flags(
                 "Hello",
                 "--body",
                 "Body",
-                "--contact-id",
-                "contact-x",
                 "--workflow-id",
-                "workflow-y",
-                "--thread-id",
-                "gmail-thread-z",
+                workflow.id,
             ],
         )
 
     assert result.exit_code == 0, result.output
     kwargs = mock_send.call_args.kwargs
-    assert kwargs["contact_id"] == "contact-x"
-    assert kwargs["workflow_id"] == "workflow-y"
-    assert kwargs["thread_id"] == "gmail-thread-z"
+    assert kwargs["workflow_id"] == workflow.id
 
 
 def test_email_send_account_not_found(
@@ -1471,7 +1464,7 @@ def test_email_send_gmail_failure_returns_error(
         patch("mailpilot.database.get_account", return_value=account),
         patch("mailpilot.gmail.GmailClient"),
         patch("logfire.exception"),
-        patch("mailpilot.sync.send_email", side_effect=RuntimeError("gmail 500")),
+        patch("mailpilot.email_ops.send_email", side_effect=RuntimeError("gmail 500")),
     ):
         result = runner.invoke(
             main,
@@ -1510,7 +1503,7 @@ def test_email_send_with_cc_and_bcc(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_account", return_value=account),
         patch("mailpilot.gmail.GmailClient"),
-        patch("mailpilot.sync.send_email", return_value=sent) as mock_send,
+        patch("mailpilot.email_ops.send_email", return_value=sent) as mock_send,
     ):
         result = runner.invoke(
             main,
@@ -1552,7 +1545,7 @@ def test_email_send_with_multiple_to(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_account", return_value=account),
         patch("mailpilot.gmail.GmailClient"),
-        patch("mailpilot.sync.send_email", return_value=sent) as mock_send,
+        patch("mailpilot.email_ops.send_email", return_value=sent) as mock_send,
     ):
         result = runner.invoke(
             main,
@@ -1575,6 +1568,82 @@ def test_email_send_with_multiple_to(
     assert result.exit_code == 0, result.output
     kwargs = mock_send.call_args.kwargs
     assert kwargs["to"] == "a@example.com,b@example.com"
+
+
+def test_email_send_contact_disabled_returns_error(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    from mailpilot.email_ops import ContactDisabledError
+
+    account = _make_account()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.gmail.GmailClient"),
+        patch(
+            "mailpilot.email_ops.send_email",
+            side_effect=ContactDisabledError("contact is bounced: hard fail"),
+        ),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "email",
+                "send",
+                "--account-id",
+                account.id,
+                "--to",
+                "r@example.com",
+                "--subject",
+                "s",
+                "--body",
+                "b",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "contact_disabled"
+    assert "bounced" in data["message"]
+
+
+def test_email_send_cooldown_returns_error(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    from mailpilot.email_ops import CooldownError
+
+    account = _make_account()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.gmail.GmailClient"),
+        patch(
+            "mailpilot.email_ops.send_email",
+            side_effect=CooldownError("last unsolicited email sent ...; cooldown"),
+        ),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "email",
+                "send",
+                "--account-id",
+                account.id,
+                "--to",
+                "r@example.com",
+                "--subject",
+                "s",
+                "--body",
+                "b",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "cooldown"
 
 
 # -- workflow helpers ----------------------------------------------------------
