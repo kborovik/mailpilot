@@ -1091,6 +1091,215 @@ def test_send_email_omits_threading_headers_without_in_reply_to(
     assert msg["References"] is None
 
 
+def test_send_email_with_thread_id_auto_resolves_in_reply_to_from_local_thread(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """When thread_id is given, send_email pulls In-Reply-To/References from
+    the latest local email in that thread without an explicit in_reply_to.
+
+    Reproduces defect 1: outgoing replies must carry RFC 2822 threading
+    headers so the recipient client can re-thread the message even when
+    Gmail's threadId is opaque to it.
+    """
+    from email import message_from_bytes
+
+    account = make_test_account(database_connection, email="auto-thread@example.com")
+    prior_mid = "<prior-thread@mail.gmail.com>"
+    prior = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="prior-msg",
+        gmail_thread_id="thread-auto",
+        rfc2822_message_id=prior_mid,
+        subject="Original",
+    )
+    assert prior is not None
+
+    client, service = _make_send_client(
+        account.email,
+        send_result={
+            "id": "gmail-msg-reply",
+            "threadId": "thread-auto",
+            "labelIds": ["SENT"],
+        },
+    )
+
+    send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Re: Original",
+        body="Reply body",
+        thread_id="thread-auto",
+    )
+
+    send_body = service.users.return_value.messages.return_value.send.call_args.kwargs[
+        "body"
+    ]
+    raw = base64.urlsafe_b64decode(send_body["raw"])
+    msg = message_from_bytes(raw)
+    assert msg["In-Reply-To"] == prior_mid
+    assert msg["References"] == prior_mid
+
+
+def test_send_email_builds_references_chain_across_thread(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """References must list the prior chain space-separated, In-Reply-To the latest."""
+    from email import message_from_bytes
+
+    account = make_test_account(database_connection, email="chain@example.com")
+    first_mid = "<first-chain@mail.gmail.com>"
+    second_mid = "<second-chain@mail.gmail.com>"
+    first = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        gmail_message_id="chain-1",
+        gmail_thread_id="chain-thread",
+        rfc2822_message_id=first_mid,
+        status="sent",
+    )
+    second = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="chain-2",
+        gmail_thread_id="chain-thread",
+        rfc2822_message_id=second_mid,
+    )
+    assert first is not None
+    assert second is not None
+
+    client, service = _make_send_client(
+        account.email,
+        send_result={
+            "id": "chain-3",
+            "threadId": "chain-thread",
+            "labelIds": ["SENT"],
+        },
+    )
+
+    send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Re: Re: Hello",
+        body="Body",
+        thread_id="chain-thread",
+    )
+
+    send_body = service.users.return_value.messages.return_value.send.call_args.kwargs[
+        "body"
+    ]
+    raw = base64.urlsafe_b64decode(send_body["raw"])
+    msg = message_from_bytes(raw)
+    assert msg["In-Reply-To"] == second_mid
+    assert msg["References"] == f"{first_mid} {second_mid}"
+
+
+def test_send_email_falls_back_to_gmail_headers_when_local_message_id_missing(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """If the latest local row in the thread has rfc2822_message_id=None,
+    fetch the Gmail message headers to recover it."""
+    from email import message_from_bytes
+
+    account = make_test_account(database_connection, email="fallback@example.com")
+    legacy = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        gmail_message_id="legacy-sent",
+        gmail_thread_id="legacy-thread",
+        rfc2822_message_id=None,
+        status="sent",
+    )
+    assert legacy is not None
+
+    recovered_mid = "<legacy-recovered@mail.gmail.com>"
+    client, service = _make_send_client(
+        account.email,
+        send_result={
+            "id": "legacy-reply",
+            "threadId": "legacy-thread",
+            "labelIds": ["SENT"],
+        },
+    )
+    # Make get_message return a message with the recovered Message-ID header.
+    service.users.return_value.messages.return_value.get.return_value.execute.return_value = {
+        "id": "legacy-sent",
+        "threadId": "legacy-thread",
+        "payload": {
+            "headers": [{"name": "Message-ID", "value": recovered_mid}],
+        },
+    }
+
+    send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Re: legacy",
+        body="Body",
+        thread_id="legacy-thread",
+    )
+
+    send_body = service.users.return_value.messages.return_value.send.call_args.kwargs[
+        "body"
+    ]
+    raw = base64.urlsafe_b64decode(send_body["raw"])
+    msg = message_from_bytes(raw)
+    assert msg["In-Reply-To"] == recovered_mid
+    assert msg["References"] == recovered_mid
+
+
+def test_send_email_persists_rfc2822_message_id_after_send(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """After Gmail accepts the send, the outbound row is backfilled with
+    its RFC 2822 Message-ID so future replies in the same thread can
+    build a proper In-Reply-To/References chain."""
+    account = make_test_account(database_connection, email="mid-persist@example.com")
+    sent_mid = "<sent-fresh@mail.gmail.com>"
+    client, service = _make_send_client(
+        account.email,
+        send_result={
+            "id": "fresh-msg",
+            "threadId": "fresh-thread",
+            "labelIds": ["SENT"],
+        },
+    )
+    service.users.return_value.messages.return_value.get.return_value.execute.return_value = {
+        "id": "fresh-msg",
+        "threadId": "fresh-thread",
+        "payload": {
+            "headers": [{"name": "Message-ID", "value": sent_mid}],
+        },
+    }
+
+    email = send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Hello",
+        body="Body",
+    )
+
+    assert email.rfc2822_message_id == sent_mid
+    stored = get_email(database_connection, email.id)
+    assert stored is not None
+    assert stored.rfc2822_message_id == sent_mid
+
+
 def test_send_email_parts_use_utf8_charset(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):

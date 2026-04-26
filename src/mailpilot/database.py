@@ -1465,6 +1465,43 @@ def get_emails_by_gmail_thread_id(
     return [Email.model_validate(row) for row in rows]
 
 
+def get_latest_email_in_thread(
+    connection: psycopg.Connection[dict[str, Any]],
+    account_id: str,
+    gmail_thread_id: str,
+) -> Email | None:
+    """Get the most recently created email in a Gmail thread for an account.
+
+    Used when sending a reply into an existing thread to pull the prior
+    message's ``rfc2822_message_id`` for the outgoing ``In-Reply-To`` /
+    ``References`` headers. Scoping by ``account_id`` keeps the lookup
+    deterministic when the same Gmail thread ID is observed on multiple
+    delegated mailboxes (e.g. sender + recipient on the same domain).
+
+    Args:
+        connection: Open database connection.
+        account_id: Account FK.
+        gmail_thread_id: Gmail thread ID.
+
+    Returns:
+        Most recently created email in the thread, or None if the thread
+        has no rows for this account.
+    """
+    row = connection.execute(
+        """\
+        SELECT * FROM email
+        WHERE account_id = %(account_id)s
+          AND gmail_thread_id = %(gmail_thread_id)s
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        {"account_id": account_id, "gmail_thread_id": gmail_thread_id},
+    ).fetchone()
+    if row is None:
+        return None
+    return Email.model_validate(row)
+
+
 def get_last_cold_outbound(
     connection: psycopg.Connection[dict[str, Any]],
     account_id: str,
@@ -1533,7 +1570,13 @@ def update_email(
     Returns:
         Updated email, or None if not found.
     """
-    allowed = {"workflow_id", "is_routed", "status", "contact_id"}
+    allowed = {
+        "workflow_id",
+        "is_routed",
+        "status",
+        "contact_id",
+        "rfc2822_message_id",
+    }
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return get_email(connection, email_id)

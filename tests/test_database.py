@@ -44,6 +44,7 @@ from mailpilot.database import (
     get_emails_by_gmail_thread_id,
     get_enrollment,
     get_last_cold_outbound,
+    get_latest_email_in_thread,
     get_note,
     get_status_counts,
     get_unprocessed_inbound_email,
@@ -811,6 +812,93 @@ def test_get_emails_by_gmail_thread_id_empty(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     assert get_emails_by_gmail_thread_id(database_connection, "nonexistent") == []
+
+
+def test_get_latest_email_in_thread_returns_most_recent(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Returns the most recently created email row for the given thread+account."""
+    account = make_test_account(database_connection)
+    first = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        gmail_message_id="thread-msg-1",
+        gmail_thread_id="thread-latest",
+        rfc2822_message_id="<first@mail.gmail.com>",
+        subject="Hello",
+        status="sent",
+    )
+    second = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="thread-msg-2",
+        gmail_thread_id="thread-latest",
+        rfc2822_message_id="<second@mail.gmail.com>",
+        subject="Re: Hello",
+    )
+    assert first is not None
+    assert second is not None
+    latest = get_latest_email_in_thread(
+        database_connection, account.id, "thread-latest"
+    )
+    assert latest is not None
+    assert latest.id == second.id
+    assert latest.rfc2822_message_id == "<second@mail.gmail.com>"
+
+
+def test_get_latest_email_in_thread_scopes_by_account(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """The same Gmail thread id on a different account is ignored."""
+    account_a = make_test_account(database_connection, email="a@example.com")
+    account_b = make_test_account(database_connection, email="b@example.com")
+    create_email(
+        database_connection,
+        account_id=account_b.id,
+        direction="inbound",
+        gmail_message_id="other-1",
+        gmail_thread_id="shared-thread",
+        rfc2822_message_id="<other@mail.gmail.com>",
+    )
+    assert (
+        get_latest_email_in_thread(database_connection, account_a.id, "shared-thread")
+        is None
+    )
+
+
+def test_get_latest_email_in_thread_returns_none_when_empty(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    assert (
+        get_latest_email_in_thread(database_connection, account.id, "nonexistent")
+        is None
+    )
+
+
+def test_update_email_allows_rfc2822_message_id(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Outbound rows can be backfilled with their Message-ID after Gmail send."""
+    account = make_test_account(database_connection)
+    email = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        gmail_message_id="msg-update-mid",
+        status="sent",
+    )
+    assert email is not None
+    assert email.rfc2822_message_id is None
+    updated = update_email(
+        database_connection,
+        email.id,
+        rfc2822_message_id="<sent@mail.gmail.com>",
+    )
+    assert updated is not None
+    assert updated.rfc2822_message_id == "<sent@mail.gmail.com>"
 
 
 def test_update_email(database_connection: psycopg.Connection[dict[str, Any]]):

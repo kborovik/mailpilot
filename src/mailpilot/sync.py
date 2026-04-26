@@ -43,6 +43,8 @@ from mailpilot.database import (
     get_account_by_email,
     get_contacts_by_emails,
     get_email_by_gmail_message_id,
+    get_emails_by_gmail_thread_id,
+    get_latest_email_in_thread,
     get_sync_status,
     list_accounts,
     list_pending_tasks,
@@ -719,6 +721,100 @@ def _received_at_from_message(message: dict[str, Any]) -> datetime | None:
 # -- Send email ----------------------------------------------------------------
 
 
+def _resolve_thread_message_id(
+    gmail_client: GmailClient,
+    email: Email,
+) -> str | None:
+    """Return the RFC 2822 Message-ID for ``email``, fetching from Gmail if needed.
+
+    Outbound rows persisted before defect 1 was fixed have
+    ``rfc2822_message_id=None``. When such a row is the latest in a thread
+    we still need its Message-ID to set ``In-Reply-To`` on the next reply,
+    so we fall back to a Gmail metadata fetch keyed on
+    ``gmail_message_id``.
+    """
+    if email.rfc2822_message_id:
+        return email.rfc2822_message_id
+    if not email.gmail_message_id:
+        return None
+    fetched = gmail_client.get_message(email.gmail_message_id, format_="metadata")
+    if fetched is None:
+        return None
+    headers = get_message_headers(fetched)
+    return headers.get("message-id") or None
+
+
+def _fetch_sent_rfc2822_message_id(
+    gmail_client: GmailClient,
+    gmail_message_id: str | None,
+) -> str | None:
+    """Look up the RFC 2822 Message-ID Gmail assigned to a freshly-sent message.
+
+    Best-effort: any failure (404, network) returns None and leaves the
+    outbound row with a null ``rfc2822_message_id`` -- matching legacy
+    behaviour. Persisting the value is what unblocks future replies in
+    the same thread from building a proper References chain (defect 1).
+    """
+    if not gmail_message_id:
+        return None
+    try:
+        fetched = gmail_client.get_message(gmail_message_id, format_="metadata")
+    except Exception:
+        logfire.warn(
+            "sync.send_email.message_id_fetch_failed",
+            gmail_message_id=gmail_message_id,
+        )
+        return None
+    if fetched is None:
+        return None
+    headers = get_message_headers(fetched)
+    return headers.get("message-id") or None
+
+
+def _resolve_threading_headers(
+    connection: psycopg.Connection[dict[str, Any]],
+    account: Account,
+    gmail_client: GmailClient,
+    thread_id: str | None,
+    in_reply_to: str | None,
+) -> tuple[str | None, str | None]:
+    """Compute ``In-Reply-To`` and ``References`` for an outgoing reply.
+
+    When ``in_reply_to`` is supplied explicitly (agent ``reply_email``
+    path), use it verbatim with no References chain.
+
+    When only ``thread_id`` is supplied (CLI ``email send --thread-id``
+    path), look the prior thread up locally:
+
+    - ``In-Reply-To`` = Message-ID of the chronologically latest local
+      row in the thread.
+    - ``References`` = space-joined Message-IDs of every preceding row
+      (oldest first), excluding the latest. Both lists drop rows whose
+      Message-ID is unknown -- partial chains are still valid per
+      RFC 5322 and better than dropping the headers entirely.
+    """
+    if in_reply_to is not None:
+        return in_reply_to, None
+    if thread_id is None:
+        return None, None
+    latest = get_latest_email_in_thread(connection, account.id, thread_id)
+    if latest is None:
+        return None, None
+    latest_mid = _resolve_thread_message_id(gmail_client, latest)
+    if latest_mid is None:
+        return None, None
+    thread_emails = get_emails_by_gmail_thread_id(connection, thread_id)
+    prior_mids: list[str] = [
+        prior.rfc2822_message_id
+        for prior in thread_emails
+        if prior.account_id == account.id
+        and prior.id != latest.id
+        and prior.rfc2822_message_id
+    ]
+    references = " ".join([*prior_mids, latest_mid]) if prior_mids else None
+    return latest_mid, references
+
+
 def send_email(  # noqa: PLR0913
     connection: psycopg.Connection[dict[str, Any]],
     account: Account,
@@ -742,6 +838,13 @@ def send_email(  # noqa: PLR0913
     ``is_routed=True`` because they originate from an agent/CLI and need
     no further routing.
 
+    When ``thread_id`` is supplied without ``in_reply_to`` (the CLI
+    ``email send --thread-id`` path), threading headers are derived from
+    prior local rows in the thread so the recipient client re-threads
+    the reply instead of starting a new conversation. After Gmail accepts
+    the send, the new row is persisted with its own ``rfc2822_message_id``
+    so the next reply in the thread can extend the chain.
+
     Args:
         connection: Open database connection.
         account: Sending account (used for service-account delegation).
@@ -752,12 +855,15 @@ def send_email(  # noqa: PLR0913
         body: Plain text body.
         contact_id: Optional contact FK.
         workflow_id: Optional workflow FK.
-        thread_id: Optional Gmail thread ID for replies.
+        thread_id: Optional Gmail thread ID for replies. When set, the
+            outgoing MIME inherits ``In-Reply-To`` / ``References`` from
+            the prior thread unless ``in_reply_to`` is also supplied.
         cc: Optional CC recipient(s), comma-separated.
         bcc: Optional BCC recipient(s), comma-separated.
-        in_reply_to: RFC 2822 Message-ID of the email being replied to.
-            Sets In-Reply-To and References MIME headers for cross-client
-            thread grouping.
+        in_reply_to: Explicit RFC 2822 Message-ID for the
+            ``In-Reply-To`` header. Overrides the thread-derived value.
+            Used by the agent ``reply_email`` tool which already has the
+            original message in hand.
 
     Returns:
         The created ``Email`` row with ``direction="outbound"`` and
@@ -808,6 +914,19 @@ def send_email(  # noqa: PLR0913
         mime_message.attach(MIMEText(plain_body, "plain", "utf-8"))
         mime_message.attach(MIMEText(html_body, "html", "utf-8"))
 
+        # Resolve threading headers. When the caller supplied an explicit
+        # in_reply_to (agent reply_email path) we honour it verbatim;
+        # otherwise we derive headers from prior local thread rows so
+        # CLI-driven replies (`email send --thread-id`) re-thread on the
+        # recipient side instead of starting a new thread (defect 1).
+        resolved_in_reply_to, resolved_references = _resolve_threading_headers(
+            connection,
+            account,
+            gmail_client,
+            thread_id,
+            in_reply_to,
+        )
+
         result = gmail_client.send_message(
             message=mime_message,
             to=to,
@@ -817,11 +936,19 @@ def send_email(  # noqa: PLR0913
             account_id=account.id,
             cc=cc,
             bcc=bcc,
-            in_reply_to=in_reply_to,
+            in_reply_to=resolved_in_reply_to,
+            references=resolved_references,
         )
         gmail_message_id = result.get("id")
         gmail_thread_id = result.get("threadId")
         labels = list(result.get("labelIds") or [])
+        # Fetch the sent message's RFC 2822 Message-ID so the next reply
+        # in this thread can build a proper In-Reply-To/References chain
+        # (defect 1). Best-effort: any failure leaves the row's
+        # rfc2822_message_id null, matching prior behaviour.
+        sent_rfc2822_message_id = _fetch_sent_rfc2822_message_id(
+            gmail_client, gmail_message_id
+        )
         outbound_recipients: dict[str, list[str]] = {
             "to": [a.strip().lower() for a in to.split(",") if a.strip()],
         }
@@ -847,6 +974,7 @@ def send_email(  # noqa: PLR0913
             is_routed=True,
             sent_at=datetime.now(UTC),
             labels=labels,
+            rfc2822_message_id=sent_rfc2822_message_id,
             sender=account.email.lower(),
             recipients=outbound_recipients,
         )
