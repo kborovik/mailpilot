@@ -861,6 +861,75 @@ def email_send(
         connection.close()
 
 
+@email.command("reply")
+@click.option("--account-id", required=True, help="Sending account ID.")
+@click.option(
+    "--email-id",
+    required=True,
+    help="ID of the email being replied to.",
+)
+@click.option("--body", required=True, help="Reply body (plain text).")
+@click.option("--workflow-id", default=None, help="Link to a workflow.")
+@click.option("--cc", default=None, help="CC recipient(s), comma-separated.")
+@click.option("--bcc", default=None, help="BCC recipient(s), comma-separated.")
+def email_reply(
+    account_id: str,
+    email_id: str,
+    body: str,
+    workflow_id: str | None,
+    cc: str | None,
+    bcc: str | None,
+) -> None:
+    """Reply to an existing email in-thread.
+
+    Auto-derives recipient, subject (with "Re: " prefix), thread, and
+    In-Reply-To from the original. No cooldown applied.
+    """
+    import logfire
+
+    from mailpilot import email_ops
+    from mailpilot.database import get_account, get_workflow, initialize_database
+    from mailpilot.gmail import GmailClient
+    from mailpilot.settings import get_settings
+
+    if not body.strip():
+        output_error("body cannot be empty", "validation_error")
+
+    settings = get_settings()
+    connection = initialize_database(_database_url())
+    try:
+        account = get_account(connection, account_id)
+        if account is None:
+            output_error(f"account not found: {account_id}", "not_found")
+        if workflow_id is not None and get_workflow(connection, workflow_id) is None:
+            output_error(f"workflow not found: {workflow_id}", "not_found")
+        client = GmailClient(account.email)
+        try:
+            sent = email_ops.reply_email(
+                connection,
+                account=account,
+                gmail_client=client,
+                settings=settings,
+                email_id=email_id,
+                body=body,
+                workflow_id=workflow_id,
+                cc=cc,
+                bcc=bcc,
+            )
+        except email_ops.EmailOpsError as exc:
+            output_error(str(exc), exc.code)
+        except Exception as exc:
+            logfire.exception(
+                "cli.email.reply.failed",
+                account_id=account.id,
+                email_id=email_id,
+            )
+            output_error(str(exc), "send_failed")
+        output(sent.model_dump(mode="json"))
+    finally:
+        connection.close()
+
+
 # -- Activity commands ---------------------------------------------------------
 
 
