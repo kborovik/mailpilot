@@ -314,6 +314,7 @@ def test_run_loop_sync_error_continues(
 
     with (
         patch("mailpilot.run.list_accounts", return_value=[account]),
+        patch("mailpilot.run.get_account", return_value=account),
         patch("mailpilot.run.GmailClient", side_effect=RuntimeError("auth failed")),
         patch(
             "mailpilot.run.create_tasks_for_routed_emails",

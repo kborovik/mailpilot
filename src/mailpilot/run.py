@@ -17,6 +17,7 @@ from mailpilot.agent import invoke_workflow_agent
 from mailpilot.database import (
     complete_task,
     create_tasks_for_routed_emails,
+    get_account,
     get_contact,
     get_email,
     get_workflow,
@@ -151,8 +152,11 @@ def _sync_all_accounts(
     settings: Settings,
 ) -> None:
     """Sync all Gmail accounts. Errors per account are logged, not raised."""
-    accounts = list_accounts(connection)
-    for account in accounts:
+    summaries = list_accounts(connection, limit=1000)
+    for summary in summaries:
+        account = get_account(connection, summary.id)
+        if account is None:
+            continue
         try:
             client = GmailClient(account.email)
             sync_account(connection, account, client, settings)

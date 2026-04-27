@@ -237,7 +237,7 @@ def test_list_contacts_by_domain(
     make_test_contact(database_connection, email="b@bar.com", domain="bar.com")
     results = list_contacts(database_connection, domain="foo.com")
     assert len(results) == 1
-    assert results[0].domain == "foo.com"
+    assert results[0].email == "a@foo.com"
 
 
 def test_list_contacts_by_status(
@@ -1463,7 +1463,12 @@ def test_list_emails_filter_by_recipient(
     )
     results = list_emails(database_connection, recipient="kb@lab5.ca")
     assert len(results) == 1
-    assert "kb@lab5.ca" in results[0].recipients["to"]
+    # `recipients` is not in EmailSummary; verify by hydrating via get_email.
+    from mailpilot.database import get_email
+
+    full = get_email(database_connection, results[0].id)
+    assert full is not None
+    assert "kb@lab5.ca" in full.recipients["to"]
 
 
 def test_list_emails_filter_by_recipient_matches_cc(
@@ -1883,9 +1888,9 @@ def test_list_notes(
     )
     notes = list_notes(database_connection, entity_type="contact", entity_id=contact.id)
     assert len(notes) == 2
-    # Ordered by created_at DESC
-    assert notes[0].body == "second"
-    assert notes[1].body == "first"
+    # Ordered by created_at DESC. Summary exposes body_preview, not body.
+    assert notes[0].body_preview == "second"
+    assert notes[1].body_preview == "first"
 
 
 def test_list_notes_empty(
@@ -1934,7 +1939,7 @@ def test_list_notes_since(
         database_connection, entity_type="contact", entity_id=contact.id, since=since
     )
     assert len(results) == 1
-    assert results[0].body == "recent"
+    assert results[0].body_preview == "recent"
 
 
 def test_get_note(
@@ -2417,3 +2422,291 @@ def test_complete_task_stores_result(
     assert completed.result["reasoning"] == agent_result["reasoning"]
     assert completed.result["tool_calls"] == agent_result["tool_calls"]
     assert completed.completed_at is not None
+
+
+# -- List vs view contract -----------------------------------------------------
+#
+# Per ADR / CLAUDE.md "list (summary), view ID (full record)" rule:
+# every `list_*` returns the matching `<Entity>Summary` projection (a strict
+# subset of the full model), and every `get_*` returns the full domain model.
+# These tests pin the contract so accidental field additions to a Summary
+# (or accidental field reads after a `list_*`) are caught at test time.
+
+
+def test_account_list_summary_get_full(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from mailpilot.models import AccountSummary
+
+    make_test_account(database_connection)
+    accounts = list_accounts(database_connection)
+    assert isinstance(accounts[0], AccountSummary)
+    assert not hasattr(accounts[0], "gmail_history_id")
+    full = get_account(database_connection, accounts[0].id)
+    assert full is not None
+    assert hasattr(full, "gmail_history_id")
+
+
+def test_company_list_summary_get_full(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from mailpilot.models import CompanySummary
+
+    make_test_company(database_connection)
+    companies = list_companies(database_connection)
+    assert isinstance(companies[0], CompanySummary)
+    assert not hasattr(companies[0], "profile_summary")
+    full = get_company(database_connection, companies[0].id)
+    assert full is not None
+    assert hasattr(full, "profile_summary")
+
+
+def test_contact_list_summary_get_full(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from mailpilot.models import ContactSummary
+
+    make_test_contact(database_connection)
+    contacts = list_contacts(database_connection)
+    assert isinstance(contacts[0], ContactSummary)
+    assert not hasattr(contacts[0], "position")
+    full = get_contact(database_connection, contacts[0].id)
+    assert full is not None
+    assert hasattr(full, "position")
+
+
+def test_workflow_list_summary_get_full(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from mailpilot.models import WorkflowSummary
+
+    account = make_test_account(database_connection)
+    make_test_workflow(database_connection, account_id=account.id)
+    workflows = list_workflows(database_connection)
+    assert isinstance(workflows[0], WorkflowSummary)
+    assert not hasattr(workflows[0], "objective")
+    full = get_workflow(database_connection, workflows[0].id)
+    assert full is not None
+    assert hasattr(full, "objective")
+
+
+def test_enrollment_list_summary_drops_reason_and_created_at(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from mailpilot.models import EnrollmentSummary
+
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    create_enrollment(database_connection, workflow.id, contact.id)
+    rows = list_enrollments_detailed(database_connection, workflow_id=workflow.id)
+    assert isinstance(rows[0], EnrollmentSummary)
+    assert not hasattr(rows[0], "reason")
+    assert not hasattr(rows[0], "created_at")
+
+
+def test_email_list_summary_get_full(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from mailpilot.models import EmailSummary
+
+    account = make_test_account(database_connection)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="hi",
+        body_text="body",
+        status="sent",
+        recipients={"to": ["x@y.com"]},
+    )
+    emails = list_emails(database_connection, account_id=account.id)
+    assert isinstance(emails[0], EmailSummary)
+    assert not hasattr(emails[0], "body_text")
+    assert not hasattr(emails[0], "recipients")
+    assert not hasattr(emails[0], "labels")
+    full = get_email(database_connection, emails[0].id)
+    assert full is not None
+    assert full.body_text == "body"
+    assert "x@y.com" in full.recipients["to"]
+
+
+def test_task_list_summary(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from mailpilot.models import TaskSummary
+
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    create_task(
+        database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="follow up",
+        scheduled_at="2024-01-01T00:00:00+00:00",
+    )
+    tasks = list_tasks(database_connection, workflow_id=workflow.id)
+    assert isinstance(tasks[0], TaskSummary)
+    assert not hasattr(tasks[0], "context")
+    assert not hasattr(tasks[0], "result")
+
+
+def test_activity_list_summary(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from mailpilot.models import ActivitySummary
+
+    contact = make_test_contact(database_connection)
+    create_activity(
+        database_connection,
+        contact_id=contact.id,
+        activity_type="email_sent",
+        summary="sent X",
+        detail={"id": "abc"},
+    )
+    activities = list_activities(database_connection, contact_id=contact.id)
+    assert isinstance(activities[0], ActivitySummary)
+    assert not hasattr(activities[0], "detail")
+
+
+def test_note_list_summary_with_body_preview(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from mailpilot.models import NoteSummary
+
+    contact = make_test_contact(database_connection)
+    make_test_note(
+        database_connection,
+        entity_type="contact",
+        entity_id=contact.id,
+        body="short",
+    )
+    make_test_note(
+        database_connection,
+        entity_type="contact",
+        entity_id=contact.id,
+        body="x" * 200,
+    )
+    notes = list_notes(database_connection, entity_type="contact", entity_id=contact.id)
+    assert isinstance(notes[0], NoteSummary)
+    assert not hasattr(notes[0], "body")
+    # Long body truncated to 80 chars + "..." (ordered DESC, long one is first).
+    assert notes[0].body_preview == ("x" * 80) + "..."
+    # Short body returned verbatim with no ellipsis.
+    assert notes[1].body_preview == "short"
+    full = get_note(database_connection, notes[0].id)
+    assert full is not None
+    assert full.body == "x" * 200
+
+
+def test_list_accounts_limit_and_since(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    make_test_account(database_connection, email="a@test.com")
+    make_test_account(database_connection, email="b@test.com")
+    assert len(list_accounts(database_connection, limit=1)) == 1
+    assert len(list_accounts(database_connection, since="9999-01-01T00:00:00")) == 0
+
+
+def test_list_workflows_limit_and_since(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    account = make_test_account(database_connection)
+    make_test_workflow(database_connection, account_id=account.id, name="A")
+    make_test_workflow(database_connection, account_id=account.id, name="B")
+    assert len(list_workflows(database_connection, limit=1)) == 1
+    assert len(list_workflows(database_connection, since="9999-01-01T00:00:00")) == 0
+
+
+def test_list_companies_since(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    make_test_company(database_connection)
+    assert len(list_companies(database_connection, since="9999-01-01T00:00:00")) == 0
+
+
+def test_list_contacts_since(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    make_test_contact(database_connection)
+    assert len(list_contacts(database_connection, since="9999-01-01T00:00:00")) == 0
+
+
+def test_list_tasks_since(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    contact = make_test_contact(database_connection)
+    workflow = make_test_workflow(
+        database_connection, account_id=make_test_account(database_connection).id
+    )
+    create_task(
+        database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="x",
+        scheduled_at="2020-01-01T00:00:00+00:00",
+    )
+    assert (
+        len(
+            list_tasks(
+                database_connection,
+                workflow_id=workflow.id,
+                since="2030-01-01T00:00:00",
+            )
+        )
+        == 0
+    )
+
+
+def test_list_tags_limit_and_since(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    contact = make_test_contact(database_connection)
+    make_test_tag(
+        database_connection, entity_type="contact", entity_id=contact.id, name="a"
+    )
+    make_test_tag(
+        database_connection, entity_type="contact", entity_id=contact.id, name="b"
+    )
+    assert (
+        len(
+            list_tags(
+                database_connection,
+                entity_type="contact",
+                entity_id=contact.id,
+                limit=1,
+            )
+        )
+        == 1
+    )
+    assert (
+        len(
+            list_tags(
+                database_connection,
+                entity_type="contact",
+                entity_id=contact.id,
+                since="9999-01-01T00:00:00",
+            )
+        )
+        == 0
+    )
+
+
+def test_list_enrollments_detailed_since(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    create_enrollment(database_connection, workflow.id, contact.id)
+    assert (
+        len(
+            list_enrollments_detailed(
+                database_connection,
+                workflow_id=workflow.id,
+                since="9999-01-01T00:00:00",
+            )
+        )
+        == 0
+    )

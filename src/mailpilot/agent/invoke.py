@@ -452,13 +452,22 @@ def invoke_workflow_agent(  # noqa: PLR0913
                     f"account not found for workflow: {workflow.account_id}"
                 )
 
-            # Load email history scoped to this workflow + contact.
-            email_history = database.list_emails(
+            # Load email history scoped to this workflow + contact. The
+            # agent prompt needs ``body_text`` (not in EmailSummary), so
+            # hydrate each summary via ``get_email``.
+            email_summaries = database.list_emails(
                 connection,
                 contact_id=contact.id,
                 account_id=account.id,
                 workflow_id=workflow.id,
             )
+            email_history = [
+                full
+                for full in (
+                    database.get_email(connection, s.id) for s in email_summaries
+                )
+                if full is not None
+            ]
 
             # Build agent and deps.
             agent = _build_agent(workflow)

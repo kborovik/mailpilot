@@ -28,6 +28,7 @@ from mailpilot.database import (
     disable_contact,
     find_email_by_rfc2822_message_id,
     get_emails_by_gmail_thread_id,
+    get_workflow,
     list_workflows,
     update_email,
 )
@@ -271,8 +272,17 @@ def _try_classify(
     settings: Settings,
 ) -> str | None:
     """Step 2: LLM classification against active inbound workflows."""
-    workflows = list_workflows(connection, account_id=email.account_id, status="active")
-    inbound_workflows = [w for w in workflows if w.type == "inbound"]
+    summaries = list_workflows(connection, account_id=email.account_id, status="active")
+    inbound_summaries = [s for s in summaries if s.type == "inbound"]
+    if not inbound_summaries:
+        return None
+    # classify_email reads workflow.objective, which is not in WorkflowSummary;
+    # hydrate via get_workflow so the LLM prompt has the full record.
+    inbound_workflows = [
+        full
+        for full in (get_workflow(connection, s.id) for s in inbound_summaries)
+        if full is not None
+    ]
     if not inbound_workflows:
         return None
     return classify_email(
