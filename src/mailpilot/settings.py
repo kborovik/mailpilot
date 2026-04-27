@@ -27,6 +27,11 @@ DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6"
 
 LogfireEnvironment = Literal["development", "production"]
 
+# Fields whose values must never appear in telemetry. database_url can carry
+# user:password@host credentials, so it is treated as secret too.
+SECRET_KEYS = frozenset({"anthropic_api_key", "logfire_token", "database_url"})
+REDACTED = "***"
+
 
 class JsonConfigSource(PydanticBaseSettingsSource):
     """Load settings from ~/.mailpilot/config.json."""
@@ -125,8 +130,9 @@ def set_setting(key: str, value: object, config_path: Path = CONFIG_PATH) -> Set
     """Update a single config key, persist, and emit telemetry.
 
     Reads the current settings, swaps in ``value`` for ``key``, and writes
-    the result back. Emits ``config.set`` with the key name and whether the
-    value changed. Never logs the value itself (secrets live in this file).
+    the result back. Emits ``config.set`` with the key, whether the value
+    changed, and (for non-secret keys) the old and new values. Keys in
+    ``SECRET_KEYS`` are redacted as ``***``.
 
     Args:
         key: Config field name (must be a valid ``Settings`` field).
@@ -148,5 +154,12 @@ def set_setting(key: str, value: object, config_path: Path = CONFIG_PATH) -> Set
     updated = Settings(**{k: v for k, v in data.items() if k in Settings.model_fields})
     save_settings(updated, config_path=config_path)
     new_value = updated.model_dump(mode="json").get(key)
-    logfire.info("config.set", key=key, changed=old_value != new_value)
+    is_secret = key in SECRET_KEYS
+    logfire.info(
+        "config.set",
+        key=key,
+        changed=old_value != new_value,
+        old=REDACTED if is_secret else old_value,
+        new=REDACTED if is_secret else new_value,
+    )
     return updated

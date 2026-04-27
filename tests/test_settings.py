@@ -106,10 +106,10 @@ def _config_set_logs(capfire: CaptureLogfire) -> list[dict[str, Any]]:
     ]
 
 
-def test_set_setting_emits_telemetry_without_value(
+def test_set_setting_emits_telemetry_with_value_for_non_secret(
     capfire: CaptureLogfire, tmp_path: Path
 ):
-    """config.set must log the key + changed flag but never the value itself."""
+    """config.set logs old/new values for non-secret keys."""
     config_path = tmp_path / "config.json"
     new_model = "claude-opus-4-7"
     set_setting("anthropic_model", new_model, config_path=config_path)
@@ -119,14 +119,14 @@ def test_set_setting_emits_telemetry_without_value(
     attrs = logs[0]["attributes"]
     assert attrs["key"] == "anthropic_model"
     assert attrs["changed"] is True
-    for attr_value in attrs.values():
-        assert new_model not in str(attr_value)
+    assert attrs["old"] == "claude-sonnet-4-6"
+    assert attrs["new"] == new_model
 
 
 def test_set_setting_does_not_leak_secret_values(
     capfire: CaptureLogfire, tmp_path: Path
 ):
-    """Sanity check: setting a secret must not appear in any exported attribute."""
+    """Setting a secret key must redact both old and new values."""
     config_path = tmp_path / "config.json"
     secret = "sk-super-secret-do-not-leak"
     set_setting("anthropic_api_key", secret, config_path=config_path)
@@ -134,6 +134,24 @@ def test_set_setting_does_not_leak_secret_values(
     for span in capfire.exporter.exported_spans_as_dict():
         for attr_value in span.get("attributes", {}).values():
             assert secret not in str(attr_value)
+
+
+def test_set_setting_redacts_database_url(
+    capfire: CaptureLogfire, tmp_path: Path
+):
+    """database_url can carry credentials so it must be redacted."""
+    config_path = tmp_path / "config.json"
+    url_with_creds = "postgresql://user:hunter2@db.example.com/mailpilot"
+    set_setting("database_url", url_with_creds, config_path=config_path)
+
+    logs = _config_set_logs(capfire)
+    assert len(logs) == 1
+    attrs = logs[0]["attributes"]
+    assert attrs["old"] == "***"
+    assert attrs["new"] == "***"
+    for span in capfire.exporter.exported_spans_as_dict():
+        for attr_value in span.get("attributes", {}).values():
+            assert "hunter2" not in str(attr_value)
 
 
 def test_set_setting_changed_false_when_value_unchanged(
