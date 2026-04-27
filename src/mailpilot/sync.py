@@ -695,14 +695,40 @@ def _store_inbound_message(  # noqa: PLR0913
         and received_at is not None
         and received_at < earliest_workflow_at
     )
-    if within_window and has_active_workflows and not predates_workflows:
-        email = route_email(
-            connection, email, sender_email=sender_email, settings=settings
-        )
-    elif within_window:
-        updated = update_email(connection, email.id, is_routed=True)
-        if updated is not None:
-            email = updated
+    if not within_window:
+        with logfire.span(
+            "routing.route_email",
+            email_id=email.id,
+            account_id=email.account_id,
+            route_method="skipped_outside_window",
+        ):
+            pass  # email was created with is_routed=True already
+        return email
+    if not has_active_workflows:
+        with logfire.span(
+            "routing.route_email",
+            email_id=email.id,
+            account_id=email.account_id,
+            route_method="skipped_no_workflows",
+        ):
+            updated = update_email(connection, email.id, is_routed=True)
+            if updated is not None:
+                email = updated
+        return email
+    if predates_workflows:
+        with logfire.span(
+            "routing.route_email",
+            email_id=email.id,
+            account_id=email.account_id,
+            route_method="skipped_predates_workflows",
+        ):
+            updated = update_email(connection, email.id, is_routed=True)
+            if updated is not None:
+                email = updated
+        return email
+    email = route_email(
+        connection, email, sender_email=sender_email, settings=settings
+    )
     return email
 
 

@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import psycopg
 import pytest
 from googleapiclient.errors import HttpError
+from logfire.testing import CaptureLogfire
 
 from conftest import (
     make_test_account,
@@ -1530,3 +1531,145 @@ def test_sync_stores_sender_and_recipients(
         "to": ["inbox@lab5.ca"],
         "cc": ["dev@lab5.ca"],
     }
+
+
+def _routing_spans(capfire: CaptureLogfire) -> list[dict[str, Any]]:
+    """Return all exported spans named ``routing.route_email``."""
+    return [
+        span
+        for span in capfire.exporter.exported_spans_as_dict()
+        if span["name"] == "routing.route_email"
+    ]
+
+
+def test_sync_one_message_emits_skip_span_outside_recency_window(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Messages older than the recency window must emit a skip-tagged span."""
+    from mailpilot.sync import (
+        _store_inbound_message,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    account = make_test_account(database_connection, email="oldspan@example.com")
+    old_date = datetime.now(UTC) - timedelta(days=30)
+    message = _make_gmail_message(
+        message_id="old-span-1",
+        thread_id="t-old-span-1",
+        received_at=old_date,
+    )
+    contact = make_test_contact(
+        database_connection,
+        email="alice@example.com",
+        domain="example.com",
+    )
+
+    email = _store_inbound_message(
+        database_connection,
+        account,
+        message,
+        contacts_by_email={"alice@example.com": contact},
+        settings=make_test_settings(),
+        has_active_workflows=False,
+    )
+
+    assert email is not None
+    assert email.is_routed is True
+    spans = _routing_spans(capfire)
+    assert len(spans) == 1
+    attrs = spans[0]["attributes"]
+    assert attrs["route_method"] == "skipped_outside_window"
+    assert str(attrs["email_id"]) == str(email.id)
+
+
+def test_sync_one_message_emits_skip_span_when_no_active_workflows(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Messages on accounts without active workflows must emit a skip span."""
+    from mailpilot.sync import (
+        _store_inbound_message,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    account = make_test_account(database_connection, email="nowfspan@example.com")
+    # Message is recent (within the 7-day window).
+    message = _make_gmail_message(
+        message_id="nowf-span-1",
+        thread_id="t-nowf-span-1",
+    )
+    contact = make_test_contact(
+        database_connection,
+        email="bob@example.com",
+        domain="example.com",
+    )
+
+    email = _store_inbound_message(
+        database_connection,
+        account,
+        message,
+        contacts_by_email={"bob@example.com": contact},
+        settings=make_test_settings(),
+        has_active_workflows=False,
+    )
+
+    assert email is not None
+    assert email.is_routed is True
+    spans = _routing_spans(capfire)
+    assert len(spans) == 1
+    attrs = spans[0]["attributes"]
+    assert attrs["route_method"] == "skipped_no_workflows"
+    assert str(attrs["email_id"]) == str(email.id)
+
+
+def test_sync_one_message_emits_skip_span_when_predates_workflows(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Messages that predate the earliest active workflow must emit a skip span."""
+    from mailpilot.database import activate_workflow, update_workflow
+    from mailpilot.sync import (
+        _store_inbound_message,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    account = make_test_account(database_connection, email="predatespan@example.com")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="inbound"
+    )
+    update_workflow(
+        database_connection,
+        workflow.id,
+        objective="Handle inquiries",
+        instructions="Reply helpfully",
+    )
+    activate_workflow(database_connection, workflow.id)
+
+    # Email received within the 7-day window but 1 hour before workflow was created.
+    email_time = workflow.created_at - timedelta(hours=1)
+    message = _make_gmail_message(
+        message_id="predate-span-1",
+        thread_id="t-predate-span-1",
+        received_at=email_time,
+    )
+    contact = make_test_contact(
+        database_connection,
+        email="carol@example.com",
+        domain="example.com",
+    )
+
+    email = _store_inbound_message(
+        database_connection,
+        account,
+        message,
+        contacts_by_email={"carol@example.com": contact},
+        settings=make_test_settings(),
+        has_active_workflows=True,
+        earliest_workflow_at=workflow.created_at,
+    )
+
+    assert email is not None
+    assert email.is_routed is True
+    spans = _routing_spans(capfire)
+    assert len(spans) == 1
+    attrs = spans[0]["attributes"]
+    assert attrs["route_method"] == "skipped_predates_workflows"
+    assert str(attrs["email_id"]) == str(email.id)
