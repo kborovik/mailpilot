@@ -61,8 +61,14 @@ def configure_logging(debug: bool = False) -> None:
 
 
 def output(data: dict[str, Any]) -> None:
-    """Print structured JSON response to stdout."""
-    click.echo(json.dumps({**data, "ok": True}, indent=2))
+    r"""Print structured JSON response to stdout.
+
+    Always RFC 8259 compliant: control characters (\n, \r, \t, etc.) inside
+    string values are escaped, so downstream `json.loads` / `jq` callers never
+    trip on raw control bytes. `ensure_ascii=False` keeps non-ASCII glyphs
+    (em-dashes, accented characters) readable instead of `\uXXXX`-encoded.
+    """
+    click.echo(json.dumps({**data, "ok": True}, indent=2, ensure_ascii=False))
 
 
 def output_error(message: str, code: str) -> NoReturn:
@@ -74,7 +80,7 @@ def output_error(message: str, code: str) -> NoReturn:
     ctx = current.get_span_context() if current else None
     if ctx is not None and ctx.is_valid:
         payload["trace_id"] = format(ctx.trace_id, "032x")
-    click.echo(json.dumps(payload, indent=2), err=True)
+    click.echo(json.dumps(payload, indent=2, ensure_ascii=False), err=True)
     raise SystemExit(1)
 
 
