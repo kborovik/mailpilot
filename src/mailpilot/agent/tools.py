@@ -19,6 +19,7 @@ Tools per ADR-03:
     - ``list_enrollments`` -- list enrollments in workflow with status
     - ``read_contact`` -- CRM contact lookup
     - ``read_company`` -- CRM company lookup
+    - ``read_email`` -- full email content lookup
 """
 
 from __future__ import annotations
@@ -319,6 +320,30 @@ def read_company(
     if company is None:
         return None
     return company.model_dump()
+
+
+def read_email(
+    connection: psycopg.Connection[dict[str, Any]],
+    account_id: str,
+    email_id: str,
+) -> dict[str, Any] | None:
+    """Read a specific email by ID to view its full content, including body text.
+
+    Args:
+        connection: Open database connection.
+        account_id: Account the agent is scoped to. Emails belonging to other
+            accounts are not visible (returns None) -- prevents cross-tenant
+            data leaks via prompt injection in inbound message bodies.
+        email_id: The ID of the email to read.
+
+    Returns:
+        Full email details including body text, or None if not found or the
+        email belongs to a different account.
+    """
+    email = database.get_email(connection, email_id)
+    if email is None or email.account_id != account_id:
+        return None
+    return email.model_dump()
 
 
 def noop(reason: str) -> dict[str, Any]:

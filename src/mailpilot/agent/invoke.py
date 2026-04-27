@@ -251,6 +251,18 @@ def _wrap_read_company(
     )
 
 
+def _wrap_read_email(
+    ctx: RunContext[AgentDeps],
+    email_id: str,
+) -> dict[str, Any] | None:
+    """Read full email content (including body text) by ID."""
+    return agent_tools.read_email(
+        connection=ctx.deps.connection,
+        account_id=ctx.deps.account.id,
+        email_id=email_id,
+    )
+
+
 def _wrap_noop(
     ctx: RunContext[AgentDeps],
     reason: str,
@@ -278,6 +290,7 @@ _TOOLS: list[Tool[AgentDeps]] = [
     Tool(_wrap_search_emails, name="search_emails"),
     Tool(_wrap_read_contact, name="read_contact"),
     Tool(_wrap_read_company, name="read_company"),
+    Tool(_wrap_read_email, name="read_email"),
     Tool(_wrap_noop, name="noop"),
 ]
 
