@@ -280,6 +280,60 @@ def test_start_sync_loop_wires_wakeup_event_to_pubsub_and_listener(
     mock_wakeup.clear.assert_called()
 
 
+def _iteration_spans(capfire: CaptureLogfire) -> list[dict[str, Any]]:
+    return [
+        span
+        for span in capfire.exporter.exported_spans_as_dict()
+        if span["name"] == "sync.loop.iteration"
+    ]
+
+
+def test_run_periodic_iteration_tags_event_wakeup_source(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """sync.loop.iteration span carries wakeup_source='event' when triggered by an event."""
+    import queue as _queue  # local to avoid polluting module imports
+
+    from mailpilot.sync import (
+        _run_periodic_iteration,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    settings = make_test_settings()
+    sync_queue: _queue.Queue[str] = _queue.Queue()
+
+    _run_periodic_iteration(
+        database_connection, settings, sync_queue, wakeup_source="event"
+    )
+
+    spans = _iteration_spans(capfire)
+    assert len(spans) == 1
+    assert spans[0]["attributes"]["wakeup_source"] == "event"
+
+
+def test_run_periodic_iteration_tags_timer_wakeup_source(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """sync.loop.iteration span carries wakeup_source='timer' on periodic-timer wake."""
+    import queue as _queue
+
+    from mailpilot.sync import (
+        _run_periodic_iteration,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    settings = make_test_settings()
+    sync_queue: _queue.Queue[str] = _queue.Queue()
+
+    _run_periodic_iteration(
+        database_connection, settings, sync_queue, wakeup_source="timer"
+    )
+
+    spans = _iteration_spans(capfire)
+    assert len(spans) == 1
+    assert spans[0]["attributes"]["wakeup_source"] == "timer"
+
+
 # -- sync_account --------------------------------------------------------------
 
 

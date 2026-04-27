@@ -28,7 +28,7 @@ import threading
 import time
 from datetime import UTC, datetime, timedelta
 from email.utils import formataddr, getaddresses
-from typing import Any
+from typing import Any, Literal
 
 import click
 import logfire
@@ -69,6 +69,8 @@ _HEARTBEAT_INTERVAL = 30  # seconds
 _RECENCY_WINDOW = timedelta(days=7)
 _FULL_SYNC_MAX_RESULTS = 100
 _WATCH_RENEWAL_INTERVAL = 3600  # seconds (1 hour)
+
+WakeupSource = Literal["event", "timer"]
 
 # -- Metrics -------------------------------------------------------------------
 
@@ -188,7 +190,7 @@ def start_sync_loop(
     last_watch_renewal = 0.0
     try:
         while not shutdown_event.is_set():
-            wakeup_event.wait(timeout=settings.run_interval)
+            event_set = wakeup_event.wait(timeout=settings.run_interval)
             if shutdown_event.is_set():
                 break
             # Clear before processing, not after. Events that arrive
@@ -198,7 +200,9 @@ def start_sync_loop(
             update_sync_heartbeat(connection)
             logfire.debug("sync.loop.heartbeat", pid=pid)
 
-            _run_periodic_iteration(connection, settings, sync_queue)
+            _run_periodic_iteration(
+                connection, settings, sync_queue, "event" if event_set else "timer"
+            )
 
             # Hourly watch renewal.
             now = time.monotonic()
@@ -281,9 +285,10 @@ def _run_periodic_iteration(
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
     sync_queue: queue.Queue[str],
+    wakeup_source: WakeupSource,
 ) -> None:
     """Run one iteration of the periodic sync + task drain cycle."""
-    with logfire.span("sync.loop.iteration"):
+    with logfire.span("sync.loop.iteration", wakeup_source=wakeup_source):
         # Sync accounts from Pub/Sub notifications.
         _drain_sync_queue(connection, settings, sync_queue)
 

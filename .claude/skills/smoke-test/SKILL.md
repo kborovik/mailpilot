@@ -110,14 +110,17 @@ Save `OUTBOUND_WORKFLOW_ID`.
 
 Start `mailpilot run` in the background using `Bash` with `run_in_background: true`. Capture the bash_id so you can read its output later. This loop runs **once for the whole test** -- it stays up through Scenario B and is only stopped at the very end (Step B7).
 
+Always use `--debug` so the captured stdout shows per-iteration spans (`sync.loop.iteration`, `sync.account.run`, `gmail.get_history`, ...). Without it the loop is silent for minutes at a time, which makes diagnosing A4/B4 stalls require a Logfire round-trip.
+
 ```
-uv run mailpilot run
+uv run mailpilot --debug run
 ```
 
 Wait ~3s, read the captured stdout, confirm:
 
 - `Sync loop started (pid <pid>)` printed.
 - `Pub/Sub subscriber started` printed (a `Warning: Pub/Sub setup failed` is acceptable -- periodic sync still works).
+- At least one `sync.loop.iteration` span has appeared (proves the loop is actually ticking, not just started).
 
 **Gate A2:** background process alive; `sync_status` row present.
 
@@ -157,7 +160,7 @@ mailpilot email view <INBOUND_SIDE_EMAIL_ID>
 
 - The email exists in the inbound account's inbound emails.
 - `is_routed == true`.
-- `workflow_id == null` (no inbound workflow exists yet -- routing correctly classifies it as `unrouted`).
+- `workflow_id == null` (no inbound workflow exists yet -- the `routing.route_email` span emits `route_method=skipped_no_workflows`).
 - `gmail_thread_id` is set. Save the inbound-side email ID as `INBOUND_SIDE_EMAIL_ID` for the reply.
 
 **On failure:** Email never arrived after 60s -- read the captured `mailpilot run` output for Pub/Sub or sync errors.
@@ -220,8 +223,8 @@ Wait for a task with `email_id` set to the routed reply and `status == "complete
 Do this review now, before starting Scenario B, so the time window cleanly bounds A's spans. Use `/logfire:debug` with project=`mailpilot` and time window `[TEST_START_A, now]`. Spans to verify:
 
 - `agent.invoke` -- exactly **2** invocations (A3 send + A7 reply handling). More than 2 means the agent kept replying (loop regression).
-- `running tool` -- in A3 expect `send_email` and `update_enrollment_status` (or one of them). In A7 expect `update_enrollment_status` and **no** `send_email` or `reply_email`.
-- `routing.route_email` -- the reply (A6) should show `route_method=thread_match` and `workflow_id == OUTBOUND_WORKFLOW_ID`. The inbound-side email from A4 should show `route_method=unrouted` (no inbound workflow at the time).
+- `running tool` -- in A3 expect `send_email` plus optional context-gathering reads (`read_contact`, `read_company`); `update_enrollment_status` is **not** expected here (it fires after a reply, not on initial send). In A7 expect `update_enrollment_status` and **no** `send_email` or `reply_email`.
+- `routing.route_email` -- the reply (A6) should show `route_method=thread_match` and `workflow_id == OUTBOUND_WORKFLOW_ID`. The inbound-side email from A4 should show `route_method=skipped_no_workflows` (no inbound workflow at the time).
 - `gmail.send_message` -- 2 calls total (A3 by agent + A5 by operator).
 - Any `is_exception=true` or `level=warn` spans -- record them.
 
@@ -343,7 +346,7 @@ Match by `SUBJECT_B` (likely with a `Re:` prefix on Gmail's side).
 
 - Email present in outbound account's inbound emails.
 - `is_routed == true`.
-- `workflow_id == null` -- the outbound workflow exists and is active, but it does not own B's thread (no `thread_match`) and outbound workflows do not classify, so the reply correctly lands as `unrouted`.
+- `workflow_id == null` -- the outbound workflow exists and is active, but it does not own B's thread (no `thread_match`) and outbound workflows do not classify, so the reply correctly lands with `route_method=skipped_no_workflows`.
 - **No additional inbound replies.** Re-run `mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>` and confirm only the single reply from B5 exists. More than one means the inbound agent kept replying despite the terminal `update_enrollment_status` call -- record as a defect.
 - **Outbound workflow stayed quiet (concurrent-workflow check).** Re-run `mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>` and confirm zero new outbound sends. Any non-zero count means the still-active outbound workflow reacted to B's traffic -- record as a defect.
 
@@ -358,7 +361,7 @@ If the process does not exit within 10s, send SIGKILL and record this in the rep
 Time window `[TEST_START_B, now]`. Spans to verify:
 
 - `agent.invoke` -- exactly **1** invocation (B5). More than 1 means either the inbound agent re-fired or the outbound workflow reacted to B's traffic.
-- `routing.route_email` -- the inbound-side email (B4) should be `route_method=classified`. The outbound-side reply (B6) should be `route_method=unrouted`.
+- `routing.route_email` -- the inbound-side email (B4) should be `route_method=classified`. The outbound-side reply (B6) should be `route_method=skipped_no_workflows`.
 - `classify_email` -- 1 invocation (B4). Check `result` matches `INBOUND_WORKFLOW_ID`.
 - `running tool` (B5) -- expect `reply_email` and `update_enrollment_status`.
 - Any `is_exception=true` or `level=warn` spans -- record them.
@@ -402,7 +405,7 @@ Entity IDs (shared by both scenarios):
 
 Email summary (Scenario A):
   Outbound send:    <id>  subject: <SUBJECT_A>
-  Inbound delivery: <id>  unrouted (expected -- no inbound workflow yet)
+  Inbound delivery: <id>  skipped_no_workflows (expected -- no inbound workflow yet)
   Operator reply:   <id>  email_id: <INBOUND_SIDE_EMAIL_ID>
   Reply round-trip: <id>  workflow_id: <OUTBOUND_WORKFLOW_ID> via thread_match
 
@@ -410,7 +413,7 @@ Email summary (Scenario B):
   Operator trigger: <id>  subject: <SUBJECT_B>
   Inbound delivery: <id>  workflow_id: <INBOUND_WORKFLOW_ID> via classified
   Agent reply:      <id>  thread: <inbound thread>
-  Reply round-trip: <id>  unrouted (outbound workflow active but does not own B's thread)
+  Reply round-trip: <id>  skipped_no_workflows (outbound workflow active but does not own B's thread)
 
 Loop sentinels:
   Scenario A: agent.invoke count == 2 (expected 2)
