@@ -183,11 +183,12 @@ def start_sync_loop(
         )
 
     # Start PG LISTEN thread (instant task execution on INSERT).
-    database_url = str(settings.database_url)
-    listener_thread = _start_task_listener(database_url, wakeup_event, shutdown_event)
+    listener_thread = _start_task_listener(
+        str(settings.database_url), wakeup_event, shutdown_event
+    )
 
     # Main loop.
-    last_watch_renewal = 0.0
+    last_watch_renewal = last_full_sync = 0.0
     try:
         while not shutdown_event.is_set():
             event_set = wakeup_event.wait(timeout=settings.run_interval)
@@ -200,15 +201,24 @@ def start_sync_loop(
             update_sync_heartbeat(connection)
             logfire.debug("sync.loop.heartbeat", pid=pid)
 
-            _run_periodic_iteration(
-                connection, settings, sync_queue, "event" if event_set else "timer"
-            )
-
-            # Hourly watch renewal.
+            # Time-gate the safety-net sweep. Event-burst wakes (Pub/Sub
+            # notifications already drained by ``_drain_sync_queue``) skip
+            # the full sweep; the worst-case latency for a missed
+            # notification stays bounded by ``run_interval``.
             now = time.monotonic()
-            if now - last_watch_renewal >= _WATCH_RENEWAL_INTERVAL:
-                _renew_watches_logging_errors(connection, settings)
-                last_watch_renewal = now
+            do_full_sweep = now - last_full_sync >= settings.run_interval
+            _run_periodic_iteration(
+                connection,
+                settings,
+                sync_queue,
+                "event" if event_set else "timer",
+                do_full_sweep=do_full_sweep,
+            )
+            if do_full_sweep:
+                last_full_sync = now
+            last_watch_renewal = _renew_watches_if_due(
+                connection, settings, last_watch_renewal, now
+            )
     finally:
         # Graceful shutdown.
         if subscriber_future is not None:
@@ -286,14 +296,26 @@ def _run_periodic_iteration(
     settings: Settings,
     sync_queue: queue.Queue[str],
     wakeup_source: WakeupSource,
+    *,
+    do_full_sweep: bool,
 ) -> None:
-    """Run one iteration of the periodic sync + task drain cycle."""
-    with logfire.span("sync.loop.iteration", wakeup_source=wakeup_source):
+    """Run one iteration of the periodic sync + task drain cycle.
+
+    ``do_full_sweep`` gates the safety-net ``_sync_all_accounts`` call.
+    The caller (``start_sync_loop``) sets it to True at most once per
+    ``run_interval`` so event-burst wakes do only the queue drain.
+    """
+    with logfire.span(
+        "sync.loop.iteration",
+        wakeup_source=wakeup_source,
+        did_full_sweep=do_full_sweep,
+    ):
         # Sync accounts from Pub/Sub notifications.
         _drain_sync_queue(connection, settings, sync_queue)
 
-        # Periodic sync of all accounts.
-        _sync_all_accounts(connection, settings)
+        # Periodic safety-net sync of all accounts.
+        if do_full_sweep:
+            _sync_all_accounts(connection, settings)
 
         # Bridge routed emails to tasks and drain the queue.
         create_tasks_for_routed_emails(connection)
@@ -375,6 +397,23 @@ def _renew_watches_logging_errors(
             logfire.info("sync.watches.renewed", count=renewed)
     except Exception:
         logfire.exception("sync.watches.renewal_failed")
+
+
+def _renew_watches_if_due(
+    connection: psycopg.Connection[dict[str, Any]],
+    settings: Settings,
+    last_renewal: float,
+    now: float,
+) -> float:
+    """Run watch renewal when ``_WATCH_RENEWAL_INTERVAL`` has elapsed.
+
+    Returns the timestamp to record as the most recent renewal -- ``now``
+    when renewal ran this tick, otherwise the existing ``last_renewal``.
+    """
+    if now - last_renewal < _WATCH_RENEWAL_INTERVAL:
+        return last_renewal
+    _renew_watches_logging_errors(connection, settings)
+    return now
 
 
 # -- Per-account sync ---------------------------------------------------------
