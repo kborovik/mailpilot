@@ -11,7 +11,6 @@ Scope: ``https://www.googleapis.com/auth/gmail.modify``
 from __future__ import annotations
 
 import base64
-import re
 import time
 from email.mime.base import MIMEBase
 from email.utils import parseaddr
@@ -21,17 +20,21 @@ from typing import Any
 
 import logfire
 
-# C0 control characters that strict JSON (RFC 8259) rejects when bare in a
-# string. Excludes \t (0x09) and \n (0x0A), which Python's json module escapes
-# correctly and which appear in legitimate email bodies. Other line-break
-# controls (\r, \v, \f, 0x1c-0x1e) are folded into \n by ``str.splitlines``
-# upstream and never reach this regex.
-_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b-\x1f]")
+# Translation table that drops every C0 control byte except \t (0x09) and \n
+# (0x0A). Strict JSON parsers (RFC 8259) reject bare C0 controls in strings;
+# \t and \n are kept because Python's json module escapes them correctly and
+# they appear in legitimate email bodies. \r is intentionally dropped: inbound
+# Gmail bodies arrive with CRLF line endings, so removing \r leaves clean
+# \n-delimited lines for downstream splitlines/normalisation.
+_CONTROL_CHAR_TABLE = dict.fromkeys(
+    [i for i in range(0x20) if i not in (0x09, 0x0A)],
+    None,
+)
 
 
 def strip_control_chars(text: str) -> str:
     """Remove C0 control bytes that break strict JSON parsing of body_text."""
-    return _CONTROL_CHAR_RE.sub("", text)
+    return text.translate(_CONTROL_CHAR_TABLE)
 
 
 GmailService = Any
