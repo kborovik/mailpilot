@@ -146,7 +146,7 @@ mailpilot email view <INBOUND_SIDE_EMAIL_ID>
 - The email exists in the inbound account's inbound emails.
 - `is_routed == true`.
 - `workflow_id == null` (no inbound workflow exists -- routing correctly identifies it as `unrouted`).
-- `gmail_thread_id` is set. Save it as `INBOUND_THREAD_ID` for the reply.
+- `gmail_thread_id` is set. Save the inbound-side email ID as `INBOUND_SIDE_EMAIL_ID` for the reply.
 
 **On failure:** Email never arrived after 60s -- read the captured `mailpilot run` output for Pub/Sub or sync errors.
 
@@ -157,11 +157,9 @@ Claude Code sends the reply directly via CLI -- no inbound agent involved. This 
 Choose reply content that gives the outbound agent a clear terminal signal so it marks the enrollment outcome and stops. Phrase the decline as "this opportunity is not a fit for our current priorities" rather than "remove us from your list" -- the latter steers the agent toward `disable_contact` (a global contact block) when we want it to call `update_enrollment_status` (the per-workflow outcome). Recommended template:
 
 ```
-mailpilot email send \
+mailpilot email reply \
   --account-id <INBOUND_ACCOUNT_ID> \
-  --to outbound@lab5.ca \
-  --subject "Re: <SUBJECT_A>" \
-  --thread-id <INBOUND_THREAD_ID> \
+  --email-id <INBOUND_SIDE_EMAIL_ID> \
   --body "Thanks for the email. After reviewing internally we have decided this opportunity is not a fit for our current priorities. Please consider this declined."
 ```
 
@@ -401,7 +399,7 @@ Entity IDs (Scenario B):
 Email summary (Scenario A):
   Outbound send:    <id>  subject: <SUBJECT_A>
   Inbound delivery: <id>  unrouted (expected -- no inbound workflow)
-  Operator reply:   <id>  thread: <INBOUND_THREAD_ID>
+  Operator reply:   <id>  email_id: <INBOUND_SIDE_EMAIL_ID>
   Reply round-trip: <id>  workflow_id: <OUTBOUND_WORKFLOW_ID> via thread_match
 
 Email summary (Scenario B):
