@@ -726,9 +726,7 @@ def _store_inbound_message(  # noqa: PLR0913
             if updated is not None:
                 email = updated
         return email
-    email = route_email(
-        connection, email, sender_email=sender_email, settings=settings
-    )
+    email = route_email(connection, email, sender_email=sender_email, settings=settings)
     return email
 
 

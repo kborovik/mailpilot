@@ -1,24 +1,36 @@
 ---
 name: smoke-test
-description: End-to-end MailPilot smoke test against real Gmail (outbound@lab5.ca <-> inbound@lab5.ca). Runs two isolated scenarios sequentially -- Scenario A exercises an outbound workflow with a manual operator reply (no inbound workflow active), Scenario B exercises an inbound workflow with a manual trigger email (no outbound workflow active). Isolating one workflow type per run avoids the agent-to-agent reply loop tracked in issue #83. Use whenever the user says "smoke test", "run end-to-end", "verify the system works", or after non-trivial changes to sync, routing, agent execution, or Pub/Sub code -- even if they don't explicitly invoke the skill by name.
+description: End-to-end MailPilot smoke test against real Gmail (outbound@lab5.ca <-> inbound@lab5.ca). One Phase 0 setup, then two scenarios run sequentially without resetting state between them -- Scenario A exercises an outbound workflow with a manual operator reply, Scenario B exercises an inbound workflow with a manual trigger email. The outbound workflow stays active across Scenario B so the test verifies concurrent multi-account, multi-workflow operation. Use whenever the user says "smoke test", "run end-to-end", "verify the system works", or after non-trivial changes to sync, routing, agent execution, or Pub/Sub code -- even if they don't explicitly invoke the skill by name.
 ---
 
 # Smoke Test
 
 ## What this tests
 
-Two isolated scenarios. Each runs the full sync + routing + agent loop with exactly **one** workflow active, so the bug in issue #83 (two MailPilot-managed accounts on the same Gmail thread spawning an unbounded agent ping-pong) cannot fire.
+Two scenarios share a single Phase 0 setup and a single `mailpilot run` loop. The outbound workflow created in Scenario A stays active through Scenario B, so the test exercises real concurrent multi-workflow, multi-account operation. The agent-to-agent reply loop is prevented by two structural properties, not by isolation:
 
-| Scenario | Active workflow            | Trigger                                  | Verifies                                                                                                        |
-| -------- | -------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| A        | Outbound only (no inbound) | `mailpilot enrollment run`               | Outbound agent send -> Gmail delivery -> manual operator reply -> thread_match routing -> agent processes reply |
-| B        | Inbound only (no outbound) | `mailpilot email send` (operator-driven) | Manual trigger email -> sync -> classification routing -> inbound agent reply -> Gmail delivery                 |
+- Distinct subjects per scenario, so each Gmail thread is owned by exactly one workflow type (Scenario A's thread routes via `thread_match` to the outbound workflow; Scenario B's fresh thread routes via classification to the inbound workflow).
+- Enrollments terminating with `update_enrollment_status`, so the agent stops replying once a scenario reaches its outcome.
 
-Default: run **both** scenarios in sequence with `make clean` between them. Operator can stop after Scenario A if only outbound is in scope, or skip directly to Scenario B if only inbound matters.
+| Scenario | Active workflows                       | Trigger                                  | Verifies                                                                                                        |
+| -------- | -------------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| A        | Outbound only                          | `mailpilot enrollment run`               | Outbound agent send -> Gmail delivery -> manual operator reply -> thread_match routing -> agent processes reply |
+| B        | Outbound (terminal) + Inbound (active) | `mailpilot email send` (operator-driven) | Manual trigger email -> sync -> classification routing -> inbound agent reply -> Gmail delivery                 |
+
+Default: run **both** scenarios in sequence. `make clean` runs **only once**, at the very start of the test. Operator can stop after Scenario A if only outbound is in scope.
 
 ## Conventions used throughout
 
-- **Unique subject per scenario.** Generate a fresh `[ST-<HHMMSS>] <random topic>` per scenario (e.g., `[ST-104316] Quantum Llama Migration`). Different subject for A and B so traces don't collide.
+- **Unique subject per scenario, freshly randomized.** Subject format: `[ST-<HHMMSS>] <topic>`. Generate the topic via Bash on every run -- do **not** invent it in your head, do **not** reuse topics from prior runs, and do **not** copy any topic shown in this skill. LLMs anchor on examples and have been observed reusing the same topic across runs, which makes traces collide and defeats the point of unique subjects. Recommended generator:
+
+  ```bash
+  TOPIC_A=$(sort -R /usr/share/dict/words 2>/dev/null \
+    | grep -E '^[A-Za-z]{4,9}$' | head -2 | tr '\n' ' ' | sed 's/ *$//')
+  SUBJECT_A="[ST-$(date +%H%M%S)] ${TOPIC_A}"
+  ```
+
+  Generate `SUBJECT_B` independently the same way; verify `SUBJECT_B != SUBJECT_A` before continuing. If `/usr/share/dict/words` is unavailable, fall back to `head -c 12 /dev/urandom | base32 | tr -d '=' | head -c 10` and use that as the topic.
+
 - **Test start ISO timestamp.** Capture before each scenario; reuse for `--since` filters and Logfire time windows.
 - **Polling.** When waiting for sync, routing, or agent results: poll up to **12 attempts, 5 seconds apart (~60s total)**. Do not call `mailpilot account sync` directly -- the background `mailpilot run` loop owns sync.
 - **CLI parsing.** All commands use `uv run mailpilot`. Parse the JSON output of every command and extract IDs for the next step.
@@ -37,9 +49,9 @@ Verify before starting:
 
 ## Phase 0: Shared setup
 
-Run once at the start of each scenario (Scenario B repeats this after `make clean`).
+Run **once** at the start of the test. Both scenarios reuse the same accounts, contacts, and company; do **not** repeat Phase 0 between scenarios.
 
-1. `make clean` -- drops and re-applies the schema; mailbox contents on Gmail are untouched.
+1. `make clean` -- drops and re-applies the schema; mailbox contents on Gmail are untouched. Do not run `make clean` again until the next smoke test.
 2. Create accounts:
    ```
    mailpilot account create --email outbound@lab5.ca --display-name "Outbound Smoke"
@@ -63,7 +75,7 @@ Run once at the start of each scenario (Scenario B repeats this after `make clea
 - `mailpilot account list` returns 2 accounts.
 - `mailpilot contact list` returns 2 contacts.
 - `mailpilot company list` returns 1 company.
-- `mailpilot workflow list` returns **0** workflows. Workflows are created per-scenario, not here.
+- `mailpilot workflow list` returns **0** workflows. Workflows are created per-scenario.
 
 **On failure:** Stop. Report which entity failed and the error JSON.
 
@@ -82,8 +94,8 @@ mailpilot workflow create \
   --name "Outbound Smoke A" \
   --type outbound \
   --account-id <OUTBOUND_ACCOUNT_ID> \
-  --objective "Send a single email about <TOPIC> and mark the enrollment completed or failed based on the reply" \
-  --instructions "You are a sales rep for Lab5. Send ONE email to the contact about <TOPIC>. Subject MUST be exactly '<SUBJECT_A>'. Body MUST use Markdown (greeting, 2-3 sentence paragraph, a 3-row 2-column table). When you receive a reply, do not send another email -- read the reply and call update_enrollment_status with status='completed' if the reply expresses interest or status='failed' if it declines, then stop. Do not call disable_contact -- this is per-workflow outcome tracking, not a global contact block. Do not create follow-up tasks."
+  --objective "Send a single email about <TOPIC_A> and mark the enrollment completed or failed based on the reply" \
+  --instructions "You are a sales rep for Lab5. Send ONE email to the contact about <TOPIC_A>. Subject MUST be exactly '<SUBJECT_A>'. Body MUST use Markdown (greeting, 2-3 sentence paragraph, a 3-row 2-column table). When you receive a reply, do not send another email -- read the reply and call update_enrollment_status with status='completed' if the reply expresses interest or status='failed' if it declines, then stop. Do not call disable_contact -- this is per-workflow outcome tracking, not a global contact block. Do not create follow-up tasks."
 ```
 
 Activate it if creation does not auto-activate:
@@ -96,7 +108,7 @@ Save `OUTBOUND_WORKFLOW_ID`.
 
 ### A2. Start the sync loop
 
-Start `mailpilot run` in the background using `Bash` with `run_in_background: true`. Capture the bash_id so you can read its output later:
+Start `mailpilot run` in the background using `Bash` with `run_in_background: true`. Capture the bash_id so you can read its output later. This loop runs **once for the whole test** -- it stays up through Scenario B and is only stopped at the very end (Step B7).
 
 ```
 uv run mailpilot run
@@ -145,14 +157,14 @@ mailpilot email view <INBOUND_SIDE_EMAIL_ID>
 
 - The email exists in the inbound account's inbound emails.
 - `is_routed == true`.
-- `workflow_id == null` (no inbound workflow exists -- routing correctly identifies it as `unrouted`).
+- `workflow_id == null` (no inbound workflow exists yet -- routing correctly classifies it as `unrouted`).
 - `gmail_thread_id` is set. Save the inbound-side email ID as `INBOUND_SIDE_EMAIL_ID` for the reply.
 
 **On failure:** Email never arrived after 60s -- read the captured `mailpilot run` output for Pub/Sub or sync errors.
 
-### A5. Manual operator reply (the key isolation step)
+### A5. Manual operator reply
 
-Claude Code sends the reply directly via CLI -- no inbound agent involved. This breaks the agent-to-agent loop because there is no inbound workflow to react to anything.
+Claude Code sends the reply directly via CLI -- no inbound agent is involved at this point because no inbound workflow has been created yet. The reply lands in the outbound mailbox, where it will be picked up by `thread_match` and handed to the outbound agent for terminal processing.
 
 Choose reply content that gives the outbound agent a clear terminal signal so it marks the enrollment outcome and stops. Phrase the decline as "this opportunity is not a fit for our current priorities" rather than "remove us from your list" -- the latter steers the agent toward `disable_contact` (a global contact block) when we want it to call `update_enrollment_status` (the per-workflow outcome). Recommended template:
 
@@ -185,7 +197,7 @@ Match by `SUBJECT_A` (Gmail typically preserves the subject with a `Re:` prefix;
 
 ### A7. Wait for the outbound agent to process the reply
 
-The run loop calls `create_tasks_for_routed_emails` once Phase A6's email has `workflow_id` set, inserts a task, and the LISTEN/NOTIFY listener drains it.
+The run loop calls `create_tasks_for_routed_emails` once Step A6's email has `workflow_id` set, inserts a task, and the LISTEN/NOTIFY listener drains it.
 
 Poll for task completion:
 
@@ -203,38 +215,29 @@ Wait for a task with `email_id` set to the routed reply and `status == "complete
 
 **On failure:** If the task was never created, check that A6's email has `workflow_id` set and the run loop is alive. If the task is `failed`, `mailpilot task view <TASK_ID>` for the reason.
 
-### A8. Stop the sync loop
-
-Send SIGTERM to the background `mailpilot run` (e.g. `kill <pid>`). Wait for `Sync loop stopped` in the captured output. Confirm `sync_status` table is empty.
-
-If the process does not exit within 10s, send SIGKILL and record this in the report.
-
 ### Logfire review for Scenario A
 
-Use `/logfire:debug` with project=`mailpilot` and time window `[TEST_START_A, now]`. Spans to verify:
+Do this review now, before starting Scenario B, so the time window cleanly bounds A's spans. Use `/logfire:debug` with project=`mailpilot` and time window `[TEST_START_A, now]`. Spans to verify:
 
-- `agent.invoke` -- exactly **2** invocations (A3 send + A7 reply handling). More than 2 means the agent kept replying (loop bug regression).
+- `agent.invoke` -- exactly **2** invocations (A3 send + A7 reply handling). More than 2 means the agent kept replying (loop regression).
 - `running tool` -- in A3 expect `send_email` and `update_enrollment_status` (or one of them). In A7 expect `update_enrollment_status` and **no** `send_email` or `reply_email`.
-- `routing.route_email` -- the reply (A6) should show `route_method=thread_match` and `workflow_id == OUTBOUND_WORKFLOW_ID`. The inbound-side email from A4 should show `route_method=unrouted` (no inbound workflow).
+- `routing.route_email` -- the reply (A6) should show `route_method=thread_match` and `workflow_id == OUTBOUND_WORKFLOW_ID`. The inbound-side email from A4 should show `route_method=unrouted` (no inbound workflow at the time).
 - `gmail.send_message` -- 2 calls total (A3 by agent + A5 by operator).
 - Any `is_exception=true` or `level=warn` spans -- record them.
 
 ---
 
-## Reset between scenarios
+## Transition to Scenario B
 
-If running both scenarios in one session, reset between them so Scenario B starts clean and no outbound workflow remnants can react to B's traffic:
-
-1. Re-run `make clean` (drops the DB).
-2. Re-run **Phase 0** (entities only). Save fresh account IDs and contact IDs -- they will differ from Scenario A.
+Do **not** stop the sync loop. Do **not** run `make clean`. Do **not** recreate accounts or contacts. The outbound workflow stays active with its enrollment in a terminal state, and the run loop keeps syncing both accounts. Scenario B layers an inbound workflow on top of this live state, which is the explicit multi-workflow / multi-account checkpoint of this test.
 
 ---
 
 ## Scenario B: Inbound workflow
 
-**Hypothesis:** An inbound workflow correctly classifies an operator-sent trigger email, the agent generates a reply via the run loop, and the reply round-trips to the outbound mailbox. No outbound workflow exists, so the inbound agent's reply lands in the outbound mailbox as `unrouted` and the loop terminates.
+**Hypothesis:** With the outbound workflow from Scenario A still active, an inbound workflow correctly classifies an operator-sent trigger email on a fresh thread, the agent generates a reply via the same run loop, and the reply round-trips to the outbound mailbox. The outbound workflow does not react to B's traffic because B's thread is not owned by it (no `thread_match` hit), and outbound workflows do not classify.
 
-Capture `TEST_START_B` (ISO timestamp) and `SUBJECT_B` (different topic from A) before Step B1.
+Capture `TEST_START_B` (ISO timestamp, must be later than Scenario A's last activity) and `SUBJECT_B` -- generate a fresh random topic per the Conventions section, distinct from `SUBJECT_A`.
 
 ### B1. Create the inbound workflow
 
@@ -261,9 +264,11 @@ Save `INBOUND_WORKFLOW_ID`. Pre-enroll the sender so the agent can update the en
 mailpilot enrollment add --workflow-id <INBOUND_WORKFLOW_ID> --contact-id <OUTBOUND_CONTACT_ID>
 ```
 
-### B2. Start the sync loop
+**Gate B1 (multi-workflow checkpoint):** `mailpilot workflow list` returns **2** workflows -- the outbound from Scenario A and the inbound just created -- both with status `active`. This is the explicit verification that MailPilot can run multiple workflows on multiple accounts simultaneously.
 
-Same as A2: `uv run mailpilot run` in the background, confirm startup, save bash_id.
+### B2. Confirm the sync loop is still alive
+
+The `mailpilot run` process started in Step A2 has been syncing both accounts continuously. Read its captured stdout and confirm no fatal errors since the A-window Logfire review. If the process has died, restart it the same way as A2 and note the restart in the report.
 
 ### B3. Operator sends the trigger email
 
@@ -338,18 +343,21 @@ Match by `SUBJECT_B` (likely with a `Re:` prefix on Gmail's side).
 
 - Email present in outbound account's inbound emails.
 - `is_routed == true`.
-- `workflow_id == null` (no outbound workflow exists -- routes as `unrouted`, which is correct).
-- **No additional inbound replies.** Re-run `mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>` and confirm only the single reply from B5 exists. More than one means the agent kept replying despite the terminal `update_enrollment_status` call -- record as a defect.
+- `workflow_id == null` -- the outbound workflow exists and is active, but it does not own B's thread (no `thread_match`) and outbound workflows do not classify, so the reply correctly lands as `unrouted`.
+- **No additional inbound replies.** Re-run `mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>` and confirm only the single reply from B5 exists. More than one means the inbound agent kept replying despite the terminal `update_enrollment_status` call -- record as a defect.
+- **Outbound workflow stayed quiet (concurrent-workflow check).** Re-run `mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>` and confirm zero new outbound sends. Any non-zero count means the still-active outbound workflow reacted to B's traffic -- record as a defect.
 
 ### B7. Stop the sync loop
 
-Same as A8.
+Send SIGTERM to the background `mailpilot run` (e.g. `kill <pid>`). Wait for `Sync loop stopped` in the captured output. Confirm the `sync_status` table is empty.
+
+If the process does not exit within 10s, send SIGKILL and record this in the report.
 
 ### Logfire review for Scenario B
 
 Time window `[TEST_START_B, now]`. Spans to verify:
 
-- `agent.invoke` -- exactly **1** invocation (B5). More than 1 means the run loop is creating tasks for emails it should have ignored.
+- `agent.invoke` -- exactly **1** invocation (B5). More than 1 means either the inbound agent re-fired or the outbound workflow reacted to B's traffic.
 - `routing.route_email` -- the inbound-side email (B4) should be `route_method=classified`. The outbound-side reply (B6) should be `route_method=unrouted`.
 - `classify_email` -- 1 invocation (B4). Check `result` matches `INBOUND_WORKFLOW_ID`.
 - `running tool` (B5) -- expect `reply_email` and `update_enrollment_status`.
@@ -367,8 +375,9 @@ Produce a report covering both scenarios (or just the one that was run).
 Smoke Test Results
 ==================
 
-Scenario A: Outbound workflow
-  Phase 0 (setup) ............ PASS
+Phase 0 (one-time setup) ..... PASS
+
+Scenario A: Outbound workflow (sole workflow active)
   A1 Create workflow ......... PASS
   A2 Start sync loop ......... PASS
   A3 Outbound agent send ..... PASS
@@ -376,29 +385,24 @@ Scenario A: Outbound workflow
   A5 Operator reply .......... PASS
   A6 thread_match routing .... PASS
   A7 Agent processes reply ... PASS
-  A8 Stop sync loop .......... PASS
 
-Scenario B: Inbound workflow
-  Phase 0 (setup) ............ PASS
-  B1 Create workflow ......... PASS
-  B2 Start sync loop ......... PASS
+Scenario B: Inbound workflow (outbound workflow still active)
+  B1 Create workflow ......... PASS  (workflow list shows 2 active)
+  B2 Sync loop still alive ... PASS
   B3 Operator trigger send ... PASS
   B4 classified routing ...... PASS
   B5 Agent reply ............. PASS
   B6 Gmail delivery (out) .... PASS
   B7 Stop sync loop .......... PASS
 
-Entity IDs (Scenario A):
+Entity IDs (shared by both scenarios):
   Outbound account: <id>   Inbound account: <id>   Company: <id>
-  Outbound workflow: <id>  Outbound contact: <id>  Inbound contact: <id>
-
-Entity IDs (Scenario B):
-  Outbound account: <id>   Inbound account: <id>   Company: <id>
-  Inbound workflow: <id>   Outbound contact: <id>  Inbound contact: <id>
+  Outbound contact: <id>   Inbound contact: <id>
+  Outbound workflow: <id>  Inbound workflow: <id>
 
 Email summary (Scenario A):
   Outbound send:    <id>  subject: <SUBJECT_A>
-  Inbound delivery: <id>  unrouted (expected -- no inbound workflow)
+  Inbound delivery: <id>  unrouted (expected -- no inbound workflow yet)
   Operator reply:   <id>  email_id: <INBOUND_SIDE_EMAIL_ID>
   Reply round-trip: <id>  workflow_id: <OUTBOUND_WORKFLOW_ID> via thread_match
 
@@ -406,11 +410,12 @@ Email summary (Scenario B):
   Operator trigger: <id>  subject: <SUBJECT_B>
   Inbound delivery: <id>  workflow_id: <INBOUND_WORKFLOW_ID> via classified
   Agent reply:      <id>  thread: <inbound thread>
-  Reply round-trip: <id>  unrouted (expected -- no outbound workflow)
+  Reply round-trip: <id>  unrouted (outbound workflow active but does not own B's thread)
 
-Loop sentinel:
+Loop sentinels:
   Scenario A: agent.invoke count == 2 (expected 2)
   Scenario B: agent.invoke count == 1 (expected 1)
+  Outbound workflow during B: 0 new outbound sends (expected 0)
 ```
 
 If a phase failed, stop Part A at the failing phase with the failure JSON and any captured stdout from the background `mailpilot run`.
@@ -455,31 +460,30 @@ LIMIT 50
 
 ### Part C: Suggestions
 
-Write findings directly into the report -- do not file GitHub issues unless the user asks.
+Write findings directly into the report. Do not file external tickets unless the user asks.
 
 1. **CLI usability** -- commands that needed awkward sequencing or workarounds; missing fields in JSON output; error messages that did not point at the cause.
 2. **Logfire observability** -- missing spans, missing attributes on existing spans, noisy span families (quantify with the volume query), broken parent-child causality, agent token/cost visibility.
 3. **Agent behavior** -- did the agents follow instructions (subject, brevity, no extra tool calls)? Was `agent_reasoning` useful? Did `update_enrollment_status` get called when expected? In Scenario A, did the agent hold the line on "do not reply again"?
-4. **Loop guardrails (issue #83)** -- did either scenario produce more `agent.invoke` spans than expected? If so, the isolation strategy worked but the underlying loop bug surfaced anyway, and that is the high-priority signal from this run.
+4. **Concurrent workflow safety** -- with both workflows active during Scenario B, did the outbound workflow stay quiet (zero new sends, no `agent.invoke` outside Scenario A's window)? Did the inbound workflow correctly leave A's lingering thread alone? Excess `agent.invoke` spans here are the high-priority signal from this run, since they would indicate that two simultaneously active workflows can interfere with each other.
 5. **Other deficiencies** -- timing, race conditions, data integrity, performance.
 
 ---
 
 ## Timing
 
-Expected total: ~7 minutes when running both scenarios.
+Expected total: ~6 minutes. Phase 0 runs once, the run loop runs once, and there is no reset between scenarios.
 
 | Phase / scenario       | Duration |
 | ---------------------- | -------- |
-| Phase 0 (each)         | ~10s     |
+| Phase 0 (once)         | ~10s     |
 | A1 / B1 workflow setup | ~5s      |
-| A2 / B2 start run loop | ~5s      |
+| A2 start run loop      | ~5s      |
 | A3 outbound agent      | ~10s     |
 | A4 / B4 sync + route   | ~10-60s  |
 | A5 / B3 operator send  | ~3s      |
 | A6 reply round-trip    | ~10-60s  |
 | A7 / B5 task drain     | ~10-60s  |
 | B6 reply round-trip    | ~10-60s  |
-| Stop loop (each)       | ~3s      |
-| Reset between          | ~10s     |
+| B7 stop run loop       | ~3s      |
 | Report                 | ~10s     |
