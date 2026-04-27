@@ -48,20 +48,24 @@ def _logs_by_msg(capfire: CaptureLogfire, msg: str) -> list[dict[str, Any]]:
 
 
 def test_gmail_span_emitted_on_success(capfire: CaptureLogfire):
-    """Every GmailClient method call emits a gmail.* span."""
+    """Decorated GmailClient methods emit a gmail.* span on success.
+
+    Uses list_messages (still decorated) to verify the span contract.
+    get_profile was intentionally stripped of the decorator to reduce
+    per-iteration span volume (2026-04-26 smoke test finding).
+    """
     service = MagicMock()
-    service.users.return_value.getProfile.return_value.execute.return_value = {
-        "emailAddress": "test@example.com",
-        "historyId": "100",
+    service.users.return_value.messages.return_value.list.return_value.execute.return_value = {
+        "messages": []
     }
     client = GmailClient.from_service("test@example.com", service)
 
-    client.get_profile()
+    client.list_messages()
 
-    spans = _spans_by_name(capfire, "gmail.get_profile")
+    spans = _spans_by_name(capfire, "gmail.list_messages")
     assert len(spans) == 1
     attrs = spans[0]["attributes"]
-    assert attrs["method"] == "get_profile"
+    assert attrs["method"] == "list_messages"
     assert attrs["user_id"] == "test@example.com"
     assert attrs["attempts"] == 1
 
@@ -69,17 +73,17 @@ def test_gmail_span_emitted_on_success(capfire: CaptureLogfire):
 def test_gmail_span_records_attempts_on_retry(capfire: CaptureLogfire):
     """Transient retries are visible via the attempts attribute."""
     service = MagicMock()
-    execute = service.users.return_value.getProfile.return_value.execute
+    execute = service.users.return_value.messages.return_value.list.return_value.execute
     execute.side_effect = [
         _make_http_error(503),
-        {"emailAddress": "test@example.com", "historyId": "100"},
+        {"messages": []},
     ]
     client = GmailClient.from_service("test@example.com", service)
 
     with patch("mailpilot.gmail.time.sleep"):
-        client.get_profile()
+        client.list_messages()
 
-    spans = _spans_by_name(capfire, "gmail.get_profile")
+    spans = _spans_by_name(capfire, "gmail.list_messages")
     assert len(spans) == 1
     assert spans[0]["attributes"]["attempts"] == 2
 
@@ -87,16 +91,16 @@ def test_gmail_span_records_attempts_on_retry(capfire: CaptureLogfire):
 def test_gmail_span_records_status_on_non_transient_error(capfire: CaptureLogfire):
     """Non-transient errors include the HTTP status on the span."""
     service = MagicMock()
-    execute = service.users.return_value.getProfile.return_value.execute
+    execute = service.users.return_value.messages.return_value.list.return_value.execute
     execute.side_effect = _make_http_error(403)
     client = GmailClient.from_service("test@example.com", service)
 
     from googleapiclient.errors import HttpError
 
     with pytest.raises(HttpError):
-        client.get_profile()
+        client.list_messages()
 
-    spans = _spans_by_name(capfire, "gmail.get_profile")
+    spans = _spans_by_name(capfire, "gmail.list_messages")
     assert len(spans) == 1
     assert spans[0]["attributes"]["status"] == 403
     assert spans[0]["attributes"]["attempts"] == 1
@@ -110,7 +114,7 @@ def test_retry_exhausted_emits_error_log(capfire: CaptureLogfire):
     from googleapiclient.errors import HttpError
 
     service = MagicMock()
-    execute = service.users.return_value.getProfile.return_value.execute
+    execute = service.users.return_value.messages.return_value.list.return_value.execute
     execute.side_effect = [_make_http_error(503)] * MAX_RETRIES
     client = GmailClient.from_service("test@example.com", service)
 
@@ -118,12 +122,12 @@ def test_retry_exhausted_emits_error_log(capfire: CaptureLogfire):
         pytest.raises(HttpError),
         patch("mailpilot.gmail.time.sleep"),
     ):
-        client.get_profile()
+        client.list_messages()
 
     exhausted = _logs_by_msg(capfire, "gmail.retry.exhausted")
     assert len(exhausted) == 1
     attrs = exhausted[0]["attributes"]
-    assert attrs["method"] == "get_profile"
+    assert attrs["method"] == "list_messages"
     assert attrs["status"] == 503
     assert attrs["attempts"] == MAX_RETRIES
 

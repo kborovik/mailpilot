@@ -178,7 +178,6 @@ class GmailClient:
         client._service = service
         return client
 
-    @_retry_on_transient
     def get_profile(self, user_id: str = "me") -> dict[str, Any]:
         """Fetch Gmail user profile.
 

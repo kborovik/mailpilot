@@ -4,6 +4,7 @@ import base64
 from unittest.mock import patch
 
 import pytest
+from logfire.testing import CaptureLogfire
 
 from mailpilot import gmail
 from mailpilot.gmail import (
@@ -401,3 +402,31 @@ def test_stop_watch_calls_users_stop():
 
     service.users().stop.assert_called_once_with(userId="me")
     service.users().stop().execute.assert_called_once()
+
+
+# -- get_profile span regression -----------------------------------------------
+
+
+def test_get_profile_does_not_emit_span_on_success(capfire: CaptureLogfire) -> None:
+    """get_profile is called every sync iteration -- avoid span noise.
+
+    Regression target for the 2026-04-26 smoke test observation that
+    gmail.get_profile dominated logfire volume (42 spans in ~5 minutes
+    for two accounts). The parent sync.account.run span captures the
+    failure mode; the per-call span adds no diagnostic value.
+    """
+    from unittest.mock import MagicMock
+
+    from mailpilot.gmail import GmailClient
+
+    service = MagicMock()
+    service.users.return_value.getProfile.return_value.execute.return_value = {
+        "emailAddress": "test@example.com",
+        "historyId": "100",
+    }
+    client = GmailClient.from_service("test@example.com", service)
+
+    client.get_profile()
+
+    span_names = [s["name"] for s in capfire.exporter.exported_spans_as_dict()]
+    assert "gmail.get_profile" not in span_names
