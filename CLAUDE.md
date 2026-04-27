@@ -277,4 +277,4 @@ Logging and tracing use [Pydantic Logfire](https://pydantic.dev/logfire) (OpenTe
 
 ## Standards
 
-ASCII-only. Use: `<-` `->` `--` `"` `(c)` `(tm)` `...`
+ASCII-only for project artifacts (code, docs, plans, CLI output). Agent-generated email body content is exempt -- the LLM may use Unicode where it improves readability. Use: `<-` `->` `--` `"` `(c)` `(tm)` `...`
