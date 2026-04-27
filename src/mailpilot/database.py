@@ -1410,7 +1410,10 @@ def list_emails(
             (case-insensitive, matches to/cc/bcc).
 
     Returns:
-        List of email summaries ordered by creation time descending.
+        List of email summaries ordered by ``COALESCE(sent_at, received_at)``
+        descending -- the same expression used by the ``since`` filter, so
+        operators can page newest-first using a timestamp visible in
+        ``EmailSummary``.
     """
     conditions: list[SQL] = []
     params: dict[str, object] = {"limit": limit}
@@ -1447,7 +1450,8 @@ def list_emails(
     query = SQL(
         "SELECT id, account_id, contact_id, workflow_id, direction, "
         "subject, sender, status, sent_at, received_at "
-        "FROM email {} ORDER BY created_at DESC LIMIT %(limit)s"
+        "FROM email {} "
+        "ORDER BY COALESCE(sent_at, received_at) DESC LIMIT %(limit)s"
     ).format(where)
     rows = connection.execute(query, params).fetchall()
     return [EmailSummary.model_validate(row) for row in rows]

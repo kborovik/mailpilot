@@ -1024,6 +1024,41 @@ def test_list_emails_since(
     assert results[0].subject == "Recent"
 
 
+def test_list_emails_order_matches_since_filter(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """list_emails orders by COALESCE(sent_at, received_at) DESC.
+
+    The order column must agree with the `since` filter so an operator
+    can page newest-first using a timestamp visible in the summary.
+    """
+    from datetime import datetime, timedelta
+
+    account = make_test_account(database_connection)
+    # Insert the chronologically-newer row FIRST so that ordering by
+    # `created_at DESC` would put the older content on top -- only
+    # `COALESCE(sent_at, received_at) DESC` reorders correctly.
+    newer_outbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="Newer outbound",
+        sent_at=datetime.now(UTC),
+    )
+    older_inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Older inbound",
+        gmail_message_id="msg_older_inbound",
+        received_at=datetime.now(UTC) - timedelta(days=2),
+    )
+    assert older_inbound is not None
+    assert newer_outbound is not None
+    results = list_emails(database_connection, account_id=account.id)
+    assert [r.subject for r in results] == ["Newer outbound", "Older inbound"]
+
+
 def test_list_emails_by_thread_id(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
