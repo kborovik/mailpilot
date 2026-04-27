@@ -613,3 +613,56 @@ def test_wrappers_do_not_take_contact_id_from_llm() -> None:
             f"{wrapper.__name__} must read contact_id from ctx.deps, "
             f"not accept it as a parameter; got params: {list(params)}"
         )
+
+
+# -- Tests: tool error surfacing -----------------------------------------------
+
+
+def _model_calls_disable_contact_with_bad_status() -> FunctionModel:
+    """Build a FunctionModel that calls disable_contact with an invalid status."""
+    call_count = 0
+
+    def _respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="disable_contact",
+                        args={"status": "not-a-real-status", "reason": "test"},
+                    )
+                ]
+            )
+        return ModelResponse(parts=[TextPart(content="Done")])
+
+    return FunctionModel(_respond)
+
+
+def test_invoke_surfaces_tool_errors_in_result(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """When a tool returns {error: ...}, the result must surface it.
+
+    Regression for the 2026-04-26 smoke test defect where update_enrollment_status
+    returned not_found and the orchestration still reported success.
+    """
+    _account, contact, workflow = _setup(database_connection)
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    with patch("mailpilot.agent.invoke.GmailClient"):
+        result = invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            model_override=_model_calls_disable_contact_with_bad_status(),
+        )
+
+    assert result is not None
+    assert result["tool_errors"], (
+        "expected at least one tool error in the result, got: "
+        f"{result.get('tool_errors')!r}"
+    )
+    assert result["tool_errors"][0]["tool"] == "disable_contact"

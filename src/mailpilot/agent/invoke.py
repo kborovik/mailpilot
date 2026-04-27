@@ -22,6 +22,7 @@ from typing import Any
 import logfire
 import psycopg
 from pydantic_ai import Agent, RunContext, Tool
+from pydantic_ai.messages import ModelRequest, ToolReturnPart
 from pydantic_ai.models import Model
 
 from mailpilot import database
@@ -374,7 +375,7 @@ def _build_user_prompt(  # noqa: PLR0913
 # -- Main entry point ----------------------------------------------------------
 
 
-def invoke_workflow_agent(  # noqa: PLR0913
+def invoke_workflow_agent(  # noqa: PLR0913, PLR0912, PLR0915, C901
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
     workflow: Workflow,
@@ -480,6 +481,36 @@ def invoke_workflow_agent(  # noqa: PLR0913
 
             result = agent.run_sync(prompt, model=model, deps=deps)
 
+            # Scan tool returns for {"error": ...} payloads -- the agent may have
+            # called a tool with bad arguments and ignored the rejection in its
+            # final reasoning. Surface those failures so the orchestration sees them.
+            tool_errors: list[dict[str, str]] = []
+            for message in result.all_messages():
+                if not isinstance(message, ModelRequest):
+                    continue
+                for part in message.parts:
+                    if not isinstance(part, ToolReturnPart):
+                        continue
+                    content = part.content
+                    if isinstance(content, dict) and "error" in content:
+                        tool_errors.append(
+                            {
+                                "tool": part.tool_name,
+                                "error": str(content.get("error")),
+                                "message": str(content.get("message", "")),
+                            }
+                        )
+
+            if tool_errors:
+                logfire.warn(
+                    "agent.tool_errors",
+                    workflow_id=workflow.id,
+                    contact_id=contact.id,
+                    tool_error_count=len(tool_errors),
+                    tool_errors=tool_errors,
+                )
+            span.set_attribute("tool_error_count", len(tool_errors))
+
             # Usage tracking.
             usage = result.usage()
             span.set_attribute("model", settings.anthropic_model)
@@ -511,6 +542,7 @@ def invoke_workflow_agent(  # noqa: PLR0913
                 "contact_id": contact.id,
                 "status": "completed",
                 "tool_calls": tool_call_count,
+                "tool_errors": tool_errors,
                 "reasoning": result.output,
             }
 

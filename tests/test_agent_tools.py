@@ -448,6 +448,32 @@ def test_disable_contact_not_found(
     assert result["error"] == "not_found"
 
 
+def test_disable_contact_invalid_status_returns_error(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Passing a status outside the DB CHECK constraint returns an error dict.
+
+    Regression: previously the CheckViolation bubbled up uncaught, leaving the
+    transaction in a failed state and crashing the agent invocation loop.
+    """
+    contact = make_test_contact(database_connection)
+
+    result = disable_contact(
+        connection=database_connection,
+        contact_id=contact.id,
+        status="not-a-real-status",
+        reason="test",
+    )
+
+    assert result["error"] == "invalid_status"
+    assert "bounced" in result["message"] or "unsubscribed" in result["message"]
+
+    # Connection must still be usable after the rollback.
+    refetched = get_contact(database_connection, contact.id)
+    assert refetched is not None
+    assert refetched.status == "active"
+
+
 # -- list_enrollments ----------------------------------------------------
 
 

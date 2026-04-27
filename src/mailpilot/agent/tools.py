@@ -26,6 +26,7 @@ from __future__ import annotations
 from typing import Any
 
 import psycopg
+import psycopg.errors
 
 from mailpilot import database, email_ops
 from mailpilot.models import Account
@@ -227,9 +228,19 @@ def disable_contact(
     Returns:
         Dict with updated contact status, or error if not found.
     """
-    updated = database.disable_contact(
-        connection, contact_id, status=status, status_reason=reason
-    )
+    try:
+        updated = database.disable_contact(
+            connection, contact_id, status=status, status_reason=reason
+        )
+    except psycopg.errors.CheckViolation as exc:
+        connection.rollback()
+        return {
+            "error": "invalid_status",
+            "message": (
+                f"status must be 'bounced' or 'unsubscribed', "
+                f"got: {status!r}; detail: {exc}"
+            ),
+        }
     if updated is None:
         return {"error": "not_found", "message": f"contact not found: {contact_id}"}
     return {"id": updated.id, "status": updated.status}
