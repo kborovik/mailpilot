@@ -33,7 +33,14 @@ from mailpilot.database import (
     update_email,
 )
 from mailpilot.models import Email
+from mailpilot.operator_log import operator_event
 from mailpilot.settings import Settings
+
+_VIA_BY_ROUTE_METHOD: dict[str, str] = {
+    "thread_match": "thread",
+    "rfc_message_id_match": "message_id",
+    "classified": "llm",
+}
 
 _BOUNCE_SENDERS = frozenset({"mailer-daemon", "postmaster"})
 
@@ -103,13 +110,23 @@ def route_email(
             )
             result = updated if updated is not None else email
 
-            if workflow_id is not None and result.contact_id is not None:
-                _ensure_enrollment(connection, workflow_id, result.contact_id)
+            if workflow_id is not None:
+                operator_event(
+                    "route.match",
+                    email_id=result.id,
+                    workflow_id=workflow_id,
+                    via=_VIA_BY_ROUTE_METHOD[route_method],
+                )
+                if result.contact_id is not None:
+                    _ensure_enrollment(connection, workflow_id, result.contact_id)
+            else:
+                operator_event("route.no_match", email_id=result.id)
 
             return result
-        except Exception:
+        except Exception as exc:
             span.set_attribute("result", "failure")
             logfire.exception("routing.route_email failed", email_id=email.id)
+            operator_event("error", source="routing.route_email", message=str(exc))
             raise
 
 

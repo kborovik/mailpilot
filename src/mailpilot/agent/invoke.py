@@ -30,6 +30,7 @@ from mailpilot.agent import tools as agent_tools
 from mailpilot.exceptions import AgentDidNotUseToolsError
 from mailpilot.gmail import GmailClient
 from mailpilot.models import Account, Contact, Email, Workflow
+from mailpilot.operator_log import operator_event
 from mailpilot.settings import Settings
 
 
@@ -552,6 +553,13 @@ def invoke_workflow_agent(  # noqa: PLR0913
 
             span.set_attribute("result", "completed")
             span.set_attribute("agent_reasoning", result.output)
+            operator_event(
+                "agent.run",
+                workflow_id=workflow.id,
+                contact_id=contact.id,
+                status="completed",
+                tool_calls=tool_call_count,
+            )
             return {
                 "workflow_id": workflow.id,
                 "contact_id": contact.id,

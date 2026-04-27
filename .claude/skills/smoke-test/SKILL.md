@@ -110,7 +110,7 @@ Save `OUTBOUND_WORKFLOW_ID`.
 
 Start `mailpilot run` in the background using `Bash` with `run_in_background: true`. Capture the bash_id so you can read its output later. This loop runs **once for the whole test** -- it stays up through Scenario B and is only stopped at the very end (Step B7).
 
-Always use `--debug` so the captured stdout shows per-iteration spans (`sync.loop.iteration`, `sync.account.run`, `gmail.get_history`, ...). Without it the loop is silent for minutes at a time, which makes diagnosing A4/B4 stalls require a Logfire round-trip.
+The loop emits curated `event=...` lifecycle lines on stdout regardless of `--debug` (`loop.tick`, `sync.account`, `route.match`, `agent.run`, `task.drain`, `error`). Use `--debug` only when you also need Logfire's full span output for deep diagnosis.
 
 ```
 uv run mailpilot --debug run
@@ -120,7 +120,7 @@ Wait ~3s, read the captured stdout, confirm:
 
 - `Sync loop started (pid <pid>)` printed.
 - `Pub/Sub subscriber started` printed (a `Warning: Pub/Sub setup failed` is acceptable -- periodic sync still works).
-- At least one `sync.loop.iteration` span has appeared (proves the loop is actually ticking, not just started).
+- At least one `event=loop.tick` line has appeared (proves the loop is actually ticking, not just started).
 
 **Gate A2:** background process alive; `sync_status` row present.
 

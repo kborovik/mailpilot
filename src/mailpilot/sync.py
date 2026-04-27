@@ -21,6 +21,7 @@ Usage::
 
 from __future__ import annotations
 
+import itertools
 import os
 import queue
 import signal
@@ -63,6 +64,7 @@ from mailpilot.gmail import (
     parse_sender,
 )
 from mailpilot.models import Account, Contact, Email
+from mailpilot.operator_log import operator_event
 from mailpilot.routing import route_email
 from mailpilot.settings import Settings
 
@@ -121,7 +123,7 @@ def _check_stale_sync_status(
         click.echo(f"Removing stale sync status (pid {existing.pid} is dead)")
 
 
-def start_sync_loop(
+def start_sync_loop(  # noqa: PLR0915
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
 ) -> None:
@@ -153,6 +155,7 @@ def start_sync_loop(
     _check_stale_sync_status(connection, pid)
     upsert_sync_status(connection, pid)
     logfire.info("sync.loop.start", pid=pid)
+    operator_event("loop.start", pid=pid, interval=settings.run_interval)
     click.echo(f"Sync loop started (pid {pid})")
     click.echo(f"Interval: {settings.run_interval}s")
     click.echo("Press Ctrl+C or send SIGTERM to stop")
@@ -228,6 +231,7 @@ def start_sync_loop(
         shutdown_event.set()  # signal listener thread
         listener_thread.join(timeout=5)
         delete_sync_status(connection)
+        operator_event("loop.stop", pid=pid)
         logfire.info("sync.loop.stop", pid=pid)
         click.echo("Sync loop stopped")
 
@@ -256,8 +260,9 @@ def _start_pubsub_logging_errors(
         future = start_subscriber(settings, callback)
         click.echo("Pub/Sub subscriber started")
         return future
-    except Exception:
+    except Exception as exc:
         logfire.exception("sync.pubsub.setup_failed")
+        operator_event("error", source="sync.pubsub.setup_failed", message=str(exc))
         click.echo("Warning: Pub/Sub setup failed, running in polling-only mode")
         return None
 
@@ -282,14 +287,23 @@ def _start_task_listener(
                 for _notify in listen_conn.notifies(timeout=30.0):
                     wakeup_event.set()
                     break
-        except Exception:
+        except Exception as exc:
             logfire.exception("sync.task_listener.error")
+            operator_event("error", source="sync.task_listener.error", message=str(exc))
         finally:
             listen_conn.close()
 
     thread = threading.Thread(target=_listen, daemon=True)
     thread.start()
     return thread
+
+
+_iteration_counter = itertools.count(1)
+
+
+def _next_iteration_count() -> int:
+    """Return a monotonically increasing iteration number for operator output."""
+    return next(_iteration_counter)
 
 
 def _run_periodic_iteration(
@@ -306,6 +320,13 @@ def _run_periodic_iteration(
     The caller (``start_sync_loop``) sets it to True at most once per
     ``run_interval`` so event-burst wakes do only the queue drain.
     """
+    iteration = _next_iteration_count()
+    operator_event(
+        "loop.tick",
+        iteration=iteration,
+        wakeup=wakeup_source,
+        full_sweep=do_full_sweep,
+    )
     with logfire.span(
         "sync.loop.iteration",
         wakeup_source=wakeup_source,
@@ -341,15 +362,19 @@ def _drain_sync_queue(
         if account is None:
             logfire.debug("sync.notification.unknown_email", email=email)
             continue
+        operator_event("pubsub.notify", email=account.email)
         try:
             client = GmailClient(account.email)
             sync_account(connection, account, client, settings)
             synced.add(email)
-        except Exception:
+        except Exception as exc:
             logfire.exception(
                 "sync.notification.sync_failed",
                 account_id=account.id,
                 email=account.email,
+            )
+            operator_event(
+                "error", source="sync.notification.sync_failed", message=str(exc)
             )
 
 
@@ -366,12 +391,13 @@ def _sync_all_accounts(
         try:
             client = GmailClient(account.email)
             sync_account(connection, account, client, settings)
-        except Exception:
+        except Exception as exc:
             logfire.exception(
                 "sync.account.sync_failed",
                 account_id=account.id,
                 email=account.email,
             )
+            operator_event("error", source="sync.account.sync_failed", message=str(exc))
 
 
 def _drain_pending_tasks(
@@ -381,9 +407,13 @@ def _drain_pending_tasks(
     """Execute all pending tasks that are due."""
     from mailpilot.run import execute_task
 
+    start = time.monotonic()
     pending = list_pending_tasks(connection)
     for task in pending:
         execute_task(connection, settings, task)
+    if pending:
+        duration_ms = int((time.monotonic() - start) * 1000)
+        operator_event("task.drain", drained=len(pending), duration_ms=duration_ms)
 
 
 def _renew_watches_logging_errors(
@@ -399,8 +429,9 @@ def _renew_watches_logging_errors(
         renewed = renew_watches(connection, settings)
         if renewed > 0:
             logfire.info("sync.watches.renewed", count=renewed)
-    except Exception:
+    except Exception as exc:
         logfire.exception("sync.watches.renewal_failed")
+        operator_event("error", source="sync.watches.renewal_failed", message=str(exc))
 
 
 def _renew_watches_if_due(
@@ -525,12 +556,20 @@ def sync_account(
                 duration_ms,
                 attributes={"account_id": account.id, "mode": mode},
             )
+            operator_event(
+                "sync.account",
+                email=account.email,
+                new=stored,
+                duplicates=duplicate_skipped_count,
+                duration_ms=int(duration_ms),
+            )
             return stored
-        except Exception:
+        except Exception as exc:
             sync_errors.add(
                 1, attributes={"account_id": account.id, "reason": "sync_exception"}
             )
             logfire.exception("sync.account.run failed", account_id=account.id)
+            operator_event("error", source="sync.account.run", message=str(exc))
             raise
 
 
