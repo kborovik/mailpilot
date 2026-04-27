@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -25,6 +26,9 @@ from conftest import (
 from mailpilot.agent.invoke import (
     _SYSTEM_PREFIX,  # pyright: ignore[reportPrivateUsage]
     _advisory_lock_keys,  # pyright: ignore[reportPrivateUsage]
+    _wrap_create_task,  # pyright: ignore[reportPrivateUsage]
+    _wrap_disable_contact,  # pyright: ignore[reportPrivateUsage]
+    _wrap_update_enrollment_status,  # pyright: ignore[reportPrivateUsage]
     invoke_workflow_agent,
 )
 from mailpilot.database import (
@@ -588,3 +592,24 @@ def test_system_prefix_guides_contact_status_update() -> None:
 def test_system_prefix_allows_markdown_in_emails() -> None:
     """System prefix must not prohibit markdown in email content."""
     assert "No markdown" not in _SYSTEM_PREFIX
+
+
+# -- Tests: wrapper signatures -------------------------------------------------
+
+
+def test_wrappers_do_not_take_contact_id_from_llm() -> None:
+    """contact_id must come from AgentDeps, not from LLM-provided arguments.
+
+    Regression for the 2026-04-26 smoke test defect where the agent passed
+    the contact's email as contact_id and the tool returned not_found.
+    """
+    for wrapper in (
+        _wrap_update_enrollment_status,
+        _wrap_disable_contact,
+        _wrap_create_task,
+    ):
+        params = inspect.signature(wrapper).parameters
+        assert "contact_id" not in params, (
+            f"{wrapper.__name__} must read contact_id from ctx.deps, "
+            f"not accept it as a parameter; got params: {list(params)}"
+        )
