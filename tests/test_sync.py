@@ -303,7 +303,11 @@ def test_run_periodic_iteration_tags_event_wakeup_source(
     sync_queue: _queue.Queue[str] = _queue.Queue()
 
     _run_periodic_iteration(
-        database_connection, settings, sync_queue, wakeup_source="event"
+        database_connection,
+        settings,
+        sync_queue,
+        wakeup_source="event",
+        do_full_sweep=True,
     )
 
     spans = _iteration_spans(capfire)
@@ -326,12 +330,125 @@ def test_run_periodic_iteration_tags_timer_wakeup_source(
     sync_queue: _queue.Queue[str] = _queue.Queue()
 
     _run_periodic_iteration(
-        database_connection, settings, sync_queue, wakeup_source="timer"
+        database_connection,
+        settings,
+        sync_queue,
+        wakeup_source="timer",
+        do_full_sweep=True,
     )
 
     spans = _iteration_spans(capfire)
     assert len(spans) == 1
     assert spans[0]["attributes"]["wakeup_source"] == "timer"
+
+
+def test_run_periodic_iteration_runs_sync_all_when_do_full_sweep_true(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """do_full_sweep=True -> _sync_all_accounts runs and span did_full_sweep is True."""
+    import queue as _queue
+
+    from mailpilot.sync import (
+        _run_periodic_iteration,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    settings = make_test_settings()
+    sync_queue: _queue.Queue[str] = _queue.Queue()
+
+    with patch("mailpilot.sync._sync_all_accounts") as mock_sync_all:
+        _run_periodic_iteration(
+            database_connection,
+            settings,
+            sync_queue,
+            wakeup_source="event",
+            do_full_sweep=True,
+        )
+
+    mock_sync_all.assert_called_once()
+    spans = _iteration_spans(capfire)
+    assert len(spans) == 1
+    assert spans[0]["attributes"]["did_full_sweep"] is True
+
+
+def test_run_periodic_iteration_skips_sync_all_when_do_full_sweep_false(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """do_full_sweep=False -> _sync_all_accounts is skipped and span did_full_sweep is False."""
+    import queue as _queue
+
+    from mailpilot.sync import (
+        _run_periodic_iteration,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    settings = make_test_settings()
+    sync_queue: _queue.Queue[str] = _queue.Queue()
+
+    with patch("mailpilot.sync._sync_all_accounts") as mock_sync_all:
+        _run_periodic_iteration(
+            database_connection,
+            settings,
+            sync_queue,
+            wakeup_source="event",
+            do_full_sweep=False,
+        )
+
+    mock_sync_all.assert_not_called()
+    spans = _iteration_spans(capfire)
+    assert len(spans) == 1
+    assert spans[0]["attributes"]["did_full_sweep"] is False
+
+
+def test_start_sync_loop_time_gates_full_sweep(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """_sync_all_accounts runs at most once per run_interval seconds.
+
+    Two event wakes within run_interval should trigger _sync_all_accounts
+    only once -- the first wake. Subsequent event-burst wakes do only the
+    queue drain. Once run_interval has elapsed, the next wake runs the
+    sweep again.
+    """
+    settings = make_test_settings(run_interval=30)
+
+    with (
+        patch("mailpilot.sync.threading.Event") as mock_event_cls,
+        patch("mailpilot.sync._start_task_listener"),
+        patch("mailpilot.sync._start_pubsub_logging_errors", return_value=None),
+        patch("mailpilot.sync._drain_sync_queue"),
+        patch("mailpilot.sync._sync_all_accounts") as mock_sync_all,
+        patch("mailpilot.sync.create_tasks_for_routed_emails"),
+        patch("mailpilot.sync._drain_pending_tasks"),
+        patch("mailpilot.sync._renew_watches_logging_errors"),
+        patch("mailpilot.sync.signal.signal"),
+        patch("mailpilot.sync.time.monotonic") as mock_monotonic,
+    ):
+        # Three iterations; one time.monotonic() call per iteration.
+        # t=1000: first wake -> 1000 - 0.0 >= 30, sweep runs, last_full_sync=1000.
+        # t=1010: second wake -> 1010 - 1000 = 10 < 30, sweep skipped.
+        # t=1050: third wake -> 1050 - 1000 = 50 >= 30, sweep runs again.
+        mock_monotonic.side_effect = [1000.0, 1010.0, 1050.0]
+
+        mock_shutdown = MagicMock()
+        # while-check False x3 (run iterations 1/2/3), then True (exit)
+        mock_shutdown.is_set.side_effect = [
+            False,  # while
+            False,  # post-wait #1
+            False,  # while
+            False,  # post-wait #2
+            False,  # while
+            False,  # post-wait #3
+            True,  # while -> exit
+        ]
+        mock_wakeup = MagicMock()
+        mock_wakeup.wait.return_value = True  # event-driven wakes
+        mock_event_cls.side_effect = [mock_shutdown, mock_wakeup]
+
+        start_sync_loop(database_connection, settings)
+
+    # Sweep ran on iteration 1 and iteration 3, but NOT iteration 2.
+    assert mock_sync_all.call_count == 2
 
 
 # -- sync_account --------------------------------------------------------------
