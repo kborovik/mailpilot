@@ -372,10 +372,31 @@ def _build_user_prompt(  # noqa: PLR0913
     return "\n".join(sections)
 
 
+def _extract_tool_errors(result: Any) -> list[dict[str, str]]:
+    """Walk the message ledger and collect tool returns that carry error payloads."""
+    errors: list[dict[str, str]] = []
+    for message in result.all_messages():
+        if not isinstance(message, ModelRequest):
+            continue
+        for part in message.parts:
+            if not isinstance(part, ToolReturnPart):
+                continue
+            content = part.content
+            if isinstance(content, dict) and "error" in content:
+                errors.append(
+                    {
+                        "tool": part.tool_name,
+                        "error": str(content.get("error")),
+                        "message": str(content.get("message", "")),
+                    }
+                )
+    return errors
+
+
 # -- Main entry point ----------------------------------------------------------
 
 
-def invoke_workflow_agent(  # noqa: PLR0913, PLR0912, PLR0915, C901
+def invoke_workflow_agent(  # noqa: PLR0913
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
     workflow: Workflow,
@@ -484,22 +505,7 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0912, PLR0915, C901
             # Scan tool returns for {"error": ...} payloads -- the agent may have
             # called a tool with bad arguments and ignored the rejection in its
             # final reasoning. Surface those failures so the orchestration sees them.
-            tool_errors: list[dict[str, str]] = []
-            for message in result.all_messages():
-                if not isinstance(message, ModelRequest):
-                    continue
-                for part in message.parts:
-                    if not isinstance(part, ToolReturnPart):
-                        continue
-                    content = part.content
-                    if isinstance(content, dict) and "error" in content:
-                        tool_errors.append(
-                            {
-                                "tool": part.tool_name,
-                                "error": str(content.get("error")),
-                                "message": str(content.get("message", "")),
-                            }
-                        )
+            tool_errors = _extract_tool_errors(result)
 
             if tool_errors:
                 logfire.warn(
