@@ -275,6 +275,8 @@ Logging and tracing use [Pydantic Logfire](https://pydantic.dev/logfire) (OpenTe
 - Token: `mailpilot config set logfire_token <TOKEN>` or `LOGFIRE_TOKEN` env var
 - Cloud send: `send_to_logfire='if-token-present'` -- console-only when no token
 
+**Operator-log layer.** `src/mailpilot/operator_log.py` exposes `operator_event(name, **fields)` which writes a single-line `HH:MM:SS event=NAME k1=v1 ...` record to stdout, independent of Logfire's console exporter. It carries the curated lifecycle stream operators monitor under journald: `loop.start`, `loop.tick`, `loop.stop`, `pubsub.notify`, `sync.account`, `route.match`, `route.no_match`, `agent.run`, `task.drain`, `error`. Always on, regardless of `--debug`. When you add a new `logfire.exception` site reachable from `mailpilot run`, pair it with `operator_event("error", source=<event_name>, message=str(exc))` so the operator stream stays complete. Newlines in field values are collapsed to spaces -- preserves the one-line-per-event contract for `journalctl | grep`. See ADR-07 for the design.
+
 **Cloud project.** All records land in dedicated Logfire project **`mailpilot`** (scope of the project-scoped write token). The sibling `leadpilot` service uses its own project, so no `service_name` filter is needed when querying. Spans are split by `deployment_environment` (`development` | `production`), set from the `logfire_environment` setting. When querying via MCP, always pass `project='mailpilot'` and filter with `WHERE deployment_environment = 'production'` (or `'development'`).
 
 **Skills for Logfire work.** Prefer these skills over ad-hoc commands:

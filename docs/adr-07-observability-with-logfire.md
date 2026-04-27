@@ -127,6 +127,20 @@ except ApiError as exc:
 - Local development with live traces: use `/logfire:dev-session` to obtain write credentials. The session token lands in `~/.mailpilot/config.json` via `mailpilot config set logfire_token`.
 - Console output defaults to `warn`. Use `mailpilot --debug COMMAND` to see `debug` and `info` locally.
 
+### Operator log layer
+
+`src/mailpilot/operator_log.py` is a separate, single-function layer (`operator_event(name, **fields)`) that writes one structured line per lifecycle event to stdout. It is independent of Logfire's console exporter.
+
+**Why split:**
+
+- Under systemd, stdout becomes journald. journald rate-limits (default 10000/30s) and silently drops on overflow. Mirroring full Logfire span output to stdout risks dropped lines on busy mailboxes.
+- The operator-log layer answers "is it alive, what just happened, did anything error" -- a tight, high-signal feed. Logfire remains the deep-trace layer.
+- The `--debug` flag still controls Logfire's console exporter for local debugging. The operator log is always on.
+
+**Curated event set:** `loop.start`, `loop.tick`, `loop.stop`, `pubsub.notify`, `sync.account`, `route.match`, `route.no_match`, `agent.run`, `task.drain`, `error`. Each event line is single-line ASCII: `HH:MM:SS event=NAME k1=v1 k2=v2`.
+
+**When you add a new lifecycle event,** add it to `operator_event` call sites only -- do not add it to Logfire's console exporter. When you add a `logfire.exception` or `logfire.warn` reachable from `mailpilot run`, pair it with `operator_event("error", source=<event_name>, message=str(exc))` so the operator stream stays complete.
+
 ### Investigation workflow
 
 When debugging production behavior, use the `/logfire:debug` skill, which drives the Logfire MCP. Pass `project='mailpilot'` on every call. Standard filter prefix for production queries:

@@ -20,6 +20,23 @@ from typing import Any
 
 import logfire
 
+# Translation table that drops every C0 control byte except \t (0x09) and \n
+# (0x0A). Strict JSON parsers (RFC 8259) reject bare C0 controls in strings;
+# \t and \n are kept because Python's json module escapes them correctly and
+# they appear in legitimate email bodies. \r is intentionally dropped: inbound
+# Gmail bodies arrive with CRLF line endings, so removing \r leaves clean
+# \n-delimited lines for downstream splitlines/normalisation.
+_CONTROL_CHAR_TABLE = dict.fromkeys(
+    [i for i in range(0x20) if i not in (0x09, 0x0A)],
+    None,
+)
+
+
+def strip_control_chars(text: str) -> str:
+    """Remove C0 control bytes that break strict JSON parsing of body_text."""
+    return text.translate(_CONTROL_CHAR_TABLE)
+
+
 GmailService = Any
 """Type alias for the Gmail API service resource (untyped by Google)."""
 
@@ -591,6 +608,7 @@ def _normalize_text(text: str) -> str:
     """
     if not text:
         return ""
+    text = strip_control_chars(text)
     lines = [line.rstrip() for line in text.splitlines()]
     collapsed: list[str] = []
     blank_count = 0

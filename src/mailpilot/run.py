@@ -26,6 +26,7 @@ from mailpilot.database import (
 )
 from mailpilot.gmail import GmailClient
 from mailpilot.models import Task
+from mailpilot.operator_log import operator_event
 from mailpilot.settings import Settings
 from mailpilot.sync import sync_account
 
@@ -95,6 +96,7 @@ def execute_task(
                 "run.task.agent_failed",
                 task_id=task.id,
             )
+            operator_event("error", source="run.task.agent_failed", message=str(exc))
             connection.rollback()
             complete_task(
                 connection,

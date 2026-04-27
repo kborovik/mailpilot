@@ -524,6 +524,74 @@ def test_invoke_span_has_usage_attributes(
     assert attrs["llm_requests"] >= 1
 
 
+def test_invoke_span_has_status_completed_on_success(
+    database_connection: psycopg.Connection[dict[str, Any]],
+    capfire: CaptureLogfire,
+) -> None:
+    """Successful agent.invoke span carries status=completed.
+
+    Operator-log parity: the ``event=agent.run`` line emits ``status=completed``
+    and the result dict has ``status=completed``. The span MUST mirror the
+    same value so Logfire queries don't need to join through ``task.status``.
+    """
+    _account, contact, workflow = _setup(database_connection)
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    with patch("mailpilot.agent.invoke.GmailClient"):
+        invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            model_override=FunctionModel(_model_that_calls_noop),
+        )
+
+    invoke_spans = [
+        s
+        for s in capfire.exporter.exported_spans_as_dict()
+        if s["name"] == "agent.invoke"
+    ]
+    assert len(invoke_spans) == 1
+    assert invoke_spans[0]["attributes"]["status"] == "completed"
+
+
+def test_invoke_span_has_status_failed_on_exception(
+    database_connection: psycopg.Connection[dict[str, Any]],
+    capfire: CaptureLogfire,
+) -> None:
+    """Failed agent.invoke span carries status=failed.
+
+    When the agent raises (e.g. AgentDidNotUseToolsError) the span MUST be
+    annotated with status=failed before the exception propagates so the
+    operator log's ``event=error`` (emitted by callers) lines up with the
+    span attribute in Logfire.
+    """
+    _account, contact, workflow = _setup(database_connection)
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        pytest.raises(AgentDidNotUseToolsError),
+    ):
+        invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            model_override=FunctionModel(_model_no_tools),
+        )
+
+    invoke_spans = [
+        s
+        for s in capfire.exporter.exported_spans_as_dict()
+        if s["name"] == "agent.invoke"
+    ]
+    assert len(invoke_spans) == 1
+    assert invoke_spans[0]["attributes"]["status"] == "failed"
+
+
 # -- Tests: reply_email tool ---------------------------------------------------
 
 
