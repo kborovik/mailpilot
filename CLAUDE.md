@@ -50,15 +50,15 @@ The CLI must be LLM Agent friendly: JSON output only. Exit codes must be meaning
 
 **Verbs: GitHub CLI (`gh`) as default guidance, not a rule.** Common verbs: `list` (summary), `view ID` (full record), `get` (fetch from external API), `set` (update config). The primary concern is LLM-agent ease-of-operation and fewer mistakes -- when a domain-specific verb (e.g., `reply`) reduces parameters or ambiguity for the operator, prefer it over forcing a `gh`-style alternative. All IDs are UUIDv7.
 
-**List vs view contract.** A `<entity> list` row exists to answer one question -- "is this the row I want to drill into?" -- so it MUST contain only fields that:
+**List vs view contract.** A `<entity> list` or `<entity> search` row exists to answer one question -- "is this the row I want to drill into?" -- so it MUST contain only fields that:
 
 1. **Identify** -- `id` plus the natural identifier (email, name, subject, domain).
-2. **Filter** -- every field exposed as a `--flag` on the same `list` command (status, type, direction, FK refs).
+2. **Filter** -- every field exposed as a `--flag` on the same `list` or `search` command (status, type, direction, FK refs).
 3. **Order** -- the timestamp the list is sorted by.
 
 It MUST NOT contain long-text fields (`body_text`, `instructions`, `objective`, `profile_summary`, `qualification_notes`, ...), JSON blobs (`detail`, `context`, `result`, `recipients`), variable-cardinality lists (`labels`, `domain_aliases`, `products_services`, `locations`), or internal Gmail bookkeeping (`gmail_history_id`, `watch_expiration`, `references_header`, `in_reply_to`, `rfc2822_message_id`).
 
-Mechanics: each entity has a `<Entity>Summary` Pydantic model in `models.py` (a strict subset of the full model). `list_<entity>` in `database.py` SELECTs only summary columns and returns `list[<Entity>Summary]`. `<entity> view ID` (and `get_<entity>()`) returns the full record. Exceptions: `Tag` already matches the summary contract (no `TagSummary`); `Note` summary keeps `body_preview` (first 80 chars + `...` if truncated) since the body is the entire content; `EnrollmentSummary` is denormalised with `contact_email` / `contact_name` because the join is already established in `list_enrollments_detailed`. Internal hot paths that need full records (sync loops over accounts, agent prompt assembly that needs `body_text`, classifier that needs `objective`) hydrate via `get_<entity>()` per id rather than introducing a `list_*_full` variant.
+Mechanics: each entity has a `<Entity>Summary` Pydantic model in `models.py` (a strict subset of the full model). `list_<entity>` in `database.py` SELECTs only summary columns and returns `list[<Entity>Summary]`. `<entity> view ID` (and `get_<entity>()`) returns the full record. `search_*` follows the same contract -- it matches against all indexed text fields (e.g. `body_text`, `objective`, `recipients`) but the projection returned to callers is `<Entity>Summary`, so consumers needing full records on a hit hydrate via `get_<entity>(id)`. Exceptions: `Tag` already matches the summary contract (no `TagSummary`); `Note` summary keeps `body_preview` (first 80 chars + `...` if truncated) since the body is the entire content; `EnrollmentSummary` is denormalised with `contact_email` / `contact_name` because the join is already established in `list_enrollments_detailed`. Internal hot paths that need full records (sync loops over accounts, agent prompt assembly that needs `body_text`, classifier that needs `objective`) hydrate via `get_<entity>()` per id rather than introducing a `list_*_full` variant.
 
 **Input validation in CLI commands.** All commands validate before touching the database:
 

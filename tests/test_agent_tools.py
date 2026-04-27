@@ -24,6 +24,7 @@ from mailpilot.agent.tools import (
     noop,
     read_company,
     read_contact,
+    read_email,
     reply_email,
     search_emails,
     send_email,
@@ -576,6 +577,76 @@ def test_read_company_not_found(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     result = read_company(connection=database_connection, domain="nonexistent.com")
+    assert result is None
+
+
+# -- read_email ----------------------------------------------------------------
+
+
+def test_read_email_found(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection, email="alice@example.com")
+    email = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="Hello",
+        body_text="Full body content here",
+        contact_id=contact.id,
+        recipients={"to": ["alice@example.com"]},
+        status="sent",
+    )
+    assert email is not None
+
+    result = read_email(
+        connection=database_connection,
+        account_id=account.id,
+        email_id=email.id,
+    )
+
+    assert result is not None
+    assert result["id"] == email.id
+    assert result["body_text"] == "Full body content here"
+
+
+def test_read_email_not_found(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+
+    result = read_email(
+        connection=database_connection,
+        account_id=account.id,
+        email_id="0190a000-0000-7000-8000-000000000000",
+    )
+    assert result is None
+
+
+def test_read_email_cross_account_returns_none(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account_a = make_test_account(database_connection, email="a@lab5.ca")
+    account_b = make_test_account(database_connection, email="b@lab5.ca")
+    contact = make_test_contact(database_connection, email="alice@example.com")
+    email_b = create_email(
+        database_connection,
+        account_id=account_b.id,
+        direction="outbound",
+        subject="Account B private",
+        body_text="Sensitive content from account B",
+        contact_id=contact.id,
+        recipients={"to": ["alice@example.com"]},
+        status="sent",
+    )
+    assert email_b is not None
+
+    result = read_email(
+        connection=database_connection,
+        account_id=account_a.id,
+        email_id=email_b.id,
+    )
     assert result is None
 
 
