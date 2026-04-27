@@ -552,6 +552,7 @@ def invoke_workflow_agent(  # noqa: PLR0913
                 )
 
             span.set_attribute("result", "completed")
+            span.set_attribute("status", "completed")
             span.set_attribute("agent_reasoning", result.output)
             operator_event(
                 "agent.run",
@@ -568,6 +569,14 @@ def invoke_workflow_agent(  # noqa: PLR0913
                 "tool_errors": tool_errors,
                 "reasoning": result.output,
             }
+
+        except Exception:
+            # Mirror the operator-log error event into the span so Logfire
+            # queries can identify failed runs without joining through
+            # task.status. The exception itself still propagates -- callers
+            # (e.g. run.py) emit the operator-log ``event=error`` line.
+            span.set_attribute("status", "failed")
+            raise
 
         finally:
             _release_advisory_lock(connection, workflow.id, contact.id)
