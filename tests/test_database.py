@@ -1450,7 +1450,7 @@ def test_search_emails_matches_recipients(
     )
     results = search_emails(database_connection, "kb@lab5.ca")
     assert len(results) == 1
-    assert "kb@lab5.ca" in results[0].recipients["to"]
+    assert results[0].subject == "Outgoing"
 
 
 def test_list_emails_filter_by_sender(
@@ -2564,6 +2564,75 @@ def test_email_list_summary_get_full(
     assert full is not None
     assert full.body_text == "body"
     assert "x@y.com" in full.recipients["to"]
+
+
+def test_company_search_summary_get_full(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from mailpilot.models import CompanySummary
+
+    make_test_company(database_connection, name="Acme Corp", domain="acme.com")
+    companies = search_companies(database_connection, "acme")
+    assert isinstance(companies[0], CompanySummary)
+    assert not hasattr(companies[0], "profile_summary")
+    full = get_company(database_connection, companies[0].id)
+    assert full is not None
+    assert hasattr(full, "profile_summary")
+
+
+def test_contact_search_summary_get_full(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from mailpilot.models import ContactSummary
+
+    make_test_contact(database_connection, email="alice@example.com")
+    contacts = search_contacts(database_connection, "alice")
+    assert isinstance(contacts[0], ContactSummary)
+    assert not hasattr(contacts[0], "position")
+    full = get_contact(database_connection, contacts[0].id)
+    assert full is not None
+    assert hasattr(full, "position")
+
+
+def test_workflow_search_summary_get_full(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from mailpilot.models import WorkflowSummary
+
+    account = make_test_account(database_connection)
+    make_test_workflow(database_connection, account_id=account.id, name="Outreach")
+    workflows = search_workflows(database_connection, "outreach")
+    assert isinstance(workflows[0], WorkflowSummary)
+    assert not hasattr(workflows[0], "objective")
+    full = get_workflow(database_connection, workflows[0].id)
+    assert full is not None
+    assert hasattr(full, "objective")
+
+
+def test_email_search_summary_get_full(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from mailpilot.models import EmailSummary
+
+    account = make_test_account(database_connection)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="Meeting Request",
+        body_text="Let's schedule a call",
+        status="sent",
+        recipients={"to": ["client@example.com"]},
+    )
+    emails = search_emails(database_connection, "meeting")
+    assert isinstance(emails[0], EmailSummary)
+    assert not hasattr(emails[0], "body_text")
+    assert not hasattr(emails[0], "recipients")
+    assert not hasattr(emails[0], "labels")
+    full = get_email(database_connection, emails[0].id)
+    assert full is not None
+    assert full.body_text == "Let's schedule a call"
+    assert "client@example.com" in full.recipients["to"]
 
 
 def test_task_list_summary(

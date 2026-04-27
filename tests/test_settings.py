@@ -136,9 +136,7 @@ def test_set_setting_does_not_leak_secret_values(
             assert secret not in str(attr_value)
 
 
-def test_set_setting_redacts_database_url(
-    capfire: CaptureLogfire, tmp_path: Path
-):
+def test_set_setting_redacts_database_url(capfire: CaptureLogfire, tmp_path: Path):
     """database_url can carry credentials so it must be redacted."""
     config_path = tmp_path / "config.json"
     url_with_creds = "postgresql://user:hunter2@db.example.com/mailpilot"

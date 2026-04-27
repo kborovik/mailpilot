@@ -374,7 +374,7 @@ def search_companies(
     connection: psycopg.Connection[dict[str, Any]],
     query: str,
     limit: int = 100,
-) -> list[Company]:
+) -> list[CompanySummary]:
     """Search companies by name or domain.
 
     Args:
@@ -383,12 +383,13 @@ def search_companies(
         limit: Maximum number of results.
 
     Returns:
-        Matching companies ordered by name.
+        Matching company summaries ordered by name.
     """
     pattern = f"%{query}%"
     rows = connection.execute(
         """\
-        SELECT * FROM company
+        SELECT id, name, domain, industry, employee_count, created_at
+        FROM company
         WHERE LOWER(name) LIKE LOWER(%(pattern)s)
            OR LOWER(domain) LIKE LOWER(%(pattern)s)
         ORDER BY LOWER(name)
@@ -396,7 +397,7 @@ def search_companies(
         """,
         {"pattern": pattern, "limit": limit},
     ).fetchall()
-    return [Company.model_validate(row) for row in rows]
+    return [CompanySummary.model_validate(row) for row in rows]
 
 
 def get_company_by_domain(
@@ -705,7 +706,7 @@ def search_contacts(
     connection: psycopg.Connection[dict[str, Any]],
     query: str,
     limit: int = 100,
-) -> list[Contact]:
+) -> list[ContactSummary]:
     """Search contacts by email, name, or domain.
 
     Args:
@@ -714,12 +715,13 @@ def search_contacts(
         limit: Maximum number of results.
 
     Returns:
-        Matching contacts ordered by email.
+        Matching contact summaries ordered by email.
     """
     pattern = f"%{query}%"
     rows = connection.execute(
         """\
-        SELECT * FROM contact
+        SELECT id, email, first_name, last_name, company_id, status, created_at
+        FROM contact
         WHERE LOWER(email) LIKE LOWER(%(pattern)s)
            OR LOWER(COALESCE(first_name, '')) LIKE LOWER(%(pattern)s)
            OR LOWER(COALESCE(last_name, '')) LIKE LOWER(%(pattern)s)
@@ -729,7 +731,7 @@ def search_contacts(
         """,
         {"pattern": pattern, "limit": limit},
     ).fetchall()
-    return [Contact.model_validate(row) for row in rows]
+    return [ContactSummary.model_validate(row) for row in rows]
 
 
 def update_contact(
@@ -907,7 +909,7 @@ def search_workflows(
     connection: psycopg.Connection[dict[str, Any]],
     query: str,
     limit: int = 100,
-) -> list[Workflow]:
+) -> list[WorkflowSummary]:
     """Search workflows by name or objective.
 
     Args:
@@ -916,12 +918,13 @@ def search_workflows(
         limit: Maximum number of results.
 
     Returns:
-        Matching workflows ordered by name.
+        Matching workflow summaries ordered by name.
     """
     pattern = f"%{query}%"
     rows = connection.execute(
         """\
-        SELECT * FROM workflow
+        SELECT id, name, type, account_id, status, created_at
+        FROM workflow
         WHERE LOWER(name) LIKE LOWER(%(pattern)s)
            OR LOWER(objective) LIKE LOWER(%(pattern)s)
         ORDER BY LOWER(name)
@@ -929,7 +932,7 @@ def search_workflows(
         """,
         {"pattern": pattern, "limit": limit},
     ).fetchall()
-    return [Workflow.model_validate(row) for row in rows]
+    return [WorkflowSummary.model_validate(row) for row in rows]
 
 
 def update_workflow(
@@ -1462,7 +1465,7 @@ def search_emails(
     query: str,
     limit: int = 100,
     account_id: str | None = None,
-) -> list[Email]:
+) -> list[EmailSummary]:
     """Search emails by subject, body text, sender, or recipients.
 
     Args:
@@ -1472,7 +1475,7 @@ def search_emails(
         account_id: Filter by account ID.
 
     Returns:
-        Matching emails ordered by creation time descending.
+        Matching email summaries ordered by creation time descending.
     """
     pattern = f"%{query}%"
     params: dict[str, object] = {"pattern": pattern, "limit": limit}
@@ -1481,7 +1484,9 @@ def search_emails(
         account_filter = SQL("AND account_id = %(account_id)s")
         params["account_id"] = account_id
     query_sql = SQL(
-        "SELECT * FROM email "
+        "SELECT id, account_id, contact_id, workflow_id, direction, "
+        "subject, sender, status, sent_at, received_at "
+        "FROM email "
         "WHERE (LOWER(subject) LIKE LOWER(%(pattern)s) "
         "   OR LOWER(body_text) LIKE LOWER(%(pattern)s) "
         "   OR LOWER(sender) LIKE LOWER(%(pattern)s) "
@@ -1491,7 +1496,7 @@ def search_emails(
         "LIMIT %(limit)s"
     ).format(account_filter)
     rows = connection.execute(query_sql, params).fetchall()
-    return [Email.model_validate(row) for row in rows]
+    return [EmailSummary.model_validate(row) for row in rows]
 
 
 def get_email_by_gmail_message_id(
