@@ -21,6 +21,16 @@ class Account(BaseModel):
     updated_at: datetime
 
 
+class AccountSummary(BaseModel):
+    """List-view projection of `Account`."""
+
+    id: str
+    email: str
+    display_name: str
+    last_synced_at: datetime | None
+    created_at: datetime
+
+
 class Company(BaseModel):
     """Target company for outbound campaigns."""
 
@@ -40,6 +50,17 @@ class Company(BaseModel):
     qualification_notes: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class CompanySummary(BaseModel):
+    """List-view projection of `Company`."""
+
+    id: str
+    name: str
+    domain: str
+    industry: str | None
+    employee_count: int | None
+    created_at: datetime
 
 
 class Contact(BaseModel):
@@ -63,6 +84,18 @@ class Contact(BaseModel):
     updated_at: datetime
 
 
+class ContactSummary(BaseModel):
+    """List-view projection of `Contact`."""
+
+    id: str
+    email: str
+    first_name: str | None
+    last_name: str | None
+    company_id: str | None
+    status: str
+    created_at: datetime
+
+
 WorkflowType = Literal["inbound", "outbound"]
 WorkflowStatus = Literal["draft", "active", "paused"]
 
@@ -82,6 +115,17 @@ class Workflow(BaseModel):
     updated_at: datetime
 
 
+class WorkflowSummary(BaseModel):
+    """List-view projection of `Workflow`."""
+
+    id: str
+    name: str
+    type: WorkflowType
+    account_id: str
+    status: WorkflowStatus
+    created_at: datetime
+
+
 EnrollmentStatus = Literal["pending", "active", "completed", "failed"]
 
 
@@ -96,16 +140,14 @@ class Enrollment(BaseModel):
     updated_at: datetime
 
 
-class EnrollmentDetail(BaseModel):
-    """Enrollment with denormalised contact info for list display."""
+class EnrollmentSummary(BaseModel):
+    """List-view projection of `Enrollment` joined with contact identity."""
 
     workflow_id: str
     contact_id: str
     contact_email: str
     contact_name: str
     status: EnrollmentStatus
-    reason: str
-    created_at: datetime
     updated_at: datetime
 
 
@@ -137,6 +179,21 @@ class Email(BaseModel):
     created_at: datetime
 
 
+class EmailSummary(BaseModel):
+    """List-view projection of `Email`."""
+
+    id: str
+    account_id: str
+    contact_id: str | None
+    workflow_id: str | None
+    direction: EmailDirection
+    subject: str
+    sender: str
+    status: str
+    sent_at: datetime | None
+    received_at: datetime | None
+
+
 TaskStatus = Literal["pending", "completed", "failed", "cancelled"]
 
 
@@ -154,6 +211,18 @@ class Task(BaseModel):
     result: dict[str, object] = {}
     completed_at: datetime | None = None
     created_at: datetime
+
+
+class TaskSummary(BaseModel):
+    """List-view projection of `Task`."""
+
+    id: str
+    workflow_id: str
+    contact_id: str
+    email_id: str | None
+    description: str
+    scheduled_at: datetime
+    status: TaskStatus
 
 
 ActivityType = Literal[
@@ -181,6 +250,17 @@ class Activity(BaseModel):
     created_at: datetime
 
 
+class ActivitySummary(BaseModel):
+    """List-view projection of `Activity`."""
+
+    id: str
+    contact_id: str
+    company_id: str | None
+    type: ActivityType
+    summary: str
+    created_at: datetime
+
+
 EntityType = Literal["contact", "company"]
 
 
@@ -201,6 +281,16 @@ class Note(BaseModel):
     entity_type: EntityType
     entity_id: str
     body: str
+    created_at: datetime
+
+
+class NoteSummary(BaseModel):
+    """List-view projection of `Note` with truncated body preview."""
+
+    id: str
+    entity_type: EntityType
+    entity_id: str
+    body_preview: str
     created_at: datetime
 
 

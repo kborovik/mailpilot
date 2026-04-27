@@ -254,13 +254,15 @@ def account_create(email: str, display_name: str) -> None:
 
 
 @account.command("list")
-def account_list() -> None:
-    """List all Gmail accounts."""
+@click.option("--limit", default=100, help="Maximum results.")
+@click.option("--since", default=None, help="ISO datetime lower bound on created_at.")
+def account_list(limit: int, since: str | None) -> None:
+    """List Gmail accounts as summaries."""
     from mailpilot.database import initialize_database, list_accounts
 
     connection = initialize_database(_database_url())
     try:
-        accounts = list_accounts(connection)
+        accounts = list_accounts(connection, limit=limit, since=since)
         output({"accounts": [a.model_dump(mode="json") for a in accounts]})
     finally:
         connection.close()
@@ -326,7 +328,12 @@ def account_sync(account_id: str | None) -> None:
                 output_error(f"account not found: {account_id}", "not_found")
             accounts = [single]
         else:
-            accounts = list_accounts(connection)
+            summaries = list_accounts(connection, limit=1000)
+            accounts = [
+                full
+                for full in (get_account(connection, s.id) for s in summaries)
+                if full is not None
+            ]
 
         results: list[dict[str, object]] = []
         total_stored = 0
@@ -430,13 +437,14 @@ def company_search(query: str, limit: int) -> None:
 
 @company.command("list")
 @click.option("--limit", default=100, help="Maximum results.")
-def company_list(limit: int) -> None:
-    """List all companies."""
+@click.option("--since", default=None, help="ISO datetime lower bound on created_at.")
+def company_list(limit: int, since: str | None) -> None:
+    """List companies as summaries."""
     from mailpilot.database import initialize_database, list_companies
 
     connection = initialize_database(_database_url())
     try:
-        companies = list_companies(connection, limit=limit)
+        companies = list_companies(connection, limit=limit, since=since)
         output({"companies": [c.model_dump(mode="json") for c in companies]})
     finally:
         connection.close()
@@ -464,12 +472,13 @@ def company_export(file: str) -> None:
     """Export all companies to a JSON file."""
     import pathlib
 
-    from mailpilot.database import initialize_database, list_companies
+    from mailpilot.database import get_company, initialize_database, list_companies
 
     connection = initialize_database(_database_url())
     try:
-        companies = list_companies(connection)
-        data = [c.model_dump(mode="json") for c in companies]
+        summaries = list_companies(connection, limit=100_000)
+        full = [get_company(connection, s.id) for s in summaries]
+        data = [c.model_dump(mode="json") for c in full if c is not None]
         pathlib.Path(file).write_text(json.dumps(data, indent=2))
         output({"exported": len(data), "file": file})
     finally:
@@ -601,10 +610,15 @@ def contact_search(query: str, limit: int) -> None:
     type=click.Choice(["active", "bounced", "unsubscribed"]),
     help="Filter by contact status.",
 )
+@click.option("--since", default=None, help="ISO datetime lower bound on created_at.")
 def contact_list(
-    limit: int, domain: str | None, company_id: str | None, status: str | None
+    limit: int,
+    domain: str | None,
+    company_id: str | None,
+    status: str | None,
+    since: str | None,
 ) -> None:
-    """List contacts."""
+    """List contacts as summaries."""
     from mailpilot.database import get_company, initialize_database, list_contacts
 
     connection = initialize_database(_database_url())
@@ -612,7 +626,12 @@ def contact_list(
         if company_id is not None and get_company(connection, company_id) is None:
             output_error(f"company not found: {company_id}", "not_found")
         contacts = list_contacts(
-            connection, limit=limit, domain=domain, company_id=company_id, status=status
+            connection,
+            limit=limit,
+            domain=domain,
+            company_id=company_id,
+            status=status,
+            since=since,
         )
         output({"contacts": [c.model_dump(mode="json") for c in contacts]})
     finally:
@@ -641,12 +660,13 @@ def contact_export(file: str) -> None:
     """Export all contacts to a JSON file."""
     import pathlib
 
-    from mailpilot.database import initialize_database, list_contacts
+    from mailpilot.database import get_contact, initialize_database, list_contacts
 
     connection = initialize_database(_database_url())
     try:
-        contacts = list_contacts(connection)
-        data = [c.model_dump(mode="json") for c in contacts]
+        summaries = list_contacts(connection, limit=100_000)
+        full = [get_contact(connection, s.id) for s in summaries]
+        data = [c.model_dump(mode="json") for c in full if c is not None]
         pathlib.Path(file).write_text(json.dumps(data, indent=2))
         output({"exported": len(data), "file": file})
     finally:
@@ -1176,7 +1196,14 @@ def tag_remove(contact_id: str | None, company_id: str | None, name: str) -> Non
 @tag.command("list")
 @click.option("--contact-id", default=None, help="Contact ID.")
 @click.option("--company-id", default=None, help="Company ID.")
-def tag_list(contact_id: str | None, company_id: str | None) -> None:
+@click.option("--limit", default=100, help="Maximum results.")
+@click.option("--since", default=None, help="ISO datetime lower bound on created_at.")
+def tag_list(
+    contact_id: str | None,
+    company_id: str | None,
+    limit: int,
+    since: str | None,
+) -> None:
     """List tags on a contact or company."""
     from mailpilot.database import (
         get_company,
@@ -1193,7 +1220,13 @@ def tag_list(contact_id: str | None, company_id: str | None) -> None:
                 output_error(f"contact {entity_id} not found", "not_found")
         elif get_company(connection, entity_id) is None:
             output_error(f"company {entity_id} not found", "not_found")
-        tags = list_tags(connection, entity_type=entity_type, entity_id=entity_id)
+        tags = list_tags(
+            connection,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            limit=limit,
+            since=since,
+        )
         output({"tags": [t.model_dump(mode="json") for t in tags]})
     finally:
         connection.close()
@@ -1549,10 +1582,16 @@ def workflow_search(query: str, limit: int) -> None:
     type=click.Choice(["inbound", "outbound"]),
     help="Filter by workflow type.",
 )
+@click.option("--limit", default=100, help="Maximum results.")
+@click.option("--since", default=None, help="ISO datetime lower bound on created_at.")
 def workflow_list(
-    account_id: str | None, status: str | None, workflow_type: str | None
+    account_id: str | None,
+    status: str | None,
+    workflow_type: str | None,
+    limit: int,
+    since: str | None,
 ) -> None:
-    """List workflows."""
+    """List workflows as summaries."""
     from mailpilot.database import get_account, initialize_database, list_workflows
 
     connection = initialize_database(_database_url())
@@ -1564,6 +1603,8 @@ def workflow_list(
             account_id=account_id,
             status=status,
             workflow_type=workflow_type,
+            limit=limit,
+            since=since,
         )
         output({"workflows": [w.model_dump(mode="json") for w in workflows]})
     finally:
@@ -1792,13 +1833,15 @@ def enrollment_view(workflow_id: str, contact_id: str) -> None:
     help="Filter by enrollment status.",
 )
 @click.option("--limit", default=100, help="Maximum results.")
+@click.option("--since", default=None, help="ISO datetime lower bound on updated_at.")
 def enrollment_list(
     workflow_id: str | None,
     contact_id: str | None,
     status: str | None,
     limit: int,
+    since: str | None,
 ) -> None:
-    """List enrollments. Filter by workflow, contact, or both."""
+    """List enrollments as summaries. Filter by workflow, contact, or both."""
     from mailpilot.database import (
         get_contact,
         get_workflow,
@@ -1818,6 +1861,7 @@ def enrollment_list(
             contact_id=contact_id,
             status=status,
             limit=limit,
+            since=since,
         )
         output({"enrollments": [r.model_dump(mode="json") for r in rows]})
     finally:
@@ -1871,13 +1915,15 @@ def task() -> None:
     help="Filter by task status.",
 )
 @click.option("--limit", default=100, help="Maximum results.")
+@click.option("--since", default=None, help="ISO datetime lower bound on scheduled_at.")
 def task_list(
     workflow_id: str | None,
     contact_id: str | None,
     status: str | None,
     limit: int,
+    since: str | None,
 ) -> None:
-    """List tasks with optional filters."""
+    """List tasks as summaries with optional filters."""
     from mailpilot.database import (
         get_contact,
         get_workflow,
@@ -1897,6 +1943,7 @@ def task_list(
             contact_id=contact_id,
             status=status,
             limit=limit,
+            since=since,
         )
         output({"tasks": [t.model_dump(mode="json") for t in tasks]})
     finally:

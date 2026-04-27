@@ -50,6 +50,16 @@ The CLI must be LLM Agent friendly: JSON output only. Exit codes must be meaning
 
 **Verbs: GitHub CLI (`gh`) as default guidance, not a rule.** Common verbs: `list` (summary), `view ID` (full record), `get` (fetch from external API), `set` (update config). The primary concern is LLM-agent ease-of-operation and fewer mistakes -- when a domain-specific verb (e.g., `reply`) reduces parameters or ambiguity for the operator, prefer it over forcing a `gh`-style alternative. All IDs are UUIDv7.
 
+**List vs view contract.** A `<entity> list` row exists to answer one question -- "is this the row I want to drill into?" -- so it MUST contain only fields that:
+
+1. **Identify** -- `id` plus the natural identifier (email, name, subject, domain).
+2. **Filter** -- every field exposed as a `--flag` on the same `list` command (status, type, direction, FK refs).
+3. **Order** -- the timestamp the list is sorted by.
+
+It MUST NOT contain long-text fields (`body_text`, `instructions`, `objective`, `profile_summary`, `qualification_notes`, ...), JSON blobs (`detail`, `context`, `result`, `recipients`), variable-cardinality lists (`labels`, `domain_aliases`, `products_services`, `locations`), or internal Gmail bookkeeping (`gmail_history_id`, `watch_expiration`, `references_header`, `in_reply_to`, `rfc2822_message_id`).
+
+Mechanics: each entity has a `<Entity>Summary` Pydantic model in `models.py` (a strict subset of the full model). `list_<entity>` in `database.py` SELECTs only summary columns and returns `list[<Entity>Summary]`. `<entity> view ID` (and `get_<entity>()`) returns the full record. Exceptions: `Tag` already matches the summary contract (no `TagSummary`); `Note` summary keeps `body_preview` (first 80 chars + `...` if truncated) since the body is the entire content; `EnrollmentSummary` is denormalised with `contact_email` / `contact_name` because the join is already established in `list_enrollments_detailed`. Internal hot paths that need full records (sync loops over accounts, agent prompt assembly that needs `body_text`, classifier that needs `objective`) hydrate via `get_<entity>()` per id rather than introducing a `list_*_full` variant.
+
 **Input validation in CLI commands.** All commands validate before touching the database:
 
 1. Required text fields reject empty/whitespace-only values: `output_error("X cannot be empty", "validation_error")` -- checked before `initialize_database()`.
@@ -63,7 +73,7 @@ mailpilot --debug COMMAND
 mailpilot --completion bash|zsh|fish
 
 mailpilot account create --email E [--display-name N]
-mailpilot account list
+mailpilot account list [--limit N] [--since ISO]
 mailpilot account view ID
 mailpilot account update ID [--display-name N]
 mailpilot account sync [--account-id ID]
@@ -71,7 +81,7 @@ mailpilot account sync [--account-id ID]
 mailpilot company create --domain D [--name N] [opts]
 mailpilot company update ID [--name N]
 mailpilot company search QUERY [--limit N]
-mailpilot company list [--limit N]
+mailpilot company list [--limit N] [--since ISO]
 mailpilot company view ID
 mailpilot company export FILE
 mailpilot company import FILE
@@ -79,7 +89,7 @@ mailpilot company import FILE
 mailpilot contact create --email E [--first-name F] [--last-name L] [opts]
 mailpilot contact update ID [--email E] [--first-name F] [--last-name L] [opts]
 mailpilot contact search QUERY [--limit N]
-mailpilot contact list [--limit N] [--domain D] [--company-id ID] [--status active|bounced|unsubscribed]
+mailpilot contact list [--limit N] [--domain D] [--company-id ID] [--status active|bounced|unsubscribed] [--since ISO]
 mailpilot contact view ID
 mailpilot contact export FILE
 mailpilot contact import FILE
@@ -87,7 +97,7 @@ mailpilot contact import FILE
 mailpilot workflow create --name N --type inbound|outbound --account-id ID [--objective O] [--instructions TEXT | --instructions-file F] [--draft]
 mailpilot workflow update ID [--name N] [--objective O] [--instructions TEXT | --instructions-file F]
 mailpilot workflow search QUERY [--limit N]
-mailpilot workflow list [--account-id ID] [--status draft|active|paused] [--type inbound|outbound]
+mailpilot workflow list [--account-id ID] [--status draft|active|paused] [--type inbound|outbound] [--limit N] [--since ISO]
 mailpilot workflow view ID
 mailpilot workflow start ID
 mailpilot workflow stop ID
@@ -95,11 +105,11 @@ mailpilot workflow stop ID
 mailpilot enrollment add --workflow-id ID --contact-id ID
 mailpilot enrollment remove --workflow-id ID --contact-id ID
 mailpilot enrollment view --workflow-id ID --contact-id ID
-mailpilot enrollment list [--workflow-id ID] [--contact-id ID] [--status pending|active|completed|failed] [--limit N]
+mailpilot enrollment list [--workflow-id ID] [--contact-id ID] [--status pending|active|completed|failed] [--limit N] [--since ISO]
 mailpilot enrollment update --workflow-id ID --contact-id ID --status S [--reason R]
 mailpilot enrollment run --workflow-id ID --contact-id ID
 
-mailpilot task list [--workflow-id ID] [--contact-id ID] [--status pending|completed|failed|cancelled] [--limit N]
+mailpilot task list [--workflow-id ID] [--contact-id ID] [--status pending|completed|failed|cancelled] [--limit N] [--since ISO]
 mailpilot task view ID
 mailpilot task cancel ID
 
@@ -117,8 +127,8 @@ mailpilot tag add --contact-id ID NAME
 mailpilot tag add --company-id ID NAME
 mailpilot tag remove --contact-id ID NAME
 mailpilot tag remove --company-id ID NAME
-mailpilot tag list --contact-id ID
-mailpilot tag list --company-id ID
+mailpilot tag list --contact-id ID [--limit N] [--since ISO]
+mailpilot tag list --company-id ID [--limit N] [--since ISO]
 mailpilot tag search NAME [--type contact|company] [--limit N]
 
 mailpilot note add --contact-id ID --body TEXT

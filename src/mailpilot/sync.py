@@ -40,6 +40,7 @@ from mailpilot.database import (
     create_or_get_contact_by_email,
     create_tasks_for_routed_emails,
     delete_sync_status,
+    get_account,
     get_account_by_email,
     get_contacts_by_emails,
     get_email_by_gmail_message_id,
@@ -357,8 +358,11 @@ def _sync_all_accounts(
     settings: Settings,
 ) -> None:
     """Sync all Gmail accounts. Errors per account are logged, not raised."""
-    accounts = list_accounts(connection)
-    for account in accounts:
+    summaries = list_accounts(connection, limit=1000)
+    for summary in summaries:
+        account = get_account(connection, summary.id)
+        if account is None:
+            continue
         try:
             client = GmailClient(account.email)
             sync_account(connection, account, client, settings)

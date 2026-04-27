@@ -24,17 +24,25 @@ from psycopg.types.json import Json
 
 from mailpilot.models import (
     Account,
+    AccountSummary,
     Activity,
+    ActivitySummary,
     Company,
+    CompanySummary,
     Contact,
+    ContactSummary,
     Email,
+    EmailSummary,
     Enrollment,
-    EnrollmentDetail,
+    EnrollmentSummary,
     Note,
+    NoteSummary,
     SyncStatus,
     Tag,
     Task,
+    TaskSummary,
     Workflow,
+    WorkflowSummary,
 )
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
@@ -201,17 +209,34 @@ def get_account(
 
 def list_accounts(
     connection: psycopg.Connection[dict[str, Any]],
-) -> list[Account]:
-    """List all accounts.
+    limit: int = 100,
+    since: str | None = None,
+) -> list[AccountSummary]:
+    """List accounts as summaries (identify/filter/order fields only).
+
+    Internal callers needing the full record (e.g. ``gmail_history_id``,
+    ``watch_expiration``) must hydrate via ``get_account()`` per id.
 
     Args:
         connection: Open database connection.
+        limit: Maximum results.
+        since: ISO datetime lower bound on ``created_at``.
 
     Returns:
-        List of accounts ordered by creation time.
+        List of account summaries ordered by creation time.
     """
-    rows = connection.execute("SELECT * FROM account ORDER BY created_at").fetchall()
-    return [Account.model_validate(row) for row in rows]
+    conditions: list[Composed | SQL] = []
+    params: dict[str, object] = {"limit": limit}
+    if since is not None:
+        conditions.append(SQL("created_at >= %(since)s"))
+        params["since"] = since
+    where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
+    query = SQL(
+        "SELECT id, email, display_name, last_synced_at, created_at "
+        "FROM account {where} ORDER BY created_at LIMIT %(limit)s"
+    ).format(where=where)
+    rows = connection.execute(query, params).fetchall()
+    return [AccountSummary.model_validate(row) for row in rows]
 
 
 def get_account_by_email(
@@ -319,21 +344,30 @@ def get_company(
 def list_companies(
     connection: psycopg.Connection[dict[str, Any]],
     limit: int = 100,
-) -> list[Company]:
-    """List companies.
+    since: str | None = None,
+) -> list[CompanySummary]:
+    """List companies as summaries.
 
     Args:
         connection: Open database connection.
-        limit: Maximum number of companies to return.
+        limit: Maximum results.
+        since: ISO datetime lower bound on ``created_at``.
 
     Returns:
-        List of companies ordered by name.
+        List of company summaries ordered by name.
     """
-    rows = connection.execute(
-        "SELECT * FROM company ORDER BY LOWER(name) LIMIT %(limit)s",
-        {"limit": limit},
-    ).fetchall()
-    return [Company.model_validate(row) for row in rows]
+    conditions: list[Composed | SQL] = []
+    params: dict[str, object] = {"limit": limit}
+    if since is not None:
+        conditions.append(SQL("created_at >= %(since)s"))
+        params["since"] = since
+    where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
+    query = SQL(
+        "SELECT id, name, domain, industry, employee_count, created_at "
+        "FROM company {where} ORDER BY LOWER(name) LIMIT %(limit)s"
+    ).format(where=where)
+    rows = connection.execute(query, params).fetchall()
+    return [CompanySummary.model_validate(row) for row in rows]
 
 
 def search_companies(
@@ -629,18 +663,20 @@ def list_contacts(
     domain: str | None = None,
     company_id: str | None = None,
     status: str | None = None,
-) -> list[Contact]:
-    """List contacts with optional filters.
+    since: str | None = None,
+) -> list[ContactSummary]:
+    """List contacts as summaries with optional filters.
 
     Args:
         connection: Open database connection.
-        limit: Maximum number of contacts to return.
+        limit: Maximum results.
         domain: Filter by domain.
         company_id: Filter by company ID.
         status: Filter by contact status ("active", "bounced", "unsubscribed").
+        since: ISO datetime lower bound on ``created_at``.
 
     Returns:
-        List of contacts ordered by email.
+        List of contact summaries ordered by email.
     """
     conditions: list[SQL] = []
     params: dict[str, object] = {"limit": limit}
@@ -653,10 +689,16 @@ def list_contacts(
     if status is not None:
         conditions.append(SQL("status = %(status)s"))
         params["status"] = status
+    if since is not None:
+        conditions.append(SQL("created_at >= %(since)s"))
+        params["since"] = since
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
-    query = SQL("SELECT * FROM contact {} ORDER BY email LIMIT %(limit)s").format(where)
+    query = SQL(
+        "SELECT id, email, first_name, last_name, company_id, status, created_at "
+        "FROM contact {} ORDER BY email LIMIT %(limit)s"
+    ).format(where)
     rows = connection.execute(query, params).fetchall()
-    return [Contact.model_validate(row) for row in rows]
+    return [ContactSummary.model_validate(row) for row in rows]
 
 
 def search_contacts(
@@ -822,20 +864,24 @@ def list_workflows(
     account_id: str | None = None,
     status: str | None = None,
     workflow_type: str | None = None,
-) -> list[Workflow]:
-    """List workflows with optional account, status, and type filters.
+    limit: int = 100,
+    since: str | None = None,
+) -> list[WorkflowSummary]:
+    """List workflows as summaries with optional account, status, and type filters.
 
     Args:
         connection: Open database connection.
         account_id: Filter by account ID.
         status: Filter by workflow status (e.g., "active").
         workflow_type: Filter by workflow type ("inbound" or "outbound").
+        limit: Maximum results.
+        since: ISO datetime lower bound on ``created_at``.
 
     Returns:
-        List of workflows ordered by creation time.
+        List of workflow summaries ordered by creation time.
     """
     conditions: list[SQL] = []
-    params: dict[str, object] = {}
+    params: dict[str, object] = {"limit": limit}
     if account_id is not None:
         conditions.append(SQL("account_id = %(account_id)s"))
         params["account_id"] = account_id
@@ -845,10 +891,16 @@ def list_workflows(
     if workflow_type is not None:
         conditions.append(SQL("type = %(workflow_type)s"))
         params["workflow_type"] = workflow_type
+    if since is not None:
+        conditions.append(SQL("created_at >= %(since)s"))
+        params["since"] = since
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
-    query = SQL("SELECT * FROM workflow {} ORDER BY created_at").format(where)
+    query = SQL(
+        "SELECT id, name, type, account_id, status, created_at "
+        "FROM workflow {} ORDER BY created_at LIMIT %(limit)s"
+    ).format(where)
     rows = connection.execute(query, params).fetchall()
-    return [Workflow.model_validate(row) for row in rows]
+    return [WorkflowSummary.model_validate(row) for row in rows]
 
 
 def search_workflows(
@@ -1147,8 +1199,9 @@ def list_enrollments_detailed(
     contact_id: str | None = None,
     status: str | None = None,
     limit: int = 100,
-) -> list[EnrollmentDetail]:
-    """List enrollments with denormalised contact info for display.
+    since: str | None = None,
+) -> list[EnrollmentSummary]:
+    """List enrollments with denormalised contact info as summaries.
 
     JOINs the contact table to include email and name. Separate from
     ``list_enrollments`` to avoid breaking agent tools which expect
@@ -1160,10 +1213,11 @@ def list_enrollments_detailed(
         workflow_id: Optional workflow FK filter.
         contact_id: Optional contact FK filter.
         status: Filter by enrollment status.
-        limit: Maximum results (default 100).
+        limit: Maximum results.
+        since: ISO datetime lower bound on ``e.updated_at``.
 
     Returns:
-        List of enrollment details.
+        List of enrollment summaries.
     """
     params: dict[str, object] = {"limit": limit}
     where_parts: list[Composed | SQL] = []
@@ -1176,21 +1230,25 @@ def list_enrollments_detailed(
     if status is not None:
         where_parts.append(SQL("e.status = %(status)s"))
         params["status"] = status
+    if since is not None:
+        where_parts.append(SQL("e.updated_at >= %(since)s"))
+        params["since"] = since
     where_clause = (
         SQL("WHERE ") + SQL(" AND ").join(where_parts) if where_parts else SQL("")
     )
     query = SQL(
-        "SELECT e.*, c.email AS contact_email, "
+        "SELECT e.workflow_id, e.contact_id, e.status, e.updated_at, "
+        "c.email AS contact_email, "
         "TRIM(COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '')) "
         "AS contact_name "
         "FROM enrollment e "
         "JOIN contact c ON c.id = e.contact_id "
         "{} "
-        "ORDER BY e.created_at "
+        "ORDER BY e.updated_at "
         "LIMIT %(limit)s"
     ).format(where_clause)
     rows = connection.execute(query, params).fetchall()
-    return [EnrollmentDetail.model_validate(row) for row in rows]
+    return [EnrollmentSummary.model_validate(row) for row in rows]
 
 
 # -- Email ---------------------------------------------------------------------
@@ -1334,12 +1392,12 @@ def list_emails(
     status: str | None = None,
     sender: str | None = None,
     recipient: str | None = None,
-) -> list[Email]:
-    """List emails with optional filters.
+) -> list[EmailSummary]:
+    """List emails as summaries with optional filters.
 
     Args:
         connection: Open database connection.
-        limit: Maximum number of emails to return.
+        limit: Maximum results.
         contact_id: Filter by contact ID.
         account_id: Filter by account ID.
         since: ISO datetime lower bound for COALESCE(sent_at, received_at).
@@ -1352,7 +1410,10 @@ def list_emails(
             (case-insensitive, matches to/cc/bcc).
 
     Returns:
-        List of emails ordered by creation time descending.
+        List of email summaries ordered by ``COALESCE(sent_at, received_at)``
+        descending -- the same expression used by the ``since`` filter, so
+        operators can page newest-first using a timestamp visible in
+        ``EmailSummary``.
     """
     conditions: list[SQL] = []
     params: dict[str, object] = {"limit": limit}
@@ -1387,10 +1448,13 @@ def list_emails(
         params["recipient_pattern"] = f"%{recipient}%"
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
-        "SELECT * FROM email {} ORDER BY created_at DESC LIMIT %(limit)s"
+        "SELECT id, account_id, contact_id, workflow_id, direction, "
+        "subject, sender, status, sent_at, received_at "
+        "FROM email {} "
+        "ORDER BY COALESCE(sent_at, received_at) DESC LIMIT %(limit)s"
     ).format(where)
     rows = connection.execute(query, params).fetchall()
-    return [Email.model_validate(row) for row in rows]
+    return [EmailSummary.model_validate(row) for row in rows]
 
 
 def search_emails(
@@ -1815,18 +1879,20 @@ def list_tasks(
     contact_id: str | None = None,
     status: str | None = None,
     limit: int = 100,
-) -> list[Task]:
-    """List tasks with optional filters.
+    since: str | None = None,
+) -> list[TaskSummary]:
+    """List tasks as summaries with optional filters.
 
     Args:
         connection: Open database connection.
         workflow_id: Filter by workflow ID.
         contact_id: Filter by contact ID.
         status: Filter by task status.
-        limit: Maximum number of tasks to return.
+        limit: Maximum results.
+        since: ISO datetime lower bound on ``scheduled_at``.
 
     Returns:
-        List of tasks ordered by scheduled_at descending.
+        List of task summaries ordered by scheduled_at descending.
     """
     conditions: list[SQL] = []
     params: dict[str, object] = {"limit": limit}
@@ -1839,12 +1905,17 @@ def list_tasks(
     if status is not None:
         conditions.append(SQL("status = %(status)s"))
         params["status"] = status
+    if since is not None:
+        conditions.append(SQL("scheduled_at >= %(since)s"))
+        params["since"] = since
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
-        "SELECT * FROM task {} ORDER BY scheduled_at DESC LIMIT %(limit)s"
+        "SELECT id, workflow_id, contact_id, email_id, description, "
+        "scheduled_at, status "
+        "FROM task {} ORDER BY scheduled_at DESC LIMIT %(limit)s"
     ).format(where)
     rows = connection.execute(query, params).fetchall()
-    return [Task.model_validate(row) for row in rows]
+    return [TaskSummary.model_validate(row) for row in rows]
 
 
 def get_unprocessed_inbound_email(
@@ -1980,8 +2051,8 @@ def list_activities(
     activity_type: str | None = None,
     limit: int = 100,
     since: str | None = None,
-) -> list[Activity]:
-    """List activities with required contact or company filter.
+) -> list[ActivitySummary]:
+    """List activities as summaries with required contact or company filter.
 
     At least one of ``contact_id`` or ``company_id`` must be provided.
 
@@ -1994,7 +2065,7 @@ def list_activities(
         since: ISO datetime lower bound for created_at.
 
     Returns:
-        Activities ordered by created_at descending.
+        Activity summaries ordered by created_at descending.
 
     Raises:
         ValueError: If neither contact_id nor company_id is provided.
@@ -2017,10 +2088,11 @@ def list_activities(
         params["since"] = since
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
-        "SELECT * FROM activity {} ORDER BY created_at DESC LIMIT %(limit)s"
+        "SELECT id, contact_id, company_id, type, summary, created_at "
+        "FROM activity {} ORDER BY created_at DESC LIMIT %(limit)s"
     ).format(where)
     rows = connection.execute(query, params).fetchall()
-    return [Activity.model_validate(row) for row in rows]
+    return [ActivitySummary.model_validate(row) for row in rows]
 
 
 # -- Tag -----------------------------------------------------------------------
@@ -2107,25 +2179,39 @@ def list_tags(
     connection: psycopg.Connection[dict[str, Any]],
     entity_type: str,
     entity_id: str,
+    limit: int = 100,
+    since: str | None = None,
 ) -> list[Tag]:
     """List all tags on a contact or company.
+
+    Tag has no Summary projection -- the full row already matches the
+    summary contract (id, entity_type, entity_id, name, created_at).
 
     Args:
         connection: Open database connection.
         entity_type: "contact" or "company".
         entity_id: ID of the tagged entity.
+        limit: Maximum results.
+        since: ISO datetime lower bound on ``created_at``.
 
     Returns:
         Tags ordered by name.
     """
-    rows = connection.execute(
-        """\
-        SELECT * FROM tag
-        WHERE entity_type = %(entity_type)s AND entity_id = %(entity_id)s
-        ORDER BY name
-        """,
-        {"entity_type": entity_type, "entity_id": entity_id},
-    ).fetchall()
+    conditions: list[Composed | SQL] = [
+        SQL("entity_type = %(entity_type)s"),
+        SQL("entity_id = %(entity_id)s"),
+    ]
+    params: dict[str, object] = {
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "limit": limit,
+    }
+    if since is not None:
+        conditions.append(SQL("created_at >= %(since)s"))
+        params["since"] = since
+    where = SQL("WHERE ") + SQL(" AND ").join(conditions)
+    query = SQL("SELECT * FROM tag {} ORDER BY name LIMIT %(limit)s").format(where)
+    rows = connection.execute(query, params).fetchall()
     return [Tag.model_validate(row) for row in rows]
 
 
@@ -2232,18 +2318,21 @@ def list_notes(
     entity_id: str,
     limit: int = 100,
     since: str | None = None,
-) -> list[Note]:
-    """List notes on a contact or company.
+) -> list[NoteSummary]:
+    """List notes on a contact or company as summaries with body previews.
+
+    The full body is replaced by ``body_preview`` -- the first 80 characters
+    with a trailing ellipsis when the body is longer.
 
     Args:
         connection: Open database connection.
         entity_type: "contact" or "company".
         entity_id: ID of the annotated entity.
-        limit: Maximum number of notes to return.
+        limit: Maximum results.
         since: ISO datetime lower bound for created_at.
 
     Returns:
-        Notes ordered by created_at descending.
+        Note summaries ordered by created_at descending.
     """
     conditions: list[SQL] = [
         SQL("entity_type = %(entity_type)s"),
@@ -2259,10 +2348,14 @@ def list_notes(
         params["since"] = since
     where = SQL("WHERE ") + SQL(" AND ").join(conditions)
     query = SQL(
-        "SELECT * FROM note {} ORDER BY created_at DESC LIMIT %(limit)s"
+        "SELECT id, entity_type, entity_id, "
+        "CASE WHEN LENGTH(body) > 80 THEN LEFT(body, 80) || '...' "
+        "ELSE body END AS body_preview, "
+        "created_at "
+        "FROM note {} ORDER BY created_at DESC LIMIT %(limit)s"
     ).format(where)
     rows = connection.execute(query, params).fetchall()
-    return [Note.model_validate(row) for row in rows]
+    return [NoteSummary.model_validate(row) for row in rows]
 
 
 def get_note(

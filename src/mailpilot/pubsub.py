@@ -238,20 +238,23 @@ def renew_watches(
     Returns:
         Number of watches renewed.
     """
-    from mailpilot.database import list_accounts, update_account
+    from mailpilot.database import get_account, list_accounts, update_account
     from mailpilot.gmail import GmailClient
 
     project_id = _resolve_project_id(settings)
     topic = _topic_path(project_id, settings)
     threshold = datetime.now(UTC) + _WATCH_RENEWAL_THRESHOLD
 
-    accounts = list_accounts(connection)
+    summaries = list_accounts(connection, limit=1000)
     renewed = 0
 
     # Per-account spans rather than a single wrapper. A hung Gmail
     # watch call would otherwise block the wrapper span from flushing
     # and hide which account is the offender.
-    for account in accounts:
+    for summary in summaries:
+        account = get_account(connection, summary.id)
+        if account is None:
+            continue
         if (
             account.watch_expiration is not None
             and account.watch_expiration > threshold
