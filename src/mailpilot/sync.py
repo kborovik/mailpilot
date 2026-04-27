@@ -62,6 +62,7 @@ from mailpilot.gmail import (
     extract_text_from_message,
     get_message_headers,
     parse_sender,
+    strip_control_chars,
 )
 from mailpilot.models import Account, Contact, Email
 from mailpilot.operator_log import operator_event
@@ -1020,7 +1021,7 @@ def send_email(  # noqa: PLR0913
         # markers, leaving recipients on text/plain-only clients with
         # tab-soup tables.
         html_body = render_email_html(body, theme)
-        plain_body = body
+        plain_body = strip_control_chars(body)
 
         # Build multipart/alternative MIME
         mime_message = MIMEMultipart("alternative")

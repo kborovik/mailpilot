@@ -106,6 +106,46 @@ def test_extract_empty_payload():
     assert extract_text_from_message({"payload": {}}) == ""
 
 
+def test_extract_strips_control_characters():
+    """C0 control bytes (NUL, BEL, ESC, ...) break strict JSON parsers."""
+    raw = "Hello\x00world\x07\x1bend"
+    message = {
+        "payload": {
+            "mimeType": "text/plain",
+            "body": {"data": _b64(raw)},
+        }
+    }
+    assert extract_text_from_message(message) == "Helloworldend"
+
+
+def test_extract_preserves_tabs_and_newlines():
+    raw = "Line 1\tcol\nLine 2"
+    message = {
+        "payload": {
+            "mimeType": "text/plain",
+            "body": {"data": _b64(raw)},
+        }
+    }
+    assert extract_text_from_message(message) == "Line 1\tcol\nLine 2"
+
+
+def test_extract_round_trips_through_json_strict_mode():
+    """Body must be safe to embed in a JSON document with strict parsing."""
+    import json
+
+    raw = "Header\x00\x01\x02body\x1ftrailer\nDone"
+    message = {
+        "payload": {
+            "mimeType": "text/plain",
+            "body": {"data": _b64(raw)},
+        }
+    }
+    body = extract_text_from_message(message)
+    payload = json.dumps({"body_text": body})
+    parsed = json.loads(payload)  # strict by default
+    assert parsed["body_text"] == body
+
+
 def test_get_message_headers():
     message = {
         "payload": {
