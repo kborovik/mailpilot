@@ -223,7 +223,6 @@ Both are delegated via the service account in `google_application_credentials` a
 make check              # lint + tests
 make lint               # py-format + py-lint + py-types
 make py-test            # pytest -x
-make e2e                # live-Gmail smoke tests against mailpilot_e2e DB (opt-in)
 make py-format          # ruff format
 make py-lint            # ruff check --fix
 make py-types           # basedpyright
@@ -252,7 +251,7 @@ If a GitHub operation isn't covered by a skill (e.g. reviewing comments, closing
 2. Implement minimal code to pass
 3. Run: `uv run ruff check --fix` then `uv run basedpyright`
 
-Tests use a separate database: `postgresql://localhost/mailpilot_test` (override with `DATABASE_URL` env var). The `database_connection` fixture truncates all tables before each test. Use `make_test_settings()` for Settings instances and `load_fixture()` for JSON fixtures -- all in `conftest.py`. HTTP mocking uses `pytest-httpx`. Span-contract tests use the `capfire: CaptureLogfire` fixture from `logfire.testing` (see `tests/test_database_telemetry.py`). The `e2e` pytest marker is excluded from default runs (`addopts = "-m 'not e2e'"`); live-Gmail tests live under `tests/e2e/` and run via `make e2e` against `mailpilot_e2e`.
+Tests use a separate database: `postgresql://localhost/mailpilot_test` (override with `DATABASE_URL` env var). The `database_connection` fixture truncates all tables before each test. Use `make_test_settings()` for Settings instances and `load_fixture()` for JSON fixtures -- all in `conftest.py`. HTTP mocking uses `pytest-httpx`. Span-contract tests use the `capfire: CaptureLogfire` fixture from `logfire.testing` (see `tests/test_database_telemetry.py`). For live-Gmail end-to-end coverage, use the `/smoke-test` skill (see `.claude/skills/smoke-test/SKILL.md`) -- it drives the full agent loop against `outbound@lab5.ca` <-> `inbound@lab5.ca`.
 
 **Patching gotcha for entity validation.** When a CLI command calls `get_contact()`, `get_company()`, or `get_account()` for FK validation, every test for that command must patch the `get_*` function with a valid return value. Adding FK validation to an existing command will break its tests until the patches are added.
 

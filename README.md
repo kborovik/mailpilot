@@ -68,7 +68,6 @@ mailpilot run
 make check    # lint + tests
 make lint     # ruff format + ruff check + basedpyright
 make py-test  # pytest -x
-make e2e      # live-Gmail smoke tests
 ```
 
 ## Documentation
