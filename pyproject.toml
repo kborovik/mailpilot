@@ -108,10 +108,6 @@ known-first-party = ["mailpilot"]
 ]
 
 [tool.pytest.ini_options]
-addopts = "-m 'not e2e'"
-markers = [
-    "e2e: end-to-end tests that hit the live Gmail API and a dedicated e2e database (opt-in via 'make e2e' or 'pytest -m e2e')",
-]
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::PendingDeprecationWarning",
