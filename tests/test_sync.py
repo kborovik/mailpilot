@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import psycopg
 import pytest
 from googleapiclient.errors import HttpError
+from logfire.testing import CaptureLogfire
 
 from conftest import (
     make_test_account,
@@ -277,6 +278,60 @@ def test_start_sync_loop_wires_wakeup_event_to_pubsub_and_listener(
     mock_wakeup.wait.assert_called_with(timeout=settings.run_interval)
     # The wait was cleared so events during processing re-trigger.
     mock_wakeup.clear.assert_called()
+
+
+def _iteration_spans(capfire: CaptureLogfire) -> list[dict[str, Any]]:
+    return [
+        span
+        for span in capfire.exporter.exported_spans_as_dict()
+        if span["name"] == "sync.loop.iteration"
+    ]
+
+
+def test_run_periodic_iteration_tags_event_wakeup_source(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """sync.loop.iteration span carries wakeup_source='event' when triggered by an event."""
+    import queue as _queue  # local to avoid polluting module imports
+
+    from mailpilot.sync import (
+        _run_periodic_iteration,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    settings = make_test_settings()
+    sync_queue: _queue.Queue[str] = _queue.Queue()
+
+    _run_periodic_iteration(
+        database_connection, settings, sync_queue, wakeup_source="event"
+    )
+
+    spans = _iteration_spans(capfire)
+    assert len(spans) == 1
+    assert spans[0]["attributes"]["wakeup_source"] == "event"
+
+
+def test_run_periodic_iteration_tags_timer_wakeup_source(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """sync.loop.iteration span carries wakeup_source='timer' on periodic-timer wake."""
+    import queue as _queue
+
+    from mailpilot.sync import (
+        _run_periodic_iteration,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    settings = make_test_settings()
+    sync_queue: _queue.Queue[str] = _queue.Queue()
+
+    _run_periodic_iteration(
+        database_connection, settings, sync_queue, wakeup_source="timer"
+    )
+
+    spans = _iteration_spans(capfire)
+    assert len(spans) == 1
+    assert spans[0]["attributes"]["wakeup_source"] == "timer"
 
 
 # -- sync_account --------------------------------------------------------------
@@ -1091,6 +1146,215 @@ def test_send_email_omits_threading_headers_without_in_reply_to(
     assert msg["References"] is None
 
 
+def test_send_email_with_thread_id_auto_resolves_in_reply_to_from_local_thread(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """When thread_id is given, send_email pulls In-Reply-To/References from
+    the latest local email in that thread without an explicit in_reply_to.
+
+    Reproduces defect 1: outgoing replies must carry RFC 2822 threading
+    headers so the recipient client can re-thread the message even when
+    Gmail's threadId is opaque to it.
+    """
+    from email import message_from_bytes
+
+    account = make_test_account(database_connection, email="auto-thread@example.com")
+    prior_mid = "<prior-thread@mail.gmail.com>"
+    prior = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="prior-msg",
+        gmail_thread_id="thread-auto",
+        rfc2822_message_id=prior_mid,
+        subject="Original",
+    )
+    assert prior is not None
+
+    client, service = _make_send_client(
+        account.email,
+        send_result={
+            "id": "gmail-msg-reply",
+            "threadId": "thread-auto",
+            "labelIds": ["SENT"],
+        },
+    )
+
+    send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Re: Original",
+        body="Reply body",
+        thread_id="thread-auto",
+    )
+
+    send_body = service.users.return_value.messages.return_value.send.call_args.kwargs[
+        "body"
+    ]
+    raw = base64.urlsafe_b64decode(send_body["raw"])
+    msg = message_from_bytes(raw)
+    assert msg["In-Reply-To"] == prior_mid
+    assert msg["References"] == prior_mid
+
+
+def test_send_email_builds_references_chain_across_thread(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """References must list the prior chain space-separated, In-Reply-To the latest."""
+    from email import message_from_bytes
+
+    account = make_test_account(database_connection, email="chain@example.com")
+    first_mid = "<first-chain@mail.gmail.com>"
+    second_mid = "<second-chain@mail.gmail.com>"
+    first = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        gmail_message_id="chain-1",
+        gmail_thread_id="chain-thread",
+        rfc2822_message_id=first_mid,
+        status="sent",
+    )
+    second = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="chain-2",
+        gmail_thread_id="chain-thread",
+        rfc2822_message_id=second_mid,
+    )
+    assert first is not None
+    assert second is not None
+
+    client, service = _make_send_client(
+        account.email,
+        send_result={
+            "id": "chain-3",
+            "threadId": "chain-thread",
+            "labelIds": ["SENT"],
+        },
+    )
+
+    send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Re: Re: Hello",
+        body="Body",
+        thread_id="chain-thread",
+    )
+
+    send_body = service.users.return_value.messages.return_value.send.call_args.kwargs[
+        "body"
+    ]
+    raw = base64.urlsafe_b64decode(send_body["raw"])
+    msg = message_from_bytes(raw)
+    assert msg["In-Reply-To"] == second_mid
+    assert msg["References"] == f"{first_mid} {second_mid}"
+
+
+def test_send_email_falls_back_to_gmail_headers_when_local_message_id_missing(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """If the latest local row in the thread has rfc2822_message_id=None,
+    fetch the Gmail message headers to recover it."""
+    from email import message_from_bytes
+
+    account = make_test_account(database_connection, email="fallback@example.com")
+    legacy = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        gmail_message_id="legacy-sent",
+        gmail_thread_id="legacy-thread",
+        rfc2822_message_id=None,
+        status="sent",
+    )
+    assert legacy is not None
+
+    recovered_mid = "<legacy-recovered@mail.gmail.com>"
+    client, service = _make_send_client(
+        account.email,
+        send_result={
+            "id": "legacy-reply",
+            "threadId": "legacy-thread",
+            "labelIds": ["SENT"],
+        },
+    )
+    # Make get_message return a message with the recovered Message-ID header.
+    service.users.return_value.messages.return_value.get.return_value.execute.return_value = {
+        "id": "legacy-sent",
+        "threadId": "legacy-thread",
+        "payload": {
+            "headers": [{"name": "Message-ID", "value": recovered_mid}],
+        },
+    }
+
+    send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Re: legacy",
+        body="Body",
+        thread_id="legacy-thread",
+    )
+
+    send_body = service.users.return_value.messages.return_value.send.call_args.kwargs[
+        "body"
+    ]
+    raw = base64.urlsafe_b64decode(send_body["raw"])
+    msg = message_from_bytes(raw)
+    assert msg["In-Reply-To"] == recovered_mid
+    assert msg["References"] == recovered_mid
+
+
+def test_send_email_persists_rfc2822_message_id_after_send(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """After Gmail accepts the send, the outbound row is backfilled with
+    its RFC 2822 Message-ID so future replies in the same thread can
+    build a proper In-Reply-To/References chain."""
+    account = make_test_account(database_connection, email="mid-persist@example.com")
+    sent_mid = "<sent-fresh@mail.gmail.com>"
+    client, service = _make_send_client(
+        account.email,
+        send_result={
+            "id": "fresh-msg",
+            "threadId": "fresh-thread",
+            "labelIds": ["SENT"],
+        },
+    )
+    service.users.return_value.messages.return_value.get.return_value.execute.return_value = {
+        "id": "fresh-msg",
+        "threadId": "fresh-thread",
+        "payload": {
+            "headers": [{"name": "Message-ID", "value": sent_mid}],
+        },
+    }
+
+    email = send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Hello",
+        body="Body",
+    )
+
+    assert email.rfc2822_message_id == sent_mid
+    stored = get_email(database_connection, email.id)
+    assert stored is not None
+    assert stored.rfc2822_message_id == sent_mid
+
+
 def test_send_email_parts_use_utf8_charset(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
@@ -1321,3 +1585,183 @@ def test_sync_stores_sender_and_recipients(
         "to": ["inbox@lab5.ca"],
         "cc": ["dev@lab5.ca"],
     }
+
+
+def _routing_spans(capfire: CaptureLogfire) -> list[dict[str, Any]]:
+    """Return all exported spans named ``routing.route_email``."""
+    return [
+        span
+        for span in capfire.exporter.exported_spans_as_dict()
+        if span["name"] == "routing.route_email"
+    ]
+
+
+def test_sync_stores_in_reply_to_and_references_headers(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Inbound sync persists In-Reply-To / References for routing fallback."""
+    from mailpilot.sync import (
+        _store_inbound_message,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    account = make_test_account(database_connection, email="hdr@example.com")
+    message = _make_gmail_message(
+        message_id="msg_hdr_1",
+        thread_id="thread_hdr_1",
+        from_header="Alice <alice@example.com>",
+        subject="Re: hello",
+        extra_headers=[
+            {"name": "In-Reply-To", "value": "<orig@mailpilot.test>"},
+            {
+                "name": "References",
+                "value": "<root@mailpilot.test> <orig@mailpilot.test>",
+            },
+        ],
+    )
+    contact = make_test_contact(
+        database_connection, email="alice@example.com", domain="example.com"
+    )
+    email = _store_inbound_message(
+        database_connection,
+        account,
+        message,
+        contacts_by_email={"alice@example.com": contact},
+        settings=make_test_settings(),
+        has_active_workflows=False,
+    )
+    assert email is not None
+    assert email.in_reply_to == "<orig@mailpilot.test>"
+    assert email.references_header == "<root@mailpilot.test> <orig@mailpilot.test>"
+
+
+def test_sync_one_message_emits_skip_span_outside_recency_window(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Messages older than the recency window must emit a skip-tagged span."""
+    from mailpilot.sync import (
+        _store_inbound_message,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    account = make_test_account(database_connection, email="oldspan@example.com")
+    old_date = datetime.now(UTC) - timedelta(days=30)
+    message = _make_gmail_message(
+        message_id="old-span-1",
+        thread_id="t-old-span-1",
+        received_at=old_date,
+    )
+    contact = make_test_contact(
+        database_connection,
+        email="alice@example.com",
+        domain="example.com",
+    )
+
+    email = _store_inbound_message(
+        database_connection,
+        account,
+        message,
+        contacts_by_email={"alice@example.com": contact},
+        settings=make_test_settings(),
+        has_active_workflows=False,
+    )
+
+    assert email is not None
+    assert email.is_routed is True
+    spans = _routing_spans(capfire)
+    assert len(spans) == 1
+    attrs = spans[0]["attributes"]
+    assert attrs["route_method"] == "skipped_outside_window"
+    assert str(attrs["email_id"]) == str(email.id)
+
+
+def test_sync_one_message_emits_skip_span_when_no_active_workflows(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Messages on accounts without active workflows must emit a skip span."""
+    from mailpilot.sync import (
+        _store_inbound_message,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    account = make_test_account(database_connection, email="nowfspan@example.com")
+    # Message is recent (within the 7-day window).
+    message = _make_gmail_message(
+        message_id="nowf-span-1",
+        thread_id="t-nowf-span-1",
+    )
+    contact = make_test_contact(
+        database_connection,
+        email="bob@example.com",
+        domain="example.com",
+    )
+
+    email = _store_inbound_message(
+        database_connection,
+        account,
+        message,
+        contacts_by_email={"bob@example.com": contact},
+        settings=make_test_settings(),
+        has_active_workflows=False,
+    )
+
+    assert email is not None
+    assert email.is_routed is True
+    spans = _routing_spans(capfire)
+    assert len(spans) == 1
+    attrs = spans[0]["attributes"]
+    assert attrs["route_method"] == "skipped_no_workflows"
+    assert str(attrs["email_id"]) == str(email.id)
+
+
+def test_sync_one_message_emits_skip_span_when_predates_workflows(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Messages that predate the earliest active workflow must emit a skip span."""
+    from mailpilot.database import activate_workflow, update_workflow
+    from mailpilot.sync import (
+        _store_inbound_message,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    account = make_test_account(database_connection, email="predatespan@example.com")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="inbound"
+    )
+    update_workflow(
+        database_connection,
+        workflow.id,
+        objective="Handle inquiries",
+        instructions="Reply helpfully",
+    )
+    activate_workflow(database_connection, workflow.id)
+
+    # Email received within the 7-day window but 1 hour before workflow was created.
+    email_time = workflow.created_at - timedelta(hours=1)
+    message = _make_gmail_message(
+        message_id="predate-span-1",
+        thread_id="t-predate-span-1",
+        received_at=email_time,
+    )
+    contact = make_test_contact(
+        database_connection,
+        email="carol@example.com",
+        domain="example.com",
+    )
+
+    email = _store_inbound_message(
+        database_connection,
+        account,
+        message,
+        contacts_by_email={"carol@example.com": contact},
+        settings=make_test_settings(),
+        has_active_workflows=True,
+        earliest_workflow_at=workflow.created_at,
+    )
+
+    assert email is not None
+    assert email.is_routed is True
+    spans = _routing_spans(capfire)
+    assert len(spans) == 1
+    attrs = spans[0]["attributes"]
+    assert attrs["route_method"] == "skipped_predates_workflows"
+    assert str(attrs["email_id"]) == str(email.id)

@@ -48,7 +48,7 @@ The CLI must be LLM Agent friendly: JSON output only. Exit codes must be meaning
 
 **Settings-first parameter passing.** CLI commands never pass config values (API keys) as separate function arguments. Instead: (1) load `Settings` via `get_settings()`, (2) pass the `Settings` instance to sync/agent functions. These functions read all config from `settings`. Only operational params (`limit`, `scope`, `on_progress`) stay as function arguments.
 
-**Convention: GitHub CLI (`gh`) as reference.** Standard verbs: `list` (summary), `view ID` (full record), `get` (fetch from external API), `set` (update config). All IDs are UUIDv7.
+**Verbs: GitHub CLI (`gh`) as default guidance, not a rule.** Common verbs: `list` (summary), `view ID` (full record), `get` (fetch from external API), `set` (update config). The primary concern is LLM-agent ease-of-operation and fewer mistakes -- when a domain-specific verb (e.g., `reply`) reduces parameters or ambiguity for the operator, prefer it over forcing a `gh`-style alternative. All IDs are UUIDv7.
 
 **Input validation in CLI commands.** All commands validate before touching the database:
 
@@ -106,7 +106,8 @@ mailpilot task cancel ID
 mailpilot email search QUERY [--limit N]
 mailpilot email list [--limit N] [--contact-id ID] [--account-id ID] [--since ISO] [--thread-id TEXT] [--direction inbound|outbound] [--workflow-id ID] [--status sent|received|bounced] [--from ADDR] [--to ADDR]
 mailpilot email view ID
-mailpilot email send --account-id ID --to E [--to E2 ...] --subject S --body B [--contact-id ID] [--workflow-id ID] [--thread-id ID] [--cc E] [--bcc E]
+mailpilot email send  --account-id ID --to E [--to E2 ...] --subject S --body B [--workflow-id ID] [--cc E] [--bcc E]
+mailpilot email reply --account-id ID --email-id ID --body B [--workflow-id ID] [--cc E] [--bcc E]
 
 mailpilot activity list --contact-id ID [--type TYPE] [--limit N] [--since ISO]
 mailpilot activity list --company-id ID [--type TYPE] [--limit N] [--since ISO]
@@ -276,4 +277,4 @@ Logging and tracing use [Pydantic Logfire](https://pydantic.dev/logfire) (OpenTe
 
 ## Standards
 
-ASCII-only. Use: `<-` `->` `--` `"` `(c)` `(tm)` `...`
+ASCII-only for project artifacts (code, docs, plans, CLI output). Agent-generated email body content is exempt -- the LLM may use Unicode where it improves readability. Use: `<-` `->` `--` `"` `(c)` `(tm)` `...`

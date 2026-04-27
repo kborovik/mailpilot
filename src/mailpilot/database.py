@@ -1212,6 +1212,8 @@ def create_email(
     sent_at: datetime | None = None,
     labels: list[str] | None = None,
     rfc2822_message_id: str | None = None,
+    in_reply_to: str | None = None,
+    references_header: str | None = None,
     sender: str = "",
     recipients: dict[str, list[str]] | None = None,
 ) -> Email | None:
@@ -1239,6 +1241,11 @@ def create_email(
         sent_at: When the outbound message was handed to Gmail (UTC datetime).
         labels: Gmail label IDs attached to the message.
         rfc2822_message_id: RFC 2822 Message-ID header value.
+        in_reply_to: RFC 2822 In-Reply-To header value (parent message id).
+        references_header: RFC 2822 References header value (full
+            whitespace-separated chain of ancestor message ids). Stored as
+            ``references_header`` because ``references`` is a reserved SQL
+            keyword.
         sender: Sender email address (lowercase).
         recipients: Recipient addresses grouped by type
             (``{"to": [...], "cc": [...], "bcc": [...]}``)
@@ -1253,12 +1260,14 @@ def create_email(
             body_text, gmail_message_id, gmail_thread_id,
             contact_id, workflow_id, status, is_routed,
             received_at, sent_at, labels, rfc2822_message_id,
+            in_reply_to, references_header,
             sender, recipients)
         VALUES (%(id)s, %(account_id)s, %(direction)s,
             %(subject)s, %(body_text)s, %(gmail_message_id)s,
             %(gmail_thread_id)s, %(contact_id)s, %(workflow_id)s,
             %(status)s, %(is_routed)s, %(received_at)s, %(sent_at)s,
             %(labels)s, %(rfc2822_message_id)s,
+            %(in_reply_to)s, %(references_header)s,
             %(sender)s, %(recipients)s)
         ON CONFLICT (gmail_message_id) DO NOTHING
         RETURNING *
@@ -1279,6 +1288,8 @@ def create_email(
             "sent_at": sent_at,
             "labels": Json(labels or []),
             "rfc2822_message_id": rfc2822_message_id,
+            "in_reply_to": in_reply_to,
+            "references_header": references_header,
             "sender": sender,
             "recipients": Json(recipients or {}),
         },
@@ -1465,6 +1476,86 @@ def get_emails_by_gmail_thread_id(
     return [Email.model_validate(row) for row in rows]
 
 
+def get_latest_email_in_thread(
+    connection: psycopg.Connection[dict[str, Any]],
+    account_id: str,
+    gmail_thread_id: str,
+) -> Email | None:
+    """Get the most recently created email in a Gmail thread for an account.
+
+    Used when sending a reply into an existing thread to pull the prior
+    message's ``rfc2822_message_id`` for the outgoing ``In-Reply-To`` /
+    ``References`` headers. Scoping by ``account_id`` keeps the lookup
+    deterministic when the same Gmail thread ID is observed on multiple
+    delegated mailboxes (e.g. sender + recipient on the same domain).
+
+    Args:
+        connection: Open database connection.
+        account_id: Account FK.
+        gmail_thread_id: Gmail thread ID.
+
+    Returns:
+        Most recently created email in the thread, or None if the thread
+        has no rows for this account.
+    """
+    row = connection.execute(
+        """\
+        SELECT * FROM email
+        WHERE account_id = %(account_id)s
+          AND gmail_thread_id = %(gmail_thread_id)s
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        {"account_id": account_id, "gmail_thread_id": gmail_thread_id},
+    ).fetchone()
+    if row is None:
+        return None
+    return Email.model_validate(row)
+
+
+def find_email_by_rfc2822_message_id(
+    connection: psycopg.Connection[dict[str, Any]],
+    account_id: str,
+    message_ids: list[str],
+) -> Email | None:
+    """Find the most recent email matching any of the given RFC 2822 message ids.
+
+    Used by the routing pipeline as a fallback when ``gmail_thread_id`` no
+    longer joins inbound replies to their outbound parents (Gmail re-threads
+    on the recipient side, producing a different ``threadId`` for the same
+    conversation). Restricted to a single ``account_id`` so cross-account
+    collisions on a shared Message-ID cannot leak workflow assignments.
+
+    Args:
+        connection: Open database connection.
+        account_id: Account scope -- only rows belonging to this account
+            are considered.
+        message_ids: Candidate RFC 2822 Message-ID values, typically the
+            inbound email's ``In-Reply-To`` plus every entry in its
+            ``References`` chain.
+
+    Returns:
+        The most-recently created matching email, or ``None`` when no row
+        in this account stores any of ``message_ids`` in its
+        ``rfc2822_message_id`` column.
+    """
+    if not message_ids:
+        return None
+    row = connection.execute(
+        """\
+        SELECT * FROM email
+        WHERE account_id = %(account_id)s
+          AND rfc2822_message_id = ANY(%(message_ids)s)
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        {"account_id": account_id, "message_ids": message_ids},
+    ).fetchone()
+    if row is None:
+        return None
+    return Email.model_validate(row)
+
+
 def get_last_cold_outbound(
     connection: psycopg.Connection[dict[str, Any]],
     account_id: str,
@@ -1533,7 +1624,13 @@ def update_email(
     Returns:
         Updated email, or None if not found.
     """
-    allowed = {"workflow_id", "is_routed", "status", "contact_id"}
+    allowed = {
+        "workflow_id",
+        "is_routed",
+        "status",
+        "contact_id",
+        "rfc2822_message_id",
+    }
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return get_email(connection, email_id)

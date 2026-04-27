@@ -22,6 +22,7 @@ from typing import Any
 import logfire
 import psycopg
 from pydantic_ai import Agent, RunContext, Tool
+from pydantic_ai.messages import ModelRequest, ToolReturnPart
 from pydantic_ai.models import Model
 
 from mailpilot import database
@@ -41,6 +42,7 @@ class AgentDeps:
     gmail_client: GmailClient
     settings: Settings
     workflow_id: str
+    contact_id: str
 
 
 # -- Advisory lock -------------------------------------------------------------
@@ -145,19 +147,18 @@ def _wrap_reply_email(
     )
 
 
-def _wrap_create_task(  # noqa: PLR0913
+def _wrap_create_task(
     ctx: RunContext[AgentDeps],
-    contact_id: str,
     description: str,
     scheduled_at: str,
     context: dict[str, Any] | None = None,
     email_id: str | None = None,
 ) -> dict[str, str]:
-    """Schedule deferred work for later execution."""
+    """Schedule deferred work for the current contact."""
     return agent_tools.create_task(
         connection=ctx.deps.connection,
         workflow_id=ctx.deps.workflow_id,
-        contact_id=contact_id,
+        contact_id=ctx.deps.contact_id,
         description=description,
         scheduled_at=scheduled_at,
         context=context,
@@ -178,15 +179,14 @@ def _wrap_cancel_task(
 
 def _wrap_update_enrollment_status(
     ctx: RunContext[AgentDeps],
-    contact_id: str,
     status: str,
     reason: str,
 ) -> dict[str, str]:
-    """Report outcome for an enrollment in the current workflow."""
+    """Report outcome for the current contact's enrollment in this workflow."""
     return agent_tools.update_enrollment_status(
         connection=ctx.deps.connection,
         workflow_id=ctx.deps.workflow_id,
-        contact_id=contact_id,
+        contact_id=ctx.deps.contact_id,
         status=status,
         reason=reason,
     )
@@ -194,14 +194,13 @@ def _wrap_update_enrollment_status(
 
 def _wrap_disable_contact(
     ctx: RunContext[AgentDeps],
-    contact_id: str,
     status: str,
     reason: str,
 ) -> dict[str, str]:
-    """Set a global block on a contact (bounced or unsubscribed)."""
+    """Set a global block on the current contact (bounced or unsubscribed)."""
     return agent_tools.disable_contact(
         connection=ctx.deps.connection,
-        contact_id=contact_id,
+        contact_id=ctx.deps.contact_id,
         status=status,
         reason=reason,
     )
@@ -373,6 +372,27 @@ def _build_user_prompt(  # noqa: PLR0913
     return "\n".join(sections)
 
 
+def _extract_tool_errors(result: Any) -> list[dict[str, str]]:
+    """Walk the message ledger and collect tool returns that carry error payloads."""
+    errors: list[dict[str, str]] = []
+    for message in result.all_messages():
+        if not isinstance(message, ModelRequest):
+            continue
+        for part in message.parts:
+            if not isinstance(part, ToolReturnPart):
+                continue
+            content = part.content
+            if isinstance(content, dict) and "error" in content:
+                errors.append(
+                    {
+                        "tool": part.tool_name,
+                        "error": str(content.get("error")),
+                        "message": str(content.get("message", "")),
+                    }
+                )
+    return errors
+
+
 # -- Main entry point ----------------------------------------------------------
 
 
@@ -465,6 +485,7 @@ def invoke_workflow_agent(  # noqa: PLR0913
                 gmail_client=gmail_client,
                 settings=settings,
                 workflow_id=workflow.id,
+                contact_id=contact.id,
             )
 
             # Assemble prompt and run.
@@ -480,6 +501,21 @@ def invoke_workflow_agent(  # noqa: PLR0913
             span.set_attribute("prompt_length", len(prompt))
 
             result = agent.run_sync(prompt, model=model, deps=deps)
+
+            # Scan tool returns for {"error": ...} payloads -- the agent may have
+            # called a tool with bad arguments and ignored the rejection in its
+            # final reasoning. Surface those failures so the orchestration sees them.
+            tool_errors = _extract_tool_errors(result)
+
+            if tool_errors:
+                logfire.warn(
+                    "agent.tool_errors",
+                    workflow_id=workflow.id,
+                    contact_id=contact.id,
+                    tool_error_count=len(tool_errors),
+                    tool_errors=tool_errors,
+                )
+            span.set_attribute("tool_error_count", len(tool_errors))
 
             # Usage tracking.
             usage = result.usage()
@@ -512,6 +548,7 @@ def invoke_workflow_agent(  # noqa: PLR0913
                 "contact_id": contact.id,
                 "status": "completed",
                 "tool_calls": tool_call_count,
+                "tool_errors": tool_errors,
                 "reasoning": result.output,
             }
 

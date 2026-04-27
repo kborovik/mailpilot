@@ -178,7 +178,6 @@ class GmailClient:
         client._service = service
         return client
 
-    @_retry_on_transient
     def get_profile(self, user_id: str = "me") -> dict[str, Any]:
         """Fetch Gmail user profile.
 
@@ -273,6 +272,7 @@ class GmailClient:
         cc: str | None = None,
         bcc: str | None = None,
         in_reply_to: str | None = None,
+        references: str | None = None,
         user_id: str = "me",
     ) -> dict[str, Any]:
         """Send an email message via Gmail API.
@@ -287,8 +287,11 @@ class GmailClient:
             cc: CC recipient(s), comma-separated.
             bcc: BCC recipient(s), comma-separated.
             in_reply_to: RFC 2822 Message-ID of the email being replied to.
-                Sets In-Reply-To and References headers for cross-client
-                thread grouping.
+                Sets the In-Reply-To header for cross-client thread grouping.
+            references: Space-separated RFC 2822 Message-ID chain of prior
+                messages in the thread (RFC 5322 section 3.6.4). Falls back
+                to ``in_reply_to`` when omitted, which is correct for replies
+                to a single prior message.
             user_id: Gmail user ID.
 
         Returns:
@@ -304,7 +307,7 @@ class GmailClient:
             message["Bcc"] = bcc
         if in_reply_to:
             message["In-Reply-To"] = in_reply_to
-            message["References"] = in_reply_to
+            message["References"] = references or in_reply_to
         message["X-MailPilot-Version"] = _MAILPILOT_VERSION
         if account_id:
             message["X-MailPilot-Account-Id"] = account_id

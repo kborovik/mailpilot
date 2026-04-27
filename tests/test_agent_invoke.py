@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -25,6 +26,9 @@ from conftest import (
 from mailpilot.agent.invoke import (
     _SYSTEM_PREFIX,  # pyright: ignore[reportPrivateUsage]
     _advisory_lock_keys,  # pyright: ignore[reportPrivateUsage]
+    _wrap_create_task,  # pyright: ignore[reportPrivateUsage]
+    _wrap_disable_contact,  # pyright: ignore[reportPrivateUsage]
+    _wrap_update_enrollment_status,  # pyright: ignore[reportPrivateUsage]
     invoke_workflow_agent,
 )
 from mailpilot.database import (
@@ -588,3 +592,77 @@ def test_system_prefix_guides_contact_status_update() -> None:
 def test_system_prefix_allows_markdown_in_emails() -> None:
     """System prefix must not prohibit markdown in email content."""
     assert "No markdown" not in _SYSTEM_PREFIX
+
+
+# -- Tests: wrapper signatures -------------------------------------------------
+
+
+def test_wrappers_do_not_take_contact_id_from_llm() -> None:
+    """contact_id must come from AgentDeps, not from LLM-provided arguments.
+
+    Regression for the 2026-04-26 smoke test defect where the agent passed
+    the contact's email as contact_id and the tool returned not_found.
+    """
+    for wrapper in (
+        _wrap_update_enrollment_status,
+        _wrap_disable_contact,
+        _wrap_create_task,
+    ):
+        params = inspect.signature(wrapper).parameters
+        assert "contact_id" not in params, (
+            f"{wrapper.__name__} must read contact_id from ctx.deps, "
+            f"not accept it as a parameter; got params: {list(params)}"
+        )
+
+
+# -- Tests: tool error surfacing -----------------------------------------------
+
+
+def _model_calls_disable_contact_with_bad_status() -> FunctionModel:
+    """Build a FunctionModel that calls disable_contact with an invalid status."""
+    call_count = 0
+
+    def _respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="disable_contact",
+                        args={"status": "not-a-real-status", "reason": "test"},
+                    )
+                ]
+            )
+        return ModelResponse(parts=[TextPart(content="Done")])
+
+    return FunctionModel(_respond)
+
+
+def test_invoke_surfaces_tool_errors_in_result(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """When a tool returns {error: ...}, the result must surface it.
+
+    Regression for the 2026-04-26 smoke test defect where update_enrollment_status
+    returned not_found and the orchestration still reported success.
+    """
+    _account, contact, workflow = _setup(database_connection)
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    with patch("mailpilot.agent.invoke.GmailClient"):
+        result = invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            model_override=_model_calls_disable_contact_with_bad_status(),
+        )
+
+    assert result is not None
+    assert result["tool_errors"], (
+        "expected at least one tool error in the result, got: "
+        f"{result.get('tool_errors')!r}"
+    )
+    assert result["tool_errors"][0]["tool"] == "disable_contact"

@@ -796,9 +796,7 @@ def email_view(email_id: str) -> None:
 )
 @click.option("--subject", required=True, help="Email subject.")
 @click.option("--body", required=True, help="Plain text body.")
-@click.option("--contact-id", default=None, help="Link to an existing contact.")
 @click.option("--workflow-id", default=None, help="Link to a workflow.")
-@click.option("--thread-id", default=None, help="Gmail thread ID for replies.")
 @click.option("--cc", default=None, help="CC recipient(s), comma-separated.")
 @click.option("--bcc", default=None, help="BCC recipient(s), comma-separated.")
 def email_send(
@@ -806,19 +804,25 @@ def email_send(
     to: tuple[str, ...],
     subject: str,
     body: str,
-    contact_id: str | None,
     workflow_id: str | None,
-    thread_id: str | None,
     cc: str | None,
     bcc: str | None,
 ) -> None:
-    """Send an outbound email via the given account's Gmail mailbox."""
+    """Send a new outbound email via the given account's Gmail mailbox.
+
+    Use ``email reply`` to continue an existing thread.
+    """
     import logfire
 
-    from mailpilot.database import get_account, initialize_database
+    from mailpilot import email_ops
+    from mailpilot.database import get_account, get_workflow, initialize_database
     from mailpilot.gmail import GmailClient
     from mailpilot.settings import get_settings
-    from mailpilot.sync import send_email
+
+    if not subject.strip():
+        output_error("subject cannot be empty", "validation_error")
+    if not body.strip():
+        output_error("body cannot be empty", "validation_error")
 
     to_joined = ",".join(to)
     settings = get_settings()
@@ -827,9 +831,11 @@ def email_send(
         account = get_account(connection, account_id)
         if account is None:
             output_error(f"account not found: {account_id}", "not_found")
+        if workflow_id is not None and get_workflow(connection, workflow_id) is None:
+            output_error(f"workflow not found: {workflow_id}", "not_found")
         client = GmailClient(account.email)
         try:
-            sent = send_email(
+            sent = email_ops.send_email(
                 connection,
                 account=account,
                 gmail_client=client,
@@ -837,17 +843,86 @@ def email_send(
                 to=to_joined,
                 subject=subject,
                 body=body,
-                contact_id=contact_id,
                 workflow_id=workflow_id,
-                thread_id=thread_id,
                 cc=cc,
                 bcc=bcc,
             )
+        except email_ops.EmailOpsError as exc:
+            output_error(str(exc), exc.code)
         except Exception as exc:
             logfire.exception(
                 "cli.email.send.failed",
                 account_id=account.id,
                 to=to,
+            )
+            output_error(str(exc), "send_failed")
+        output(sent.model_dump(mode="json"))
+    finally:
+        connection.close()
+
+
+@email.command("reply")
+@click.option("--account-id", required=True, help="Sending account ID.")
+@click.option(
+    "--email-id",
+    required=True,
+    help="ID of the email being replied to.",
+)
+@click.option("--body", required=True, help="Reply body (plain text).")
+@click.option("--workflow-id", default=None, help="Link to a workflow.")
+@click.option("--cc", default=None, help="CC recipient(s), comma-separated.")
+@click.option("--bcc", default=None, help="BCC recipient(s), comma-separated.")
+def email_reply(
+    account_id: str,
+    email_id: str,
+    body: str,
+    workflow_id: str | None,
+    cc: str | None,
+    bcc: str | None,
+) -> None:
+    """Reply to an existing email in-thread.
+
+    Auto-derives recipient, subject (with "Re: " prefix), thread, and
+    In-Reply-To from the original. No cooldown applied.
+    """
+    import logfire
+
+    from mailpilot import email_ops
+    from mailpilot.database import get_account, get_workflow, initialize_database
+    from mailpilot.gmail import GmailClient
+    from mailpilot.settings import get_settings
+
+    if not body.strip():
+        output_error("body cannot be empty", "validation_error")
+
+    settings = get_settings()
+    connection = initialize_database(_database_url())
+    try:
+        account = get_account(connection, account_id)
+        if account is None:
+            output_error(f"account not found: {account_id}", "not_found")
+        if workflow_id is not None and get_workflow(connection, workflow_id) is None:
+            output_error(f"workflow not found: {workflow_id}", "not_found")
+        client = GmailClient(account.email)
+        try:
+            sent = email_ops.reply_email(
+                connection,
+                account=account,
+                gmail_client=client,
+                settings=settings,
+                email_id=email_id,
+                body=body,
+                workflow_id=workflow_id,
+                cc=cc,
+                bcc=bcc,
+            )
+        except email_ops.EmailOpsError as exc:
+            output_error(str(exc), exc.code)
+        except Exception as exc:
+            logfire.exception(
+                "cli.email.reply.failed",
+                account_id=account.id,
+                email_id=email_id,
             )
             output_error(str(exc), "send_failed")
         output(sent.model_dump(mode="json"))

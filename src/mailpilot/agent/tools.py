@@ -23,43 +23,15 @@ Tools per ADR-03:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import psycopg
 
-from mailpilot import database
+from mailpilot import database, email_ops
 from mailpilot.models import Account
 from mailpilot.settings import Settings
-from mailpilot.sync import send_email as sync_send_email
 
-_COOLDOWN_DAYS = 30
-
-
-def _activate_enrollment_if_pending(
-    connection: psycopg.Connection[dict[str, Any]],
-    workflow_id: str,
-    contact_id: str,
-) -> None:
-    """Transition enrollment from pending to active after successful send.
-
-    No-op if the enrollment row does not exist, or if the current status
-    is anything other than ``pending``.
-
-    Args:
-        connection: Open database connection.
-        workflow_id: Current workflow FK.
-        contact_id: Contact FK.
-    """
-    enrollment = database.get_enrollment(connection, workflow_id, contact_id)
-    if enrollment is not None and enrollment.status == "pending":
-        database.update_enrollment(
-            connection,
-            workflow_id,
-            contact_id,
-            status="active",
-            reason="email sent",
-        )
+_VALID_DISABLE_STATUSES = ("bounced", "unsubscribed")
 
 
 def send_email(  # noqa: PLR0913
@@ -74,74 +46,26 @@ def send_email(  # noqa: PLR0913
     cc: str | None = None,
     bcc: str | None = None,
 ) -> dict[str, Any]:
-    """Send a new outbound email via Gmail API.
+    """Agent tool: send a new outbound email via Gmail.
 
-    For replies to existing emails, use ``reply_email`` instead.
-
-    Guards:
-    1. Contact must be active (not bounced/unsubscribed) -- hard block
-    2. Cooldown: blocked if last unsolicited outbound to this contact from
-       this account was within cooldown period (30 days)
-
-    Args:
-        connection: Open database connection.
-        account: Sending account.
-        gmail_client: Gmail client scoped to account.
-        settings: Application settings.
-        workflow_id: Current workflow FK.
-        to: Recipient email address.
-        subject: Email subject.
-        body: Email body (plain text).
-        cc: CC recipient(s), comma-separated.
-        bcc: BCC recipient(s), comma-separated.
-
-    Returns:
-        Dict with sent message details (id, gmail_message_id, gmail_thread_id),
-        or error dict if blocked by guard.
+    Thin wrapper over :func:`mailpilot.email_ops.send_email`. Converts
+    typed policy exceptions into the LLM-facing error dict shape.
     """
-    # Guard 1: contact status check.
-    contact = database.get_contact_by_email(connection, to)
-    contact_id: str | None = None
-    if contact is not None:
-        contact_id = contact.id
-        if contact.status != "active":
-            return {
-                "error": "contact_disabled",
-                "message": f"contact is {contact.status}: {contact.status_reason}",
-            }
-
-        # Guard 2: cooldown.
-        last = database.get_last_cold_outbound(
-            connection, account.id, contact.id, workflow_id
+    try:
+        email = email_ops.send_email(
+            connection,
+            account,
+            gmail_client,  # type: ignore[arg-type]
+            settings,
+            to=to,
+            subject=subject,
+            body=body,
+            workflow_id=workflow_id,
+            cc=cc,
+            bcc=bcc,
         )
-        if last is not None and last.created_at > datetime.now(UTC) - timedelta(
-            days=_COOLDOWN_DAYS
-        ):
-            sent_at = last.created_at.isoformat()
-            return {
-                "error": "cooldown",
-                "message": (
-                    f"last unsolicited email sent {sent_at}; "
-                    f"cooldown is {_COOLDOWN_DAYS} days"
-                ),
-            }
-
-    email = sync_send_email(
-        connection=connection,
-        account=account,
-        gmail_client=gmail_client,  # type: ignore[arg-type]
-        settings=settings,
-        to=to,
-        subject=subject,
-        body=body,
-        contact_id=contact_id,
-        workflow_id=workflow_id,
-        cc=cc,
-        bcc=bcc,
-    )
-
-    if contact_id is not None:
-        _activate_enrollment_if_pending(connection, workflow_id, contact_id)
+    except email_ops.EmailOpsError as exc:
+        return {"error": exc.code, "message": str(exc)}
 
     return {
         "id": email.id,
@@ -161,92 +85,24 @@ def reply_email(  # noqa: PLR0913
     cc: str | None = None,
     bcc: str | None = None,
 ) -> dict[str, Any]:
-    """Reply to an existing email in-thread.
+    """Agent tool: reply in-thread. Wraps :func:`email_ops.reply_email`.
 
-    Resolves recipient, subject, and thread_id automatically from the
-    original email. No cooldown check -- replies are always allowed.
-
-    Guards:
-    1. Original email must exist
-    2. Original email must have a gmail_thread_id
-    3. Original email must have a contact_id
-    4. Contact must exist
-    5. Contact must be active (not bounced/unsubscribed)
-
-    Args:
-        connection: Open database connection.
-        account: Sending account.
-        gmail_client: Gmail client scoped to account.
-        settings: Application settings.
-        workflow_id: Current workflow FK.
-        email_id: ID of the email being replied to.
-        body: Reply body (plain text).
-        cc: CC recipient(s), comma-separated.
-        bcc: BCC recipient(s), comma-separated.
-
-    Returns:
-        Dict with sent message details (id, gmail_message_id, gmail_thread_id),
-        or error dict if blocked by guard.
+    Converts typed policy exceptions into the LLM-facing error dict.
     """
-    # Guard 1: original email must exist.
-    original = database.get_email(connection, email_id)
-    if original is None:
-        return {
-            "error": "not_found",
-            "message": f"email not found: {email_id}",
-        }
-
-    # Guard 2: original email must have a gmail_thread_id.
-    if original.gmail_thread_id is None:
-        return {
-            "error": "no_thread",
-            "message": f"email has no gmail_thread_id: {email_id}",
-        }
-
-    # Guard 3: original email must have a contact.
-    if original.contact_id is None:
-        return {
-            "error": "no_contact",
-            "message": f"email has no contact_id: {email_id}",
-        }
-
-    # Guard 4: contact must exist.
-    contact = database.get_contact(connection, original.contact_id)
-    if contact is None:
-        return {
-            "error": "not_found",
-            "message": f"contact not found: {original.contact_id}",
-        }
-
-    # Guard 5: contact must be active.
-    if contact.status != "active":
-        return {
-            "error": "contact_disabled",
-            "message": f"contact is {contact.status}: {contact.status_reason}",
-        }
-
-    # Derive subject: prepend "Re: " unless already prefixed.
-    subject = original.subject
-    if not subject.lower().startswith("re: "):
-        subject = f"Re: {subject}"
-
-    email = sync_send_email(
-        connection=connection,
-        account=account,
-        gmail_client=gmail_client,  # type: ignore[arg-type]
-        settings=settings,
-        to=contact.email,
-        subject=subject,
-        body=body,
-        contact_id=contact.id,
-        workflow_id=workflow_id,
-        thread_id=original.gmail_thread_id,
-        cc=cc,
-        bcc=bcc,
-        in_reply_to=original.rfc2822_message_id,
-    )
-
-    _activate_enrollment_if_pending(connection, workflow_id, contact.id)
+    try:
+        email = email_ops.reply_email(
+            connection,
+            account,
+            gmail_client,  # type: ignore[arg-type]
+            settings,
+            email_id=email_id,
+            body=body,
+            workflow_id=workflow_id,
+            cc=cc,
+            bcc=bcc,
+        )
+    except email_ops.EmailOpsError as exc:
+        return {"error": exc.code, "message": str(exc)}
 
     return {
         "id": email.id,
@@ -373,6 +229,13 @@ def disable_contact(
     Returns:
         Dict with updated contact status, or error if not found.
     """
+    if status not in _VALID_DISABLE_STATUSES:
+        return {
+            "error": "invalid_status",
+            "message": (
+                f"status must be one of {_VALID_DISABLE_STATUSES}, got: {status!r}"
+            ),
+        }
     updated = database.disable_contact(
         connection, contact_id, status=status, status_reason=reason
     )
