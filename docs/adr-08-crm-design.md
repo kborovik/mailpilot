@@ -1,4 +1,4 @@
-# ADR-08: CRM Evolution -- Activity Timeline, Tags, and Notes
+# ADR-08: CRM Design -- Activity Timeline, Tags, and Notes
 
 ## Status
 

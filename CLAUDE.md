@@ -34,7 +34,7 @@ Email body stored as plain text only (see `docs/adr-02-email-body-storage-strate
 
 ### Workflows
 
-Workflow is the central abstraction for both outbound campaigns and inbound auto-reply (see `docs/adr-03-workflow-model.md`). Each workflow is executed by a Pydantic AI agent with tool access. Inbound emails are routed via thread matching then LLM classification. Agent plans multi-step work via deferred tasks. See `docs/email-flow.md` for execution flows. See `docs/adr-08-crm-evolution.md` for the CRM evolution design.
+Workflow is the central abstraction for both outbound campaigns and inbound auto-reply (see `docs/adr-03-workflow-model.md`). Each workflow is executed by a Pydantic AI agent with tool access. Inbound emails are routed via thread matching then LLM classification. Agent plans multi-step work via deferred tasks. See `docs/email-flow.md` for execution flows. See `docs/adr-08-crm-design.md` for the CRM design.
 
 ### Email Rendering
 

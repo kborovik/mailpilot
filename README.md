@@ -79,7 +79,7 @@ make py-test  # pytest -x
 - [Schema Migration](docs/adr-05-schema-migration-strategy.md)
 - [Workflow Field Definitions](docs/adr-06-workflow-field-definitions.md)
 - [Observability with Logfire](docs/adr-07-observability-with-logfire.md)
-- [CRM Evolution](docs/adr-08-crm-evolution.md)
+- [CRM Design](docs/adr-08-crm-design.md)
 - [Email Flow](docs/email-flow.md)
 
 ## License
