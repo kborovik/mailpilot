@@ -29,7 +29,7 @@ from mailpilot.agent.invoke import (
     _build_agent,  # pyright: ignore[reportPrivateUsage]
     _wrap_create_task,  # pyright: ignore[reportPrivateUsage]
     _wrap_disable_contact,  # pyright: ignore[reportPrivateUsage]
-    _wrap_update_enrollment_status,  # pyright: ignore[reportPrivateUsage]
+    _wrap_record_enrollment_outcome,  # pyright: ignore[reportPrivateUsage]
     invoke_workflow_agent,
 )
 from mailpilot.database import (
@@ -654,8 +654,8 @@ def test_agent_calls_reply_email(
 
 
 def test_system_prefix_guides_contact_status_update() -> None:
-    """System prefix must instruct agents to update contact status."""
-    assert "update_enrollment_status" in _SYSTEM_PREFIX
+    """System prefix must instruct agents to record enrollment outcome."""
+    assert "record_enrollment_outcome" in _SYSTEM_PREFIX
 
 
 def test_system_prefix_allows_markdown_in_emails() -> None:
@@ -704,7 +704,7 @@ def test_wrappers_do_not_take_contact_id_from_llm() -> None:
     the contact's email as contact_id and the tool returned not_found.
     """
     for wrapper in (
-        _wrap_update_enrollment_status,
+        _wrap_record_enrollment_outcome,
         _wrap_disable_contact,
         _wrap_create_task,
     ):
@@ -744,7 +744,7 @@ def test_invoke_surfaces_tool_errors_in_result(
 ) -> None:
     """When a tool returns {error: ...}, the result must surface it.
 
-    Regression for the 2026-04-26 smoke test defect where update_enrollment_status
+    Regression for the 2026-04-26 smoke test defect where record_enrollment_outcome
     returned not_found and the orchestration still reported success.
     """
     _account, contact, workflow = _setup(database_connection)

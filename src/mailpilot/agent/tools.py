@@ -13,7 +13,7 @@ Tools per ADR-03:
     - ``reply_email`` -- reply in-thread with auto-resolved recipient and subject
     - ``create_task`` -- schedule deferred work
     - ``cancel_task`` -- cancel a pending task
-    - ``update_enrollment_status`` -- report per-workflow outcome
+    - ``record_enrollment_outcome`` -- record per-workflow outcome on timeline
     - ``disable_contact`` -- set global contact block (bounced/unsubscribed)
     - ``search_emails`` -- query email history
     - ``list_enrollments`` -- list enrollments in workflow with status
@@ -172,54 +172,54 @@ def cancel_task(
     return {"id": task.id, "status": task.status}
 
 
-def update_enrollment_status(
+def record_enrollment_outcome(
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str,
     contact_id: str,
-    status: str,
+    outcome: str,
     reason: str,
 ) -> dict[str, str]:
-    """Report outcome for an enrollment in the current workflow.
+    """Record an outcome (completed or failed) on the activity timeline.
 
-    The agent -- not the system -- decides success or failure. Emits a
-    ``workflow_completed`` or ``workflow_failed`` activity on those
-    transitions so the timeline records the outcome.
+    Outcome is purely a timeline event -- the enrollment row's status is
+    not modified. The agent declares the engagement done; if a later
+    inbound reply arrives, the agent can react without first
+    "reactivating" anything.
 
     Args:
         connection: Open database connection.
         workflow_id: Current workflow FK.
         contact_id: Contact ID.
-        status: "active", "completed", or "failed".
+        outcome: "completed" or "failed".
         reason: Agent's explanation (e.g., "meeting booked", "no response").
 
     Returns:
-        Dict with updated status, or error if enrollment not found.
+        Dict with the recorded outcome, or an error dict if the
+        enrollment is missing or the outcome is invalid.
     """
-    valid_statuses = ("active", "completed", "failed")
-    if status not in valid_statuses:
+    valid_outcomes = ("completed", "failed")
+    if outcome not in valid_outcomes:
         return {
-            "error": "invalid_status",
-            "message": f"status must be one of {valid_statuses}, got: {status}",
+            "error": "invalid_outcome",
+            "message": f"outcome must be one of {valid_outcomes}, got: {outcome}",
         }
-    enrollment = database.update_enrollment(
-        connection, workflow_id, contact_id, status=status, reason=reason
-    )
+    enrollment = database.get_enrollment(connection, workflow_id, contact_id)
     if enrollment is None:
         return {
             "error": "not_found",
             "message": f"enrollment not found: {workflow_id}/{contact_id}",
         }
-    if status in ("completed", "failed"):
-        contact = database.get_contact(connection, contact_id)
-        database.create_activity(
-            connection,
-            contact_id=contact_id,
-            activity_type=f"workflow_{status}",
-            summary=reason or f"Workflow {status}",
-            detail={"workflow_id": workflow_id, "reason": reason},
-            company_id=contact.company_id if contact is not None else None,
-        )
-    return {"status": enrollment.status, "reason": enrollment.reason}
+    contact = database.get_contact(connection, contact_id)
+    database.create_activity(
+        connection,
+        contact_id=contact_id,
+        activity_type=f"enrollment_{outcome}",
+        summary=reason or f"Enrollment {outcome}",
+        detail={"reason": reason},
+        company_id=contact.company_id if contact is not None else None,
+        workflow_id=workflow_id,
+    )
+    return {"outcome": outcome, "reason": reason}
 
 
 def disable_contact(
