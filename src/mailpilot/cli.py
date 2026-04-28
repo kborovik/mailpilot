@@ -1072,17 +1072,6 @@ def tag() -> None:
     """Manage tags on contacts and companies."""
 
 
-def _resolve_entity(contact_id: str | None, company_id: str | None) -> tuple[str, str]:
-    """Return (entity_type, entity_id) or call output_error."""
-    if contact_id and company_id:
-        output_error("specify only one of --contact-id or --company-id", "invalid_args")
-    if contact_id:
-        return ("contact", contact_id)
-    if company_id:
-        return ("company", company_id)
-    output_error("one of --contact-id or --company-id is required", "missing_filter")
-
-
 @tag.command("add")
 @click.option("--contact-id", default=None, help="Contact ID.")
 @click.option("--company-id", default=None, help="Company ID.")
@@ -1090,8 +1079,9 @@ def _resolve_entity(contact_id: str | None, company_id: str | None) -> tuple[str
 def tag_add(contact_id: str | None, company_id: str | None, name: str) -> None:
     """Add a tag to a contact or company."""
     from mailpilot.database import (
-        create_activity,
-        create_tag,
+        _normalize_tag_name,
+        add_company_tag,
+        add_contact_tag,
         get_company,
         get_contact,
         initialize_database,
@@ -1099,44 +1089,39 @@ def tag_add(contact_id: str | None, company_id: str | None, name: str) -> None:
 
     if not name.strip():
         output_error("tag name cannot be empty", "validation_error")
-    entity_type, entity_id = _resolve_entity(contact_id, company_id)
+    if (contact_id is None) == (company_id is None):
+        output_error(
+            "exactly one of --contact-id or --company-id is required",
+            "validation_error",
+        )
     connection = initialize_database(_database_url())
     try:
-        contact = None
-        if entity_type == "contact":
-            contact = get_contact(connection, entity_id)
-            if contact is None:
-                output_error(
-                    f"contact {entity_id} not found",
-                    "not_found",
+        if contact_id is not None:
+            if get_contact(connection, contact_id) is None:
+                output_error(f"contact {contact_id} not found", "not_found")
+            try:
+                created = add_contact_tag(
+                    connection, contact_id=contact_id, name=name
                 )
+            except ValueError as exc:
+                output_error(str(exc), "validation_error")
+            owner = ("contact", contact_id)
         else:
-            company = get_company(connection, entity_id)
-            if company is None:
-                output_error(
-                    f"company {entity_id} not found",
-                    "not_found",
+            assert company_id is not None
+            if get_company(connection, company_id) is None:
+                output_error(f"company {company_id} not found", "not_found")
+            try:
+                created = add_company_tag(
+                    connection, company_id=company_id, name=name
                 )
-        created = create_tag(
-            connection,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            name=name,
-        )
+            except ValueError as exc:
+                output_error(str(exc), "validation_error")
+            owner = ("company", company_id)
         if created is None:
-            normalized = name.strip().lower()
+            normalized = _normalize_tag_name(name)
             output_error(
-                f"tag '{normalized}' already exists on {entity_type} {entity_id}",
+                f"tag '{normalized}' already exists on {owner[0]} {owner[1]}",
                 "already_exists",
-            )
-        if entity_type == "contact" and contact is not None:
-            create_activity(
-                connection,
-                contact_id=entity_id,
-                activity_type="tag_added",
-                summary=f"Tagged as {created.name}",
-                detail={"tag": created.name},
-                company_id=contact.company_id,
             )
         output(created.model_dump(mode="json"))
     finally:
@@ -1150,45 +1135,49 @@ def tag_add(contact_id: str | None, company_id: str | None, name: str) -> None:
 def tag_remove(contact_id: str | None, company_id: str | None, name: str) -> None:
     """Remove a tag from a contact or company."""
     from mailpilot.database import (
-        create_activity,
-        delete_tag,
+        _normalize_tag_name,
         get_company,
         get_contact,
         initialize_database,
+        remove_company_tag,
+        remove_contact_tag,
     )
 
-    entity_type, entity_id = _resolve_entity(contact_id, company_id)
+    if (contact_id is None) == (company_id is None):
+        output_error(
+            "exactly one of --contact-id or --company-id is required",
+            "validation_error",
+        )
     connection = initialize_database(_database_url())
     try:
-        contact = None
-        if entity_type == "contact":
-            contact = get_contact(connection, entity_id)
-            if contact is None:
-                output_error(f"contact {entity_id} not found", "not_found")
-        elif get_company(connection, entity_id) is None:
-            output_error(f"company {entity_id} not found", "not_found")
-        deleted = delete_tag(
-            connection,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            name=name,
-        )
-        normalized = name.strip().lower()
+        if contact_id is not None:
+            if get_contact(connection, contact_id) is None:
+                output_error(f"contact {contact_id} not found", "not_found")
+            try:
+                deleted = remove_contact_tag(
+                    connection, contact_id=contact_id, name=name
+                )
+            except ValueError as exc:
+                output_error(str(exc), "validation_error")
+            owner = ("contact", contact_id)
+        else:
+            assert company_id is not None
+            if get_company(connection, company_id) is None:
+                output_error(f"company {company_id} not found", "not_found")
+            try:
+                deleted = remove_company_tag(
+                    connection, company_id=company_id, name=name
+                )
+            except ValueError as exc:
+                output_error(str(exc), "validation_error")
+            owner = ("company", company_id)
+        normalized = _normalize_tag_name(name)
         if not deleted:
             output_error(
-                f"tag '{normalized}' not found on {entity_type} {entity_id}",
+                f"tag '{normalized}' not found on {owner[0]} {owner[1]}",
                 "not_found",
             )
-        if entity_type == "contact" and contact is not None:
-            create_activity(
-                connection,
-                contact_id=entity_id,
-                activity_type="tag_removed",
-                summary=f"Removed tag {normalized}",
-                detail={"tag": normalized},
-                company_id=contact.company_id,
-            )
-        output({"removed": True, "tag": normalized, "entity_type": entity_type})
+        output({"removed": True, "tag": normalized, "owner_type": owner[0]})
     finally:
         connection.close()
 
@@ -1212,21 +1201,26 @@ def tag_list(
         list_tags,
     )
 
-    entity_type, entity_id = _resolve_entity(contact_id, company_id)
+    if (contact_id is None) == (company_id is None):
+        output_error(
+            "exactly one of --contact-id or --company-id is required",
+            "validation_error",
+        )
     connection = initialize_database(_database_url())
     try:
-        if entity_type == "contact":
-            if get_contact(connection, entity_id) is None:
-                output_error(f"contact {entity_id} not found", "not_found")
-        elif get_company(connection, entity_id) is None:
-            output_error(f"company {entity_id} not found", "not_found")
-        tags = list_tags(
-            connection,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            limit=limit,
-            since=since,
-        )
+        if contact_id is not None:
+            if get_contact(connection, contact_id) is None:
+                output_error(f"contact {contact_id} not found", "not_found")
+            tags = list_tags(
+                connection, contact_id=contact_id, limit=limit, since=since
+            )
+        else:
+            assert company_id is not None
+            if get_company(connection, company_id) is None:
+                output_error(f"company {company_id} not found", "not_found")
+            tags = list_tags(
+                connection, company_id=company_id, limit=limit, since=since
+            )
         output({"tags": [t.model_dump(mode="json") for t in tags]})
     finally:
         connection.close()
@@ -1236,19 +1230,19 @@ def tag_list(
 @click.argument("name")
 @click.option(
     "--type",
-    "entity_type",
+    "owner",
     default=None,
     type=click.Choice(["contact", "company"]),
-    help="Filter by entity type.",
+    help="Filter by owner type.",
 )
 @click.option("--limit", default=100, help="Maximum results.")
-def tag_search(name: str, entity_type: str | None, limit: int) -> None:
+def tag_search(name: str, owner: str | None, limit: int) -> None:
     """Search tags by name."""
     from mailpilot.database import initialize_database, search_tags
 
     connection = initialize_database(_database_url())
     try:
-        tags = search_tags(connection, name=name, entity_type=entity_type, limit=limit)
+        tags = search_tags(connection, name=name, owner=owner, limit=limit)
         output({"tags": [t.model_dump(mode="json") for t in tags]})
     finally:
         connection.close()
@@ -1269,8 +1263,8 @@ def note() -> None:
 def note_add(contact_id: str | None, company_id: str | None, body: str) -> None:
     """Add a note to a contact or company."""
     from mailpilot.database import (
-        create_activity,
-        create_note,
+        add_company_note,
+        add_contact_note,
         get_company,
         get_contact,
         initialize_database,
@@ -1278,38 +1272,25 @@ def note_add(contact_id: str | None, company_id: str | None, body: str) -> None:
 
     if not body.strip():
         output_error("note body cannot be empty", "validation_error")
-    entity_type, entity_id = _resolve_entity(contact_id, company_id)
+    if (contact_id is None) == (company_id is None):
+        output_error(
+            "exactly one of --contact-id or --company-id is required",
+            "validation_error",
+        )
     connection = initialize_database(_database_url())
     try:
-        contact = None
-        if entity_type == "contact":
-            contact = get_contact(connection, entity_id)
-            if contact is None:
-                output_error(
-                    f"contact {entity_id} not found",
-                    "not_found",
-                )
+        if contact_id is not None:
+            if get_contact(connection, contact_id) is None:
+                output_error(f"contact {contact_id} not found", "not_found")
+            created = add_contact_note(
+                connection, contact_id=contact_id, body=body
+            )
         else:
-            company = get_company(connection, entity_id)
-            if company is None:
-                output_error(
-                    f"company {entity_id} not found",
-                    "not_found",
-                )
-        created = create_note(
-            connection,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            body=body,
-        )
-        if entity_type == "contact" and contact is not None:
-            create_activity(
-                connection,
-                contact_id=entity_id,
-                activity_type="note_added",
-                summary="Note added",
-                detail={"note_id": created.id},
-                company_id=contact.company_id,
+            assert company_id is not None
+            if get_company(connection, company_id) is None:
+                output_error(f"company {company_id} not found", "not_found")
+            created = add_company_note(
+                connection, company_id=company_id, body=body
             )
         output(created.model_dump(mode="json"))
     finally:
@@ -1332,21 +1313,26 @@ def note_list(
         list_notes,
     )
 
-    entity_type, entity_id = _resolve_entity(contact_id, company_id)
+    if (contact_id is None) == (company_id is None):
+        output_error(
+            "exactly one of --contact-id or --company-id is required",
+            "validation_error",
+        )
     connection = initialize_database(_database_url())
     try:
-        if entity_type == "contact":
-            if get_contact(connection, entity_id) is None:
-                output_error(f"contact {entity_id} not found", "not_found")
-        elif get_company(connection, entity_id) is None:
-            output_error(f"company {entity_id} not found", "not_found")
-        notes = list_notes(
-            connection,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            limit=limit,
-            since=since,
-        )
+        if contact_id is not None:
+            if get_contact(connection, contact_id) is None:
+                output_error(f"contact {contact_id} not found", "not_found")
+            notes = list_notes(
+                connection, contact_id=contact_id, limit=limit, since=since
+            )
+        else:
+            assert company_id is not None
+            if get_company(connection, company_id) is None:
+                output_error(f"company {company_id} not found", "not_found")
+            notes = list_notes(
+                connection, company_id=company_id, limit=limit, since=since
+            )
         output({"notes": [n.model_dump(mode="json") for n in notes]})
     finally:
         connection.close()
