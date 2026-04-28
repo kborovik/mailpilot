@@ -3240,14 +3240,43 @@ def test_activity_create(runner: CliRunner, mock_connection: MagicMock) -> None:
     mock_create.assert_called_once_with(
         mock_connection,
         contact_id="cid-1",
+        company_id=None,
         activity_type="email_sent",
         summary="Sent intro",
         detail={},
-        company_id=None,
     )
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["type"] == "email_sent"
+
+
+def test_activity_create_company_only(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """Company-only activity rows are allowed (#102 sugg 2)."""
+    activity = _make_activity(contact_id=None, company_id="comp-1", type="note_added")
+    company = _make_company(id="comp-1")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=company),
+        patch("mailpilot.database.create_activity", return_value=activity),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "activity",
+                "create",
+                "--company-id",
+                "comp-1",
+                "--type",
+                "note_added",
+                "--summary",
+                "Company note",
+            ],
+        )
+
+    assert result.exit_code == 0
 
 
 def test_activity_create_with_detail(
@@ -3283,10 +3312,10 @@ def test_activity_create_with_detail(
     mock_create.assert_called_once_with(
         mock_connection,
         contact_id="cid-1",
+        company_id=None,
         activity_type="email_sent",
         summary="Sent intro",
         detail={"email_id": "e-1"},
-        company_id=None,
     )
 
 

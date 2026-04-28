@@ -22,9 +22,11 @@ _ACTIVITY_TYPES = [
     "tag_added",
     "tag_removed",
     "status_changed",
-    "workflow_assigned",
-    "workflow_completed",
-    "workflow_failed",
+    "enrollment_added",
+    "enrollment_completed",
+    "enrollment_failed",
+    "enrollment_paused",
+    "enrollment_resumed",
 ]
 
 
@@ -965,7 +967,8 @@ def activity() -> None:
 
 
 @activity.command("create")
-@click.option("--contact-id", required=True, help="Contact ID.")
+@click.option("--contact-id", default=None, help="Contact ID.")
+@click.option("--company-id", default=None, help="Optional company ID.")
 @click.option(
     "--type",
     "activity_type",
@@ -975,15 +978,14 @@ def activity() -> None:
 )
 @click.option("--summary", required=True, help="One-line description.")
 @click.option("--detail", default=None, help="JSON detail payload.")
-@click.option("--company-id", default=None, help="Optional company ID.")
 def activity_create(
-    contact_id: str,
+    contact_id: str | None,
+    company_id: str | None,
     activity_type: str,
     summary: str,
     detail: str | None,
-    company_id: str | None,
 ) -> None:
-    """Create an activity event."""
+    """Create an activity event. At least one of --contact-id / --company-id."""
     from mailpilot.database import (
         create_activity,
         get_company,
@@ -993,20 +995,25 @@ def activity_create(
 
     if not summary.strip():
         output_error("summary cannot be empty", "validation_error")
+    if contact_id is None and company_id is None:
+        output_error(
+            "at least one of --contact-id or --company-id is required",
+            "validation_error",
+        )
     detail_dict: dict[str, object] = json.loads(detail) if detail else {}
     connection = initialize_database(_database_url())
     try:
-        if get_contact(connection, contact_id) is None:
+        if contact_id is not None and get_contact(connection, contact_id) is None:
             output_error(f"contact not found: {contact_id}", "not_found")
         if company_id is not None and get_company(connection, company_id) is None:
             output_error(f"company not found: {company_id}", "not_found")
         created = create_activity(
             connection,
             contact_id=contact_id,
+            company_id=company_id,
             activity_type=activity_type,
             summary=summary,
             detail=detail_dict,
-            company_id=company_id,
         )
         output(created.model_dump(mode="json"))
     finally:
