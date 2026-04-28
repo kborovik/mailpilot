@@ -3899,8 +3899,8 @@ def test_tag_search_with_type(runner: CliRunner, mock_connection: MagicMock) -> 
 def _make_note(**overrides: Any) -> Note:
     defaults: dict[str, Any] = {
         "id": "01234567-0000-7000-0000-000000000012",
-        "entity_type": "contact",
-        "entity_id": "01234567-0000-7000-0000-000000000003",
+        "contact_id": "01234567-0000-7000-0000-000000000003",
+        "company_id": None,
         "body": "Test note body",
         "created_at": _NOW,
     }
@@ -3916,9 +3916,10 @@ def test_note_add(runner: CliRunner, mock_connection: MagicMock) -> None:
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.create_note", return_value=note) as mock_create,
+        patch(
+            "mailpilot.database.add_contact_note", return_value=note
+        ) as mock_create,
         patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.create_activity"),
     ):
         result = runner.invoke(
             main,
@@ -3928,8 +3929,7 @@ def test_note_add(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert result.exit_code == 0
     mock_create.assert_called_once_with(
         mock_connection,
-        entity_type="contact",
-        entity_id="cid-1",
+        contact_id="cid-1",
         body="Test note body",
     )
     data = json.loads(result.output)
@@ -3938,12 +3938,12 @@ def test_note_add(runner: CliRunner, mock_connection: MagicMock) -> None:
 
 
 def test_note_add_on_company(runner: CliRunner, mock_connection: MagicMock) -> None:
-    note = _make_note(entity_type="company", entity_id="comp-1")
+    note = _make_note(contact_id=None, company_id="comp-1")
     company = _make_company(id="comp-1")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.create_note", return_value=note),
+        patch("mailpilot.database.add_company_note", return_value=note) as mock_add,
         patch("mailpilot.database.get_company", return_value=company),
     ):
         result = runner.invoke(
@@ -3952,35 +3952,13 @@ def test_note_add_on_company(runner: CliRunner, mock_connection: MagicMock) -> N
         )
 
     assert result.exit_code == 0
+    mock_add.assert_called_once_with(
+        mock_connection,
+        company_id="comp-1",
+        body="Company note",
+    )
     data = json.loads(result.output)
     assert data["ok"] is True
-
-
-def test_note_add_creates_activity(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
-    note = _make_note()
-    contact = _make_contact()
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.create_note", return_value=note),
-        patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.create_activity") as mock_activity,
-    ):
-        runner.invoke(
-            main,
-            ["note", "add", "--contact-id", "cid-1", "--body", "Test note body"],
-        )
-
-    mock_activity.assert_called_once_with(
-        mock_connection,
-        contact_id="cid-1",
-        activity_type="note_added",
-        summary="Note added",
-        detail={"note_id": note.id},
-        company_id=None,
-    )
 
 
 def test_note_add_contact_not_found(
@@ -4031,7 +4009,7 @@ def test_note_add_no_entity(runner: CliRunner, mock_connection: MagicMock) -> No
 
     assert result.exit_code == 1
     data = json.loads(result.output)
-    assert data["error"] == "missing_filter"
+    assert data["error"] == "validation_error"
 
 
 def test_note_add_empty_body(runner: CliRunner, mock_connection: MagicMock) -> None:
@@ -4111,7 +4089,7 @@ def test_note_list_with_limit(runner: CliRunner, mock_connection: MagicMock) -> 
 
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
-        mock_connection, entity_type="contact", entity_id="cid-1", limit=5, since=None
+        mock_connection, contact_id="cid-1", limit=5, since=None
     )
 
 
@@ -4138,8 +4116,7 @@ def test_note_list_with_since(runner: CliRunner, mock_connection: MagicMock) -> 
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
         mock_connection,
-        entity_type="contact",
-        entity_id="cid-1",
+        contact_id="cid-1",
         limit=100,
         since="2024-01-01T00:00:00Z",
     )
@@ -4155,7 +4132,7 @@ def test_note_list_no_entity(runner: CliRunner, mock_connection: MagicMock) -> N
 
     assert result.exit_code == 1
     data = json.loads(result.output)
-    assert data["error"] == "missing_filter"
+    assert data["error"] == "validation_error"
 
 
 # -- note view -----------------------------------------------------------------
