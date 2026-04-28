@@ -24,9 +24,11 @@ import psycopg
 
 from mailpilot.agent.classify import classify_email
 from mailpilot.database import (
+    create_activity,
     create_enrollment,
     disable_contact,
     find_email_by_rfc2822_message_id,
+    get_contact,
     get_emails_by_gmail_thread_id,
     get_workflow,
     list_workflows,
@@ -316,5 +318,23 @@ def _ensure_enrollment(
     workflow_id: str,
     contact_id: str,
 ) -> None:
-    """Create an enrollment entry if not already present."""
-    create_enrollment(connection, workflow_id, contact_id)
+    """Create an enrollment entry if not already present.
+
+    Emits a ``workflow_assigned`` activity only on the initial insert --
+    ``create_enrollment`` returns ``None`` on ON CONFLICT so re-routes in
+    the same thread do not duplicate the timeline entry.
+    """
+    enrollment = create_enrollment(connection, workflow_id, contact_id)
+    if enrollment is None:
+        return
+    workflow = get_workflow(connection, workflow_id)
+    contact = get_contact(connection, contact_id)
+    workflow_name = workflow.name if workflow is not None else ""
+    create_activity(
+        connection,
+        contact_id=contact_id,
+        activity_type="workflow_assigned",
+        summary=f"Assigned to {workflow_name or 'workflow'}",
+        detail={"workflow_id": workflow_id, "workflow_name": workflow_name},
+        company_id=contact.company_id if contact is not None else None,
+    )

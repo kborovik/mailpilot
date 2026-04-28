@@ -1688,6 +1688,7 @@ def enrollment() -> None:
 def enrollment_add(workflow_id: str, contact_id: str) -> None:
     """Enroll a contact in a workflow."""
     from mailpilot.database import (
+        create_activity,
         create_enrollment,
         get_contact,
         get_enrollment,
@@ -1697,12 +1698,25 @@ def enrollment_add(workflow_id: str, contact_id: str) -> None:
 
     connection = initialize_database(_database_url())
     try:
-        if get_workflow(connection, workflow_id) is None:
+        workflow = get_workflow(connection, workflow_id)
+        if workflow is None:
             output_error(f"workflow not found: {workflow_id}", "not_found")
-        if get_contact(connection, contact_id) is None:
+        contact = get_contact(connection, contact_id)
+        if contact is None:
             output_error(f"contact not found: {contact_id}", "not_found")
         created = create_enrollment(connection, workflow_id, contact_id)
         if created is not None:
+            create_activity(
+                connection,
+                contact_id=contact_id,
+                activity_type="workflow_assigned",
+                summary=f"Assigned to {workflow.name}",
+                detail={
+                    "workflow_id": workflow_id,
+                    "workflow_name": workflow.name,
+                },
+                company_id=contact.company_id,
+            )
             output(created.model_dump(mode="json"))
             return
         existing = get_enrollment(connection, workflow_id, contact_id)
@@ -1882,7 +1896,12 @@ def enrollment_update(
     workflow_id: str, contact_id: str, status: str, reason: str | None
 ) -> None:
     """Update enrollment status and reason."""
-    from mailpilot.database import initialize_database, update_enrollment
+    from mailpilot.database import (
+        create_activity,
+        get_contact,
+        initialize_database,
+        update_enrollment,
+    )
 
     connection = initialize_database(_database_url())
     try:
@@ -1892,6 +1911,16 @@ def enrollment_update(
         updated = update_enrollment(connection, workflow_id, contact_id, **fields)
         if updated is None:
             output_error("enrollment not found", "not_found")
+        if status in ("completed", "failed"):
+            contact = get_contact(connection, contact_id)
+            create_activity(
+                connection,
+                contact_id=contact_id,
+                activity_type=f"workflow_{status}",
+                summary=reason or f"Workflow {status}",
+                detail={"workflow_id": workflow_id, "reason": reason or ""},
+                company_id=contact.company_id if contact is not None else None,
+            )
         output(updated.model_dump(mode="json"))
     finally:
         connection.close()

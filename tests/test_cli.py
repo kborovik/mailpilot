@@ -4280,6 +4280,7 @@ def test_enrollment_add(runner: CliRunner, mock_connection: MagicMock) -> None:
         patch(
             "mailpilot.database.create_enrollment", return_value=enrollment
         ) as mock_create,
+        patch("mailpilot.database.create_activity") as mock_activity,
     ):
         result = runner.invoke(
             main,
@@ -4295,6 +4296,10 @@ def test_enrollment_add(runner: CliRunner, mock_connection: MagicMock) -> None:
 
     assert result.exit_code == 0
     mock_create.assert_called_once_with(mock_connection, _WORKFLOW_ID, _CONTACT_ID)
+    activity_kwargs = mock_activity.call_args.kwargs
+    assert activity_kwargs["activity_type"] == "workflow_assigned"
+    assert activity_kwargs["contact_id"] == _CONTACT_ID
+    assert activity_kwargs["detail"]["workflow_id"] == _WORKFLOW_ID
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["workflow_id"] == _WORKFLOW_ID
@@ -4314,6 +4319,7 @@ def test_enrollment_add_idempotent(
         patch("mailpilot.database.get_contact", return_value=_make_contact()),
         patch("mailpilot.database.create_enrollment", return_value=None),
         patch("mailpilot.database.get_enrollment", return_value=existing),
+        patch("mailpilot.database.create_activity") as mock_activity,
     ):
         result = runner.invoke(
             main,
@@ -4328,6 +4334,7 @@ def test_enrollment_add_idempotent(
         )
 
     assert result.exit_code == 0
+    mock_activity.assert_not_called()
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["status"] == "active"
@@ -4658,6 +4665,8 @@ def test_enrollment_update(runner: CliRunner, mock_connection: MagicMock) -> Non
         patch(
             "mailpilot.database.update_enrollment", return_value=updated
         ) as mock_update,
+        patch("mailpilot.database.get_contact", return_value=_make_contact()),
+        patch("mailpilot.database.create_activity") as mock_activity,
     ):
         result = runner.invoke(
             main,
@@ -4683,6 +4692,9 @@ def test_enrollment_update(runner: CliRunner, mock_connection: MagicMock) -> Non
         status="completed",
         reason="Demo booked",
     )
+    activity_kwargs = mock_activity.call_args.kwargs
+    assert activity_kwargs["activity_type"] == "workflow_completed"
+    assert activity_kwargs["summary"] == "Demo booked"
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["status"] == "completed"
@@ -4699,6 +4711,8 @@ def test_enrollment_update_without_reason(
         patch(
             "mailpilot.database.update_enrollment", return_value=updated
         ) as mock_update,
+        patch("mailpilot.database.get_contact", return_value=_make_contact()),
+        patch("mailpilot.database.create_activity") as mock_activity,
     ):
         result = runner.invoke(
             main,
@@ -4721,6 +4735,36 @@ def test_enrollment_update_without_reason(
         _CONTACT_ID,
         status="failed",
     )
+    assert mock_activity.call_args.kwargs["activity_type"] == "workflow_failed"
+
+
+def test_enrollment_update_active_does_not_emit_activity(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """Transitions to active or pending must not emit a workflow activity."""
+    updated = _make_enrollment(status="active")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.update_enrollment", return_value=updated),
+        patch("mailpilot.database.create_activity") as mock_activity,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "update",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--contact-id",
+                _CONTACT_ID,
+                "--status",
+                "active",
+            ],
+        )
+
+    assert result.exit_code == 0
+    mock_activity.assert_not_called()
 
 
 def test_enrollment_update_not_found(

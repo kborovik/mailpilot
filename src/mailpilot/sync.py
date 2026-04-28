@@ -36,6 +36,7 @@ import logfire
 import psycopg
 
 from mailpilot.database import (
+    create_activity,
     create_contacts_bulk,
     create_email,
     create_or_get_contact_by_email,
@@ -773,6 +774,14 @@ def _store_inbound_message(  # noqa: PLR0913
     )
     if email is None:
         return None
+    create_activity(
+        connection,
+        contact_id=contact.id,
+        activity_type="email_received",
+        summary=email.subject,
+        detail={"email_id": email.id, "subject": email.subject},
+        company_id=contact.company_id,
+    )
     sync_messages_stored.add(
         1,
         attributes={"within_recency_window": within_window},

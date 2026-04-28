@@ -181,7 +181,9 @@ def update_enrollment_status(
 ) -> dict[str, str]:
     """Report outcome for an enrollment in the current workflow.
 
-    The agent -- not the system -- decides success or failure.
+    The agent -- not the system -- decides success or failure. Emits a
+    ``workflow_completed`` or ``workflow_failed`` activity on those
+    transitions so the timeline records the outcome.
 
     Args:
         connection: Open database connection.
@@ -207,6 +209,16 @@ def update_enrollment_status(
             "error": "not_found",
             "message": f"enrollment not found: {workflow_id}/{contact_id}",
         }
+    if status in ("completed", "failed"):
+        contact = database.get_contact(connection, contact_id)
+        database.create_activity(
+            connection,
+            contact_id=contact_id,
+            activity_type=f"workflow_{status}",
+            summary=reason or f"Workflow {status}",
+            detail={"workflow_id": workflow_id, "reason": reason},
+            company_id=contact.company_id if contact is not None else None,
+        )
     return {"status": enrollment.status, "reason": enrollment.reason}
 
 

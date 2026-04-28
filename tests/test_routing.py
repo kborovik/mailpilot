@@ -626,6 +626,102 @@ def test_route_email_enrollment_idempotent(
     assert routed.is_routed is True
 
 
+def test_route_email_emits_workflow_assigned_activity(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """A first-time enrollment must emit a workflow_assigned activity tied
+    to the contact, with workflow id + name in the detail."""
+    from mailpilot.database import list_activities
+
+    account = make_test_account(database_connection, email="wact@example.com")
+    contact = make_test_contact(
+        database_connection, email="sender@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(
+        database_connection,
+        account_id=account.id,
+        workflow_type="inbound",
+        name="Inbound Inquiry",
+    )
+    _activate_workflow(database_connection, workflow.id)
+
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="prior",
+        gmail_thread_id="t-wact",
+        workflow_id=workflow.id,
+        is_routed=True,
+    )
+    new_email = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="reply",
+        gmail_thread_id="t-wact",
+        contact_id=contact.id,
+    )
+    assert new_email is not None
+
+    route_email(
+        database_connection, new_email, "sender@example.com", make_test_settings()
+    )
+
+    activities = list_activities(
+        database_connection, contact_id=contact.id, activity_type="workflow_assigned"
+    )
+    assert len(activities) == 1
+    assert workflow.name in activities[0].summary
+
+
+def test_route_email_workflow_assigned_only_once_on_duplicate_enrollment(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """When create_enrollment hits ON CONFLICT (returns None), no second
+    workflow_assigned activity should be emitted for the same pair."""
+    from mailpilot.database import list_activities
+
+    account = make_test_account(database_connection, email="wactdup@example.com")
+    contact = make_test_contact(
+        database_connection, email="repeat@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="inbound"
+    )
+    _activate_workflow(database_connection, workflow.id)
+
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="prior",
+        gmail_thread_id="t-wactdup",
+        workflow_id=workflow.id,
+        is_routed=True,
+    )
+
+    for index in (1, 2):
+        inbound = create_email(
+            database_connection,
+            account_id=account.id,
+            direction="inbound",
+            subject=f"reply {index}",
+            gmail_thread_id="t-wactdup",
+            gmail_message_id=f"msg-wactdup-{index}",
+            contact_id=contact.id,
+        )
+        assert inbound is not None
+        route_email(
+            database_connection, inbound, "repeat@example.com", make_test_settings()
+        )
+
+    activities = list_activities(
+        database_connection, contact_id=contact.id, activity_type="workflow_assigned"
+    )
+    assert len(activities) == 1
+
+
 # -- Span contract: route_method attribute ------------------------------------
 
 

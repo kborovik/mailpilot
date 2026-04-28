@@ -108,7 +108,7 @@ Save `OUTBOUND_WORKFLOW_ID`.
 
 ### A2. Start the sync loop
 
-Start `mailpilot run` in the background using `Bash` with `run_in_background: true`. Capture the bash_id so you can read its output later. This loop runs **once for the whole test** -- it stays up through Scenario B and is only stopped at the very end (Step B7).
+Start `mailpilot run` in the background using `Bash` with `run_in_background: true`. Capture the bash_id so you can read its output later. This loop runs **once for the whole test** -- it stays up through Scenario B and is only stopped at the very end (Step B8).
 
 The loop emits curated `event=...` lifecycle lines on stdout regardless of `--debug` (`loop.tick`, `sync.account`, `route.match`, `agent.run`, `task.drain`, `error`). Use `--debug` only when you also need Logfire's full span output for deep diagnosis.
 
@@ -217,6 +217,24 @@ Wait for a task with `email_id` set to the routed reply and `status == "complete
 - **No additional outbound emails were sent.** Re-run `mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_A>` and confirm only the original outbound from A3 is present. If the count > 1, the agent kept replying despite the decline signal -- record this as a defect for the report.
 
 **On failure:** If the task was never created, check that A6's email has `workflow_id` set and the run loop is alive. If the task is `failed`, `mailpilot task view <TASK_ID>` for the reason.
+
+### A8. Verify the CRM activity timeline
+
+The runtime paths emit `activity` rows automatically (no manual `activity create`). Read the inbound contact's timeline:
+
+```
+mailpilot activity list --contact-id <INBOUND_CONTACT_ID> --since <TEST_START_A>
+```
+
+**Gate A8 (activity wiring):**
+
+- `workflow_assigned` activity present with `detail.workflow_id == OUTBOUND_WORKFLOW_ID` (emitted by `enrollment add`).
+- `email_sent` activity present with `summary == SUBJECT_A` (emitted by `email_ops.send_email` when the outbound agent sent in A3).
+- `email_received` activity present with the operator-reply subject (emitted by sync's `_store_inbound_message` when the reply landed in the outbound mailbox in A6).
+- Exactly one of `workflow_completed` or `workflow_failed` present (emitted by `agent.tools.update_enrollment_status` in A7); summary equals the agent's `reason`.
+- No `tag_added` / `note_added` rows from this scenario (we did not run those CLI commands).
+
+If any expected type is missing, the runtime wiring (issue #46) regressed for that path.
 
 ### Logfire review for Scenario A
 
@@ -350,7 +368,24 @@ Match by `SUBJECT_B` (likely with a `Re:` prefix on Gmail's side).
 - **No additional inbound replies.** Re-run `mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>` and confirm only the single reply from B5 exists. More than one means the inbound agent kept replying despite the terminal `update_enrollment_status` call -- record as a defect.
 - **Outbound workflow stayed quiet (concurrent-workflow check).** Re-run `mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>` and confirm zero new outbound sends. Any non-zero count means the still-active outbound workflow reacted to B's traffic -- record as a defect.
 
-### B7. Stop the sync loop
+### B7. Verify the CRM activity timeline
+
+Read the outbound contact's timeline (this is the contact whose enrollment was driven by the inbound workflow in B):
+
+```
+mailpilot activity list --contact-id <OUTBOUND_CONTACT_ID> --since <TEST_START_B>
+```
+
+**Gate B7 (activity wiring):**
+
+- `workflow_assigned` activity present with `detail.workflow_id == INBOUND_WORKFLOW_ID` (emitted by `enrollment add` in B1).
+- `email_received` activity present with `summary == SUBJECT_B` (emitted by sync's `_store_inbound_message` when the trigger arrived in B4 on the inbound mailbox).
+- `email_sent` activity present from the agent reply in B5 (subject begins with `Re:`).
+- `workflow_completed` activity present (emitted by `agent.tools.update_enrollment_status` after B5).
+
+Also re-read the inbound contact's timeline from Scenario A and confirm no new `email_*` rows appeared during Scenario B (the outbound workflow stayed quiet). Any new entries here mirror the existing "outbound workflow stayed quiet" check in Gate B6 from the activity-table side.
+
+### B8. Stop the sync loop
 
 Send SIGTERM to the background `mailpilot run` (e.g. `kill <pid>`). Wait for `Sync loop stopped` in the captured output. Confirm the `sync_status` table is empty.
 
@@ -388,6 +423,7 @@ Scenario A: Outbound workflow (sole workflow active)
   A5 Operator reply .......... PASS
   A6 thread_match routing .... PASS
   A7 Agent processes reply ... PASS
+  A8 Activity timeline ....... PASS
 
 Scenario B: Inbound workflow (outbound workflow still active)
   B1 Create workflow ......... PASS  (workflow list shows 2 active)
@@ -396,7 +432,8 @@ Scenario B: Inbound workflow (outbound workflow still active)
   B4 classified routing ...... PASS
   B5 Agent reply ............. PASS
   B6 Gmail delivery (out) .... PASS
-  B7 Stop sync loop .......... PASS
+  B7 Activity timeline ....... PASS
+  B8 Stop sync loop .......... PASS
 
 Entity IDs (shared by both scenarios):
   Outbound account: <id>   Inbound account: <id>   Company: <id>
@@ -488,5 +525,6 @@ Expected total: ~6 minutes. Phase 0 runs once, the run loop runs once, and there
 | A6 reply round-trip    | ~10-60s  |
 | A7 / B5 task drain     | ~10-60s  |
 | B6 reply round-trip    | ~10-60s  |
-| B7 stop run loop       | ~3s      |
+| A8 / B7 activity check | ~3s      |
+| B8 stop run loop       | ~3s      |
 | Report                 | ~10s     |
