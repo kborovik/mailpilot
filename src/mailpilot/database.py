@@ -10,6 +10,7 @@ Convention:
     update_X(connection, id, ...) -> X
 """
 
+import re
 import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
@@ -2103,39 +2104,58 @@ def list_activities(
 # -- Tag -----------------------------------------------------------------------
 
 
+_TAG_NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]*")
+
+
+def _normalize_tag_name(name: str) -> str:
+    """Normalize a tag name to lowercase hyphenated form.
+
+    Strips whitespace, lowercases, replaces whitespace and underscores
+    with hyphens, collapses repeated hyphens, trims leading/trailing
+    hyphens, and validates against ``[a-z0-9][a-z0-9-]*``.
+
+    Raises:
+        ValueError: If the result is empty or contains disallowed
+        characters.
+    """
+    cleaned = name.strip().lower()
+    cleaned = re.sub(r"[\s_]+", "-", cleaned)
+    cleaned = re.sub(r"-+", "-", cleaned).strip("-")
+    if not _TAG_NAME_RE.fullmatch(cleaned):
+        raise ValueError(f"invalid tag name: {name!r} (normalized to {cleaned!r})")
+    return cleaned
+
+
 def create_tag(
     connection: psycopg.Connection[dict[str, Any]],
-    entity_type: str,
-    entity_id: str,
     name: str,
+    contact_id: str | None = None,
+    company_id: str | None = None,
 ) -> Tag | None:
     """Create a tag on a contact or company.
 
-    Normalizes the tag name to lowercase with leading/trailing whitespace
-    stripped. Uses ON CONFLICT DO NOTHING so duplicate tags are silently
-    ignored.
+    Exactly one of ``contact_id`` or ``company_id`` must be provided.
+    The name is normalized via ``_normalize_tag_name``. Uses ON CONFLICT
+    DO NOTHING -- returns None if the tag already exists.
 
-    Args:
-        connection: Open database connection.
-        entity_type: "contact" or "company".
-        entity_id: ID of the tagged entity.
-        name: Tag name (normalized to lowercase).
-
-    Returns:
-        Created tag, or None if the tag already exists.
+    Raises:
+        ValueError: If neither or both of contact_id/company_id are set,
+        or if the tag name fails normalization.
     """
-    normalized = name.strip().lower()
+    if (contact_id is None) == (company_id is None):
+        raise ValueError("exactly one of contact_id or company_id is required")
+    normalized = _normalize_tag_name(name)
     row = connection.execute(
         """\
-        INSERT INTO tag (id, entity_type, entity_id, name)
-        VALUES (%(id)s, %(entity_type)s, %(entity_id)s, %(name)s)
-        ON CONFLICT (entity_type, entity_id, name) DO NOTHING
+        INSERT INTO tag (id, contact_id, company_id, name)
+        VALUES (%(id)s, %(contact_id)s, %(company_id)s, %(name)s)
+        ON CONFLICT DO NOTHING
         RETURNING *
         """,
         {
             "id": _new_id(),
-            "entity_type": entity_type,
-            "entity_id": entity_id,
+            "contact_id": contact_id,
+            "company_id": company_id,
             "name": normalized,
         },
     ).fetchone()
@@ -2147,135 +2167,129 @@ def create_tag(
 
 def delete_tag(
     connection: psycopg.Connection[dict[str, Any]],
-    entity_type: str,
-    entity_id: str,
     name: str,
+    contact_id: str | None = None,
+    company_id: str | None = None,
 ) -> bool:
     """Remove a tag from a contact or company.
 
-    Args:
-        connection: Open database connection.
-        entity_type: "contact" or "company".
-        entity_id: ID of the tagged entity.
-        name: Tag name (normalized to lowercase for matching).
-
-    Returns:
-        True if the tag was deleted, False if it was not found.
+    Raises:
+        ValueError: If neither or both of contact_id/company_id are set.
     """
-    normalized = name.strip().lower()
-    cursor = connection.execute(
-        """\
-        DELETE FROM tag
-        WHERE entity_type = %(entity_type)s
-          AND entity_id = %(entity_id)s
-          AND name = %(name)s
-        """,
-        {
-            "entity_type": entity_type,
-            "entity_id": entity_id,
-            "name": normalized,
-        },
-    )
+    if (contact_id is None) == (company_id is None):
+        raise ValueError("exactly one of contact_id or company_id is required")
+    normalized = _normalize_tag_name(name)
+    if contact_id is not None:
+        cursor = connection.execute(
+            "DELETE FROM tag WHERE contact_id = %(contact_id)s AND name = %(name)s",
+            {"contact_id": contact_id, "name": normalized},
+        )
+    else:
+        cursor = connection.execute(
+            "DELETE FROM tag WHERE company_id = %(company_id)s AND name = %(name)s",
+            {"company_id": company_id, "name": normalized},
+        )
     connection.commit()
     return cursor.rowcount > 0
 
 
 def list_tags(
     connection: psycopg.Connection[dict[str, Any]],
-    entity_type: str,
-    entity_id: str,
+    contact_id: str | None = None,
+    company_id: str | None = None,
     limit: int = 100,
     since: str | None = None,
 ) -> list[Tag]:
-    """List all tags on a contact or company.
+    """List tags on a contact or company.
 
     Tag has no Summary projection -- the full row already matches the
-    summary contract (id, entity_type, entity_id, name, created_at).
+    summary contract.
 
-    Args:
-        connection: Open database connection.
-        entity_type: "contact" or "company".
-        entity_id: ID of the tagged entity.
-        limit: Maximum results.
-        since: ISO datetime lower bound on ``created_at``.
-
-    Returns:
-        Tags ordered by name.
+    Raises:
+        ValueError: If neither or both of contact_id/company_id are set.
     """
-    conditions: list[Composed | SQL] = [
-        SQL("entity_type = %(entity_type)s"),
-        SQL("entity_id = %(entity_id)s"),
-    ]
-    params: dict[str, object] = {
-        "entity_type": entity_type,
-        "entity_id": entity_id,
-        "limit": limit,
-    }
+    if (contact_id is None) == (company_id is None):
+        raise ValueError("exactly one of contact_id or company_id is required")
+    params: dict[str, object] = {"limit": limit}
+    where_parts: list[Composed | SQL] = []
+    if contact_id is not None:
+        where_parts.append(SQL("contact_id = %(contact_id)s"))
+        params["contact_id"] = contact_id
+    else:
+        where_parts.append(SQL("company_id = %(company_id)s"))
+        params["company_id"] = company_id
     if since is not None:
-        conditions.append(SQL("created_at >= %(since)s"))
+        where_parts.append(SQL("created_at >= %(since)s"))
         params["since"] = since
-    where = SQL("WHERE ") + SQL(" AND ").join(conditions)
+    where = SQL("WHERE ") + SQL(" AND ").join(where_parts)
     query = SQL("SELECT * FROM tag {} ORDER BY name LIMIT %(limit)s").format(where)
     rows = connection.execute(query, params).fetchall()
     return [Tag.model_validate(row) for row in rows]
 
 
-def list_entities_by_tag(
+def list_contacts_by_tag(
     connection: psycopg.Connection[dict[str, Any]],
-    entity_type: str,
     name: str,
     limit: int = 100,
 ) -> list[str]:
-    """Find all entities with a given tag.
-
-    Args:
-        connection: Open database connection.
-        entity_type: "contact" or "company".
-        name: Tag name to search for.
-        limit: Maximum number of entity IDs to return.
-
-    Returns:
-        Entity IDs matching the tag.
-    """
-    normalized = name.strip().lower()
+    """Return contact IDs with the given tag (normalized)."""
+    normalized = _normalize_tag_name(name)
     rows = connection.execute(
         """\
-        SELECT entity_id FROM tag
-        WHERE entity_type = %(entity_type)s AND name = %(name)s
+        SELECT contact_id FROM tag
+        WHERE contact_id IS NOT NULL AND name = %(name)s
         ORDER BY created_at
         LIMIT %(limit)s
         """,
-        {"entity_type": entity_type, "name": normalized, "limit": limit},
+        {"name": normalized, "limit": limit},
     ).fetchall()
-    return [row["entity_id"] for row in rows]
+    return [row["contact_id"] for row in rows]
+
+
+def list_companies_by_tag(
+    connection: psycopg.Connection[dict[str, Any]],
+    name: str,
+    limit: int = 100,
+) -> list[str]:
+    """Return company IDs with the given tag (normalized)."""
+    normalized = _normalize_tag_name(name)
+    rows = connection.execute(
+        """\
+        SELECT company_id FROM tag
+        WHERE company_id IS NOT NULL AND name = %(name)s
+        ORDER BY created_at
+        LIMIT %(limit)s
+        """,
+        {"name": normalized, "limit": limit},
+    ).fetchall()
+    return [row["company_id"] for row in rows]
 
 
 def search_tags(
     connection: psycopg.Connection[dict[str, Any]],
     name: str,
-    entity_type: str | None = None,
+    owner: str | None = None,
     limit: int = 100,
 ) -> list[Tag]:
-    """Search tags by name with optional entity type filter.
+    """Search tags by name pattern with optional owner filter.
 
     Args:
-        connection: Open database connection.
-        name: Tag name pattern (LIKE match).
-        entity_type: Optional filter by "contact" or "company".
-        limit: Maximum number of results.
-
-    Returns:
-        Matching tags ordered by name.
+        owner: ``"contact"`` to limit to contact tags, ``"company"`` to
+            limit to company tags, ``None`` for both.
     """
+    if owner not in (None, "contact", "company"):
+        raise ValueError("owner must be 'contact', 'company', or None")
     pattern = f"%{name.strip().lower()}%"
     params: dict[str, object] = {"pattern": pattern, "limit": limit}
-    type_filter = SQL("")
-    if entity_type is not None:
-        type_filter = SQL("AND entity_type = %(entity_type)s")
-        params["entity_type"] = entity_type
+    owner_filter = SQL("")
+    if owner == "contact":
+        owner_filter = SQL("AND contact_id IS NOT NULL")
+    elif owner == "company":
+        owner_filter = SQL("AND company_id IS NOT NULL")
     query = SQL(
-        "SELECT * FROM tag WHERE name LIKE %(pattern)s {} ORDER BY name LIMIT %(limit)s"
-    ).format(type_filter)
+        "SELECT * FROM tag WHERE name LIKE %(pattern)s {} "
+        "ORDER BY name LIMIT %(limit)s"
+    ).format(owner_filter)
     rows = connection.execute(query, params).fetchall()
     return [Tag.model_validate(row) for row in rows]
 

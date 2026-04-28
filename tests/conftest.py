@@ -147,16 +147,16 @@ def make_test_activity(
 
 def make_test_tag(
     connection: psycopg.Connection[dict[str, Any]],
-    entity_type: str = "contact",
-    entity_id: str = "",
+    contact_id: str | None = None,
+    company_id: str | None = None,
     name: str = "prospect",
 ) -> Tag:
     """Create a test tag in the database."""
     tag = create_tag(
         connection,
-        entity_type=entity_type,
-        entity_id=entity_id,
         name=name,
+        contact_id=contact_id,
+        company_id=company_id,
     )
     assert tag is not None, f"tag '{name}' already exists"
     return tag
@@ -164,14 +164,14 @@ def make_test_tag(
 
 def make_test_note(
     connection: psycopg.Connection[dict[str, Any]],
-    entity_type: str = "contact",
-    entity_id: str = "",
+    contact_id: str | None = None,
+    company_id: str | None = None,
     body: str = "Test note body",
 ) -> Note:
     """Create a test note in the database."""
     return create_note(
         connection,
-        entity_type=entity_type,
-        entity_id=entity_id,
         body=body,
+        contact_id=contact_id,
+        company_id=company_id,
     )
