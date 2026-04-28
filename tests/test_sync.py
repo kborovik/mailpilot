@@ -1746,6 +1746,13 @@ def test_sync_inbound_emits_email_received_activity(
     activity = activities[0]
     assert activity.summary == "Activity wiring test"
     assert activity.company_id == company.id
+    row = database_connection.execute(
+        "SELECT email_id FROM activity "
+        "WHERE type = 'email_received' AND contact_id = %s",
+        (contact.id,),
+    ).fetchone()
+    assert row is not None
+    assert row["email_id"] == email.id
 
 
 def test_sync_inbound_skips_activity_when_create_email_returns_none(
