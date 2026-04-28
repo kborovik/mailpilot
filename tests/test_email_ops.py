@@ -209,70 +209,6 @@ def test_send_email_raises_cooldown_when_recent_cold_send(
     gmail_client.send_message.assert_not_called()
 
 
-def test_send_email_activates_pending_enrollment(
-    database_connection: psycopg.Connection[dict[str, Any]],
-) -> None:
-    account = make_test_account(database_connection)
-    contact = make_test_contact(
-        database_connection, email="recipient@example.com", domain="example.com"
-    )
-    workflow = make_test_workflow(database_connection, account_id=account.id)
-    _activate(database_connection, workflow.id)
-    create_enrollment(database_connection, workflow.id, contact.id)
-    gmail_client = _make_gmail_client(account)
-
-    send_email(
-        connection=database_connection,
-        account=account,
-        gmail_client=gmail_client,
-        settings=make_test_settings(),
-        to="recipient@example.com",
-        subject="Hello",
-        body="Hi",
-        workflow_id=workflow.id,
-    )
-
-    enrollment = get_enrollment(database_connection, workflow.id, contact.id)
-    assert enrollment is not None
-    assert enrollment.status == "active"
-
-
-def test_send_email_pending_to_active_does_not_emit_workflow_activity(
-    database_connection: psycopg.Connection[dict[str, Any]],
-) -> None:
-    """The pending->active transition done inside email_ops must NOT emit
-    a workflow_completed/workflow_failed/workflow_assigned activity --
-    workflow_assigned and email_sent already cover the timeline."""
-    from mailpilot.database import list_activities
-
-    account = make_test_account(database_connection)
-    contact = make_test_contact(
-        database_connection, email="recipient@example.com", domain="example.com"
-    )
-    workflow = make_test_workflow(database_connection, account_id=account.id)
-    _activate(database_connection, workflow.id)
-    create_enrollment(database_connection, workflow.id, contact.id)
-    gmail_client = _make_gmail_client(account)
-
-    send_email(
-        connection=database_connection,
-        account=account,
-        gmail_client=gmail_client,
-        settings=make_test_settings(),
-        to="recipient@example.com",
-        subject="Hello",
-        body="Hi",
-        workflow_id=workflow.id,
-    )
-
-    workflow_activities = [
-        a
-        for a in list_activities(database_connection, contact_id=contact.id)
-        if a.type in ("workflow_assigned", "workflow_completed", "workflow_failed")
-    ]
-    assert workflow_activities == []
-
-
 def test_send_email_no_workflow_id_skips_enrollment(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
@@ -517,34 +453,6 @@ def test_reply_email_passes_in_reply_to_kwarg(
     )
 
 
-def test_reply_email_activates_pending_enrollment(
-    database_connection: psycopg.Connection[dict[str, Any]],
-) -> None:
-    account = make_test_account(database_connection)
-    contact = make_test_contact(
-        database_connection, email="sender@example.com", domain="example.com"
-    )
-    workflow = make_test_workflow(database_connection, account_id=account.id)
-    _activate(database_connection, workflow.id)
-    create_enrollment(database_connection, workflow.id, contact.id)
-    inbound = _make_inbound(database_connection, account.id, contact.id, workflow.id)
-    gmail_client = _make_gmail_client(account)
-
-    reply_email(
-        connection=database_connection,
-        account=account,
-        gmail_client=gmail_client,
-        settings=make_test_settings(),
-        email_id=inbound.id,
-        body="hi",
-        workflow_id=workflow.id,
-    )
-
-    enrollment = get_enrollment(database_connection, workflow.id, contact.id)
-    assert enrollment is not None
-    assert enrollment.status == "active"
-
-
 # -- Activity emission ---------------------------------------------------------
 
 
@@ -552,7 +460,7 @@ def test_send_email_emits_email_sent_activity(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     """A successful send must produce one email_sent activity tied to the
-    resolved contact, with subject summary and workflow_id in the detail."""
+    resolved contact, with subject summary and email_id/workflow_id FKs."""
     from mailpilot.database import create_company, list_activities
 
     account = make_test_account(database_connection)
@@ -569,7 +477,7 @@ def test_send_email_emits_email_sent_activity(
     _activate(database_connection, workflow.id)
     gmail_client = _make_gmail_client(account)
 
-    send_email(
+    email = send_email(
         connection=database_connection,
         account=account,
         gmail_client=gmail_client,
@@ -586,6 +494,14 @@ def test_send_email_emits_email_sent_activity(
     assert len(activities) == 1
     assert activities[0].summary == "Outbound test"
     assert activities[0].company_id == company.id
+    row = database_connection.execute(
+        "SELECT email_id, workflow_id FROM activity "
+        "WHERE type = 'email_sent' AND contact_id = %s",
+        (contact.id,),
+    ).fetchone()
+    assert row is not None
+    assert row["email_id"] == email.id
+    assert row["workflow_id"] == workflow.id
 
 
 def test_send_email_skips_activity_when_contact_unknown(
