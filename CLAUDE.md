@@ -106,7 +106,7 @@ mailpilot enrollment add --workflow-id ID --contact-id ID
 mailpilot enrollment remove --workflow-id ID --contact-id ID
 mailpilot enrollment view --workflow-id ID --contact-id ID
 mailpilot enrollment list [--workflow-id ID] [--contact-id ID] [--status pending|active|completed|failed] [--limit N] [--since ISO]
-mailpilot enrollment update --workflow-id ID --contact-id ID --status S [--reason R]
+mailpilot enrollment update --workflow-id ID --contact-id ID --status active|paused [--reason R]
 mailpilot enrollment run --workflow-id ID --contact-id ID
 
 mailpilot task list [--workflow-id ID] [--contact-id ID] [--status pending|completed|failed|cancelled] [--limit N] [--since ISO]
@@ -121,7 +121,7 @@ mailpilot email reply --account-id ID --email-id ID --body B [--workflow-id ID] 
 
 mailpilot activity list --contact-id ID [--type TYPE] [--limit N] [--since ISO]
 mailpilot activity list --company-id ID [--type TYPE] [--limit N] [--since ISO]
-mailpilot activity create --contact-id ID --type TYPE --summary TEXT [--detail JSON] [--company-id ID]
+mailpilot activity create [--contact-id ID] [--company-id ID] --type TYPE --summary TEXT [--detail JSON]
 
 mailpilot tag add --contact-id ID NAME
 mailpilot tag add --company-id ID NAME
@@ -177,9 +177,10 @@ MailPilot is a CRM with Gmail as the communication channel. Core concepts:
 
 - **Contact** -- a person with an email address. May belong to a company.
 - **Company** -- an organization identified by domain.
-- **Tag** -- flexible label on contacts or companies for segmentation. Convention: lowercase, hyphenated (e.g., `prospect`, `logistics`, `cold`). No formal pipeline stages -- tags are freeform.
-- **Note** -- freeform text annotation on a contact or company. Append-only.
-- **Activity** -- chronological event log per contact. All significant interactions (emails, notes, tags, status changes, workflow events) are recorded as activities. This is the unified timeline Claude Code queries for relationship health and reporting.
+- **Tag** -- flexible label on a contact or company. Each row sets exactly one of `contact_id` or `company_id` (XOR). Tag names are strictly normalized to `[a-z0-9][a-z0-9-]*`; invalid names raise. Convention: lowercase, hyphenated (e.g., `prospect`, `logistics`, `cold`). No formal pipeline stages -- tags are freeform.
+- **Note** -- freeform text annotation on a contact or company. Same XOR pattern as Tag. Append-only.
+- **Activity** -- chronological event log per contact and/or company. At least one of `contact_id` / `company_id` must be set. Structured FK columns (`email_id`, `workflow_id`, `task_id`) let reports join without parsing `detail` JSON. Activities are append-only.
+- **Enrollment** -- contact's binding to a workflow. Status is operational state only: `active` (agent runs against it) or `paused`. Outcomes (`completed`, `failed`) are recorded as activity events via the agent's `record_enrollment_outcome` tool, not as enrollment state.
 - **Workflow** -- binds an account to agent instructions for email communication (inbound or outbound). Unchanged from prior design (see `docs/adr-03-workflow-model.md`).
 
 ### Reporting
