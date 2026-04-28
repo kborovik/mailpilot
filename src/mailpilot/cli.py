@@ -1086,7 +1086,7 @@ def tag() -> None:
 def tag_add(contact_id: str | None, company_id: str | None, name: str) -> None:
     """Add a tag to a contact or company."""
     from mailpilot.database import (
-        _normalize_tag_name,
+        _normalize_tag_name,  # pyright: ignore[reportPrivateUsage]
         add_company_tag,
         add_contact_tag,
         get_company,
@@ -1107,9 +1107,7 @@ def tag_add(contact_id: str | None, company_id: str | None, name: str) -> None:
             if get_contact(connection, contact_id) is None:
                 output_error(f"contact {contact_id} not found", "not_found")
             try:
-                created = add_contact_tag(
-                    connection, contact_id=contact_id, name=name
-                )
+                created = add_contact_tag(connection, contact_id=contact_id, name=name)
             except ValueError as exc:
                 output_error(str(exc), "validation_error")
             owner = ("contact", contact_id)
@@ -1118,9 +1116,7 @@ def tag_add(contact_id: str | None, company_id: str | None, name: str) -> None:
             if get_company(connection, company_id) is None:
                 output_error(f"company {company_id} not found", "not_found")
             try:
-                created = add_company_tag(
-                    connection, company_id=company_id, name=name
-                )
+                created = add_company_tag(connection, company_id=company_id, name=name)
             except ValueError as exc:
                 output_error(str(exc), "validation_error")
             owner = ("company", company_id)
@@ -1142,7 +1138,7 @@ def tag_add(contact_id: str | None, company_id: str | None, name: str) -> None:
 def tag_remove(contact_id: str | None, company_id: str | None, name: str) -> None:
     """Remove a tag from a contact or company."""
     from mailpilot.database import (
-        _normalize_tag_name,
+        _normalize_tag_name,  # pyright: ignore[reportPrivateUsage]
         get_company,
         get_contact,
         initialize_database,
@@ -1289,16 +1285,12 @@ def note_add(contact_id: str | None, company_id: str | None, body: str) -> None:
         if contact_id is not None:
             if get_contact(connection, contact_id) is None:
                 output_error(f"contact {contact_id} not found", "not_found")
-            created = add_contact_note(
-                connection, contact_id=contact_id, body=body
-            )
+            created = add_contact_note(connection, contact_id=contact_id, body=body)
         else:
             assert company_id is not None
             if get_company(connection, company_id) is None:
                 output_error(f"company {company_id} not found", "not_found")
-            created = add_company_note(
-                connection, company_id=company_id, body=body
-            )
+            created = add_company_note(connection, company_id=company_id, body=body)
         output(created.model_dump(mode="json"))
     finally:
         connection.close()
@@ -1702,13 +1694,11 @@ def enrollment_add(workflow_id: str, contact_id: str) -> None:
             create_activity(
                 connection,
                 contact_id=contact_id,
-                activity_type="workflow_assigned",
+                activity_type="enrollment_added",
                 summary=f"Assigned to {workflow.name}",
-                detail={
-                    "workflow_id": workflow_id,
-                    "workflow_name": workflow.name,
-                },
+                detail={"workflow_name": workflow.name},
                 company_id=contact.company_id,
+                workflow_id=workflow_id,
             )
             output(created.model_dump(mode="json"))
             return
@@ -1836,7 +1826,7 @@ def enrollment_view(workflow_id: str, contact_id: str) -> None:
 @click.option(
     "--status",
     default=None,
-    type=click.Choice(["pending", "active", "completed", "failed"]),
+    type=click.Choice(["active", "paused"]),
     help="Filter by enrollment status.",
 )
 @click.option("--limit", default=100, help="Maximum results.")
@@ -1881,38 +1871,50 @@ def enrollment_list(
 @click.option(
     "--status",
     required=True,
-    type=click.Choice(["pending", "active", "completed", "failed"]),
-    help="New enrollment status.",
+    type=click.Choice(["active", "paused"]),
+    help="New enrollment status (active or paused).",
 )
 @click.option("--reason", default=None, help="Status reason.")
 def enrollment_update(
     workflow_id: str, contact_id: str, status: str, reason: str | None
 ) -> None:
-    """Update enrollment status and reason."""
+    """Update enrollment operational status (active or paused).
+
+    Outcomes (completed, failed) are recorded as activity by the agent
+    via record_enrollment_outcome -- not via this command.
+    """
     from mailpilot.database import (
         create_activity,
         get_contact,
+        get_enrollment,
         initialize_database,
         update_enrollment,
     )
 
     connection = initialize_database(_database_url())
     try:
+        before = get_enrollment(connection, workflow_id, contact_id)
+        if before is None:
+            output_error("enrollment not found", "not_found")
         fields: dict[str, object] = {"status": status}
         if reason is not None:
             fields["reason"] = reason
         updated = update_enrollment(connection, workflow_id, contact_id, **fields)
         if updated is None:
             output_error("enrollment not found", "not_found")
-        if status in ("completed", "failed"):
+        if before.status != status:
             contact = get_contact(connection, contact_id)
+            activity_type = (
+                "enrollment_paused" if status == "paused" else "enrollment_resumed"
+            )
             create_activity(
                 connection,
                 contact_id=contact_id,
-                activity_type=f"workflow_{status}",
-                summary=reason or f"Workflow {status}",
-                detail={"workflow_id": workflow_id, "reason": reason or ""},
+                activity_type=activity_type,
+                summary=reason or f"Enrollment {status}",
+                detail={"reason": reason or ""},
                 company_id=contact.company_id if contact is not None else None,
+                workflow_id=workflow_id,
             )
         output(updated.model_dump(mode="json"))
     finally:

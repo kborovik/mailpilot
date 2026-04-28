@@ -1730,7 +1730,9 @@ def test_status_counts_includes_activities(
 
 def test_normalize_tag_name_accepts_valid_inputs() -> None:
     """Lowercase, hyphenated, alphanumeric tags pass through unchanged."""
-    from mailpilot.database import _normalize_tag_name
+    from mailpilot.database import (
+        _normalize_tag_name,  # pyright: ignore[reportPrivateUsage]
+    )
 
     assert _normalize_tag_name("prospect") == "prospect"
     assert _normalize_tag_name("hot-lead") == "hot-lead"
@@ -1739,7 +1741,9 @@ def test_normalize_tag_name_accepts_valid_inputs() -> None:
 
 def test_normalize_tag_name_collapses_separators_and_case() -> None:
     """Whitespace, underscores, and uppercase are normalized; hyphens collapse."""
-    from mailpilot.database import _normalize_tag_name
+    from mailpilot.database import (
+        _normalize_tag_name,  # pyright: ignore[reportPrivateUsage]
+    )
 
     assert _normalize_tag_name("Hot Lead") == "hot-lead"
     assert _normalize_tag_name("hot_lead") == "hot-lead"
@@ -1750,15 +1754,17 @@ def test_normalize_tag_name_collapses_separators_and_case() -> None:
 
 def test_normalize_tag_name_rejects_invalid() -> None:
     """Names that cannot be normalized to [a-z0-9][a-z0-9-]* raise ValueError."""
-    from mailpilot.database import _normalize_tag_name
+    from mailpilot.database import (
+        _normalize_tag_name,  # pyright: ignore[reportPrivateUsage]
+    )
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="invalid tag name"):
         _normalize_tag_name("")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="invalid tag name"):
         _normalize_tag_name("---")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="invalid tag name"):
         _normalize_tag_name("hot/lead")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="invalid tag name"):
         _normalize_tag_name("hot.lead")
 
 
@@ -1769,13 +1775,17 @@ def test_create_contact_tag_and_company_tag(
     company = make_test_company(database_connection)
     contact = make_test_contact(database_connection)
 
-    contact_tag = create_tag(database_connection, contact_id=contact.id, name="prospect")
+    contact_tag = create_tag(
+        database_connection, contact_id=contact.id, name="prospect"
+    )
     assert contact_tag is not None
     assert contact_tag.contact_id == contact.id
     assert contact_tag.company_id is None
     assert contact_tag.name == "prospect"
 
-    company_tag = create_tag(database_connection, company_id=company.id, name="enterprise")
+    company_tag = create_tag(
+        database_connection, company_id=company.id, name="enterprise"
+    )
     assert company_tag is not None
     assert company_tag.company_id == company.id
     assert company_tag.contact_id is None
@@ -1976,7 +1986,9 @@ def test_remove_company_tag_emits_activity_atomically(
     company = make_test_company(database_connection)
     add_company_tag(database_connection, company_id=company.id, name="enterprise")
     assert (
-        remove_company_tag(database_connection, company_id=company.id, name="enterprise")
+        remove_company_tag(
+            database_connection, company_id=company.id, name="enterprise"
+        )
         is True
     )
     types = [
@@ -2045,9 +2057,7 @@ def test_create_note_requires_exactly_one_owner(
     with pytest.raises(ValueError, match="exactly one"):
         create_note(database_connection, body="x")
     with pytest.raises(ValueError, match="exactly one"):
-        create_note(
-            database_connection, contact_id="c1", company_id="co1", body="x"
-        )
+        create_note(database_connection, contact_id="c1", company_id="co1", body="x")
 
 
 def test_list_notes(
@@ -2918,9 +2928,7 @@ def test_list_tags_limit_and_since(
     contact = make_test_contact(database_connection)
     make_test_tag(database_connection, contact_id=contact.id, name="a")
     make_test_tag(database_connection, contact_id=contact.id, name="b")
-    assert (
-        len(list_tags(database_connection, contact_id=contact.id, limit=1)) == 1
-    )
+    assert len(list_tags(database_connection, contact_id=contact.id, limit=1)) == 1
     assert (
         len(
             list_tags(

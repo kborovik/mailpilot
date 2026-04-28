@@ -18,8 +18,6 @@ from conftest import (
 from mailpilot.database import (
     activate_workflow,
     create_email,
-    create_enrollment,
-    get_enrollment,
     update_workflow,
 )
 from mailpilot.database import disable_contact as db_disable_contact

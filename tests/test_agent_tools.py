@@ -25,10 +25,10 @@ from mailpilot.agent.tools import (
     read_company,
     read_contact,
     read_email,
+    record_enrollment_outcome,
     reply_email,
     search_emails,
     send_email,
-    record_enrollment_outcome,
 )
 from mailpilot.database import (
     activate_workflow,

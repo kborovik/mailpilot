@@ -2285,8 +2285,11 @@ def search_tags(
     """Search tags by name pattern with optional owner filter.
 
     Args:
+        connection: Open database connection.
+        name: Pattern to LIKE-match against tag ``name``.
         owner: ``"contact"`` to limit to contact tags, ``"company"`` to
             limit to company tags, ``None`` for both.
+        limit: Maximum number of results.
     """
     if owner not in (None, "contact", "company"):
         raise ValueError("owner must be 'contact', 'company', or None")
@@ -2298,8 +2301,7 @@ def search_tags(
     elif owner == "company":
         owner_filter = SQL("AND company_id IS NOT NULL")
     query = SQL(
-        "SELECT * FROM tag WHERE name LIKE %(pattern)s {} "
-        "ORDER BY name LIMIT %(limit)s"
+        "SELECT * FROM tag WHERE name LIKE %(pattern)s {} ORDER BY name LIMIT %(limit)s"
     ).format(owner_filter)
     rows = connection.execute(query, params).fetchall()
     return [Tag.model_validate(row) for row in rows]
