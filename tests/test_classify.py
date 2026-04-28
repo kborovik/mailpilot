@@ -12,8 +12,8 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from conftest import make_test_settings
 from mailpilot.agent import classify as classify_module
-from mailpilot.agent.classify import (  # pyright: ignore[reportPrivateUsage]
-    _AGENT,
+from mailpilot.agent.classify import (
+    _AGENT,  # pyright: ignore[reportPrivateUsage]
     classify_email,
 )
 from mailpilot.models import Workflow
