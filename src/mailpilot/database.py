@@ -2305,6 +2305,179 @@ def search_tags(
     return [Tag.model_validate(row) for row in rows]
 
 
+def add_contact_tag(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact_id: str,
+    name: str,
+) -> Tag | None:
+    """Add a tag to a contact and emit a `tag_added` activity atomically.
+
+    The two writes share one transaction. Returns ``None`` if the tag
+    already exists -- in that case no activity is written.
+    """
+    normalized = _normalize_tag_name(name)
+    contact_row = connection.execute(
+        "SELECT company_id FROM contact WHERE id = %s", (contact_id,)
+    ).fetchone()
+    if contact_row is None:
+        raise ValueError(f"contact not found: {contact_id}")
+    tag_row = connection.execute(
+        """\
+        INSERT INTO tag (id, contact_id, company_id, name)
+        VALUES (%(id)s, %(contact_id)s, NULL, %(name)s)
+        ON CONFLICT DO NOTHING
+        RETURNING *
+        """,
+        {"id": _new_id(), "contact_id": contact_id, "name": normalized},
+    ).fetchone()
+    if tag_row is None:
+        connection.commit()
+        return None
+    connection.execute(
+        """\
+        INSERT INTO activity (
+            id, contact_id, company_id, type, summary, detail
+        )
+        VALUES (
+            %(id)s, %(contact_id)s, %(company_id)s,
+            'tag_added', %(summary)s, %(detail)s
+        )
+        """,
+        {
+            "id": _new_id(),
+            "contact_id": contact_id,
+            "company_id": contact_row["company_id"],
+            "summary": f"Tagged as {normalized}",
+            "detail": Json({"tag": normalized}),
+        },
+    )
+    connection.commit()
+    return Tag.model_validate(tag_row)
+
+
+def add_company_tag(
+    connection: psycopg.Connection[dict[str, Any]],
+    company_id: str,
+    name: str,
+) -> Tag | None:
+    """Add a tag to a company and emit a `tag_added` company activity atomically."""
+    normalized = _normalize_tag_name(name)
+    if (
+        connection.execute(
+            "SELECT 1 FROM company WHERE id = %s", (company_id,)
+        ).fetchone()
+        is None
+    ):
+        raise ValueError(f"company not found: {company_id}")
+    tag_row = connection.execute(
+        """\
+        INSERT INTO tag (id, contact_id, company_id, name)
+        VALUES (%(id)s, NULL, %(company_id)s, %(name)s)
+        ON CONFLICT DO NOTHING
+        RETURNING *
+        """,
+        {"id": _new_id(), "company_id": company_id, "name": normalized},
+    ).fetchone()
+    if tag_row is None:
+        connection.commit()
+        return None
+    connection.execute(
+        """\
+        INSERT INTO activity (
+            id, contact_id, company_id, type, summary, detail
+        )
+        VALUES (
+            %(id)s, NULL, %(company_id)s,
+            'tag_added', %(summary)s, %(detail)s
+        )
+        """,
+        {
+            "id": _new_id(),
+            "company_id": company_id,
+            "summary": f"Tagged as {normalized}",
+            "detail": Json({"tag": normalized}),
+        },
+    )
+    connection.commit()
+    return Tag.model_validate(tag_row)
+
+
+def remove_contact_tag(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact_id: str,
+    name: str,
+) -> bool:
+    """Remove a tag from a contact and emit a `tag_removed` activity atomically."""
+    normalized = _normalize_tag_name(name)
+    contact_row = connection.execute(
+        "SELECT company_id FROM contact WHERE id = %s", (contact_id,)
+    ).fetchone()
+    if contact_row is None:
+        raise ValueError(f"contact not found: {contact_id}")
+    cursor = connection.execute(
+        "DELETE FROM tag WHERE contact_id = %s AND name = %s",
+        (contact_id, normalized),
+    )
+    if cursor.rowcount == 0:
+        connection.commit()
+        return False
+    connection.execute(
+        """\
+        INSERT INTO activity (
+            id, contact_id, company_id, type, summary, detail
+        )
+        VALUES (
+            %(id)s, %(contact_id)s, %(company_id)s,
+            'tag_removed', %(summary)s, %(detail)s
+        )
+        """,
+        {
+            "id": _new_id(),
+            "contact_id": contact_id,
+            "company_id": contact_row["company_id"],
+            "summary": f"Removed tag {normalized}",
+            "detail": Json({"tag": normalized}),
+        },
+    )
+    connection.commit()
+    return True
+
+
+def remove_company_tag(
+    connection: psycopg.Connection[dict[str, Any]],
+    company_id: str,
+    name: str,
+) -> bool:
+    """Remove a tag from a company and emit a `tag_removed` activity atomically."""
+    normalized = _normalize_tag_name(name)
+    cursor = connection.execute(
+        "DELETE FROM tag WHERE company_id = %s AND name = %s",
+        (company_id, normalized),
+    )
+    if cursor.rowcount == 0:
+        connection.commit()
+        return False
+    connection.execute(
+        """\
+        INSERT INTO activity (
+            id, contact_id, company_id, type, summary, detail
+        )
+        VALUES (
+            %(id)s, NULL, %(company_id)s,
+            'tag_removed', %(summary)s, %(detail)s
+        )
+        """,
+        {
+            "id": _new_id(),
+            "company_id": company_id,
+            "summary": f"Removed tag {normalized}",
+            "detail": Json({"tag": normalized}),
+        },
+    )
+    connection.commit()
+    return True
+
+
 # -- Note ----------------------------------------------------------------------
 
 
@@ -2398,6 +2571,91 @@ def get_note(
     if row is None:
         return None
     return Note.model_validate(row)
+
+
+def add_contact_note(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact_id: str,
+    body: str,
+) -> Note:
+    """Add a note to a contact and emit a `note_added` activity atomically."""
+    contact_row = connection.execute(
+        "SELECT company_id FROM contact WHERE id = %s", (contact_id,)
+    ).fetchone()
+    if contact_row is None:
+        raise ValueError(f"contact not found: {contact_id}")
+    note_row = connection.execute(
+        """\
+        INSERT INTO note (id, contact_id, company_id, body)
+        VALUES (%(id)s, %(contact_id)s, NULL, %(body)s)
+        RETURNING *
+        """,
+        {"id": _new_id(), "contact_id": contact_id, "body": body},
+    ).fetchone()
+    note = Note.model_validate(note_row)
+    connection.execute(
+        """\
+        INSERT INTO activity (
+            id, contact_id, company_id, type, summary, detail
+        )
+        VALUES (
+            %(id)s, %(contact_id)s, %(company_id)s,
+            'note_added', %(summary)s, %(detail)s
+        )
+        """,
+        {
+            "id": _new_id(),
+            "contact_id": contact_id,
+            "company_id": contact_row["company_id"],
+            "summary": "Note added",
+            "detail": Json({"note_id": note.id}),
+        },
+    )
+    connection.commit()
+    return note
+
+
+def add_company_note(
+    connection: psycopg.Connection[dict[str, Any]],
+    company_id: str,
+    body: str,
+) -> Note:
+    """Add a note to a company and emit a `note_added` company activity atomically."""
+    if (
+        connection.execute(
+            "SELECT 1 FROM company WHERE id = %s", (company_id,)
+        ).fetchone()
+        is None
+    ):
+        raise ValueError(f"company not found: {company_id}")
+    note_row = connection.execute(
+        """\
+        INSERT INTO note (id, contact_id, company_id, body)
+        VALUES (%(id)s, NULL, %(company_id)s, %(body)s)
+        RETURNING *
+        """,
+        {"id": _new_id(), "company_id": company_id, "body": body},
+    ).fetchone()
+    note = Note.model_validate(note_row)
+    connection.execute(
+        """\
+        INSERT INTO activity (
+            id, contact_id, company_id, type, summary, detail
+        )
+        VALUES (
+            %(id)s, NULL, %(company_id)s,
+            'note_added', %(summary)s, %(detail)s
+        )
+        """,
+        {
+            "id": _new_id(),
+            "company_id": company_id,
+            "summary": "Note added",
+            "detail": Json({"note_id": note.id}),
+        },
+    )
+    connection.commit()
+    return note
 
 
 # -- Sync Status ---------------------------------------------------------------

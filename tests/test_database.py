@@ -1899,6 +1899,121 @@ def test_status_counts_includes_tags(
     assert counts["tags"] == 1
 
 
+# -- Atomic helpers ----------------------------------------------------------
+
+
+def test_add_contact_tag_emits_activity_atomically(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """add_contact_tag writes tag + tag_added activity in one transaction."""
+    from mailpilot.database import add_contact_tag
+
+    contact = make_test_contact(database_connection)
+    tag = add_contact_tag(database_connection, contact_id=contact.id, name="prospect")
+    assert tag is not None
+    assert tag.name == "prospect"
+    assert [t.name for t in list_tags(database_connection, contact_id=contact.id)] == [
+        "prospect"
+    ]
+    activities = list_activities(database_connection, contact_id=contact.id)
+    assert len(activities) == 1
+    assert activities[0].type == "tag_added"
+    assert activities[0].summary == "Tagged as prospect"
+
+
+def test_add_contact_tag_returns_none_on_duplicate_no_activity(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Duplicate tag insert returns None and emits no activity."""
+    from mailpilot.database import add_contact_tag
+
+    contact = make_test_contact(database_connection)
+    add_contact_tag(database_connection, contact_id=contact.id, name="prospect")
+    second = add_contact_tag(
+        database_connection, contact_id=contact.id, name="prospect"
+    )
+    assert second is None
+    activities = list_activities(database_connection, contact_id=contact.id)
+    assert len(activities) == 1
+
+
+def test_remove_contact_tag_emits_activity_atomically(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from mailpilot.database import add_contact_tag, remove_contact_tag
+
+    contact = make_test_contact(database_connection)
+    add_contact_tag(database_connection, contact_id=contact.id, name="cold")
+    assert (
+        remove_contact_tag(database_connection, contact_id=contact.id, name="cold")
+        is True
+    )
+    types = [
+        a.type for a in list_activities(database_connection, contact_id=contact.id)
+    ]
+    assert "tag_removed" in types
+
+
+def test_add_company_tag_emits_company_activity(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from mailpilot.database import add_company_tag
+
+    company = make_test_company(database_connection)
+    add_company_tag(database_connection, company_id=company.id, name="enterprise")
+    activities = list_activities(database_connection, company_id=company.id)
+    assert len(activities) == 1
+    assert activities[0].type == "tag_added"
+    assert activities[0].company_id == company.id
+    assert activities[0].contact_id is None
+
+
+def test_remove_company_tag_emits_activity_atomically(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from mailpilot.database import add_company_tag, remove_company_tag
+
+    company = make_test_company(database_connection)
+    add_company_tag(database_connection, company_id=company.id, name="enterprise")
+    assert (
+        remove_company_tag(database_connection, company_id=company.id, name="enterprise")
+        is True
+    )
+    types = [
+        a.type for a in list_activities(database_connection, company_id=company.id)
+    ]
+    assert "tag_removed" in types
+
+
+def test_add_contact_note_emits_activity_atomically(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from mailpilot.database import add_contact_note
+
+    contact = make_test_contact(database_connection)
+    note = add_contact_note(
+        database_connection, contact_id=contact.id, body="quick note"
+    )
+    notes = list_notes(database_connection, contact_id=contact.id)
+    assert [n.id for n in notes] == [note.id]
+    activities = list_activities(database_connection, contact_id=contact.id)
+    assert len(activities) == 1
+    assert activities[0].type == "note_added"
+
+
+def test_add_company_note_emits_company_activity(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from mailpilot.database import add_company_note
+
+    company = make_test_company(database_connection)
+    add_company_note(database_connection, company_id=company.id, body="ent")
+    activities = list_activities(database_connection, company_id=company.id)
+    assert len(activities) == 1
+    assert activities[0].type == "note_added"
+    assert activities[0].company_id == company.id
+
+
 # -- Note ---------------------------------------------------------------------
 
 
