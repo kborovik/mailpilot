@@ -414,6 +414,80 @@ def test_update_enrollment_status_not_found(
     assert result["error"] == "not_found"
 
 
+def test_update_enrollment_status_emits_workflow_completed_activity(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Transitioning to ``completed`` must emit a workflow_completed
+    activity with the agent's reason as summary."""
+    from mailpilot.database import list_activities
+
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    create_enrollment(database_connection, workflow.id, contact.id)
+
+    update_enrollment_status(
+        connection=database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        status="completed",
+        reason="meeting booked",
+    )
+
+    activities = list_activities(
+        database_connection, contact_id=contact.id, activity_type="workflow_completed"
+    )
+    assert len(activities) == 1
+    assert activities[0].summary == "meeting booked"
+
+
+def test_update_enrollment_status_emits_workflow_failed_activity(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from mailpilot.database import list_activities
+
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    create_enrollment(database_connection, workflow.id, contact.id)
+
+    update_enrollment_status(
+        connection=database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        status="failed",
+        reason="no response",
+    )
+
+    activities = list_activities(
+        database_connection, contact_id=contact.id, activity_type="workflow_failed"
+    )
+    assert len(activities) == 1
+    assert activities[0].summary == "no response"
+
+
+def test_update_enrollment_status_active_does_not_emit_activity(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Only completed/failed transitions emit; active transitions do not."""
+    from mailpilot.database import list_activities
+
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    create_enrollment(database_connection, workflow.id, contact.id)
+
+    update_enrollment_status(
+        connection=database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        status="active",
+        reason="started",
+    )
+
+    assert list_activities(database_connection, contact_id=contact.id) == []
+
+
 # -- disable_contact -----------------------------------------------------------
 
 

@@ -1704,6 +1704,96 @@ def test_sync_stores_sender_and_recipients(
     }
 
 
+def test_sync_inbound_emits_email_received_activity(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """_store_inbound_message must create one email_received activity per
+    stored row, with summary=subject and detail.email_id/subject set."""
+    from mailpilot.database import create_company, list_activities
+    from mailpilot.sync import (
+        _store_inbound_message,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    account = make_test_account(database_connection, email="inbox@lab5.ca")
+    company = create_company(database_connection, name="Example", domain="example.com")
+    contact = make_test_contact(
+        database_connection,
+        email="alice@example.com",
+        domain="example.com",
+        company_id=company.id,
+    )
+    message = _make_gmail_message(
+        message_id="msg_act_1",
+        thread_id="thread_act_1",
+        from_header="Alice <alice@example.com>",
+        subject="Activity wiring test",
+    )
+
+    email = _store_inbound_message(
+        database_connection,
+        account,
+        message,
+        contacts_by_email={"alice@example.com": contact},
+        settings=make_test_settings(),
+        has_active_workflows=False,
+    )
+    assert email is not None
+
+    activities = list_activities(
+        database_connection, contact_id=contact.id, activity_type="email_received"
+    )
+    assert len(activities) == 1
+    activity = activities[0]
+    assert activity.summary == "Activity wiring test"
+    assert activity.company_id == company.id
+
+
+def test_sync_inbound_skips_activity_when_create_email_returns_none(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """A duplicate Gmail message ID returns None from create_email; no
+    email_received activity must be emitted in that case."""
+    from mailpilot.database import create_email, list_activities
+    from mailpilot.sync import (
+        _store_inbound_message,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    account = make_test_account(database_connection, email="inbox@lab5.ca")
+    contact = make_test_contact(
+        database_connection, email="alice@example.com", domain="example.com"
+    )
+    # Pre-insert the same gmail_message_id so the second create_email returns None.
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="prior",
+        contact_id=contact.id,
+        gmail_message_id="dup_msg_1",
+        gmail_thread_id="dup_thread_1",
+    )
+    message = _make_gmail_message(
+        message_id="dup_msg_1",
+        thread_id="dup_thread_1",
+        from_header="Alice <alice@example.com>",
+        subject="Should not duplicate",
+    )
+
+    result = _store_inbound_message(
+        database_connection,
+        account,
+        message,
+        contacts_by_email={"alice@example.com": contact},
+        settings=make_test_settings(),
+        has_active_workflows=False,
+    )
+    assert result is None
+    activities = list_activities(
+        database_connection, contact_id=contact.id, activity_type="email_received"
+    )
+    assert activities == []
+
+
 def _routing_spans(capfire: CaptureLogfire) -> list[dict[str, Any]]:
     """Return all exported spans named ``routing.route_email``."""
     return [

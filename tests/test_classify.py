@@ -12,7 +12,10 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from conftest import make_test_settings
 from mailpilot.agent import classify as classify_module
-from mailpilot.agent.classify import classify_email
+from mailpilot.agent.classify import (
+    _AGENT,  # pyright: ignore[reportPrivateUsage]
+    classify_email,
+)
 from mailpilot.models import Workflow
 
 
@@ -208,3 +211,10 @@ def test_classify_span_has_usage_attributes(capfire: CaptureLogfire) -> None:
     assert attrs["input_tokens"] >= 0
     assert attrs["output_tokens"] >= 0
     assert attrs["total_tokens"] == attrs["input_tokens"] + attrs["output_tokens"]
+
+
+def test_classifier_agent_has_explicit_name_for_otel_traces() -> None:
+    """Classifier and workflow agents both emit `agent run` spans -- giving
+    each Agent an explicit `name=` keeps `gen_ai.agent.name` legible instead
+    of leaking the private `_AGENT` variable name into telemetry."""
+    assert _AGENT.name == "mailpilot.classifier"

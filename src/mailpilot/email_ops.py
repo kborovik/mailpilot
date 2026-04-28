@@ -20,7 +20,7 @@ import psycopg
 
 from mailpilot import database
 from mailpilot.gmail import GmailClient
-from mailpilot.models import Account, Email
+from mailpilot.models import Account, Contact, Email
 from mailpilot.settings import Settings
 from mailpilot.sync import send_email as sync_send_email
 
@@ -89,6 +89,26 @@ def _activate_enrollment_if_pending(
         )
 
 
+def _emit_email_sent_activity(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact: Contact,
+    email: Email,
+    workflow_id: str | None,
+) -> None:
+    database.create_activity(
+        connection,
+        contact_id=contact.id,
+        activity_type="email_sent",
+        summary=email.subject,
+        detail={
+            "email_id": email.id,
+            "subject": email.subject,
+            "workflow_id": workflow_id,
+        },
+        company_id=contact.company_id,
+    )
+
+
 def send_email(  # noqa: PLR0913
     connection: psycopg.Connection[dict[str, Any]],
     account: Account,
@@ -148,6 +168,9 @@ def send_email(  # noqa: PLR0913
         cc=cc,
         bcc=bcc,
     )
+
+    if contact is not None:
+        _emit_email_sent_activity(connection, contact, email, workflow_id)
 
     if workflow_id is not None and contact_id is not None:
         _activate_enrollment_if_pending(connection, workflow_id, contact_id)
@@ -216,6 +239,8 @@ def reply_email(  # noqa: PLR0913
         bcc=bcc,
         in_reply_to=original.rfc2822_message_id,
     )
+
+    _emit_email_sent_activity(connection, contact, email, workflow_id)
 
     if workflow_id is not None:
         _activate_enrollment_if_pending(connection, workflow_id, contact.id)
