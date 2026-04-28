@@ -2011,36 +2011,47 @@ def create_tasks_for_routed_emails(
 
 def create_activity(
     connection: psycopg.Connection[dict[str, Any]],
-    contact_id: str,
     activity_type: str,
     summary: str = "",
     detail: dict[str, object] | None = None,
+    contact_id: str | None = None,
     company_id: str | None = None,
+    email_id: str | None = None,
+    workflow_id: str | None = None,
+    task_id: str | None = None,
 ) -> Activity:
-    """Create an activity event in a contact's timeline.
+    """Create an activity event.
 
-    Args:
-        connection: Open database connection.
-        contact_id: Contact FK (every activity relates to a contact).
-        activity_type: Activity type (email_sent, tag_added, etc.).
-        summary: One-line human-readable description.
-        detail: Type-specific JSON data (email_id, tag name, etc.).
-        company_id: Optional company FK for company-level views.
+    At least one of ``contact_id`` or ``company_id`` must be set.
+    Structured FK columns (``email_id``, ``workflow_id``, ``task_id``)
+    let reports join activity to source records without parsing
+    ``detail`` JSON.
 
-    Returns:
-        Created activity.
+    Raises:
+        ValueError: If neither contact_id nor company_id is provided.
     """
+    if contact_id is None and company_id is None:
+        raise ValueError("at least one of contact_id or company_id is required")
     row = connection.execute(
         """\
-        INSERT INTO activity (id, contact_id, company_id, type, summary, detail)
-        VALUES (%(id)s, %(contact_id)s, %(company_id)s, %(type)s,
-                %(summary)s, %(detail)s)
+        INSERT INTO activity (
+            id, contact_id, company_id, email_id, workflow_id, task_id,
+            type, summary, detail
+        )
+        VALUES (
+            %(id)s, %(contact_id)s, %(company_id)s, %(email_id)s,
+            %(workflow_id)s, %(task_id)s,
+            %(type)s, %(summary)s, %(detail)s
+        )
         RETURNING *
         """,
         {
             "id": _new_id(),
             "contact_id": contact_id,
             "company_id": company_id,
+            "email_id": email_id,
+            "workflow_id": workflow_id,
+            "task_id": task_id,
             "type": activity_type,
             "summary": summary,
             "detail": Json(detail or {}),

@@ -1660,6 +1660,62 @@ def test_list_activities_requires_filter(
         list_activities(database_connection)
 
 
+def test_create_activity_with_structured_fks(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """email_id, workflow_id, task_id are first-class FK columns (#102 sugg 5)."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    email = create_email(
+        database_connection,
+        account_id=account.id,
+        contact_id=contact.id,
+        direction="outbound",
+        subject="Hi",
+        body_text="hi",
+    )
+    assert email is not None
+
+    activity = create_activity(
+        database_connection,
+        contact_id=contact.id,
+        activity_type="email_sent",
+        summary="Hi",
+        email_id=email.id,
+        workflow_id=workflow.id,
+    )
+    assert activity.email_id == email.id
+    assert activity.workflow_id == workflow.id
+    assert activity.task_id is None
+
+
+def test_create_activity_company_only(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """contact_id is nullable when company_id is provided (#102 sugg 2)."""
+    company = make_test_company(database_connection)
+    activity = create_activity(
+        database_connection,
+        company_id=company.id,
+        activity_type="note_added",
+        summary="Company note",
+    )
+    assert activity.contact_id is None
+    assert activity.company_id == company.id
+
+
+def test_create_activity_requires_contact_or_company(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    with pytest.raises(ValueError, match="contact_id or company_id"):
+        create_activity(
+            database_connection,
+            activity_type="note_added",
+            summary="orphan",
+        )
+
+
 def test_status_counts_includes_activities(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
