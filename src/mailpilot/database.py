@@ -2299,31 +2299,27 @@ def search_tags(
 
 def create_note(
     connection: psycopg.Connection[dict[str, Any]],
-    entity_type: str,
-    entity_id: str,
     body: str,
+    contact_id: str | None = None,
+    company_id: str | None = None,
 ) -> Note:
-    """Create a freeform text note on a contact or company.
+    """Create a freeform note on a contact or company.
 
-    Args:
-        connection: Open database connection.
-        entity_type: "contact" or "company".
-        entity_id: ID of the annotated entity.
-        body: Note text.
-
-    Returns:
-        Created note.
+    Raises:
+        ValueError: If neither or both of contact_id/company_id are set.
     """
+    if (contact_id is None) == (company_id is None):
+        raise ValueError("exactly one of contact_id or company_id is required")
     row = connection.execute(
         """\
-        INSERT INTO note (id, entity_type, entity_id, body)
-        VALUES (%(id)s, %(entity_type)s, %(entity_id)s, %(body)s)
+        INSERT INTO note (id, contact_id, company_id, body)
+        VALUES (%(id)s, %(contact_id)s, %(company_id)s, %(body)s)
         RETURNING *
         """,
         {
             "id": _new_id(),
-            "entity_type": entity_type,
-            "entity_id": entity_id,
+            "contact_id": contact_id,
+            "company_id": company_id,
             "body": body,
         },
     ).fetchone()
@@ -2333,8 +2329,8 @@ def create_note(
 
 def list_notes(
     connection: psycopg.Connection[dict[str, Any]],
-    entity_type: str,
-    entity_id: str,
+    contact_id: str | None = None,
+    company_id: str | None = None,
     limit: int = 100,
     since: str | None = None,
 ) -> list[NoteSummary]:
@@ -2343,31 +2339,25 @@ def list_notes(
     The full body is replaced by ``body_preview`` -- the first 80 characters
     with a trailing ellipsis when the body is longer.
 
-    Args:
-        connection: Open database connection.
-        entity_type: "contact" or "company".
-        entity_id: ID of the annotated entity.
-        limit: Maximum results.
-        since: ISO datetime lower bound for created_at.
-
-    Returns:
-        Note summaries ordered by created_at descending.
+    Raises:
+        ValueError: If neither or both of contact_id/company_id are set.
     """
-    conditions: list[SQL] = [
-        SQL("entity_type = %(entity_type)s"),
-        SQL("entity_id = %(entity_id)s"),
-    ]
-    params: dict[str, object] = {
-        "entity_type": entity_type,
-        "entity_id": entity_id,
-        "limit": limit,
-    }
+    if (contact_id is None) == (company_id is None):
+        raise ValueError("exactly one of contact_id or company_id is required")
+    params: dict[str, object] = {"limit": limit}
+    where_parts: list[Composed | SQL] = []
+    if contact_id is not None:
+        where_parts.append(SQL("contact_id = %(contact_id)s"))
+        params["contact_id"] = contact_id
+    else:
+        where_parts.append(SQL("company_id = %(company_id)s"))
+        params["company_id"] = company_id
     if since is not None:
-        conditions.append(SQL("created_at >= %(since)s"))
+        where_parts.append(SQL("created_at >= %(since)s"))
         params["since"] = since
-    where = SQL("WHERE ") + SQL(" AND ").join(conditions)
+    where = SQL("WHERE ") + SQL(" AND ").join(where_parts)
     query = SQL(
-        "SELECT id, entity_type, entity_id, "
+        "SELECT id, contact_id, company_id, "
         "CASE WHEN LENGTH(body) > 80 THEN LEFT(body, 80) || '...' "
         "ELSE body END AS body_preview, "
         "created_at "

@@ -1846,44 +1846,46 @@ def test_status_counts_includes_tags(
 # -- Note ---------------------------------------------------------------------
 
 
-def test_create_note(
+def test_create_contact_note_and_company_note(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
+    from mailpilot.database import create_note
+
     contact = make_test_contact(database_connection)
-    note = make_test_note(
-        database_connection, entity_type="contact", entity_id=contact.id
+    contact_note = create_note(
+        database_connection, contact_id=contact.id, body="Met at conf"
     )
-    assert note.entity_type == "contact"
-    assert note.entity_id == contact.id
-    assert note.body == "Test note body"
-    assert note.id
+    assert contact_note.contact_id == contact.id
+    assert contact_note.company_id is None
+
+    company = make_test_company(database_connection)
+    company_note = create_note(
+        database_connection, company_id=company.id, body="Tier 1 account"
+    )
+    assert company_note.company_id == company.id
+    assert company_note.contact_id is None
 
 
-def test_create_note_on_company(
+def test_create_note_requires_exactly_one_owner(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    company = make_test_company(database_connection)
-    note = make_test_note(
-        database_connection,
-        entity_type="company",
-        entity_id=company.id,
-        body="Company note",
-    )
-    assert note.entity_type == "company"
-    assert note.body == "Company note"
+    from mailpilot.database import create_note
+
+    with pytest.raises(ValueError, match="exactly one"):
+        create_note(database_connection, body="x")
+    with pytest.raises(ValueError, match="exactly one"):
+        create_note(
+            database_connection, contact_id="c1", company_id="co1", body="x"
+        )
 
 
 def test_list_notes(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     contact = make_test_contact(database_connection)
-    make_test_note(
-        database_connection, entity_type="contact", entity_id=contact.id, body="first"
-    )
-    make_test_note(
-        database_connection, entity_type="contact", entity_id=contact.id, body="second"
-    )
-    notes = list_notes(database_connection, entity_type="contact", entity_id=contact.id)
+    make_test_note(database_connection, contact_id=contact.id, body="first")
+    make_test_note(database_connection, contact_id=contact.id, body="second")
+    notes = list_notes(database_connection, contact_id=contact.id)
     assert len(notes) == 2
     # Ordered by created_at DESC. Summary exposes body_preview, not body.
     assert notes[0].body_preview == "second"
@@ -1894,7 +1896,7 @@ def test_list_notes_empty(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     contact = make_test_contact(database_connection)
-    notes = list_notes(database_connection, entity_type="contact", entity_id=contact.id)
+    notes = list_notes(database_connection, contact_id=contact.id)
     assert notes == []
 
 
@@ -1902,15 +1904,9 @@ def test_list_notes_with_limit(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     contact = make_test_contact(database_connection)
-    make_test_note(
-        database_connection, entity_type="contact", entity_id=contact.id, body="first"
-    )
-    make_test_note(
-        database_connection, entity_type="contact", entity_id=contact.id, body="second"
-    )
-    notes = list_notes(
-        database_connection, entity_type="contact", entity_id=contact.id, limit=1
-    )
+    make_test_note(database_connection, contact_id=contact.id, body="first")
+    make_test_note(database_connection, contact_id=contact.id, body="second")
+    notes = list_notes(database_connection, contact_id=contact.id, limit=1)
     assert len(notes) == 1
 
 
@@ -1920,21 +1916,15 @@ def test_list_notes_since(
     from datetime import datetime, timedelta
 
     contact = make_test_contact(database_connection)
-    make_test_note(
-        database_connection, entity_type="contact", entity_id=contact.id, body="old"
-    )
+    make_test_note(database_connection, contact_id=contact.id, body="old")
     database_connection.execute(
         "UPDATE note SET created_at = CURRENT_TIMESTAMP - interval '2 days' "
         "WHERE body = 'old'"
     )
     database_connection.commit()
-    make_test_note(
-        database_connection, entity_type="contact", entity_id=contact.id, body="recent"
-    )
+    make_test_note(database_connection, contact_id=contact.id, body="recent")
     since = (datetime.now(UTC) - timedelta(days=1)).isoformat()
-    results = list_notes(
-        database_connection, entity_type="contact", entity_id=contact.id, since=since
-    )
+    results = list_notes(database_connection, contact_id=contact.id, since=since)
     assert len(results) == 1
     assert results[0].body_preview == "recent"
 
@@ -1943,9 +1933,7 @@ def test_get_note(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     contact = make_test_contact(database_connection)
-    created = make_test_note(
-        database_connection, entity_type="contact", entity_id=contact.id
-    )
+    created = make_test_note(database_connection, contact_id=contact.id)
     found = get_note(database_connection, created.id)
     assert found is not None
     assert found.id == created.id
@@ -1963,7 +1951,7 @@ def test_status_counts_includes_notes(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     contact = make_test_contact(database_connection)
-    make_test_note(database_connection, entity_type="contact", entity_id=contact.id)
+    make_test_note(database_connection, contact_id=contact.id)
     counts = get_status_counts(database_connection)
     assert counts["notes"] == 1
 
@@ -2642,19 +2630,9 @@ def test_note_list_summary_with_body_preview(
     from mailpilot.models import NoteSummary
 
     contact = make_test_contact(database_connection)
-    make_test_note(
-        database_connection,
-        entity_type="contact",
-        entity_id=contact.id,
-        body="short",
-    )
-    make_test_note(
-        database_connection,
-        entity_type="contact",
-        entity_id=contact.id,
-        body="x" * 200,
-    )
-    notes = list_notes(database_connection, entity_type="contact", entity_id=contact.id)
+    make_test_note(database_connection, contact_id=contact.id, body="short")
+    make_test_note(database_connection, contact_id=contact.id, body="x" * 200)
+    notes = list_notes(database_connection, contact_id=contact.id)
     assert isinstance(notes[0], NoteSummary)
     assert not hasattr(notes[0], "body")
     # Long body truncated to 80 chars + "..." (ordered DESC, long one is first).
