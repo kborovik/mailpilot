@@ -46,6 +46,7 @@ Candidate workflows will be provided in the user message.
 """
 
 _AGENT: Agent[None, ClassificationResult] = Agent(
+    name="mailpilot.classifier",
     output_type=ClassificationResult,
     instructions=_INSTRUCTIONS,
 )

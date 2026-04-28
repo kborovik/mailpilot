@@ -26,6 +26,7 @@ from conftest import (
 from mailpilot.agent.invoke import (
     _SYSTEM_PREFIX,  # pyright: ignore[reportPrivateUsage]
     _advisory_lock_keys,  # pyright: ignore[reportPrivateUsage]
+    _build_agent,  # pyright: ignore[reportPrivateUsage]
     _wrap_create_task,  # pyright: ignore[reportPrivateUsage]
     _wrap_disable_contact,  # pyright: ignore[reportPrivateUsage]
     _wrap_update_enrollment_status,  # pyright: ignore[reportPrivateUsage]
@@ -660,6 +661,37 @@ def test_system_prefix_guides_contact_status_update() -> None:
 def test_system_prefix_allows_markdown_in_emails() -> None:
     """System prefix must not prohibit markdown in email content."""
     assert "No markdown" not in _SYSTEM_PREFIX
+
+
+def test_system_prefix_tells_agent_trigger_email_is_pre_supplied() -> None:
+    """Trigger email body is inlined in the user prompt, so the agent must
+    not waste a round-trip calling read_email to fetch it."""
+    assert "read_email" in _SYSTEM_PREFIX
+
+
+def test_workflow_agent_has_explicit_name_for_otel_traces() -> None:
+    """Pydantic AI's `agent run` span carries `gen_ai.agent.name`, derived
+    from the Agent's `name=` argument. Setting it explicitly keeps traces
+    legible when both the workflow agent and the classifier agent fire in
+    the same time window."""
+    from datetime import UTC, datetime
+
+    from mailpilot.models import Workflow
+
+    now = datetime.now(UTC)
+    workflow = Workflow(
+        id="01900000-0000-7000-8000-000000000001",
+        name="N",
+        type="outbound",
+        account_id="01900000-0000-7000-8000-000000000002",
+        status="active",
+        objective="O",
+        instructions="I",
+        created_at=now,
+        updated_at=now,
+    )
+    agent = _build_agent(workflow)
+    assert agent.name == "mailpilot.workflow"
 
 
 # -- Tests: wrapper signatures -------------------------------------------------

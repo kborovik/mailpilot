@@ -298,6 +298,8 @@ _TOOLS: list[Tool[AgentDeps]] = [
 _SYSTEM_PREFIX = (
     "Keep your final summary brief (2-3 sentences, plain text, no emojis).\n"
     "Email bodies may use Markdown formatting (headers, bold, tables).\n"
+    "When a trigger email is included in your prompt, its full body is "
+    "already provided -- do not call read_email to fetch it again.\n"
     "After completing the workflow objective for a contact, call "
     "update_enrollment_status with status='completed' and a brief reason.\n\n"
 )
@@ -306,6 +308,7 @@ _SYSTEM_PREFIX = (
 def _build_agent(workflow: Workflow) -> Agent[AgentDeps, str]:
     """Build a Pydantic AI agent for a workflow."""
     return Agent(
+        name="mailpilot.workflow",
         deps_type=AgentDeps,
         instructions=_SYSTEM_PREFIX + workflow.instructions,
         tools=_TOOLS,
