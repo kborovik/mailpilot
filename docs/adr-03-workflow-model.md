@@ -2,6 +2,8 @@
 
 ## Status
 
+Updated 2026-04-29. Enrollment state model collapsed to operational-only (`active` / `paused`); per-contact outcomes (`completed`, `failed`) moved to activity events emitted by `record_enrollment_outcome`. See ADR-08 for the activity timeline contract.
+
 Updated 2026-04-25. Field definitions formerly in ADR-06 are folded into this ADR. The join entity formerly named `workflow_contact` was renamed to `enrollment` in the same change.
 
 ## Context
@@ -35,12 +37,14 @@ Both require: an email account, a set of LLM instructions, and email tracking. T
 
 ### State Model
 
-Three levels of status tracking, from global to per-enrollment:
+Four levels of status tracking, from global to per-enrollment:
 
 1. **Contact status** -- can we email this person at all? (system-enforced)
 2. **Email status** -- what happened to this message? (system-set)
 3. **Workflow status** -- is this workflow running? (operational)
-4. **Enrollment status** -- did we achieve this workflow's objective for this contact? (agent-driven)
+4. **Enrollment status** -- is the agent allowed to act on this contact within this workflow? (operational, agent-controllable)
+
+Per-enrollment **outcomes** (`completed`, `failed`) are not statuses -- they are activity events on the contact timeline. See "Enrollment outcomes" below.
 
 **Contact status** (global, across all workflows):
 
@@ -65,7 +69,7 @@ The `send_email` tool checks `contact.status = 'active'` before sending. If the 
 | `status` | Behavior                                                              |
 | -------- | --------------------------------------------------------------------- |
 | `draft`  | Created, not running. Editing instructions and objective.             |
-| `active` | Running. Outbound sends to pending enrollments. Inbound receives emails. |
+| `active` | Running. Outbound sends to active enrollments via `enrollment run` and tasks. Inbound classification considers this workflow as a candidate. |
 | `paused` | No new work. Existing threads still handled (no ghosting mid-thread). |
 
 **Workflow status transitions:**
@@ -88,39 +92,37 @@ All other transitions are invalid. `draft -> paused` is meaningless (nothing to 
 
 **Paused semantics:** A paused workflow still handles replies to existing threads (via thread match routing) and executes pending tasks. It does NOT accept new contacts (outbound) or classify new emails (inbound).
 
-**Enrollment status** (did we achieve this workflow's objective for this contact?):
+**Enrollment status** (is the agent allowed to act on this contact within this workflow?):
 
-| `status`    | Meaning                                       |
-| ----------- | --------------------------------------------- |
-| `pending`   | Queued, not yet contacted                     |
-| `active`    | Conversation in progress                      |
-| `completed` | Agent determined objective achieved           |
-| `failed`    | Agent determined objective cannot be achieved |
+| `status` | Meaning                                                                         |
+| -------- | ------------------------------------------------------------------------------- |
+| `active` | Default. The task runner and `enrollment run` invoke the agent for this pair.   |
+| `paused` | Operator-set. `execute_task` cancels pending tasks for paused enrollments; `enrollment run` refuses with `invalid_state`. |
 
-**Enrollment status transitions:**
+The schema enforces this with `CHECK (status IN ('active', 'paused'))` and `DEFAULT 'active'`. There is no `pending` state -- enrollments are created active. There is no automatic system transition (the previous `_activate_enrollment_if_pending` helper has been removed).
 
 ```
-  pending -----> active -----> completed
-                 ^ ^ |
-          retry  | | | retry
-                 | v |
-                 failed
+                 pause
+       active ----------> paused
+          ^                  |
+          |       resume     |
+          +------------------+
 ```
 
-The agent has full discretion -- any transition is valid, including non-linear ones (`pending -> failed` on bounce, `completed -> active` on re-engagement, `failed -> active` on retry). No system-level guards. The agent must provide a `reason` explaining each transition via `update_enrollment_status`.
+**Enrollment outcomes** (`completed`, `failed`): the agent reports its assessment via the `record_enrollment_outcome` tool. The tool does **not** modify `enrollment.status` -- it appends an `enrollment_completed` or `enrollment_failed` row to the activity timeline (see ADR-08), with the agent's `reason` recorded in `detail`. This is deliberate: a contact who replies after the agent declared the engagement "completed" should still be handled, without the system needing to "reactivate" anything. The agent reads its prior outcomes from the timeline (or via `list_enrollments`, which surfaces the latest outcome alongside the operational status).
 
-The system makes one automatic transition: `_activate_enrollment_if_pending` flips `pending -> active` when a successful outbound send occurs. All other transitions are agent-driven.
+`pause`/`resume` transitions also emit timeline events (`enrollment_paused`, `enrollment_resumed`) so the contact history shows when the operator intervened.
 
 ### Email Routing
 
-See `docs/adr-04-email-routing.md`. Inbound emails are routed to workflows via thread match then LLM classification. Paused workflows receive replies to existing threads but are excluded from classification (no new conversations). Successful routing creates an `enrollment` row if one does not already exist.
+See `docs/adr-04-email-routing.md`. Inbound emails are routed to workflows via a four-step pipeline: Gmail thread match -> RFC 2822 message-id match -> LLM classification (active inbound workflows only) -> unrouted. Paused workflows receive replies to existing threads (steps 1 and 2) but are excluded from classification (step 3) so they accept no new conversations. Successful routing creates an `enrollment` row if one does not already exist (`_ensure_enrollment` with `ON CONFLICT DO NOTHING`) and emits an `enrollment_added` activity once per pair.
 
 ### Scope
 
-A workflow is scoped: **account (1) -> workflow (N) -> contact (M via enrollment)**. The `enrollment` join table binds contacts to workflows and tracks per-enrollment outcome. The `reason` field holds the agent's explanation ("meeting booked for Tuesday", "contact explicitly declined", "no response after 3 follow-ups").
+A workflow is scoped: **account (1) -> workflow (N) -> contact (M via enrollment)**. The `enrollment` join table binds contacts to workflows. The row's `reason` text field is set by the operator on `pause`/`resume` and recorded as the activity's summary; per-engagement outcomes ("meeting booked for Tuesday", "no response after 3 follow-ups") live on the timeline, not on the row.
 
-- **Outbound**: contacts are added before sending. `enrollment run` requires the contact to be enrolled.
-- **Inbound**: contacts are enrolled automatically when classification routes an email.
+- **Outbound**: contacts are added before sending via `enrollment add --workflow-id ID --contact-id ID`. `enrollment run` requires the contact to be enrolled and the enrollment status to be `active`.
+- **Inbound**: contacts are enrolled automatically when routing assigns the email to a workflow (`_ensure_enrollment` in `routing.py`).
 
 A contact can be enrolled in multiple workflows (different accounts, different campaigns). The composite PK `(workflow_id, contact_id)` prevents duplicates within the same workflow.
 
@@ -134,7 +136,7 @@ A contact can be enrolled in multiple workflows (different accounts, different c
 | Pydantic   | `Literal["inbound", "outbound"]`               |
 | Set at     | Creation only                                  |
 | Mutability | Immutable                                      |
-| Consumers  | Run guard (outbound check), classification filter, email-flow routing |
+| Consumers  | Classifier candidate filter (`_try_classify` keeps only `type == "inbound"`), CLI `enrollment run` (loads trigger email for inbound workflows only), email-flow routing |
 
 **`name`** -- Human-readable workflow identifier.
 
@@ -151,7 +153,7 @@ A contact can be enrolled in multiple workflows (different accounts, different c
 | ---------- | ---------------------------------------------------- |
 | SQL        | `TEXT NOT NULL DEFAULT ''`                            |
 | Activation | Required (must be non-empty after stripping)         |
-| Consumers  | Agent outcome evaluation, classifier routing, `update_enrollment_status` decisions |
+| Consumers  | Agent outcome evaluation (the prompt's `Objective:` line), classifier routing, `record_enrollment_outcome` reasoning |
 | Format     | Imperative phrase starting with a verb: "Book...", "Answer...", "Qualify...", "Resolve..." |
 | Guidance   | One sentence, under 100 characters. Outcome-oriented (what success looks like), not process-oriented (how to achieve it -- that is what `instructions` is for) |
 
@@ -222,11 +224,11 @@ Each workflow is executed by a Pydantic AI agent. The agent is **stateless** -- 
 
 The agent is invoked by three types of events:
 
-| Event         | Trigger              | Agent receives                    |
-| ------------- | -------------------- | --------------------------------- |
-| Email arrives | Pub/Sub sync         | New email + workflow instructions |
-| Task due      | Periodic task runner | Task description + context        |
-| Manual run    | `mailpilot enrollment run` | Contact + instructions          |
+| Event         | Trigger                                                                            | Agent receives                    |
+| ------------- | ---------------------------------------------------------------------------------- | --------------------------------- |
+| Email arrives | Pub/Sub watch -> sync -> route -> `create_tasks_for_routed_emails` -> task drain   | New email + workflow instructions |
+| Task due      | `pg_notify('task_pending')` on INSERT wakes the loop's PG `LISTEN` thread; periodic timer is the safety-net fallback | Task description + context        |
+| Manual run    | `mailpilot enrollment run`                                                         | Contact + instructions (+ unprocessed inbound email for inbound workflows) |
 
 ### Concurrency
 
@@ -240,10 +242,11 @@ This is a "skip if busy" pattern, not a queue. Advisory locks are released when 
 
 When the agent processes a contact, it receives the **email history scoped to this workflow + contact** -- the `invoke_workflow_agent` flow loads `list_emails(contact_id=, account_id=, workflow_id=)`. This keeps the prompt focused on the current workflow's conversation thread.
 
-The `send_email` tool enforces a **cooldown guard** on unsolicited outreach only:
+The `send_email` tool enforces a **cooldown guard** on unsolicited outreach only. The guard lives in the `email_ops` policy layer (`src/mailpilot/email_ops.py`), which both `agent/tools.py:send_email` and `cli.py:email_send` call into:
 
 - **Reply** (use `reply_email` tool) -- always allowed, no cooldown. The contact wrote to us and deserves a response regardless of prior outreach history.
-- **New conversation** (`send_email`) -- check the last unsolicited outbound email to this contact from this account. If sent within the cooldown period (currently 30 days, defined as `_COOLDOWN_DAYS` in `agent/tools.py`), refuse to send.
+- **New conversation** (`send_email`) -- check the last unsolicited outbound email from this account to this contact in the current workflow (`get_last_cold_outbound`). If sent within the cooldown period (`_COOLDOWN_DAYS = 30` in `email_ops.py`), raise `CooldownError` (LLM-facing `code = "cooldown"`).
+- **Contact status** is also checked here: a `bounced` or `unsubscribed` contact raises `ContactDisabledError` (`code = "contact_disabled"`) before the cooldown check.
 
 ### Tools
 
@@ -251,21 +254,24 @@ The agent interacts with the system through tools only. Tool signatures below sh
 
 Tools registered in `_TOOLS` (in `agent/invoke.py`):
 
-| Tool                          | Mutates    | Purpose                                                            |
-| ----------------------------- | ---------- | ------------------------------------------------------------------ |
-| `send_email`                  | `email`    | Send a new outbound email. Guards: contact active, cooldown.       |
-| `reply_email`                 | `email`    | Reply in-thread to an existing email. Always allowed.              |
-| `create_task`                 | `task`     | Schedule deferred work for later execution.                        |
-| `cancel_task`                 | `task`     | Cancel a pending task.                                             |
-| `update_enrollment_status`    | `enrollment` | Report per-workflow outcome (active, completed, failed).         |
-| `disable_contact`             | `contact`  | Set global contact block (`bounced` or `unsubscribed`).            |
-| `list_enrollments`            | -          | List all enrollments in this workflow with their status.           |
-| `search_emails`               | -          | Query email history for the current account.                       |
-| `read_contact`                | -          | CRM lookup by email.                                               |
-| `read_company`                | -          | CRM lookup by domain.                                              |
-| `noop`                        | -          | Explicit "no action needed" -- still counts as a tool call.        |
+| Tool                          | Mutates    | Purpose                                                                                                |
+| ----------------------------- | ---------- | ------------------------------------------------------------------------------------------------------ |
+| `send_email`                  | `email`    | Send a new outbound email. Guards: contact active, 30-day cooldown.                                    |
+| `reply_email`                 | `email`    | Reply in-thread to an existing email. Auto-derives recipient/subject/`In-Reply-To`. No cooldown.       |
+| `create_task`                 | `task`     | Schedule deferred work for later execution. Fires `pg_notify('task_pending')` on insert.               |
+| `cancel_task`                 | `task`     | Cancel a pending task.                                                                                 |
+| `record_enrollment_outcome`   | `activity` | Append `enrollment_completed` or `enrollment_failed` to the contact timeline. Does not change `enrollment.status`. |
+| `disable_contact`             | `contact`  | Set global contact block (`bounced` or `unsubscribed`).                                                |
+| `list_enrollments`            | -          | List enrollments in the current workflow with their operational status and latest outcome.            |
+| `search_emails`               | -          | Query email history for the current account.                                                           |
+| `read_contact`                | -          | CRM lookup by email.                                                                                   |
+| `read_company`                | -          | CRM lookup by domain.                                                                                  |
+| `read_email`                  | -          | Read full email content (including body text) by ID.                                                   |
+| `noop`                        | -          | Explicit "no action needed" -- still counts as a tool call.                                            |
 
 The agent must call at least one tool per run. A run with zero tool calls raises `AgentDidNotUseToolsError`. `noop(reason)` is the explicit escape hatch.
+
+The trigger email's full body is included verbatim in the prompt by `_format_trigger`, so the agent should not call `read_email` on the trigger -- the system prompt prefix says so explicitly.
 
 ### Task planning
 
@@ -295,7 +301,8 @@ See `src/mailpilot/schema.sql`. Workflow-related tables: `workflow`, `enrollment
 - Per-account isolation maintained -- workflows are scoped to accounts
 - Stateless agent invocations -- simple, predictable, no state management
 - Task-based planning -- deferred work is just database rows with timestamps
-- Two-level status model -- global contact blocks (system-enforced) + per-enrollment outcomes (agent-driven)
+- Status / outcome split: enrollment status is operational (active / paused), and per-engagement outcomes live on the activity timeline. A late reply after `record_enrollment_outcome("completed", ...)` does not require any "reactivate" step before the agent can respond
+- Global contact blocks (`bounced` / `unsubscribed`) remain system-enforced via the `email_ops` policy layer -- they fire before the cooldown check and span all workflows
 - Each workflow field has a precise contract: who writes it, who reads it, when required
 - CHECK constraints enforce valid values at the database level regardless of client
 - Immutability of `type` and `account_id` prevents corruption of FK relationships
