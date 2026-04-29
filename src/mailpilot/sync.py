@@ -396,10 +396,10 @@ def _sync_all_accounts(
     """
     summaries = list_accounts(connection, limit=1000)
     for summary in summaries:
+        if summary.email in synced:
+            continue
         account = get_account(connection, summary.id)
         if account is None:
-            continue
-        if account.email in synced:
             continue
         try:
             client = GmailClient(account.email)

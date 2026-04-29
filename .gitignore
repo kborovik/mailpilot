@@ -4,7 +4,7 @@
 .claude/worktrees/
 .env
 .firecrawl/
-.pytest_cache
+.pytest_cache/
 .ruff_cache/
 .superpowers/
 .venv/
