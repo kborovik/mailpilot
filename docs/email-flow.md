@@ -103,7 +103,7 @@ The filter uses `e.created_at >= w.created_at` (DB insert time, not Gmail's `rec
 Then `invoke_workflow_agent` is called with the workflow, contact, and (if the task has `email_id`) the trigger email. `invoke_workflow_agent`:
 
 - Acquires a non-blocking PostgreSQL advisory lock on `(workflow_id, contact_id)`. If the lock is held, the run is skipped (returns `None`).
-- Loads cross-workflow email history scoped to `(account_id, contact_id, workflow_id)`.
+- Loads email history scoped to `(account_id, contact_id, workflow_id)`. The list is workflow-scoped: each `Email` summary is hydrated to a full row via `get_email` so the agent prompt has `body_text`.
 - Builds a Pydantic AI agent with the workflow's `instructions` plus a fixed `_SYSTEM_PREFIX`.
 - Tools registered on the agent (see `agent/invoke.py`):
   - `send_email` -- new outbound, with contact-status + 30-day cooldown guards (via `email_ops.send_email`).
@@ -123,14 +123,15 @@ The advisory lock is released in `finally`. The trigger email's body is included
 
 ---
 
-## Outbound Email Flow
+## Manual Workflow Run (Outbound + ad-hoc Inbound)
 
 ### 1. Initiate -- `mailpilot enrollment run`
 
-CLI entry point: `mailpilot enrollment run --workflow-id ID --contact-id ID` (handler at `cli.enrollment_run`).
+CLI entry point: `mailpilot enrollment run --workflow-id ID --contact-id ID` (handler at `cli.enrollment_run`). Works for both inbound and outbound workflows -- it is the operator-driven equivalent of the loop's automatic invocation.
 
 - Validates: workflow exists and `status = 'active'`; contact exists; enrollment exists and `status = 'active'`.
-- For inbound workflows: looks up the most recent unprocessed inbound email via `get_unprocessed_inbound_email` and passes it as the trigger.
+- For **outbound** workflows: no trigger email; the agent's prompt explains it is an outbound invocation.
+- For **inbound** workflows: looks up the most recent unprocessed inbound email via `get_unprocessed_inbound_email` (most recent inbound row in this `(workflow, contact)` with no task) and passes it as the trigger.
 - Calls `invoke_workflow_agent` directly (not via `create_task`) so the manual run is immediate and does not race the loop's `task_pending` listener.
 
 ### 2. Execute -- `invoke_workflow_agent()`
@@ -157,7 +158,7 @@ If guards pass, `sync.send_email` does the actual send:
 - Renders the Markdown body to themed HTML via `email_renderer.render_email_html` (workflow `theme` -> `EmailTheme`), and pairs it with a stripped-control-chars plaintext part.
 - Builds a `multipart/alternative` MIME message with both parts.
 - Resolves threading headers (`_resolve_threading_headers`): an explicit `in_reply_to` (agent `reply_email` path) is honoured verbatim; otherwise CLI `email send --thread-id` derives `In-Reply-To` from the latest local row's `rfc2822_message_id` and a `References` chain from prior rows in the same account+thread.
-- Calls `GmailClient.send_message` with custom headers (`X-MailPilot-Version`, `X-MailPilot-Account-Id`).
+- Calls `GmailClient.send_message`, passing `account_id` so Gmail (`gmail.py`) can stamp the outgoing message with `X-MailPilot-Version` and `X-MailPilot-Account-Id` headers.
 - Fetches the sent message's `Message-ID` via a metadata GET (`_fetch_sent_rfc2822_message_id`) so the next reply in this thread can build a proper `References` chain. Best-effort -- a failure leaves `rfc2822_message_id = NULL`.
 - Persists the row via `create_email` with `direction = 'outbound'`, `is_routed = TRUE`, `status = 'sent'`, `sent_at = now()`. Outbound rows skip the routing pipeline entirely.
 - Typed `EmailOpsError` subclasses (`code = "contact_disabled"` / `"cooldown"` / `"not_found"` / `"no_thread"` / `"no_contact"`) are converted by `agent/tools.py` into the LLM-facing `{"error": code, "message": ...}` shape, and by `cli.py` into `output_error(...)` JSON.
