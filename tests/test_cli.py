@@ -3147,6 +3147,52 @@ def test_enrollment_run_contact_not_enrolled(
     assert "not enrolled" in data["message"]
 
 
+def test_enrollment_run_paused_enrollment(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """Manual run is rejected when the enrollment is paused."""
+    workflow = _make_workflow(status="active")
+    contact = Contact(
+        id=_CONTACT_ID,
+        email="lead@acme.com",
+        domain="acme.com",
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    paused = Enrollment(
+        workflow_id=_WORKFLOW_ID,
+        contact_id=_CONTACT_ID,
+        status="paused",
+        reason="operator hold",
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=workflow),
+        patch("mailpilot.database.get_contact", return_value=contact),
+        patch("mailpilot.database.get_enrollment", return_value=paused),
+        patch("mailpilot.agent.invoke_workflow_agent") as mock_invoke,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "run",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--contact-id",
+                _CONTACT_ID,
+            ],
+        )
+    assert result.exit_code == 1, result.output
+    mock_invoke.assert_not_called()
+    data = json.loads(result.output)
+    assert data["error"] == "invalid_state"
+    assert "paused" in data["message"]
+
+
 def test_enrollment_run_agent_failed(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
@@ -3240,14 +3286,43 @@ def test_activity_create(runner: CliRunner, mock_connection: MagicMock) -> None:
     mock_create.assert_called_once_with(
         mock_connection,
         contact_id="cid-1",
+        company_id=None,
         activity_type="email_sent",
         summary="Sent intro",
         detail={},
-        company_id=None,
     )
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["type"] == "email_sent"
+
+
+def test_activity_create_company_only(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """Company-only activity rows are allowed (#102 sugg 2)."""
+    activity = _make_activity(contact_id=None, company_id="comp-1", type="note_added")
+    company = _make_company(id="comp-1")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=company),
+        patch("mailpilot.database.create_activity", return_value=activity),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "activity",
+                "create",
+                "--company-id",
+                "comp-1",
+                "--type",
+                "note_added",
+                "--summary",
+                "Company note",
+            ],
+        )
+
+    assert result.exit_code == 0
 
 
 def test_activity_create_with_detail(
@@ -3283,10 +3358,10 @@ def test_activity_create_with_detail(
     mock_create.assert_called_once_with(
         mock_connection,
         contact_id="cid-1",
+        company_id=None,
         activity_type="email_sent",
         summary="Sent intro",
         detail={"email_id": "e-1"},
-        company_id=None,
     )
 
 
@@ -3507,8 +3582,8 @@ def test_activity_list_company_not_found(
 def _make_tag(**overrides: Any) -> Tag:
     defaults: dict[str, Any] = {
         "id": "01234567-0000-7000-0000-000000000011",
-        "entity_type": "contact",
-        "entity_id": "01234567-0000-7000-0000-000000000003",
+        "contact_id": "01234567-0000-7000-0000-000000000003",
+        "company_id": None,
         "name": "prospect",
         "created_at": _NOW,
     }
@@ -3524,9 +3599,8 @@ def test_tag_add(runner: CliRunner, mock_connection: MagicMock) -> None:
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.create_tag", return_value=tag) as mock_create,
+        patch("mailpilot.database.add_contact_tag", return_value=tag) as mock_add,
         patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.create_activity"),
     ):
         result = runner.invoke(
             main,
@@ -3534,10 +3608,9 @@ def test_tag_add(runner: CliRunner, mock_connection: MagicMock) -> None:
         )
 
     assert result.exit_code == 0
-    mock_create.assert_called_once_with(
+    mock_add.assert_called_once_with(
         mock_connection,
-        entity_type="contact",
-        entity_id="cid-1",
+        contact_id="cid-1",
         name="prospect",
     )
     data = json.loads(result.output)
@@ -3545,30 +3618,25 @@ def test_tag_add(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert data["name"] == "prospect"
 
 
-def test_tag_add_creates_activity(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
-    tag = _make_tag()
-    contact = _make_contact()
+def test_tag_add_on_company(runner: CliRunner, mock_connection: MagicMock) -> None:
+    tag = _make_tag(contact_id=None, company_id="comp-1", name="enterprise")
+    company = _make_company(id="comp-1")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.create_tag", return_value=tag),
-        patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.create_activity") as mock_activity,
+        patch("mailpilot.database.add_company_tag", return_value=tag) as mock_add,
+        patch("mailpilot.database.get_company", return_value=company),
     ):
-        runner.invoke(
+        result = runner.invoke(
             main,
-            ["tag", "add", "--contact-id", "cid-1", "prospect"],
+            ["tag", "add", "--company-id", "comp-1", "enterprise"],
         )
 
-    mock_activity.assert_called_once_with(
+    assert result.exit_code == 0
+    mock_add.assert_called_once_with(
         mock_connection,
-        contact_id="cid-1",
-        activity_type="tag_added",
-        summary="Tagged as prospect",
-        detail={"tag": "prospect"},
-        company_id=None,
+        company_id="comp-1",
+        name="enterprise",
     )
 
 
@@ -3578,7 +3646,7 @@ def test_tag_add_already_exists(runner: CliRunner, mock_connection: MagicMock) -
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.create_tag", return_value=None),
+        patch("mailpilot.database.add_contact_tag", return_value=None),
     ):
         result = runner.invoke(
             main,
@@ -3638,7 +3706,7 @@ def test_tag_add_no_entity(runner: CliRunner, mock_connection: MagicMock) -> Non
 
     assert result.exit_code == 1
     data = json.loads(result.output)
-    assert data["error"] == "missing_filter"
+    assert data["error"] == "validation_error"
 
 
 def test_tag_add_empty_name(runner: CliRunner, mock_connection: MagicMock) -> None:
@@ -3654,6 +3722,25 @@ def test_tag_add_empty_name(runner: CliRunner, mock_connection: MagicMock) -> No
     assert "name" in data["message"]
 
 
+def test_tag_add_rejects_invalid_name(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    contact = _make_contact()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_contact", return_value=contact),
+    ):
+        result = runner.invoke(
+            main, ["tag", "add", "--contact-id", "cid-1", "hot/lead"]
+        )
+
+    assert result.exit_code != 0
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "invalid tag" in data["message"].lower()
+
+
 # -- tag remove ----------------------------------------------------------------
 
 
@@ -3662,9 +3749,10 @@ def test_tag_remove(runner: CliRunner, mock_connection: MagicMock) -> None:
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.delete_tag", return_value=True) as mock_delete,
+        patch(
+            "mailpilot.database.remove_contact_tag", return_value=True
+        ) as mock_delete,
         patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.create_activity"),
     ):
         result = runner.invoke(
             main,
@@ -3674,39 +3762,12 @@ def test_tag_remove(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert result.exit_code == 0
     mock_delete.assert_called_once_with(
         mock_connection,
-        entity_type="contact",
-        entity_id="cid-1",
+        contact_id="cid-1",
         name="prospect",
     )
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["removed"] is True
-
-
-def test_tag_remove_creates_activity(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
-    contact = _make_contact()
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.delete_tag", return_value=True),
-        patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.create_activity") as mock_activity,
-    ):
-        runner.invoke(
-            main,
-            ["tag", "remove", "--contact-id", "cid-1", "prospect"],
-        )
-
-    mock_activity.assert_called_once_with(
-        mock_connection,
-        contact_id="cid-1",
-        activity_type="tag_removed",
-        summary="Removed tag prospect",
-        detail={"tag": "prospect"},
-        company_id=None,
-    )
 
 
 def test_tag_remove_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:
@@ -3715,7 +3776,7 @@ def test_tag_remove_not_found(runner: CliRunner, mock_connection: MagicMock) -> 
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.delete_tag", return_value=False),
+        patch("mailpilot.database.remove_contact_tag", return_value=False),
     ):
         result = runner.invoke(
             main,
@@ -3783,8 +3844,7 @@ def test_tag_list(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
         mock_connection,
-        entity_type="contact",
-        entity_id="cid-1",
+        contact_id="cid-1",
         limit=100,
         since=None,
     )
@@ -3820,8 +3880,7 @@ def test_tag_list_limit_and_since(
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
         mock_connection,
-        entity_type="contact",
-        entity_id="cid-1",
+        contact_id="cid-1",
         limit=5,
         since="2024-01-01T00:00:00",
     )
@@ -3837,7 +3896,7 @@ def test_tag_list_no_entity(runner: CliRunner, mock_connection: MagicMock) -> No
 
     assert result.exit_code == 1
     data = json.loads(result.output)
-    assert data["error"] == "missing_filter"
+    assert data["error"] == "validation_error"
 
 
 def test_tag_list_contact_not_found(
@@ -3886,7 +3945,7 @@ def test_tag_search(runner: CliRunner, mock_connection: MagicMock) -> None:
 
     assert result.exit_code == 0
     mock_search.assert_called_once_with(
-        mock_connection, name="prospect", entity_type=None, limit=100
+        mock_connection, name="prospect", owner=None, limit=100
     )
     data = json.loads(result.output)
     assert data["ok"] is True
@@ -3905,7 +3964,7 @@ def test_tag_search_with_type(runner: CliRunner, mock_connection: MagicMock) -> 
 
     assert result.exit_code == 0
     mock_search.assert_called_once_with(
-        mock_connection, name="prospect", entity_type="contact", limit=5
+        mock_connection, name="prospect", owner="contact", limit=5
     )
 
 
@@ -3915,8 +3974,8 @@ def test_tag_search_with_type(runner: CliRunner, mock_connection: MagicMock) -> 
 def _make_note(**overrides: Any) -> Note:
     defaults: dict[str, Any] = {
         "id": "01234567-0000-7000-0000-000000000012",
-        "entity_type": "contact",
-        "entity_id": "01234567-0000-7000-0000-000000000003",
+        "contact_id": "01234567-0000-7000-0000-000000000003",
+        "company_id": None,
         "body": "Test note body",
         "created_at": _NOW,
     }
@@ -3932,9 +3991,8 @@ def test_note_add(runner: CliRunner, mock_connection: MagicMock) -> None:
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.create_note", return_value=note) as mock_create,
+        patch("mailpilot.database.add_contact_note", return_value=note) as mock_create,
         patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.create_activity"),
     ):
         result = runner.invoke(
             main,
@@ -3944,8 +4002,7 @@ def test_note_add(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert result.exit_code == 0
     mock_create.assert_called_once_with(
         mock_connection,
-        entity_type="contact",
-        entity_id="cid-1",
+        contact_id="cid-1",
         body="Test note body",
     )
     data = json.loads(result.output)
@@ -3954,12 +4011,12 @@ def test_note_add(runner: CliRunner, mock_connection: MagicMock) -> None:
 
 
 def test_note_add_on_company(runner: CliRunner, mock_connection: MagicMock) -> None:
-    note = _make_note(entity_type="company", entity_id="comp-1")
+    note = _make_note(contact_id=None, company_id="comp-1")
     company = _make_company(id="comp-1")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.create_note", return_value=note),
+        patch("mailpilot.database.add_company_note", return_value=note) as mock_add,
         patch("mailpilot.database.get_company", return_value=company),
     ):
         result = runner.invoke(
@@ -3968,35 +4025,13 @@ def test_note_add_on_company(runner: CliRunner, mock_connection: MagicMock) -> N
         )
 
     assert result.exit_code == 0
+    mock_add.assert_called_once_with(
+        mock_connection,
+        company_id="comp-1",
+        body="Company note",
+    )
     data = json.loads(result.output)
     assert data["ok"] is True
-
-
-def test_note_add_creates_activity(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
-    note = _make_note()
-    contact = _make_contact()
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.create_note", return_value=note),
-        patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.create_activity") as mock_activity,
-    ):
-        runner.invoke(
-            main,
-            ["note", "add", "--contact-id", "cid-1", "--body", "Test note body"],
-        )
-
-    mock_activity.assert_called_once_with(
-        mock_connection,
-        contact_id="cid-1",
-        activity_type="note_added",
-        summary="Note added",
-        detail={"note_id": note.id},
-        company_id=None,
-    )
 
 
 def test_note_add_contact_not_found(
@@ -4047,7 +4082,7 @@ def test_note_add_no_entity(runner: CliRunner, mock_connection: MagicMock) -> No
 
     assert result.exit_code == 1
     data = json.loads(result.output)
-    assert data["error"] == "missing_filter"
+    assert data["error"] == "validation_error"
 
 
 def test_note_add_empty_body(runner: CliRunner, mock_connection: MagicMock) -> None:
@@ -4127,7 +4162,7 @@ def test_note_list_with_limit(runner: CliRunner, mock_connection: MagicMock) -> 
 
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
-        mock_connection, entity_type="contact", entity_id="cid-1", limit=5, since=None
+        mock_connection, contact_id="cid-1", limit=5, since=None
     )
 
 
@@ -4154,8 +4189,7 @@ def test_note_list_with_since(runner: CliRunner, mock_connection: MagicMock) -> 
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
         mock_connection,
-        entity_type="contact",
-        entity_id="cid-1",
+        contact_id="cid-1",
         limit=100,
         since="2024-01-01T00:00:00Z",
     )
@@ -4171,7 +4205,7 @@ def test_note_list_no_entity(runner: CliRunner, mock_connection: MagicMock) -> N
 
     assert result.exit_code == 1
     data = json.loads(result.output)
-    assert data["error"] == "missing_filter"
+    assert data["error"] == "validation_error"
 
 
 # -- note view -----------------------------------------------------------------
@@ -4247,7 +4281,7 @@ def _make_enrollment(**overrides: Any) -> Enrollment:
     defaults: dict[str, Any] = {
         "workflow_id": _WORKFLOW_ID,
         "contact_id": _CONTACT_ID,
-        "status": "pending",
+        "status": "active",
         "reason": "",
         "created_at": _NOW,
         "updated_at": _NOW,
@@ -4261,7 +4295,7 @@ def _make_enrollment_summary(**overrides: Any) -> EnrollmentSummary:
         "contact_id": _CONTACT_ID,
         "contact_email": "alice@example.com",
         "contact_name": "Alice Smith",
-        "status": "pending",
+        "status": "active",
         "updated_at": _NOW,
     }
     return EnrollmentSummary(**{**defaults, **overrides})
@@ -4297,14 +4331,14 @@ def test_enrollment_add(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert result.exit_code == 0
     mock_create.assert_called_once_with(mock_connection, _WORKFLOW_ID, _CONTACT_ID)
     activity_kwargs = mock_activity.call_args.kwargs
-    assert activity_kwargs["activity_type"] == "workflow_assigned"
+    assert activity_kwargs["activity_type"] == "enrollment_added"
     assert activity_kwargs["contact_id"] == _CONTACT_ID
-    assert activity_kwargs["detail"]["workflow_id"] == _WORKFLOW_ID
+    assert activity_kwargs["workflow_id"] == _WORKFLOW_ID
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["workflow_id"] == _WORKFLOW_ID
     assert data["contact_id"] == _CONTACT_ID
-    assert data["status"] == "pending"
+    assert data["status"] == "active"
 
 
 def test_enrollment_add_idempotent(
@@ -4559,7 +4593,7 @@ def test_enrollment_list_with_status(
                 "--workflow-id",
                 _WORKFLOW_ID,
                 "--status",
-                "completed",
+                "paused",
             ],
         )
 
@@ -4568,7 +4602,7 @@ def test_enrollment_list_with_status(
         mock_connection,
         workflow_id=_WORKFLOW_ID,
         contact_id=None,
-        status="completed",
+        status="paused",
         limit=100,
         since=None,
     )
@@ -4657,11 +4691,15 @@ def test_enrollment_list_workflow_not_found(
 # -- enrollment update ---------------------------------------------------------
 
 
-def test_enrollment_update(runner: CliRunner, mock_connection: MagicMock) -> None:
-    updated = _make_enrollment(status="completed", reason="Demo booked")
+def test_enrollment_update_paused_emits_activity(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    before = _make_enrollment(status="active")
+    updated = _make_enrollment(status="paused", reason="vacation")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_enrollment", return_value=before),
         patch(
             "mailpilot.database.update_enrollment", return_value=updated
         ) as mock_update,
@@ -4678,9 +4716,9 @@ def test_enrollment_update(runner: CliRunner, mock_connection: MagicMock) -> Non
                 "--contact-id",
                 _CONTACT_ID,
                 "--status",
-                "completed",
+                "paused",
                 "--reason",
-                "Demo booked",
+                "vacation",
             ],
         )
 
@@ -4689,63 +4727,57 @@ def test_enrollment_update(runner: CliRunner, mock_connection: MagicMock) -> Non
         mock_connection,
         _WORKFLOW_ID,
         _CONTACT_ID,
-        status="completed",
-        reason="Demo booked",
+        status="paused",
+        reason="vacation",
     )
     activity_kwargs = mock_activity.call_args.kwargs
-    assert activity_kwargs["activity_type"] == "workflow_completed"
-    assert activity_kwargs["summary"] == "Demo booked"
-    data = json.loads(result.output)
-    assert data["ok"] is True
-    assert data["status"] == "completed"
-    assert data["reason"] == "Demo booked"
+    assert activity_kwargs["activity_type"] == "enrollment_paused"
+    assert activity_kwargs["summary"] == "vacation"
+    assert activity_kwargs["workflow_id"] == _WORKFLOW_ID
 
 
-def test_enrollment_update_without_reason(
+def test_enrollment_update_active_emits_resumed_activity(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    updated = _make_enrollment(status="failed")
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch(
-            "mailpilot.database.update_enrollment", return_value=updated
-        ) as mock_update,
-        patch("mailpilot.database.get_contact", return_value=_make_contact()),
-        patch("mailpilot.database.create_activity") as mock_activity,
-    ):
-        result = runner.invoke(
-            main,
-            [
-                "enrollment",
-                "update",
-                "--workflow-id",
-                _WORKFLOW_ID,
-                "--contact-id",
-                _CONTACT_ID,
-                "--status",
-                "failed",
-            ],
-        )
-
-    assert result.exit_code == 0
-    mock_update.assert_called_once_with(
-        mock_connection,
-        _WORKFLOW_ID,
-        _CONTACT_ID,
-        status="failed",
-    )
-    assert mock_activity.call_args.kwargs["activity_type"] == "workflow_failed"
-
-
-def test_enrollment_update_active_does_not_emit_activity(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
-    """Transitions to active or pending must not emit a workflow activity."""
+    """paused -> active transition emits enrollment_resumed."""
+    before = _make_enrollment(status="paused")
     updated = _make_enrollment(status="active")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_enrollment", return_value=before),
+        patch("mailpilot.database.update_enrollment", return_value=updated),
+        patch("mailpilot.database.get_contact", return_value=_make_contact()),
+        patch("mailpilot.database.create_activity") as mock_activity,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "update",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--contact-id",
+                _CONTACT_ID,
+                "--status",
+                "active",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert mock_activity.call_args.kwargs["activity_type"] == "enrollment_resumed"
+
+
+def test_enrollment_update_unchanged_status_does_not_emit_activity(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """No status change -- no activity."""
+    before = _make_enrollment(status="active")
+    updated = _make_enrollment(status="active")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_enrollment", return_value=before),
         patch("mailpilot.database.update_enrollment", return_value=updated),
         patch("mailpilot.database.create_activity") as mock_activity,
     ):
@@ -4767,13 +4799,13 @@ def test_enrollment_update_active_does_not_emit_activity(
     mock_activity.assert_not_called()
 
 
-def test_enrollment_update_not_found(
+def test_enrollment_update_rejects_legacy_status(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
+    """`completed`/`failed`/`pending` are no longer valid CLI statuses."""
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.update_enrollment", return_value=None),
     ):
         result = runner.invoke(
             main,
@@ -4786,6 +4818,31 @@ def test_enrollment_update_not_found(
                 _CONTACT_ID,
                 "--status",
                 "completed",
+            ],
+        )
+
+    assert result.exit_code != 0
+
+
+def test_enrollment_update_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_enrollment", return_value=None),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "update",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--contact-id",
+                _CONTACT_ID,
+                "--status",
+                "active",
             ],
         )
 

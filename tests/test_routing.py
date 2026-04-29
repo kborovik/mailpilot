@@ -569,7 +569,7 @@ def test_route_email_creates_enrollment_on_route(
 
     enrollment = get_enrollment(database_connection, workflow.id, contact.id)
     assert enrollment is not None
-    assert enrollment.status == "pending"
+    assert enrollment.status == "active"
 
 
 def test_route_email_enrollment_idempotent(
@@ -626,11 +626,11 @@ def test_route_email_enrollment_idempotent(
     assert routed.is_routed is True
 
 
-def test_route_email_emits_workflow_assigned_activity(
+def test_route_email_emits_enrollment_added_activity(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """A first-time enrollment must emit a workflow_assigned activity tied
-    to the contact, with workflow id + name in the detail."""
+    """A first-time enrollment must emit an enrollment_added activity tied
+    to the contact, with workflow_id populated as a column."""
     from mailpilot.database import list_activities
 
     account = make_test_account(database_connection, email="wact@example.com")
@@ -669,17 +669,24 @@ def test_route_email_emits_workflow_assigned_activity(
     )
 
     activities = list_activities(
-        database_connection, contact_id=contact.id, activity_type="workflow_assigned"
+        database_connection, contact_id=contact.id, activity_type="enrollment_added"
     )
     assert len(activities) == 1
     assert workflow.name in activities[0].summary
+    row = database_connection.execute(
+        "SELECT workflow_id FROM activity WHERE type = 'enrollment_added' "
+        "AND contact_id = %s",
+        (contact.id,),
+    ).fetchone()
+    assert row is not None
+    assert row["workflow_id"] == workflow.id
 
 
-def test_route_email_workflow_assigned_only_once_on_duplicate_enrollment(
+def test_route_email_enrollment_added_only_once_on_duplicate_enrollment(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     """When create_enrollment hits ON CONFLICT (returns None), no second
-    workflow_assigned activity should be emitted for the same pair."""
+    enrollment_added activity should be emitted for the same pair."""
     from mailpilot.database import list_activities
 
     account = make_test_account(database_connection, email="wactdup@example.com")
@@ -717,7 +724,7 @@ def test_route_email_workflow_assigned_only_once_on_duplicate_enrollment(
         )
 
     activities = list_activities(
-        database_connection, contact_id=contact.id, activity_type="workflow_assigned"
+        database_connection, contact_id=contact.id, activity_type="enrollment_added"
     )
     assert len(activities) == 1
 

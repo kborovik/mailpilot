@@ -178,17 +178,17 @@ def _wrap_cancel_task(
     )
 
 
-def _wrap_update_enrollment_status(
+def _wrap_record_enrollment_outcome(
     ctx: RunContext[AgentDeps],
-    status: str,
+    outcome: str,
     reason: str,
 ) -> dict[str, str]:
-    """Report outcome for the current contact's enrollment in this workflow."""
-    return agent_tools.update_enrollment_status(
+    """Record an enrollment outcome (completed or failed) on the timeline."""
+    return agent_tools.record_enrollment_outcome(
         connection=ctx.deps.connection,
         workflow_id=ctx.deps.workflow_id,
         contact_id=ctx.deps.contact_id,
-        status=status,
+        outcome=outcome,
         reason=reason,
     )
 
@@ -284,7 +284,7 @@ _TOOLS: list[Tool[AgentDeps]] = [
     Tool(_wrap_reply_email, name="reply_email"),
     Tool(_wrap_create_task, name="create_task"),
     Tool(_wrap_cancel_task, name="cancel_task"),
-    Tool(_wrap_update_enrollment_status, name="update_enrollment_status"),
+    Tool(_wrap_record_enrollment_outcome, name="record_enrollment_outcome"),
     Tool(_wrap_disable_contact, name="disable_contact"),
     Tool(_wrap_list_enrollments, name="list_enrollments"),
     Tool(_wrap_search_emails, name="search_emails"),
@@ -301,7 +301,7 @@ _SYSTEM_PREFIX = (
     "When a trigger email is included in your prompt, its full body is "
     "already provided -- do not call read_email to fetch it again.\n"
     "After completing the workflow objective for a contact, call "
-    "update_enrollment_status with status='completed' and a brief reason.\n\n"
+    "record_enrollment_outcome with outcome='completed' and a brief reason.\n\n"
 )
 
 

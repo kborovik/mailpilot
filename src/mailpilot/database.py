@@ -10,6 +10,7 @@ Convention:
     update_X(connection, id, ...) -> X
 """
 
+import re
 import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
@@ -35,6 +36,7 @@ from mailpilot.models import (
     EmailSummary,
     Enrollment,
     EnrollmentSummary,
+    EnrollmentWithOutcome,
     Note,
     NoteSummary,
     SyncStatus,
@@ -1170,6 +1172,58 @@ def list_enrollments(
     return [Enrollment.model_validate(row) for row in rows]
 
 
+def list_enrollments_with_outcomes(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+) -> list[EnrollmentWithOutcome]:
+    """List enrollments in a workflow with their latest outcome activity.
+
+    Per ADR-08, outcomes (`completed` / `failed`) are timeline-only and do
+    not change `enrollment.status`. This helper LEFT JOINs the most recent
+    `enrollment_completed` / `enrollment_failed` activity per row so the
+    agent can answer "has this objective already been satisfied for any
+    contact in this workflow?" in a single query.
+
+    Args:
+        connection: Open database connection.
+        workflow_id: Workflow FK.
+
+    Returns:
+        List of `EnrollmentWithOutcome`, ordered by enrollment `created_at`.
+    """
+    rows = connection.execute(
+        """\
+        SELECT
+            e.workflow_id,
+            e.contact_id,
+            e.status,
+            e.reason,
+            e.created_at,
+            e.updated_at,
+            CASE a.type
+                WHEN 'enrollment_completed' THEN 'completed'
+                WHEN 'enrollment_failed' THEN 'failed'
+            END AS latest_outcome,
+            COALESCE(a.detail->>'reason', a.summary) AS latest_outcome_reason,
+            a.created_at AS latest_outcome_at
+        FROM enrollment e
+        LEFT JOIN LATERAL (
+            SELECT type, summary, detail, created_at
+            FROM activity
+            WHERE activity.contact_id = e.contact_id
+              AND activity.workflow_id = e.workflow_id
+              AND activity.type IN ('enrollment_completed', 'enrollment_failed')
+            ORDER BY created_at DESC
+            LIMIT 1
+        ) a ON TRUE
+        WHERE e.workflow_id = %(workflow_id)s
+        ORDER BY e.created_at
+        """,
+        {"workflow_id": workflow_id},
+    ).fetchall()
+    return [EnrollmentWithOutcome.model_validate(row) for row in rows]
+
+
 def delete_enrollment(
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str,
@@ -2010,36 +2064,47 @@ def create_tasks_for_routed_emails(
 
 def create_activity(
     connection: psycopg.Connection[dict[str, Any]],
-    contact_id: str,
     activity_type: str,
     summary: str = "",
     detail: dict[str, object] | None = None,
+    contact_id: str | None = None,
     company_id: str | None = None,
+    email_id: str | None = None,
+    workflow_id: str | None = None,
+    task_id: str | None = None,
 ) -> Activity:
-    """Create an activity event in a contact's timeline.
+    """Create an activity event.
 
-    Args:
-        connection: Open database connection.
-        contact_id: Contact FK (every activity relates to a contact).
-        activity_type: Activity type (email_sent, tag_added, etc.).
-        summary: One-line human-readable description.
-        detail: Type-specific JSON data (email_id, tag name, etc.).
-        company_id: Optional company FK for company-level views.
+    At least one of ``contact_id`` or ``company_id`` must be set.
+    Structured FK columns (``email_id``, ``workflow_id``, ``task_id``)
+    let reports join activity to source records without parsing
+    ``detail`` JSON.
 
-    Returns:
-        Created activity.
+    Raises:
+        ValueError: If neither contact_id nor company_id is provided.
     """
+    if contact_id is None and company_id is None:
+        raise ValueError("at least one of contact_id or company_id is required")
     row = connection.execute(
         """\
-        INSERT INTO activity (id, contact_id, company_id, type, summary, detail)
-        VALUES (%(id)s, %(contact_id)s, %(company_id)s, %(type)s,
-                %(summary)s, %(detail)s)
+        INSERT INTO activity (
+            id, contact_id, company_id, email_id, workflow_id, task_id,
+            type, summary, detail
+        )
+        VALUES (
+            %(id)s, %(contact_id)s, %(company_id)s, %(email_id)s,
+            %(workflow_id)s, %(task_id)s,
+            %(type)s, %(summary)s, %(detail)s
+        )
         RETURNING *
         """,
         {
             "id": _new_id(),
             "contact_id": contact_id,
             "company_id": company_id,
+            "email_id": email_id,
+            "workflow_id": workflow_id,
+            "task_id": task_id,
             "type": activity_type,
             "summary": summary,
             "detail": Json(detail or {}),
@@ -2103,39 +2168,58 @@ def list_activities(
 # -- Tag -----------------------------------------------------------------------
 
 
+_TAG_NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]*")
+
+
+def _normalize_tag_name(name: str) -> str:
+    """Normalize a tag name to lowercase hyphenated form.
+
+    Strips whitespace, lowercases, replaces whitespace and underscores
+    with hyphens, collapses repeated hyphens, trims leading/trailing
+    hyphens, and validates against ``[a-z0-9][a-z0-9-]*``.
+
+    Raises:
+        ValueError: If the result is empty or contains disallowed
+        characters.
+    """
+    cleaned = name.strip().lower()
+    cleaned = re.sub(r"[\s_]+", "-", cleaned)
+    cleaned = re.sub(r"-+", "-", cleaned).strip("-")
+    if not _TAG_NAME_RE.fullmatch(cleaned):
+        raise ValueError(f"invalid tag name: {name!r} (normalized to {cleaned!r})")
+    return cleaned
+
+
 def create_tag(
     connection: psycopg.Connection[dict[str, Any]],
-    entity_type: str,
-    entity_id: str,
     name: str,
+    contact_id: str | None = None,
+    company_id: str | None = None,
 ) -> Tag | None:
     """Create a tag on a contact or company.
 
-    Normalizes the tag name to lowercase with leading/trailing whitespace
-    stripped. Uses ON CONFLICT DO NOTHING so duplicate tags are silently
-    ignored.
+    Exactly one of ``contact_id`` or ``company_id`` must be provided.
+    The name is normalized via ``_normalize_tag_name``. Uses ON CONFLICT
+    DO NOTHING -- returns None if the tag already exists.
 
-    Args:
-        connection: Open database connection.
-        entity_type: "contact" or "company".
-        entity_id: ID of the tagged entity.
-        name: Tag name (normalized to lowercase).
-
-    Returns:
-        Created tag, or None if the tag already exists.
+    Raises:
+        ValueError: If neither or both of contact_id/company_id are set,
+        or if the tag name fails normalization.
     """
-    normalized = name.strip().lower()
+    if (contact_id is None) == (company_id is None):
+        raise ValueError("exactly one of contact_id or company_id is required")
+    normalized = _normalize_tag_name(name)
     row = connection.execute(
         """\
-        INSERT INTO tag (id, entity_type, entity_id, name)
-        VALUES (%(id)s, %(entity_type)s, %(entity_id)s, %(name)s)
-        ON CONFLICT (entity_type, entity_id, name) DO NOTHING
+        INSERT INTO tag (id, contact_id, company_id, name)
+        VALUES (%(id)s, %(contact_id)s, %(company_id)s, %(name)s)
+        ON CONFLICT DO NOTHING
         RETURNING *
         """,
         {
             "id": _new_id(),
-            "entity_type": entity_type,
-            "entity_id": entity_id,
+            "contact_id": contact_id,
+            "company_id": company_id,
             "name": normalized,
         },
     ).fetchone()
@@ -2147,137 +2231,306 @@ def create_tag(
 
 def delete_tag(
     connection: psycopg.Connection[dict[str, Any]],
-    entity_type: str,
-    entity_id: str,
     name: str,
+    contact_id: str | None = None,
+    company_id: str | None = None,
 ) -> bool:
     """Remove a tag from a contact or company.
 
-    Args:
-        connection: Open database connection.
-        entity_type: "contact" or "company".
-        entity_id: ID of the tagged entity.
-        name: Tag name (normalized to lowercase for matching).
-
-    Returns:
-        True if the tag was deleted, False if it was not found.
+    Raises:
+        ValueError: If neither or both of contact_id/company_id are set.
     """
-    normalized = name.strip().lower()
-    cursor = connection.execute(
-        """\
-        DELETE FROM tag
-        WHERE entity_type = %(entity_type)s
-          AND entity_id = %(entity_id)s
-          AND name = %(name)s
-        """,
-        {
-            "entity_type": entity_type,
-            "entity_id": entity_id,
-            "name": normalized,
-        },
-    )
+    if (contact_id is None) == (company_id is None):
+        raise ValueError("exactly one of contact_id or company_id is required")
+    normalized = _normalize_tag_name(name)
+    if contact_id is not None:
+        cursor = connection.execute(
+            "DELETE FROM tag WHERE contact_id = %(contact_id)s AND name = %(name)s",
+            {"contact_id": contact_id, "name": normalized},
+        )
+    else:
+        cursor = connection.execute(
+            "DELETE FROM tag WHERE company_id = %(company_id)s AND name = %(name)s",
+            {"company_id": company_id, "name": normalized},
+        )
     connection.commit()
     return cursor.rowcount > 0
 
 
 def list_tags(
     connection: psycopg.Connection[dict[str, Any]],
-    entity_type: str,
-    entity_id: str,
+    contact_id: str | None = None,
+    company_id: str | None = None,
     limit: int = 100,
     since: str | None = None,
 ) -> list[Tag]:
-    """List all tags on a contact or company.
+    """List tags on a contact or company.
 
     Tag has no Summary projection -- the full row already matches the
-    summary contract (id, entity_type, entity_id, name, created_at).
+    summary contract.
 
-    Args:
-        connection: Open database connection.
-        entity_type: "contact" or "company".
-        entity_id: ID of the tagged entity.
-        limit: Maximum results.
-        since: ISO datetime lower bound on ``created_at``.
-
-    Returns:
-        Tags ordered by name.
+    Raises:
+        ValueError: If neither or both of contact_id/company_id are set.
     """
-    conditions: list[Composed | SQL] = [
-        SQL("entity_type = %(entity_type)s"),
-        SQL("entity_id = %(entity_id)s"),
-    ]
-    params: dict[str, object] = {
-        "entity_type": entity_type,
-        "entity_id": entity_id,
-        "limit": limit,
-    }
+    if (contact_id is None) == (company_id is None):
+        raise ValueError("exactly one of contact_id or company_id is required")
+    params: dict[str, object] = {"limit": limit}
+    where_parts: list[Composed | SQL] = []
+    if contact_id is not None:
+        where_parts.append(SQL("contact_id = %(contact_id)s"))
+        params["contact_id"] = contact_id
+    else:
+        where_parts.append(SQL("company_id = %(company_id)s"))
+        params["company_id"] = company_id
     if since is not None:
-        conditions.append(SQL("created_at >= %(since)s"))
+        where_parts.append(SQL("created_at >= %(since)s"))
         params["since"] = since
-    where = SQL("WHERE ") + SQL(" AND ").join(conditions)
+    where = SQL("WHERE ") + SQL(" AND ").join(where_parts)
     query = SQL("SELECT * FROM tag {} ORDER BY name LIMIT %(limit)s").format(where)
     rows = connection.execute(query, params).fetchall()
     return [Tag.model_validate(row) for row in rows]
 
 
-def list_entities_by_tag(
+def list_contacts_by_tag(
     connection: psycopg.Connection[dict[str, Any]],
-    entity_type: str,
     name: str,
     limit: int = 100,
 ) -> list[str]:
-    """Find all entities with a given tag.
-
-    Args:
-        connection: Open database connection.
-        entity_type: "contact" or "company".
-        name: Tag name to search for.
-        limit: Maximum number of entity IDs to return.
-
-    Returns:
-        Entity IDs matching the tag.
-    """
-    normalized = name.strip().lower()
+    """Return contact IDs with the given tag (normalized)."""
+    normalized = _normalize_tag_name(name)
     rows = connection.execute(
         """\
-        SELECT entity_id FROM tag
-        WHERE entity_type = %(entity_type)s AND name = %(name)s
+        SELECT contact_id FROM tag
+        WHERE contact_id IS NOT NULL AND name = %(name)s
         ORDER BY created_at
         LIMIT %(limit)s
         """,
-        {"entity_type": entity_type, "name": normalized, "limit": limit},
+        {"name": normalized, "limit": limit},
     ).fetchall()
-    return [row["entity_id"] for row in rows]
+    return [row["contact_id"] for row in rows]
+
+
+def list_companies_by_tag(
+    connection: psycopg.Connection[dict[str, Any]],
+    name: str,
+    limit: int = 100,
+) -> list[str]:
+    """Return company IDs with the given tag (normalized)."""
+    normalized = _normalize_tag_name(name)
+    rows = connection.execute(
+        """\
+        SELECT company_id FROM tag
+        WHERE company_id IS NOT NULL AND name = %(name)s
+        ORDER BY created_at
+        LIMIT %(limit)s
+        """,
+        {"name": normalized, "limit": limit},
+    ).fetchall()
+    return [row["company_id"] for row in rows]
 
 
 def search_tags(
     connection: psycopg.Connection[dict[str, Any]],
     name: str,
-    entity_type: str | None = None,
+    owner: str | None = None,
     limit: int = 100,
 ) -> list[Tag]:
-    """Search tags by name with optional entity type filter.
+    """Search tags by name pattern with optional owner filter.
 
     Args:
         connection: Open database connection.
-        name: Tag name pattern (LIKE match).
-        entity_type: Optional filter by "contact" or "company".
+        name: Pattern to LIKE-match against tag ``name``.
+        owner: ``"contact"`` to limit to contact tags, ``"company"`` to
+            limit to company tags, ``None`` for both.
         limit: Maximum number of results.
-
-    Returns:
-        Matching tags ordered by name.
     """
+    if owner not in (None, "contact", "company"):
+        raise ValueError("owner must be 'contact', 'company', or None")
     pattern = f"%{name.strip().lower()}%"
     params: dict[str, object] = {"pattern": pattern, "limit": limit}
-    type_filter = SQL("")
-    if entity_type is not None:
-        type_filter = SQL("AND entity_type = %(entity_type)s")
-        params["entity_type"] = entity_type
+    owner_filter = SQL("")
+    if owner == "contact":
+        owner_filter = SQL("AND contact_id IS NOT NULL")
+    elif owner == "company":
+        owner_filter = SQL("AND company_id IS NOT NULL")
     query = SQL(
         "SELECT * FROM tag WHERE name LIKE %(pattern)s {} ORDER BY name LIMIT %(limit)s"
-    ).format(type_filter)
+    ).format(owner_filter)
     rows = connection.execute(query, params).fetchall()
     return [Tag.model_validate(row) for row in rows]
+
+
+def add_contact_tag(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact_id: str,
+    name: str,
+) -> Tag | None:
+    """Add a tag to a contact and emit a `tag_added` activity atomically.
+
+    The two writes share one transaction. Returns ``None`` if the tag
+    already exists -- in that case no activity is written.
+    """
+    normalized = _normalize_tag_name(name)
+    contact_row = connection.execute(
+        "SELECT company_id FROM contact WHERE id = %s", (contact_id,)
+    ).fetchone()
+    if contact_row is None:
+        raise ValueError(f"contact not found: {contact_id}")
+    tag_row = connection.execute(
+        """\
+        INSERT INTO tag (id, contact_id, company_id, name)
+        VALUES (%(id)s, %(contact_id)s, NULL, %(name)s)
+        ON CONFLICT DO NOTHING
+        RETURNING *
+        """,
+        {"id": _new_id(), "contact_id": contact_id, "name": normalized},
+    ).fetchone()
+    if tag_row is None:
+        connection.commit()
+        return None
+    connection.execute(
+        """\
+        INSERT INTO activity (
+            id, contact_id, company_id, type, summary, detail
+        )
+        VALUES (
+            %(id)s, %(contact_id)s, %(company_id)s,
+            'tag_added', %(summary)s, %(detail)s
+        )
+        """,
+        {
+            "id": _new_id(),
+            "contact_id": contact_id,
+            "company_id": contact_row["company_id"],
+            "summary": f"Tagged as {normalized}",
+            "detail": Json({"tag": normalized}),
+        },
+    )
+    connection.commit()
+    return Tag.model_validate(tag_row)
+
+
+def add_company_tag(
+    connection: psycopg.Connection[dict[str, Any]],
+    company_id: str,
+    name: str,
+) -> Tag | None:
+    """Add a tag to a company and emit a `tag_added` company activity atomically."""
+    normalized = _normalize_tag_name(name)
+    if (
+        connection.execute(
+            "SELECT 1 FROM company WHERE id = %s", (company_id,)
+        ).fetchone()
+        is None
+    ):
+        raise ValueError(f"company not found: {company_id}")
+    tag_row = connection.execute(
+        """\
+        INSERT INTO tag (id, contact_id, company_id, name)
+        VALUES (%(id)s, NULL, %(company_id)s, %(name)s)
+        ON CONFLICT DO NOTHING
+        RETURNING *
+        """,
+        {"id": _new_id(), "company_id": company_id, "name": normalized},
+    ).fetchone()
+    if tag_row is None:
+        connection.commit()
+        return None
+    connection.execute(
+        """\
+        INSERT INTO activity (
+            id, contact_id, company_id, type, summary, detail
+        )
+        VALUES (
+            %(id)s, NULL, %(company_id)s,
+            'tag_added', %(summary)s, %(detail)s
+        )
+        """,
+        {
+            "id": _new_id(),
+            "company_id": company_id,
+            "summary": f"Tagged as {normalized}",
+            "detail": Json({"tag": normalized}),
+        },
+    )
+    connection.commit()
+    return Tag.model_validate(tag_row)
+
+
+def remove_contact_tag(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact_id: str,
+    name: str,
+) -> bool:
+    """Remove a tag from a contact and emit a `tag_removed` activity atomically."""
+    normalized = _normalize_tag_name(name)
+    contact_row = connection.execute(
+        "SELECT company_id FROM contact WHERE id = %s", (contact_id,)
+    ).fetchone()
+    if contact_row is None:
+        raise ValueError(f"contact not found: {contact_id}")
+    cursor = connection.execute(
+        "DELETE FROM tag WHERE contact_id = %s AND name = %s",
+        (contact_id, normalized),
+    )
+    if cursor.rowcount == 0:
+        connection.commit()
+        return False
+    connection.execute(
+        """\
+        INSERT INTO activity (
+            id, contact_id, company_id, type, summary, detail
+        )
+        VALUES (
+            %(id)s, %(contact_id)s, %(company_id)s,
+            'tag_removed', %(summary)s, %(detail)s
+        )
+        """,
+        {
+            "id": _new_id(),
+            "contact_id": contact_id,
+            "company_id": contact_row["company_id"],
+            "summary": f"Removed tag {normalized}",
+            "detail": Json({"tag": normalized}),
+        },
+    )
+    connection.commit()
+    return True
+
+
+def remove_company_tag(
+    connection: psycopg.Connection[dict[str, Any]],
+    company_id: str,
+    name: str,
+) -> bool:
+    """Remove a tag from a company and emit a `tag_removed` activity atomically."""
+    normalized = _normalize_tag_name(name)
+    cursor = connection.execute(
+        "DELETE FROM tag WHERE company_id = %s AND name = %s",
+        (company_id, normalized),
+    )
+    if cursor.rowcount == 0:
+        connection.commit()
+        return False
+    connection.execute(
+        """\
+        INSERT INTO activity (
+            id, contact_id, company_id, type, summary, detail
+        )
+        VALUES (
+            %(id)s, NULL, %(company_id)s,
+            'tag_removed', %(summary)s, %(detail)s
+        )
+        """,
+        {
+            "id": _new_id(),
+            "company_id": company_id,
+            "summary": f"Removed tag {normalized}",
+            "detail": Json({"tag": normalized}),
+        },
+    )
+    connection.commit()
+    return True
 
 
 # -- Note ----------------------------------------------------------------------
@@ -2285,31 +2538,27 @@ def search_tags(
 
 def create_note(
     connection: psycopg.Connection[dict[str, Any]],
-    entity_type: str,
-    entity_id: str,
     body: str,
+    contact_id: str | None = None,
+    company_id: str | None = None,
 ) -> Note:
-    """Create a freeform text note on a contact or company.
+    """Create a freeform note on a contact or company.
 
-    Args:
-        connection: Open database connection.
-        entity_type: "contact" or "company".
-        entity_id: ID of the annotated entity.
-        body: Note text.
-
-    Returns:
-        Created note.
+    Raises:
+        ValueError: If neither or both of contact_id/company_id are set.
     """
+    if (contact_id is None) == (company_id is None):
+        raise ValueError("exactly one of contact_id or company_id is required")
     row = connection.execute(
         """\
-        INSERT INTO note (id, entity_type, entity_id, body)
-        VALUES (%(id)s, %(entity_type)s, %(entity_id)s, %(body)s)
+        INSERT INTO note (id, contact_id, company_id, body)
+        VALUES (%(id)s, %(contact_id)s, %(company_id)s, %(body)s)
         RETURNING *
         """,
         {
             "id": _new_id(),
-            "entity_type": entity_type,
-            "entity_id": entity_id,
+            "contact_id": contact_id,
+            "company_id": company_id,
             "body": body,
         },
     ).fetchone()
@@ -2319,8 +2568,8 @@ def create_note(
 
 def list_notes(
     connection: psycopg.Connection[dict[str, Any]],
-    entity_type: str,
-    entity_id: str,
+    contact_id: str | None = None,
+    company_id: str | None = None,
     limit: int = 100,
     since: str | None = None,
 ) -> list[NoteSummary]:
@@ -2329,31 +2578,25 @@ def list_notes(
     The full body is replaced by ``body_preview`` -- the first 80 characters
     with a trailing ellipsis when the body is longer.
 
-    Args:
-        connection: Open database connection.
-        entity_type: "contact" or "company".
-        entity_id: ID of the annotated entity.
-        limit: Maximum results.
-        since: ISO datetime lower bound for created_at.
-
-    Returns:
-        Note summaries ordered by created_at descending.
+    Raises:
+        ValueError: If neither or both of contact_id/company_id are set.
     """
-    conditions: list[SQL] = [
-        SQL("entity_type = %(entity_type)s"),
-        SQL("entity_id = %(entity_id)s"),
-    ]
-    params: dict[str, object] = {
-        "entity_type": entity_type,
-        "entity_id": entity_id,
-        "limit": limit,
-    }
+    if (contact_id is None) == (company_id is None):
+        raise ValueError("exactly one of contact_id or company_id is required")
+    params: dict[str, object] = {"limit": limit}
+    where_parts: list[Composed | SQL] = []
+    if contact_id is not None:
+        where_parts.append(SQL("contact_id = %(contact_id)s"))
+        params["contact_id"] = contact_id
+    else:
+        where_parts.append(SQL("company_id = %(company_id)s"))
+        params["company_id"] = company_id
     if since is not None:
-        conditions.append(SQL("created_at >= %(since)s"))
+        where_parts.append(SQL("created_at >= %(since)s"))
         params["since"] = since
-    where = SQL("WHERE ") + SQL(" AND ").join(conditions)
+    where = SQL("WHERE ") + SQL(" AND ").join(where_parts)
     query = SQL(
-        "SELECT id, entity_type, entity_id, "
+        "SELECT id, contact_id, company_id, "
         "CASE WHEN LENGTH(body) > 80 THEN LEFT(body, 80) || '...' "
         "ELSE body END AS body_preview, "
         "created_at "
@@ -2383,6 +2626,91 @@ def get_note(
     if row is None:
         return None
     return Note.model_validate(row)
+
+
+def add_contact_note(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact_id: str,
+    body: str,
+) -> Note:
+    """Add a note to a contact and emit a `note_added` activity atomically."""
+    contact_row = connection.execute(
+        "SELECT company_id FROM contact WHERE id = %s", (contact_id,)
+    ).fetchone()
+    if contact_row is None:
+        raise ValueError(f"contact not found: {contact_id}")
+    note_row = connection.execute(
+        """\
+        INSERT INTO note (id, contact_id, company_id, body)
+        VALUES (%(id)s, %(contact_id)s, NULL, %(body)s)
+        RETURNING *
+        """,
+        {"id": _new_id(), "contact_id": contact_id, "body": body},
+    ).fetchone()
+    note = Note.model_validate(note_row)
+    connection.execute(
+        """\
+        INSERT INTO activity (
+            id, contact_id, company_id, type, summary, detail
+        )
+        VALUES (
+            %(id)s, %(contact_id)s, %(company_id)s,
+            'note_added', %(summary)s, %(detail)s
+        )
+        """,
+        {
+            "id": _new_id(),
+            "contact_id": contact_id,
+            "company_id": contact_row["company_id"],
+            "summary": "Note added",
+            "detail": Json({"note_id": note.id}),
+        },
+    )
+    connection.commit()
+    return note
+
+
+def add_company_note(
+    connection: psycopg.Connection[dict[str, Any]],
+    company_id: str,
+    body: str,
+) -> Note:
+    """Add a note to a company and emit a `note_added` company activity atomically."""
+    if (
+        connection.execute(
+            "SELECT 1 FROM company WHERE id = %s", (company_id,)
+        ).fetchone()
+        is None
+    ):
+        raise ValueError(f"company not found: {company_id}")
+    note_row = connection.execute(
+        """\
+        INSERT INTO note (id, contact_id, company_id, body)
+        VALUES (%(id)s, NULL, %(company_id)s, %(body)s)
+        RETURNING *
+        """,
+        {"id": _new_id(), "company_id": company_id, "body": body},
+    ).fetchone()
+    note = Note.model_validate(note_row)
+    connection.execute(
+        """\
+        INSERT INTO activity (
+            id, contact_id, company_id, type, summary, detail
+        )
+        VALUES (
+            %(id)s, NULL, %(company_id)s,
+            'note_added', %(summary)s, %(detail)s
+        )
+        """,
+        {
+            "id": _new_id(),
+            "company_id": company_id,
+            "summary": "Note added",
+            "detail": Json({"note_id": note.id}),
+        },
+    )
+    connection.commit()
+    return note
 
 
 # -- Sync Status ---------------------------------------------------------------

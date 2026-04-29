@@ -73,8 +73,8 @@ CREATE INDEX IF NOT EXISTS idx_workflow_account_id ON workflow(account_id);
 CREATE TABLE IF NOT EXISTS enrollment (
     workflow_id   TEXT NOT NULL REFERENCES workflow(id),
     contact_id    TEXT NOT NULL REFERENCES contact(id),
-    status        TEXT NOT NULL DEFAULT 'pending'
-                  CHECK (status IN ('pending', 'active', 'completed', 'failed')),
+    status        TEXT NOT NULL DEFAULT 'active'
+                  CHECK (status IN ('active', 'paused')),
     reason        TEXT NOT NULL DEFAULT '',
     created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -149,48 +149,66 @@ CREATE TRIGGER task_pending_trigger
 
 CREATE TABLE IF NOT EXISTS activity (
     id              TEXT PRIMARY KEY,
-    contact_id      TEXT NOT NULL REFERENCES contact(id),
+    contact_id      TEXT REFERENCES contact(id),
     company_id      TEXT REFERENCES company(id),
+    email_id        TEXT REFERENCES email(id),
+    workflow_id     TEXT REFERENCES workflow(id),
+    task_id         TEXT REFERENCES task(id),
     type            TEXT NOT NULL
                     CHECK (type IN (
                         'email_sent', 'email_received',
                         'note_added', 'tag_added', 'tag_removed',
-                        'status_changed', 'workflow_assigned',
-                        'workflow_completed', 'workflow_failed'
+                        'status_changed',
+                        'enrollment_added',
+                        'enrollment_completed', 'enrollment_failed',
+                        'enrollment_paused', 'enrollment_resumed'
                     )),
     summary         TEXT NOT NULL DEFAULT '',
     detail          JSONB NOT NULL DEFAULT '{}',
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (contact_id IS NOT NULL OR company_id IS NOT NULL)
 );
 
-CREATE INDEX IF NOT EXISTS idx_activity_contact_id ON activity(contact_id);
-CREATE INDEX IF NOT EXISTS idx_activity_company_id ON activity(company_id);
+CREATE INDEX IF NOT EXISTS idx_activity_contact_timeline
+    ON activity(contact_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_activity_company_timeline
+    ON activity(company_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_activity_type ON activity(type);
-CREATE INDEX IF NOT EXISTS idx_activity_created_at ON activity(created_at);
 
 CREATE TABLE IF NOT EXISTS tag (
     id              TEXT PRIMARY KEY,
-    entity_type     TEXT NOT NULL
-                    CHECK (entity_type IN ('contact', 'company')),
-    entity_id       TEXT NOT NULL,
+    contact_id      TEXT REFERENCES contact(id),
+    company_id      TEXT REFERENCES company(id),
     name            TEXT NOT NULL,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (entity_type, entity_id, name)
+    CHECK (
+        (contact_id IS NOT NULL AND company_id IS NULL)
+        OR
+        (contact_id IS NULL AND company_id IS NOT NULL)
+    )
 );
 
-CREATE INDEX IF NOT EXISTS idx_tag_entity ON tag(entity_type, entity_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tag_contact_unique
+    ON tag(contact_id, name) WHERE contact_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tag_company_unique
+    ON tag(company_id, name) WHERE company_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_tag_name ON tag(name);
 
 CREATE TABLE IF NOT EXISTS note (
     id              TEXT PRIMARY KEY,
-    entity_type     TEXT NOT NULL
-                    CHECK (entity_type IN ('contact', 'company')),
-    entity_id       TEXT NOT NULL,
+    contact_id      TEXT REFERENCES contact(id),
+    company_id      TEXT REFERENCES company(id),
     body            TEXT NOT NULL,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (
+        (contact_id IS NOT NULL AND company_id IS NULL)
+        OR
+        (contact_id IS NULL AND company_id IS NOT NULL)
+    )
 );
 
-CREATE INDEX IF NOT EXISTS idx_note_entity ON note(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_note_contact_id ON note(contact_id) WHERE contact_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_note_company_id ON note(company_id) WHERE company_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS sync_status (
     id            TEXT PRIMARY KEY DEFAULT 'singleton',

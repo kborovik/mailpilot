@@ -25,10 +25,10 @@ from mailpilot.agent.tools import (
     read_company,
     read_contact,
     read_email,
+    record_enrollment_outcome,
     reply_email,
     search_emails,
     send_email,
-    update_enrollment_status,
 )
 from mailpilot.database import (
     activate_workflow,
@@ -374,51 +374,13 @@ def test_cancel_task_not_found(
     assert result["error"] == "not_found"
 
 
-# -- update_enrollment_status -----------------------------------------------------
+# -- record_enrollment_outcome -----------------------------------------------------
 
 
-def test_update_enrollment_status_success(
+def test_record_enrollment_outcome_completed_writes_activity_only(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    account = make_test_account(database_connection)
-    contact = make_test_contact(database_connection)
-    workflow = make_test_workflow(database_connection, account_id=account.id)
-    create_enrollment(database_connection, workflow.id, contact.id)
-
-    result = update_enrollment_status(
-        connection=database_connection,
-        workflow_id=workflow.id,
-        contact_id=contact.id,
-        status="completed",
-        reason="meeting booked",
-    )
-
-    assert result["status"] == "completed"
-    wc = get_enrollment(database_connection, workflow.id, contact.id)
-    assert wc is not None
-    assert wc.status == "completed"
-    assert wc.reason == "meeting booked"
-
-
-def test_update_enrollment_status_not_found(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    result = update_enrollment_status(
-        connection=database_connection,
-        workflow_id="nonexistent",
-        contact_id="nonexistent",
-        status="completed",
-        reason="done",
-    )
-
-    assert result["error"] == "not_found"
-
-
-def test_update_enrollment_status_emits_workflow_completed_activity(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    """Transitioning to ``completed`` must emit a workflow_completed
-    activity with the agent's reason as summary."""
+    """outcome='completed' emits enrollment_completed activity, no status change."""
     from mailpilot.database import list_activities
 
     account = make_test_account(database_connection)
@@ -426,24 +388,28 @@ def test_update_enrollment_status_emits_workflow_completed_activity(
     workflow = make_test_workflow(database_connection, account_id=account.id)
     create_enrollment(database_connection, workflow.id, contact.id)
 
-    update_enrollment_status(
+    result = record_enrollment_outcome(
         connection=database_connection,
         workflow_id=workflow.id,
         contact_id=contact.id,
-        status="completed",
+        outcome="completed",
         reason="meeting booked",
     )
+    assert result == {"outcome": "completed", "reason": "meeting booked"}
 
-    activities = list_activities(
-        database_connection, contact_id=contact.id, activity_type="workflow_completed"
-    )
-    assert len(activities) == 1
-    assert activities[0].summary == "meeting booked"
+    enrollment = get_enrollment(database_connection, workflow.id, contact.id)
+    assert enrollment is not None
+    assert enrollment.status == "active"  # unchanged
+
+    activities = list_activities(database_connection, contact_id=contact.id)
+    types = [a.type for a in activities]
+    assert "enrollment_completed" in types
 
 
-def test_update_enrollment_status_emits_workflow_failed_activity(
+def test_record_enrollment_outcome_failed(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
+    """outcome='failed' emits enrollment_failed activity."""
     from mailpilot.database import list_activities
 
     account = make_test_account(database_connection)
@@ -451,41 +417,43 @@ def test_update_enrollment_status_emits_workflow_failed_activity(
     workflow = make_test_workflow(database_connection, account_id=account.id)
     create_enrollment(database_connection, workflow.id, contact.id)
 
-    update_enrollment_status(
+    record_enrollment_outcome(
         connection=database_connection,
         workflow_id=workflow.id,
         contact_id=contact.id,
-        status="failed",
+        outcome="failed",
         reason="no response",
     )
-
-    activities = list_activities(
-        database_connection, contact_id=contact.id, activity_type="workflow_failed"
-    )
-    assert len(activities) == 1
-    assert activities[0].summary == "no response"
+    types = [
+        a.type for a in list_activities(database_connection, contact_id=contact.id)
+    ]
+    assert "enrollment_failed" in types
 
 
-def test_update_enrollment_status_active_does_not_emit_activity(
+def test_record_enrollment_outcome_rejects_invalid_outcome(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """Only completed/failed transitions emit; active transitions do not."""
-    from mailpilot.database import list_activities
-
-    account = make_test_account(database_connection)
-    contact = make_test_contact(database_connection)
-    workflow = make_test_workflow(database_connection, account_id=account.id)
-    create_enrollment(database_connection, workflow.id, contact.id)
-
-    update_enrollment_status(
+    result = record_enrollment_outcome(
         connection=database_connection,
-        workflow_id=workflow.id,
-        contact_id=contact.id,
-        status="active",
-        reason="started",
+        workflow_id="wf1",
+        contact_id="c1",
+        outcome="cancelled",
+        reason="x",
     )
+    assert result.get("error") == "invalid_outcome"
 
-    assert list_activities(database_connection, contact_id=contact.id) == []
+
+def test_record_enrollment_outcome_missing_enrollment(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    result = record_enrollment_outcome(
+        connection=database_connection,
+        workflow_id="wf-nonexistent",
+        contact_id="c-nonexistent",
+        outcome="completed",
+        reason="x",
+    )
+    assert result.get("error") == "not_found"
 
 
 # -- disable_contact -----------------------------------------------------------
@@ -564,7 +532,7 @@ def test_list_enrollments_success(
 
     assert len(result) == 1
     assert result[0]["contact_id"] == contact.id
-    assert result[0]["status"] == "pending"
+    assert result[0]["status"] == "active"
 
 
 def test_list_enrollments_empty(
@@ -576,6 +544,89 @@ def test_list_enrollments_empty(
     result = list_enrollments(connection=database_connection, workflow_id=workflow.id)
 
     assert result == []
+
+
+def test_list_enrollments_includes_latest_outcome(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Each enrollment row carries the latest enrollment_completed/failed
+    outcome so the agent can coordinate across contacts (skip person B if
+    person A at the same company already finished the objective)."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+
+    completed_contact = make_test_contact(database_connection, email="done@example.com")
+    failed_contact = make_test_contact(database_connection, email="failed@example.com")
+    pending_contact = make_test_contact(database_connection, email="open@example.com")
+    create_enrollment(database_connection, workflow.id, completed_contact.id)
+    create_enrollment(database_connection, workflow.id, failed_contact.id)
+    create_enrollment(database_connection, workflow.id, pending_contact.id)
+
+    record_enrollment_outcome(
+        connection=database_connection,
+        workflow_id=workflow.id,
+        contact_id=completed_contact.id,
+        outcome="completed",
+        reason="meeting booked",
+    )
+    record_enrollment_outcome(
+        connection=database_connection,
+        workflow_id=workflow.id,
+        contact_id=failed_contact.id,
+        outcome="failed",
+        reason="hard bounce",
+    )
+
+    rows = list_enrollments(connection=database_connection, workflow_id=workflow.id)
+    by_contact = {row["contact_id"]: row for row in rows}
+
+    completed_row = by_contact[completed_contact.id]
+    assert completed_row["latest_outcome"] == "completed"
+    assert completed_row["latest_outcome_reason"] == "meeting booked"
+    assert completed_row["latest_outcome_at"] is not None
+
+    failed_row = by_contact[failed_contact.id]
+    assert failed_row["latest_outcome"] == "failed"
+    assert failed_row["latest_outcome_reason"] == "hard bounce"
+    assert failed_row["latest_outcome_at"] is not None
+
+    pending_row = by_contact[pending_contact.id]
+    assert pending_row["latest_outcome"] is None
+    assert pending_row["latest_outcome_reason"] is None
+    assert pending_row["latest_outcome_at"] is None
+
+
+def test_list_enrollments_uses_most_recent_outcome(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """If multiple outcomes were recorded, only the latest is surfaced."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+
+    contact = make_test_contact(database_connection, email="flip@example.com")
+    create_enrollment(database_connection, workflow.id, contact.id)
+
+    record_enrollment_outcome(
+        connection=database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        outcome="failed",
+        reason="initial soft fail",
+    )
+    record_enrollment_outcome(
+        connection=database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        outcome="completed",
+        reason="recovered after re-engagement",
+    )
+
+    rows = list_enrollments(connection=database_connection, workflow_id=workflow.id)
+    assert len(rows) == 1
+    assert rows[0]["latest_outcome"] == "completed"
+    assert rows[0]["latest_outcome_reason"] == "recovered after re-engagement"
 
 
 # -- search_emails -------------------------------------------------------------

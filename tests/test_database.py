@@ -55,7 +55,6 @@ from mailpilot.database import (
     list_contacts,
     list_emails,
     list_enrollments_detailed,
-    list_entities_by_tag,
     list_notes,
     list_tags,
     list_tasks,
@@ -1661,6 +1660,62 @@ def test_list_activities_requires_filter(
         list_activities(database_connection)
 
 
+def test_create_activity_with_structured_fks(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """email_id, workflow_id, task_id are first-class FK columns (#102 sugg 5)."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    email = create_email(
+        database_connection,
+        account_id=account.id,
+        contact_id=contact.id,
+        direction="outbound",
+        subject="Hi",
+        body_text="hi",
+    )
+    assert email is not None
+
+    activity = create_activity(
+        database_connection,
+        contact_id=contact.id,
+        activity_type="email_sent",
+        summary="Hi",
+        email_id=email.id,
+        workflow_id=workflow.id,
+    )
+    assert activity.email_id == email.id
+    assert activity.workflow_id == workflow.id
+    assert activity.task_id is None
+
+
+def test_create_activity_company_only(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """contact_id is nullable when company_id is provided (#102 sugg 2)."""
+    company = make_test_company(database_connection)
+    activity = create_activity(
+        database_connection,
+        company_id=company.id,
+        activity_type="note_added",
+        summary="Company note",
+    )
+    assert activity.contact_id is None
+    assert activity.company_id == company.id
+
+
+def test_create_activity_requires_contact_or_company(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    with pytest.raises(ValueError, match="contact_id or company_id"):
+        create_activity(
+            database_connection,
+            activity_type="note_added",
+            summary="orphan",
+        )
+
+
 def test_status_counts_includes_activities(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
@@ -1673,255 +1728,345 @@ def test_status_counts_includes_activities(
 # -- Tag -----------------------------------------------------------------------
 
 
-def test_create_tag(
+def test_normalize_tag_name_accepts_valid_inputs() -> None:
+    """Lowercase, hyphenated, alphanumeric tags pass through unchanged."""
+    from mailpilot.database import (
+        _normalize_tag_name,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    assert _normalize_tag_name("prospect") == "prospect"
+    assert _normalize_tag_name("hot-lead") == "hot-lead"
+    assert _normalize_tag_name("q4-2025") == "q4-2025"
+
+
+def test_normalize_tag_name_collapses_separators_and_case() -> None:
+    """Whitespace, underscores, and uppercase are normalized; hyphens collapse."""
+    from mailpilot.database import (
+        _normalize_tag_name,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    assert _normalize_tag_name("Hot Lead") == "hot-lead"
+    assert _normalize_tag_name("hot_lead") == "hot-lead"
+    assert _normalize_tag_name("HOT--LEAD") == "hot-lead"
+    assert _normalize_tag_name("  spaced  ") == "spaced"
+    assert _normalize_tag_name("-leading-trailing-") == "leading-trailing"
+
+
+def test_normalize_tag_name_rejects_invalid() -> None:
+    """Names that cannot be normalized to [a-z0-9][a-z0-9-]* raise ValueError."""
+    from mailpilot.database import (
+        _normalize_tag_name,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    with pytest.raises(ValueError, match="invalid tag name"):
+        _normalize_tag_name("")
+    with pytest.raises(ValueError, match="invalid tag name"):
+        _normalize_tag_name("---")
+    with pytest.raises(ValueError, match="invalid tag name"):
+        _normalize_tag_name("hot/lead")
+    with pytest.raises(ValueError, match="invalid tag name"):
+        _normalize_tag_name("hot.lead")
+
+
+def test_create_contact_tag_and_company_tag(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
+    """create_tag accepts contact_id XOR company_id."""
+    company = make_test_company(database_connection)
     contact = make_test_contact(database_connection)
-    tag = make_test_tag(
-        database_connection, entity_type="contact", entity_id=contact.id
+
+    contact_tag = create_tag(
+        database_connection, contact_id=contact.id, name="prospect"
     )
-    assert tag.entity_type == "contact"
-    assert tag.entity_id == contact.id
-    assert tag.name == "prospect"
-    assert tag.id
+    assert contact_tag is not None
+    assert contact_tag.contact_id == contact.id
+    assert contact_tag.company_id is None
+    assert contact_tag.name == "prospect"
+
+    company_tag = create_tag(
+        database_connection, company_id=company.id, name="enterprise"
+    )
+    assert company_tag is not None
+    assert company_tag.company_id == company.id
+    assert company_tag.contact_id is None
+
+
+def test_create_tag_requires_exactly_one_owner(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """contact_id XOR company_id; passing both or neither raises."""
+    with pytest.raises(ValueError, match="exactly one"):
+        create_tag(database_connection, name="x")
+    with pytest.raises(ValueError, match="exactly one"):
+        create_tag(database_connection, contact_id="c1", company_id="co1", name="x")
 
 
 def test_create_tag_normalizes_name(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
+    """create_tag applies _normalize_tag_name."""
     contact = make_test_contact(database_connection)
-    tag = make_test_tag(
-        database_connection,
-        entity_type="contact",
-        entity_id=contact.id,
-        name="  PROSPECT  ",
-    )
-    assert tag.name == "prospect"
+    tag = create_tag(database_connection, contact_id=contact.id, name="Hot Lead")
+    assert tag is not None
+    assert tag.name == "hot-lead"
 
 
-def test_create_tag_idempotent(
+def test_create_tag_idempotent_on_duplicate(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
+    """Duplicate insert returns None thanks to ON CONFLICT DO NOTHING."""
     contact = make_test_contact(database_connection)
-    first = create_tag(
-        database_connection,
-        entity_type="contact",
-        entity_id=contact.id,
-        name="prospect",
-    )
+    first = create_tag(database_connection, contact_id=contact.id, name="prospect")
+    second = create_tag(database_connection, contact_id=contact.id, name="prospect")
     assert first is not None
-    second = create_tag(
-        database_connection,
-        entity_type="contact",
-        entity_id=contact.id,
-        name="prospect",
-    )
     assert second is None
 
 
-def test_create_tag_on_company(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    company = make_test_company(database_connection)
-    tag = make_test_tag(
-        database_connection,
-        entity_type="company",
-        entity_id=company.id,
-        name="logistics",
-    )
-    assert tag.entity_type == "company"
-    assert tag.name == "logistics"
-
-
-def test_delete_tag(
+def test_delete_tag_by_contact(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     contact = make_test_contact(database_connection)
-    make_test_tag(database_connection, entity_type="contact", entity_id=contact.id)
-    deleted = delete_tag(
-        database_connection,
-        entity_type="contact",
-        entity_id=contact.id,
-        name="prospect",
-    )
-    assert deleted is True
+    create_tag(database_connection, contact_id=contact.id, name="cold")
+    assert delete_tag(database_connection, contact_id=contact.id, name="cold") is True
+    assert delete_tag(database_connection, contact_id=contact.id, name="cold") is False
 
 
-def test_delete_tag_not_found(
+def test_list_tags_by_contact(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     contact = make_test_contact(database_connection)
-    deleted = delete_tag(
-        database_connection,
-        entity_type="contact",
-        entity_id=contact.id,
-        name="nonexistent",
-    )
-    assert deleted is False
-
-
-def test_list_tags(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    contact = make_test_contact(database_connection)
-    make_test_tag(
-        database_connection, entity_type="contact", entity_id=contact.id, name="cold"
-    )
-    make_test_tag(
-        database_connection,
-        entity_type="contact",
-        entity_id=contact.id,
-        name="prospect",
-    )
-    tags = list_tags(database_connection, entity_type="contact", entity_id=contact.id)
-    assert len(tags) == 2
-    # Ordered by name
-    assert tags[0].name == "cold"
-    assert tags[1].name == "prospect"
+    create_tag(database_connection, contact_id=contact.id, name="prospect")
+    create_tag(database_connection, contact_id=contact.id, name="cold")
+    tags = list_tags(database_connection, contact_id=contact.id)
+    assert {t.name for t in tags} == {"prospect", "cold"}
 
 
 def test_list_tags_empty(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     contact = make_test_contact(database_connection)
-    tags = list_tags(database_connection, entity_type="contact", entity_id=contact.id)
+    tags = list_tags(database_connection, contact_id=contact.id)
     assert tags == []
 
 
-def test_list_entities_by_tag(
+def test_list_contacts_by_tag_name(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    c1 = make_test_contact(database_connection, email="a@test.com", domain="test.com")
-    c2 = make_test_contact(database_connection, email="b@test.com", domain="test.com")
-    c3 = make_test_contact(database_connection, email="c@test.com", domain="test.com")
-    make_test_tag(
-        database_connection, entity_type="contact", entity_id=c1.id, name="prospect"
-    )
-    make_test_tag(
-        database_connection, entity_type="contact", entity_id=c2.id, name="prospect"
-    )
-    make_test_tag(
-        database_connection, entity_type="contact", entity_id=c3.id, name="client"
-    )
+    from mailpilot.database import list_contacts_by_tag
 
-    ids = list_entities_by_tag(
-        database_connection, entity_type="contact", name="prospect"
-    )
-    assert len(ids) == 2
-    assert c1.id in ids
-    assert c2.id in ids
+    a = make_test_contact(database_connection, email="x1@acme.test", domain="acme.test")
+    b = make_test_contact(database_connection, email="x2@acme.test", domain="acme.test")
+    create_tag(database_connection, contact_id=a.id, name="hot")
+    create_tag(database_connection, contact_id=b.id, name="hot")
+    ids = list_contacts_by_tag(database_connection, name="hot")
+    assert set(ids) == {a.id, b.id}
 
 
-def test_list_entities_by_tag_with_limit(
+def test_list_companies_by_tag_name(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    c1 = make_test_contact(database_connection, email="a@test.com", domain="test.com")
-    c2 = make_test_contact(database_connection, email="b@test.com", domain="test.com")
-    make_test_tag(
-        database_connection, entity_type="contact", entity_id=c1.id, name="prospect"
-    )
-    make_test_tag(
-        database_connection, entity_type="contact", entity_id=c2.id, name="prospect"
-    )
+    from mailpilot.database import list_companies_by_tag
 
-    ids = list_entities_by_tag(
-        database_connection, entity_type="contact", name="prospect", limit=1
-    )
-    assert len(ids) == 1
+    a = make_test_company(database_connection, name="A", domain="a.test")
+    b = make_test_company(database_connection, name="B", domain="b.test")
+    create_tag(database_connection, company_id=a.id, name="enterprise")
+    create_tag(database_connection, company_id=b.id, name="enterprise")
+    ids = list_companies_by_tag(database_connection, name="enterprise")
+    assert set(ids) == {a.id, b.id}
 
 
 def test_search_tags(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     contact = make_test_contact(database_connection)
-    make_test_tag(
-        database_connection,
-        entity_type="contact",
-        entity_id=contact.id,
-        name="prospect",
-    )
-    make_test_tag(
-        database_connection, entity_type="contact", entity_id=contact.id, name="cold"
-    )
+    create_tag(database_connection, contact_id=contact.id, name="prospect")
+    create_tag(database_connection, contact_id=contact.id, name="cold")
 
     results = search_tags(database_connection, name="pro")
     assert len(results) == 1
     assert results[0].name == "prospect"
 
 
-def test_search_tags_with_entity_type(
+def test_search_tags_with_owner(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     contact = make_test_contact(database_connection)
     company = make_test_company(database_connection)
-    make_test_tag(
-        database_connection,
-        entity_type="contact",
-        entity_id=contact.id,
-        name="prospect",
-    )
-    make_test_tag(
-        database_connection,
-        entity_type="company",
-        entity_id=company.id,
-        name="prospect",
-    )
+    create_tag(database_connection, contact_id=contact.id, name="prospect")
+    create_tag(database_connection, company_id=company.id, name="prospect")
 
-    results = search_tags(database_connection, name="prospect", entity_type="contact")
+    results = search_tags(database_connection, name="prospect", owner="contact")
     assert len(results) == 1
-    assert results[0].entity_type == "contact"
+    assert results[0].contact_id == contact.id
 
 
 def test_status_counts_includes_tags(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     contact = make_test_contact(database_connection)
-    make_test_tag(database_connection, entity_type="contact", entity_id=contact.id)
+    make_test_tag(database_connection, contact_id=contact.id)
     counts = get_status_counts(database_connection)
     assert counts["tags"] == 1
+
+
+# -- Atomic helpers ----------------------------------------------------------
+
+
+def test_add_contact_tag_emits_activity_atomically(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """add_contact_tag writes tag + tag_added activity in one transaction."""
+    from mailpilot.database import add_contact_tag
+
+    contact = make_test_contact(database_connection)
+    tag = add_contact_tag(database_connection, contact_id=contact.id, name="prospect")
+    assert tag is not None
+    assert tag.name == "prospect"
+    assert [t.name for t in list_tags(database_connection, contact_id=contact.id)] == [
+        "prospect"
+    ]
+    activities = list_activities(database_connection, contact_id=contact.id)
+    assert len(activities) == 1
+    assert activities[0].type == "tag_added"
+    assert activities[0].summary == "Tagged as prospect"
+
+
+def test_add_contact_tag_returns_none_on_duplicate_no_activity(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Duplicate tag insert returns None and emits no activity."""
+    from mailpilot.database import add_contact_tag
+
+    contact = make_test_contact(database_connection)
+    add_contact_tag(database_connection, contact_id=contact.id, name="prospect")
+    second = add_contact_tag(
+        database_connection, contact_id=contact.id, name="prospect"
+    )
+    assert second is None
+    activities = list_activities(database_connection, contact_id=contact.id)
+    assert len(activities) == 1
+
+
+def test_remove_contact_tag_emits_activity_atomically(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from mailpilot.database import add_contact_tag, remove_contact_tag
+
+    contact = make_test_contact(database_connection)
+    add_contact_tag(database_connection, contact_id=contact.id, name="cold")
+    assert (
+        remove_contact_tag(database_connection, contact_id=contact.id, name="cold")
+        is True
+    )
+    types = [
+        a.type for a in list_activities(database_connection, contact_id=contact.id)
+    ]
+    assert "tag_removed" in types
+
+
+def test_add_company_tag_emits_company_activity(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from mailpilot.database import add_company_tag
+
+    company = make_test_company(database_connection)
+    add_company_tag(database_connection, company_id=company.id, name="enterprise")
+    activities = list_activities(database_connection, company_id=company.id)
+    assert len(activities) == 1
+    assert activities[0].type == "tag_added"
+    assert activities[0].company_id == company.id
+    assert activities[0].contact_id is None
+
+
+def test_remove_company_tag_emits_activity_atomically(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from mailpilot.database import add_company_tag, remove_company_tag
+
+    company = make_test_company(database_connection)
+    add_company_tag(database_connection, company_id=company.id, name="enterprise")
+    assert (
+        remove_company_tag(
+            database_connection, company_id=company.id, name="enterprise"
+        )
+        is True
+    )
+    types = [
+        a.type for a in list_activities(database_connection, company_id=company.id)
+    ]
+    assert "tag_removed" in types
+
+
+def test_add_contact_note_emits_activity_atomically(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from mailpilot.database import add_contact_note
+
+    contact = make_test_contact(database_connection)
+    note = add_contact_note(
+        database_connection, contact_id=contact.id, body="quick note"
+    )
+    notes = list_notes(database_connection, contact_id=contact.id)
+    assert [n.id for n in notes] == [note.id]
+    activities = list_activities(database_connection, contact_id=contact.id)
+    assert len(activities) == 1
+    assert activities[0].type == "note_added"
+
+
+def test_add_company_note_emits_company_activity(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from mailpilot.database import add_company_note
+
+    company = make_test_company(database_connection)
+    add_company_note(database_connection, company_id=company.id, body="ent")
+    activities = list_activities(database_connection, company_id=company.id)
+    assert len(activities) == 1
+    assert activities[0].type == "note_added"
+    assert activities[0].company_id == company.id
 
 
 # -- Note ---------------------------------------------------------------------
 
 
-def test_create_note(
+def test_create_contact_note_and_company_note(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
+    from mailpilot.database import create_note
+
     contact = make_test_contact(database_connection)
-    note = make_test_note(
-        database_connection, entity_type="contact", entity_id=contact.id
+    contact_note = create_note(
+        database_connection, contact_id=contact.id, body="Met at conf"
     )
-    assert note.entity_type == "contact"
-    assert note.entity_id == contact.id
-    assert note.body == "Test note body"
-    assert note.id
+    assert contact_note.contact_id == contact.id
+    assert contact_note.company_id is None
+
+    company = make_test_company(database_connection)
+    company_note = create_note(
+        database_connection, company_id=company.id, body="Tier 1 account"
+    )
+    assert company_note.company_id == company.id
+    assert company_note.contact_id is None
 
 
-def test_create_note_on_company(
+def test_create_note_requires_exactly_one_owner(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    company = make_test_company(database_connection)
-    note = make_test_note(
-        database_connection,
-        entity_type="company",
-        entity_id=company.id,
-        body="Company note",
-    )
-    assert note.entity_type == "company"
-    assert note.body == "Company note"
+    from mailpilot.database import create_note
+
+    with pytest.raises(ValueError, match="exactly one"):
+        create_note(database_connection, body="x")
+    with pytest.raises(ValueError, match="exactly one"):
+        create_note(database_connection, contact_id="c1", company_id="co1", body="x")
 
 
 def test_list_notes(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     contact = make_test_contact(database_connection)
-    make_test_note(
-        database_connection, entity_type="contact", entity_id=contact.id, body="first"
-    )
-    make_test_note(
-        database_connection, entity_type="contact", entity_id=contact.id, body="second"
-    )
-    notes = list_notes(database_connection, entity_type="contact", entity_id=contact.id)
+    make_test_note(database_connection, contact_id=contact.id, body="first")
+    make_test_note(database_connection, contact_id=contact.id, body="second")
+    notes = list_notes(database_connection, contact_id=contact.id)
     assert len(notes) == 2
     # Ordered by created_at DESC. Summary exposes body_preview, not body.
     assert notes[0].body_preview == "second"
@@ -1932,7 +2077,7 @@ def test_list_notes_empty(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     contact = make_test_contact(database_connection)
-    notes = list_notes(database_connection, entity_type="contact", entity_id=contact.id)
+    notes = list_notes(database_connection, contact_id=contact.id)
     assert notes == []
 
 
@@ -1940,15 +2085,9 @@ def test_list_notes_with_limit(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     contact = make_test_contact(database_connection)
-    make_test_note(
-        database_connection, entity_type="contact", entity_id=contact.id, body="first"
-    )
-    make_test_note(
-        database_connection, entity_type="contact", entity_id=contact.id, body="second"
-    )
-    notes = list_notes(
-        database_connection, entity_type="contact", entity_id=contact.id, limit=1
-    )
+    make_test_note(database_connection, contact_id=contact.id, body="first")
+    make_test_note(database_connection, contact_id=contact.id, body="second")
+    notes = list_notes(database_connection, contact_id=contact.id, limit=1)
     assert len(notes) == 1
 
 
@@ -1958,21 +2097,15 @@ def test_list_notes_since(
     from datetime import datetime, timedelta
 
     contact = make_test_contact(database_connection)
-    make_test_note(
-        database_connection, entity_type="contact", entity_id=contact.id, body="old"
-    )
+    make_test_note(database_connection, contact_id=contact.id, body="old")
     database_connection.execute(
         "UPDATE note SET created_at = CURRENT_TIMESTAMP - interval '2 days' "
         "WHERE body = 'old'"
     )
     database_connection.commit()
-    make_test_note(
-        database_connection, entity_type="contact", entity_id=contact.id, body="recent"
-    )
+    make_test_note(database_connection, contact_id=contact.id, body="recent")
     since = (datetime.now(UTC) - timedelta(days=1)).isoformat()
-    results = list_notes(
-        database_connection, entity_type="contact", entity_id=contact.id, since=since
-    )
+    results = list_notes(database_connection, contact_id=contact.id, since=since)
     assert len(results) == 1
     assert results[0].body_preview == "recent"
 
@@ -1981,9 +2114,7 @@ def test_get_note(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     contact = make_test_contact(database_connection)
-    created = make_test_note(
-        database_connection, entity_type="contact", entity_id=contact.id
-    )
+    created = make_test_note(database_connection, contact_id=contact.id)
     found = get_note(database_connection, created.id)
     assert found is not None
     assert found.id == created.id
@@ -2001,7 +2132,7 @@ def test_status_counts_includes_notes(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     contact = make_test_contact(database_connection)
-    make_test_note(database_connection, entity_type="contact", entity_id=contact.id)
+    make_test_note(database_connection, contact_id=contact.id)
     counts = get_status_counts(database_connection)
     assert counts["notes"] == 1
 
@@ -2043,7 +2174,7 @@ def test_list_enrollments_detailed(
     detail = results[0]
     assert detail.contact_email == "alice@example.com"
     assert detail.contact_name == "Alice Smith"
-    assert detail.status == "pending"
+    assert detail.status == "active"
     assert detail.workflow_id == workflow.id
     assert detail.contact_id == contact.id
 
@@ -2059,12 +2190,50 @@ def test_list_enrollments_detailed_status_filter(
     c2 = make_test_contact(database_connection, email="b@example.com")
     create_enrollment(database_connection, workflow.id, c1.id)
     create_enrollment(database_connection, workflow.id, c2.id)
-    update_enrollment(database_connection, workflow.id, c1.id, status="completed")
+    update_enrollment(database_connection, workflow.id, c1.id, status="paused")
     results = list_enrollments_detailed(
-        database_connection, workflow_id=workflow.id, status="completed"
+        database_connection, workflow_id=workflow.id, status="paused"
     )
     assert len(results) == 1
     assert results[0].contact_id == c1.id
+
+
+def test_create_enrollment_defaults_to_active(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Enrollment defaults to 'active' (status collapse, comment #4334976677)."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+
+    enrollment = create_enrollment(
+        database_connection, workflow_id=workflow.id, contact_id=contact.id
+    )
+    assert enrollment is not None
+    assert enrollment.status == "active"
+
+
+def test_update_enrollment_rejects_legacy_statuses(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """`completed`/`failed`/`pending` are no longer valid enrollment statuses."""
+    from mailpilot.database import update_enrollment
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    create_enrollment(
+        database_connection, workflow_id=workflow.id, contact_id=contact.id
+    )
+    for bad in ("pending", "completed", "failed"):
+        with pytest.raises((psycopg.errors.CheckViolation, ValueError)):
+            update_enrollment(
+                database_connection,
+                workflow.id,
+                contact.id,
+                status=bad,
+            )
+        database_connection.rollback()
 
 
 def test_list_enrollments_detailed_limit(
@@ -2680,19 +2849,9 @@ def test_note_list_summary_with_body_preview(
     from mailpilot.models import NoteSummary
 
     contact = make_test_contact(database_connection)
-    make_test_note(
-        database_connection,
-        entity_type="contact",
-        entity_id=contact.id,
-        body="short",
-    )
-    make_test_note(
-        database_connection,
-        entity_type="contact",
-        entity_id=contact.id,
-        body="x" * 200,
-    )
-    notes = list_notes(database_connection, entity_type="contact", entity_id=contact.id)
+    make_test_note(database_connection, contact_id=contact.id, body="short")
+    make_test_note(database_connection, contact_id=contact.id, body="x" * 200)
+    notes = list_notes(database_connection, contact_id=contact.id)
     assert isinstance(notes[0], NoteSummary)
     assert not hasattr(notes[0], "body")
     # Long body truncated to 80 chars + "..." (ordered DESC, long one is first).
@@ -2767,29 +2926,14 @@ def test_list_tags_limit_and_since(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     contact = make_test_contact(database_connection)
-    make_test_tag(
-        database_connection, entity_type="contact", entity_id=contact.id, name="a"
-    )
-    make_test_tag(
-        database_connection, entity_type="contact", entity_id=contact.id, name="b"
-    )
+    make_test_tag(database_connection, contact_id=contact.id, name="a")
+    make_test_tag(database_connection, contact_id=contact.id, name="b")
+    assert len(list_tags(database_connection, contact_id=contact.id, limit=1)) == 1
     assert (
         len(
             list_tags(
                 database_connection,
-                entity_type="contact",
-                entity_id=contact.id,
-                limit=1,
-            )
-        )
-        == 1
-    )
-    assert (
-        len(
-            list_tags(
-                database_connection,
-                entity_type="contact",
-                entity_id=contact.id,
+                contact_id=contact.id,
                 since="9999-01-01T00:00:00",
             )
         )

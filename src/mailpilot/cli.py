@@ -22,9 +22,11 @@ _ACTIVITY_TYPES = [
     "tag_added",
     "tag_removed",
     "status_changed",
-    "workflow_assigned",
-    "workflow_completed",
-    "workflow_failed",
+    "enrollment_added",
+    "enrollment_completed",
+    "enrollment_failed",
+    "enrollment_paused",
+    "enrollment_resumed",
 ]
 
 
@@ -965,7 +967,8 @@ def activity() -> None:
 
 
 @activity.command("create")
-@click.option("--contact-id", required=True, help="Contact ID.")
+@click.option("--contact-id", default=None, help="Contact ID.")
+@click.option("--company-id", default=None, help="Optional company ID.")
 @click.option(
     "--type",
     "activity_type",
@@ -975,15 +978,14 @@ def activity() -> None:
 )
 @click.option("--summary", required=True, help="One-line description.")
 @click.option("--detail", default=None, help="JSON detail payload.")
-@click.option("--company-id", default=None, help="Optional company ID.")
 def activity_create(
-    contact_id: str,
+    contact_id: str | None,
+    company_id: str | None,
     activity_type: str,
     summary: str,
     detail: str | None,
-    company_id: str | None,
 ) -> None:
-    """Create an activity event."""
+    """Create an activity event. At least one of --contact-id / --company-id."""
     from mailpilot.database import (
         create_activity,
         get_company,
@@ -993,20 +995,25 @@ def activity_create(
 
     if not summary.strip():
         output_error("summary cannot be empty", "validation_error")
+    if contact_id is None and company_id is None:
+        output_error(
+            "at least one of --contact-id or --company-id is required",
+            "validation_error",
+        )
     detail_dict: dict[str, object] = json.loads(detail) if detail else {}
     connection = initialize_database(_database_url())
     try:
-        if get_contact(connection, contact_id) is None:
+        if contact_id is not None and get_contact(connection, contact_id) is None:
             output_error(f"contact not found: {contact_id}", "not_found")
         if company_id is not None and get_company(connection, company_id) is None:
             output_error(f"company not found: {company_id}", "not_found")
         created = create_activity(
             connection,
             contact_id=contact_id,
+            company_id=company_id,
             activity_type=activity_type,
             summary=summary,
             detail=detail_dict,
-            company_id=company_id,
         )
         output(created.model_dump(mode="json"))
     finally:
@@ -1072,17 +1079,6 @@ def tag() -> None:
     """Manage tags on contacts and companies."""
 
 
-def _resolve_entity(contact_id: str | None, company_id: str | None) -> tuple[str, str]:
-    """Return (entity_type, entity_id) or call output_error."""
-    if contact_id and company_id:
-        output_error("specify only one of --contact-id or --company-id", "invalid_args")
-    if contact_id:
-        return ("contact", contact_id)
-    if company_id:
-        return ("company", company_id)
-    output_error("one of --contact-id or --company-id is required", "missing_filter")
-
-
 @tag.command("add")
 @click.option("--contact-id", default=None, help="Contact ID.")
 @click.option("--company-id", default=None, help="Company ID.")
@@ -1090,8 +1086,9 @@ def _resolve_entity(contact_id: str | None, company_id: str | None) -> tuple[str
 def tag_add(contact_id: str | None, company_id: str | None, name: str) -> None:
     """Add a tag to a contact or company."""
     from mailpilot.database import (
-        create_activity,
-        create_tag,
+        _normalize_tag_name,  # pyright: ignore[reportPrivateUsage]
+        add_company_tag,
+        add_contact_tag,
         get_company,
         get_contact,
         initialize_database,
@@ -1099,44 +1096,35 @@ def tag_add(contact_id: str | None, company_id: str | None, name: str) -> None:
 
     if not name.strip():
         output_error("tag name cannot be empty", "validation_error")
-    entity_type, entity_id = _resolve_entity(contact_id, company_id)
+    if (contact_id is None) == (company_id is None):
+        output_error(
+            "exactly one of --contact-id or --company-id is required",
+            "validation_error",
+        )
     connection = initialize_database(_database_url())
     try:
-        contact = None
-        if entity_type == "contact":
-            contact = get_contact(connection, entity_id)
-            if contact is None:
-                output_error(
-                    f"contact {entity_id} not found",
-                    "not_found",
-                )
+        if contact_id is not None:
+            if get_contact(connection, contact_id) is None:
+                output_error(f"contact {contact_id} not found", "not_found")
+            try:
+                created = add_contact_tag(connection, contact_id=contact_id, name=name)
+            except ValueError as exc:
+                output_error(str(exc), "validation_error")
+            owner = ("contact", contact_id)
         else:
-            company = get_company(connection, entity_id)
-            if company is None:
-                output_error(
-                    f"company {entity_id} not found",
-                    "not_found",
-                )
-        created = create_tag(
-            connection,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            name=name,
-        )
+            assert company_id is not None
+            if get_company(connection, company_id) is None:
+                output_error(f"company {company_id} not found", "not_found")
+            try:
+                created = add_company_tag(connection, company_id=company_id, name=name)
+            except ValueError as exc:
+                output_error(str(exc), "validation_error")
+            owner = ("company", company_id)
         if created is None:
-            normalized = name.strip().lower()
+            normalized = _normalize_tag_name(name)
             output_error(
-                f"tag '{normalized}' already exists on {entity_type} {entity_id}",
+                f"tag '{normalized}' already exists on {owner[0]} {owner[1]}",
                 "already_exists",
-            )
-        if entity_type == "contact" and contact is not None:
-            create_activity(
-                connection,
-                contact_id=entity_id,
-                activity_type="tag_added",
-                summary=f"Tagged as {created.name}",
-                detail={"tag": created.name},
-                company_id=contact.company_id,
             )
         output(created.model_dump(mode="json"))
     finally:
@@ -1150,45 +1138,49 @@ def tag_add(contact_id: str | None, company_id: str | None, name: str) -> None:
 def tag_remove(contact_id: str | None, company_id: str | None, name: str) -> None:
     """Remove a tag from a contact or company."""
     from mailpilot.database import (
-        create_activity,
-        delete_tag,
+        _normalize_tag_name,  # pyright: ignore[reportPrivateUsage]
         get_company,
         get_contact,
         initialize_database,
+        remove_company_tag,
+        remove_contact_tag,
     )
 
-    entity_type, entity_id = _resolve_entity(contact_id, company_id)
+    if (contact_id is None) == (company_id is None):
+        output_error(
+            "exactly one of --contact-id or --company-id is required",
+            "validation_error",
+        )
     connection = initialize_database(_database_url())
     try:
-        contact = None
-        if entity_type == "contact":
-            contact = get_contact(connection, entity_id)
-            if contact is None:
-                output_error(f"contact {entity_id} not found", "not_found")
-        elif get_company(connection, entity_id) is None:
-            output_error(f"company {entity_id} not found", "not_found")
-        deleted = delete_tag(
-            connection,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            name=name,
-        )
-        normalized = name.strip().lower()
+        if contact_id is not None:
+            if get_contact(connection, contact_id) is None:
+                output_error(f"contact {contact_id} not found", "not_found")
+            try:
+                deleted = remove_contact_tag(
+                    connection, contact_id=contact_id, name=name
+                )
+            except ValueError as exc:
+                output_error(str(exc), "validation_error")
+            owner = ("contact", contact_id)
+        else:
+            assert company_id is not None
+            if get_company(connection, company_id) is None:
+                output_error(f"company {company_id} not found", "not_found")
+            try:
+                deleted = remove_company_tag(
+                    connection, company_id=company_id, name=name
+                )
+            except ValueError as exc:
+                output_error(str(exc), "validation_error")
+            owner = ("company", company_id)
+        normalized = _normalize_tag_name(name)
         if not deleted:
             output_error(
-                f"tag '{normalized}' not found on {entity_type} {entity_id}",
+                f"tag '{normalized}' not found on {owner[0]} {owner[1]}",
                 "not_found",
             )
-        if entity_type == "contact" and contact is not None:
-            create_activity(
-                connection,
-                contact_id=entity_id,
-                activity_type="tag_removed",
-                summary=f"Removed tag {normalized}",
-                detail={"tag": normalized},
-                company_id=contact.company_id,
-            )
-        output({"removed": True, "tag": normalized, "entity_type": entity_type})
+        output({"removed": True, "tag": normalized, "owner_type": owner[0]})
     finally:
         connection.close()
 
@@ -1212,21 +1204,26 @@ def tag_list(
         list_tags,
     )
 
-    entity_type, entity_id = _resolve_entity(contact_id, company_id)
+    if (contact_id is None) == (company_id is None):
+        output_error(
+            "exactly one of --contact-id or --company-id is required",
+            "validation_error",
+        )
     connection = initialize_database(_database_url())
     try:
-        if entity_type == "contact":
-            if get_contact(connection, entity_id) is None:
-                output_error(f"contact {entity_id} not found", "not_found")
-        elif get_company(connection, entity_id) is None:
-            output_error(f"company {entity_id} not found", "not_found")
-        tags = list_tags(
-            connection,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            limit=limit,
-            since=since,
-        )
+        if contact_id is not None:
+            if get_contact(connection, contact_id) is None:
+                output_error(f"contact {contact_id} not found", "not_found")
+            tags = list_tags(
+                connection, contact_id=contact_id, limit=limit, since=since
+            )
+        else:
+            assert company_id is not None
+            if get_company(connection, company_id) is None:
+                output_error(f"company {company_id} not found", "not_found")
+            tags = list_tags(
+                connection, company_id=company_id, limit=limit, since=since
+            )
         output({"tags": [t.model_dump(mode="json") for t in tags]})
     finally:
         connection.close()
@@ -1236,19 +1233,19 @@ def tag_list(
 @click.argument("name")
 @click.option(
     "--type",
-    "entity_type",
+    "owner",
     default=None,
     type=click.Choice(["contact", "company"]),
-    help="Filter by entity type.",
+    help="Filter by owner type.",
 )
 @click.option("--limit", default=100, help="Maximum results.")
-def tag_search(name: str, entity_type: str | None, limit: int) -> None:
+def tag_search(name: str, owner: str | None, limit: int) -> None:
     """Search tags by name."""
     from mailpilot.database import initialize_database, search_tags
 
     connection = initialize_database(_database_url())
     try:
-        tags = search_tags(connection, name=name, entity_type=entity_type, limit=limit)
+        tags = search_tags(connection, name=name, owner=owner, limit=limit)
         output({"tags": [t.model_dump(mode="json") for t in tags]})
     finally:
         connection.close()
@@ -1269,8 +1266,8 @@ def note() -> None:
 def note_add(contact_id: str | None, company_id: str | None, body: str) -> None:
     """Add a note to a contact or company."""
     from mailpilot.database import (
-        create_activity,
-        create_note,
+        add_company_note,
+        add_contact_note,
         get_company,
         get_contact,
         initialize_database,
@@ -1278,39 +1275,22 @@ def note_add(contact_id: str | None, company_id: str | None, body: str) -> None:
 
     if not body.strip():
         output_error("note body cannot be empty", "validation_error")
-    entity_type, entity_id = _resolve_entity(contact_id, company_id)
+    if (contact_id is None) == (company_id is None):
+        output_error(
+            "exactly one of --contact-id or --company-id is required",
+            "validation_error",
+        )
     connection = initialize_database(_database_url())
     try:
-        contact = None
-        if entity_type == "contact":
-            contact = get_contact(connection, entity_id)
-            if contact is None:
-                output_error(
-                    f"contact {entity_id} not found",
-                    "not_found",
-                )
+        if contact_id is not None:
+            if get_contact(connection, contact_id) is None:
+                output_error(f"contact {contact_id} not found", "not_found")
+            created = add_contact_note(connection, contact_id=contact_id, body=body)
         else:
-            company = get_company(connection, entity_id)
-            if company is None:
-                output_error(
-                    f"company {entity_id} not found",
-                    "not_found",
-                )
-        created = create_note(
-            connection,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            body=body,
-        )
-        if entity_type == "contact" and contact is not None:
-            create_activity(
-                connection,
-                contact_id=entity_id,
-                activity_type="note_added",
-                summary="Note added",
-                detail={"note_id": created.id},
-                company_id=contact.company_id,
-            )
+            assert company_id is not None
+            if get_company(connection, company_id) is None:
+                output_error(f"company {company_id} not found", "not_found")
+            created = add_company_note(connection, company_id=company_id, body=body)
         output(created.model_dump(mode="json"))
     finally:
         connection.close()
@@ -1332,21 +1312,26 @@ def note_list(
         list_notes,
     )
 
-    entity_type, entity_id = _resolve_entity(contact_id, company_id)
+    if (contact_id is None) == (company_id is None):
+        output_error(
+            "exactly one of --contact-id or --company-id is required",
+            "validation_error",
+        )
     connection = initialize_database(_database_url())
     try:
-        if entity_type == "contact":
-            if get_contact(connection, entity_id) is None:
-                output_error(f"contact {entity_id} not found", "not_found")
-        elif get_company(connection, entity_id) is None:
-            output_error(f"company {entity_id} not found", "not_found")
-        notes = list_notes(
-            connection,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            limit=limit,
-            since=since,
-        )
+        if contact_id is not None:
+            if get_contact(connection, contact_id) is None:
+                output_error(f"contact {contact_id} not found", "not_found")
+            notes = list_notes(
+                connection, contact_id=contact_id, limit=limit, since=since
+            )
+        else:
+            assert company_id is not None
+            if get_company(connection, company_id) is None:
+                output_error(f"company {company_id} not found", "not_found")
+            notes = list_notes(
+                connection, company_id=company_id, limit=limit, since=since
+            )
         output({"notes": [n.model_dump(mode="json") for n in notes]})
     finally:
         connection.close()
@@ -1709,13 +1694,11 @@ def enrollment_add(workflow_id: str, contact_id: str) -> None:
             create_activity(
                 connection,
                 contact_id=contact_id,
-                activity_type="workflow_assigned",
+                activity_type="enrollment_added",
                 summary=f"Assigned to {workflow.name}",
-                detail={
-                    "workflow_id": workflow_id,
-                    "workflow_name": workflow.name,
-                },
+                detail={"workflow_name": workflow.name},
                 company_id=contact.company_id,
+                workflow_id=workflow_id,
             )
             output(created.model_dump(mode="json"))
             return
@@ -1761,10 +1744,16 @@ def enrollment_run(workflow_id: str, contact_id: str) -> None:
         contact = get_contact(connection, contact_id)
         if contact is None:
             output_error(f"contact not found: {contact_id}", "not_found")
-        if get_enrollment(connection, workflow_id, contact.id) is None:
+        enrollment = get_enrollment(connection, workflow_id, contact.id)
+        if enrollment is None:
             output_error(
                 f"contact {contact_id} is not enrolled in workflow {workflow_id}",
                 "not_found",
+            )
+        if enrollment.status != "active":
+            output_error(
+                f"enrollment is not active (status={enrollment.status})",
+                "invalid_state",
             )
         email = None
         if wf.type == "inbound":
@@ -1843,7 +1832,7 @@ def enrollment_view(workflow_id: str, contact_id: str) -> None:
 @click.option(
     "--status",
     default=None,
-    type=click.Choice(["pending", "active", "completed", "failed"]),
+    type=click.Choice(["active", "paused"]),
     help="Filter by enrollment status.",
 )
 @click.option("--limit", default=100, help="Maximum results.")
@@ -1888,38 +1877,50 @@ def enrollment_list(
 @click.option(
     "--status",
     required=True,
-    type=click.Choice(["pending", "active", "completed", "failed"]),
-    help="New enrollment status.",
+    type=click.Choice(["active", "paused"]),
+    help="New enrollment status (active or paused).",
 )
 @click.option("--reason", default=None, help="Status reason.")
 def enrollment_update(
     workflow_id: str, contact_id: str, status: str, reason: str | None
 ) -> None:
-    """Update enrollment status and reason."""
+    """Update enrollment operational status (active or paused).
+
+    Outcomes (completed, failed) are recorded as activity by the agent
+    via record_enrollment_outcome -- not via this command.
+    """
     from mailpilot.database import (
         create_activity,
         get_contact,
+        get_enrollment,
         initialize_database,
         update_enrollment,
     )
 
     connection = initialize_database(_database_url())
     try:
+        before = get_enrollment(connection, workflow_id, contact_id)
+        if before is None:
+            output_error("enrollment not found", "not_found")
         fields: dict[str, object] = {"status": status}
         if reason is not None:
             fields["reason"] = reason
         updated = update_enrollment(connection, workflow_id, contact_id, **fields)
         if updated is None:
             output_error("enrollment not found", "not_found")
-        if status in ("completed", "failed"):
+        if before.status != status:
             contact = get_contact(connection, contact_id)
+            activity_type = (
+                "enrollment_paused" if status == "paused" else "enrollment_resumed"
+            )
             create_activity(
                 connection,
                 contact_id=contact_id,
-                activity_type=f"workflow_{status}",
-                summary=reason or f"Workflow {status}",
-                detail={"workflow_id": workflow_id, "reason": reason or ""},
+                activity_type=activity_type,
+                summary=reason or f"Enrollment {status}",
+                detail={"reason": reason or ""},
                 company_id=contact.company_id if contact is not None else None,
+                workflow_id=workflow_id,
             )
         output(updated.model_dump(mode="json"))
     finally:

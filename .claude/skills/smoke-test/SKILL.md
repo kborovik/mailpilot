@@ -10,7 +10,7 @@ description: End-to-end MailPilot smoke test against real Gmail (outbound@lab5.c
 Two scenarios share a single Phase 0 setup and a single `mailpilot run` loop. The outbound workflow created in Scenario A stays active through Scenario B, so the test exercises real concurrent multi-workflow, multi-account operation. The agent-to-agent reply loop is prevented by two structural properties, not by isolation:
 
 - Distinct subjects per scenario, so each Gmail thread is owned by exactly one workflow type (Scenario A's thread routes via `thread_match` to the outbound workflow; Scenario B's fresh thread routes via classification to the inbound workflow).
-- Enrollments terminating with `update_enrollment_status`, so the agent stops replying once a scenario reaches its outcome.
+- Enrollments terminating with `record_enrollment_outcome`, so the agent stops replying once a scenario reaches its outcome.
 
 | Scenario | Active workflows                       | Trigger                                  | Verifies                                                                                                        |
 | -------- | -------------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
@@ -33,7 +33,7 @@ Default: run **both** scenarios in sequence. `make clean` runs **only once**, at
 
 - **Test start ISO timestamp.** Capture before each scenario; reuse for `--since` filters and Logfire time windows.
 - **Polling.** When waiting for sync, routing, or agent results: poll up to **12 attempts, 5 seconds apart (~60s total)**. Do not call `mailpilot account sync` directly -- the background `mailpilot run` loop owns sync.
-- **CLI parsing.** All commands use `uv run mailpilot`. Parse the JSON output of every command and extract IDs for the next step.
+- **CLI parsing.** All commands use `uv run mailpilot`. Parse the JSON output of every command and extract IDs for the next step. Do not capture into a shell variable and re-emit with `echo "$VAR" | python3 -c ...` -- zsh's built-in `echo` interprets backslash escapes in the JSON (e.g. converts the literal two-char `\n` inside `body_text` into a real newline) and the resulting stream is no longer valid strict JSON. Either pipe `mailpilot ... | python3 -c ...` directly, or use `printf '%s' "$VAR"` to feed a captured value verbatim.
 - **ASCII only.** No emojis. Use `->`, `--`, plain pipes.
 
 ## Prerequisites
@@ -95,7 +95,7 @@ mailpilot workflow create \
   --type outbound \
   --account-id <OUTBOUND_ACCOUNT_ID> \
   --objective "Send a single email about <TOPIC_A> and mark the enrollment completed or failed based on the reply" \
-  --instructions "You are a sales rep for Lab5. Send ONE email to the contact about <TOPIC_A>. Subject MUST be exactly '<SUBJECT_A>'. Body MUST use Markdown (greeting, 2-3 sentence paragraph, a 3-row 2-column table). When you receive a reply, do not send another email -- read the reply and call update_enrollment_status with status='completed' if the reply expresses interest or status='failed' if it declines, then stop. Do not call disable_contact -- this is per-workflow outcome tracking, not a global contact block. Do not create follow-up tasks."
+  --instructions "You are a sales rep for Lab5. Send ONE email to the contact about <TOPIC_A>. Subject MUST be exactly '<SUBJECT_A>'. Body MUST use Markdown (greeting, 2-3 sentence paragraph, a 3-row 2-column table). When you receive a reply, do not send another email -- read the reply and call record_enrollment_outcome with status='completed' if the reply expresses interest or status='failed' if it declines, then stop. Do not call disable_contact -- this is per-workflow outcome tracking, not a global contact block. Do not create follow-up tasks."
 ```
 
 Activate it if creation does not auto-activate:
@@ -136,7 +136,7 @@ mailpilot enrollment run --workflow-id <OUTBOUND_WORKFLOW_ID> --contact-id <INBO
 - `enrollment run` output: `"status": "completed"` and `"tool_calls" >= 1`.
 - `mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound` shows the outbound email with `subject == SUBJECT_A`.
 - The email's `body_text` contains `|` (table) and either `**` or `#` (Markdown).
-- `mailpilot enrollment list --workflow-id <OUTBOUND_WORKFLOW_ID>` shows enrollment status `active` or `completed`.
+- `mailpilot enrollment list --workflow-id <OUTBOUND_WORKFLOW_ID>` shows enrollment status `active`. Per ADR-08 `enrollment.status` is operational only (`active` / `paused`); the agent never mutates it directly. The send-completion outcome lives in the activity timeline (verified in A8), not on the enrollment row.
 
 Save `OUTBOUND_EMAIL_ID`.
 
@@ -169,7 +169,7 @@ mailpilot email view <INBOUND_SIDE_EMAIL_ID>
 
 Claude Code sends the reply directly via CLI -- no inbound agent is involved at this point because no inbound workflow has been created yet. The reply lands in the outbound mailbox, where it will be picked up by `thread_match` and handed to the outbound agent for terminal processing.
 
-Choose reply content that gives the outbound agent a clear terminal signal so it marks the enrollment outcome and stops. Phrase the decline as "this opportunity is not a fit for our current priorities" rather than "remove us from your list" -- the latter steers the agent toward `disable_contact` (a global contact block) when we want it to call `update_enrollment_status` (the per-workflow outcome). Recommended template:
+Choose reply content that gives the outbound agent a clear terminal signal so it marks the enrollment outcome and stops. Phrase the decline as "this opportunity is not a fit for our current priorities" rather than "remove us from your list" -- the latter steers the agent toward `disable_contact` (a global contact block) when we want it to call `record_enrollment_outcome` (the per-workflow outcome). Recommended template:
 
 ```
 mailpilot email reply \
@@ -213,7 +213,7 @@ Wait for a task with `email_id` set to the routed reply and `status == "complete
 **Gate A7:**
 
 - Task exists with `email_id == <routed reply id>` and `status == "completed"`.
-- `mailpilot enrollment list --workflow-id <OUTBOUND_WORKFLOW_ID>` shows enrollment status is `completed` or `failed` (terminal, agent-driven).
+- `mailpilot enrollment list --workflow-id <OUTBOUND_WORKFLOW_ID>` still shows status `active` -- by design (ADR-08, `enrollment.status` is operational only). The terminal outcome is recorded as an `enrollment_completed` or `enrollment_failed` activity row, verified in A8.
 - **No additional outbound emails were sent.** Re-run `mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_A>` and confirm only the original outbound from A3 is present. If the count > 1, the agent kept replying despite the decline signal -- record this as a defect for the report.
 
 **On failure:** If the task was never created, check that A6's email has `workflow_id` set and the run loop is alive. If the task is `failed`, `mailpilot task view <TASK_ID>` for the reason.
@@ -226,22 +226,22 @@ The runtime paths emit `activity` rows automatically (no manual `activity create
 mailpilot activity list --contact-id <INBOUND_CONTACT_ID> --since <TEST_START_A>
 ```
 
-**Gate A8 (activity wiring):**
+**Gate A8 (activity wiring):** activity types follow the `enrollment_*` vocabulary defined in ADR-08.
 
-- `workflow_assigned` activity present with `detail.workflow_id == OUTBOUND_WORKFLOW_ID` (emitted by `enrollment add`).
+- `enrollment_added` activity present with `detail.workflow_id == OUTBOUND_WORKFLOW_ID` (emitted by `enrollment add`).
 - `email_sent` activity present with `summary == SUBJECT_A` (emitted by `email_ops.send_email` when the outbound agent sent in A3).
 - `email_received` activity present with the operator-reply subject (emitted by sync's `_store_inbound_message` when the reply landed in the outbound mailbox in A6).
-- Exactly one of `workflow_completed` or `workflow_failed` present (emitted by `agent.tools.update_enrollment_status` in A7); summary equals the agent's `reason`.
+- Exactly one of `enrollment_completed` or `enrollment_failed` present (emitted by `agent.tools.record_enrollment_outcome` in A7); summary equals the agent's `reason`.
 - No `tag_added` / `note_added` rows from this scenario (we did not run those CLI commands).
 
-If any expected type is missing, the runtime wiring (issue #46) regressed for that path.
+If any expected type is missing, the runtime activity wiring regressed for that path.
 
 ### Logfire review for Scenario A
 
 Do this review now, before starting Scenario B, so the time window cleanly bounds A's spans. Use `/logfire:debug` with project=`mailpilot` and time window `[TEST_START_A, now]`. Spans to verify:
 
-- `agent.invoke` -- exactly **2** invocations (A3 send + A7 reply handling). More than 2 means the agent kept replying (loop regression).
-- `running tool` -- in A3 expect `send_email` plus optional context-gathering reads (`read_contact`, `read_company`); `update_enrollment_status` is **not** expected here (it fires after a reply, not on initial send). In A7 expect `update_enrollment_status` and **no** `send_email` or `reply_email`.
+- `agent.invoke` -- exactly **2** invocations across all processes (A3 send invoked by foreground `enrollment run`, A7 reply handling drained by the background `mailpilot run` loop). The bg run-loop's stdout will only show the A7 invocation -- the A3 invocation lives in the fg `enrollment run` process. Logfire (or any process-agnostic trace store) shows both. More than 2 total means the agent kept replying (loop regression).
+- `running tool` -- in A3 expect `send_email` plus optional context-gathering reads (`read_contact`, `read_company`); `record_enrollment_outcome` is **not** expected here (it fires after a reply, not on initial send). In A7 expect `record_enrollment_outcome` and **no** `send_email` or `reply_email`.
 - `routing.route_email` -- the reply (A6) should show `route_method=thread_match` and `workflow_id == OUTBOUND_WORKFLOW_ID`. The inbound-side email from A4 should show `route_method=skipped_no_workflows` (no inbound workflow at the time).
 - `gmail.send_message` -- 2 calls total (A3 by agent + A5 by operator).
 - Any `is_exception=true` or `level=warn` spans -- record them.
@@ -270,7 +270,7 @@ mailpilot workflow create \
   --type inbound \
   --account-id <INBOUND_ACCOUNT_ID> \
   --objective "Answer product questions about Lab5 services" \
-  --instructions "You are a customer service rep for Lab5. Reply briefly to product questions about Lab5's services. Body MUST use Markdown (greeting, 2-3 sentence response, a 2-row 2-column table of services or next steps). Subject MUST preserve the incoming thread subject. After replying, call update_enrollment_status with status='completed'. Do not create follow-up tasks."
+  --instructions "You are a customer service rep for Lab5. Reply briefly to product questions about Lab5's services. Body MUST use Markdown (greeting, 2-3 sentence response, a 2-row 2-column table of services or next steps). Subject MUST preserve the incoming thread subject. After replying, call record_enrollment_outcome with status='completed'. Do not create follow-up tasks."
 ```
 
 Activate if needed:
@@ -344,7 +344,7 @@ Wait for a task with `email_id == ROUTED_EMAIL_ID` and `status == "completed"`.
 - `mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>` returns at least 1 reply.
 - The reply's `gmail_thread_id` matches the inbound side's thread of the routed email (in-thread via `reply_email`).
 - The reply's `body_text` contains `|` (Markdown table preserved).
-- `mailpilot enrollment list --workflow-id <INBOUND_WORKFLOW_ID>` shows enrollment status `completed`.
+- `mailpilot enrollment list --workflow-id <INBOUND_WORKFLOW_ID>` still shows status `active` -- by design (ADR-08, `enrollment.status` is operational only). The terminal outcome is recorded as an `enrollment_completed` activity row, verified in B7.
 
 Save `INBOUND_REPLY_EMAIL_ID`.
 
@@ -365,7 +365,7 @@ Match by `SUBJECT_B` (likely with a `Re:` prefix on Gmail's side).
 - Email present in outbound account's inbound emails.
 - `is_routed == true`.
 - `workflow_id == null` -- the outbound workflow exists and is active, but it does not own B's thread (no `thread_match`) and outbound workflows do not classify, so the reply correctly lands with `route_method=skipped_no_workflows`.
-- **No additional inbound replies.** Re-run `mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>` and confirm only the single reply from B5 exists. More than one means the inbound agent kept replying despite the terminal `update_enrollment_status` call -- record as a defect.
+- **No additional inbound replies.** Re-run `mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>` and confirm only the single reply from B5 exists. More than one means the inbound agent kept replying despite the terminal `record_enrollment_outcome` call -- record as a defect.
 - **Outbound workflow stayed quiet (concurrent-workflow check).** Re-run `mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>` and confirm zero new outbound sends. Any non-zero count means the still-active outbound workflow reacted to B's traffic -- record as a defect.
 
 ### B7. Verify the CRM activity timeline
@@ -376,14 +376,14 @@ Read the outbound contact's timeline (this is the contact whose enrollment was d
 mailpilot activity list --contact-id <OUTBOUND_CONTACT_ID> --since <TEST_START_B>
 ```
 
-**Gate B7 (activity wiring):**
+**Gate B7 (activity wiring):** activity types follow the `enrollment_*` vocabulary defined in ADR-08.
 
-- `workflow_assigned` activity present with `detail.workflow_id == INBOUND_WORKFLOW_ID` (emitted by `enrollment add` in B1).
+- `enrollment_added` activity present with `detail.workflow_id == INBOUND_WORKFLOW_ID` (emitted by `enrollment add` in B1).
 - `email_received` activity present with `summary == SUBJECT_B` (emitted by sync's `_store_inbound_message` when the trigger arrived in B4 on the inbound mailbox).
 - `email_sent` activity present from the agent reply in B5 (subject begins with `Re:`).
-- `workflow_completed` activity present (emitted by `agent.tools.update_enrollment_status` after B5).
+- `enrollment_completed` activity present (emitted by `agent.tools.record_enrollment_outcome` after B5).
 
-Also re-read the inbound contact's timeline from Scenario A and confirm no new `email_*` rows appeared during Scenario B (the outbound workflow stayed quiet). Any new entries here mirror the existing "outbound workflow stayed quiet" check in Gate B6 from the activity-table side.
+Note: re-reading the inbound contact's timeline from Scenario A is **not** a useful concurrent-quiet check. The inbound contact (recipient of A's outbound mail and counterparty for B's traffic on the outbound mailbox) will naturally accumulate `email_sent` / `email_received` rows during B because B's trigger and the agent's round-tripped reply both involve that contact. The authoritative concurrent-quiet check is Gate B6's "0 new outbound sends from the outbound account" assertion -- that is what proves the outbound workflow did not act.
 
 ### B8. Stop the sync loop
 
@@ -398,7 +398,7 @@ Time window `[TEST_START_B, now]`. Spans to verify:
 - `agent.invoke` -- exactly **1** invocation (B5). More than 1 means either the inbound agent re-fired or the outbound workflow reacted to B's traffic.
 - `routing.route_email` -- the inbound-side email (B4) should be `route_method=classified`. The outbound-side reply (B6) should be `route_method=skipped_no_workflows`.
 - `classify_email` -- 1 invocation (B4). Check `result` matches `INBOUND_WORKFLOW_ID`.
-- `running tool` (B5) -- expect `reply_email` and `update_enrollment_status`.
+- `running tool` (B5) -- expect `reply_email` and `record_enrollment_outcome`.
 - Any `is_exception=true` or `level=warn` spans -- record them.
 
 ---
@@ -504,7 +504,7 @@ Write findings directly into the report. Do not file external tickets unless the
 
 1. **CLI usability** -- commands that needed awkward sequencing or workarounds; missing fields in JSON output; error messages that did not point at the cause.
 2. **Logfire observability** -- missing spans, missing attributes on existing spans, noisy span families (quantify with the volume query), broken parent-child causality, agent token/cost visibility.
-3. **Agent behavior** -- did the agents follow instructions (subject, brevity, no extra tool calls)? Was `agent_reasoning` useful? Did `update_enrollment_status` get called when expected? In Scenario A, did the agent hold the line on "do not reply again"?
+3. **Agent behavior** -- did the agents follow instructions (subject, brevity, no extra tool calls)? Was `agent_reasoning` useful? Did `record_enrollment_outcome` get called when expected? In Scenario A, did the agent hold the line on "do not reply again"?
 4. **Concurrent workflow safety** -- with both workflows active during Scenario B, did the outbound workflow stay quiet (zero new sends, no `agent.invoke` outside Scenario A's window)? Did the inbound workflow correctly leave A's lingering thread alone? Excess `agent.invoke` spans here are the high-priority signal from this run, since they would indicate that two simultaneously active workflows can interfere with each other.
 5. **Other deficiencies** -- timing, race conditions, data integrity, performance.
 

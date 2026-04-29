@@ -779,8 +779,9 @@ def _store_inbound_message(  # noqa: PLR0913
         contact_id=contact.id,
         activity_type="email_received",
         summary=email.subject,
-        detail={"email_id": email.id, "subject": email.subject},
+        detail={"subject": email.subject},
         company_id=contact.company_id,
+        email_id=email.id,
     )
     sync_messages_stored.add(
         1,

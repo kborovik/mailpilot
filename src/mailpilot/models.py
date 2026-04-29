@@ -126,15 +126,21 @@ class WorkflowSummary(BaseModel):
     created_at: datetime
 
 
-EnrollmentStatus = Literal["pending", "active", "completed", "failed"]
+EnrollmentStatus = Literal["active", "paused"]
 
 
 class Enrollment(BaseModel):
-    """A contact's participation in a workflow with lifecycle outcome."""
+    """A contact's binding to a workflow.
+
+    Status is operational state only -- ``active`` (agent considers this
+    contact when the workflow runs) or ``paused`` (operator/agent has
+    suspended). Outcomes (completed/failed) live in the activity timeline,
+    not in this row.
+    """
 
     workflow_id: str
     contact_id: str
-    status: EnrollmentStatus = "pending"
+    status: EnrollmentStatus = "active"
     reason: str = ""
     created_at: datetime
     updated_at: datetime
@@ -149,6 +155,29 @@ class EnrollmentSummary(BaseModel):
     contact_name: str
     status: EnrollmentStatus
     updated_at: datetime
+
+
+EnrollmentOutcome = Literal["completed", "failed"]
+
+
+class EnrollmentWithOutcome(BaseModel):
+    """Enrollment plus the latest outcome activity, if any.
+
+    Outcomes (`completed` / `failed`) are timeline-only per ADR-08 -- they do
+    not live on the enrollment row. This composite carries the most recent
+    `enrollment_completed` / `enrollment_failed` activity so the agent can
+    coordinate across contacts in a single read.
+    """
+
+    workflow_id: str
+    contact_id: str
+    status: EnrollmentStatus
+    reason: str
+    created_at: datetime
+    updated_at: datetime
+    latest_outcome: EnrollmentOutcome | None = None
+    latest_outcome_reason: str | None = None
+    latest_outcome_at: datetime | None = None
 
 
 EmailDirection = Literal["inbound", "outbound"]
@@ -232,18 +261,30 @@ ActivityType = Literal[
     "tag_added",
     "tag_removed",
     "status_changed",
-    "workflow_assigned",
-    "workflow_completed",
-    "workflow_failed",
+    "enrollment_added",
+    "enrollment_completed",
+    "enrollment_failed",
+    "enrollment_paused",
+    "enrollment_resumed",
 ]
 
 
 class Activity(BaseModel):
-    """Chronological event in a contact's relationship timeline."""
+    """Chronological event in a contact or company timeline.
+
+    Either ``contact_id`` or ``company_id`` must be set (or both, for
+    contact events that should also surface in the company timeline).
+    Structured FK columns (``email_id``, ``workflow_id``, ``task_id``)
+    let reports join activity to source records without parsing
+    ``detail`` JSON.
+    """
 
     id: str
-    contact_id: str
+    contact_id: str | None = None
     company_id: str | None = None
+    email_id: str | None = None
+    workflow_id: str | None = None
+    task_id: str | None = None
     type: ActivityType
     summary: str = ""
     detail: dict[str, object] = {}
@@ -254,32 +295,37 @@ class ActivitySummary(BaseModel):
     """List-view projection of `Activity`."""
 
     id: str
-    contact_id: str
+    contact_id: str | None
     company_id: str | None
     type: ActivityType
     summary: str
     created_at: datetime
 
 
-EntityType = Literal["contact", "company"]
-
-
 class Tag(BaseModel):
-    """Flexible label on a contact or company for segmentation."""
+    """Flexible label on a contact or company for segmentation.
+
+    Exactly one of ``contact_id`` or ``company_id`` is set (XOR enforced
+    at the schema level).
+    """
 
     id: str
-    entity_type: EntityType
-    entity_id: str
+    contact_id: str | None = None
+    company_id: str | None = None
     name: str
     created_at: datetime
 
 
 class Note(BaseModel):
-    """Freeform text annotation on a contact or company."""
+    """Freeform text annotation on a contact or company.
+
+    Exactly one of ``contact_id`` or ``company_id`` is set (XOR enforced
+    at the schema level).
+    """
 
     id: str
-    entity_type: EntityType
-    entity_id: str
+    contact_id: str | None = None
+    company_id: str | None = None
     body: str
     created_at: datetime
 
@@ -288,8 +334,8 @@ class NoteSummary(BaseModel):
     """List-view projection of `Note` with truncated body preview."""
 
     id: str
-    entity_type: EntityType
-    entity_id: str
+    contact_id: str | None
+    company_id: str | None
     body_preview: str
     created_at: datetime
 

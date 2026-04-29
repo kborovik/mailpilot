@@ -73,22 +73,6 @@ class ContactMissingError(EmailOpsError):
     code = "not_found"
 
 
-def _activate_enrollment_if_pending(
-    connection: psycopg.Connection[dict[str, Any]],
-    workflow_id: str,
-    contact_id: str,
-) -> None:
-    enrollment = database.get_enrollment(connection, workflow_id, contact_id)
-    if enrollment is not None and enrollment.status == "pending":
-        database.update_enrollment(
-            connection,
-            workflow_id,
-            contact_id,
-            status="active",
-            reason="email sent",
-        )
-
-
 def _emit_email_sent_activity(
     connection: psycopg.Connection[dict[str, Any]],
     contact: Contact,
@@ -100,12 +84,10 @@ def _emit_email_sent_activity(
         contact_id=contact.id,
         activity_type="email_sent",
         summary=email.subject,
-        detail={
-            "email_id": email.id,
-            "subject": email.subject,
-            "workflow_id": workflow_id,
-        },
+        detail={"subject": email.subject},
         company_id=contact.company_id,
+        email_id=email.id,
+        workflow_id=workflow_id,
     )
 
 
@@ -128,8 +110,6 @@ def send_email(  # noqa: PLR0913
     contact-status and 30-day cold-outbound cooldown guards. The cooldown
     query is workflow-scoped, so it runs only when ``workflow_id`` is set
     (ad-hoc CLI sends without a workflow have no cooldown context).
-    Activates a pending enrollment when both ``workflow_id`` and a
-    resolved contact are present.
 
     Raises:
         ContactDisabledError: contact is bounced/unsubscribed.
@@ -172,9 +152,6 @@ def send_email(  # noqa: PLR0913
     if contact is not None:
         _emit_email_sent_activity(connection, contact, email, workflow_id)
 
-    if workflow_id is not None and contact_id is not None:
-        _activate_enrollment_if_pending(connection, workflow_id, contact_id)
-
     return email
 
 
@@ -194,8 +171,7 @@ def reply_email(  # noqa: PLR0913
 
     Auto-derives recipient (contact.email), subject ("Re: " prefixed
     unless already prefixed), thread_id, and In-Reply-To from the
-    original. No cooldown -- replies are always allowed. Activates a
-    matching pending enrollment when ``workflow_id`` is set.
+    original. No cooldown -- replies are always allowed.
 
     Raises:
         OriginalNotFoundError: ``email_id`` does not exist.
@@ -241,8 +217,5 @@ def reply_email(  # noqa: PLR0913
     )
 
     _emit_email_sent_activity(connection, contact, email, workflow_id)
-
-    if workflow_id is not None:
-        _activate_enrollment_if_pending(connection, workflow_id, contact.id)
 
     return email

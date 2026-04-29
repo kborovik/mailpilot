@@ -11,6 +11,7 @@ import psycopg
 from mailpilot.models import (
     Contact,
     Email,
+    Enrollment,
     Task,
     Workflow,
 )
@@ -68,6 +69,18 @@ def _make_task(**overrides: Any) -> Task:
     return Task(**{**defaults, **overrides})
 
 
+def _make_enrollment(**overrides: Any) -> Enrollment:
+    defaults: dict[str, Any] = {
+        "workflow_id": _WORKFLOW_ID,
+        "contact_id": _CONTACT_ID,
+        "status": "active",
+        "reason": "",
+        "created_at": _NOW,
+        "updated_at": _NOW,
+    }
+    return Enrollment(**{**defaults, **overrides})
+
+
 def _make_email(**overrides: Any) -> Email:
     defaults: dict[str, Any] = {
         "id": _EMAIL_ID,
@@ -98,11 +111,13 @@ def test_execute_task_success(
     task = _make_task()
     workflow = _make_workflow()
     contact = _make_contact()
+    enrollment = _make_enrollment()
 
     agent_result = {"tool_calls": 2, "reasoning": "Sent follow-up."}
     with (
         patch("mailpilot.run.get_workflow", return_value=workflow),
         patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
         patch(
             "mailpilot.run.invoke_workflow_agent",
             return_value=agent_result,
@@ -178,7 +193,37 @@ def test_execute_task_disabled_contact(
     )
 
 
-def test_execute_task_lock_held(
+def test_execute_task_paused_enrollment(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings()
+    task = _make_task()
+    workflow = _make_workflow()
+    contact = _make_contact()
+    enrollment = _make_enrollment(status="paused", reason="operator hold")
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch("mailpilot.run.invoke_workflow_agent") as mock_invoke,
+        patch("mailpilot.run.complete_task") as mock_complete,
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_invoke.assert_not_called()
+    mock_complete.assert_called_once_with(
+        database_connection,
+        _TASK_ID,
+        status="cancelled",
+        result={"reason": "enrollment paused"},
+    )
+
+
+def test_execute_task_missing_enrollment(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     from conftest import make_test_settings
@@ -192,6 +237,37 @@ def test_execute_task_lock_held(
     with (
         patch("mailpilot.run.get_workflow", return_value=workflow),
         patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=None),
+        patch("mailpilot.run.invoke_workflow_agent") as mock_invoke,
+        patch("mailpilot.run.complete_task") as mock_complete,
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_invoke.assert_not_called()
+    mock_complete.assert_called_once_with(
+        database_connection,
+        _TASK_ID,
+        status="cancelled",
+        result={"reason": "enrollment not found"},
+    )
+
+
+def test_execute_task_lock_held(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings()
+    task = _make_task()
+    workflow = _make_workflow()
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
         patch("mailpilot.run.invoke_workflow_agent", return_value=None),
         patch("mailpilot.run.complete_task") as mock_complete,
     ):
@@ -210,10 +286,12 @@ def test_execute_task_agent_error(
     task = _make_task()
     workflow = _make_workflow()
     contact = _make_contact()
+    enrollment = _make_enrollment()
 
     with (
         patch("mailpilot.run.get_workflow", return_value=workflow),
         patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
         patch(
             "mailpilot.run.invoke_workflow_agent",
             side_effect=RuntimeError("LLM error"),
@@ -241,10 +319,12 @@ def test_execute_task_with_email(
     task = _make_task(email_id=_EMAIL_ID)
     workflow = _make_workflow()
     contact = _make_contact()
+    enrollment = _make_enrollment()
 
     with (
         patch("mailpilot.run.get_workflow", return_value=workflow),
         patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
         patch("mailpilot.run.get_email", return_value=email),
         patch(
             "mailpilot.run.invoke_workflow_agent",

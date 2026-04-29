@@ -320,9 +320,9 @@ def _ensure_enrollment(
 ) -> None:
     """Create an enrollment entry if not already present.
 
-    Emits a ``workflow_assigned`` activity only on the initial insert --
-    ``create_enrollment`` returns ``None`` on ON CONFLICT so re-routes in
-    the same thread do not duplicate the timeline entry.
+    Emits an ``enrollment_added`` activity only on the initial insert --
+    ``create_enrollment`` returns ``None`` on ON CONFLICT so re-routes
+    in the same thread do not duplicate the timeline entry.
     """
     enrollment = create_enrollment(connection, workflow_id, contact_id)
     if enrollment is None:
@@ -333,8 +333,9 @@ def _ensure_enrollment(
     create_activity(
         connection,
         contact_id=contact_id,
-        activity_type="workflow_assigned",
+        activity_type="enrollment_added",
         summary=f"Assigned to {workflow_name or 'workflow'}",
-        detail={"workflow_id": workflow_id, "workflow_name": workflow_name},
+        detail={"workflow_name": workflow_name},
         company_id=contact.company_id if contact is not None else None,
+        workflow_id=workflow_id,
     )
