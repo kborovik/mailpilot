@@ -192,7 +192,7 @@ def make_notification_callback(
     """
 
     def callback(message: Any) -> None:
-        with logfire.span("pubsub.notification"):
+        with logfire.span("pubsub.notification", _level="debug"):
             try:
                 # Message.data is already-decoded raw bytes from the pubsub
                 # client; re-decoding raises binascii.Error on real Gmail
