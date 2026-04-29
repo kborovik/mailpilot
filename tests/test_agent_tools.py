@@ -546,6 +546,89 @@ def test_list_enrollments_empty(
     assert result == []
 
 
+def test_list_enrollments_includes_latest_outcome(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Each enrollment row carries the latest enrollment_completed/failed
+    outcome so the agent can coordinate across contacts (skip person B if
+    person A at the same company already finished the objective)."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+
+    completed_contact = make_test_contact(database_connection, email="done@example.com")
+    failed_contact = make_test_contact(database_connection, email="failed@example.com")
+    pending_contact = make_test_contact(database_connection, email="open@example.com")
+    create_enrollment(database_connection, workflow.id, completed_contact.id)
+    create_enrollment(database_connection, workflow.id, failed_contact.id)
+    create_enrollment(database_connection, workflow.id, pending_contact.id)
+
+    record_enrollment_outcome(
+        connection=database_connection,
+        workflow_id=workflow.id,
+        contact_id=completed_contact.id,
+        outcome="completed",
+        reason="meeting booked",
+    )
+    record_enrollment_outcome(
+        connection=database_connection,
+        workflow_id=workflow.id,
+        contact_id=failed_contact.id,
+        outcome="failed",
+        reason="hard bounce",
+    )
+
+    rows = list_enrollments(connection=database_connection, workflow_id=workflow.id)
+    by_contact = {row["contact_id"]: row for row in rows}
+
+    completed_row = by_contact[completed_contact.id]
+    assert completed_row["latest_outcome"] == "completed"
+    assert completed_row["latest_outcome_reason"] == "meeting booked"
+    assert completed_row["latest_outcome_at"] is not None
+
+    failed_row = by_contact[failed_contact.id]
+    assert failed_row["latest_outcome"] == "failed"
+    assert failed_row["latest_outcome_reason"] == "hard bounce"
+    assert failed_row["latest_outcome_at"] is not None
+
+    pending_row = by_contact[pending_contact.id]
+    assert pending_row["latest_outcome"] is None
+    assert pending_row["latest_outcome_reason"] is None
+    assert pending_row["latest_outcome_at"] is None
+
+
+def test_list_enrollments_uses_most_recent_outcome(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """If multiple outcomes were recorded, only the latest is surfaced."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+
+    contact = make_test_contact(database_connection, email="flip@example.com")
+    create_enrollment(database_connection, workflow.id, contact.id)
+
+    record_enrollment_outcome(
+        connection=database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        outcome="failed",
+        reason="initial soft fail",
+    )
+    record_enrollment_outcome(
+        connection=database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        outcome="completed",
+        reason="recovered after re-engagement",
+    )
+
+    rows = list_enrollments(connection=database_connection, workflow_id=workflow.id)
+    assert len(rows) == 1
+    assert rows[0]["latest_outcome"] == "completed"
+    assert rows[0]["latest_outcome_reason"] == "recovered after re-engagement"
+
+
 # -- search_emails -------------------------------------------------------------
 
 

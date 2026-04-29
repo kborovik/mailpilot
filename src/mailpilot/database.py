@@ -36,6 +36,7 @@ from mailpilot.models import (
     EmailSummary,
     Enrollment,
     EnrollmentSummary,
+    EnrollmentWithOutcome,
     Note,
     NoteSummary,
     SyncStatus,
@@ -1169,6 +1170,58 @@ def list_enrollments(
     ).format(status_filter)
     rows = connection.execute(query, params).fetchall()
     return [Enrollment.model_validate(row) for row in rows]
+
+
+def list_enrollments_with_outcomes(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+) -> list[EnrollmentWithOutcome]:
+    """List enrollments in a workflow with their latest outcome activity.
+
+    Per ADR-08, outcomes (`completed` / `failed`) are timeline-only and do
+    not change `enrollment.status`. This helper LEFT JOINs the most recent
+    `enrollment_completed` / `enrollment_failed` activity per row so the
+    agent can answer "has this objective already been satisfied for any
+    contact in this workflow?" in a single query.
+
+    Args:
+        connection: Open database connection.
+        workflow_id: Workflow FK.
+
+    Returns:
+        List of `EnrollmentWithOutcome`, ordered by enrollment `created_at`.
+    """
+    rows = connection.execute(
+        """\
+        SELECT
+            e.workflow_id,
+            e.contact_id,
+            e.status,
+            e.reason,
+            e.created_at,
+            e.updated_at,
+            CASE a.type
+                WHEN 'enrollment_completed' THEN 'completed'
+                WHEN 'enrollment_failed' THEN 'failed'
+            END AS latest_outcome,
+            COALESCE(a.detail->>'reason', a.summary) AS latest_outcome_reason,
+            a.created_at AS latest_outcome_at
+        FROM enrollment e
+        LEFT JOIN LATERAL (
+            SELECT type, summary, detail, created_at
+            FROM activity
+            WHERE activity.contact_id = e.contact_id
+              AND activity.workflow_id = e.workflow_id
+              AND activity.type IN ('enrollment_completed', 'enrollment_failed')
+            ORDER BY created_at DESC
+            LIMIT 1
+        ) a ON TRUE
+        WHERE e.workflow_id = %(workflow_id)s
+        ORDER BY e.created_at
+        """,
+        {"workflow_id": workflow_id},
+    ).fetchall()
+    return [EnrollmentWithOutcome.model_validate(row) for row in rows]
 
 
 def delete_enrollment(

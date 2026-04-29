@@ -157,6 +157,29 @@ class EnrollmentSummary(BaseModel):
     updated_at: datetime
 
 
+EnrollmentOutcome = Literal["completed", "failed"]
+
+
+class EnrollmentWithOutcome(BaseModel):
+    """Enrollment plus the latest outcome activity, if any.
+
+    Outcomes (`completed` / `failed`) are timeline-only per ADR-08 -- they do
+    not live on the enrollment row. This composite carries the most recent
+    `enrollment_completed` / `enrollment_failed` activity so the agent can
+    coordinate across contacts in a single read.
+    """
+
+    workflow_id: str
+    contact_id: str
+    status: EnrollmentStatus
+    reason: str
+    created_at: datetime
+    updated_at: datetime
+    latest_outcome: EnrollmentOutcome | None = None
+    latest_outcome_reason: str | None = None
+    latest_outcome_at: datetime | None = None
+
+
 EmailDirection = Literal["inbound", "outbound"]
 
 

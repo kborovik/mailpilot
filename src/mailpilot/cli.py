@@ -1744,10 +1744,16 @@ def enrollment_run(workflow_id: str, contact_id: str) -> None:
         contact = get_contact(connection, contact_id)
         if contact is None:
             output_error(f"contact not found: {contact_id}", "not_found")
-        if get_enrollment(connection, workflow_id, contact.id) is None:
+        enrollment = get_enrollment(connection, workflow_id, contact.id)
+        if enrollment is None:
             output_error(
                 f"contact {contact_id} is not enrolled in workflow {workflow_id}",
                 "not_found",
+            )
+        if enrollment.status != "active":
+            output_error(
+                f"enrollment is not active (status={enrollment.status})",
+                "invalid_state",
             )
         email = None
         if wf.type == "inbound":

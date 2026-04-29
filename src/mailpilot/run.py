@@ -20,6 +20,7 @@ from mailpilot.database import (
     get_account,
     get_contact,
     get_email,
+    get_enrollment,
     get_workflow,
     list_accounts,
     list_pending_tasks,
@@ -76,6 +77,37 @@ def execute_task(
                 task.id,
                 status="cancelled",
                 result={"reason": "contact disabled or not found"},
+            )
+            return
+
+        enrollment = get_enrollment(connection, task.workflow_id, task.contact_id)
+        if enrollment is None:
+            logfire.info(
+                "run.task.skip_missing_enrollment",
+                task_id=task.id,
+                workflow_id=task.workflow_id,
+                contact_id=task.contact_id,
+            )
+            complete_task(
+                connection,
+                task.id,
+                status="cancelled",
+                result={"reason": "enrollment not found"},
+            )
+            return
+        if enrollment.status != "active":
+            logfire.info(
+                "run.task.skip_paused_enrollment",
+                task_id=task.id,
+                workflow_id=task.workflow_id,
+                contact_id=task.contact_id,
+                enrollment_status=enrollment.status,
+            )
+            complete_task(
+                connection,
+                task.id,
+                status="cancelled",
+                result={"reason": "enrollment paused"},
             )
             return
 

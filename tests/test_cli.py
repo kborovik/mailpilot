@@ -3147,6 +3147,52 @@ def test_enrollment_run_contact_not_enrolled(
     assert "not enrolled" in data["message"]
 
 
+def test_enrollment_run_paused_enrollment(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """Manual run is rejected when the enrollment is paused."""
+    workflow = _make_workflow(status="active")
+    contact = Contact(
+        id=_CONTACT_ID,
+        email="lead@acme.com",
+        domain="acme.com",
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    paused = Enrollment(
+        workflow_id=_WORKFLOW_ID,
+        contact_id=_CONTACT_ID,
+        status="paused",
+        reason="operator hold",
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=workflow),
+        patch("mailpilot.database.get_contact", return_value=contact),
+        patch("mailpilot.database.get_enrollment", return_value=paused),
+        patch("mailpilot.agent.invoke_workflow_agent") as mock_invoke,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "run",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--contact-id",
+                _CONTACT_ID,
+            ],
+        )
+    assert result.exit_code == 1, result.output
+    mock_invoke.assert_not_called()
+    data = json.loads(result.output)
+    assert data["error"] == "invalid_state"
+    assert "paused" in data["message"]
+
+
 def test_enrollment_run_agent_failed(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:

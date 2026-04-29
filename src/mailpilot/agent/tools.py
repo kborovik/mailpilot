@@ -261,20 +261,24 @@ def list_enrollments(
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str,
 ) -> list[dict[str, Any]]:
-    """List enrollments in a workflow with their outcome status.
+    """List enrollments in a workflow with their latest outcome.
 
     Lets the agent coordinate across contacts (e.g., skip person B if
-    person A at the same company already completed the objective).
+    person A at the same company already completed the objective). Each
+    row includes ``latest_outcome`` (``completed`` / ``failed`` / ``None``),
+    ``latest_outcome_reason``, and ``latest_outcome_at`` -- pulled from the
+    activity timeline since outcomes are timeline-only per ADR-08.
 
     Args:
         connection: Open database connection.
         workflow_id: Workflow ID.
 
     Returns:
-        List of enrollment records with status and reason.
+        List of enrollment records with operational status and the latest
+        outcome activity, if any.
     """
-    enrollments = database.list_enrollments(connection, workflow_id)
-    return [e.model_dump() for e in enrollments]
+    enrollments = database.list_enrollments_with_outcomes(connection, workflow_id)
+    return [e.model_dump(mode="json") for e in enrollments]
 
 
 def search_emails(
