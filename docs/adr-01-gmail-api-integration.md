@@ -18,9 +18,9 @@ Requirements:
 
 ## Decision
 
-**Google API Python Client (synchronous) + ThreadPoolExecutor for per-account concurrency.** The application manages a small number of accounts (not thousands of connections), so asyncio adds complexity without proportional benefit. `google-api-python-client` is Google's official library -- battle-tested, handles auth refresh, discovery, and serialization. ThreadPoolExecutor gives natural per-account parallelism for I/O-bound work.
+**Google API Python Client (synchronous) called serially from a single sync-loop thread.** The application manages a small number of accounts (5-50 in expected use), so asyncio adds complexity without proportional benefit. `google-api-python-client` is Google's official library -- battle-tested, handles auth refresh, discovery, and serialization. Per-account isolation comes from try/except around each `sync_account` call, not from a thread pool.
 
-**Pub/Sub streaming pull via `google-cloud-pubsub`.** The official library handles gRPC reconnection, flow control, and message leasing. Its callback-based subscriber runs in background threads -- a natural fit for the threading model.
+**Pub/Sub streaming pull via `google-cloud-pubsub`.** The official library handles gRPC reconnection, flow control, and message leasing. Its callback-based subscriber runs in background threads owned by the library; the callback only enqueues the account's email address onto a `queue.Queue` and signals the main loop.
 
 ### Dependencies
 
@@ -32,21 +32,31 @@ Requirements:
 
 ### Concurrency Model
 
+`start_sync_loop` in `src/mailpilot/sync.py` runs one foreground loop thread plus two helper threads. All Gmail API work happens on the main loop thread; the helpers exist only to wake it.
+
 ```
-Main Thread
+Main loop thread (start_sync_loop)
   |
-  +-- PubSub SubscriberClient (background gRPC threads, managed by library)
+  | wakeup_event.wait(timeout=run_interval)
+  |   |
+  |   +-- _drain_sync_queue: per email in sync_queue -> sync_account()
+  |   +-- _sync_all_accounts (full sweep, time-gated by run_interval)
+  |   +-- create_tasks_for_routed_emails  (routed -> task rows)
+  |   +-- _drain_pending_tasks            (run agent per pending task)
+  |   +-- _renew_watches_if_due           (every _WATCH_RENEWAL_INTERVAL)
+  |
+  +-- Pub/Sub subscriber (gRPC threads owned by google-cloud-pubsub)
   |     |
-  |     +-- callback: decode notification, submit sync task to executor
+  |     +-- callback: decode emailAddress, sync_queue.put, wakeup_event.set, ack
   |
-  +-- ThreadPoolExecutor (per-account sync)
+  +-- PG LISTEN thread (_start_task_listener)
   |     |
-  |     +-- Thread: sync account A (history API -> fetch messages -> store)
-  |     +-- Thread: sync account B (independent, isolated)
-  |     +-- ...
+  |     +-- LISTEN task_pending -> wakeup_event.set
   |
-  +-- Periodic tasks (watch renewal, stale account check)
+  +-- Signal handlers (SIGTERM / SIGINT) -> shutdown_event.set, wakeup_event.set
 ```
+
+The loop's `wait()` is on a single shared `wakeup_event`. Pub/Sub notifications, PG `task_pending` events, and signals all set it; the periodic timer is the upper-bound fallback, not the primary trigger (see CLAUDE.md). `wakeup_event.clear()` runs **before** processing so events that arrive mid-iteration re-trigger the next wait.
 
 ## Per-Account Sync Model
 
@@ -125,11 +135,13 @@ Topic:        projects/{project_id}/topics/{google_pubsub_topic}
 Subscription: projects/{project_id}/subscriptions/{google_pubsub_subscription}
 ```
 
-Infrastructure created idempotently:
+Infrastructure created idempotently by `setup_pubsub` in `src/mailpilot/pubsub.py`:
 
 1. Create topic (catch `AlreadyExists`)
-2. Create pull subscription (ack deadline 10s, retention 7 days)
-3. Set IAM policy on topic: grant `gmail-api-push@system.gserviceaccount.com` the `pubsub.publisher` role
+2. Set IAM policy on topic: grant `gmail-api-push@system.gserviceaccount.com` the `pubsub.publisher` role (skipped when already bound)
+3. Create pull subscription with `ack_deadline_seconds=60` (catch `AlreadyExists`)
+
+Each RPC runs inside its own `logfire.span` so a hung call surfaces directly in traces -- wrapping the whole setup in one span hid which step was stuck until everything finished.
 
 ### Watch Registration
 
@@ -152,8 +164,8 @@ Response:
 ```
 
 - Expiration: 7 days from registration
-- Renewal: call `watch()` again daily (idempotent)
-- Store `watch_expiration` on the account row
+- Renewal: `_renew_watches_if_due` runs once per `_WATCH_RENEWAL_INTERVAL` (1 hour). `pubsub.renew_watches` re-registers any account whose `watch_expiration` is missing or within 24 hours (`_WATCH_RENEWAL_THRESHOLD`)
+- Store `watch_expiration` on the account row; if `watch()` returns a `historyId`, also write it to `gmail_history_id`
 
 ### Notification Format
 
@@ -170,94 +182,98 @@ The `historyId` indicates what changed. The subscriber must call the History API
 
 ### Streaming Pull
 
-`google-cloud-pubsub` `SubscriberClient.subscribe()` opens a persistent gRPC stream. The callback:
+`google-cloud-pubsub` `SubscriberClient.subscribe()` opens a persistent gRPC stream. The callback (`make_notification_callback` in `pubsub.py`) is intentionally minimal so the gRPC threads never block on Gmail or DB work:
 
-1. Decode the base64 `data` field
-2. Look up the account by `emailAddress`
-3. Submit a sync task to the ThreadPoolExecutor
+1. Decode `message.data` (already-decoded raw bytes from the pubsub client) as JSON and read `emailAddress`
+2. `sync_queue.put(emailAddress)`
+3. `wakeup_event.set()` so the main loop drains the queue immediately instead of waiting for the next periodic tick
 4. `message.ack()`
 
-On decode errors: `message.nack()` for Pub/Sub retry.
+The `historyId` from the notification payload is intentionally ignored -- `sync_account` snapshots the mailbox's current historyId itself via `users.getProfile`. Look-up of the account row and the actual sync run on the main loop thread inside `_drain_sync_queue`, which is also where unknown email addresses are filtered out.
+
+**Decode errors always ack, never nack.** Real Gmail watch payloads have triggered `binascii.Error` from a stale double-decode and `json.JSONDecodeError` / `KeyError` / `UnicodeDecodeError` for malformed messages (see #82). Nacking would cause infinite redelivery of the same poison message, so the callback logs a `pubsub.notification.decode_error` exception with the raw payload excerpt and acks anyway.
 
 ## Sync Pipeline
 
+`sync_account` in `sync.py` is the per-account entry point. It uses a **checkpoint-first** pattern: snapshot `users.getProfile().historyId` *before* listing messages, then write that checkpoint as the account's new `gmail_history_id` at the end. Anything that arrives during the run still has a higher historyId and will be picked up on the next incremental sync.
+
 ### Initial Sync (no history ID)
 
-When an account has no `gmail_history_id`:
+When an account has no `gmail_history_id`, `_collect_new_message_ids` returns a full INBOX listing:
 
-1. `list_messages(query="", max_results=500)` -- list recent message IDs
-2. Fetch each message with `format=full`
-3. Extract text, headers, store in `email` table
-4. Record the `historyId` from the list response on the account
+1. `list_messages(max_results=_FULL_SYNC_MAX_RESULTS, label_ids=["INBOX"])` -- 100 most recent INBOX message IDs
+2. Filter out IDs already present in the `email` table (`get_email_by_gmail_message_id`) -- duplicates are harmless but skipping them avoids needless fetches
+3. Batch-fetch the remaining IDs via `get_messages_batch` (one HTTP round-trip per 100 messages, 404s silently skipped)
+4. Extract text and headers, store in `email` table; store the snapshot `historyId` and `last_synced_at` on the account
 
 ### Incremental Sync (has history ID)
 
-On Pub/Sub notification for an account:
+When `gmail_history_id` is set:
 
-1. `get_history(start_history_id=id)` -- get changes since last sync
-2. Page through results (follow `nextPageToken`)
-3. For each `messageAdded`: fetch full message, store in `email` table
-4. Update `gmail_history_id` on the account to the latest history ID
-5. Update `last_synced_at`
+1. `get_history(start_history_id=id, history_types=["messageAdded"], label_id="INBOX")` -- pages through `nextPageToken` automatically
+2. Extract unique message IDs from `messagesAdded`
+3. Same dedupe + batch fetch + store path as initial sync
+4. Update `gmail_history_id` to the snapshot taken before the run, plus `last_synced_at`
 
 ### History 404 Fallback
 
-If history API returns 404 (history ID too old -- typically >7 days):
-
-1. Clear `gmail_history_id` on the account
-2. Trigger initial sync (full re-sync)
-3. Log the event for observability
+If `get_history` returns 404 (history ID too old -- typically >7 days), `_collect_new_message_ids` logs `sync.account.history_fallback` and falls back to the full INBOX listing for this run. The fresh checkpoint from `getProfile` is then written as the new `gmail_history_id` at the end of `sync_account`, so the next sync resumes incrementally without an explicit "clear" step.
 
 ### Watch Renewal
 
-Periodic check (hourly):
+`_renew_watches_if_due` runs once per `_WATCH_RENEWAL_INTERVAL` (1 hour) at the bottom of the main loop. `pubsub.renew_watches`:
 
-1. Query accounts where `watch_expiration` is within 24 hours
-2. For each: call `watch()` to re-register
-3. Update `watch_expiration` and `gmail_history_id` on the account
+1. Iterates accounts (`list_accounts(limit=1000)`)
+2. Skips any whose `watch_expiration` is more than 24 hours away
+3. For each remaining account: call `GmailClient.watch(topic)` and `update_account` with the new `watch_expiration` (and `gmail_history_id` when the response carries one)
+4. Each per-account renewal is wrapped in its own `pubsub.watch_account` span; failures are logged via `logfire.exception` and never abort the sweep
 
 ## Error Handling
 
 ### Retries
 
-Exponential backoff with `time.sleep` for transient errors:
+`_retry_on_transient` in `gmail.py` decorates every Gmail API call. Each invocation runs inside a `gmail.<method>` span with `attempts` and final `status` attributes; transient retries are emitted as `gmail api transient error, retrying` warnings, and exhausting all retries logs `gmail.retry.exhausted` for alerting.
 
-- Retry on: 429 (rate limit), 500, 502, 503, 504, 529
-- Max attempts: 5
-- Max backoff: 30 seconds
-- Non-transient 4xx: raise immediately
+- Retry on: `_TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504, 529}`
+- Max attempts: `_MAX_RETRIES = 5`
+- Backoff: `min(2**attempt, _MAX_BACKOFF)` with `_MAX_BACKOFF = 30.0` seconds
+- Non-transient HTTP errors: raise immediately (status set as span attribute first)
 
 ### Per-Account Isolation
 
-Each account syncs in its own thread via ThreadPoolExecutor. Errors are caught and logged per account -- they do not propagate to other accounts or crash the sync loop.
+Account sync runs serially on the main loop thread (`_drain_sync_queue` and `_sync_all_accounts` iterate accounts one at a time). Each per-account call is wrapped in `try/except`: errors are recorded as `sync.notification.sync_failed` / `sync.account.run failed` exceptions and an `error` operator event, but never propagate to the next account or to the loop itself.
 
 ### Specific Cases
 
-- 404 on message fetch: skip silently (message deleted between list and fetch)
-- 404 on history: fallback to initial sync
-- 401/403 on delegated access: log error, skip account (delegation may have been revoked)
-- Pub/Sub callback errors: nack message for redelivery
+- 404 on `get_message`: returns `None` (message deleted between list and fetch)
+- 404 inside `get_messages_batch`: silently skipped per message
+- 404 on `get_history`: fall back to full INBOX listing (see History 404 Fallback)
+- 401/403 on delegated access: surfaced as a sync error and logged; the next account proceeds
+- Pub/Sub decode errors: log as `pubsub.notification.decode_error` and ack (#82). Never nack -- nacking poison messages causes infinite redelivery
 
 ## Email Sending
 
-Outgoing emails use `send_message()` with a base64url-encoded RFC 2822 message.
+`GmailClient.send_message` builds a `multipart/alternative` envelope, base64url-encodes it, and POSTs to `users.messages.send`. The plain-text part is the agent's Markdown source; the HTML part is rendered by `email_renderer.render_email_html` (see ADR-02). Only the plain text is persisted on the `email` row.
 
-Custom headers on all outgoing emails for traceability:
+Custom headers stamped inside `send_message` (always set):
 
-- `X-MailPilot-Version` -- application version
-- `X-MailPilot-Account-Id` -- sending account ID
+- `X-MailPilot-Version` -- application version (read from package metadata)
+- `X-MailPilot-Account-Id` -- the MailPilot account ID, when supplied by the caller
 
-Threading: set `threadId` in the request body to continue an existing Gmail thread.
+Threading inside Gmail: set `threadId` in the send body to continue an existing thread on the sender's side.
+
+Threading across mail clients: set the RFC 5322 `In-Reply-To` and `References` headers on the MIME message. `sync._resolve_threading_headers` derives them automatically when the caller supplies a `thread_id`, or honours an explicit `in_reply_to` from the agent's `reply_email` tool. After the send, `sync.send_email` fetches the assigned `Message-ID` from Gmail (with a logged-and-tolerated failure path) and records it on the `email` row so future inbound replies can be matched via RFC 2822 message-id lookup. See ADR-04 for the matching counterpart.
 
 ## Consequences
 
 ### Positive
 
-- Simple concurrency model -- threads for parallelism, no async/await coloring
+- Single-threaded sync loop -- no shared mutable state between accounts, no async/await coloring
 - `google-api-python-client` handles auth, discovery, serialization -- less code to maintain
 - `google-cloud-pubsub` handles gRPC reconnection, flow control, lease management
-- Per-account thread isolation -- one account's failure cannot cascade
-- Incremental sync via history API -- efficient, minimal API quota usage
+- Per-account try/except isolation -- one account's failure cannot cascade
+- Incremental sync via history API + checkpoint pattern -- efficient and self-healing on 404
+- Event-driven main loop (Pub/Sub + PG `LISTEN`) keeps real-time latency bounded by `wakeup_event` rather than `run_interval`
 - No public endpoints needed -- pull-based Pub/Sub works behind firewalls
 
 ### Negative
@@ -266,7 +282,7 @@ Threading: set `threadId` in the request body to continue an existing Gmail thre
 - Admin must approve domain-wide delegation
 - 7-day history limit -- stale accounts require full re-sync
 - `google-cloud-pubsub` pulls in gRPC (heavier dependency tree)
-- Thread overhead per account (negligible at expected scale of 5-50 accounts)
+- Serial per-account sync inside one tick -- if account count grows past ~50, full sweeps may take longer than `run_interval`. Pub/Sub-driven syncs stay fast because they only sync the notified account.
 
 ## References
 
@@ -275,3 +291,9 @@ Threading: set `threadId` in the request body to continue an existing Gmail thre
 - [Gmail Quota](https://developers.google.com/gmail/api/reference/quota)
 - [Service Account Auth](https://developers.google.com/identity/protocols/oauth2/service-account)
 - [Pub/Sub Streaming Pull](https://cloud.google.com/pubsub/docs/pull)
+- `src/mailpilot/gmail.py` -- `GmailClient`, `_retry_on_transient`, `extract_text_from_message`
+- `src/mailpilot/pubsub.py` -- `setup_pubsub`, `make_notification_callback`, `renew_watches`
+- `src/mailpilot/sync.py` -- `start_sync_loop`, `sync_account`, `_resolve_threading_headers`, `send_email`
+- `docs/adr-02-email-body-storage-strategy.md` -- inbound text extraction, outbound rendering
+- `docs/adr-04-email-routing.md` -- routing pipeline (consumes the rows this sync writes) and RFC 2822 message-id matching for replies
+- `docs/email-flow.md` -- end-to-end inbound and outbound flows
