@@ -400,6 +400,45 @@ def test_run_periodic_iteration_skips_sync_all_when_do_full_sweep_false(
     assert spans[0]["attributes"]["did_full_sweep"] is False
 
 
+def test_run_periodic_iteration_full_sweep_skips_already_synced(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """An account synced from the Pub/Sub queue is not synced again by the
+    full sweep in the same iteration.
+    """
+    import queue as _queue
+
+    from mailpilot.sync import (
+        _run_periodic_iteration,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    notified = make_test_account(
+        database_connection, email="notified@example.com", display_name="Notified"
+    )
+    other = make_test_account(
+        database_connection, email="other@example.com", display_name="Other"
+    )
+
+    settings = make_test_settings()
+    sync_queue: _queue.Queue[str] = _queue.Queue()
+    sync_queue.put(notified.email)
+
+    with (
+        patch("mailpilot.sync.GmailClient"),
+        patch("mailpilot.sync.sync_account") as mock_sync_account,
+    ):
+        _run_periodic_iteration(
+            database_connection,
+            settings,
+            sync_queue,
+            wakeup_source="event",
+            do_full_sweep=True,
+        )
+
+    synced_emails = [call.args[1].email for call in mock_sync_account.call_args_list]
+    assert sorted(synced_emails) == sorted([notified.email, other.email])
+
+
 def test_start_sync_loop_time_gates_full_sweep(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):

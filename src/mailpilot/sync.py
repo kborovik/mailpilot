@@ -334,12 +334,16 @@ def _run_periodic_iteration(
         wakeup_source=wakeup_source,
         did_full_sweep=do_full_sweep,
     ):
+        # Track accounts synced this tick so the full sweep doesn't re-run
+        # work the Pub/Sub drain just did.
+        synced: set[str] = set()
+
         # Sync accounts from Pub/Sub notifications.
-        _drain_sync_queue(connection, settings, sync_queue)
+        _drain_sync_queue(connection, settings, sync_queue, synced)
 
         # Periodic safety-net sync of all accounts.
         if do_full_sweep:
-            _sync_all_accounts(connection, settings)
+            _sync_all_accounts(connection, settings, synced)
 
         # Bridge routed emails to tasks and drain the queue.
         create_tasks_for_routed_emails(connection)
@@ -350,9 +354,9 @@ def _drain_sync_queue(
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
     sync_queue: queue.Queue[str],
+    synced: set[str],
 ) -> None:
     """Sync accounts that received Pub/Sub notifications."""
-    synced: set[str] = set()
     while not sync_queue.empty():
         try:
             email = sync_queue.get_nowait()
@@ -383,16 +387,24 @@ def _drain_sync_queue(
 def _sync_all_accounts(
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
+    synced: set[str],
 ) -> None:
-    """Sync all Gmail accounts. Errors per account are logged, not raised."""
+    """Sync all Gmail accounts. Errors per account are logged, not raised.
+
+    Accounts already present in ``synced`` (already handled this tick by
+    ``_drain_sync_queue``) are skipped to avoid duplicate Gmail round-trips.
+    """
     summaries = list_accounts(connection, limit=1000)
     for summary in summaries:
         account = get_account(connection, summary.id)
         if account is None:
             continue
+        if account.email in synced:
+            continue
         try:
             client = GmailClient(account.email)
             sync_account(connection, account, client, settings)
+            synced.add(account.email)
         except Exception as exc:
             logfire.exception(
                 "sync.account.sync_failed",

@@ -111,7 +111,7 @@ def test_drain_sync_queue_emits_pubsub_notify(
     sync_queue: queue.Queue[str] = queue.Queue()
     sync_queue.put(account.email)
 
-    _drain_sync_queue(database_connection, make_test_settings(), sync_queue)
+    _drain_sync_queue(database_connection, make_test_settings(), sync_queue, set())
 
     out = capsys.readouterr().out
     assert "event=pubsub.notify" in out
@@ -195,7 +195,7 @@ def test_drain_sync_queue_emits_error_on_sync_failure(
     sync_queue: queue.Queue[str] = queue.Queue()
     sync_queue.put(account.email)
 
-    _drain_sync_queue(database_connection, make_test_settings(), sync_queue)
+    _drain_sync_queue(database_connection, make_test_settings(), sync_queue, set())
 
     out = capsys.readouterr().out
     assert "event=error" in out
