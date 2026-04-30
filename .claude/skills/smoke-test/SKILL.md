@@ -143,6 +143,8 @@ mailpilot enrollment add --workflow-id <OUTBOUND_WORKFLOW_ID> --contact-id <INBO
 mailpilot enrollment run --workflow-id <OUTBOUND_WORKFLOW_ID> --contact-id <INBOUND_CONTACT_ID>
 ```
 
+`mailpilot enrollment run` MUST be invoked exactly once per `(workflow_id, contact_id)`. If the outbound email is not visible in the next gate's `email list` poll, keep polling — do NOT re-invoke `enrollment run`. A second invocation against the same enrollment produces a redundant `agent.invoke` (the agent searches for the prior send and noops correctly, but burns an LLM round-trip and inflates the trace). See SPEC §V12 / §T18 / §B2.
+
 **Gate A3:**
 
 - `enrollment run` output: `"status": "completed"` and `"tool_calls" >= 1`.
@@ -252,7 +254,10 @@ If any expected type is missing, the runtime activity wiring regressed for that 
 
 Do this review now, before B, so the window cleanly bounds A's spans. Use `/logfire:debug` with project=`mailpilot` and window `[TEST_START_A, now]`. Spans to verify:
 
-- `agent.invoke` -- exactly **2** invocations across all processes (A3 send invoked by foreground `enrollment run`, A7 reply handling drained by background `mailpilot run` loop). The bg run-loop's stdout shows only the A7 invocation -- A3 lives in the fg `enrollment run` process. Logfire (or any process-agnostic trace store) shows both. More than 2 total → agent kept replying (loop regression).
+- `agent.invoke` -- count by `trigger` attribute, not by total. Per SPEC §V12 / §T18, the span carries an explicit `trigger` label set by the caller path:
+  - `trigger="task"` -- expect exactly **1** (A7 reply handling, drained by background `mailpilot run`). More than 1 → agent kept replying (loop regression). This is the regression signal for Scenario A.
+  - `trigger="enrollment_run"` -- expect at least **1** (A3 send via foreground `enrollment run`). Tolerated regardless of count: an operator double-fire produces extra `enrollment_run` spans that correctly noop, so they cost an LLM round-trip but do not signal regression. T19 / B2 prefer single-invocation discipline (see A3) but the trace contract here permits more.
+  - `trigger="email"` / `trigger="manual"` -- not expected in Scenario A; flag if present.
 - `running tool` -- A3: expect `send_email` plus optional context-gathering reads (`read_contact`, `read_company`); `record_enrollment_outcome` is **not** expected here (it fires after a reply, not on initial send). A7: expect `record_enrollment_outcome` and **no** `send_email` or `reply_email`.
 - `routing.route_email` -- the reply (A6) → `route_method=thread_match` and `workflow_id == OUTBOUND_WORKFLOW_ID`. The inbound-side email from A4 → `route_method=skipped_no_workflows` (no inbound workflow at the time).
 - `gmail.send_message` -- 2 calls total (A3 by agent + A5 by operator).
