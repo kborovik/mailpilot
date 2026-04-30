@@ -2,9 +2,7 @@
 
 ## Status
 
-Updated 2026-04-29. Enrollment state model collapsed to operational-only (`active` / `paused`); per-contact outcomes (`completed`, `failed`) moved to activity events emitted by `record_enrollment_outcome`. See ADR-08 for the activity timeline contract.
-
-Updated 2026-04-25. Field definitions formerly in ADR-06 are folded into this ADR. The join entity formerly named `workflow_contact` was renamed to `enrollment` in the same change.
+Accepted
 
 ## Context
 
@@ -48,29 +46,29 @@ Per-enrollment **outcomes** (`completed`, `failed`) are not statuses -- they are
 
 **Contact status** (global, across all workflows):
 
-| `status`       | Meaning                                    | Set by                     |
-| -------------- | ------------------------------------------ | -------------------------- |
-| `active`       | Can be emailed (default)                   | System                     |
-| `bounced`      | Email invalid, delivery failed             | System (bounce detection)  |
-| `unsubscribed` | Contact requested no further emails        | Agent via `disable_contact` |
+| `status`       | Meaning                             | Set by                      |
+| -------------- | ----------------------------------- | --------------------------- |
+| `active`       | Can be emailed (default)            | System                      |
+| `bounced`      | Email invalid, delivery failed      | System (bounce detection)   |
+| `unsubscribed` | Contact requested no further emails | Agent via `disable_contact` |
 
 The `send_email` tool checks `contact.status = 'active'` before sending. If the contact is not active, the tool refuses with a clear message. This is a hard block across all workflows. `status_reason` holds the explanation ("hard bounce on 2026-04-10", "replied: do not contact me again").
 
 **Email status** (what happened to this message?):
 
-| `status`   | Meaning                            | Set by                    |
-| ---------- | ---------------------------------- | ------------------------- |
-| `sent`     | Delivered to Gmail API (outbound)  | System after send         |
-| `received` | Synced from Gmail (inbound)        | System during sync        |
-| `bounced`  | Delivery failed (outbound)         | System (bounce detection) |
+| `status`   | Meaning                           | Set by                    |
+| ---------- | --------------------------------- | ------------------------- |
+| `sent`     | Delivered to Gmail API (outbound) | System after send         |
+| `received` | Synced from Gmail (inbound)       | System during sync        |
+| `bounced`  | Delivery failed (outbound)        | System (bounce detection) |
 
 **Workflow status** (is this workflow running?):
 
-| `status` | Behavior                                                              |
-| -------- | --------------------------------------------------------------------- |
-| `draft`  | Created, not running. Editing instructions and objective.             |
+| `status` | Behavior                                                                                                                                     |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `draft`  | Created, not running. Editing instructions and objective.                                                                                    |
 | `active` | Running. Outbound sends to active enrollments via `enrollment run` and tasks. Inbound classification considers this workflow as a candidate. |
-| `paused` | No new work. Existing threads still handled (no ghosting mid-thread). |
+| `paused` | No new work. Existing threads still handled (no ghosting mid-thread).                                                                        |
 
 **Workflow status transitions:**
 
@@ -82,11 +80,11 @@ The `send_email` tool checks `contact.status = 'active'` before sending. If the 
                      +-----------------+
 ```
 
-| From     | To       | Trigger                | Guard                                        |
-| -------- | -------- | ---------------------- | -------------------------------------------- |
-| `draft`  | `active` | `workflow start ID`    | instructions and objective must be non-empty |
-| `active` | `paused` | `workflow stop ID`     | none                                         |
-| `paused` | `active` | `workflow start ID`    | none                                         |
+| From     | To       | Trigger             | Guard                                        |
+| -------- | -------- | ------------------- | -------------------------------------------- |
+| `draft`  | `active` | `workflow start ID` | instructions and objective must be non-empty |
+| `active` | `paused` | `workflow stop ID`  | none                                         |
+| `paused` | `active` | `workflow start ID` | none                                         |
 
 All other transitions are invalid. `draft -> paused` is meaningless (nothing to pause). `active -> draft` and `paused -> draft` are not allowed -- edit instructions while active or paused. No terminal state: workflows are paused, not deleted.
 
@@ -94,9 +92,9 @@ All other transitions are invalid. `draft -> paused` is meaningless (nothing to 
 
 **Enrollment status** (is the agent allowed to act on this contact within this workflow?):
 
-| `status` | Meaning                                                                         |
-| -------- | ------------------------------------------------------------------------------- |
-| `active` | Default. The task runner and `enrollment run` invoke the agent for this pair.   |
+| `status` | Meaning                                                                                                                   |
+| -------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `active` | Default. The task runner and `enrollment run` invoke the agent for this pair.                                             |
 | `paused` | Operator-set. `execute_task` cancels pending tasks for paused enrollments; `enrollment run` refuses with `invalid_state`. |
 
 The schema enforces this with `CHECK (status IN ('active', 'paused'))` and `DEFAULT 'active'`. There is no `pending` state -- enrollments are created active. There is no automatic system transition (the previous `_activate_enrollment_if_pending` helper has been removed).
@@ -130,50 +128,50 @@ A contact can be enrolled in multiple workflows (different accounts, different c
 
 **`type`** -- Workflow direction.
 
-| Property   | Value                                          |
-| ---------- | ---------------------------------------------- |
-| SQL        | `TEXT NOT NULL CHECK (type IN ('inbound', 'outbound'))` |
-| Pydantic   | `Literal["inbound", "outbound"]`               |
-| Set at     | Creation only                                  |
-| Mutability | Immutable                                      |
+| Property   | Value                                                                                                                                                                   |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SQL        | `TEXT NOT NULL CHECK (type IN ('inbound', 'outbound'))`                                                                                                                 |
+| Pydantic   | `Literal["inbound", "outbound"]`                                                                                                                                        |
+| Set at     | Creation only                                                                                                                                                           |
+| Mutability | Immutable                                                                                                                                                               |
 | Consumers  | Classifier candidate filter (`_try_classify` keeps only `type == "inbound"`), CLI `enrollment run` (loads trigger email for inbound workflows only), email-flow routing |
 
 **`name`** -- Human-readable workflow identifier.
 
-| Property   | Value                                         |
-| ---------- | --------------------------------------------- |
-| SQL        | `TEXT NOT NULL`, `UNIQUE (account_id, name)`  |
-| Mutability | Mutable via `update_workflow()`               |
+| Property   | Value                                             |
+| ---------- | ------------------------------------------------- |
+| SQL        | `TEXT NOT NULL`, `UNIQUE (account_id, name)`      |
+| Mutability | Mutable via `update_workflow()`                   |
 | Consumers  | CLI listing, classifier routing (identity signal) |
-| Format     | Free text, descriptive of audience and channel |
+| Format     | Free text, descriptive of audience and channel    |
 
 **`objective`** -- Concise agent goal statement.
 
-| Property   | Value                                                |
-| ---------- | ---------------------------------------------------- |
-| SQL        | `TEXT NOT NULL DEFAULT ''`                            |
-| Activation | Required (must be non-empty after stripping)         |
-| Consumers  | Agent outcome evaluation (the prompt's `Objective:` line), classifier routing, `record_enrollment_outcome` reasoning |
-| Format     | Imperative phrase starting with a verb: "Book...", "Answer...", "Qualify...", "Resolve..." |
+| Property   | Value                                                                                                                                                          |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SQL        | `TEXT NOT NULL DEFAULT ''`                                                                                                                                     |
+| Activation | Required (must be non-empty after stripping)                                                                                                                   |
+| Consumers  | Agent outcome evaluation (the prompt's `Objective:` line), classifier routing, `record_enrollment_outcome` reasoning                                           |
+| Format     | Imperative phrase starting with a verb: "Book...", "Answer...", "Qualify...", "Resolve..."                                                                     |
 | Guidance   | One sentence, under 100 characters. Outcome-oriented (what success looks like), not process-oriented (how to achieve it -- that is what `instructions` is for) |
 
 **`instructions`** -- Agent system prompt.
 
-| Property   | Value                                               |
-| ---------- | --------------------------------------------------- |
-| SQL        | `TEXT NOT NULL DEFAULT ''`                           |
-| Activation | Required (must be non-empty after stripping)        |
-| Consumers  | `invoke_workflow_agent()` -- passed as system prompt |
-| Format     | Free-form text, no structured format imposed         |
+| Property   | Value                                                                                                                                                                      |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SQL        | `TEXT NOT NULL DEFAULT ''`                                                                                                                                                 |
+| Activation | Required (must be non-empty after stripping)                                                                                                                               |
+| Consumers  | `invoke_workflow_agent()` -- passed as system prompt                                                                                                                       |
+| Format     | Free-form text, no structured format imposed                                                                                                                               |
 | Guidance   | Complete instructions for agent behavior: tone, rules, escalation criteria, tool usage hints. The agent receives this on every invocation alongside fresh database context |
 
 **`theme`** -- Email rendering palette.
 
-| Property   | Value                                               |
-| ---------- | --------------------------------------------------- |
-| SQL        | `TEXT NOT NULL DEFAULT 'blue'`                       |
-| Mutability | Mutable via `update_workflow()`                     |
-| Consumers  | `email_renderer.render_html()` for outbound emails  |
+| Property   | Value                                                          |
+| ---------- | -------------------------------------------------------------- |
+| SQL        | `TEXT NOT NULL DEFAULT 'blue'`                                 |
+| Mutability | Mutable via `update_workflow()`                                |
+| Consumers  | `email_renderer.render_html()` for outbound emails             |
 | Format     | One of `THEME_NAMES` (blue, green, orange, purple, red, slate) |
 
 **Examples**
@@ -224,11 +222,11 @@ Each workflow is executed by a Pydantic AI agent. The agent is **stateless** -- 
 
 The agent is invoked by three types of events:
 
-| Event         | Trigger                                                                            | Agent receives                    |
-| ------------- | ---------------------------------------------------------------------------------- | --------------------------------- |
-| Email arrives | Pub/Sub watch -> sync -> route -> `create_tasks_for_routed_emails` -> task drain   | New email + workflow instructions |
-| Task due      | `pg_notify('task_pending')` on INSERT wakes the loop's PG `LISTEN` thread; periodic timer is the safety-net fallback | Task description + context        |
-| Manual run    | `mailpilot enrollment run`                                                         | Contact + instructions (+ unprocessed inbound email for inbound workflows) |
+| Event         | Trigger                                                                                                              | Agent receives                                                             |
+| ------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Email arrives | Pub/Sub watch -> sync -> route -> `create_tasks_for_routed_emails` -> task drain                                     | New email + workflow instructions                                          |
+| Task due      | `pg_notify('task_pending')` on INSERT wakes the loop's PG `LISTEN` thread; periodic timer is the safety-net fallback | Task description + context                                                 |
+| Manual run    | `mailpilot enrollment run`                                                                                           | Contact + instructions (+ unprocessed inbound email for inbound workflows) |
 
 ### Concurrency
 
@@ -254,20 +252,20 @@ The agent interacts with the system through tools only. Tool signatures below sh
 
 Tools registered in `_TOOLS` (in `agent/invoke.py`):
 
-| Tool                          | Mutates    | Purpose                                                                                                |
-| ----------------------------- | ---------- | ------------------------------------------------------------------------------------------------------ |
-| `send_email`                  | `email`    | Send a new outbound email. Guards: contact active, 30-day cooldown.                                    |
-| `reply_email`                 | `email`    | Reply in-thread to an existing email. Auto-derives recipient/subject/`In-Reply-To`. No cooldown.       |
-| `create_task`                 | `task`     | Schedule deferred work for later execution. Fires `pg_notify('task_pending')` on insert.               |
-| `cancel_task`                 | `task`     | Cancel a pending task.                                                                                 |
-| `record_enrollment_outcome`   | `activity` | Append `enrollment_completed` or `enrollment_failed` to the contact timeline. Does not change `enrollment.status`. |
-| `disable_contact`             | `contact`  | Set global contact block (`bounced` or `unsubscribed`).                                                |
-| `list_enrollments`            | -          | List enrollments in the current workflow with their operational status and latest outcome.            |
-| `search_emails`               | -          | Query email history for the current account.                                                           |
-| `read_contact`                | -          | CRM lookup by email.                                                                                   |
-| `read_company`                | -          | CRM lookup by domain.                                                                                  |
-| `read_email`                  | -          | Read full email content (including body text) by ID.                                                   |
-| `noop`                        | -          | Explicit "no action needed" -- still counts as a tool call.                                            |
+| Tool                        | Mutates    | Purpose                                                                                                            |
+| --------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------ |
+| `send_email`                | `email`    | Send a new outbound email. Guards: contact active, 30-day cooldown.                                                |
+| `reply_email`               | `email`    | Reply in-thread to an existing email. Auto-derives recipient/subject/`In-Reply-To`. No cooldown.                   |
+| `create_task`               | `task`     | Schedule deferred work for later execution. Fires `pg_notify('task_pending')` on insert.                           |
+| `cancel_task`               | `task`     | Cancel a pending task.                                                                                             |
+| `record_enrollment_outcome` | `activity` | Append `enrollment_completed` or `enrollment_failed` to the contact timeline. Does not change `enrollment.status`. |
+| `disable_contact`           | `contact`  | Set global contact block (`bounced` or `unsubscribed`).                                                            |
+| `list_enrollments`          | -          | List enrollments in the current workflow with their operational status and latest outcome.                         |
+| `search_emails`             | -          | Query email history for the current account.                                                                       |
+| `read_contact`              | -          | CRM lookup by email.                                                                                               |
+| `read_company`              | -          | CRM lookup by domain.                                                                                              |
+| `read_email`                | -          | Read full email content (including body text) by ID.                                                               |
+| `noop`                      | -          | Explicit "no action needed" -- still counts as a tool call.                                                        |
 
 The agent must call at least one tool per run. A run with zero tool calls raises `AgentDidNotUseToolsError`. `noop(reason)` is the explicit escape hatch.
 

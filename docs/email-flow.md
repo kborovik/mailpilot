@@ -10,6 +10,7 @@
 - **Signal handlers** -- SIGTERM / SIGINT set both `shutdown_event` and `wakeup_event` so an in-flight wait unblocks immediately.
 
 Each iteration calls `_run_periodic_iteration` which:
+
 1. Drains the Pub/Sub `sync_queue` via `_drain_sync_queue` (one `sync_account` call per pending account, deduped by email).
 2. If the safety-net interval has elapsed, calls `_sync_all_accounts` for accounts not already synced this tick.
 3. Bridges newly routed inbound emails to tasks via `create_tasks_for_routed_emails`.
