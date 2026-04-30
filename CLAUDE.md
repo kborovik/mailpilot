@@ -13,6 +13,18 @@ MailPilot manages contacts, companies, and communication workflows through Gmail
 
 Claude Code is the primary operator of MailPilot. The CLI is LLM-agent-friendly (JSON output, meaningful exit codes, actionable errors). The internal agent handles only time-sensitive work that cannot wait for a Claude Code session.
 
+## Style for these instructions
+
+Compression rules for CLAUDE.md and project docs. Does NOT apply to code, error strings, commit messages, PR descriptions, or agent-generated email bodies.
+
+- Drop articles (a, an, the), filler (just, really, basically), aux verbs where fragments work (is, are, was).
+- No hedging (might, perhaps, could be worth).
+- Fragments fine. Bullets over prose when listing >2 items.
+- Use `->` for "leads to / becomes" (matches ASCII standard).
+- `MUST` / `MUST NOT` / `MAY` over "is required to" / "should never" / "may optionally".
+- One rule per line. `Why:` suffix only when non-obvious.
+- Preserve verbatim: code, paths, identifiers, env vars, SQL, numbers, URLs.
+
 ## Principles
 
 - Technical accuracy over politeness
@@ -20,7 +32,7 @@ Claude Code is the primary operator of MailPilot. The CLI is LLM-agent-friendly 
 - Agent-driven, not system-driven. The system provides tools and scheduling; LLM agents make all business decisions (what to send, when to follow up, when to give up).
 - Type-safety is non-negotiable. basedpyright strict mode.
 - TDD for ALL changes.
-- Background loops wake on events, not on timers. When a real-time mechanism exists (Pub/Sub callback, PG `LISTEN/NOTIFY`, signal handler), the main loop's `wait()` MUST be on a shared `wakeup_event` that those mechanisms set. Periodic timers are the upper-bound fallback, not the primary trigger -- otherwise the real-time path silently degrades to polling and the test suite cannot tell the difference. Clear the wakeup event BEFORE processing so events arriving mid-iteration re-trigger the next wait. See `start_sync_loop` in `src/mailpilot/sync.py` for the canonical shape.
+- Background loops wake on events, not timers. When real-time mechanism exists (Pub/Sub, PG `LISTEN/NOTIFY`, signal handler), main loop `wait()` MUST use shared `wakeup_event` set by those mechanisms. Periodic timers = upper-bound fallback only -- otherwise real-time path silently degrades to polling and tests cannot tell the difference. Clear `wakeup_event` BEFORE processing -> mid-iteration events re-trigger next wait. Canonical shape: `start_sync_loop` in `src/mailpilot/sync.py`.
 
 ## Architecture
 
@@ -58,7 +70,19 @@ The CLI must be LLM Agent friendly: JSON output only. Exit codes must be meaning
 
 It MUST NOT contain long-text fields (`body_text`, `instructions`, `objective`, `profile_summary`, `qualification_notes`, ...), JSON blobs (`detail`, `context`, `result`, `recipients`), variable-cardinality lists (`labels`, `domain_aliases`, `products_services`, `locations`), or internal Gmail bookkeeping (`gmail_history_id`, `watch_expiration`, `references_header`, `in_reply_to`, `rfc2822_message_id`).
 
-Mechanics: each entity has a `<Entity>Summary` Pydantic model in `models.py` (a strict subset of the full model). `list_<entity>` in `database.py` SELECTs only summary columns and returns `list[<Entity>Summary]`. `<entity> view ID` (and `get_<entity>()`) returns the full record. `search_*` follows the same contract -- it matches against all indexed text fields (e.g. `body_text`, `objective`, `recipients`) but the projection returned to callers is `<Entity>Summary`, so consumers needing full records on a hit hydrate via `get_<entity>(id)`. Exceptions: `Tag` already matches the summary contract (no `TagSummary`); `Note` summary keeps `body_preview` (first 80 chars + `...` if truncated) since the body is the entire content; `EnrollmentSummary` is denormalised with `contact_email` / `contact_name` because the join is already established in `list_enrollments_detailed`. Internal hot paths that need full records (sync loops over accounts, agent prompt assembly that needs `body_text`, classifier that needs `objective`) hydrate via `get_<entity>()` per id rather than introducing a `list_*_full` variant.
+Mechanics:
+
+- Each entity has `<Entity>Summary` in `models.py` -- strict subset of full model.
+- `list_<entity>` in `database.py` SELECTs summary columns only, returns `list[<Entity>Summary]`.
+- `<entity> view ID` and `get_<entity>()` return full record.
+- `search_*` matches all indexed text fields (`body_text`, `objective`, `recipients`) but projects to `<Entity>Summary`. Consumers needing full records hydrate via `get_<entity>(id)`.
+- Hot paths needing full records (sync loop, agent prompt, classifier) hydrate per-id via `get_<entity>()` -- do NOT introduce `list_*_full` variants.
+
+Exceptions:
+
+- `Tag` already matches summary contract -- no `TagSummary`.
+- `Note` summary keeps `body_preview` (first 80 chars + `...` if truncated) -- body is the entire content.
+- `EnrollmentSummary` denormalised with `contact_email` / `contact_name` -- join already established in `list_enrollments_detailed`.
 
 **Input validation in CLI commands.** All commands validate before touching the database:
 
@@ -277,7 +301,12 @@ Logging and tracing use [Pydantic Logfire](https://pydantic.dev/logfire) (OpenTe
 - Token: `mailpilot config set logfire_token <TOKEN>` or `LOGFIRE_TOKEN` env var
 - Cloud send: `send_to_logfire='if-token-present'` -- console-only when no token
 
-**Operator-log layer.** `src/mailpilot/operator_log.py` exposes `operator_event(name, **fields)` which writes a single-line `HH:MM:SS event=NAME k1=v1 ...` record to stdout, independent of Logfire's console exporter. It carries the curated lifecycle stream operators monitor under journald: `loop.start`, `loop.tick`, `loop.stop`, `pubsub.notify`, `sync.account`, `route.match`, `route.no_match`, `agent.run`, `task.drain`, `error`. Always on, regardless of `--debug`. When you add a new `logfire.exception` site reachable from `mailpilot run`, pair it with `operator_event("error", source=<event_name>, message=str(exc))` so the operator stream stays complete. Newlines in field values are collapsed to spaces -- preserves the one-line-per-event contract for `journalctl | grep`. See ADR-07 for the design.
+**Operator-log layer.** `src/mailpilot/operator_log.py` exposes `operator_event(name, **fields)` -> single-line `HH:MM:SS event=NAME k1=v1 ...` to stdout, independent of Logfire's console exporter. Always on, regardless of `--debug`.
+
+- Curated lifecycle events (monitored under journald): `loop.start`, `loop.tick`, `loop.stop`, `pubsub.notify`, `sync.account`, `route.match`, `route.no_match`, `agent.run`, `task.drain`, `error`.
+- New `logfire.exception` site reachable from `mailpilot run` MUST be paired with `operator_event("error", source=<event_name>, message=str(exc))` -- keeps operator stream complete.
+- Newlines in field values collapsed to spaces -- preserves one-line-per-event contract for `journalctl | grep`.
+- Design: ADR-07.
 
 **Cloud project.** All records land in dedicated Logfire project **`mailpilot`** (scope of the project-scoped write token). The sibling `leadpilot` service uses its own project, so no `service_name` filter is needed when querying. Spans are split by `deployment_environment` (`development` | `production`), set from the `logfire_environment` setting. When querying via MCP, always pass `project='mailpilot'` and filter with `WHERE deployment_environment = 'production'` (or `'development'`).
 
