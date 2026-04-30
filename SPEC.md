@@ -52,7 +52,7 @@ T8|x|unit tests: `DriveClient` (list, get, error mapping)|V7
 T9|x|smoke-test scenario — KB-grounded reply + polite decline in `.claude/skills/smoke-test/SKILL.md`|V5,V6
 T10|x|`make check` clean|V8
 T11|x|add `is_routed` to `EmailSummary` & `list_emails` projection -- list rows ! answer routing state w/o `view`. Why: smoke-test gates kept needing `email view <id>` only to check `is_routed` (currently null on summary even when routed)|-
-T12|.|clarify Gate B8 in `.claude/skills/smoke-test/SKILL.md` -- filter by `workflow_id == OUTBOUND_WORKFLOW_ID`, ⊥ by `--account-id`. Why: operator-driven trigger sends from `outbound@` are normal in B; only agent-driven sends from outbound *workflow* are the regression signal|-
+T12|x|clarify Gate B8 in `.claude/skills/smoke-test/SKILL.md` -- filter by `workflow_id == OUTBOUND_WORKFLOW_ID`, ⊥ by `--account-id`. Why: operator-driven trigger sends from `outbound@` are normal in B; only agent-driven sends from outbound *workflow* are the regression signal|-
 T13|.|analyze `pubsub.notification` vs `pubsub.notification.received` span duplication in `src/mailpilot/pubsub.py` (17 of each in last smoke run, 33 spans for ~conceptually-one event). Output: written decision -- collapse | keep both w/ rename | drop one. ⊥ code change until analysis approved|-
 
 ## §B BUGS

@@ -395,11 +395,25 @@ mailpilot activity list --contact-id <OUTBOUND_CONTACT_ID> --since <TEST_START_B
 
 The Scenario A outbound workflow is still active throughout Scenario B. It must not have reacted to B's traffic.
 
+The outbound *account* legitimately sends mail in B (the operator's two trigger emails in B3 and B6 leave from `outbound@`); those are not the signal we care about. The signal is whether the outbound *workflow* generated any agent-driven sends. Filter by `workflow_id` for that distinction:
+
+```
+mailpilot email list \
+  --account-id <OUTBOUND_ACCOUNT_ID> \
+  --direction outbound \
+  --workflow-id <OUTBOUND_WORKFLOW_ID> \
+  --since <TEST_START_B>
+```
+
+**Gate B8:** Zero rows. Any non-zero count means the still-active outbound workflow reacted to B's traffic -- record as a defect.
+
+Sanity check the operator triggers are still there (B3 and B6 are agent-driven from B's perspective but operator-driven from A's perspective, so they carry `workflow_id == null` on the outbound mailbox):
+
 ```
 mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>
 ```
 
-**Gate B8:** Zero new outbound sends from the outbound account during B's window. Any non-zero count means the still-active outbound workflow reacted -- record as a defect.
+Expect exactly 2 rows (the B3 and B6 triggers), each with `workflow_id == null`. Any deviation here is a separate signal -- either an unexpected outbound send (record as a defect) or a missing trigger (re-run B3/B6).
 
 ### B9. Stop the sync loop
 
