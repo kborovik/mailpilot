@@ -454,6 +454,7 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
     task_description: str = "",
     task_context: dict[str, Any] | None = None,
     model_override: Model | str | None = None,
+    trigger: str = "manual",
 ) -> dict[str, Any] | None:
     """Run the workflow's Pydantic AI agent for a contact.
 
@@ -469,6 +470,11 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
         task_description: Deferred task description, if triggered by task runner.
         task_context: Arbitrary JSON context from the task row.
         model_override: Override the LLM model (for testing with FunctionModel).
+        trigger: Caller path label for the ``agent.invoke`` span. One of
+            ``enrollment_run`` (CLI manual via ``mailpilot enrollment run``),
+            ``task`` (background drain via ``run.execute_task``),
+            ``email`` (email-driven), or ``manual`` (default for direct
+            programmatic calls). See SPEC §V12.
 
     Returns:
         Dict with invocation result, or None if skipped (lock held).
@@ -481,7 +487,7 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
         workflow_id=workflow.id,
         contact_id=contact.id,
         workflow_type=workflow.type,
-        trigger="email" if email else ("task" if task_description else "manual"),
+        trigger=trigger,
     ) as span:
         # Acquire advisory lock.
         if not _try_acquire_advisory_lock(connection, workflow.id, contact.id):

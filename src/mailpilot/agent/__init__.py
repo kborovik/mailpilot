@@ -30,6 +30,7 @@ def invoke_workflow_agent(  # noqa: PLR0913
     task_description: str = "",
     task_context: dict[str, Any] | None = None,
     model_override: Model[Any] | str | None = None,
+    trigger: str = "manual",
 ) -> dict[str, Any] | None:
     """Run the workflow's Pydantic AI agent for a contact.
 
@@ -47,4 +48,5 @@ def invoke_workflow_agent(  # noqa: PLR0913
         task_description=task_description,
         task_context=task_context,
         model_override=model_override,
+        trigger=trigger,
     )

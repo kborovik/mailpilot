@@ -1771,6 +1771,7 @@ def enrollment_run(workflow_id: str, contact_id: str) -> None:
                 contact,
                 email=email,
                 task_description=description,
+                trigger="enrollment_run",
             )
         except Exception as exc:
             envelope["status"] = "failed"

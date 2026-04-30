@@ -122,6 +122,7 @@ def execute_task(
                 email=email,
                 task_description=task.description,
                 task_context=task.context,
+                trigger="task",
             )
         except Exception as exc:
             logfire.exception(
