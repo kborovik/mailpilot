@@ -8,7 +8,15 @@ Pipeline that assigns inbound emails to the correct workflow:
    re-threading, where the same conversation has different ``threadId`` on
    each side)
 3. **LLM classification** -- single-turn call against active inbound workflows
-4. **Unrouted** -- store with is_routed=True, workflow_id=NULL
+4. **Unrouted** -- classifier ran on real candidates and rejected all of them
+5. **Skipped, no inbound workflows** -- account has zero active inbound
+   workflows; classifier never runs (distinct from the sync-layer
+   ``skipped_no_workflows`` short-circuit, which fires when the account has
+   zero active workflows of any type)
+
+Cases 4 and 5 both store with is_routed=True, workflow_id=NULL but emit
+distinct ``route_method`` values so operators can tell intentional structural
+gaps apart from genuine classifier misses.
 
 Also handles bounce detection (mailer-daemon/postmaster senders and
 bounce-related Gmail labels) and creates ``enrollment`` entries
@@ -93,16 +101,10 @@ def route_email(
                 if workflow_id is not None:
                     route_method = "rfc_message_id_match"
                 else:
-                    workflow_id = _try_classify(
+                    workflow_id, route_method = _try_classify(
                         connection, email, sender_email, settings
                     )
-                    route_method = (
-                        "classified" if workflow_id is not None else "unrouted"
-                    )
-            span.set_attribute(
-                "result",
-                route_method if workflow_id is not None else "unrouted",
-            )
+            span.set_attribute("result", route_method)
             span.set_attribute("route_method", route_method)
             if workflow_id is not None:
                 span.set_attribute("workflow_id", workflow_id)
@@ -289,12 +291,20 @@ def _try_classify(
     email: Email,
     sender_email: str,
     settings: Settings,
-) -> str | None:
-    """Step 2: LLM classification against active inbound workflows."""
+) -> tuple[str | None, str]:
+    """Step 3: LLM classification against active inbound workflows.
+
+    Returns ``(workflow_id, route_method)`` where ``route_method`` is:
+
+    - ``"classified"`` -- classifier ran and returned a workflow_id.
+    - ``"unrouted"`` -- classifier ran on real candidates and returned None.
+    - ``"skipped_no_inbound_workflows"`` -- account has no active inbound
+      workflows (or none survive hydration); classifier was not called.
+    """
     summaries = list_workflows(connection, account_id=email.account_id, status="active")
     inbound_summaries = [s for s in summaries if s.type == "inbound"]
     if not inbound_summaries:
-        return None
+        return (None, "skipped_no_inbound_workflows")
     # classify_email reads workflow.objective, which is not in WorkflowSummary;
     # hydrate via get_workflow so the LLM prompt has the full record.
     inbound_workflows = [
@@ -303,14 +313,15 @@ def _try_classify(
         if full is not None
     ]
     if not inbound_workflows:
-        return None
-    return classify_email(
+        return (None, "skipped_no_inbound_workflows")
+    workflow_id = classify_email(
         subject=email.subject,
         body=email.body_text,
         sender=sender_email,
         active_workflows=inbound_workflows,
         settings=settings,
     )
+    return (workflow_id, "classified" if workflow_id is not None else "unrouted")
 
 
 def _ensure_enrollment(

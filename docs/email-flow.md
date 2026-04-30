@@ -72,8 +72,8 @@ Determine which workflow handles this email. Idempotent: rows with `is_routed = 
 - **Bounce check first**: `_is_bounce` (sender local part `mailer-daemon`/`postmaster`, or any Gmail label containing `BOUNCE`). On hit, `_handle_bounce` marks the original outbound email `status = 'bounced'`, disables the original recipient (`contact.status = 'bounced'`), and stops here.
 - **Step 1 -- Thread match** (`_try_thread_match`): if a prior email in the same `gmail_thread_id` (same account, different row) has a non-null `workflow_id`, use the most recent such workflow. Status-agnostic (active or paused) for the no-ghosting guarantee.
 - **Step 2 -- RFC 2822 message-id match** (`_try_rfc_message_id_match`): if no thread match, walk the inbound email's `In-Reply-To` and `References` headers and look them up against `email.rfc2822_message_id` within the same account. Closes the recipient-side re-threading gap (Gmail can assign a fresh `threadId` even when the message cites our original `Message-ID`).
-- **Step 3 -- LLM classification** (`_try_classify` -> `agent.classify.classify_email`): single-turn structured-output call against active **inbound** workflows for the account (paused, draft, and outbound workflows are excluded).
-- **Step 4 -- Unrouted**: store with `workflow_id = NULL`, `is_routed = TRUE`.
+- **Step 3 -- LLM classification** (`_try_classify` -> `agent.classify.classify_email`): single-turn structured-output call against active **inbound** workflows for the account (paused, draft, and outbound workflows are excluded). Returns `(workflow_id, route_method)`; the route_method is `classified` on a hit, `unrouted` if the LLM rejected all candidates, or `skipped_no_inbound_workflows` if the account had no inbound candidates and the LLM was never called.
+- **Step 4 -- Unrouted**: store with `workflow_id = NULL`, `is_routed = TRUE` (covers both the `unrouted` and `skipped_no_inbound_workflows` route_methods).
 
 On a successful match, `_ensure_enrollment` creates the `(workflow_id, contact_id)` enrollment row if missing (`ON CONFLICT DO NOTHING`) and emits an `enrollment_added` activity once. See ADR-04 for the full pipeline contract.
 
