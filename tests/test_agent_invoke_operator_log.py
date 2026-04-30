@@ -81,7 +81,7 @@ def test_invoke_workflow_agent_emits_agent_run(
             model_override=FunctionModel(_model_that_calls_noop),
         )
 
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert "event=agent.run" in out
     assert f"workflow_id={workflow.id}" in out
     assert f"contact_id={contact.id}" in out

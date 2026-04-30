@@ -32,6 +32,7 @@ Compression rules for CLAUDE.md and project docs. Does NOT apply to code, error 
 - Agent-driven, not system-driven. The system provides tools and scheduling; LLM agents make all business decisions (what to send, when to follow up, when to give up).
 - Type-safety is non-negotiable. basedpyright strict mode.
 - TDD for ALL changes.
+- Spec lives in SPEC.md; use `/ck:*` skills to mutate or check it.
 - Background loops wake on events, not timers. When real-time mechanism exists (Pub/Sub, PG `LISTEN/NOTIFY`, signal handler), main loop `wait()` MUST use shared `wakeup_event` set by those mechanisms. Periodic timers = upper-bound fallback only -- otherwise real-time path silently degrades to polling and tests cannot tell the difference. Clear `wakeup_event` BEFORE processing -> mid-iteration events re-trigger next wait. Canonical shape: `start_sync_loop` in `src/mailpilot/sync.py`.
 
 ## Architecture
@@ -301,7 +302,7 @@ Logging and tracing use [Pydantic Logfire](https://pydantic.dev/logfire) (OpenTe
 - Token: `mailpilot config set logfire_token <TOKEN>` or `LOGFIRE_TOKEN` env var
 - Cloud send: `send_to_logfire='if-token-present'` -- console-only when no token
 
-**Operator-log layer.** `src/mailpilot/operator_log.py` exposes `operator_event(name, **fields)` -> single-line `HH:MM:SS event=NAME k1=v1 ...` to stdout, independent of Logfire's console exporter. Always on, regardless of `--debug`.
+**Operator-log layer.** `src/mailpilot/operator_log.py` exposes `operator_event(name, **fields)` -> single-line `HH:MM:SS event=NAME k1=v1 ...` to stderr, independent of Logfire's console exporter. Always on, regardless of `--debug`. Stderr keeps stdout strict-JSON for single-shot CLI commands like `mailpilot enrollment run` whose stdout is consumed by parsers; journald captures stderr identically to stdout, so `journalctl | grep event=` still works under systemd.
 
 - Curated lifecycle events (monitored under journald): `loop.start`, `loop.tick`, `loop.stop`, `pubsub.notify`, `sync.account`, `route.match`, `route.no_match`, `agent.run`, `task.drain`, `error`.
 - New `logfire.exception` site reachable from `mailpilot run` MUST be paired with `operator_event("error", source=<event_name>, message=str(exc))` -- keeps operator stream complete.

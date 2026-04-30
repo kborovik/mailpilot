@@ -1,8 +1,11 @@
 """Operator-facing console output for ``mailpilot run``.
 
-Independent of Logfire's console exporter. Always emits to stdout
+Independent of Logfire's console exporter. Always emits to stderr
 (captured by journald under systemd). Use Logfire for deep traces;
 use this for the lifecycle/error layer operators monitor.
+
+Stderr keeps stdout strict-JSON for single-shot CLI commands like
+``mailpilot enrollment run`` whose stdout is consumed by parsers.
 
 See ADR-07 "Operator log layer".
 """
@@ -15,7 +18,7 @@ from typing import Any
 
 
 def operator_event(name: str, **fields: Any) -> None:
-    """Write one structured line to stdout.
+    """Write one structured line to stderr.
 
     Format: ``HH:MM:SS event=NAME k1=v1 k2=v2`` -- single line, ASCII-only.
     Values containing whitespace are double-quoted with internal quotes
@@ -31,5 +34,5 @@ def operator_event(name: str, **fields: Any) -> None:
             text = '"' + text.replace('"', '\\"') + '"'
         parts.append(f"{key}={text}")
     line = f"{timestamp} " + " ".join(parts)
-    sys.stdout.write(line + "\n")
-    sys.stdout.flush()
+    sys.stderr.write(line + "\n")
+    sys.stderr.flush()

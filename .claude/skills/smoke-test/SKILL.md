@@ -122,7 +122,7 @@ Save `OUTBOUND_WORKFLOW_ID`.
 
 Start `mailpilot run` in the background via `Bash` with `run_in_background: true`. Capture the bash_id so you can read its output later. The loop runs **once for the whole test** -- it stays up through B and is only stopped at the very end (B9).
 
-The loop emits curated `event=...` lifecycle lines on stdout regardless of `--debug` (`loop.tick`, `sync.account`, `route.match`, `agent.run`, `task.drain`, `error`). Use `--debug` only when you also need Logfire's full span output for deep diagnosis.
+The loop emits curated `event=...` lifecycle lines on stderr regardless of `--debug` (`loop.tick`, `sync.account`, `route.match`, `agent.run`, `task.drain`, `error`). The `Bash` background capture merges stdout and stderr, so the captured output you read still contains them. Use `--debug` only when you also need Logfire's full span output for deep diagnosis.
 
 ```
 uv run mailpilot --debug run

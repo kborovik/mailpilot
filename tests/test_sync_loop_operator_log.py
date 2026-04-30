@@ -49,7 +49,7 @@ def test_run_periodic_iteration_emits_loop_tick(
         do_full_sweep=True,
     )
 
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert "event=loop.tick" in out
     assert "iteration=1" in out
     assert "wakeup=event" in out
@@ -87,7 +87,7 @@ def test_run_periodic_iteration_increments_iteration_counter(
         do_full_sweep=False,
     )
 
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert "iteration=1" in out
     assert "iteration=2" in out
 
@@ -113,7 +113,7 @@ def test_drain_sync_queue_emits_pubsub_notify(
 
     _drain_sync_queue(database_connection, make_test_settings(), sync_queue, set())
 
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert "event=pubsub.notify" in out
     assert f"email={account.email}" in out
 
@@ -140,7 +140,7 @@ def test_sync_account_emits_sync_account_event(
     stored = sync_account(database_connection, account, client, make_test_settings())
 
     assert stored == 1
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert "event=sync.account" in out
     assert "email=op@example.com" in out
     assert "new=1" in out
@@ -167,7 +167,7 @@ def test_drain_pending_tasks_emits_task_drain_when_tasks_executed(
 
     _drain_pending_tasks(database_connection, make_test_settings())
 
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert "event=task.drain" in out
     assert "drained=3" in out
     assert "duration_ms=" in out
@@ -197,7 +197,7 @@ def test_drain_sync_queue_emits_error_on_sync_failure(
 
     _drain_sync_queue(database_connection, make_test_settings(), sync_queue, set())
 
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert "event=error" in out
     assert "source=sync.notification.sync_failed" in out
     assert 'message="Gmail timeout 504"' in out
@@ -216,7 +216,7 @@ def test_drain_pending_tasks_skips_event_when_no_tasks(
 
     _drain_pending_tasks(database_connection, make_test_settings())
 
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert "event=task.drain" not in out
 
 
@@ -242,7 +242,7 @@ def test_start_sync_loop_emits_loop_start_and_loop_stop(
 
         start_sync_loop(database_connection, settings)
 
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert "event=loop.start" in out
     assert f"pid={os.getpid()}" in out
     assert f"interval={settings.run_interval}" in out

@@ -86,7 +86,7 @@ def test_route_email_emits_match_via_thread(
         database_connection, new_email, "alice@example.com", make_test_settings()
     )
 
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert "event=route.match" in out
     assert f"email_id={new_email.id}" in out
     assert f"workflow_id={workflow.id}" in out
@@ -129,7 +129,7 @@ def test_route_email_emits_match_via_message_id(
     capsys.readouterr()
     route_email(database_connection, reply, "alice@example.com", make_test_settings())
 
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert "event=route.match" in out
     assert "via=message_id" in out
     assert f"workflow_id={workflow.id}" in out
@@ -164,7 +164,7 @@ def test_route_email_emits_no_match_when_classification_returns_none(
     ):
         route_email(database_connection, new_email, "bob@example.com", settings)
 
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert "event=route.no_match" in out
     assert f"email_id={new_email.id}" in out
 
@@ -198,7 +198,7 @@ def test_route_email_emits_match_via_llm_when_classifier_returns_workflow(
     ):
         route_email(database_connection, new_email, "carol@example.com", settings)
 
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert "event=route.match" in out
     assert "via=llm" in out
     assert f"workflow_id={workflow.id}" in out
