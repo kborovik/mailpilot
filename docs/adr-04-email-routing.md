@@ -37,7 +37,9 @@ When an inbound email arrives for an account, route it through a four-step pipel
        v
   3. _try_classify (LLM, inbound active) -----> hit -----> route to workflow
        |
-       | miss
+       | miss (one of two no-match labels):
+       |   - unrouted                       (classifier ran, no candidate matched)
+       |   - skipped_no_inbound_workflows   (no active inbound workflows; LLM never ran)
        v
   4. store as unrouted
        |
@@ -51,9 +53,14 @@ When an inbound email arrives for an account, route it through a four-step pipel
 
 **Step 2 -- RFC 2822 message-id match (`_try_rfc_message_id_match`).** Gmail re-threads on the recipient side: a reply landing on the outbound mailbox can have a fresh `threadId` even though it cites our original send via `In-Reply-To` / `References`. When step 1 returns no match, walk the cited message-ids (parent first via `In-Reply-To`, then ancestors from the whitespace-separated `References`, deduped while preserving order) and look them up against `email.rfc2822_message_id` within the same `account_id`. Scope is intentionally restricted to the inbound email's own account so cross-account collisions on a shared `Message-ID` cannot leak workflow assignments.
 
-**Step 3 -- LLM classification (`_try_classify` -> `mailpilot.agent.classify.classify_email`).** Single-turn Pydantic AI structured-output call. Candidates are limited to **active inbound** workflows (`list_workflows(account_id, status="active")` filtered by `type == "inbound"`); paused, draft, and outbound workflows are excluded. This means a new email about a paused workflow's topic will go unrouted -- intentional, since paused workflows only handle existing threads, not new conversations. The classifier is also skipped when there are no candidates (returns None without calling the LLM) and when the model returns a `workflow_id` that is not in the candidate set (also coerced to None).
+**Step 3 -- LLM classification (`_try_classify` -> `mailpilot.agent.classify.classify_email`).** Single-turn Pydantic AI structured-output call. Candidates are limited to **active inbound** workflows (`list_workflows(account_id, status="active")` filtered by `type == "inbound"`); paused, draft, and outbound workflows are excluded. This means a new email about a paused workflow's topic will go unrouted -- intentional, since paused workflows only handle existing threads, not new conversations. When the model returns a `workflow_id` that is not in the candidate set, it is coerced to None.
 
-**Step 4 -- Unrouted.** If classification returns no match, store the email with `workflow_id = NULL` and `is_routed = TRUE`. The email is preserved and can be viewed via `mailpilot email list --account-id ID` and `mailpilot email view ID`.
+`_try_classify` returns `(workflow_id, route_method)` so the `routing.route_email` span can distinguish the two no-match cases:
+
+- `route_method=skipped_no_inbound_workflows` -- account has no active inbound workflows (or none survive hydration); the LLM is never called. Distinct from the sync-layer `skipped_no_workflows` short-circuit, which fires only when the account has zero active workflows of any type. The inbound-only label is what fires on the outbound mailbox when an inbound reply lands while only outbound workflows are active.
+- `route_method=unrouted` -- the LLM ran on real candidates and rejected all of them (returned `None` or returned a hallucinated workflow_id that was coerced to None). This is the genuine "classifier could not place this email" signal worth investigating in production.
+
+**Step 4 -- Unrouted.** If classification returns no match (either label above), store the email with `workflow_id = NULL` and `is_routed = TRUE`. The email is preserved and can be viewed via `mailpilot email list --account-id ID` and `mailpilot email view ID`.
 
 ### Pre-routing skips (sync layer)
 

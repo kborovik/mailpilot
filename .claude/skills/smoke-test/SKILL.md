@@ -364,7 +364,7 @@ Match by `SUBJECT_B` (likely with a `Re:` prefix on Gmail's side).
 
 - Email present in outbound account's inbound emails.
 - `is_routed == true`.
-- `workflow_id == null` -- the outbound workflow exists and is active, but it does not own B's thread (no `thread_match`) and outbound workflows do not classify, so the reply correctly lands with `route_method=skipped_no_workflows`.
+- `workflow_id == null` -- the outbound workflow exists and is active, but it does not own B's thread (no `thread_match`) and outbound workflows do not classify, so the reply correctly lands with `route_method=skipped_no_inbound_workflows` (account has active workflows, but none are inbound, so the classifier never runs).
 - **No additional inbound replies.** Re-run `mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>` and confirm only the single reply from B5 exists. More than one means the inbound agent kept replying despite the terminal `record_enrollment_outcome` call -- record as a defect.
 - **Outbound workflow stayed quiet (concurrent-workflow check).** Re-run `mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>` and confirm zero new outbound sends. Any non-zero count means the still-active outbound workflow reacted to B's traffic -- record as a defect.
 
@@ -396,7 +396,7 @@ If the process does not exit within 10s, send SIGKILL and record this in the rep
 Time window `[TEST_START_B, now]`. Spans to verify:
 
 - `agent.invoke` -- exactly **1** invocation (B5). More than 1 means either the inbound agent re-fired or the outbound workflow reacted to B's traffic.
-- `routing.route_email` -- the inbound-side email (B4) should be `route_method=classified`. The outbound-side reply (B6) should be `route_method=skipped_no_workflows`.
+- `routing.route_email` -- the inbound-side email (B4) should be `route_method=classified`. The outbound-side reply (B6) should be `route_method=skipped_no_inbound_workflows` (the outbound workflow is active but not an inbound classification candidate).
 - `classify_email` -- 1 invocation (B4). Check `result` matches `INBOUND_WORKFLOW_ID`.
 - `running tool` (B5) -- expect `reply_email` and `record_enrollment_outcome`.
 - Any `is_exception=true` or `level=warn` spans -- record them.
@@ -450,7 +450,7 @@ Email summary (Scenario B):
   Operator trigger: <id>  subject: <SUBJECT_B>
   Inbound delivery: <id>  workflow_id: <INBOUND_WORKFLOW_ID> via classified
   Agent reply:      <id>  thread: <inbound thread>
-  Reply round-trip: <id>  skipped_no_workflows (outbound workflow active but does not own B's thread)
+  Reply round-trip: <id>  skipped_no_inbound_workflows (outbound workflow active but not an inbound classification candidate)
 
 Loop sentinels:
   Scenario A: agent.invoke count == 2 (expected 2)

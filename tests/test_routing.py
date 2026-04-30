@@ -782,14 +782,65 @@ def test_route_email_span_has_route_method_unrouted(
     capfire: CaptureLogfire,
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """routing.route_email span must set route_method='unrouted'."""
+    """routing.route_email span must set route_method='unrouted' when the
+    classifier ran on real candidates and rejected them all."""
     account = make_test_account(database_connection, email="rmur@example.com")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="inbound"
+    )
+    _activate_workflow(database_connection, workflow.id)
+
+    new_email = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Random spam",
+        body_text="You won a prize!",
+        gmail_thread_id="t-rmur",
+    )
+    assert new_email is not None
+
+    settings = make_test_settings(
+        anthropic_api_key="sk-test",
+        anthropic_model="claude-sonnet-4-6",
+    )
+    model = _function_model_returning(workflow_id=None, reasoning="no match")
+
+    with classify_module._AGENT.override(model=model):  # pyright: ignore[reportPrivateUsage]
+        route_email(database_connection, new_email, "nobody@example.com", settings)
+
+    spans = _routing_spans(capfire)
+    assert len(spans) == 1
+    assert spans[0]["attributes"]["route_method"] == "unrouted"
+
+
+def test_route_email_span_has_route_method_skipped_no_inbound_workflows(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """routing.route_email span must set route_method='skipped_no_inbound_workflows'
+    when the account has only outbound workflows -- classifier never runs."""
+    account = make_test_account(database_connection, email="rmsni@example.com")
+    outbound_wf = make_test_workflow(
+        database_connection,
+        account_id=account.id,
+        name="Outbound only",
+        workflow_type="outbound",
+    )
+    update_workflow(
+        database_connection,
+        outbound_wf.id,
+        objective="Cold outreach",
+        instructions="Send cold emails",
+    )
+    activate_workflow(database_connection, outbound_wf.id)
+
     new_email = create_email(
         database_connection,
         account_id=account.id,
         direction="inbound",
         subject="orphan",
-        gmail_thread_id="t-rmur",
+        gmail_thread_id="t-rmsni",
     )
     assert new_email is not None
 
@@ -799,7 +850,8 @@ def test_route_email_span_has_route_method_unrouted(
 
     spans = _routing_spans(capfire)
     assert len(spans) == 1
-    assert spans[0]["attributes"]["route_method"] == "unrouted"
+    assert spans[0]["attributes"]["route_method"] == "skipped_no_inbound_workflows"
+    assert "workflow_id" not in spans[0]["attributes"]
 
 
 # -- RFC 2822 In-Reply-To fallback (Defect 2) ---------------------------------
