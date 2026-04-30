@@ -77,6 +77,18 @@ Run **once** at the start. Both scenarios reuse the same accounts, contacts, and
 - `mailpilot company list` returns 1 company.
 - `mailpilot workflow list` returns **0** workflows. Workflows are created per-scenario.
 
+**KB visibility gate (Scenario B prerequisite).** The demo KB lives in the `MailPilot` Shared Drive (ID `0AJIvyECg210LUk9PVA`), folder `MailPilot Demo` (ID `1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat`). `demo@lab5.ca` is a Reader on the Shared Drive; that membership -- not per-file ACL -- is what makes the files visible to the impersonated user. Verify before scenarios start, impersonating the actual subject the agent will use:
+
+```
+uv run python -c "
+from mailpilot.drive import DriveClient
+files = DriveClient('demo@lab5.ca').list_markdown('1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat')
+print(len(files), [f['name'] for f in files])
+"
+```
+
+Expect exactly 3 markdown files (`pure-aqua-commercial-ro-systems.md`, `pure-aqua-industrial-water-softener.md`, `watts-uv-com-disinfection.md`). If fewer, B will produce false declines -- stop and fix the Drive ACL before continuing. `anyoneWithLink:reader` alone does **not** make files appear here -- it only governs who can open the URL once it's pasted into the reply.
+
 **On failure:** Stop. Report which entity failed and the error JSON.
 
 ---
@@ -260,16 +272,17 @@ Do not stop the sync loop. Do not run `make clean`. Do not recreate accounts or 
 
 **Real KB used.** This scenario uses the production KB folder, not a fixture:
 
+- Shared Drive: `MailPilot` (ID `0AJIvyECg210LUk9PVA`). Members: `kb@lab5.ca` Manager, `demo@lab5.ca` Reader.
 - Folder name: `MailPilot Demo`
-- Folder ID: `1cqgBcAh8JABFC86VfDA4-Iub8-juMEP2`
-- Markdown files (as of writing -- run `gws drive files list --params '{"q":"parents in '\''1cqgBcAh8JABFC86VfDA4-Iub8-juMEP2'\'' and trashed = false","fields":"files(id,name,mimeType)"}'` to confirm before each test run):
+- Folder ID: `1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat`
+- Markdown files (as of writing -- the Phase 0 KB visibility gate also enumerates them; re-confirm via that gate before each run):
   - `pure-aqua-commercial-ro-systems.md` -- TW-series RO systems (e.g., TW-18.0K-1240).
   - `pure-aqua-industrial-water-softener.md` -- SF-series softeners (e.g., SF-100S).
   - `watts-uv-com-disinfection.md` -- UV-COM disinfection units.
 
   PDFs sit alongside the `.md` files; `list_drive_markdown`'s `mimeType='text/markdown'` filter must skip them. If it does not, that is a defect.
 
-- The service account used for `mailpilot` must have at least Viewer access on the folder when impersonating `demo@lab5.ca`. If `list_drive_markdown` returns `not_found`, fix the Drive permission before retrying -- do not patch around it.
+- Access model: because the KB lives in a Shared Drive, listing depends on the impersonated user being a Shared Drive member, not on per-file ACL. `anyoneWithLink:reader` is set on every file so the `web_view_link` returned by `read_drive_markdown` opens for strangers reading the agent's reply. If `list_drive_markdown` returns an empty list or `not_found`, the failure mode is almost always Shared Drive membership of `demo@lab5.ca`, not file-level sharing -- fix that first, do not patch around it.
 
 Capture `TEST_START_B` (ISO, must be later than A's last activity) and two distinct subjects -- `SUBJECT_B1` (in-scope) and `SUBJECT_B2` (out-of-scope) -- per the Conventions section. Both must differ from `SUBJECT_A`.
 
@@ -283,7 +296,7 @@ mailpilot workflow create \
   --type inbound \
   --account-id <DEMO_ACCOUNT_ID> \
   --objective "Answer water-treatment product questions grounded in the MailPilot Demo Drive folder; politely decline questions about products not in the KB." \
-  --instructions "You are the lab5.ca/demo agent. The Markdown product knowledge base lives in Google Drive folder 1cqgBcAh8JABFC86VfDA4-Iub8-juMEP2. For every reply: call list_drive_markdown with that folder ID, pick the most relevant file by name, call read_drive_markdown on it, then compose the reply grounded in that file's content. Cite the source file name in the body. If no listed file is relevant to the question (e.g., the asker is asking about Pentair, Evoqua, or Grundfos products that are not in the folder), reply with a short polite decline that explains the KB does not cover that product and do NOT fabricate specifications. Body MUST use plain Markdown. Subject MUST preserve the incoming thread subject. After replying, call record_enrollment_outcome with outcome='completed'. Do not create follow-up tasks."
+  --instructions "You are the lab5.ca/demo agent. The Markdown product knowledge base lives in Google Drive folder 1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat. For every reply: call list_drive_markdown with that folder ID, pick the most relevant file by name, call read_drive_markdown on it, then compose the reply grounded in that file's content. Cite the source file name in the body. If no listed file is relevant to the question (e.g., the asker is asking about Pentair, Evoqua, or Grundfos products that are not in the folder), reply with a short polite decline that explains the KB does not cover that product and do NOT fabricate specifications. Body MUST use plain Markdown. Subject MUST preserve the incoming thread subject. After replying, call record_enrollment_outcome with outcome='completed'. Do not create follow-up tasks."
 ```
 
 Activate and pre-enroll the sender:
@@ -341,7 +354,7 @@ Match by `SUBJECT_B1` (likely with `Re:` prefix). Record the wall-clock time the
 
 Run a Logfire query for the `agent.invoke` span produced by B4's reply. Within that invocation, the `running tool` child spans must include, in order:
 
-1. `list_drive_markdown` (with `folder_id=1cqgBcAh8JABFC86VfDA4-Iub8-juMEP2`)
+1. `list_drive_markdown` (with `folder_id=1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat`)
 2. `read_drive_markdown` (with a `file_id` returned by step 1)
 3. `reply_email`
 4. `record_enrollment_outcome` (outcome=`completed`)
@@ -466,7 +479,7 @@ Entity IDs (shared by both scenarios):
   Outbound account: <id>   Inbound account: <id>   Demo account: <id>   Company: <id>
   Outbound contact: <id>   Inbound contact: <id>   Demo contact: <id>
   Outbound workflow: <id>  Demo workflow: <id>
-  KB folder ID: 1cqgBcAh8JABFC86VfDA4-Iub8-juMEP2
+  KB folder ID: 1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat
 
 Email summary (Scenario A):
   Outbound send:    <id>  subject: <SUBJECT_A>

@@ -62,6 +62,9 @@ def test_list_markdown_query_filters_to_markdown_in_folder_excluding_trash() -> 
     assert "parents in 'FOLDER42'" in query
     assert "trashed = false" in query
     assert call_kwargs["fields"] == "files(id, name)"
+    assert call_kwargs["corpora"] == "allDrives"
+    assert call_kwargs["supportsAllDrives"] is True
+    assert call_kwargs["includeItemsFromAllDrives"] is True
 
 
 def test_list_markdown_empty_folder_returns_empty_list() -> None:
@@ -101,8 +104,12 @@ def test_read_markdown_uses_alt_media_for_body() -> None:
     files = service.files.return_value
     metadata_kwargs = files.get.call_args.kwargs
     media_kwargs = files.get_media.call_args.kwargs
-    assert metadata_kwargs == {"fileId": "FID", "fields": "name, webViewLink"}
-    assert media_kwargs == {"fileId": "FID"}
+    assert metadata_kwargs == {
+        "fileId": "FID",
+        "fields": "name, webViewLink",
+        "supportsAllDrives": True,
+    }
+    assert media_kwargs == {"fileId": "FID", "supportsAllDrives": True}
 
 
 def test_read_markdown_decodes_utf8_with_replacement_on_invalid_bytes() -> None:

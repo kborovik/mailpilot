@@ -83,7 +83,15 @@ class DriveClient:
             f"and trashed = false"
         )
         response: dict[str, Any] = (
-            self._service.files().list(q=query, fields="files(id, name)").execute()
+            self._service.files()
+            .list(
+                q=query,
+                fields="files(id, name)",
+                corpora="allDrives",
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+            )
+            .execute()
         )
         files: list[dict[str, str]] = []
         for entry in response.get("files", []):
@@ -101,10 +109,18 @@ class DriveClient:
         """
         metadata: dict[str, Any] = (
             self._service.files()
-            .get(fileId=file_id, fields="name, webViewLink")
+            .get(
+                fileId=file_id,
+                fields="name, webViewLink",
+                supportsAllDrives=True,
+            )
             .execute()
         )
-        media: bytes = self._service.files().get_media(fileId=file_id).execute()
+        media: bytes = (
+            self._service.files()
+            .get_media(fileId=file_id, supportsAllDrives=True)
+            .execute()
+        )
         return {
             "name": metadata.get("name", ""),
             "content": media.decode("utf-8", errors="replace"),
