@@ -20,6 +20,8 @@ Tools per ADR-03:
     - ``read_contact`` -- CRM contact lookup
     - ``read_company`` -- CRM company lookup
     - ``read_email`` -- full email content lookup
+    - ``list_drive_markdown`` -- list Markdown files in a Drive folder
+    - ``read_drive_markdown`` -- read a Markdown file from Drive
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from typing import Any
 import psycopg
 
 from mailpilot import database, email_ops
+from mailpilot.drive import DriveClient
 from mailpilot.models import Account
 from mailpilot.settings import Settings
 
@@ -360,6 +363,66 @@ def read_email(
     if email is None or email.account_id != account_id:
         return None
     return email.model_dump()
+
+
+def list_drive_markdown(
+    drive_client: DriveClient,
+    folder_id: str,
+) -> list[dict[str, str]] | dict[str, str]:
+    """List Markdown files in a Drive folder for KB grounding.
+
+    Args:
+        drive_client: Drive client scoped to the current account.
+        folder_id: Drive folder ID supplied via the workflow instructions.
+
+    Returns:
+        List of ``{"file_id": ..., "name": ...}`` on success, or an error
+        dict ``{"error": ..., "message": ...}`` on Drive failure.
+    """
+    from googleapiclient.errors import HttpError
+
+    try:
+        return drive_client.list_markdown(folder_id)
+    except HttpError as exc:
+        if exc.resp.status == 404:
+            return {
+                "error": "not_found",
+                "message": f"drive folder not found: {folder_id}",
+            }
+        return {
+            "error": "drive_unavailable",
+            "message": str(exc),
+        }
+
+
+def read_drive_markdown(
+    drive_client: DriveClient,
+    file_id: str,
+) -> dict[str, str]:
+    """Read a Markdown file from Drive.
+
+    Args:
+        drive_client: Drive client scoped to the current account.
+        file_id: Drive file ID, typically returned by ``list_drive_markdown``.
+
+    Returns:
+        ``{"name": ..., "content": ..., "web_view_link": ...}`` on success,
+        or ``{"error": ..., "message": ...}`` on Drive failure.
+    """
+    from googleapiclient.errors import HttpError
+
+    try:
+        return drive_client.read_markdown(file_id)
+    except HttpError as exc:
+        if exc.resp.status == 404:
+            return {
+                "error": "not_found",
+                "message": f"drive file not found: {file_id}",
+            }
+        return {
+            "error": "drive_unavailable",
+            "message": str(exc),
+        }
 
 
 def noop(reason: str) -> dict[str, Any]:

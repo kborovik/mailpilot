@@ -219,10 +219,7 @@ def test_resolve_credentials_path_from_settings(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
     settings = Settings(google_application_credentials="/tmp/service-account.json")
     with patch("mailpilot.settings.get_settings", return_value=settings):
-        assert (
-            gmail._resolve_credentials_path()  # pyright: ignore[reportPrivateUsage]
-            == "/tmp/service-account.json"
-        )
+        assert gmail.resolve_credentials_path() == "/tmp/service-account.json"
 
 
 def test_resolve_credentials_path_falls_back_to_env(
@@ -231,10 +228,7 @@ def test_resolve_credentials_path_falls_back_to_env(
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/env/key.json")
     settings = Settings(google_application_credentials="")
     with patch("mailpilot.settings.get_settings", return_value=settings):
-        assert (
-            gmail._resolve_credentials_path()  # pyright: ignore[reportPrivateUsage]
-            == "/env/key.json"
-        )
+        assert gmail.resolve_credentials_path() == "/env/key.json"
 
 
 def test_resolve_credentials_path_settings_wins_over_env(
@@ -243,10 +237,7 @@ def test_resolve_credentials_path_settings_wins_over_env(
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/env/key.json")
     settings = Settings(google_application_credentials="/cfg/key.json")
     with patch("mailpilot.settings.get_settings", return_value=settings):
-        assert (
-            gmail._resolve_credentials_path()  # pyright: ignore[reportPrivateUsage]
-            == "/cfg/key.json"
-        )
+        assert gmail.resolve_credentials_path() == "/cfg/key.json"
 
 
 def test_resolve_credentials_path_missing(monkeypatch: pytest.MonkeyPatch):
@@ -256,7 +247,7 @@ def test_resolve_credentials_path_missing(monkeypatch: pytest.MonkeyPatch):
         patch("mailpilot.settings.get_settings", return_value=settings),
         pytest.raises(SystemExit, match="No service account credentials"),
     ):
-        gmail._resolve_credentials_path()  # pyright: ignore[reportPrivateUsage]
+        gmail.resolve_credentials_path()
 
 
 # -- get_messages_batch --------------------------------------------------------

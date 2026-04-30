@@ -107,7 +107,7 @@ def _retry_on_transient(func: Any) -> Any:
     return wrapper
 
 
-def _resolve_credentials_path() -> str:
+def resolve_credentials_path() -> str:
     """Resolve the service account credentials file path.
 
     Reads ``google_application_credentials`` from settings first, then
@@ -152,7 +152,7 @@ def build_gmail_service(email: str) -> GmailService:
     from googleapiclient.discovery import build
 
     credentials = Credentials.from_service_account_file(  # type: ignore[no-untyped-call]
-        _resolve_credentials_path(),
+        resolve_credentials_path(),
         scopes=_GMAIL_SCOPE,
     )
     delegated = credentials.with_subject(email)

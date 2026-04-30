@@ -69,7 +69,10 @@ def test_invoke_workflow_agent_emits_agent_run(
     )
 
     capsys.readouterr()
-    with patch("mailpilot.agent.invoke.GmailClient"):
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
         invoke_workflow_agent(
             database_connection,
             settings,

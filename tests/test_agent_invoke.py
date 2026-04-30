@@ -135,7 +135,10 @@ def test_agent_calls_noop_passes_enforcement(
     settings = make_test_settings(
         anthropic_api_key="sk-test", anthropic_model="test-model"
     )
-    with patch("mailpilot.agent.invoke.GmailClient"):
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
         invoke_workflow_agent(
             database_connection,
             settings,
@@ -156,6 +159,7 @@ def test_agent_no_tool_calls_raises(
     )
     with (
         patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
         pytest.raises(AgentDidNotUseToolsError, match=workflow.id),
     ):
         invoke_workflow_agent(
@@ -176,7 +180,10 @@ def test_agent_calls_real_tool_passes_enforcement(
         anthropic_api_key="sk-test", anthropic_model="test-model"
     )
     model = _model_that_calls_tool("read_contact", {"email": contact.email})
-    with patch("mailpilot.agent.invoke.GmailClient"):
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
         invoke_workflow_agent(
             database_connection,
             settings,
@@ -247,7 +254,10 @@ def test_email_history_loaded(
     )
 
     captured_messages: list[ModelMessage] = []
-    with patch("mailpilot.agent.invoke.GmailClient"):
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
         invoke_workflow_agent(
             database_connection,
             settings,
@@ -314,7 +324,10 @@ def test_email_history_scoped_to_workflow(
     )
 
     captured_messages: list[ModelMessage] = []
-    with patch("mailpilot.agent.invoke.GmailClient"):
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
         invoke_workflow_agent(
             database_connection,
             settings,
@@ -357,7 +370,10 @@ def test_inbound_email_trigger(
     )
 
     captured_messages: list[ModelMessage] = []
-    with patch("mailpilot.agent.invoke.GmailClient"):
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
         invoke_workflow_agent(
             database_connection,
             settings,
@@ -397,7 +413,10 @@ def test_inbound_email_trigger_includes_email_id_and_sender(
     assert email is not None
 
     captured_messages: list[ModelMessage] = []
-    with patch("mailpilot.agent.invoke.GmailClient"):
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
         invoke_workflow_agent(
             database_connection,
             settings,
@@ -424,7 +443,10 @@ def test_deferred_task_trigger(
     )
 
     captured_messages: list[ModelMessage] = []
-    with patch("mailpilot.agent.invoke.GmailClient"):
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
         invoke_workflow_agent(
             database_connection,
             settings,
@@ -454,6 +476,7 @@ def test_account_not_found_raises(
 
     with (
         patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
         patch("mailpilot.agent.invoke.database.get_account", return_value=None),
         pytest.raises(ValueError, match="account not found"),
     ):
@@ -475,6 +498,7 @@ def test_missing_api_key_raises(
 
     with (
         patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
         pytest.raises(ValueError, match="anthropic_api_key is required"),
     ):
         invoke_workflow_agent(
@@ -498,7 +522,10 @@ def test_invoke_span_has_usage_attributes(
     settings = make_test_settings(
         anthropic_api_key="sk-test", anthropic_model="test-model"
     )
-    with patch("mailpilot.agent.invoke.GmailClient"):
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
         invoke_workflow_agent(
             database_connection,
             settings,
@@ -539,7 +566,10 @@ def test_invoke_span_has_status_completed_on_success(
     settings = make_test_settings(
         anthropic_api_key="sk-test", anthropic_model="test-model"
     )
-    with patch("mailpilot.agent.invoke.GmailClient"):
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
         invoke_workflow_agent(
             database_connection,
             settings,
@@ -574,6 +604,7 @@ def test_invoke_span_has_status_failed_on_exception(
     )
     with (
         patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
         pytest.raises(AgentDidNotUseToolsError),
     ):
         invoke_workflow_agent(
@@ -625,7 +656,10 @@ def test_agent_calls_reply_email(
         "reply_email",
         {"email_id": inbound.id, "body": "Sure, happy to help!"},
     )
-    with patch("mailpilot.agent.invoke.GmailClient") as mock_cls:
+    with (
+        patch("mailpilot.agent.invoke.GmailClient") as mock_cls,
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
         mock_client = MagicMock()
         mock_client.send_message.return_value = {
             "id": "sent-1",
@@ -751,7 +785,10 @@ def test_invoke_surfaces_tool_errors_in_result(
     settings = make_test_settings(
         anthropic_api_key="sk-test", anthropic_model="test-model"
     )
-    with patch("mailpilot.agent.invoke.GmailClient"):
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
         result = invoke_workflow_agent(
             database_connection,
             settings,

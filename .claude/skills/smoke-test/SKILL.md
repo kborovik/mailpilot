@@ -403,6 +403,74 @@ Time window `[TEST_START_B, now]`. Spans to verify:
 
 ---
 
+## Scenario C: KB-grounded inbound auto-reply (optional)
+
+Exercises the `list_drive_markdown` / `read_drive_markdown` agent tools by routing an inbound trigger through a workflow that cites a Google Drive folder of Markdown notes. Run only when changes touch `src/mailpilot/drive.py`, the two Drive tools, or the system prompt's KB grounding paragraph in `src/mailpilot/agent/invoke.py`. Run after Scenario B; reuses Phase 0 entities and the `mailpilot run` loop.
+
+### Prerequisites (operator action, one-time)
+
+Outside the test runner, the operator must:
+
+1. Create a Google Drive folder named `mailpilot-kb-smoke` and grant the inbound service-account-impersonated user (`inbound@lab5.ca`) at least Viewer access.
+2. Drop one Markdown file `lab5-faq.md` in that folder containing exactly one verifiable fact, e.g.:
+   ```
+   # Lab5 FAQ
+   Lab5's office is at 1234 Industrial Way, Vancouver BC.
+   ```
+3. Capture the folder ID from the URL and export it as `KB_FOLDER_ID`.
+
+If `KB_FOLDER_ID` is unset, skip Scenario C and record `SKIPPED (no KB folder configured)` in the report.
+
+### C1. Create KB-grounded inbound workflow
+
+```
+mailpilot workflow create --name "KB Inbound" --type inbound --account-id <INBOUND_ACCOUNT_ID> \
+  --objective "Answer questions using the KB folder; decline politely when the answer is not in the KB." \
+  --instructions "You are an inbound assistant. The Drive folder ID is $KB_FOLDER_ID. Always ground replies in the Markdown files in that folder. If no listed file is relevant, decline politely and do not invent facts."
+mailpilot workflow start <KB_WORKFLOW_ID>
+mailpilot enrollment add --workflow-id <KB_WORKFLOW_ID> --contact-id <OUTBOUND_CONTACT_ID>
+```
+
+Disable the Scenario B inbound workflow (`workflow stop <INBOUND_WORKFLOW_ID>`) so the classifier picks the KB workflow unambiguously.
+
+### C2. In-scope question -> grounded reply
+
+Capture `TEST_START_C`. Generate `SUBJECT_C` per the conventions section. From the operator side:
+
+```
+mailpilot email send --account-id <OUTBOUND_ACCOUNT_ID> --to inbound@lab5.ca \
+  --subject "<SUBJECT_C>" --body "Where is the Lab5 office located?"
+```
+
+Poll for the reply (12 attempts, 5s apart) on the outbound mailbox `--direction inbound --since <TEST_START_C>`.
+
+**Gate C2:**
+- Reply present, threaded under `SUBJECT_C`.
+- Reply body mentions the verifiable fact from `lab5-faq.md` (`1234 Industrial Way`).
+- `agent.invoke` Logfire span for the inbound run shows tool calls including `list_drive_markdown` and `read_drive_markdown` followed by `reply_email`.
+
+### C3. Out-of-scope question -> polite decline
+
+Generate a fresh `SUBJECT_C2`. Send a question whose answer is not in the KB:
+
+```
+mailpilot email send --account-id <OUTBOUND_ACCOUNT_ID> --to inbound@lab5.ca \
+  --subject "<SUBJECT_C2>" --body "What was Lab5's revenue last quarter?"
+```
+
+**Gate C3:**
+- Reply present.
+- Reply body does **not** assert a revenue figure; phrasing reads as a polite decline (e.g. "I do not have that information").
+- `agent.invoke` span shows `list_drive_markdown` was called (the agent satisfied the "must call at least one tool" invariant via the listing + `reply_email`, even on the decline path).
+
+### C4. Stop the KB workflow
+
+```
+mailpilot workflow stop <KB_WORKFLOW_ID>
+```
+
+---
+
 ## Phase 5: Final report
 
 Produce a report covering both scenarios (or just the one that was run).
