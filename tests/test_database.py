@@ -1133,6 +1133,36 @@ def test_list_emails_by_workflow_id(
     assert results[0].subject == "Campaign"
 
 
+def test_list_emails_summary_includes_is_routed(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Summary projection MUST include is_routed so callers can answer
+    routing state from `list` without falling back to `view`.
+    """
+    account = make_test_account(database_connection)
+    routed = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="msg_routed",
+        subject="routed message",
+    )
+    unrouted = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="msg_unrouted",
+        subject="unrouted message",
+    )
+    assert routed is not None
+    assert unrouted is not None
+    update_email(database_connection, routed.id, is_routed=True)
+
+    results = {row.id: row for row in list_emails(database_connection)}
+    assert results[routed.id].is_routed is True
+    assert results[unrouted.id].is_routed is False
+
+
 def test_list_emails_by_status(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):

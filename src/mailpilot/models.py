@@ -219,6 +219,7 @@ class EmailSummary(BaseModel):
     subject: str
     sender: str
     status: str
+    is_routed: bool
     sent_at: datetime | None
     received_at: datetime | None
 
