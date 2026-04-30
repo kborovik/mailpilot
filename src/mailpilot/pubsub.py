@@ -192,7 +192,7 @@ def make_notification_callback(
     """
 
     def callback(message: Any) -> None:
-        with logfire.span("pubsub.notification", _level="debug"):
+        with logfire.span("pubsub.notification", _level="debug") as span:
             try:
                 # Message.data is already-decoded raw bytes from the pubsub
                 # client; re-decoding raises binascii.Error on real Gmail
@@ -210,10 +210,7 @@ def make_notification_callback(
                 )
                 message.ack()
                 return
-            logfire.debug(
-                "pubsub.notification.received",
-                email=email_address,
-            )
+            span.set_attribute("email", email_address)
             sync_queue.put(email_address)
             if wakeup_event is not None:
                 wakeup_event.set()

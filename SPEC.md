@@ -53,7 +53,8 @@ T9|x|smoke-test scenario — KB-grounded reply + polite decline in `.claude/skil
 T10|x|`make check` clean|V8
 T11|x|add `is_routed` to `EmailSummary` & `list_emails` projection -- list rows ! answer routing state w/o `view`. Why: smoke-test gates kept needing `email view <id>` only to check `is_routed` (currently null on summary even when routed)|-
 T12|x|clarify Gate B8 in `.claude/skills/smoke-test/SKILL.md` -- filter by `workflow_id == OUTBOUND_WORKFLOW_ID`, ⊥ by `--account-id`. Why: operator-driven trigger sends from `outbound@` are normal in B; only agent-driven sends from outbound *workflow* are the regression signal|-
-T13|.|analyze `pubsub.notification` vs `pubsub.notification.received` span duplication in `src/mailpilot/pubsub.py` (17 of each in last smoke run, 33 spans for ~conceptually-one event). Output: written decision -- collapse | keep both w/ rename | drop one. ⊥ code change until analysis approved|-
+T13|x|analyze `pubsub.notification` vs `pubsub.notification.received` span duplication in `src/mailpilot/pubsub.py` (17 of each in last smoke run, 33 spans for ~conceptually-one event). Decision: **collapse** -- drop `pubsub.notification.received` log, add `email` attribute to existing span. Rationale: aligns w/ project convention (every other operation span carries identifier as attribute), 50% record reduction on hot path, no test impact. Failure-path `pubsub.notification.decode_error` log preserved|-
+T14|x|apply T13 collapse -- drop `logfire.debug("pubsub.notification.received")` in `src/mailpilot/pubsub.py:213`, set `email` as attribute on `pubsub.notification` span. Add span-contract test: success path emits 1 `pubsub.notification` row w/ `email` attr & no `pubsub.notification.received` row|-
 
 ## §B BUGS
 id|date|cause|fix
