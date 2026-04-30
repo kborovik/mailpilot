@@ -210,12 +210,13 @@ API keys and config stored in `~/.mailpilot/config.json` via `mailpilot config s
 
 ### Test Accounts
 
-Two real Google Workspace accounts are provisioned for end-to-end smoke tests against Gmail API:
+Three real Google Workspace accounts are provisioned for end-to-end smoke tests against Gmail API:
 
-- `inbound@lab5.ca` -- Inbound (receives messages, used for auto-reply flows)
 - `outbound@lab5.ca` -- Outbound (sends cold email, used for campaign flows)
+- `inbound@lab5.ca` -- Manual-reply target (recipient of Scenario A's outbound mail; the operator replies from this mailbox to exercise `thread_match` routing)
+- `demo@lab5.ca` -- Live KB-grounded demo agent (the lab5.ca/demo system; auto-replies grounded in the `MailPilot Demo` Drive folder, Scenario B)
 
-Both are delegated via the service account in `google_application_credentials` and can be re-created with `mailpilot account create --email ... --display-name ...` after a `make clean`.
+All three are delegated via the service account in `google_application_credentials` and can be re-created with `mailpilot account create --email ... --display-name ...` after a `make clean`.
 
 **Full smoke test:** Use `/smoke-test` to run a phased end-to-end test that exercises the complete agent loop: entity setup, outbound email send via agent, inbound sync + routing, inbound agent reply, and round-trip verification. See `.claude/skills/smoke-test/SKILL.md`.
 

@@ -1,6 +1,6 @@
 ---
 name: smoke-test
-description: End-to-end MailPilot smoke test against real Gmail (outbound@lab5.ca <-> inbound@lab5.ca). One Phase 0 setup, then two scenarios run sequentially without resetting state between them -- Scenario A exercises an outbound workflow with a manual operator reply, Scenario B exercises an inbound workflow with a manual trigger email. The outbound workflow stays active across Scenario B so the test verifies concurrent multi-account, multi-workflow operation. Use whenever the user says "smoke test", "run end-to-end", "verify the system works", or after non-trivial changes to sync, routing, agent execution, or Pub/Sub code -- even if they don't explicitly invoke the skill by name.
+description: End-to-end MailPilot smoke test against real Gmail across outbound@lab5.ca, inbound@lab5.ca, and demo@lab5.ca. One Phase 0 setup, then two scenarios run sequentially without resetting state between them -- Scenario A exercises an outbound workflow with a manual operator reply, Scenario B exercises the live KB-grounded inbound auto-reply demo at https://lab5.ca/demo/ (real Drive folder, in-scope grounded reply + out-of-scope polite decline). The outbound workflow stays active across Scenario B so the test verifies concurrent multi-account, multi-workflow operation. Both scenarios are mandatory. Use whenever the user says "smoke test", "run end-to-end", "verify the system works", or after non-trivial changes to sync, routing, agent execution, KB grounding, or Pub/Sub code -- even if they don't explicitly invoke the skill by name.
 ---
 
 # Smoke Test
@@ -9,15 +9,15 @@ description: End-to-end MailPilot smoke test against real Gmail (outbound@lab5.c
 
 Two scenarios share a single Phase 0 setup and a single `mailpilot run` loop. The outbound workflow created in Scenario A stays active through Scenario B, so the test exercises real concurrent multi-workflow, multi-account operation. The agent-to-agent reply loop is prevented by two structural properties, not by isolation:
 
-- Distinct subjects per scenario, so each Gmail thread is owned by exactly one workflow type (Scenario A's thread routes via `thread_match` to the outbound workflow; Scenario B's fresh thread routes via classification to the inbound workflow).
+- Distinct subjects per scenario, so each Gmail thread is owned by exactly one workflow type (Scenario A's thread routes via `thread_match` to the outbound workflow; Scenario B's fresh threads route via classification to the demo's inbound workflow).
 - Enrollments terminating with `record_enrollment_outcome`, so the agent stops replying once a scenario reaches its outcome.
 
-| Scenario | Active workflows                       | Trigger                                  | Verifies                                                                                                        |
-| -------- | -------------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| A        | Outbound only                          | `mailpilot enrollment run`               | Outbound agent send -> Gmail delivery -> manual operator reply -> thread_match routing -> agent processes reply |
-| B        | Outbound (terminal) + Inbound (active) | `mailpilot email send` (operator-driven) | Manual trigger email -> sync -> classification routing -> inbound agent reply -> Gmail delivery                 |
+| Scenario | Active workflows                       | Trigger                                  | Verifies                                                                                                                       |
+| -------- | -------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| A        | Outbound only                          | `mailpilot enrollment run`               | Outbound agent send -> Gmail delivery -> manual operator reply -> thread_match routing -> agent processes reply                |
+| B        | Outbound (terminal) + Demo (active)    | `mailpilot email send` (operator-driven) | The lab5.ca/demo promise -- KB-grounded reply within 60s for in-scope question, polite decline for out-of-scope question       |
 
-Default: run **both** scenarios in sequence. `make clean` runs **only once**, at the very start of the test. Operator can stop after Scenario A if only outbound is in scope.
+Both scenarios are **mandatory**. `make clean` runs **only once**, at the very start of the test. Scenario B is the lab5.ca/demo system under test -- it MUST run.
 
 ## Conventions used throughout
 
@@ -29,7 +29,7 @@ Default: run **both** scenarios in sequence. `make clean` runs **only once**, at
   SUBJECT_A="[ST-$(date +%H%M%S)] ${TOPIC_A}"
   ```
 
-  Generate `SUBJECT_B` independently the same way; verify `SUBJECT_B != SUBJECT_A` before continuing. If `/usr/share/dict/words` is unavailable, fall back to `head -c 12 /dev/urandom | base32 | tr -d '=' | head -c 10` and use that as the topic.
+  Scenario B sends two trigger emails; generate `SUBJECT_B1` (in-scope) and `SUBJECT_B2` (out-of-scope) independently the same way, and verify all three subjects (`SUBJECT_A`, `SUBJECT_B1`, `SUBJECT_B2`) are distinct before continuing. If `/usr/share/dict/words` is unavailable, fall back to `head -c 12 /dev/urandom | base32 | tr -d '=' | head -c 10` and use that as the topic.
 
 - **Test start ISO timestamp.** Capture before each scenario; reuse for `--since` filters and Logfire time windows.
 - **Polling.** When waiting for sync, routing, or agent results: poll up to **12 attempts, 5 seconds apart (~60s total)**. Do not call `mailpilot account sync` directly -- the background `mailpilot run` loop owns sync.
@@ -55,9 +55,10 @@ Run **once** at the start of the test. Both scenarios reuse the same accounts, c
 2. Create accounts:
    ```
    mailpilot account create --email outbound@lab5.ca --display-name "Outbound Smoke"
-   mailpilot account create --email inbound@lab5.ca --display-name "Inbound Smoke"
+   mailpilot account create --email inbound@lab5.ca  --display-name "Inbound Smoke"
+   mailpilot account create --email demo@lab5.ca     --display-name "Demo (lab5.ca/demo)"
    ```
-   Save `OUTBOUND_ACCOUNT_ID` and `INBOUND_ACCOUNT_ID`.
+   Save `OUTBOUND_ACCOUNT_ID`, `INBOUND_ACCOUNT_ID`, and `DEMO_ACCOUNT_ID`. All three must be delegated through the service account in `google_application_credentials`. If `demo@lab5.ca` cannot be created (auth/delegation failure), stop -- Scenario B cannot run.
 3. Create company:
    ```
    mailpilot company create --domain lab5.ca --name Lab5
@@ -65,15 +66,16 @@ Run **once** at the start of the test. Both scenarios reuse the same accounts, c
    Save `COMPANY_ID`.
 4. Create contacts (so contact resolution and enrollment have stable IDs to reference):
    ```
-   mailpilot contact create --email inbound@lab5.ca --first-name Inbound --last-name Smoke --company-id <COMPANY_ID>
+   mailpilot contact create --email inbound@lab5.ca  --first-name Inbound  --last-name Smoke --company-id <COMPANY_ID>
    mailpilot contact create --email outbound@lab5.ca --first-name Outbound --last-name Smoke --company-id <COMPANY_ID>
+   mailpilot contact create --email demo@lab5.ca     --first-name Demo     --last-name Lab5  --company-id <COMPANY_ID>
    ```
-   Save `INBOUND_CONTACT_ID` (the recipient of outbound mail) and `OUTBOUND_CONTACT_ID` (the sender as seen by the inbound mailbox).
+   Save `INBOUND_CONTACT_ID` (recipient of A's outbound mail), `OUTBOUND_CONTACT_ID` (the sender as seen by the demo mailbox in B), and `DEMO_CONTACT_ID` (kept for completeness; not enrolled in any workflow during the test).
 
 ### Gate 0
 
-- `mailpilot account list` returns 2 accounts.
-- `mailpilot contact list` returns 2 contacts.
+- `mailpilot account list` returns **3** accounts (outbound, inbound, demo).
+- `mailpilot contact list` returns **3** contacts.
 - `mailpilot company list` returns 1 company.
 - `mailpilot workflow list` returns **0** workflows. Workflows are created per-scenario.
 
@@ -250,230 +252,174 @@ Do this review now, before starting Scenario B, so the time window cleanly bound
 
 ## Transition to Scenario B
 
-Do **not** stop the sync loop. Do **not** run `make clean`. Do **not** recreate accounts or contacts. The outbound workflow stays active with its enrollment in a terminal state, and the run loop keeps syncing both accounts. Scenario B layers an inbound workflow on top of this live state, which is the explicit multi-workflow / multi-account checkpoint of this test.
+Do **not** stop the sync loop. Do **not** run `make clean`. Do **not** recreate accounts or contacts. The outbound workflow stays active with its enrollment in a terminal state, and the run loop keeps syncing all three accounts. Scenario B layers a KB-grounded inbound workflow on `demo@lab5.ca` on top of this live state, which is the explicit multi-workflow / multi-account checkpoint of this test.
 
 ---
 
-## Scenario B: Inbound workflow
+## Scenario B: KB-grounded demo (lab5.ca/demo)
 
-**Hypothesis:** With the outbound workflow from Scenario A still active, an inbound workflow correctly classifies an operator-sent trigger email on a fresh thread, the agent generates a reply via the same run loop, and the reply round-trips to the outbound mailbox. The outbound workflow does not react to B's traffic because B's thread is not owned by it (no `thread_match` hit), and outbound workflows do not classify.
+**Hypothesis:** The lab5.ca/demo system delivers on its public promise -- "a professional response grounded in real data" within ~60 seconds for in-scope questions, and a polite explanatory reply (no fabricated specs) for questions outside the KB. With the outbound workflow from Scenario A still active, the demo workflow on `demo@lab5.ca` correctly classifies an operator-sent question on a fresh thread, the agent grounds its answer in the real Drive KB via `list_drive_markdown` + `read_drive_markdown`, and the reply round-trips to the outbound mailbox.
 
-Capture `TEST_START_B` (ISO timestamp, must be later than Scenario A's last activity) and `SUBJECT_B` -- generate a fresh random topic per the Conventions section, distinct from `SUBJECT_A`.
+**Real KB used.** This scenario uses the production KB folder, not a fixture:
 
-### B1. Create the inbound workflow
+- Folder name: `MailPilot Demo`
+- Folder ID: `1cqgBcAh8JABFC86VfDA4-Iub8-juMEP2`
+- Markdown files (as of writing -- run `gws drive files list --params '{"q":"parents in '\''1cqgBcAh8JABFC86VfDA4-Iub8-juMEP2'\'' and trashed = false","fields":"files(id,name,mimeType)"}'` to confirm before each test run):
+  - `pure-aqua-commercial-ro-systems.md` -- TW-series RO systems (e.g., TW-18.0K-1240).
+  - `pure-aqua-industrial-water-softener.md` -- SF-series softeners (e.g., SF-100S).
+  - `watts-uv-com-disinfection.md` -- UV-COM disinfection units.
 
-Choose an objective and trigger-email body that pair cleanly so classification is unambiguous. Recommended (product question):
+  PDFs sit alongside the `.md` files; `list_drive_markdown`'s `mimeType='text/markdown'` filter must skip them. If it does not, that is a defect.
+
+- The service account used for `mailpilot` must have at least Viewer access on the folder when impersonating `demo@lab5.ca`. If `list_drive_markdown` returns `not_found`, fix the Drive permission before retrying -- do not patch around it.
+
+Capture `TEST_START_B` (ISO timestamp, must be later than Scenario A's last activity) and two distinct subjects -- `SUBJECT_B1` (in-scope) and `SUBJECT_B2` (out-of-scope) -- per the Conventions section. Both must differ from `SUBJECT_A`.
+
+### B1. Create the demo inbound workflow
+
+Operator-style instructions citing the real folder ID. The agent's behaviour comes from this prompt -- changing the wording changes what we are testing.
 
 ```
 mailpilot workflow create \
-  --name "Inbound Smoke B" \
+  --name "Demo (lab5.ca/demo)" \
   --type inbound \
-  --account-id <INBOUND_ACCOUNT_ID> \
-  --objective "Answer product questions about Lab5 services" \
-  --instructions "You are a customer service rep for Lab5. Reply briefly to product questions about Lab5's services. Body MUST use Markdown (greeting, 2-3 sentence response, a 2-row 2-column table of services or next steps). Subject MUST preserve the incoming thread subject. After replying, call record_enrollment_outcome with status='completed'. Do not create follow-up tasks."
+  --account-id <DEMO_ACCOUNT_ID> \
+  --objective "Answer water-treatment product questions grounded in the MailPilot Demo Drive folder; politely decline questions about products not in the KB." \
+  --instructions "You are the lab5.ca/demo agent. The Markdown product knowledge base lives in Google Drive folder 1cqgBcAh8JABFC86VfDA4-Iub8-juMEP2. For every reply: call list_drive_markdown with that folder ID, pick the most relevant file by name, call read_drive_markdown on it, then compose the reply grounded in that file's content. Cite the source file name in the body. If no listed file is relevant to the question (e.g., the asker is asking about Pentair, Evoqua, or Grundfos products that are not in the folder), reply with a short polite decline that explains the KB does not cover that product and do NOT fabricate specifications. Body MUST use plain Markdown. Subject MUST preserve the incoming thread subject. After replying, call record_enrollment_outcome with outcome='completed'. Do not create follow-up tasks."
 ```
 
-Activate if needed:
+Activate and pre-enroll the sender:
 
 ```
-mailpilot workflow start <INBOUND_WORKFLOW_ID>
+mailpilot workflow start <DEMO_WORKFLOW_ID>
+mailpilot enrollment add --workflow-id <DEMO_WORKFLOW_ID> --contact-id <OUTBOUND_CONTACT_ID>
 ```
 
-Save `INBOUND_WORKFLOW_ID`. Pre-enroll the sender so the agent can update the enrollment cleanly:
-
-```
-mailpilot enrollment add --workflow-id <INBOUND_WORKFLOW_ID> --contact-id <OUTBOUND_CONTACT_ID>
-```
-
-**Gate B1 (multi-workflow checkpoint):** `mailpilot workflow list` returns **2** workflows -- the outbound from Scenario A and the inbound just created -- both with status `active`. This is the explicit verification that MailPilot can run multiple workflows on multiple accounts simultaneously.
+**Gate B1 (multi-workflow checkpoint):** `mailpilot workflow list` returns **2** workflows -- the outbound from Scenario A (terminal but still active) and the demo workflow just created -- both with status `active`.
 
 ### B2. Confirm the sync loop is still alive
 
-The `mailpilot run` process started in Step A2 has been syncing both accounts continuously. Read its captured stdout and confirm no fatal errors since the A-window Logfire review. If the process has died, restart it the same way as A2 and note the restart in the report.
+The `mailpilot run` process started in Step A2 has been syncing all three accounts continuously. Read its captured stdout and confirm no fatal errors since the A-window Logfire review. If the process has died, restart it the same way as A2 and note the restart in the report.
 
-### B3. Operator sends the trigger email
+### B3. Send the in-scope question
+
+Pick one in-scope question from the lab5.ca/demo page. Examples (rotate freely; do **not** memorize a single phrasing):
+
+- "What are the dimensions and weight of the TW-18.0K-1240 reverse osmosis system?"
+- "Which SF-100S softener would you recommend for a hospital needing at least 200 GPM continuous flow?"
+- "Which UV-COM model supports the highest flow rate, and what certifications does it have?"
 
 ```
 mailpilot email send \
   --account-id <OUTBOUND_ACCOUNT_ID> \
-  --to inbound@lab5.ca \
-  --subject "<SUBJECT_B>" \
-  --body "Hi Lab5 team -- I am evaluating Lab5 for our procurement team. Can you describe what services you offer and how onboarding works? Looking forward to your response."
+  --to demo@lab5.ca \
+  --subject "<SUBJECT_B1>" \
+  --body "<your in-scope question>"
 ```
 
-Save `TRIGGER_EMAIL_ID` (from the JSON output) and `TRIGGER_THREAD_ID` (`gmail_thread_id` -- this is the outbound-account-side thread).
+Save `TRIGGER_EMAIL_ID_B1` and `TRIGGER_THREAD_ID_B1`. Capture the wall-clock send time as `T_SEND_B1`.
 
 **Gate B3:** Command exits 0 and returns a JSON envelope with the new email's `id`.
 
-### B4. Wait for the inbound side to sync, classify, and route
+### B4. Wait for the demo agent to reply (60-second SLA)
 
-Poll the inbound account:
-
-```
-mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction inbound --since <TEST_START_B>
-```
-
-Match by `SUBJECT_B`. When found, fetch detail and wait until `workflow_id` is set.
-
-**Gate B4:**
-
-- Email present in inbound account's inbound emails.
-- `is_routed == true`.
-- `workflow_id == INBOUND_WORKFLOW_ID`.
-- `route_method == classified` (verifiable from the `routing.route_email` Logfire span; classification, not thread_match, since this is a fresh thread on the inbound side).
-
-Save `ROUTED_EMAIL_ID`.
-
-**On failure:** If the email arrived but `workflow_id` is null after 60s, the LLM classifier did not match. Confirm the workflow is `active` and the objective phrasing matches the trigger body. Re-read inbound workflow with `mailpilot workflow view <INBOUND_WORKFLOW_ID>`.
-
-### B5. Wait for the inbound agent to reply
-
-The run loop bridges B4's routed email into a task and drains it.
-
-Poll:
-
-```
-mailpilot task list --workflow-id <INBOUND_WORKFLOW_ID>
-```
-
-Wait for a task with `email_id == ROUTED_EMAIL_ID` and `status == "completed"`.
-
-**Gate B5:**
-
-- Task completed.
-- `mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>` returns at least 1 reply.
-- The reply's `gmail_thread_id` matches the inbound side's thread of the routed email (in-thread via `reply_email`).
-- The reply's `body_text` contains `|` (Markdown table preserved).
-- `mailpilot enrollment list --workflow-id <INBOUND_WORKFLOW_ID>` still shows status `active` -- by design (ADR-08, `enrollment.status` is operational only). The terminal outcome is recorded as an `enrollment_completed` activity row, verified in B7.
-
-Save `INBOUND_REPLY_EMAIL_ID`.
-
-**On failure:** No task -- check the run loop is alive and B4's email has `workflow_id` set. Task `failed` -- `mailpilot task view <TASK_ID>` for reason.
-
-### B6. Wait for the reply to land in the outbound mailbox
-
-Poll the outbound account:
+This is the critical gate. The lab5.ca/demo page promises delivery within ~60 seconds. Poll the outbound mailbox for the reply:
 
 ```
 mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction inbound --since <TEST_START_B>
 ```
 
-Match by `SUBJECT_B` (likely with a `Re:` prefix on Gmail's side).
+Match by `SUBJECT_B1` (likely with `Re:` prefix). Record the wall-clock time the reply first appears as `T_REPLY_B1` and compute `LATENCY_B1 = T_REPLY_B1 - T_SEND_B1`.
 
-**Gate B6:**
+**Gate B4 (the demo promise):**
 
-- Email present in outbound account's inbound emails.
-- `is_routed == true`.
-- `workflow_id == null` -- the outbound workflow exists and is active, but it does not own B's thread (no `thread_match`) and outbound workflows do not classify, so the reply correctly lands with `route_method=skipped_no_inbound_workflows` (account has active workflows, but none are inbound, so the classifier never runs).
-- **No additional inbound replies.** Re-run `mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>` and confirm only the single reply from B5 exists. More than one means the inbound agent kept replying despite the terminal `record_enrollment_outcome` call -- record as a defect.
-- **Outbound workflow stayed quiet (concurrent-workflow check).** Re-run `mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>` and confirm zero new outbound sends. Any non-zero count means the still-active outbound workflow reacted to B's traffic -- record as a defect.
+- Reply present, threaded under `SUBJECT_B1`.
+- `LATENCY_B1 <= 60s`. **If the reply takes longer, that is a regression of the lab5.ca/demo promise -- record as a Critical defect.** (Polling cadence is 5s, so granularity is coarse; if the first observation lands at 65s and it was the first reply on the thread, treat the run as borderline and re-test.)
+- The reply on the demo side (`mailpilot email list --account-id <DEMO_ACCOUNT_ID> --direction outbound --since <TEST_START_B>`) has `is_routed == true`, `workflow_id == DEMO_WORKFLOW_ID`, `route_method == classified`. The classifier ran -- not `thread_match`, since this is a fresh thread.
+- The reply body is **grounded in the KB**: it mentions the model number from the question verbatim (e.g., `TW-18.0K-1240`, `SF-100S`, `UV-COM`) and includes at least one numeric fact (regex `\d`) consistent with a spec answer. A reply that does not cite a model number or numeric fact is a grounding regression.
+- The reply body cites the source file name (or its product family name) -- the workflow instructions require this. Missing citation is a prompt-fidelity regression.
+
+### B5. Verify the agent actually used the Drive tools
+
+Run a Logfire query for the `agent.invoke` span produced by B4's reply. Within that invocation, the `running tool` child spans must include, in order:
+
+1. `list_drive_markdown` (with `folder_id=1cqgBcAh8JABFC86VfDA4-Iub8-juMEP2`)
+2. `read_drive_markdown` (with a `file_id` returned by step 1)
+3. `reply_email`
+4. `record_enrollment_outcome` (outcome=`completed`)
+
+**Gate B5:**
+
+- All four tool calls present in this order.
+- `list_drive_markdown` returned a non-error list (no `error` key in the tool return).
+- `read_drive_markdown` returned a dict with non-empty `content`.
+- An agent that skips `list_drive_markdown` or invents a `file_id` without listing first is a prompt-fidelity regression -- record as a defect even if the reply happens to be plausible.
+
+### B6. Send the out-of-scope question
+
+Same demo workflow, fresh subject:
+
+```
+mailpilot email send \
+  --account-id <OUTBOUND_ACCOUNT_ID> \
+  --to demo@lab5.ca \
+  --subject "<SUBJECT_B2>" \
+  --body "Which Pentair Evoqua reverse osmosis system would you recommend for a 500 GPM industrial laundry?"
+```
+
+(Pentair Evoqua and Grundfos are explicitly named on lab5.ca/demo as out-of-scope vendors. Pick whichever you like; vary across runs.)
+
+Save `TRIGGER_EMAIL_ID_B2`, capture `T_SEND_B2`, and poll the outbound mailbox for `SUBJECT_B2` the same way as B4. Capture `T_REPLY_B2`.
+
+**Gate B6 (polite decline, no fabrication):**
+
+- Reply present within 60s.
+- Reply body does **not** contain any Pentair, Evoqua, or Grundfos model number or specification -- a regex over the body must not match `Pentair|Evoqua|Grundfos` followed by what looks like a spec figure. The agent must not fabricate.
+- Reply body reads as a polite decline -- it acknowledges the asker, states the KB does not cover that product, and (per the workflow instructions) does not invent.
+- The `agent.invoke` for B6 still shows `list_drive_markdown` followed by `reply_email` (the decline path satisfies the "must call >=1 tool per run" invariant via the listing). Missing `list_drive_markdown` here means the agent declined without consulting the KB -- it might have got lucky on this question, but the prompt contract was not honoured. Record as a defect.
 
 ### B7. Verify the CRM activity timeline
-
-Read the outbound contact's timeline (this is the contact whose enrollment was driven by the inbound workflow in B):
 
 ```
 mailpilot activity list --contact-id <OUTBOUND_CONTACT_ID> --since <TEST_START_B>
 ```
 
-**Gate B7 (activity wiring):** activity types follow the `enrollment_*` vocabulary defined in ADR-08.
+**Gate B7 (activity wiring):** activity types follow the `enrollment_*` vocabulary in ADR-08.
 
-- `enrollment_added` activity present with `detail.workflow_id == INBOUND_WORKFLOW_ID` (emitted by `enrollment add` in B1).
-- `email_received` activity present with `summary == SUBJECT_B` (emitted by sync's `_store_inbound_message` when the trigger arrived in B4 on the inbound mailbox).
-- `email_sent` activity present from the agent reply in B5 (subject begins with `Re:`).
-- `enrollment_completed` activity present (emitted by `agent.tools.record_enrollment_outcome` after B5).
+- `enrollment_added` with `detail.workflow_id == DEMO_WORKFLOW_ID` (from B1).
+- Two `email_received` activities -- the demo mailbox received the trigger emails for B1 and B2.
+- Two `email_sent` activities from the agent replies (subjects begin with `Re:`).
+- Two `enrollment_completed` activities (one per question, both emitted by `record_enrollment_outcome`).
 
-Note: re-reading the inbound contact's timeline from Scenario A is **not** a useful concurrent-quiet check. The inbound contact (recipient of A's outbound mail and counterparty for B's traffic on the outbound mailbox) will naturally accumulate `email_sent` / `email_received` rows during B because B's trigger and the agent's round-tripped reply both involve that contact. The authoritative concurrent-quiet check is Gate B6's "0 new outbound sends from the outbound account" assertion -- that is what proves the outbound workflow did not act.
+### B8. Concurrent-workflow quiet check
 
-### B8. Stop the sync loop
+The Scenario A outbound workflow is still active throughout Scenario B. It must not have reacted to B's traffic.
 
-Send SIGTERM to the background `mailpilot run` (e.g. `kill <pid>`). Wait for `Sync loop stopped` in the captured output. Confirm the `sync_status` table is empty.
+```
+mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>
+```
 
-If the process does not exit within 10s, send SIGKILL and record this in the report.
+**Gate B8:** Zero new outbound sends from the outbound account during B's window. Any non-zero count means the still-active outbound workflow reacted -- record as a defect.
+
+### B9. Stop the sync loop
+
+Send SIGTERM to the background `mailpilot run` (e.g. `kill <pid>`). Wait for `Sync loop stopped` in the captured output. Confirm the `sync_status` table is empty. If the process does not exit within 10s, send SIGKILL and record this in the report.
 
 ### Logfire review for Scenario B
 
 Time window `[TEST_START_B, now]`. Spans to verify:
 
-- `agent.invoke` -- exactly **1** invocation (B5). More than 1 means either the inbound agent re-fired or the outbound workflow reacted to B's traffic.
-- `routing.route_email` -- the inbound-side email (B4) should be `route_method=classified`. The outbound-side reply (B6) should be `route_method=skipped_no_inbound_workflows` (the outbound workflow is active but not an inbound classification candidate).
-- `classify_email` -- 1 invocation (B4). Check `result` matches `INBOUND_WORKFLOW_ID`.
-- `running tool` (B5) -- expect `reply_email` and `record_enrollment_outcome`.
-- Any `is_exception=true` or `level=warn` spans -- record them.
-
----
-
-## Scenario C: KB-grounded inbound auto-reply (optional)
-
-Exercises the `list_drive_markdown` / `read_drive_markdown` agent tools by routing an inbound trigger through a workflow that cites a Google Drive folder of Markdown notes. Run only when changes touch `src/mailpilot/drive.py`, the two Drive tools, or the system prompt's KB grounding paragraph in `src/mailpilot/agent/invoke.py`. Run after Scenario B; reuses Phase 0 entities and the `mailpilot run` loop.
-
-### Prerequisites (operator action, one-time)
-
-Outside the test runner, the operator must:
-
-1. Create a Google Drive folder named `mailpilot-kb-smoke` and grant the inbound service-account-impersonated user (`inbound@lab5.ca`) at least Viewer access.
-2. Drop one Markdown file `lab5-faq.md` in that folder containing exactly one verifiable fact, e.g.:
-   ```
-   # Lab5 FAQ
-   Lab5's office is at 1234 Industrial Way, Vancouver BC.
-   ```
-3. Capture the folder ID from the URL and export it as `KB_FOLDER_ID`.
-
-If `KB_FOLDER_ID` is unset, skip Scenario C and record `SKIPPED (no KB folder configured)` in the report.
-
-### C1. Create KB-grounded inbound workflow
-
-```
-mailpilot workflow create --name "KB Inbound" --type inbound --account-id <INBOUND_ACCOUNT_ID> \
-  --objective "Answer questions using the KB folder; decline politely when the answer is not in the KB." \
-  --instructions "You are an inbound assistant. The Drive folder ID is $KB_FOLDER_ID. Always ground replies in the Markdown files in that folder. If no listed file is relevant, decline politely and do not invent facts."
-mailpilot workflow start <KB_WORKFLOW_ID>
-mailpilot enrollment add --workflow-id <KB_WORKFLOW_ID> --contact-id <OUTBOUND_CONTACT_ID>
-```
-
-Disable the Scenario B inbound workflow (`workflow stop <INBOUND_WORKFLOW_ID>`) so the classifier picks the KB workflow unambiguously.
-
-### C2. In-scope question -> grounded reply
-
-Capture `TEST_START_C`. Generate `SUBJECT_C` per the conventions section. From the operator side:
-
-```
-mailpilot email send --account-id <OUTBOUND_ACCOUNT_ID> --to inbound@lab5.ca \
-  --subject "<SUBJECT_C>" --body "Where is the Lab5 office located?"
-```
-
-Poll for the reply (12 attempts, 5s apart) on the outbound mailbox `--direction inbound --since <TEST_START_C>`.
-
-**Gate C2:**
-- Reply present, threaded under `SUBJECT_C`.
-- Reply body mentions the verifiable fact from `lab5-faq.md` (`1234 Industrial Way`).
-- `agent.invoke` Logfire span for the inbound run shows tool calls including `list_drive_markdown` and `read_drive_markdown` followed by `reply_email`.
-
-### C3. Out-of-scope question -> polite decline
-
-Generate a fresh `SUBJECT_C2`. Send a question whose answer is not in the KB:
-
-```
-mailpilot email send --account-id <OUTBOUND_ACCOUNT_ID> --to inbound@lab5.ca \
-  --subject "<SUBJECT_C2>" --body "What was Lab5's revenue last quarter?"
-```
-
-**Gate C3:**
-- Reply present.
-- Reply body does **not** assert a revenue figure; phrasing reads as a polite decline (e.g. "I do not have that information").
-- `agent.invoke` span shows `list_drive_markdown` was called (the agent satisfied the "must call at least one tool" invariant via the listing + `reply_email`, even on the decline path).
-
-### C4. Stop the KB workflow
-
-```
-mailpilot workflow stop <KB_WORKFLOW_ID>
-```
+- `agent.invoke` -- exactly **2** invocations (B4 and B6). More than 2 means the demo agent re-fired or the outbound workflow reacted to B's traffic.
+- `routing.route_email` -- both demo-side trigger emails should be `route_method=classified`. The outbound-side replies should be `route_method=skipped_no_inbound_workflows`.
+- `classify_email` -- 2 invocations. Both `result` values match `DEMO_WORKFLOW_ID`.
+- `running tool` per invocation -- expect `list_drive_markdown` + `read_drive_markdown` + `reply_email` + `record_enrollment_outcome` for B4 (in-scope), and `list_drive_markdown` + `reply_email` + `record_enrollment_outcome` for B6 (out-of-scope decline; `read_drive_markdown` is **not** required here since no listed file is relevant). Either pattern is acceptable, but `list_drive_markdown` is mandatory in both.
+- Any `is_exception=true` or `level=warn` spans -- record them. Drive 4xx/5xx surfacing as `drive_unavailable` from the tool is acceptable in the agent's tool-return ledger but should not be `is_exception=true` on the span.
 
 ---
 
 ## Phase 5: Final report
 
-Produce a report covering both scenarios (or just the one that was run).
+Produce a report covering both scenarios. Both are mandatory; a missing scenario is a test failure, not a permitted skip.
 
 ### Part A: Phase results
 
@@ -481,7 +427,7 @@ Produce a report covering both scenarios (or just the one that was run).
 Smoke Test Results
 ==================
 
-Phase 0 (one-time setup) ..... PASS
+Phase 0 (one-time setup) ..... PASS  (3 accounts, 3 contacts, 1 company)
 
 Scenario A: Outbound workflow (sole workflow active)
   A1 Create workflow ......... PASS
@@ -493,20 +439,22 @@ Scenario A: Outbound workflow (sole workflow active)
   A7 Agent processes reply ... PASS
   A8 Activity timeline ....... PASS
 
-Scenario B: Inbound workflow (outbound workflow still active)
-  B1 Create workflow ......... PASS  (workflow list shows 2 active)
+Scenario B: KB-grounded demo (lab5.ca/demo, outbound workflow still active)
+  B1 Create demo workflow .... PASS  (workflow list shows 2 active)
   B2 Sync loop still alive ... PASS
-  B3 Operator trigger send ... PASS
-  B4 classified routing ...... PASS
-  B5 Agent reply ............. PASS
-  B6 Gmail delivery (out) .... PASS
+  B3 In-scope trigger send ... PASS
+  B4 60s grounded reply ...... PASS  (LATENCY_B1 = <Ns>; cited model: <e.g., TW-18.0K-1240>)
+  B5 Drive tools used ........ PASS  (list_drive_markdown -> read_drive_markdown -> reply_email -> record_enrollment_outcome)
+  B6 Out-of-scope decline .... PASS  (LATENCY_B2 = <Ns>; no fabricated specs)
   B7 Activity timeline ....... PASS
-  B8 Stop sync loop .......... PASS
+  B8 Outbound stayed quiet ... PASS  (0 new outbound sends during B)
+  B9 Stop sync loop .......... PASS
 
 Entity IDs (shared by both scenarios):
-  Outbound account: <id>   Inbound account: <id>   Company: <id>
-  Outbound contact: <id>   Inbound contact: <id>
-  Outbound workflow: <id>  Inbound workflow: <id>
+  Outbound account: <id>   Inbound account: <id>   Demo account: <id>   Company: <id>
+  Outbound contact: <id>   Inbound contact: <id>   Demo contact: <id>
+  Outbound workflow: <id>  Demo workflow: <id>
+  KB folder ID: 1cqgBcAh8JABFC86VfDA4-Iub8-juMEP2
 
 Email summary (Scenario A):
   Outbound send:    <id>  subject: <SUBJECT_A>
@@ -515,15 +463,17 @@ Email summary (Scenario A):
   Reply round-trip: <id>  workflow_id: <OUTBOUND_WORKFLOW_ID> via thread_match
 
 Email summary (Scenario B):
-  Operator trigger: <id>  subject: <SUBJECT_B>
-  Inbound delivery: <id>  workflow_id: <INBOUND_WORKFLOW_ID> via classified
-  Agent reply:      <id>  thread: <inbound thread>
-  Reply round-trip: <id>  skipped_no_inbound_workflows (outbound workflow active but not an inbound classification candidate)
+  In-scope trigger:    <id>  subject: <SUBJECT_B1>
+  In-scope delivery:   <id>  workflow_id: <DEMO_WORKFLOW_ID> via classified
+  In-scope reply:      <id>  latency: <Ns>  cited file: <name>  body grounded: yes
+  Out-of-scope trigger:<id>  subject: <SUBJECT_B2>
+  Out-of-scope reply:  <id>  latency: <Ns>  fabricated specs: NO  declined politely: yes
 
 Loop sentinels:
   Scenario A: agent.invoke count == 2 (expected 2)
-  Scenario B: agent.invoke count == 1 (expected 1)
+  Scenario B: agent.invoke count == 2 (expected 2)
   Outbound workflow during B: 0 new outbound sends (expected 0)
+  Drive tool calls in B: list_drive_markdown >= 2, read_drive_markdown >= 1
 ```
 
 If a phase failed, stop Part A at the failing phase with the failure JSON and any captured stdout from the background `mailpilot run`.
@@ -573,26 +523,29 @@ Write findings directly into the report. Do not file external tickets unless the
 1. **CLI usability** -- commands that needed awkward sequencing or workarounds; missing fields in JSON output; error messages that did not point at the cause.
 2. **Logfire observability** -- missing spans, missing attributes on existing spans, noisy span families (quantify with the volume query), broken parent-child causality, agent token/cost visibility.
 3. **Agent behavior** -- did the agents follow instructions (subject, brevity, no extra tool calls)? Was `agent_reasoning` useful? Did `record_enrollment_outcome` get called when expected? In Scenario A, did the agent hold the line on "do not reply again"?
-4. **Concurrent workflow safety** -- with both workflows active during Scenario B, did the outbound workflow stay quiet (zero new sends, no `agent.invoke` outside Scenario A's window)? Did the inbound workflow correctly leave A's lingering thread alone? Excess `agent.invoke` spans here are the high-priority signal from this run, since they would indicate that two simultaneously active workflows can interfere with each other.
-5. **Other deficiencies** -- timing, race conditions, data integrity, performance.
+4. **Demo promise (lab5.ca/demo)** -- did the in-scope reply in B4 land within 60s and cite a model number from the KB? Did B5 confirm `list_drive_markdown` + `read_drive_markdown` ran in order? Did the out-of-scope reply in B6 decline without fabricating any Pentair / Evoqua / Grundfos specs? Any deviation here is a regression of a public, customer-facing promise -- mark Critical.
+5. **Concurrent workflow safety** -- with both workflows active during Scenario B, did the outbound workflow stay quiet (zero new sends, no `agent.invoke` outside Scenario A's window)? Did the demo workflow correctly leave A's lingering thread alone? Excess `agent.invoke` spans here are the high-priority signal from this run, since they would indicate that two simultaneously active workflows can interfere with each other.
+6. **Drive integration** -- did the `mimeType='text/markdown'` filter correctly skip the PDFs in the KB folder? Were any Drive errors observed (`drive_unavailable`, `not_found`)? Are `list_drive_markdown` / `read_drive_markdown` tool spans surfacing useful attributes (folder_id, file_id, file count)?
+7. **Other deficiencies** -- timing, race conditions, data integrity, performance.
 
 ---
 
 ## Timing
 
-Expected total: ~6 minutes. Phase 0 runs once, the run loop runs once, and there is no reset between scenarios.
+Expected total: ~7 minutes. Phase 0 runs once, the run loop runs once, and there is no reset between scenarios.
 
-| Phase / scenario       | Duration |
-| ---------------------- | -------- |
-| Phase 0 (once)         | ~10s     |
-| A1 / B1 workflow setup | ~5s      |
-| A2 start run loop      | ~5s      |
-| A3 outbound agent      | ~10s     |
-| A4 / B4 sync + route   | ~10-60s  |
-| A5 / B3 operator send  | ~3s      |
-| A6 reply round-trip    | ~10-60s  |
-| A7 / B5 task drain     | ~10-60s  |
-| B6 reply round-trip    | ~10-60s  |
-| A8 / B7 activity check | ~3s      |
-| B8 stop run loop       | ~3s      |
-| Report                 | ~10s     |
+| Phase / scenario               | Duration |
+| ------------------------------ | -------- |
+| Phase 0 (once, 3 accounts)     | ~15s     |
+| A1 / B1 workflow setup         | ~5s      |
+| A2 start run loop              | ~5s      |
+| A3 outbound agent              | ~10s     |
+| A4 sync + route                | ~10-60s  |
+| A5 / B3 / B6 operator send     | ~3s each |
+| A6 reply round-trip            | ~10-60s  |
+| A7 task drain                  | ~10-60s  |
+| B4 in-scope reply (60s SLA)    | ~10-60s  |
+| B6 out-of-scope reply (60s SLA)| ~10-60s  |
+| A8 / B7 activity check         | ~3s      |
+| B9 stop run loop               | ~3s      |
+| Report                         | ~10s     |
