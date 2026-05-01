@@ -1,6 +1,6 @@
 ---
 name: smoke-test
-description: End-to-end MailPilot smoke test against real Gmail across outbound@lab5.ca, inbound@lab5.ca, demo@lab5.ca. One Phase 0 setup → 2 scenarios run sequentially without state reset. Scenario A = outbound workflow + manual operator reply. Scenario B = live KB-grounded inbound auto-reply demo at https://lab5.ca/demo/ (real Drive folder, in-scope grounded reply + out-of-scope polite decline). Outbound workflow stays active across B → verifies concurrent multi-account, multi-workflow operation. Both scenarios mandatory. Use whenever user says "smoke test", "run end-to-end", "verify the system works", or after non-trivial changes to sync, routing, agent execution, KB grounding, or Pub/Sub code -- even without explicit invocation.
+description: End-to-end MailPilot smoke test against real Gmail across outbound@lab5.ca and inbound@lab5.ca. One Phase 0 setup → 2 scenarios run sequentially without state reset. Scenario A = outbound workflow + manual operator reply. Scenario B = live KB-grounded inbound auto-reply demo at https://lab5.ca/demo/ (real Drive folder, in-scope grounded reply + out-of-scope polite decline). Outbound workflow stays active across B → verifies concurrent multi-account, multi-workflow operation. Both scenarios mandatory. Use whenever user says "smoke test", "run end-to-end", "verify the system works", or after non-trivial changes to sync, routing, agent execution, KB grounding, or Pub/Sub code -- even without explicit invocation.
 ---
 
 # Smoke Test
@@ -54,10 +54,9 @@ Run **once** at the start. Both scenarios reuse the same accounts, contacts, and
 2. Create accounts:
    ```
    mailpilot account create --email outbound@lab5.ca --display-name "Outbound Smoke"
-   mailpilot account create --email inbound@lab5.ca  --display-name "Inbound Smoke"
-   mailpilot account create --email demo@lab5.ca     --display-name "Demo (lab5.ca/demo)"
+   mailpilot account create --email inbound@lab5.ca  --display-name "Inbound Smoke (also hosts Demo workflow in B)"
    ```
-   Save `OUTBOUND_ACCOUNT_ID`, `INBOUND_ACCOUNT_ID`, `DEMO_ACCOUNT_ID`. All three must be delegated through the service account in `google_application_credentials`. If `demo@lab5.ca` cannot be created (auth/delegation failure), stop -- Scenario B cannot run.
+   Save `OUTBOUND_ACCOUNT_ID`, `INBOUND_ACCOUNT_ID`. Both must be delegated through the service account in `google_application_credentials`. If `inbound@lab5.ca` cannot be created (auth/delegation failure), stop -- Scenario B cannot run.
 3. Create company:
    ```
    mailpilot company create --domain lab5.ca --name Lab5
@@ -67,23 +66,22 @@ Run **once** at the start. Both scenarios reuse the same accounts, contacts, and
    ```
    mailpilot contact create --email inbound@lab5.ca  --first-name Inbound  --last-name Smoke --company-id <COMPANY_ID>
    mailpilot contact create --email outbound@lab5.ca --first-name Outbound --last-name Smoke --company-id <COMPANY_ID>
-   mailpilot contact create --email demo@lab5.ca     --first-name Demo     --last-name Lab5  --company-id <COMPANY_ID>
    ```
-   Save `INBOUND_CONTACT_ID` (recipient of A's outbound mail), `OUTBOUND_CONTACT_ID` (sender as seen by the demo mailbox in B), `DEMO_CONTACT_ID` (kept for completeness; not enrolled in any workflow).
+   Save `INBOUND_CONTACT_ID` (recipient of A's outbound mail; also the demo-workflow mailbox's contact in B), `OUTBOUND_CONTACT_ID` (sender as seen by the demo mailbox in B).
 
 ### Gate 0
 
-- `mailpilot account list` returns **3** accounts (outbound, inbound, demo).
-- `mailpilot contact list` returns **3** contacts.
+- `mailpilot account list` returns **2** accounts (outbound, inbound).
+- `mailpilot contact list` returns **2** contacts.
 - `mailpilot company list` returns 1 company.
 - `mailpilot workflow list` returns **0** workflows. Workflows are created per-scenario.
 
-**KB visibility gate (Scenario B prerequisite).** The demo KB lives in the `MailPilot` Shared Drive (ID `0AJIvyECg210LUk9PVA`), folder `MailPilot Demo` (ID `1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat`). `demo@lab5.ca` is a Reader on the Shared Drive; that membership -- not per-file ACL -- is what makes the files visible to the impersonated user. Verify before scenarios start, impersonating the actual subject the agent will use:
+**KB visibility gate (Scenario B prerequisite).** The demo KB lives in the `MailPilot` Shared Drive (ID `0AJIvyECg210LUk9PVA`), folder `MailPilot Demo` (ID `1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat`). `inbound@lab5.ca` is a Reader on the Shared Drive; that membership -- not per-file ACL -- is what makes the files visible to the impersonated user. Verify before scenarios start, impersonating the actual subject the agent will use:
 
 ```
 uv run python -c "
 from mailpilot.drive import DriveClient
-files = DriveClient('demo@lab5.ca').list_markdown('1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat')
+files = DriveClient('inbound@lab5.ca').list_markdown('1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat')
 print(len(files), [f['name'] for f in files])
 "
 ```
@@ -268,17 +266,17 @@ Do this review now, before B, so the window cleanly bounds A's spans. Use `/logf
 
 ## Transition to Scenario B
 
-Do not stop the sync loop. Do not run `make clean`. Do not recreate accounts or contacts. The outbound workflow stays active with its enrollment in a terminal state, and the run loop keeps syncing all three accounts. Scenario B layers a KB-grounded inbound workflow on `demo@lab5.ca` on top of this live state -- the explicit multi-workflow / multi-account checkpoint of the test.
+Do not stop the sync loop. Do not run `make clean`. Do not recreate accounts or contacts. The outbound workflow stays active with its enrollment in a terminal state, and the run loop keeps syncing both accounts. Scenario B layers a KB-grounded inbound workflow on `inbound@lab5.ca` on top of this live state -- the explicit multi-workflow / multi-account checkpoint of the test.
 
 ---
 
 ## Scenario B: KB-grounded demo (lab5.ca/demo)
 
-**Hypothesis:** The lab5.ca/demo system delivers on its public promise -- "a professional response grounded in real data" within ~60 seconds for in-scope questions, and a polite explanatory reply (no fabricated specs) for questions outside the KB. With the outbound workflow from A still active, the demo workflow on `demo@lab5.ca` correctly classifies an operator-sent question on a fresh thread, the agent grounds its answer in the real Drive KB via `list_drive_markdown` + `read_drive_markdown`, and the reply round-trips to the outbound mailbox.
+**Hypothesis:** The lab5.ca/demo system delivers on its public promise -- "a professional response grounded in real data" within ~60 seconds for in-scope questions, and a polite explanatory reply (no fabricated specs) for questions outside the KB. With the outbound workflow from A still active, the demo workflow on `inbound@lab5.ca` correctly classifies an operator-sent question on a fresh thread, the agent grounds its answer in the real Drive KB via `list_drive_markdown` + `read_drive_markdown`, and the reply round-trips to the outbound mailbox.
 
 **Real KB used.** This scenario uses the production KB folder, not a fixture:
 
-- Shared Drive: `MailPilot` (ID `0AJIvyECg210LUk9PVA`). Members: `kb@lab5.ca` Manager, `demo@lab5.ca` Reader.
+- Shared Drive: `MailPilot` (ID `0AJIvyECg210LUk9PVA`). Members: `kb@lab5.ca` Manager, `inbound@lab5.ca` Reader.
 - Folder name: `MailPilot Demo`
 - Folder ID: `1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat`
 - Markdown files (as of writing -- the Phase 0 KB visibility gate also enumerates them; re-confirm via that gate before each run):
@@ -288,7 +286,7 @@ Do not stop the sync loop. Do not run `make clean`. Do not recreate accounts or 
 
   PDFs sit alongside the `.md` files; `list_drive_markdown`'s `mimeType='text/markdown'` filter must skip them. If it does not, that is a defect.
 
-- Access model: because the KB lives in a Shared Drive, listing depends on the impersonated user being a Shared Drive member, not on per-file ACL. `anyoneWithLink:reader` is set on every file so the `web_view_link` returned by `read_drive_markdown` opens for strangers reading the agent's reply. If `list_drive_markdown` returns an empty list or `not_found`, the failure mode is almost always Shared Drive membership of `demo@lab5.ca`, not file-level sharing -- fix that first, do not patch around it.
+- Access model: because the KB lives in a Shared Drive, listing depends on the impersonated user being a Shared Drive member, not on per-file ACL. `anyoneWithLink:reader` is set on every file so the `web_view_link` returned by `read_drive_markdown` opens for strangers reading the agent's reply. If `list_drive_markdown` returns an empty list or `not_found`, the failure mode is almost always Shared Drive membership of `inbound@lab5.ca`, not file-level sharing -- fix that first, do not patch around it.
 
 Capture `TEST_START_B` (ISO, must be later than A's last activity) and two distinct subjects -- `SUBJECT_B1` (in-scope) and `SUBJECT_B2` (out-of-scope) -- per the Conventions section. Both must differ from `SUBJECT_A`.
 
@@ -300,7 +298,7 @@ Operator-style instructions citing the real folder ID. The agent's behaviour com
 mailpilot workflow create \
   --name "Demo (lab5.ca/demo)" \
   --type inbound \
-  --account-id <DEMO_ACCOUNT_ID> \
+  --account-id <INBOUND_ACCOUNT_ID> \
   --objective "Answer water-treatment product questions grounded in the MailPilot Demo Drive folder; politely decline questions about products not in the KB." \
   --instructions "You are the lab5.ca/demo agent. The Markdown product knowledge base lives in Google Drive folder 1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat. For every reply: call list_drive_markdown with that folder ID, pick the most relevant file by name, call read_drive_markdown on it, then compose the reply grounded in that file's content. Cite the source file name in the body. If no listed file is relevant to the question (e.g., the asker is asking about Pentair, Evoqua, or Grundfos products that are not in the folder), reply with a short polite decline that explains the KB does not cover that product and do NOT fabricate specifications. Body MUST use plain Markdown. Subject MUST preserve the incoming thread subject. After replying, call record_enrollment_outcome with outcome='completed'. Do not create follow-up tasks."
 ```
@@ -316,7 +314,7 @@ mailpilot enrollment add --workflow-id <DEMO_WORKFLOW_ID> --contact-id <OUTBOUND
 
 ### B2. Confirm the sync loop is still alive
 
-The `mailpilot run` process started in A2 has been syncing all three accounts continuously. Read its captured stdout, confirm no fatal errors since the A-window Logfire review. If the process died, restart it the same way as A2 and note the restart in the report.
+The `mailpilot run` process started in A2 has been syncing both accounts continuously. Read its captured stdout, confirm no fatal errors since the A-window Logfire review. If the process died, restart it the same way as A2 and note the restart in the report.
 
 ### B3. Send the in-scope question
 
@@ -329,7 +327,7 @@ Pick one in-scope question from the lab5.ca/demo page. Examples (rotate freely; 
 ```
 mailpilot email send \
   --account-id <OUTBOUND_ACCOUNT_ID> \
-  --to demo@lab5.ca \
+  --to inbound@lab5.ca \
   --subject "<SUBJECT_B1>" \
   --body "<your in-scope question>"
 ```
@@ -352,7 +350,7 @@ Match by `SUBJECT_B1` (likely with `Re:` prefix). Record the wall-clock time the
 
 - Reply present, threaded under `SUBJECT_B1`.
 - `LATENCY_B1 <= 60s`. **If the reply takes longer, that is a regression of the lab5.ca/demo promise -- record as a Critical defect.** (Polling cadence is 5s, so granularity is coarse; if the first observation lands at 65s and it was the first reply on the thread, treat the run as borderline and re-test.)
-- Reply on the demo side (`mailpilot email list --account-id <DEMO_ACCOUNT_ID> --direction outbound --since <TEST_START_B>`) → `is_routed == true`, `workflow_id == DEMO_WORKFLOW_ID`, `route_method == classified`. The classifier ran -- not `thread_match`, since this is a fresh thread.
+- Reply on the demo side (`mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>`) → `is_routed == true`, `workflow_id == DEMO_WORKFLOW_ID`, `route_method == classified`. The classifier ran -- not `thread_match`, since this is a fresh thread.
 - Reply body **grounded in the KB**: mentions the model number from the question verbatim (e.g., `TW-18.0K-1240`, `SF-100S`, `UV-COM`) and includes at least one numeric fact (regex `\d`) consistent with a spec answer. A reply without a model number or numeric fact is a grounding regression.
 - Reply body cites the source file name (or its product family name) -- the workflow instructions require this. Missing citation is a prompt-fidelity regression.
 
@@ -379,7 +377,7 @@ Same demo workflow, fresh subject:
 ```
 mailpilot email send \
   --account-id <OUTBOUND_ACCOUNT_ID> \
-  --to demo@lab5.ca \
+  --to inbound@lab5.ca \
   --subject "<SUBJECT_B2>" \
   --body "Which Pentair Evoqua reverse osmosis system would you recommend for a 500 GPM industrial laundry?"
 ```
@@ -458,7 +456,7 @@ Produce a report covering both scenarios. Both are mandatory; a missing scenario
 Smoke Test Results
 ==================
 
-Phase 0 (one-time setup) ..... PASS  (3 accounts, 3 contacts, 1 company)
+Phase 0 (one-time setup) ..... PASS  (2 accounts, 2 contacts, 1 company)
 
 Scenario A: Outbound workflow (sole workflow active)
   A1 Create workflow ......... PASS
@@ -482,8 +480,8 @@ Scenario B: KB-grounded demo (lab5.ca/demo, outbound workflow still active)
   B9 Stop sync loop .......... PASS
 
 Entity IDs (shared by both scenarios):
-  Outbound account: <id>   Inbound account: <id>   Demo account: <id>   Company: <id>
-  Outbound contact: <id>   Inbound contact: <id>   Demo contact: <id>
+  Outbound account: <id>   Inbound account: <id>   Company: <id>
+  Outbound contact: <id>   Inbound contact: <id>
   Outbound workflow: <id>  Demo workflow: <id>
   KB folder ID: 1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat
 
@@ -567,7 +565,7 @@ Expected total: ~7 minutes. Phase 0 once, run loop once, no reset between scenar
 
 | Phase / scenario               | Duration |
 | ------------------------------ | -------- |
-| Phase 0 (once, 3 accounts)     | ~15s     |
+| Phase 0 (once, 2 accounts)     | ~15s     |
 | A1 / B1 workflow setup         | ~5s      |
 | A2 start run loop              | ~5s      |
 | A3 outbound agent              | ~10s     |
