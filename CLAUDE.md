@@ -85,6 +85,15 @@ Exceptions:
 - `Note` summary keeps `body_preview` (first 80 chars + `...` if truncated) -- body is the entire content.
 - `EnrollmentSummary` denormalised with `contact_email` / `contact_name` -- join already established in `list_enrollments_detailed`.
 
+**JSON envelope shape.** All JSON-yielding commands wrap their payload under a stable key (SPEC §V13):
+
+- `<entity> list` and `<entity> search` -> `{"<plural>": [...], "ok": true}`
+- `<entity> view`, `<entity> create`, `<entity> update` (and create-equivalents `add`/`start`/`stop`/`cancel`/`reply`/`send`) -> `{"<singular>": {...}, "ok": true}`
+- Operational commands that don't return an entity (`account sync`, `tag remove`, `enrollment remove`, `enrollment run`, `*_export`/`*_import`, `config get/set`, `status`) keep their bespoke envelope.
+- Errors -> `{"error": CODE, "message": TEXT, "ok": false}` to stderr, exit 1.
+
+Use `output_entity("<singular>", model)` for single-entity returns; `output({"<plural>": [...]})` for list returns. NEVER `output(model.model_dump(mode="json"))` -- inlining entity fields at the top level breaks parser symmetry with list commands and was the cause of the smoke-test parser breakages on 2026-04-30.
+
 **Input validation in CLI commands.** All commands validate before touching the database:
 
 1. Required text fields reject empty/whitespace-only values: `output_error("X cannot be empty", "validation_error")` -- checked before `initialize_database()`.
