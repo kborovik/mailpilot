@@ -15,6 +15,7 @@ from typing import Any
 import logfire
 from google.cloud.pubsub_v1 import PublisherClient, SubscriberClient
 
+from mailpilot.operator_log import operator_event
 from mailpilot.settings import Settings
 
 StreamingPullFuture = Any
@@ -199,7 +200,7 @@ def make_notification_callback(
                 # watch payloads (see #82).
                 data = json.loads(message.data)
                 email_address = data["emailAddress"]
-            except json.JSONDecodeError, KeyError, UnicodeDecodeError:
+            except (json.JSONDecodeError, KeyError, UnicodeDecodeError) as exc:
                 logfire.exception(
                     "pubsub.notification.decode_error",
                     pubsub_message_id=message.message_id,
@@ -207,6 +208,11 @@ def make_notification_callback(
                     payload_excerpt=message.data[:200].decode(
                         "utf-8", errors="replace"
                     ),
+                )
+                operator_event(
+                    "error",
+                    source="pubsub.notification.decode_error",
+                    message=str(exc),
                 )
                 message.ack()
                 return
@@ -282,11 +288,16 @@ def renew_watches(
                     email=account.email,
                     expiration=new_expiration.isoformat(),
                 )
-            except Exception:
+            except Exception as exc:
                 logfire.exception(
                     "pubsub.watch.renewal_failed",
                     account_id=account.id,
                     email=account.email,
+                )
+                operator_event(
+                    "error",
+                    source="pubsub.watch.renewal_failed",
+                    message=str(exc),
                 )
 
     return renewed

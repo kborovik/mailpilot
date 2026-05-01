@@ -345,6 +345,28 @@ def test_notification_callback_decode_error_records_exception(
     assert "JSONDecodeError" in event_attrs["exception.type"]
 
 
+def test_notification_callback_decode_error_emits_operator_event(
+    capsys: Any,
+) -> None:
+    """logfire.exception at pubsub.notification.decode_error pairs w/ operator event=error."""
+    import queue
+
+    from mailpilot.pubsub import make_notification_callback
+
+    sync_queue: queue.Queue[str] = queue.Queue()
+    callback = make_notification_callback(sync_queue)
+
+    message = MagicMock()
+    message.data = b"not-valid-json{"
+    message.message_id = "msg-abc-123"
+
+    callback(message)
+
+    err = capsys.readouterr().err
+    assert "event=error" in err
+    assert "source=pubsub.notification.decode_error" in err
+
+
 # -- renew_watches -------------------------------------------------------------
 
 
@@ -382,6 +404,37 @@ def test_renew_watches_renews_expiring(
     assert updated is not None
     assert updated.watch_expiration is not None
     assert updated.watch_expiration > soon
+
+
+def test_renew_watches_emits_error_on_renewal_failure(
+    capsys: Any,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """logfire.exception at pubsub.watch.renewal_failed pairs w/ operator event=error."""
+    from mailpilot.pubsub import renew_watches
+
+    settings = make_test_settings(
+        google_application_credentials="/tmp/creds.json",
+        google_pubsub_topic="test-topic",
+    )
+    account = make_test_account(database_connection, email="renew-fail@example.com")
+    soon = datetime.now(UTC) + timedelta(hours=12)
+    update_account(database_connection, account.id, watch_expiration=soon)
+
+    with (
+        patch("mailpilot.pubsub._resolve_project_id", return_value="my-project"),
+        patch("mailpilot.gmail.GmailClient") as mock_gmail_cls,
+    ):
+        mock_client = mock_gmail_cls.return_value
+        mock_client.watch.side_effect = RuntimeError("watch quota exceeded")
+
+        count = renew_watches(database_connection, settings)
+
+    assert count == 0
+    err = capsys.readouterr().err
+    assert "event=error" in err
+    assert "source=pubsub.watch.renewal_failed" in err
+    assert 'message="watch quota exceeded"' in err
 
 
 def test_renew_watches_skips_fresh_watches(
