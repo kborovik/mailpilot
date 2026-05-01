@@ -243,6 +243,39 @@ def test_notification_callback_acks_on_missing_email_field() -> None:
     message.ack.assert_called_once()
 
 
+def test_notification_callback_success_emits_one_span_with_email_attribute(
+    capfire: CaptureLogfire,
+) -> None:
+    """Success path emits exactly one `pubsub.notification` row carrying the
+    email as a span attribute, and zero `pubsub.notification.received` rows.
+
+    Regression guard: an earlier version of the callback emitted both a span
+    and a paired `logfire.debug("pubsub.notification.received", ...)` log,
+    doubling Logfire row volume on the hot path with no information benefit
+    (see SPEC.md §T13). This test pins the collapsed shape so a future
+    refactor cannot silently bring the duplicate log back.
+    """
+    import queue
+
+    from mailpilot.pubsub import make_notification_callback
+
+    sync_queue: queue.Queue[str] = queue.Queue()
+    callback = make_notification_callback(sync_queue)
+
+    message = MagicMock()
+    message.data = json.dumps({"emailAddress": "user@example.com"}).encode()
+    message.message_id = "msg-success-1"
+
+    callback(message)
+
+    spans = capfire.exporter.exported_spans_as_dict()
+    notif_spans = [s for s in spans if s["name"] == "pubsub.notification"]
+    received_logs = [s for s in spans if s["name"] == "pubsub.notification.received"]
+    assert len(notif_spans) == 1
+    assert len(received_logs) == 0
+    assert notif_spans[0]["attributes"].get("email") == "user@example.com"
+
+
 def test_notification_callback_decode_error_attaches_diagnostics(
     capfire: CaptureLogfire,
 ) -> None:

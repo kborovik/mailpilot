@@ -73,6 +73,21 @@ def output(data: dict[str, Any]) -> None:
     click.echo(json.dumps({**data, "ok": True}, indent=2, ensure_ascii=False))
 
 
+def output_entity(key: str, model: Any) -> None:
+    """Emit a single entity wrapped under its singular key.
+
+    Per SPEC §V13: `<entity> view|create|update` -> `{"<singular>": {...}, "ok": true}`.
+    Symmetric with `output({"<plural>": [...]})` used by list commands.
+    """
+    click.echo(
+        json.dumps(
+            {key: model.model_dump(mode="json"), "ok": True},
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
+
+
 def output_error(message: str, code: str) -> NoReturn:
     """Print structured JSON error to stderr and exit."""
     from opentelemetry import trace
@@ -250,7 +265,7 @@ def account_create(email: str, display_name: str) -> None:
     connection = initialize_database(_database_url())
     try:
         created = create_account(connection, email=email, display_name=display_name)
-        output(created.model_dump(mode="json"))
+        output_entity("account", created)
     finally:
         connection.close()
 
@@ -281,7 +296,7 @@ def account_view(account_id: str) -> None:
         found = get_account(connection, account_id)
         if found is None:
             output_error(f"account not found: {account_id}", "not_found")
-        output(found.model_dump(mode="json"))
+        output_entity("account", found)
     finally:
         connection.close()
 
@@ -301,7 +316,7 @@ def account_update(account_id: str, display_name: str | None) -> None:
         updated = update_account(connection, account_id, **fields)
         if updated is None:
             output_error(f"account not found: {account_id}", "not_found")
-        output(updated.model_dump(mode="json"))
+        output_entity("account", updated)
     finally:
         connection.close()
 
@@ -397,7 +412,7 @@ def company_create(domain: str, name: str) -> None:
     connection = initialize_database(_database_url())
     try:
         created = create_company(connection, name=name, domain=domain)
-        output(created.model_dump(mode="json"))
+        output_entity("company", created)
     finally:
         connection.close()
 
@@ -417,7 +432,7 @@ def company_update(company_id: str, name: str | None) -> None:
         updated = update_company(connection, company_id, **fields)
         if updated is None:
             output_error(f"company not found: {company_id}", "not_found")
-        output(updated.model_dump(mode="json"))
+        output_entity("company", updated)
     finally:
         connection.close()
 
@@ -463,7 +478,7 @@ def company_view(company_id: str) -> None:
         found = get_company(connection, company_id)
         if found is None:
             output_error(f"company not found: {company_id}", "not_found")
-        output(found.model_dump(mode="json"))
+        output_entity("company", found)
     finally:
         connection.close()
 
@@ -546,7 +561,7 @@ def contact_create(
             last_name=last_name,
             company_id=company_id,
         )
-        output(created.model_dump(mode="json"))
+        output_entity("contact", created)
     finally:
         connection.close()
 
@@ -582,7 +597,7 @@ def contact_update(
         updated = update_contact(connection, contact_id, **fields)
         if updated is None:
             output_error(f"contact not found: {contact_id}", "not_found")
-        output(updated.model_dump(mode="json"))
+        output_entity("contact", updated)
     finally:
         connection.close()
 
@@ -651,7 +666,7 @@ def contact_view(contact_id: str) -> None:
         found = get_contact(connection, contact_id)
         if found is None:
             output_error(f"contact not found: {contact_id}", "not_found")
-        output(found.model_dump(mode="json"))
+        output_entity("contact", found)
     finally:
         connection.close()
 
@@ -808,7 +823,7 @@ def email_view(email_id: str) -> None:
         found = get_email(connection, email_id)
         if found is None:
             output_error(f"email not found: {email_id}", "not_found")
-        output(found.model_dump(mode="json"))
+        output_entity("email", found)
     finally:
         connection.close()
 
@@ -884,7 +899,7 @@ def email_send(
                 to=to,
             )
             output_error(str(exc), "send_failed")
-        output(sent.model_dump(mode="json"))
+        output_entity("email", sent)
     finally:
         connection.close()
 
@@ -953,7 +968,7 @@ def email_reply(
                 email_id=email_id,
             )
             output_error(str(exc), "send_failed")
-        output(sent.model_dump(mode="json"))
+        output_entity("email", sent)
     finally:
         connection.close()
 
@@ -1015,7 +1030,7 @@ def activity_create(
             summary=summary,
             detail=detail_dict,
         )
-        output(created.model_dump(mode="json"))
+        output_entity("activity", created)
     finally:
         connection.close()
 
@@ -1126,7 +1141,7 @@ def tag_add(contact_id: str | None, company_id: str | None, name: str) -> None:
                 f"tag '{normalized}' already exists on {owner[0]} {owner[1]}",
                 "already_exists",
             )
-        output(created.model_dump(mode="json"))
+        output_entity("tag", created)
     finally:
         connection.close()
 
@@ -1291,7 +1306,7 @@ def note_add(contact_id: str | None, company_id: str | None, body: str) -> None:
             if get_company(connection, company_id) is None:
                 output_error(f"company {company_id} not found", "not_found")
             created = add_company_note(connection, company_id=company_id, body=body)
-        output(created.model_dump(mode="json"))
+        output_entity("note", created)
     finally:
         connection.close()
 
@@ -1348,7 +1363,7 @@ def note_view(note_id: str) -> None:
         found = get_note(connection, note_id)
         if found is None:
             output_error(f"note {note_id} not found", "not_found")
-        output(found.model_dump(mode="json"))
+        output_entity("note", found)
     finally:
         connection.close()
 
@@ -1474,7 +1489,7 @@ def workflow_create(
             created = update_workflow(connection, created.id, **extras) or created
         if not draft and has_objective and has_instructions:
             created = activate_workflow(connection, created.id)
-        output(created.model_dump(mode="json"))
+        output_entity("workflow", created)
     finally:
         connection.close()
 
@@ -1532,7 +1547,7 @@ def workflow_update(
         updated = update_workflow(connection, workflow_id, **fields)
         if updated is None:
             output_error(f"workflow not found: {workflow_id}", "not_found")
-        output(updated.model_dump(mode="json"))
+        output_entity("workflow", updated)
     finally:
         connection.close()
 
@@ -1607,7 +1622,7 @@ def workflow_view(workflow_id: str) -> None:
         found = get_workflow(connection, workflow_id)
         if found is None:
             output_error(f"workflow not found: {workflow_id}", "not_found")
-        output(found.model_dump(mode="json"))
+        output_entity("workflow", found)
     finally:
         connection.close()
 
@@ -1637,7 +1652,7 @@ def workflow_start(workflow_id: str) -> None:
                     "invalid_state",
                 )
             output_error(message, "invalid_state")
-        output(activated.model_dump(mode="json"))
+        output_entity("workflow", activated)
     finally:
         connection.close()
 
@@ -1654,7 +1669,7 @@ def workflow_stop(workflow_id: str) -> None:
             paused = pause_workflow(connection, workflow_id)
         except ValueError as exc:
             output_error(str(exc), "invalid_state")
-        output(paused.model_dump(mode="json"))
+        output_entity("workflow", paused)
     finally:
         connection.close()
 
@@ -1700,11 +1715,11 @@ def enrollment_add(workflow_id: str, contact_id: str) -> None:
                 company_id=contact.company_id,
                 workflow_id=workflow_id,
             )
-            output(created.model_dump(mode="json"))
+            output_entity("enrollment", created)
             return
         existing = get_enrollment(connection, workflow_id, contact_id)
         if existing is not None:
-            output(existing.model_dump(mode="json"))
+            output_entity("enrollment", existing)
             return
     finally:
         connection.close()
@@ -1771,6 +1786,7 @@ def enrollment_run(workflow_id: str, contact_id: str) -> None:
                 contact,
                 email=email,
                 task_description=description,
+                trigger="enrollment_run",
             )
         except Exception as exc:
             envelope["status"] = "failed"
@@ -1821,7 +1837,7 @@ def enrollment_view(workflow_id: str, contact_id: str) -> None:
         record = get_enrollment(connection, workflow_id, contact_id)
         if record is None:
             output_error("enrollment not found", "not_found")
-        output(record.model_dump(mode="json"))
+        output_entity("enrollment", record)
     finally:
         connection.close()
 
@@ -1922,7 +1938,7 @@ def enrollment_update(
                 company_id=contact.company_id if contact is not None else None,
                 workflow_id=workflow_id,
             )
-        output(updated.model_dump(mode="json"))
+        output_entity("enrollment", updated)
     finally:
         connection.close()
 
@@ -1991,7 +2007,7 @@ def task_view(task_id: str) -> None:
         found = get_task(connection, task_id)
         if found is None:
             output_error(f"task not found: {task_id}", "not_found")
-        output(found.model_dump(mode="json"))
+        output_entity("task", found)
     finally:
         connection.close()
 
@@ -2007,6 +2023,6 @@ def task_cancel(task_id: str) -> None:
         cancelled = cancel_task(connection, task_id)
         if cancelled is None:
             output_error(f"task not found or not pending: {task_id}", "not_found")
-        output(cancelled.model_dump(mode="json"))
+        output_entity("task", cancelled)
     finally:
         connection.close()

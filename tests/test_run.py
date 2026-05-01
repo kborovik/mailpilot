@@ -134,6 +134,7 @@ def test_execute_task_success(
         email=None,
         task_description="follow up",
         task_context={},
+        trigger="task",
     )
     mock_complete.assert_called_once_with(
         database_connection,
@@ -342,6 +343,7 @@ def test_execute_task_with_email(
         email=email,
         task_description="follow up",
         task_context={},
+        trigger="task",
     )
 
 

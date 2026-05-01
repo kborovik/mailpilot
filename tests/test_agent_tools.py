@@ -20,10 +20,12 @@ from mailpilot.agent.tools import (
     cancel_task,
     create_task,
     disable_contact,
+    list_drive_markdown,
     list_enrollments,
     noop,
     read_company,
     read_contact,
+    read_drive_markdown,
     read_email,
     record_enrollment_outcome,
     reply_email,
@@ -773,6 +775,98 @@ def test_read_email_cross_account_returns_none(
         email_id=email_b.id,
     )
     assert result is None
+
+
+# -- list_drive_markdown / read_drive_markdown -------------------------------
+
+
+def _http_error(status: int, reason: str = "") -> Any:
+    """Build a googleapiclient HttpError with a given status."""
+    from googleapiclient.errors import HttpError
+
+    resp = MagicMock()
+    resp.status = status
+    resp.reason = reason or ("Not Found" if status == 404 else "Error")
+    return HttpError(resp=resp, content=b"error")
+
+
+def test_list_drive_markdown_returns_files_on_success() -> None:
+    drive_client = MagicMock()
+    drive_client.list_markdown.return_value = [
+        {"file_id": "f1", "name": "guide.md"},
+    ]
+
+    result = list_drive_markdown(drive_client=drive_client, folder_id="FOLDER")
+
+    assert result == [{"file_id": "f1", "name": "guide.md"}]
+    drive_client.list_markdown.assert_called_once_with("FOLDER")
+
+
+def test_list_drive_markdown_empty_folder_returns_empty_list() -> None:
+    drive_client = MagicMock()
+    drive_client.list_markdown.return_value = []
+
+    result = list_drive_markdown(drive_client=drive_client, folder_id="EMPTY")
+
+    assert result == []
+
+
+def test_list_drive_markdown_not_found_returns_error_dict() -> None:
+    drive_client = MagicMock()
+    drive_client.list_markdown.side_effect = _http_error(404)
+
+    result = list_drive_markdown(drive_client=drive_client, folder_id="MISSING")
+
+    assert isinstance(result, dict)
+    assert result["error"] == "not_found"
+    assert "MISSING" in result["message"]
+
+
+def test_list_drive_markdown_other_http_error_returns_drive_unavailable() -> None:
+    drive_client = MagicMock()
+    drive_client.list_markdown.side_effect = _http_error(500, "Server Error")
+
+    result = list_drive_markdown(drive_client=drive_client, folder_id="FOLDER")
+
+    assert isinstance(result, dict)
+    assert result["error"] == "drive_unavailable"
+
+
+def test_read_drive_markdown_returns_content_on_success() -> None:
+    drive_client = MagicMock()
+    drive_client.read_markdown.return_value = {
+        "name": "guide.md",
+        "content": "# Guide\n\nbody",
+        "web_view_link": "https://x/y",
+    }
+
+    result = read_drive_markdown(drive_client=drive_client, file_id="FID")
+
+    assert result == {
+        "name": "guide.md",
+        "content": "# Guide\n\nbody",
+        "web_view_link": "https://x/y",
+    }
+    drive_client.read_markdown.assert_called_once_with("FID")
+
+
+def test_read_drive_markdown_not_found_returns_error_dict() -> None:
+    drive_client = MagicMock()
+    drive_client.read_markdown.side_effect = _http_error(404)
+
+    result = read_drive_markdown(drive_client=drive_client, file_id="MISSING")
+
+    assert result["error"] == "not_found"
+    assert "MISSING" in result["message"]
+
+
+def test_read_drive_markdown_other_http_error_returns_drive_unavailable() -> None:
+    drive_client = MagicMock()
+    drive_client.read_markdown.side_effect = _http_error(503)
+
+    result = read_drive_markdown(drive_client=drive_client, file_id="FID")
+
+    assert result["error"] == "drive_unavailable"
 
 
 # -- noop ----------------------------------------------------------------------

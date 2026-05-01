@@ -1,4 +1,12 @@
-"""Operator-log emissions from agent invocation."""
+"""Span-contract tests for the ``agent.invoke`` ``trigger`` attribute.
+
+SPEC §V12 requires the ``trigger`` attribute on the ``agent.invoke`` span
+to reflect the caller path explicitly: ``enrollment_run`` for CLI manual
+runs, ``task`` for background drains, ``email`` for email-driven calls,
+``manual`` for direct programmatic calls. Tests assert the value flows
+through from the explicit ``trigger`` parameter rather than being
+heuristically inferred.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +14,7 @@ from typing import Any
 from unittest.mock import patch
 
 import psycopg
-import pytest
+from logfire.testing import CaptureLogfire
 from pydantic_ai.messages import (
     ModelMessage,
     ModelResponse,
@@ -52,9 +60,22 @@ def _model_that_calls_noop(
     )
 
 
-def test_invoke_workflow_agent_emits_agent_run(
-    capsys: pytest.CaptureFixture[str],
+def _agent_invoke_trigger(capfire: CaptureLogfire) -> str:
+    spans = [
+        span
+        for span in capfire.exporter.exported_spans_as_dict()
+        if span["name"] == "agent.invoke"
+    ]
+    assert len(spans) == 1, f"expected exactly one agent.invoke span, got {len(spans)}"
+    trigger = spans[0]["attributes"].get("trigger")
+    assert isinstance(trigger, str)
+    return trigger
+
+
+def _run(
     database_connection: psycopg.Connection[dict[str, Any]],
+    *,
+    trigger: str | None,
 ) -> None:
     account = make_test_account(database_connection, email="agent@example.com")
     contact = make_test_contact(
@@ -68,7 +89,12 @@ def test_invoke_workflow_agent_emits_agent_run(
         anthropic_api_key="sk-test", anthropic_model="test-model"
     )
 
-    capsys.readouterr()
+    kwargs: dict[str, Any] = {
+        "model_override": FunctionModel(_model_that_calls_noop),
+    }
+    if trigger is not None:
+        kwargs["trigger"] = trigger
+
     with (
         patch("mailpilot.agent.invoke.GmailClient"),
         patch("mailpilot.agent.invoke.DriveClient"),
@@ -78,12 +104,30 @@ def test_invoke_workflow_agent_emits_agent_run(
             settings,
             workflow,
             contact,
-            model_override=FunctionModel(_model_that_calls_noop),
+            **kwargs,
         )
 
-    out = capsys.readouterr().err
-    assert "event=agent.run" in out
-    assert f"workflow_id={workflow.id}" in out
-    assert f"contact_id={contact.id}" in out
-    assert "status=completed" in out
-    assert "tool_calls=1" in out
+
+def test_trigger_enrollment_run(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    _run(database_connection, trigger="enrollment_run")
+    assert _agent_invoke_trigger(capfire) == "enrollment_run"
+
+
+def test_trigger_task(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    _run(database_connection, trigger="task")
+    assert _agent_invoke_trigger(capfire) == "task"
+
+
+def test_trigger_default_is_manual(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Direct programmatic callers that omit ``trigger`` get ``manual``."""
+    _run(database_connection, trigger=None)
+    assert _agent_invoke_trigger(capfire) == "manual"

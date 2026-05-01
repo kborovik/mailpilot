@@ -102,8 +102,8 @@ def test_account_create(runner: CliRunner, mock_connection: MagicMock) -> None:
     )
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["email"] == "test@example.com"
-    assert data["display_name"] == "Test Account"
+    assert data["account"]["email"] == "test@example.com"
+    assert data["account"]["display_name"] == "Test Account"
 
 
 def test_account_create_email_only(
@@ -211,7 +211,7 @@ def test_account_view(runner: CliRunner, mock_connection: MagicMock) -> None:
     mock_get.assert_called_once_with(mock_connection, account.id)
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["id"] == account.id
+    assert data["account"]["id"] == account.id
 
 
 def test_account_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:
@@ -250,7 +250,7 @@ def test_account_update_display_name(
     )
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["display_name"] == "New Name"
+    assert data["account"]["display_name"] == "New Name"
 
 
 def test_account_update_no_fields(
@@ -268,7 +268,7 @@ def test_account_update_no_fields(
     mock_update.assert_called_once_with(mock_connection, account.id)
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["id"] == account.id
+    assert data["account"]["id"] == account.id
 
 
 def test_account_update_not_found(
@@ -423,8 +423,8 @@ def test_company_create(runner: CliRunner, mock_connection: MagicMock) -> None:
     )
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["domain"] == "acme.com"
-    assert data["name"] == "Acme Corp"
+    assert data["company"]["domain"] == "acme.com"
+    assert data["company"]["name"] == "Acme Corp"
 
 
 def test_company_create_domain_only(
@@ -521,7 +521,7 @@ def test_company_view(runner: CliRunner, mock_connection: MagicMock) -> None:
     mock_get.assert_called_once_with(mock_connection, company.id)
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["id"] == company.id
+    assert data["company"]["id"] == company.id
 
 
 def test_company_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:
@@ -606,7 +606,7 @@ def test_company_update_name(runner: CliRunner, mock_connection: MagicMock) -> N
     mock_update.assert_called_once_with(mock_connection, updated.id, name="New Name")
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["name"] == "New Name"
+    assert data["company"]["name"] == "New Name"
 
 
 def test_company_update_no_fields(
@@ -754,8 +754,8 @@ def test_contact_create(runner: CliRunner, mock_connection: MagicMock) -> None:
     )
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["email"] == "alice@example.com"
-    assert data["first_name"] == "Alice"
+    assert data["contact"]["email"] == "alice@example.com"
+    assert data["contact"]["first_name"] == "Alice"
 
 
 def test_contact_create_email_only(
@@ -830,7 +830,7 @@ def test_contact_update_first_name(
     )
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["first_name"] == "Alicia"
+    assert data["contact"]["first_name"] == "Alicia"
 
 
 def test_contact_update_no_fields(
@@ -1046,7 +1046,7 @@ def test_contact_view(runner: CliRunner, mock_connection: MagicMock) -> None:
     mock_get.assert_called_once_with(mock_connection, contact.id)
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["id"] == contact.id
+    assert data["contact"]["id"] == contact.id
 
 
 def test_contact_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:
@@ -1328,7 +1328,7 @@ def test_email_view(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["id"] == email.id
+    assert data["email"]["id"] == email.id
 
 
 def test_email_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:
@@ -1381,7 +1381,7 @@ def test_email_view_body_text_with_newlines_is_valid_json(
 
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
-    assert data["body_text"] == body
+    assert data["email"]["body_text"] == body
 
 
 def test_output_escapes_all_control_characters() -> None:
@@ -1529,9 +1529,9 @@ def test_email_send_success(runner: CliRunner, mock_connection: MagicMock) -> No
     assert kwargs["workflow_id"] is None
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["id"] == sent.id
-    assert data["direction"] == "outbound"
-    assert data["status"] == "sent"
+    assert data["email"]["id"] == sent.id
+    assert data["email"]["direction"] == "outbound"
+    assert data["email"]["status"] == "sent"
 
 
 def test_email_send_with_workflow_id(
@@ -1841,7 +1841,7 @@ def test_email_reply_success(runner: CliRunner, mock_connection: MagicMock) -> N
     assert kwargs["workflow_id"] is None
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["id"] == sent.id
+    assert data["email"]["id"] == sent.id
 
 
 def test_email_reply_account_not_found(
@@ -2057,8 +2057,8 @@ def test_workflow_create(runner: CliRunner, mock_connection: MagicMock) -> None:
     )
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["id"] == workflow.id
-    assert data["type"] == "outbound"
+    assert data["workflow"]["id"] == workflow.id
+    assert data["workflow"]["type"] == "outbound"
 
 
 def test_workflow_create_with_objective_and_instructions(
@@ -2112,7 +2112,7 @@ def test_workflow_create_with_objective_and_instructions(
     )
     mock_activate.assert_called_once_with(mock_connection, _WORKFLOW_ID)
     data = json.loads(result.output)
-    assert data["status"] == "active"
+    assert data["workflow"]["status"] == "active"
 
 
 def test_workflow_create_with_inline_instructions(
@@ -2156,7 +2156,7 @@ def test_workflow_create_with_inline_instructions(
     assert result.exit_code == 0, result.output
     mock_activate.assert_called_once_with(mock_connection, _WORKFLOW_ID)
     data = json.loads(result.output)
-    assert data["status"] == "active"
+    assert data["workflow"]["status"] == "active"
 
 
 def test_workflow_create_instructions_mutual_exclusion(
@@ -2307,7 +2307,7 @@ def test_workflow_create_auto_activates(
     assert result.exit_code == 0, result.output
     mock_activate.assert_called_once_with(mock_connection, _WORKFLOW_ID)
     data = json.loads(result.output)
-    assert data["status"] == "active"
+    assert data["workflow"]["status"] == "active"
 
 
 def test_workflow_create_draft_skips_activation(
@@ -2347,7 +2347,7 @@ def test_workflow_create_draft_skips_activation(
     assert result.exit_code == 0, result.output
     mock_activate.assert_not_called()
     data = json.loads(result.output)
-    assert data["status"] == "draft"
+    assert data["workflow"]["status"] == "draft"
 
 
 def test_workflow_create_missing_fields_without_draft(
@@ -2416,7 +2416,7 @@ def test_workflow_create_with_theme(
         theme="green",
     )
     data = json.loads(result.output)
-    assert data["theme"] == "green"
+    assert data["workflow"]["theme"] == "green"
 
 
 def test_workflow_create_invalid_theme(
@@ -2468,7 +2468,7 @@ def test_workflow_update_name(runner: CliRunner, mock_connection: MagicMock) -> 
     assert result.exit_code == 0, result.output
     mock_update.assert_called_once_with(mock_connection, _WORKFLOW_ID, name="Renamed")
     data = json.loads(result.output)
-    assert data["name"] == "Renamed"
+    assert data["workflow"]["name"] == "Renamed"
 
 
 def test_workflow_update_with_instructions_file(
@@ -2587,7 +2587,7 @@ def test_workflow_update_theme(runner: CliRunner, mock_connection: MagicMock) ->
     assert result.exit_code == 0, result.output
     mock_update.assert_called_once_with(mock_connection, _WORKFLOW_ID, theme="orange")
     data = json.loads(result.output)
-    assert data["theme"] == "orange"
+    assert data["workflow"]["theme"] == "orange"
 
 
 def test_workflow_update_invalid_theme(
@@ -2707,7 +2707,7 @@ def test_workflow_view(runner: CliRunner, mock_connection: MagicMock) -> None:
         result = runner.invoke(main, ["workflow", "view", _WORKFLOW_ID])
     assert result.exit_code == 0
     data = json.loads(result.output)
-    assert data["id"] == _WORKFLOW_ID
+    assert data["workflow"]["id"] == _WORKFLOW_ID
 
 
 def test_workflow_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:
@@ -2760,7 +2760,7 @@ def test_workflow_start(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert result.exit_code == 0, result.output
     mock_activate.assert_called_once_with(mock_connection, _WORKFLOW_ID)
     data = json.loads(result.output)
-    assert data["status"] == "active"
+    assert data["workflow"]["status"] == "active"
 
 
 def test_workflow_start_missing_objective(
@@ -2815,7 +2815,7 @@ def test_workflow_stop(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert result.exit_code == 0, result.output
     mock_pause.assert_called_once_with(mock_connection, _WORKFLOW_ID)
     data = json.loads(result.output)
-    assert data["status"] == "paused"
+    assert data["workflow"]["status"] == "paused"
 
 
 def test_workflow_stop_invalid_state(
@@ -3293,7 +3293,7 @@ def test_activity_create(runner: CliRunner, mock_connection: MagicMock) -> None:
     )
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["type"] == "email_sent"
+    assert data["activity"]["type"] == "email_sent"
 
 
 def test_activity_create_company_only(
@@ -3615,7 +3615,7 @@ def test_tag_add(runner: CliRunner, mock_connection: MagicMock) -> None:
     )
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["name"] == "prospect"
+    assert data["tag"]["name"] == "prospect"
 
 
 def test_tag_add_on_company(runner: CliRunner, mock_connection: MagicMock) -> None:
@@ -4007,7 +4007,7 @@ def test_note_add(runner: CliRunner, mock_connection: MagicMock) -> None:
     )
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["body"] == "Test note body"
+    assert data["note"]["body"] == "Test note body"
 
 
 def test_note_add_on_company(runner: CliRunner, mock_connection: MagicMock) -> None:
@@ -4224,8 +4224,8 @@ def test_note_view(runner: CliRunner, mock_connection: MagicMock) -> None:
     mock_get.assert_called_once_with(mock_connection, note.id)
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["id"] == note.id
-    assert data["body"] == "Test note body"
+    assert data["note"]["id"] == note.id
+    assert data["note"]["body"] == "Test note body"
 
 
 def test_note_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:
@@ -4336,9 +4336,9 @@ def test_enrollment_add(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert activity_kwargs["workflow_id"] == _WORKFLOW_ID
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["workflow_id"] == _WORKFLOW_ID
-    assert data["contact_id"] == _CONTACT_ID
-    assert data["status"] == "active"
+    assert data["enrollment"]["workflow_id"] == _WORKFLOW_ID
+    assert data["enrollment"]["contact_id"] == _CONTACT_ID
+    assert data["enrollment"]["status"] == "active"
 
 
 def test_enrollment_add_idempotent(
@@ -4371,7 +4371,7 @@ def test_enrollment_add_idempotent(
     mock_activity.assert_not_called()
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["status"] == "active"
+    assert data["enrollment"]["status"] == "active"
 
 
 def test_enrollment_add_workflow_not_found(
@@ -4510,8 +4510,8 @@ def test_enrollment_view_returns_record(
     mock_get.assert_called_once_with(mock_connection, _WORKFLOW_ID, _CONTACT_ID)
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["workflow_id"] == _WORKFLOW_ID
-    assert data["contact_id"] == _CONTACT_ID
+    assert data["enrollment"]["workflow_id"] == _WORKFLOW_ID
+    assert data["enrollment"]["contact_id"] == _CONTACT_ID
 
 
 def test_enrollment_view_not_found(
@@ -4962,8 +4962,8 @@ def test_task_view(runner: CliRunner, mock_connection: MagicMock) -> None:
 
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
-    assert data["id"] == task_obj.id
-    assert data["description"] == "follow up"
+    assert data["task"]["id"] == task_obj.id
+    assert data["task"]["description"] == "follow up"
 
 
 def test_task_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:
@@ -4994,7 +4994,7 @@ def test_task_cancel(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert result.exit_code == 0, result.output
     mock_cancel.assert_called_once_with(mock_connection, cancelled.id)
     data = json.loads(result.output)
-    assert data["status"] == "cancelled"
+    assert data["task"]["status"] == "cancelled"
 
 
 def test_task_cancel_not_pending(runner: CliRunner, mock_connection: MagicMock) -> None:
@@ -5024,3 +5024,82 @@ def test_run_command(runner: CliRunner, mock_connection: MagicMock) -> None:
 
     assert result.exit_code == 0, result.output
     mock_loop.assert_called_once_with(mock_connection, make_test_settings())
+
+
+# -- envelope shape contract (SPEC §V13) ---------------------------------------
+
+
+def test_envelope_view_wraps_under_singular_key(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """`<entity> view` MUST emit `{"<singular>": {...}, "ok": true}`."""
+    account = _make_account()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+    ):
+        result = runner.invoke(main, ["account", "view", account.id])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert set(data.keys()) == {"account", "ok"}
+    assert data["account"]["id"] == account.id
+
+
+def test_envelope_create_wraps_under_singular_key(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """`<entity> create` MUST emit `{"<singular>": {...}, "ok": true}`."""
+    account = _make_account()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_account", return_value=account),
+    ):
+        result = runner.invoke(
+            main, ["account", "create", "--email", "test@example.com"]
+        )
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert set(data.keys()) == {"account", "ok"}
+    assert data["account"]["email"] == account.email
+
+
+def test_envelope_update_wraps_under_singular_key(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """`<entity> update` MUST emit `{"<singular>": {...}, "ok": true}`."""
+    account = _make_account(display_name="Renamed")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.update_account", return_value=account),
+    ):
+        result = runner.invoke(
+            main, ["account", "update", account.id, "--display-name", "Renamed"]
+        )
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert set(data.keys()) == {"account", "ok"}
+    assert data["account"]["display_name"] == "Renamed"
+
+
+def test_envelope_list_wraps_under_plural_key(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """`<entity> list` MUST emit `{"<plural>": [...], "ok": true}` (symmetric with view)."""
+    accounts = [_make_account(id="01234567-0000-7000-0000-0000000000a1")]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_accounts", return_value=accounts),
+    ):
+        result = runner.invoke(main, ["account", "list"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert set(data.keys()) == {"accounts", "ok"}
+    assert isinstance(data["accounts"], list)

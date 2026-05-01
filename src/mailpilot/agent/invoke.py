@@ -27,6 +27,7 @@ from pydantic_ai.models import Model
 
 from mailpilot import database
 from mailpilot.agent import tools as agent_tools
+from mailpilot.drive import DriveClient
 from mailpilot.exceptions import AgentDidNotUseToolsError
 from mailpilot.gmail import GmailClient
 from mailpilot.models import Account, Contact, Email, Workflow
@@ -41,6 +42,7 @@ class AgentDeps:
     connection: psycopg.Connection[dict[str, Any]]
     account: Account
     gmail_client: GmailClient
+    drive_client: DriveClient
     settings: Settings
     workflow_id: str
     contact_id: str
@@ -263,6 +265,28 @@ def _wrap_read_email(
     )
 
 
+def _wrap_list_drive_markdown(
+    ctx: RunContext[AgentDeps],
+    folder_id: str,
+) -> list[dict[str, str]] | dict[str, str]:
+    """List Markdown files in a Drive folder for KB grounding."""
+    return agent_tools.list_drive_markdown(
+        drive_client=ctx.deps.drive_client,
+        folder_id=folder_id,
+    )
+
+
+def _wrap_read_drive_markdown(
+    ctx: RunContext[AgentDeps],
+    file_id: str,
+) -> dict[str, str]:
+    """Read a Markdown file from Drive."""
+    return agent_tools.read_drive_markdown(
+        drive_client=ctx.deps.drive_client,
+        file_id=file_id,
+    )
+
+
 def _wrap_noop(
     ctx: RunContext[AgentDeps],
     reason: str,
@@ -291,6 +315,8 @@ _TOOLS: list[Tool[AgentDeps]] = [
     Tool(_wrap_read_contact, name="read_contact"),
     Tool(_wrap_read_company, name="read_company"),
     Tool(_wrap_read_email, name="read_email"),
+    Tool(_wrap_list_drive_markdown, name="list_drive_markdown"),
+    Tool(_wrap_read_drive_markdown, name="read_drive_markdown"),
     Tool(_wrap_noop, name="noop"),
 ]
 
@@ -301,7 +327,13 @@ _SYSTEM_PREFIX = (
     "When a trigger email is included in your prompt, its full body is "
     "already provided -- do not call read_email to fetch it again.\n"
     "After completing the workflow objective for a contact, call "
-    "record_enrollment_outcome with outcome='completed' and a brief reason.\n\n"
+    "record_enrollment_outcome with outcome='completed' and a brief reason.\n"
+    "If the workflow instructions reference a Google Drive folder of "
+    "Markdown notes, ground every reply in that folder: call "
+    "list_drive_markdown with the folder ID, then read_drive_markdown on "
+    "the most relevant file before composing the reply. If no listed file "
+    "is relevant to the question, reply with a polite decline and do not "
+    "invent facts.\n\n"
 )
 
 
@@ -413,7 +445,7 @@ def _extract_tool_errors(result: Any) -> list[dict[str, str]]:
 # -- Main entry point ----------------------------------------------------------
 
 
-def invoke_workflow_agent(  # noqa: PLR0913
+def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
     workflow: Workflow,
@@ -422,6 +454,7 @@ def invoke_workflow_agent(  # noqa: PLR0913
     task_description: str = "",
     task_context: dict[str, Any] | None = None,
     model_override: Model | str | None = None,
+    trigger: str = "manual",
 ) -> dict[str, Any] | None:
     """Run the workflow's Pydantic AI agent for a contact.
 
@@ -437,6 +470,11 @@ def invoke_workflow_agent(  # noqa: PLR0913
         task_description: Deferred task description, if triggered by task runner.
         task_context: Arbitrary JSON context from the task row.
         model_override: Override the LLM model (for testing with FunctionModel).
+        trigger: Caller path label for the ``agent.invoke`` span. One of
+            ``enrollment_run`` (CLI manual via ``mailpilot enrollment run``),
+            ``task`` (background drain via ``run.execute_task``),
+            ``email`` (email-driven), or ``manual`` (default for direct
+            programmatic calls). See SPEC §V12.
 
     Returns:
         Dict with invocation result, or None if skipped (lock held).
@@ -449,7 +487,7 @@ def invoke_workflow_agent(  # noqa: PLR0913
         workflow_id=workflow.id,
         contact_id=contact.id,
         workflow_type=workflow.type,
-        trigger="email" if email else ("task" if task_description else "manual"),
+        trigger=trigger,
     ) as span:
         # Acquire advisory lock.
         if not _try_acquire_advisory_lock(connection, workflow.id, contact.id):
@@ -505,10 +543,12 @@ def invoke_workflow_agent(  # noqa: PLR0913
                 )
 
             gmail_client = GmailClient(account.email)
+            drive_client = DriveClient(account.email)
             deps = AgentDeps(
                 connection=connection,
                 account=account,
                 gmail_client=gmail_client,
+                drive_client=drive_client,
                 settings=settings,
                 workflow_id=workflow.id,
                 contact_id=contact.id,
