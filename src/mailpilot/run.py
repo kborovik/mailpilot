@@ -195,9 +195,10 @@ def _sync_all_accounts(
         try:
             client = GmailClient(account.email)
             sync_account(connection, account, client, settings)
-        except Exception:
+        except Exception as exc:
             logfire.exception(
                 "run.sync.account_failed",
                 account_id=account.id,
                 email=account.email,
             )
+            operator_event("error", source="run.sync.account_failed", message=str(exc))
