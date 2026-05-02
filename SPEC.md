@@ -24,7 +24,7 @@ Agent-operated CRM. Gmail = comms layer. Claude Code = strategist; internal Pyda
   - verbs: `list|search|view|create|update|add|remove|reply|send|start|stop|cancel|run|export|import`.
   - top-level: `run` (sync+task loop), `status`, `config get|set`, global `--version|--debug|--completion`.
   - envelope: `list|search` → `{"<plural>": [...], "ok": true}`; `view|create|update|add|reply|send|start|stop|cancel` → `{"<singular>": {...}, "ok": true}`; err → `{"error": CODE, "message": TEXT, "ok": false}`.
-- agent tools (`src/mailpilot/agent/tools.py`): `send_email`, `reply_email`, `search_emails`, `read_email`, `read_contact`, `read_company`, `list_enrollments`, `create_task`, `cancel_task`, `record_enrollment_outcome`, `disable_contact`, `list_drive_markdown`, `read_drive_markdown`, `noop`. ∀ tool → typed sig, dict return, err dict on failure.
+- agent tools (`src/mailpilot/agent/tools.py`): `send_email`, `reply_email`, `search_emails`, `read_email`, `read_contact`, `read_company`, `list_enrollments`, `create_task`, `cancel_task`, `record_enrollment_outcome`, `disable_contact`, `list_drive_markdown`, `read_drive_markdown`, `search_drive_markdown`, `noop`. ∀ tool → typed sig, dict return, err dict on failure.
 - pubsub (`src/mailpilot/pubsub.py`): topic `gmail-watch`, sub `mailpilot-watch`. `setup_pubsub()` idempotent. `start_subscriber(settings, callback)` streaming pull. `make_notification_callback(queue, wakeup_event)` decode → enqueue → `wakeup_event.set()`. `renew_watches()` refresh @ T-24h.
 - config (`src/mailpilot/settings.py`): `database_url`, `anthropic_api_key`, `anthropic_model` (default `claude-sonnet-4-6`), `google_application_credentials`, `google_pubsub_topic`, `google_pubsub_subscription`, `logfire_token`, `logfire_environment` ∈ {`development`, `production`}, `run_interval` (default 30s).
 - module: `src/mailpilot/gmail.py` → `GmailClient`; `src/mailpilot/drive.py` → `DriveClient`. Mirror shape.
@@ -55,12 +55,14 @@ V20: ∀ new agent tool → unit tests cover {hit, no-hit, error}. ∀ new CLI c
 V21: `make check` ! green (ruff + basedpyright strict + pytest).
 V22: Logfire spans split by `deployment_environment` ∈ {`development`, `production`} from `logfire_environment` setting. Project = `mailpilot` (token-scoped). MCP queries ! `WHERE deployment_environment = '<env>'`.
 V23: `activity` row → ≥1 of {`contact_id`, `company_id`} set; both allowed. Enforced via schema CHECK (`schema.sql:169`). Why: activity may attach to contact, company, or both (e.g., email sent to contact at a known company).
+V24: Drive search query (`DriveClient.search_markdown`): `mimeType='text/markdown' AND '<folder_id>' in parents AND fullText contains '<query>' AND trashed = false`. Same Shared-Drive flags as §V.14 (`corpora="allDrives"`, `supportsAllDrives=True`, `includeItemsFromAllDrives=True`). Returns `[{"file_id", "name"}]` ranked by Drive native relevance. ⊥ snippet (Drive API ⊥ provide), ⊥ embeddings, ⊥ semantic match, ⊥ cross-folder. Why: KB grounding scales past full-folder enumeration; scope locked to workflow KB folder per §V.17.
 
 ## §T TASKS
 
 id|status|task|cites
 T1|.|spec ratified — capture future work as new §T rows; backprop bugs via `/sdd:spec bug:`|-
 T2|x|pair the 3 unpaired logfire.exception sites in `run.py:199` (run.sync.account_failed), `pubsub.py:203` (pubsub.notification.decode_error), `pubsub.py:286` (pubsub.watch.renewal_failed) w/ `operator_event("error", source=<event_name>, message=str(exc))`. Add span-contract tests asserting paired emission per site|V19
+T3|.|impl `search_drive_markdown` agent tool. Add `DriveClient.search_markdown(folder_id, query)` (`src/mailpilot/drive.py`), tool wrapper (`src/mailpilot/agent/tools.py`), register in `agent/invoke.py`, system-prompt mention as preferred entry when KB folder large. Tests cover {hit, no-hit, 404 folder, drive 5xx}. Smoke-test scenario B uplift KB to ≥10 docs to demonstrate search vs full enumeration|V14,V15,V20,V24
 
 ## §B BUGS
 
