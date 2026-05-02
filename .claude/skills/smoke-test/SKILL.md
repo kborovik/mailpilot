@@ -86,7 +86,9 @@ print(len(files), [f['name'] for f in files])
 "
 ```
 
-Expect exactly 3 markdown files (`pure-aqua-commercial-ro-systems.md`, `pure-aqua-industrial-water-softener.md`, `watts-uv-com-disinfection.md`). If fewer, B will produce false declines -- stop and fix the Drive ACL before continuing. `anyoneWithLink:reader` alone does **not** make files appear here -- it only governs who can open the URL once it's pasted into the reply.
+Expect **at least 10 markdown files** (the original three -- `pure-aqua-commercial-ro-systems.md`, `pure-aqua-industrial-water-softener.md`, `watts-uv-com-disinfection.md` -- plus distractors covering adjacent water-treatment products that are still in-scope but irrelevant to the B1 question). The size matters: with only 3 docs the agent can succeed by listing every file, which masks a regression where it forgets to use `search_drive_markdown` as the targeted entry point. If fewer than 10, B's `search` vs `list` discriminator (gate B5) is meaningless -- stop and add more KB docs before continuing.
+
+If the count is zero or `not_found`, the failure is Drive ACL, not KB content -- `inbound@lab5.ca`'s Shared Drive Reader membership is what makes files visible to the impersonated user. `anyoneWithLink:reader` alone does **not** make files appear here -- it only governs who can open the URL once it's pasted into the reply.
 
 **On failure:** Stop. Report which entity failed and the error JSON.
 
@@ -279,12 +281,14 @@ Do not stop the sync loop. Do not run `make clean`. Do not recreate accounts or 
 - Shared Drive: `MailPilot` (ID `0AJIvyECg210LUk9PVA`). Members: `kb@lab5.ca` Manager, `inbound@lab5.ca` Reader.
 - Folder name: `MailPilot Demo`
 - Folder ID: `1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat`
-- Markdown files (as of writing -- the Phase 0 KB visibility gate also enumerates them; re-confirm via that gate before each run):
+- Markdown files (as of writing -- the Phase 0 KB visibility gate enumerates them and asserts the ≥10 floor; re-confirm via that gate before each run). Three answer-bearing seeds:
   - `pure-aqua-commercial-ro-systems.md` -- TW-series RO systems (e.g., TW-18.0K-1240).
   - `pure-aqua-industrial-water-softener.md` -- SF-series softeners (e.g., SF-100S).
   - `watts-uv-com-disinfection.md` -- UV-COM disinfection units.
 
-  PDFs sit alongside the `.md` files; `list_drive_markdown`'s `mimeType='text/markdown'` filter must skip them. If it does not, that is a defect.
+  Plus ≥7 distractors on adjacent in-scope water-treatment topics so the search-vs-list discriminator (gate B5) is meaningful. The seeds are what the in-scope B1 question targets; the agent must locate one of them via `search_drive_markdown` rather than by listing the whole folder.
+
+  PDFs sit alongside the `.md` files; the `mimeType='text/markdown'` filter on both `list_drive_markdown` and `search_drive_markdown` must skip them. If it does not, that is a defect.
 
 - Access model: because the KB lives in a Shared Drive, listing depends on the impersonated user being a Shared Drive member, not on per-file ACL. `anyoneWithLink:reader` is set on every file so the `web_view_link` returned by `read_drive_markdown` opens for strangers reading the agent's reply. If `list_drive_markdown` returns an empty list or `not_found`, the failure mode is almost always Shared Drive membership of `inbound@lab5.ca`, not file-level sharing -- fix that first, do not patch around it.
 
@@ -300,7 +304,7 @@ mailpilot workflow create \
   --type inbound \
   --account-id <INBOUND_ACCOUNT_ID> \
   --objective "Answer water-treatment product questions grounded in the MailPilot Demo Drive folder; politely decline questions about products not in the KB." \
-  --instructions "You are the lab5.ca/demo agent. The Markdown product knowledge base lives in Google Drive folder 1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat. For every reply: call list_drive_markdown with that folder ID, pick the most relevant file by name, call read_drive_markdown on it, then compose the reply grounded in that file's content. Cite the source file name in the body. If no listed file is relevant to the question (e.g., the asker is asking about Pentair, Evoqua, or Grundfos products that are not in the folder), reply with a short polite decline that explains the KB does not cover that product and do NOT fabricate specifications. Body MUST use plain Markdown. Subject MUST preserve the incoming thread subject. After replying, call record_enrollment_outcome with outcome='completed'. Do not create follow-up tasks."
+  --instructions "You are the lab5.ca/demo agent. The Markdown product knowledge base lives in Google Drive folder 1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat. For every reply: call search_drive_markdown with that folder ID and a query derived from the incoming question (key product terms, model numbers, application). Pick the top relevant hit and call read_drive_markdown on it before composing the reply grounded in that file's content. Cite the source file name in the body. If search_drive_markdown returns no hits for the question's terms (e.g., the asker is asking about Pentair, Evoqua, or Grundfos products that are not in the folder), reply with a short polite decline that explains the KB does not cover that product and do NOT fabricate specifications. Body MUST use plain Markdown. Subject MUST preserve the incoming thread subject. After replying, call record_enrollment_outcome with outcome='completed'. Do not create follow-up tasks."
 ```
 
 Activate and pre-enroll the sender:
@@ -358,7 +362,7 @@ Match by `SUBJECT_B1` (likely with `Re:` prefix). Record the wall-clock time the
 
 Run a Logfire query for the `agent.invoke` span produced by B4's reply. Within that invocation, the `running tool` child spans must include, in order:
 
-1. `list_drive_markdown` (with `folder_id=1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat`)
+1. `search_drive_markdown` (with `folder_id=1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat` and a non-empty `query`)
 2. `read_drive_markdown` (with a `file_id` returned by step 1)
 3. `reply_email`
 4. `record_enrollment_outcome` (outcome=`completed`)
@@ -366,9 +370,9 @@ Run a Logfire query for the `agent.invoke` span produced by B4's reply. Within t
 **Gate B5:**
 
 - All four tool calls present in this order.
-- `list_drive_markdown` returned a non-error list (no `error` key in the tool return).
+- `search_drive_markdown` returned a non-error list (no `error` key in the tool return) and the list is non-empty.
 - `read_drive_markdown` returned a dict with non-empty `content`.
-- An agent that skips `list_drive_markdown` or invents a `file_id` without listing first is a prompt-fidelity regression -- record as a defect even if the reply happens to be plausible.
+- An agent that uses `list_drive_markdown` instead of `search_drive_markdown` for the in-scope question is a regression: with ≥10 docs in the folder, full enumeration is the failure mode the new tool exists to prevent. Record as a defect even if the reply is otherwise correct. Inventing a `file_id` without searching first is also a prompt-fidelity regression.
 
 ### B6. Send the out-of-scope question
 
@@ -391,7 +395,7 @@ Save `TRIGGER_EMAIL_ID_B2`, capture `T_SEND_B2`, poll the outbound mailbox for `
 - Reply present within 60s.
 - Reply body does **not** contain any Pentair, Evoqua, or Grundfos model number or specification -- a regex over the body must not match `Pentair|Evoqua|Grundfos` followed by what looks like a spec figure. The agent must not fabricate.
 - Reply body reads as a polite decline -- acknowledges the asker, states the KB does not cover that product, and (per the workflow instructions) does not invent.
-- The `agent.invoke` for B6 still shows `list_drive_markdown` followed by `reply_email` (the decline path satisfies the "must call >=1 tool per run" invariant via the listing). Missing `list_drive_markdown` here means the agent declined without consulting the KB -- it might have got lucky on this question, but the prompt contract was not honoured. Record as a defect.
+- The `agent.invoke` for B6 still shows a KB-consulting tool call followed by `reply_email`. `search_drive_markdown` (returning `[]`) is the expected path -- the agent searches with terms from the question, gets no hits, and declines. `list_drive_markdown` is also acceptable for this decline path. Missing both means the agent declined without consulting the KB -- it might have got lucky on this question, but the prompt contract was not honoured. Record as a defect.
 
 ### B7. Verify the CRM activity timeline
 
@@ -441,7 +445,7 @@ Window `[TEST_START_B, now]`. Spans to verify:
 - `agent.invoke` -- exactly **2** invocations (B4 and B6). More than 2 → demo agent re-fired or outbound workflow reacted to B's traffic.
 - `routing.route_email` -- both demo-side trigger emails → `route_method=classified`. Outbound-side replies → `route_method=skipped_no_inbound_workflows`.
 - `classify_email` -- 2 invocations. Both `result` values match `DEMO_WORKFLOW_ID`.
-- `running tool` per invocation -- B4 (in-scope): `list_drive_markdown` + `read_drive_markdown` + `reply_email` + `record_enrollment_outcome`. B6 (out-of-scope decline): `list_drive_markdown` + `reply_email` + `record_enrollment_outcome` (`read_drive_markdown` is not required here since no listed file is relevant). Either pattern is acceptable, but `list_drive_markdown` is mandatory in both.
+- `running tool` per invocation -- B4 (in-scope): `search_drive_markdown` + `read_drive_markdown` + `reply_email` + `record_enrollment_outcome`. B6 (out-of-scope decline): `search_drive_markdown` (returning `[]`) + `reply_email` + `record_enrollment_outcome` (`read_drive_markdown` is not required here since no document matches). At least one KB-consulting tool call (`search_drive_markdown` or `list_drive_markdown`) is mandatory in both. With ≥10 docs in the folder, `list_drive_markdown` instead of `search_drive_markdown` on the in-scope path is a regression.
 - Any `is_exception=true` or `level=warn` spans -- record. Drive 4xx/5xx surfacing as `drive_unavailable` from the tool is acceptable in the agent's tool-return ledger but should not be `is_exception=true` on the span.
 
 ---
@@ -473,7 +477,7 @@ Scenario B: KB-grounded demo (lab5.ca/demo, outbound workflow still active)
   B2 Sync loop still alive ... PASS
   B3 In-scope trigger send ... PASS
   B4 60s grounded reply ...... PASS  (LATENCY_B1 = <Ns>; cited model: <e.g., TW-18.0K-1240>)
-  B5 Drive tools used ........ PASS  (list_drive_markdown -> read_drive_markdown -> reply_email -> record_enrollment_outcome)
+  B5 Drive tools used ........ PASS  (search_drive_markdown -> read_drive_markdown -> reply_email -> record_enrollment_outcome)
   B6 Out-of-scope decline .... PASS  (LATENCY_B2 = <Ns>; no fabricated specs)
   B7 Activity timeline ....... PASS
   B8 Outbound stayed quiet ... PASS  (0 new outbound sends during B)

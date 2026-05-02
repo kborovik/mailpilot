@@ -5,8 +5,9 @@ Authentication: same service account + domain-wide delegation as
 
 Scope: ``https://www.googleapis.com/auth/drive.readonly`` (read-only).
 
-Used by the agent tools ``list_drive_markdown`` and ``read_drive_markdown``
-to ground inbound auto-replies in operator-curated Markdown documents.
+Used by the agent tools ``list_drive_markdown``, ``read_drive_markdown``,
+and ``search_drive_markdown`` to ground inbound auto-replies in
+operator-curated Markdown documents.
 """
 
 from __future__ import annotations
@@ -54,6 +55,7 @@ class DriveClient:
         client = DriveClient("user@example.com")
         files = client.list_markdown(folder_id)
         body = client.read_markdown(files[0]["file_id"])
+        hits = client.search_markdown(folder_id, "shipping policy")
     """
 
     def __init__(self, email: str) -> None:
@@ -86,6 +88,44 @@ class DriveClient:
             self._service.files()
             .list(
                 q=query,
+                fields="files(id, name)",
+                corpora="allDrives",
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+            )
+            .execute()
+        )
+        files: list[dict[str, str]] = []
+        for entry in response.get("files", []):
+            files.append({"file_id": entry["id"], "name": entry["name"]})
+        return files
+
+    def search_markdown(self, folder_id: str, query: str) -> list[dict[str, str]]:
+        """Full-text search Markdown files in a Drive folder.
+
+        Wraps Drive ``files.list`` with a ``fullText contains`` predicate
+        scoped to the folder. Drive returns matches in its native relevance
+        order; the client passes that order through unchanged.
+
+        Args:
+            folder_id: Drive folder ID.
+            query: Free-text search query. Drive matches against file
+                content and metadata.
+
+        Returns:
+            List of ``{"file_id": ..., "name": ...}`` ranked by Drive's
+            native relevance. Empty list when no document matches.
+        """
+        drive_query = (
+            f"mimeType='{_MARKDOWN_MIME_TYPE}' "
+            f"and '{folder_id}' in parents "
+            f"and fullText contains '{query}' "
+            f"and trashed = false"
+        )
+        response: dict[str, Any] = (
+            self._service.files()
+            .list(
+                q=drive_query,
                 fields="files(id, name)",
                 corpora="allDrives",
                 supportsAllDrives=True,

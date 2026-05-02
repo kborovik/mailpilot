@@ -287,6 +287,19 @@ def _wrap_read_drive_markdown(
     )
 
 
+def _wrap_search_drive_markdown(
+    ctx: RunContext[AgentDeps],
+    folder_id: str,
+    query: str,
+) -> list[dict[str, str]] | dict[str, str]:
+    """Full-text search Markdown files in a Drive folder."""
+    return agent_tools.search_drive_markdown(
+        drive_client=ctx.deps.drive_client,
+        folder_id=folder_id,
+        query=query,
+    )
+
+
 def _wrap_noop(
     ctx: RunContext[AgentDeps],
     reason: str,
@@ -317,6 +330,7 @@ _TOOLS: list[Tool[AgentDeps]] = [
     Tool(_wrap_read_email, name="read_email"),
     Tool(_wrap_list_drive_markdown, name="list_drive_markdown"),
     Tool(_wrap_read_drive_markdown, name="read_drive_markdown"),
+    Tool(_wrap_search_drive_markdown, name="search_drive_markdown"),
     Tool(_wrap_noop, name="noop"),
 ]
 
@@ -329,11 +343,13 @@ _SYSTEM_PREFIX = (
     "After completing the workflow objective for a contact, call "
     "record_enrollment_outcome with outcome='completed' and a brief reason.\n"
     "If the workflow instructions reference a Google Drive folder of "
-    "Markdown notes, ground every reply in that folder: call "
-    "list_drive_markdown with the folder ID, then read_drive_markdown on "
-    "the most relevant file before composing the reply. If no listed file "
-    "is relevant to the question, reply with a polite decline and do not "
-    "invent facts.\n\n"
+    "Markdown notes, ground every reply in that folder. Prefer "
+    "search_drive_markdown(folder_id, query) to target the most relevant "
+    "documents -- enumerating the whole folder with list_drive_markdown "
+    "wastes context once the KB grows past a handful of files. Read the "
+    "top matches with read_drive_markdown before composing the reply. If "
+    "no document is relevant to the question, reply with a polite decline "
+    "and do not invent facts.\n\n"
 )
 
 
