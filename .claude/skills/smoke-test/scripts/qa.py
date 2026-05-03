@@ -40,7 +40,10 @@ def pick(args: argparse.Namespace) -> int:
     else:
         candidates = [p for p in pairs if p["type"] == args.type]
         if not candidates:
-            print(json.dumps({"error": "no_pairs_of_type", "type": args.type}), file=sys.stderr)
+            print(
+                json.dumps({"error": "no_pairs_of_type", "type": args.type}),
+                file=sys.stderr,
+            )
             return 1
         chosen = random.choice(candidates)
     print(json.dumps(chosen, indent=2))
@@ -59,11 +62,15 @@ def check_inscope(pair: dict, reply: str) -> tuple[bool, list[str], dict]:
     if src_stem and not src_cited:
         reasons.append(f"source file not cited: {src!r} (or stem {src_stem!r})")
     ok = not reasons
-    return ok, reasons, {
-        "expected_tokens": expected,
-        "missing_tokens": missing,
-        "source_cited": src_cited,
-    }
+    return (
+        ok,
+        reasons,
+        {
+            "expected_tokens": expected,
+            "missing_tokens": missing,
+            "source_cited": src_cited,
+        },
+    )
 
 
 _DIGIT_RUN_RE = re.compile(r"\d[\d,.]*")
@@ -91,7 +98,7 @@ def check_outscope(pair: dict, reply: str) -> tuple[bool, list[str], dict]:
             end = match.end()
             tail = _DIGIT_RUN_RE.match(reply, end - 1)
             window_end = tail.end() if tail else end
-            window_digit_runs = _DIGIT_RUN_RE.findall(reply[match.start():window_end])
+            window_digit_runs = _DIGIT_RUN_RE.findall(reply[match.start() : window_end])
             if window_digit_runs and all(
                 run in question_digit_runs for run in window_digit_runs
             ):
@@ -106,10 +113,14 @@ def check_outscope(pair: dict, reply: str) -> tuple[bool, list[str], dict]:
             f"no decline-signal language found (expected one of: {decline_signals})"
         )
     ok = not reasons
-    return ok, reasons, {
-        "fabrications_found": fabrications,
-        "declined": declined,
-    }
+    return (
+        ok,
+        reasons,
+        {
+            "fabrications_found": fabrications,
+            "declined": declined,
+        },
+    )
 
 
 def check(args: argparse.Namespace) -> int:
@@ -128,14 +139,19 @@ def check(args: argparse.Namespace) -> int:
         ok, reasons, details = check_inscope(pair, reply)
     else:
         ok, reasons, details = check_outscope(pair, reply)
-    print(json.dumps({
-        "id": pair["id"],
-        "type": pair["type"],
-        "question": pair["question"],
-        "pass": ok,
-        "reasons": reasons,
-        "details": details,
-    }, indent=2))
+    print(
+        json.dumps(
+            {
+                "id": pair["id"],
+                "type": pair["type"],
+                "question": pair["question"],
+                "pass": ok,
+                "reasons": reasons,
+                "details": details,
+            },
+            indent=2,
+        )
+    )
     return 0 if ok else 1
 
 

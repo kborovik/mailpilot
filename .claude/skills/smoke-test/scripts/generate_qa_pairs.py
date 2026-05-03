@@ -13,14 +13,14 @@ Usage:  python generate_qa_pairs.py
 
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 
 from anthropic import Anthropic
+from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
-from google.oauth2 import service_account
-import io
 
 from mailpilot.settings import get_settings
 
@@ -75,8 +75,7 @@ OUT_OF_SCOPE = [
         "type": "outscope",
         "source_file": None,
         "question": (
-            "Can you spec a Grundfos CRN dosing pump for chlorine injection "
-            "at 25 GPH?"
+            "Can you spec a Grundfos CRN dosing pump for chlorine injection at 25 GPH?"
         ),
         "forbidden_token_pairs": [["Grundfos", r"\d"]],
         "decline_signals": ["do not", "not in", "outside", "unable", "do not carry"],
@@ -113,12 +112,19 @@ def fetch_md_files() -> dict[str, str]:
         scopes=["https://www.googleapis.com/auth/drive.readonly"],
     ).with_subject(SUBJECT)
     svc = build("drive", "v3", credentials=creds)
-    listing = svc.files().list(
-        q=f"'{FOLDER_ID}' in parents and trashed=false and mimeType='text/markdown'",
-        fields="files(id,name)",
-        supportsAllDrives=True, includeItemsFromAllDrives=True,
-        corpora="drive", driveId=DRIVE_ID, pageSize=200,
-    ).execute()
+    listing = (
+        svc.files()
+        .list(
+            q=f"'{FOLDER_ID}' in parents and trashed=false and mimeType='text/markdown'",
+            fields="files(id,name)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+            corpora="drive",
+            driveId=DRIVE_ID,
+            pageSize=200,
+        )
+        .execute()
+    )
     out: dict[str, str] = {}
     for f in listing.get("files", []):
         request = svc.files().get_media(fileId=f["id"], supportsAllDrives=True)
@@ -140,7 +146,10 @@ def draft_qa(client: Anthropic, name: str, content: str) -> dict[str, object]:
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": f"Source file: {name}\n\n---\n\n{content}"},
+                    {
+                        "type": "text",
+                        "text": f"Source file: {name}\n\n---\n\n{content}",
+                    },
                 ],
             }
         ],

@@ -106,6 +106,11 @@ known-first-party = ["mailpilot"]
     "PLR0913", # Too many arguments OK in tests
     "E501",    # Line too long
 ]
+".claude/**/*.py" = [
+    "D",       # No docstrings required in operator skill scripts
+    "E501",    # Line too long
+    "PLR2004", # Magic values OK in scripts
+]
 
 [tool.pytest.ini_options]
 filterwarnings = [
