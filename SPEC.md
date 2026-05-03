@@ -60,7 +60,7 @@ V24: Drive search query (`DriveClient.search_markdown`): `mimeType='text/markdow
 ## §T TASKS
 
 id|status|task|cites
-T1|.|spec ratified — capture future work as new §T rows; backprop bugs via `/sdd:spec bug:`|-
+T1|x|spec ratified — capture future work as new §T rows; backprop bugs via `/sdd:spec bug:`|-
 T2|x|pair the 3 unpaired logfire.exception sites in `run.py:199` (run.sync.account_failed), `pubsub.py:203` (pubsub.notification.decode_error), `pubsub.py:286` (pubsub.watch.renewal_failed) w/ `operator_event("error", source=<event_name>, message=str(exc))`. Add span-contract tests asserting paired emission per site|V19
 T3|x|impl `search_drive_markdown` agent tool. Add `DriveClient.search_markdown(folder_id, query)` (`src/mailpilot/drive.py`), tool wrapper (`src/mailpilot/agent/tools.py`), register in `agent/invoke.py`, system-prompt mention as preferred entry when KB folder large. Tests cover {hit, no-hit, 404 folder, drive 5xx}. Smoke-test scenario B uplift KB to ≥10 docs to demonstrate search vs full enumeration|V14,V15,V20,V24
 
