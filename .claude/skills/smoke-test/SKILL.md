@@ -491,7 +491,7 @@ Window `[TEST_START_B, now]`. Spans to verify:
 
 ## Phase 5: Final report
 
-Produce a report covering both scenarios. Both are mandatory; a missing scenario is a test failure, not a permitted skip.
+Produce a report covering both scenarios. Both are mandatory; a missing scenario is a test failure, not a permitted skip. The report has four parts -- A (phase results), B (cross-cutting Logfire pass), C (suggestions), D (defects and notes). Part D is mandatory even on a clean run and is the input surface for `/sdd:spec bug: ...` BACKPROP -- skipping it strands findings.
 
 ### Part A: Phase results
 
@@ -599,6 +599,39 @@ Write findings directly into the report. Do not file external tickets unless the
 5. **Concurrent workflow safety** -- with both workflows active during B, did the outbound workflow stay quiet (zero new sends, no `agent.invoke` outside A's window)? Did the demo workflow correctly leave A's lingering thread alone? Excess `agent.invoke` spans here are the high-priority signal -- they would indicate two simultaneously active workflows can interfere with each other.
 6. **Drive integration** -- did the `mimeType='text/markdown'` filter correctly skip the PDFs in the KB folder? Any Drive errors observed (`drive_unavailable`, `not_found`)? Are `list_drive_markdown` / `read_drive_markdown` tool spans surfacing useful attributes (folder_id, file_id, file count)?
 7. **Other deficiencies** -- timing, race conditions, data integrity, performance.
+
+### Part D: Defects and notes
+
+Mandatory final section, even when the test passes cleanly (write `Defects: none.` and keep Notes / Suggestion / runtime if nothing fired). This is the operator-readable hand-off and the input surface for `/sdd:spec bug: ...` -- each Defect entry MUST be a self-contained one-paragraph bug statement that can be pasted verbatim after `/sdd:spec bug: ` to trigger BACKPROP into `SPEC.md` §B without further editing.
+
+**Layout (exact order):**
+
+1. `Defects and notes` heading.
+2. `Defect N -- <one-line title> (<severity>).` blocks. Severity is one of `Critical`, `High`, `Medium`, `Low`. Number sequentially across the run (`Defect 1`, `Defect 2`, ...). Critical = customer-facing regression of a public promise (lab5.ca/demo SLA, KB grounding, fabrication-free decline). High = wrong functional output that would mislead a real user (wrong document grounded, wrong specs returned). Medium = correct output with broken presentation (table rendered as plain lines, missing citation). Low = harness-only issues (verifier heuristics, false-negative checks).
+3. `Note N -- <title>.` blocks for things that worked as designed and are worth recording (e.g., a SPEC §V invariant held cleanly, concurrent multi-workflow operation verified). Continue numbering from where Defects left off so each item has a unique number across both lists.
+4. Optional `Suggestion -- <title>.` blocks for non-bug improvements (test data tweaks, prompt-fidelity hardening). Suggestions are NOT consumable by `/sdd:spec bug:`.
+5. Final `Total runtime: ~<N> minutes. <one-sentence verdict>.` line.
+
+**Defect body shape (so `/sdd:spec bug:` can BACKPROP it):**
+
+- Open with the observable failure (what the test saw, what was expected).
+- Cite the smoke-test gate that caught it (`A3`, `B4`, `B5`, ...) and the entity / span / file involved.
+- Name the suspected root cause in one clause -- the BACKPROP step needs this to draft §B's `cause` column and decide whether a new §V invariant prevents recurrence.
+- Reference SPEC §V / §T identifiers when the defect contradicts an existing invariant or task.
+- Reference Logfire signals (span name, attribute) when the trace already proves the cause -- e.g., `tool_call_count=5 on agent.invoke before the refusal`.
+- Plain prose, no bullets inside the block. ASCII only.
+
+**Example Defect (illustrative -- regenerate, do not paste verbatim):**
+
+> **Defect 1 -- outbound agent over-applies KB grounding (Critical).** A3 first attempt failed: with no KB-related instructions in the prompt, the outbound agent still called `search_drive_markdown` for the random topic, found nothing, and refused to send. Workflow had to be amended with explicit "do NOT call list_drive_markdown / search_drive_markdown / read_drive_markdown" to send. Logfire shows `tool_call_count=5` on the first `agent.invoke` -- five LLM round-trips wasted before the refusal. Suspected cause: outbound system prompt pulls Drive tools in by default; should be opt-in per workflow. Contradicts the spirit of SPEC §V14 (outbound workflows that do not reference a KB MUST NOT consult one).
+
+**Hand-off to /sdd:spec:** at the very end of the report, print one line per Critical/High/Medium defect of the form:
+
+```
+/sdd:spec bug: Defect <N> -- <title>. <body sentence(s) from the defect block>
+```
+
+The operator (or Claude Code itself, if the run is unattended) can then execute those lines one by one to file each defect into §B. Low-severity defects (harness-only) and Notes / Suggestions are NOT included in the hand-off list -- they are FYI only.
 
 ---
 
