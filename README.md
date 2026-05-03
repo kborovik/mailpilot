@@ -72,15 +72,8 @@ make py-test  # pytest -x
 
 ## Documentation
 
-- [Gmail Sync Architecture](docs/adr-01-gmail-api-integration.md)
-- [Email Body Storage](docs/adr-02-email-body-storage-strategy.md)
-- [Workflow Model](docs/adr-03-workflow-model.md)
-- [Email Routing](docs/adr-04-email-routing.md)
-- [Schema Migration](docs/adr-05-schema-migration-strategy.md)
-- [Workflow Field Definitions](docs/adr-06-workflow-field-definitions.md)
-- [Observability with Logfire](docs/adr-07-observability-with-logfire.md)
-- [CRM Design](docs/adr-08-crm-design.md)
-- [Email Flow](docs/email-flow.md)
+- [SPEC.md](SPEC.md) -- single source of truth (goals, constraints, invariants, tasks, bugs).
+- [CLAUDE.md](CLAUDE.md) -- operator/agent guide.
 
 ## License
 
