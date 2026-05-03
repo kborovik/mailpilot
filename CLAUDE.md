@@ -39,15 +39,15 @@ Compression rules for CLAUDE.md and project docs. Does NOT apply to code, error 
 
 ### Gmail Integration
 
-Gmail API with `google-api-python-client` + service account domain-wide delegation (see `docs/adr-01-gmail-api-integration.md`). Single scope: `gmail.modify`. Per-account impersonation via `credentials.with_subject(email)`. Custom headers on sent emails (`X-MailPilot-Version`, `X-MailPilot-Account-Id`).
+Gmail API with `google-api-python-client` + service account domain-wide delegation. Single scope: `gmail.modify`. Per-account impersonation via `credentials.with_subject(email)`. Custom headers on sent emails (`X-MailPilot-Version`, `X-MailPilot-Account-Id`).
 
 Each account syncs independently via ThreadPoolExecutor. Pub/Sub streaming pull (`google-cloud-pubsub`) for real-time notifications. History API for incremental sync. Full re-sync on history 404.
 
-Email body stored as plain text only (see `docs/adr-02-email-body-storage-strategy.md`).
+Email body stored as plain text only.
 
 ### Workflows
 
-Workflow is the central abstraction for both outbound campaigns and inbound auto-reply (see `docs/adr-03-workflow-model.md`). Each workflow is executed by a Pydantic AI agent with tool access. Inbound emails are routed via thread matching then LLM classification. Agent plans multi-step work via deferred tasks. See `docs/email-flow.md` for execution flows. See `docs/adr-08-crm-design.md` for the CRM design.
+Workflow is the central abstraction for both outbound campaigns and inbound auto-reply. Each workflow is executed by a Pydantic AI agent with tool access. Inbound emails are routed via thread matching then LLM classification. Agent plans multi-step work via deferred tasks. See SPEC.md for execution flows and CRM design.
 
 ### Email Rendering
 
@@ -215,7 +215,7 @@ MailPilot is a CRM with Gmail as the communication channel. Core concepts:
 - **Note** -- freeform text annotation on a contact or company. Same XOR pattern as Tag. Append-only.
 - **Activity** -- chronological event log per contact and/or company. At least one of `contact_id` / `company_id` must be set. Structured FK columns (`email_id`, `workflow_id`, `task_id`) let reports join without parsing `detail` JSON. Activities are append-only.
 - **Enrollment** -- contact's binding to a workflow. Status is operational state only: `active` (agent runs against it) or `paused`. Outcomes (`completed`, `failed`) are recorded as activity events via the agent's `record_enrollment_outcome` tool, not as enrollment state.
-- **Workflow** -- binds an account to agent instructions for email communication (inbound or outbound). Unchanged from prior design (see `docs/adr-03-workflow-model.md`).
+- **Workflow** -- binds an account to agent instructions for email communication (inbound or outbound).
 
 ### Reporting
 
@@ -303,7 +303,7 @@ Tests use a separate database: `postgresql://localhost/mailpilot_test` (override
 
 ## Observability
 
-Logging and tracing use [Pydantic Logfire](https://pydantic.dev/logfire) (OpenTelemetry-based). All modules use `import logfire` directly -- no per-module logger variable. Conventions are defined in `docs/adr-07-observability-with-logfire.md`; module-level instrumentation TODOs live in `docs/logfire-instrumentation-plan.md`.
+Logging and tracing use [Pydantic Logfire](https://pydantic.dev/logfire) (OpenTelemetry-based). All modules use `import logfire` directly -- no per-module logger variable. Observability conventions and invariants live in SPEC.md.
 
 - `logfire.debug("msg", key=value)` / `logfire.warn("msg", key=value)` for logging
 - `logfire.span("name")` context manager for sync stage tracing (not in agent tools -- `instrument_pydantic_ai()` handles tool spans automatically)
@@ -316,7 +316,6 @@ Logging and tracing use [Pydantic Logfire](https://pydantic.dev/logfire) (OpenTe
 - Curated lifecycle events (monitored under journald): `loop.start`, `loop.tick`, `loop.stop`, `pubsub.notify`, `sync.account`, `route.match`, `route.no_match`, `agent.run`, `task.drain`, `error`.
 - New `logfire.exception` site reachable from `mailpilot run` MUST be paired with `operator_event("error", source=<event_name>, message=str(exc))` -- keeps operator stream complete.
 - Newlines in field values collapsed to spaces -- preserves one-line-per-event contract for `journalctl | grep`.
-- Design: ADR-07.
 
 **Cloud project.** All records land in dedicated Logfire project **`mailpilot`** (scope of the project-scoped write token). The sibling `leadpilot` service uses its own project, so no `service_name` filter is needed when querying. Spans are split by `deployment_environment` (`development` | `production`), set from the `logfire_environment` setting. When querying via MCP, always pass `project='mailpilot'` and filter with `WHERE deployment_environment = 'production'` (or `'development'`).
 

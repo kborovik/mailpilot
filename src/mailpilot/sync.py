@@ -476,7 +476,7 @@ def sync_account(
 ) -> int:
     """Sync new inbound messages for a single Gmail account.
 
-    Runs the per-account inbound pipeline (see ``docs/email-flow.md``):
+    Runs the per-account inbound pipeline:
 
     1. Incremental sync via ``GmailClient.get_history`` when the account
        has a stored ``gmail_history_id``. Falls back to a full INBOX
