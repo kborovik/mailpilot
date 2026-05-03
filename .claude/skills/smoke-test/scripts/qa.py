@@ -66,9 +66,17 @@ def check_inscope(pair: dict, reply: str) -> tuple[bool, list[str], dict]:
     }
 
 
+_DIGIT_RUN_RE = re.compile(r"\d[\d,.]*")
+
+
 def check_outscope(pair: dict, reply: str) -> tuple[bool, list[str], dict]:
     forbidden_pairs = pair.get("forbidden_token_pairs", [])
     decline_signals = pair.get("decline_signals", [])
+    question = pair.get("question", "")
+    # §V.25: digits the agent could only be echoing (not fabricating) — present in
+    # the original question. A match whose digit-runs all appear in the question
+    # is a quoted recap, not a fabrication.
+    question_digit_runs = set(_DIGIT_RUN_RE.findall(question))
     reasons: list[str] = []
     fabrications: list[list[str]] = []
     for vendor, spec_re in forbidden_pairs:
@@ -76,8 +84,20 @@ def check_outscope(pair: dict, reply: str) -> tuple[bool, list[str], dict]:
         pattern = re.compile(
             re.escape(vendor) + r".{0,60}?" + spec_re, re.IGNORECASE | re.DOTALL
         )
-        if pattern.search(reply):
+        for match in pattern.finditer(reply):
+            # Extend the match forward through any continuation of the digit run:
+            # the non-greedy outer regex stops at the first digit ("5" of "50,000"),
+            # but to compare against the question we need the full run.
+            end = match.end()
+            tail = _DIGIT_RUN_RE.match(reply, end - 1)
+            window_end = tail.end() if tail else end
+            window_digit_runs = _DIGIT_RUN_RE.findall(reply[match.start():window_end])
+            if window_digit_runs and all(
+                run in question_digit_runs for run in window_digit_runs
+            ):
+                continue
             fabrications.append([vendor, spec_re])
+            break
     if fabrications:
         reasons.append(f"reply fabricates vendor specs: {fabrications}")
     declined = any(sig in reply.lower() for sig in decline_signals)

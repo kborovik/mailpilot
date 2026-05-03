@@ -56,6 +56,9 @@ V21: `make check` ! green (ruff + basedpyright strict + pytest).
 V22: Logfire spans split by `deployment_environment` ∈ {`development`, `production`} from `logfire_environment` setting. Project = `mailpilot` (token-scoped). MCP queries ! `WHERE deployment_environment = '<env>'`.
 V23: `activity` row → ≥1 of {`contact_id`, `company_id`} set; both allowed. Enforced via schema CHECK (`schema.sql:169`). Why: activity may attach to contact, company, or both (e.g., email sent to contact at a known company).
 V24: Drive search query (`DriveClient.search_markdown`): `mimeType='text/markdown' AND '<folder_id>' in parents AND fullText contains '<query>' AND trashed = false`. Same Shared-Drive flags as §V.14 (`corpora="allDrives"`, `supportsAllDrives=True`, `includeItemsFromAllDrives=True`). Returns `[{"file_id", "name"}]` ranked by Drive native relevance. ⊥ snippet (Drive API ⊥ provide), ⊥ embeddings, ⊥ semantic match, ⊥ cross-folder. Why: KB grounding scales past full-folder enumeration; scope locked to workflow KB folder per §V.17.
+V25: smoke-test out-scope QA verifier (`.claude/skills/smoke-test/scripts/qa.py:check`) ! exclude tokens present in original question before fabrication regex match. Why: agent decline that echoes "your question about X 50,000 ppm" trips verifier despite ⊥ fabrication. `details.declined: true` authoritative when ⊥ fabrication block detected outside echoed question.
+V26: ∀ `running tool` span → structured `tool_name` attribute set. ⊥ tool identity only in free-text `message`. Why: dashboards & alerts counting tool mix ! ⊥ parse prose.
+V27: ∀ email → ≤1 `routing.route_email` span lifecycle per `email_id`. History-API re-delivery & repeat sync sweep ⊥ trigger second route pass. Why: duplicate route spans inflate metrics & mask classifier regressions (e.g., A4 single delivery → 2 `skipped_no_workflows` spans observed).
 
 ## §T TASKS
 
@@ -63,8 +66,16 @@ id|status|task|cites
 T1|x|spec ratified — capture future work as new §T rows; backprop bugs via `/sdd:spec bug:`|-
 T2|x|pair the 3 unpaired logfire.exception sites in `run.py:199` (run.sync.account_failed), `pubsub.py:203` (pubsub.notification.decode_error), `pubsub.py:286` (pubsub.watch.renewal_failed) w/ `operator_event("error", source=<event_name>, message=str(exc))`. Add span-contract tests asserting paired emission per site|V19
 T3|x|impl `search_drive_markdown` agent tool. Add `DriveClient.search_markdown(folder_id, query)` (`src/mailpilot/drive.py`), tool wrapper (`src/mailpilot/agent/tools.py`), register in `agent/invoke.py`, system-prompt mention as preferred entry when KB folder large. Tests cover {hit, no-hit, 404 folder, drive 5xx}. Smoke-test scenario B uplift KB to ≥10 docs to demonstrate search vs full enumeration|V14,V15,V20,V24
+T4|x|harden smoke-test out-scope QA verifier per §V.25 — strip tokens shared w/ original question before fabrication regex; treat `details.declined=true` w/ ⊥ fabrication-outside-echo as pass|V25
+T5|.|add structured `tool_name` attribute to `running tool` span (`agent/invoke.py` instrumentation). Update existing Logfire queries to use attribute|V26
+T6|.|investigate & dedupe duplicate `routing.route_email` spans on history sweep (`src/mailpilot/sync.py` + `src/mailpilot/routing.py`)|V27
+T7|.|tighten demo workflow instructions in `.claude/skills/smoke-test/SKILL.md` to require pipe-table Markdown for spec sheets|-
 
 ## §B BUGS
 
 id|date|cause|fix
 B1|2026-05-01|3 logfire.exception sites in `run.py:199`, `pubsub.py:203`, `pubsub.py:286` reachable from `mailpilot run` ⊥ paired w/ `operator_event("error", ...)` → operator stderr stream under journald has gaps where exceptions occur. Surfaced by `/sdd:check` post-rebuild on 2026-05-01|V19
+B2|2026-05-02|smoke-test out-scope QA verifier flags digits from echoed user question as fabrications (qa-out-005 Veolia OPUS II — agent declined politely w/ ⊥ specs, verifier still failed gate B6). Surfaced by smoke run|V25
+B3|2026-05-02|`running tool` span ⊥ structured `tool_name` attribute; identity only in free-text `message`. Logfire dashboards ! parse prose. Surfaced by smoke run|V26
+B4|2026-05-02|inbound email A4 (single delivery, no inbound workflow) → 2 `routing.route_email` spans `route_method=skipped_no_workflows` (expected 1). Likely duplicate routing pass on history sweep. Surfaced by smoke run|V27
+B5|2026-05-02|demo workflow B1 reply rendered spec sheet w/ asterisks instead of pipe-table despite "plain Markdown" instructions — prompt-fidelity drift on output style|-
