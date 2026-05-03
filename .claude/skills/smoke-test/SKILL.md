@@ -625,13 +625,33 @@ Mandatory final section, even when the test passes cleanly (write `Defects: none
 
 > **Defect 1 -- outbound agent over-applies KB grounding (Critical).** A3 first attempt failed: with no KB-related instructions in the prompt, the outbound agent still called `search_drive_markdown` for the random topic, found nothing, and refused to send. Workflow had to be amended with explicit "do NOT call list_drive_markdown / search_drive_markdown / read_drive_markdown" to send. Logfire shows `tool_call_count=5` on the first `agent.invoke` -- five LLM round-trips wasted before the refusal. Suspected cause: outbound system prompt pulls Drive tools in by default; should be opt-in per workflow. Contradicts the spirit of SPEC §V14 (outbound workflows that do not reference a KB MUST NOT consult one).
 
-**Hand-off to /sdd:spec:** at the very end of the report, print one line per Critical/High/Medium defect of the form:
+**Auto-file Critical and High defects.** After the report is rendered, Claude Code MUST invoke `/sdd:spec bug: <defect body>` once per Critical and High defect, sequentially, before yielding control back to the user. Each invocation goes through `/sdd:spec`'s standard BACKPROP flow (root-cause trace, §B append, optional §V invariant, diff-then-confirm). Run them one at a time so each `## Next` reply token (`ok` / `revise` / `cancel`) applies to a single defect -- never batch.
+
+Rules:
+
+- Critical defect → MUST auto-invoke. Critical = regression of a public promise (lab5.ca/demo SLA, KB grounding, fabrication-free decline) and warrants spec-level capture.
+- High defect → MUST auto-invoke. High = wrong functional output a real user would see.
+- Medium defect → print the `/sdd:spec bug: ...` line in the report's hand-off block but do NOT auto-invoke. Operator decides whether to file. Medium often reflects presentation-layer fixes that may not need a §V invariant.
+- Low defect → harness-only; do NOT print and do NOT invoke.
+- Notes / Suggestions → NEVER consumable by `/sdd:spec bug:`. They are FYI only.
+
+**Hand-off block format.** At the very end of the report, after the auto-invocations have run, print:
 
 ```
-/sdd:spec bug: Defect <N> -- <title>. <body sentence(s) from the defect block>
+Spec hand-off
+=============
+Auto-filed (Critical/High):
+  - Defect <N> -- <title>: <result, e.g., "filed as §B.7 with §V.27" or "cancelled by operator">
+  - ...
+
+Operator review (Medium):
+  /sdd:spec bug: Defect <N> -- <title>. <body sentence(s)>
+  ...
+
+Skipped (Low / Notes / Suggestions): N items, see Part D above.
 ```
 
-The operator (or Claude Code itself, if the run is unattended) can then execute those lines one by one to file each defect into §B. Low-severity defects (harness-only) and Notes / Suggestions are NOT included in the hand-off list -- they are FYI only.
+If a `/sdd:spec` invocation is cancelled or revised by the user mid-run, record the outcome in the auto-filed list and continue with the next defect.
 
 ---
 
