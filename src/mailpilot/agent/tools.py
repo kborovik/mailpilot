@@ -395,6 +395,44 @@ def list_drive_markdown(
         }
 
 
+def search_drive_markdown(
+    drive_client: DriveClient,
+    folder_id: str,
+    query: str,
+) -> list[dict[str, str]] | dict[str, str]:
+    """Full-text search Markdown files in the workflow's KB Drive folder.
+
+    Prefer this over ``list_drive_markdown`` when the folder may contain
+    many documents -- it lets you target the most relevant file without
+    enumerating every KB entry.
+
+    Args:
+        drive_client: Drive client scoped to the current account.
+        folder_id: Drive folder ID supplied via the workflow instructions.
+        query: Free-text search query. Drive matches against file content
+            and metadata. Results returned in Drive's native relevance order.
+
+    Returns:
+        List of ``{"file_id": ..., "name": ...}`` on success (empty list
+        when nothing matches), or an error dict ``{"error": ...,
+        "message": ...}`` on Drive failure.
+    """
+    from googleapiclient.errors import HttpError
+
+    try:
+        return drive_client.search_markdown(folder_id, query)
+    except HttpError as exc:
+        if exc.resp.status == 404:
+            return {
+                "error": "not_found",
+                "message": f"drive folder not found: {folder_id}",
+            }
+        return {
+            "error": "drive_unavailable",
+            "message": str(exc),
+        }
+
+
 def read_drive_markdown(
     drive_client: DriveClient,
     file_id: str,

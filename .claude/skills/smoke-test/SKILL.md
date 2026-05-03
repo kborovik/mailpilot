@@ -44,6 +44,20 @@ Both scenarios are **mandatory**. `make clean` runs **once**, at the very start.
 - `mailpilot config get anthropic_api_key` returns a non-empty value.
 - Network access to Gmail API and Anthropic API.
 
+## Scripts
+
+Located at `.claude/skills/smoke-test/scripts/`. All QA-only -- KB-content maintenance (PDF conversion, verification, Drive push) lives outside the smoke test.
+
+**Runtime (used during the test, in B3/B4/B6):**
+
+- `qa.py pick [--type inscope|outscope] [--id ID]` -- emit one Q/A pair as JSON. Random unless `--id` given. Default type is `inscope`. The pair includes the question to send and the verifiable evidence the agent's reply must contain.
+- `qa.py check --id ID --reply-text "<body>" | --reply-file PATH` -- validate the agent's reply against that pair. Exit 0 = pass, 1 = fail. JSON on stdout lists missing tokens / fabrications / decline-signal absence.
+- `qa_pairs.json` -- 29 in-scope + 5 out-of-scope pairs. In-scope pairs name a model number + 1-3 numeric specs that MUST appear in the agent's reply, plus the source `.md` file the agent must cite. Out-of-scope pairs name (vendor, spec-shape) regex pairs the reply MUST NOT match, plus decline-signal phrases the reply MUST contain.
+
+**Maintenance (run only after the demo Drive folder content changes):**
+
+- `generate_qa_pairs.py` -- regenerate `qa_pairs.json`. Reads each `.md` from the live Drive folder via the impersonated DriveClient, asks Haiku 4.5 to draft one in-scope question per file with verifiable expected_tokens. Out-of-scope pairs are hand-curated inside the script; edit them there to rotate vendors.
+
 ---
 
 ## Phase 0: Shared setup
@@ -86,7 +100,9 @@ print(len(files), [f['name'] for f in files])
 "
 ```
 
-Expect exactly 3 markdown files (`pure-aqua-commercial-ro-systems.md`, `pure-aqua-industrial-water-softener.md`, `watts-uv-com-disinfection.md`). If fewer, B will produce false declines -- stop and fix the Drive ACL before continuing. `anyoneWithLink:reader` alone does **not** make files appear here -- it only governs who can open the URL once it's pasted into the reply.
+Expect **at least 10 markdown files** (the original three -- `pure-aqua-commercial-ro-systems.md`, `pure-aqua-industrial-water-softener.md`, `watts-uv-com-disinfection.md` -- plus distractors covering adjacent water-treatment products that are still in-scope but irrelevant to the B1 question). The size matters: with only 3 docs the agent can succeed by listing every file, which masks a regression where it forgets to use `search_drive_markdown` as the targeted entry point. If fewer than 10, B's `search` vs `list` discriminator (gate B5) is meaningless -- stop and add more KB docs before continuing.
+
+If the count is zero or `not_found`, the failure is Drive ACL, not KB content -- `inbound@lab5.ca`'s Shared Drive Reader membership is what makes files visible to the impersonated user. `anyoneWithLink:reader` alone does **not** make files appear here -- it only governs who can open the URL once it's pasted into the reply.
 
 **On failure:** Stop. Report which entity failed and the error JSON.
 
@@ -279,12 +295,14 @@ Do not stop the sync loop. Do not run `make clean`. Do not recreate accounts or 
 - Shared Drive: `MailPilot` (ID `0AJIvyECg210LUk9PVA`). Members: `kb@lab5.ca` Manager, `inbound@lab5.ca` Reader.
 - Folder name: `MailPilot Demo`
 - Folder ID: `1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat`
-- Markdown files (as of writing -- the Phase 0 KB visibility gate also enumerates them; re-confirm via that gate before each run):
+- Markdown files (as of writing -- the Phase 0 KB visibility gate enumerates them and asserts the ≥10 floor; re-confirm via that gate before each run). Three answer-bearing seeds:
   - `pure-aqua-commercial-ro-systems.md` -- TW-series RO systems (e.g., TW-18.0K-1240).
   - `pure-aqua-industrial-water-softener.md` -- SF-series softeners (e.g., SF-100S).
   - `watts-uv-com-disinfection.md` -- UV-COM disinfection units.
 
-  PDFs sit alongside the `.md` files; `list_drive_markdown`'s `mimeType='text/markdown'` filter must skip them. If it does not, that is a defect.
+  Plus ≥7 distractors on adjacent in-scope water-treatment topics so the search-vs-list discriminator (gate B5) is meaningful. The seeds are what the in-scope B1 question targets; the agent must locate one of them via `search_drive_markdown` rather than by listing the whole folder.
+
+  PDFs sit alongside the `.md` files; the `mimeType='text/markdown'` filter on both `list_drive_markdown` and `search_drive_markdown` must skip them. If it does not, that is a defect.
 
 - Access model: because the KB lives in a Shared Drive, listing depends on the impersonated user being a Shared Drive member, not on per-file ACL. `anyoneWithLink:reader` is set on every file so the `web_view_link` returned by `read_drive_markdown` opens for strangers reading the agent's reply. If `list_drive_markdown` returns an empty list or `not_found`, the failure mode is almost always Shared Drive membership of `inbound@lab5.ca`, not file-level sharing -- fix that first, do not patch around it.
 
@@ -300,7 +318,7 @@ mailpilot workflow create \
   --type inbound \
   --account-id <INBOUND_ACCOUNT_ID> \
   --objective "Answer water-treatment product questions grounded in the MailPilot Demo Drive folder; politely decline questions about products not in the KB." \
-  --instructions "You are the lab5.ca/demo agent. The Markdown product knowledge base lives in Google Drive folder 1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat. For every reply: call list_drive_markdown with that folder ID, pick the most relevant file by name, call read_drive_markdown on it, then compose the reply grounded in that file's content. Cite the source file name in the body. If no listed file is relevant to the question (e.g., the asker is asking about Pentair, Evoqua, or Grundfos products that are not in the folder), reply with a short polite decline that explains the KB does not cover that product and do NOT fabricate specifications. Body MUST use plain Markdown. Subject MUST preserve the incoming thread subject. After replying, call record_enrollment_outcome with outcome='completed'. Do not create follow-up tasks."
+  --instructions "You are the lab5.ca/demo agent. The Markdown product knowledge base lives in Google Drive folder 1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat. For every reply: call search_drive_markdown with that folder ID and a query derived from the incoming question (key product terms, model numbers, application). Pick the top relevant hit and call read_drive_markdown on it before composing the reply grounded in that file's content. Cite the source file name in the body. If search_drive_markdown returns no hits for the question's terms (e.g., the asker is asking about Pentair, Evoqua, or Grundfos products that are not in the folder), reply with a short polite decline that explains the KB does not cover that product and do NOT fabricate specifications. Body MUST use plain Markdown. When the reply contains product specifications (model numbers, flow rates, dimensions, capacities), present them as a GitHub-flavored Markdown pipe table with a header row -- e.g., `| Specification | Value |` followed by `|---|---|` and one row per spec. Do NOT use asterisks, colons, or single-spaced lines as a substitute for a table. Subject MUST preserve the incoming thread subject. After replying, call record_enrollment_outcome with outcome='completed'. Do not create follow-up tasks."
 ```
 
 Activate and pre-enroll the sender:
@@ -318,23 +336,28 @@ The `mailpilot run` process started in A2 has been syncing both accounts continu
 
 ### B3. Send the in-scope question
 
-Pick one in-scope question from the lab5.ca/demo page. Examples (rotate freely; do not memorize a single phrasing):
+Pick a random in-scope Q/A pair from the manifest, capture both its id (for the B4 verifier) and its question (for the email body):
 
-- "What are the dimensions and weight of the TW-18.0K-1240 reverse osmosis system?"
-- "Which SF-100S softener would you recommend for a hospital needing at least 200 GPM continuous flow?"
-- "Which UV-COM model supports the highest flow rate, and what certifications does it have?"
+```
+QA_B1=$(python3 .claude/skills/smoke-test/scripts/qa.py pick --type inscope)
+QA_ID_B1=$(printf '%s' "$QA_B1" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+QUESTION_B1=$(printf '%s' "$QA_B1" | python3 -c 'import json,sys; print(json.load(sys.stdin)["question"])')
+SOURCE_FILE_B1=$(printf '%s' "$QA_B1" | python3 -c 'import json,sys; print(json.load(sys.stdin)["source_file"])')
+```
+
+Send the question:
 
 ```
 mailpilot email send \
   --account-id <OUTBOUND_ACCOUNT_ID> \
   --to inbound@lab5.ca \
   --subject "<SUBJECT_B1>" \
-  --body "<your in-scope question>"
+  --body "<QUESTION_B1>"
 ```
 
-Save `TRIGGER_EMAIL_ID_B1` and `TRIGGER_THREAD_ID_B1`. Capture wall-clock send time as `T_SEND_B1`.
+Save `TRIGGER_EMAIL_ID_B1`, `TRIGGER_THREAD_ID_B1`, capture wall-clock send time as `T_SEND_B1`. Carry `QA_ID_B1` and `SOURCE_FILE_B1` forward to B4.
 
-**Gate B3:** Command exits 0, returns a JSON envelope with the new email's `id`.
+**Gate B3:** Command exits 0, returns a JSON envelope with the new email's `id`. `QA_ID_B1` matches `qa-in-NNN`. (`qa.py pick` is deterministic given `--id` -- if a run needs to repro a failing question, pin the id from the prior run's report.)
 
 ### B4. Wait for the demo agent to reply (60-second SLA)
 
@@ -351,14 +374,21 @@ Match by `SUBJECT_B1` (likely with `Re:` prefix). Record the wall-clock time the
 - Reply present, threaded under `SUBJECT_B1`.
 - `LATENCY_B1 <= 60s`. **If the reply takes longer, that is a regression of the lab5.ca/demo promise -- record as a Critical defect.** (Polling cadence is 5s, so granularity is coarse; if the first observation lands at 65s and it was the first reply on the thread, treat the run as borderline and re-test.)
 - Reply on the demo side (`mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>`) → `is_routed == true`, `workflow_id == DEMO_WORKFLOW_ID`, `route_method == classified`. The classifier ran -- not `thread_match`, since this is a fresh thread.
-- Reply body **grounded in the KB**: mentions the model number from the question verbatim (e.g., `TW-18.0K-1240`, `SF-100S`, `UV-COM`) and includes at least one numeric fact (regex `\d`) consistent with a spec answer. A reply without a model number or numeric fact is a grounding regression.
-- Reply body cites the source file name (or its product family name) -- the workflow instructions require this. Missing citation is a prompt-fidelity regression.
+- Reply body **grounded in the KB** -- run the QA verifier against the reply's `body_text`:
+
+  ```
+  python3 .claude/skills/smoke-test/scripts/qa.py check \
+    --id "$QA_ID_B1" \
+    --reply-text "$(mailpilot email view <REPLY_EMAIL_ID> | python3 -c 'import json,sys; print(json.load(sys.stdin)["email"]["body_text"])')"
+  ```
+
+  Exit 0 = pass. Exit 1 = grounding regression: the JSON output names which `expected_tokens` are missing and whether the source file was cited. Both signals are mandatory; a reply that mentions every spec but skips the source citation still fails the prompt-fidelity contract.
 
 ### B5. Verify the agent actually used the Drive tools
 
 Run a Logfire query for the `agent.invoke` span produced by B4's reply. Within that invocation, the `running tool` child spans must include, in order:
 
-1. `list_drive_markdown` (with `folder_id=1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat`)
+1. `search_drive_markdown` (with `folder_id=1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat` and a non-empty `query`)
 2. `read_drive_markdown` (with a `file_id` returned by step 1)
 3. `reply_email`
 4. `record_enrollment_outcome` (outcome=`completed`)
@@ -366,32 +396,45 @@ Run a Logfire query for the `agent.invoke` span produced by B4's reply. Within t
 **Gate B5:**
 
 - All four tool calls present in this order.
-- `list_drive_markdown` returned a non-error list (no `error` key in the tool return).
+- `search_drive_markdown` returned a non-error list (no `error` key in the tool return) and the list is non-empty.
 - `read_drive_markdown` returned a dict with non-empty `content`.
-- An agent that skips `list_drive_markdown` or invents a `file_id` without listing first is a prompt-fidelity regression -- record as a defect even if the reply happens to be plausible.
+- An agent that uses `list_drive_markdown` instead of `search_drive_markdown` for the in-scope question is a regression: with ≥10 docs in the folder, full enumeration is the failure mode the new tool exists to prevent. Record as a defect even if the reply is otherwise correct. Inventing a `file_id` without searching first is also a prompt-fidelity regression.
 
 ### B6. Send the out-of-scope question
 
-Same demo workflow, fresh subject:
+Pick a random out-of-scope Q/A pair (Pentair, Evoqua, Grundfos, Suez, Veolia -- vendors explicitly named on lab5.ca/demo as out-of-scope):
+
+```
+QA_B2=$(python3 .claude/skills/smoke-test/scripts/qa.py pick --type outscope)
+QA_ID_B2=$(printf '%s' "$QA_B2" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+QUESTION_B2=$(printf '%s' "$QA_B2" | python3 -c 'import json,sys; print(json.load(sys.stdin)["question"])')
+```
+
+Send it on a fresh subject:
 
 ```
 mailpilot email send \
   --account-id <OUTBOUND_ACCOUNT_ID> \
   --to inbound@lab5.ca \
   --subject "<SUBJECT_B2>" \
-  --body "Which Pentair Evoqua reverse osmosis system would you recommend for a 500 GPM industrial laundry?"
+  --body "<QUESTION_B2>"
 ```
 
-(Pentair, Evoqua, Grundfos are explicitly named on lab5.ca/demo as out-of-scope vendors. Pick whichever; vary across runs.)
-
-Save `TRIGGER_EMAIL_ID_B2`, capture `T_SEND_B2`, poll the outbound mailbox for `SUBJECT_B2` the same way as B4. Capture `T_REPLY_B2`.
+Save `TRIGGER_EMAIL_ID_B2`, capture `T_SEND_B2`, poll the outbound mailbox for `SUBJECT_B2` the same way as B4. Capture `T_REPLY_B2`. Carry `QA_ID_B2` forward to the gate.
 
 **Gate B6 (polite decline, no fabrication):**
 
 - Reply present within 60s.
-- Reply body does **not** contain any Pentair, Evoqua, or Grundfos model number or specification -- a regex over the body must not match `Pentair|Evoqua|Grundfos` followed by what looks like a spec figure. The agent must not fabricate.
-- Reply body reads as a polite decline -- acknowledges the asker, states the KB does not cover that product, and (per the workflow instructions) does not invent.
-- The `agent.invoke` for B6 still shows `list_drive_markdown` followed by `reply_email` (the decline path satisfies the "must call >=1 tool per run" invariant via the listing). Missing `list_drive_markdown` here means the agent declined without consulting the KB -- it might have got lucky on this question, but the prompt contract was not honoured. Record as a defect.
+- Reply body validated by the QA verifier:
+
+  ```
+  python3 .claude/skills/smoke-test/scripts/qa.py check \
+    --id "$QA_ID_B2" \
+    --reply-text "$(mailpilot email view <REPLY_EMAIL_ID> | python3 -c 'import json,sys; print(json.load(sys.stdin)["email"]["body_text"])')"
+  ```
+
+  Exit 0 = pass. Exit 1 = fabrication regression OR missing decline-signal language. The JSON output names which `forbidden_token_pairs` matched (vendor name within 60 chars of a digit -- the fabrication signature) and whether at least one `decline_signals` phrase was found.
+- The `agent.invoke` for B6 still shows a KB-consulting tool call followed by `reply_email`. `search_drive_markdown` (returning `[]`) is the expected path -- the agent searches with terms from the question, gets no hits, and declines. `list_drive_markdown` is also acceptable for this decline path. Missing both means the agent declined without consulting the KB -- it might have got lucky on this question, but the prompt contract was not honoured. Record as a defect.
 
 ### B7. Verify the CRM activity timeline
 
@@ -441,14 +484,14 @@ Window `[TEST_START_B, now]`. Spans to verify:
 - `agent.invoke` -- exactly **2** invocations (B4 and B6). More than 2 → demo agent re-fired or outbound workflow reacted to B's traffic.
 - `routing.route_email` -- both demo-side trigger emails → `route_method=classified`. Outbound-side replies → `route_method=skipped_no_inbound_workflows`.
 - `classify_email` -- 2 invocations. Both `result` values match `DEMO_WORKFLOW_ID`.
-- `running tool` per invocation -- B4 (in-scope): `list_drive_markdown` + `read_drive_markdown` + `reply_email` + `record_enrollment_outcome`. B6 (out-of-scope decline): `list_drive_markdown` + `reply_email` + `record_enrollment_outcome` (`read_drive_markdown` is not required here since no listed file is relevant). Either pattern is acceptable, but `list_drive_markdown` is mandatory in both.
+- `running tool` per invocation -- B4 (in-scope): `search_drive_markdown` + `read_drive_markdown` + `reply_email` + `record_enrollment_outcome`. B6 (out-of-scope decline): `search_drive_markdown` (returning `[]`) + `reply_email` + `record_enrollment_outcome` (`read_drive_markdown` is not required here since no document matches). At least one KB-consulting tool call (`search_drive_markdown` or `list_drive_markdown`) is mandatory in both. With ≥10 docs in the folder, `list_drive_markdown` instead of `search_drive_markdown` on the in-scope path is a regression.
 - Any `is_exception=true` or `level=warn` spans -- record. Drive 4xx/5xx surfacing as `drive_unavailable` from the tool is acceptable in the agent's tool-return ledger but should not be `is_exception=true` on the span.
 
 ---
 
 ## Phase 5: Final report
 
-Produce a report covering both scenarios. Both are mandatory; a missing scenario is a test failure, not a permitted skip.
+Produce a report covering both scenarios. Both are mandatory; a missing scenario is a test failure, not a permitted skip. The report has four parts -- A (phase results), B (cross-cutting Logfire pass), C (suggestions), D (defects and notes). Part D is mandatory even on a clean run and is the input surface for `/sdd:spec bug: ...` BACKPROP -- skipping it strands findings.
 
 ### Part A: Phase results
 
@@ -473,7 +516,7 @@ Scenario B: KB-grounded demo (lab5.ca/demo, outbound workflow still active)
   B2 Sync loop still alive ... PASS
   B3 In-scope trigger send ... PASS
   B4 60s grounded reply ...... PASS  (LATENCY_B1 = <Ns>; cited model: <e.g., TW-18.0K-1240>)
-  B5 Drive tools used ........ PASS  (list_drive_markdown -> read_drive_markdown -> reply_email -> record_enrollment_outcome)
+  B5 Drive tools used ........ PASS  (search_drive_markdown -> read_drive_markdown -> reply_email -> record_enrollment_outcome)
   B6 Out-of-scope decline .... PASS  (LATENCY_B2 = <Ns>; no fabricated specs)
   B7 Activity timeline ....... PASS
   B8 Outbound stayed quiet ... PASS  (0 new outbound sends during B)
@@ -556,6 +599,59 @@ Write findings directly into the report. Do not file external tickets unless the
 5. **Concurrent workflow safety** -- with both workflows active during B, did the outbound workflow stay quiet (zero new sends, no `agent.invoke` outside A's window)? Did the demo workflow correctly leave A's lingering thread alone? Excess `agent.invoke` spans here are the high-priority signal -- they would indicate two simultaneously active workflows can interfere with each other.
 6. **Drive integration** -- did the `mimeType='text/markdown'` filter correctly skip the PDFs in the KB folder? Any Drive errors observed (`drive_unavailable`, `not_found`)? Are `list_drive_markdown` / `read_drive_markdown` tool spans surfacing useful attributes (folder_id, file_id, file count)?
 7. **Other deficiencies** -- timing, race conditions, data integrity, performance.
+
+### Part D: Defects and notes
+
+Mandatory final section, even when the test passes cleanly (write `Defects: none.` and keep Notes / Suggestion / runtime if nothing fired). This is the operator-readable hand-off and the input surface for `/sdd:spec bug: ...` -- each Defect entry MUST be a self-contained one-paragraph bug statement that can be pasted verbatim after `/sdd:spec bug: ` to trigger BACKPROP into `SPEC.md` §B without further editing.
+
+**Layout (exact order):**
+
+1. `Defects and notes` heading.
+2. `Defect N -- <one-line title> (<severity>).` blocks. Severity is one of `Critical`, `High`, `Medium`, `Low`. Number sequentially across the run (`Defect 1`, `Defect 2`, ...). Critical = customer-facing regression of a public promise (lab5.ca/demo SLA, KB grounding, fabrication-free decline). High = wrong functional output that would mislead a real user (wrong document grounded, wrong specs returned). Medium = correct output with broken presentation (table rendered as plain lines, missing citation). Low = harness-only issues (verifier heuristics, false-negative checks).
+3. `Note N -- <title>.` blocks for things that worked as designed and are worth recording (e.g., a SPEC §V invariant held cleanly, concurrent multi-workflow operation verified). Continue numbering from where Defects left off so each item has a unique number across both lists.
+4. Optional `Suggestion -- <title>.` blocks for non-bug improvements (test data tweaks, prompt-fidelity hardening). Suggestions are NOT consumable by `/sdd:spec bug:`.
+5. Final `Total runtime: ~<N> minutes. <one-sentence verdict>.` line.
+
+**Defect body shape (so `/sdd:spec bug:` can BACKPROP it):**
+
+- Open with the observable failure (what the test saw, what was expected).
+- Cite the smoke-test gate that caught it (`A3`, `B4`, `B5`, ...) and the entity / span / file involved.
+- Name the suspected root cause in one clause -- the BACKPROP step needs this to draft §B's `cause` column and decide whether a new §V invariant prevents recurrence.
+- Reference SPEC §V / §T identifiers when the defect contradicts an existing invariant or task.
+- Reference Logfire signals (span name, attribute) when the trace already proves the cause -- e.g., `tool_call_count=5 on agent.invoke before the refusal`.
+- Plain prose, no bullets inside the block. ASCII only.
+
+**Example Defect (illustrative -- regenerate, do not paste verbatim):**
+
+> **Defect 1 -- outbound agent over-applies KB grounding (Critical).** A3 first attempt failed: with no KB-related instructions in the prompt, the outbound agent still called `search_drive_markdown` for the random topic, found nothing, and refused to send. Workflow had to be amended with explicit "do NOT call list_drive_markdown / search_drive_markdown / read_drive_markdown" to send. Logfire shows `tool_call_count=5` on the first `agent.invoke` -- five LLM round-trips wasted before the refusal. Suspected cause: outbound system prompt pulls Drive tools in by default; should be opt-in per workflow. Contradicts the spirit of SPEC §V14 (outbound workflows that do not reference a KB MUST NOT consult one).
+
+**Auto-file Critical and High defects.** After the report is rendered, Claude Code MUST invoke `/sdd:spec bug: <defect body>` once per Critical and High defect, sequentially, before yielding control back to the user. Each invocation goes through `/sdd:spec`'s standard BACKPROP flow (root-cause trace, §B append, optional §V invariant, diff-then-confirm). Run them one at a time so each `## Next` reply token (`ok` / `revise` / `cancel`) applies to a single defect -- never batch.
+
+Rules:
+
+- Critical defect → MUST auto-invoke. Critical = regression of a public promise (lab5.ca/demo SLA, KB grounding, fabrication-free decline) and warrants spec-level capture.
+- High defect → MUST auto-invoke. High = wrong functional output a real user would see.
+- Medium defect → print the `/sdd:spec bug: ...` line in the report's hand-off block but do NOT auto-invoke. Operator decides whether to file. Medium often reflects presentation-layer fixes that may not need a §V invariant.
+- Low defect → harness-only; do NOT print and do NOT invoke.
+- Notes / Suggestions → NEVER consumable by `/sdd:spec bug:`. They are FYI only.
+
+**Hand-off block format.** At the very end of the report, after the auto-invocations have run, print:
+
+```
+Spec hand-off
+=============
+Auto-filed (Critical/High):
+  - Defect <N> -- <title>: <result, e.g., "filed as §B.7 with §V.27" or "cancelled by operator">
+  - ...
+
+Operator review (Medium):
+  /sdd:spec bug: Defect <N> -- <title>. <body sentence(s)>
+  ...
+
+Skipped (Low / Notes / Suggestions): N items, see Part D above.
+```
+
+If a `/sdd:spec` invocation is cancelled or revised by the user mid-run, record the outcome in the auto-filed list and continue with the next defect.
 
 ---
 

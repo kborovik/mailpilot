@@ -29,6 +29,7 @@ from mailpilot.agent.tools import (
     read_email,
     record_enrollment_outcome,
     reply_email,
+    search_drive_markdown,
     search_emails,
     send_email,
 )
@@ -866,6 +867,71 @@ def test_read_drive_markdown_other_http_error_returns_drive_unavailable() -> Non
 
     result = read_drive_markdown(drive_client=drive_client, file_id="FID")
 
+    assert result["error"] == "drive_unavailable"
+
+
+# -- search_drive_markdown ---------------------------------------------------
+
+
+def test_search_drive_markdown_returns_files_on_success() -> None:
+    drive_client = MagicMock()
+    drive_client.search_markdown.return_value = [
+        {"file_id": "f7", "name": "shipping.md"},
+        {"file_id": "f3", "name": "returns.md"},
+    ]
+
+    result = search_drive_markdown(
+        drive_client=drive_client,
+        folder_id="FOLDER",
+        query="shipping policy",
+    )
+
+    assert result == [
+        {"file_id": "f7", "name": "shipping.md"},
+        {"file_id": "f3", "name": "returns.md"},
+    ]
+    drive_client.search_markdown.assert_called_once_with("FOLDER", "shipping policy")
+
+
+def test_search_drive_markdown_no_match_returns_empty_list() -> None:
+    drive_client = MagicMock()
+    drive_client.search_markdown.return_value = []
+
+    result = search_drive_markdown(
+        drive_client=drive_client,
+        folder_id="FOLDER",
+        query="no such topic",
+    )
+
+    assert result == []
+
+
+def test_search_drive_markdown_not_found_returns_error_dict() -> None:
+    drive_client = MagicMock()
+    drive_client.search_markdown.side_effect = _http_error(404)
+
+    result = search_drive_markdown(
+        drive_client=drive_client,
+        folder_id="MISSING",
+        query="anything",
+    )
+
+    assert isinstance(result, dict)
+    assert result["error"] == "not_found"
+    assert "MISSING" in result["message"]
+
+
+def test_search_drive_markdown_other_http_error_returns_drive_unavailable() -> None:
+    drive_client = MagicMock()
+    drive_client.search_markdown.side_effect = _http_error(500, "Server Error")
+
+    result = search_drive_markdown(
+        drive_client=drive_client,
+        folder_id="FOLDER",
+        query="anything",
+    )
+
+    assert isinstance(result, dict)
     assert result["error"] == "drive_unavailable"
 
 

@@ -76,6 +76,54 @@ def test_list_markdown_empty_folder_returns_empty_list() -> None:
     assert result == []
 
 
+def test_search_markdown_returns_file_ids_and_names_in_drive_order() -> None:
+    service = _make_service(
+        list_response={
+            "files": [
+                {"id": "f7", "name": "shipping.md"},
+                {"id": "f3", "name": "returns.md"},
+            ]
+        }
+    )
+    client = DriveClient.from_service("user@example.com", service)
+
+    result = client.search_markdown("FOLDER", "shipping policy")
+
+    assert result == [
+        {"file_id": "f7", "name": "shipping.md"},
+        {"file_id": "f3", "name": "returns.md"},
+    ]
+
+
+def test_search_markdown_query_includes_fulltext_and_folder_with_shared_drive_flags() -> (
+    None
+):
+    service = _make_service()
+    client = DriveClient.from_service("user@example.com", service)
+
+    client.search_markdown("FOLDER42", "shipping policy")
+
+    call_kwargs = service.files.return_value.list.call_args.kwargs
+    query = call_kwargs["q"]
+    assert "mimeType='text/markdown'" in query
+    assert "'FOLDER42' in parents" in query
+    assert "fullText contains 'shipping policy'" in query
+    assert "trashed = false" in query
+    assert call_kwargs["fields"] == "files(id, name)"
+    assert call_kwargs["corpora"] == "allDrives"
+    assert call_kwargs["supportsAllDrives"] is True
+    assert call_kwargs["includeItemsFromAllDrives"] is True
+
+
+def test_search_markdown_no_match_returns_empty_list() -> None:
+    service = _make_service(list_response={"files": []})
+    client = DriveClient.from_service("user@example.com", service)
+
+    result = client.search_markdown("FOLDER", "nothing matches this")
+
+    assert result == []
+
+
 def test_read_markdown_returns_name_content_and_web_view_link() -> None:
     service = _make_service(
         metadata_response={"name": "guide.md", "webViewLink": "https://x/y"},
