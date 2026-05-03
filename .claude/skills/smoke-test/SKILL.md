@@ -44,6 +44,20 @@ Both scenarios are **mandatory**. `make clean` runs **once**, at the very start.
 - `mailpilot config get anthropic_api_key` returns a non-empty value.
 - Network access to Gmail API and Anthropic API.
 
+## Scripts
+
+Located at `.claude/skills/smoke-test/scripts/`. All QA-only -- KB-content maintenance (PDF conversion, verification, Drive push) lives outside the smoke test.
+
+**Runtime (used during the test, in B3/B4/B6):**
+
+- `qa.py pick [--type inscope|outscope] [--id ID]` -- emit one Q/A pair as JSON. Random unless `--id` given. Default type is `inscope`. The pair includes the question to send and the verifiable evidence the agent's reply must contain.
+- `qa.py check --id ID --reply-text "<body>" | --reply-file PATH` -- validate the agent's reply against that pair. Exit 0 = pass, 1 = fail. JSON on stdout lists missing tokens / fabrications / decline-signal absence.
+- `qa_pairs.json` -- 29 in-scope + 5 out-of-scope pairs. In-scope pairs name a model number + 1-3 numeric specs that MUST appear in the agent's reply, plus the source `.md` file the agent must cite. Out-of-scope pairs name (vendor, spec-shape) regex pairs the reply MUST NOT match, plus decline-signal phrases the reply MUST contain.
+
+**Maintenance (run only after the demo Drive folder content changes):**
+
+- `generate_qa_pairs.py` -- regenerate `qa_pairs.json`. Reads each `.md` from the live Drive folder via the impersonated DriveClient, asks Haiku 4.5 to draft one in-scope question per file with verifiable expected_tokens. Out-of-scope pairs are hand-curated inside the script; edit them there to rotate vendors.
+
 ---
 
 ## Phase 0: Shared setup
@@ -322,23 +336,28 @@ The `mailpilot run` process started in A2 has been syncing both accounts continu
 
 ### B3. Send the in-scope question
 
-Pick one in-scope question from the lab5.ca/demo page. Examples (rotate freely; do not memorize a single phrasing):
+Pick a random in-scope Q/A pair from the manifest, capture both its id (for the B4 verifier) and its question (for the email body):
 
-- "What are the dimensions and weight of the TW-18.0K-1240 reverse osmosis system?"
-- "Which SF-100S softener would you recommend for a hospital needing at least 200 GPM continuous flow?"
-- "Which UV-COM model supports the highest flow rate, and what certifications does it have?"
+```
+QA_B1=$(python3 .claude/skills/smoke-test/scripts/qa.py pick --type inscope)
+QA_ID_B1=$(printf '%s' "$QA_B1" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+QUESTION_B1=$(printf '%s' "$QA_B1" | python3 -c 'import json,sys; print(json.load(sys.stdin)["question"])')
+SOURCE_FILE_B1=$(printf '%s' "$QA_B1" | python3 -c 'import json,sys; print(json.load(sys.stdin)["source_file"])')
+```
+
+Send the question:
 
 ```
 mailpilot email send \
   --account-id <OUTBOUND_ACCOUNT_ID> \
   --to inbound@lab5.ca \
   --subject "<SUBJECT_B1>" \
-  --body "<your in-scope question>"
+  --body "<QUESTION_B1>"
 ```
 
-Save `TRIGGER_EMAIL_ID_B1` and `TRIGGER_THREAD_ID_B1`. Capture wall-clock send time as `T_SEND_B1`.
+Save `TRIGGER_EMAIL_ID_B1`, `TRIGGER_THREAD_ID_B1`, capture wall-clock send time as `T_SEND_B1`. Carry `QA_ID_B1` and `SOURCE_FILE_B1` forward to B4.
 
-**Gate B3:** Command exits 0, returns a JSON envelope with the new email's `id`.
+**Gate B3:** Command exits 0, returns a JSON envelope with the new email's `id`. `QA_ID_B1` matches `qa-in-NNN`. (`qa.py pick` is deterministic given `--id` -- if a run needs to repro a failing question, pin the id from the prior run's report.)
 
 ### B4. Wait for the demo agent to reply (60-second SLA)
 
@@ -355,8 +374,15 @@ Match by `SUBJECT_B1` (likely with `Re:` prefix). Record the wall-clock time the
 - Reply present, threaded under `SUBJECT_B1`.
 - `LATENCY_B1 <= 60s`. **If the reply takes longer, that is a regression of the lab5.ca/demo promise -- record as a Critical defect.** (Polling cadence is 5s, so granularity is coarse; if the first observation lands at 65s and it was the first reply on the thread, treat the run as borderline and re-test.)
 - Reply on the demo side (`mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>`) → `is_routed == true`, `workflow_id == DEMO_WORKFLOW_ID`, `route_method == classified`. The classifier ran -- not `thread_match`, since this is a fresh thread.
-- Reply body **grounded in the KB**: mentions the model number from the question verbatim (e.g., `TW-18.0K-1240`, `SF-100S`, `UV-COM`) and includes at least one numeric fact (regex `\d`) consistent with a spec answer. A reply without a model number or numeric fact is a grounding regression.
-- Reply body cites the source file name (or its product family name) -- the workflow instructions require this. Missing citation is a prompt-fidelity regression.
+- Reply body **grounded in the KB** -- run the QA verifier against the reply's `body_text`:
+
+  ```
+  python3 .claude/skills/smoke-test/scripts/qa.py check \
+    --id "$QA_ID_B1" \
+    --reply-text "$(mailpilot email view <REPLY_EMAIL_ID> | python3 -c 'import json,sys; print(json.load(sys.stdin)["email"]["body_text"])')"
+  ```
+
+  Exit 0 = pass. Exit 1 = grounding regression: the JSON output names which `expected_tokens` are missing and whether the source file was cited. Both signals are mandatory; a reply that mentions every spec but skips the source citation still fails the prompt-fidelity contract.
 
 ### B5. Verify the agent actually used the Drive tools
 
@@ -376,25 +402,38 @@ Run a Logfire query for the `agent.invoke` span produced by B4's reply. Within t
 
 ### B6. Send the out-of-scope question
 
-Same demo workflow, fresh subject:
+Pick a random out-of-scope Q/A pair (Pentair, Evoqua, Grundfos, Suez, Veolia -- vendors explicitly named on lab5.ca/demo as out-of-scope):
+
+```
+QA_B2=$(python3 .claude/skills/smoke-test/scripts/qa.py pick --type outscope)
+QA_ID_B2=$(printf '%s' "$QA_B2" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+QUESTION_B2=$(printf '%s' "$QA_B2" | python3 -c 'import json,sys; print(json.load(sys.stdin)["question"])')
+```
+
+Send it on a fresh subject:
 
 ```
 mailpilot email send \
   --account-id <OUTBOUND_ACCOUNT_ID> \
   --to inbound@lab5.ca \
   --subject "<SUBJECT_B2>" \
-  --body "Which Pentair Evoqua reverse osmosis system would you recommend for a 500 GPM industrial laundry?"
+  --body "<QUESTION_B2>"
 ```
 
-(Pentair, Evoqua, Grundfos are explicitly named on lab5.ca/demo as out-of-scope vendors. Pick whichever; vary across runs.)
-
-Save `TRIGGER_EMAIL_ID_B2`, capture `T_SEND_B2`, poll the outbound mailbox for `SUBJECT_B2` the same way as B4. Capture `T_REPLY_B2`.
+Save `TRIGGER_EMAIL_ID_B2`, capture `T_SEND_B2`, poll the outbound mailbox for `SUBJECT_B2` the same way as B4. Capture `T_REPLY_B2`. Carry `QA_ID_B2` forward to the gate.
 
 **Gate B6 (polite decline, no fabrication):**
 
 - Reply present within 60s.
-- Reply body does **not** contain any Pentair, Evoqua, or Grundfos model number or specification -- a regex over the body must not match `Pentair|Evoqua|Grundfos` followed by what looks like a spec figure. The agent must not fabricate.
-- Reply body reads as a polite decline -- acknowledges the asker, states the KB does not cover that product, and (per the workflow instructions) does not invent.
+- Reply body validated by the QA verifier:
+
+  ```
+  python3 .claude/skills/smoke-test/scripts/qa.py check \
+    --id "$QA_ID_B2" \
+    --reply-text "$(mailpilot email view <REPLY_EMAIL_ID> | python3 -c 'import json,sys; print(json.load(sys.stdin)["email"]["body_text"])')"
+  ```
+
+  Exit 0 = pass. Exit 1 = fabrication regression OR missing decline-signal language. The JSON output names which `forbidden_token_pairs` matched (vendor name within 60 chars of a digit -- the fabrication signature) and whether at least one `decline_signals` phrase was found.
 - The `agent.invoke` for B6 still shows a KB-consulting tool call followed by `reply_email`. `search_drive_markdown` (returning `[]`) is the expected path -- the agent searches with terms from the question, gets no hits, and declines. `list_drive_markdown` is also acceptable for this decline path. Missing both means the agent declined without consulting the KB -- it might have got lucky on this question, but the prompt contract was not honoured. Record as a defect.
 
 ### B7. Verify the CRM activity timeline

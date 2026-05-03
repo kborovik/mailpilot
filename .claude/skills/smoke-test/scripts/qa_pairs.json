@@ -1,0 +1,422 @@
+[
+  {
+    "id": "qa-in-001",
+    "type": "inscope",
+    "source_file": "clack-birm-iron-removal-media.md",
+    "question": "What is the effective size and mesh size of Clack Birm filter media?",
+    "expected_tokens": [
+      "Effective Size: 0.48 mm",
+      "Mesh Size: 12 x 50"
+    ]
+  },
+  {
+    "id": "qa-in-002",
+    "type": "inscope",
+    "source_file": "clack-pyrolox-iron-manganese-media.md",
+    "question": "What is the bulk density and mesh size range of Pyrolox\u00ae media, and which part number represents the 60 lb. bag configuration?",
+    "expected_tokens": [
+      "120 lbs./cubic foot",
+      "US 8 x 20",
+      "A8005"
+    ]
+  },
+  {
+    "id": "qa-in-003",
+    "type": "inscope",
+    "source_file": "dow-filmtec-eco-440i-ro-membrane.md",
+    "question": "What is the permeate flow rate and active area of the ECO-440i model?",
+    "expected_tokens": [
+      "ECO-440i",
+      "12,650",
+      "440"
+    ]
+  },
+  {
+    "id": "qa-in-004",
+    "type": "inscope",
+    "source_file": "dow-filmtec-sfp-2860-ultrafiltration-membrane.md",
+    "question": "What is the membrane area and maximum operating TMP of the SFP-2860 ultrafiltration module?",
+    "expected_tokens": [
+      "SFP-2860",
+      "51",
+      "2.1 bar"
+    ]
+  },
+  {
+    "id": "qa-in-005",
+    "type": "inscope",
+    "source_file": "hydranautics-cpa4-ro-membrane.md",
+    "question": "What is the maximum applied pressure rating and permeate flow capacity of the CPA4 membrane element?",
+    "expected_tokens": [
+      "CPA4",
+      "600 psig",
+      "6000 gpd"
+    ]
+  },
+  {
+    "id": "qa-in-006",
+    "type": "inscope",
+    "source_file": "kdf-process-filtration-media.md",
+    "question": "What percentage of free chlorine can KDF 55 medium remove, and what is the heavy metal removal efficiency of KDF 55, KDF 85 and KDF-C media?",
+    "expected_tokens": [
+      "KDF 55 medium can remove over 99%",
+      "remove up to 98% of water-soluble cations"
+    ]
+  },
+  {
+    "id": "qa-in-007",
+    "type": "inscope",
+    "source_file": "pulsafeeder-chem-tech-100-150-chemical-dosing-pump.md",
+    "question": "What is the maximum flow rate and maximum pressure rating of the Series 150 model X100?",
+    "expected_tokens": [
+      "X100",
+      "100 gpd",
+      "60 PSI"
+    ]
+  },
+  {
+    "id": "qa-in-008",
+    "type": "inscope",
+    "source_file": "pure-aqua-brackish-ro-144k-gpd-usa-case-study.md",
+    "question": "What is the product capacity of the Pure Aqua Industrial Brackish Water Reverse Osmosis system described in this 2008 case study, and which membrane elements were used to achieve this capacity?",
+    "expected_tokens": [
+      "144,000 GPD",
+      "Hydranautics ESPA1",
+      "(20) 8\"x40\""
+    ]
+  },
+  {
+    "id": "qa-in-009",
+    "type": "inscope",
+    "source_file": "pure-aqua-brackish-ro-beverage-260k-gpd-nicaragua.md",
+    "question": "What is the capacity in GPD of the RO-500 Series model #TW-270K-8580 installed in Nicaragua, and how many 8\" TFC spiral wound membranes does this system contain?",
+    "expected_tokens": [
+      "RO-500 Series",
+      "260,000 GPD",
+      "model #TW-270K-8580",
+      "(40) 8\" TFC spiral wound membranes"
+    ]
+  },
+  {
+    "id": "qa-in-010",
+    "type": "inscope",
+    "source_file": "pure-aqua-commercial-frp-tank-media-filter.md",
+    "question": "What is the peak flow rate in GPM and backwash flow rate in GPM for the 28F1855MM multimedia filter model?",
+    "expected_tokens": [
+      "28F1855MM",
+      "26.6",
+      "26.6"
+    ]
+  },
+  {
+    "id": "qa-in-011",
+    "type": "inscope",
+    "source_file": "pure-aqua-commercial-ro-systems.md",
+    "question": "What is the permeate flow rate in GPD for the TW-12.0K-840 model, and what is the motor horsepower required at 60Hz?",
+    "expected_tokens": [
+      "TW-12.0K-840",
+      "12,000",
+      "3"
+    ]
+  },
+  {
+    "id": "qa-in-012",
+    "type": "inscope",
+    "source_file": "pure-aqua-commercial-water-softener-systems.md",
+    "question": "What is the exchange capacity and peak flow rate of the CVP24300 model?",
+    "expected_tokens": [
+      "CVP24300",
+      "300,000",
+      "68"
+    ]
+  },
+  {
+    "id": "qa-in-013",
+    "type": "inscope",
+    "source_file": "pure-aqua-containerized-ultrafiltration-systems.md",
+    "question": "What is the maximum tare weight of the 40ft insulated containerized ultrafiltration system?",
+    "expected_tokens": [
+      "40ft",
+      "9,400",
+      "Insulated"
+    ]
+  },
+  {
+    "id": "qa-in-014",
+    "type": "inscope",
+    "source_file": "pure-aqua-double-pass-ro-edi-power-plant-venezuela-case-study.md",
+    "question": "What is the total capacity and which treatment stages are included in the demin water system supplied by Pure Aqua to PDVSA in Venezuela?",
+    "expected_tokens": [
+      "207,360 GPD",
+      "Reverse Osmosis",
+      "Electrodeionization",
+      "Sand Filters"
+    ]
+  },
+  {
+    "id": "qa-in-015",
+    "type": "inscope",
+    "source_file": "pure-aqua-edi-electrodeionization-brochure.md",
+    "question": "What is the maximum current in amps for the EDI-220 model when operating at a feed water conductivity of 15 ppm RO Feed?",
+    "expected_tokens": [
+      "EDI-220",
+      "28",
+      "Maximum (15 ppm RO Feed)"
+    ]
+  },
+  {
+    "id": "qa-in-016",
+    "type": "inscope",
+    "source_file": "pure-aqua-industrial-nanofiltration-membrane-systems.md",
+    "question": "What is the permeate flow rate in GPD and the motor rating for the NF-64K-2580 model?",
+    "expected_tokens": [
+      "NF-64K-2580",
+      "64,800",
+      "10"
+    ]
+  },
+  {
+    "id": "qa-in-017",
+    "type": "inscope",
+    "source_file": "pure-aqua-industrial-ro-systems.md",
+    "question": "What is the motor rating in horsepower at 60 Hz for the TW-108K-3580 model, and how many 8\" membranes does it contain?",
+    "expected_tokens": [
+      "TW-108K-3580",
+      "20",
+      "15"
+    ]
+  },
+  {
+    "id": "qa-in-018",
+    "type": "inscope",
+    "source_file": "pure-aqua-industrial-seawater-ro-desalination.md",
+    "question": "What is the permeate flow rate in GPD and the motor rating in HP at 60Hz for the SW-48K-2680 model?",
+    "expected_tokens": [
+      "SW-48K-2680",
+      "48,000",
+      "40"
+    ]
+  },
+  {
+    "id": "qa-in-019",
+    "type": "inscope",
+    "source_file": "pure-aqua-industrial-steel-tank-media-filter.md",
+    "question": "What is the average flow rate in GPM and the peak flow rate in GPM for the MLF36-A model filter?",
+    "expected_tokens": [
+      "MLF36-A",
+      "71",
+      "141"
+    ]
+  },
+  {
+    "id": "qa-in-020",
+    "type": "inscope",
+    "source_file": "pure-aqua-industrial-ultrafiltration-uf-systems.md",
+    "question": "What is the filtrate production capacity in GPD for the UF-12 model when treating surface water at 35 GFD flux?",
+    "expected_tokens": [
+      "UF-12",
+      "203,904"
+    ]
+  },
+  {
+    "id": "qa-in-021",
+    "type": "inscope",
+    "source_file": "pure-aqua-industrial-water-deionizer.md",
+    "question": "What is the continuous service flow capacity in GPM for the DM42-Q-FRP model, and what is its nominal grain capacity?",
+    "expected_tokens": [
+      "DM42-Q-FRP",
+      "34",
+      "600,000"
+    ]
+  },
+  {
+    "id": "qa-in-022",
+    "type": "inscope",
+    "source_file": "pure-aqua-industrial-water-softener.md",
+    "question": "What is the continuous flow rate in GPM and peak flow rate in GPM for the WS36-600-2 model?",
+    "expected_tokens": [
+      "WS36-600-2",
+      "110",
+      "125"
+    ]
+  },
+  {
+    "id": "qa-in-023",
+    "type": "inscope",
+    "source_file": "pure-aqua-mixed-bed-deionizers.md",
+    "question": "What is the nominal exchange capacity in grains and the average service flow rate in GPM for the MB36-PVN/M9075 model?",
+    "expected_tokens": [
+      "MB36-PVN/M9075",
+      "250,000",
+      "70"
+    ]
+  },
+  {
+    "id": "qa-in-024",
+    "type": "inscope",
+    "source_file": "pure-aqua-papv-ro-pressure-vessels.md",
+    "question": "What is the operating pressure rating and vessel length of the PGV-4040-1000-1 model?",
+    "expected_tokens": [
+      "PGV-4040-1000-1",
+      "1000 PSI",
+      "40\" x 1"
+    ]
+  },
+  {
+    "id": "qa-in-025",
+    "type": "inscope",
+    "source_file": "pure-aqua-seawater-ro-16k-gpd-ecuador-case-study.md",
+    "question": "What is the maximum feed water TDS that the SW-16K-1480 system can handle, and what is its production capacity?",
+    "expected_tokens": [
+      "SW-16K-1480",
+      "42,000 PPM",
+      "16,000 GPD"
+    ]
+  },
+  {
+    "id": "qa-in-026",
+    "type": "inscope",
+    "source_file": "pure-aqua-sf-100s-industrial-water-softener.md",
+    "question": "What is the exchange capacity and continuous flow rate of the WS36-600-2 model?",
+    "expected_tokens": [
+      "WS36-600-2",
+      "600,000",
+      "65"
+    ]
+  },
+  {
+    "id": "qa-in-027",
+    "type": "inscope",
+    "source_file": "pure-aqua-skid-multimedia-iron-removal-400-gpm-usa-case-study.md",
+    "question": "What is the tank diameter and capacity of the skid mounted multimedia filtration system used for iron removal in the USA project?",
+    "expected_tokens": [
+      "54-in",
+      "400 GPM"
+    ]
+  },
+  {
+    "id": "qa-in-028",
+    "type": "inscope",
+    "source_file": "watts-smartstream-uv-disinfection.md",
+    "question": "What is the maximum lamp electrical power rating in watts for the WA012 model, and what is its rated flow rate in gallons per minute?",
+    "expected_tokens": [
+      "WA012",
+      "40",
+      "12 gpm"
+    ]
+  },
+  {
+    "id": "qa-in-029",
+    "type": "inscope",
+    "source_file": "watts-uv-com-disinfection.md",
+    "question": "What is the maximum flow rate of the C403 model, and what is its UV dose range?",
+    "expected_tokens": [
+      "C403",
+      "100 GPM",
+      "16-200"
+    ]
+  },
+  {
+    "id": "qa-out-001",
+    "type": "outscope",
+    "source_file": null,
+    "question": "Which Pentair commercial reverse osmosis system would you recommend for a 300 GPM brewery feedwater application?",
+    "forbidden_token_pairs": [
+      [
+        "Pentair",
+        "\\d"
+      ]
+    ],
+    "decline_signals": [
+      "do not",
+      "not in",
+      "outside",
+      "unable",
+      "do not carry"
+    ]
+  },
+  {
+    "id": "qa-out-002",
+    "type": "outscope",
+    "source_file": null,
+    "question": "What's the membrane life expectancy on the Evoqua W3T380000 industrial RO at 20% recovery?",
+    "forbidden_token_pairs": [
+      [
+        "Evoqua",
+        "\\d"
+      ]
+    ],
+    "decline_signals": [
+      "do not",
+      "not in",
+      "outside",
+      "unable",
+      "do not carry"
+    ]
+  },
+  {
+    "id": "qa-out-003",
+    "type": "outscope",
+    "source_file": null,
+    "question": "Can you spec a Grundfos CRN dosing pump for chlorine injection at 25 GPH?",
+    "forbidden_token_pairs": [
+      [
+        "Grundfos",
+        "\\d"
+      ]
+    ],
+    "decline_signals": [
+      "do not",
+      "not in",
+      "outside",
+      "unable",
+      "do not carry"
+    ]
+  },
+  {
+    "id": "qa-out-004",
+    "type": "outscope",
+    "source_file": null,
+    "question": "What's the per-pass salt rejection on a Suez ZeeWeed 500D ultrafiltration module?",
+    "forbidden_token_pairs": [
+      [
+        "Suez",
+        "\\d"
+      ],
+      [
+        "ZeeWeed",
+        "\\d"
+      ]
+    ],
+    "decline_signals": [
+      "do not",
+      "not in",
+      "outside",
+      "unable",
+      "do not carry"
+    ]
+  },
+  {
+    "id": "qa-out-005",
+    "type": "outscope",
+    "source_file": null,
+    "question": "Which Veolia OPUS II system handles produced water with 50,000 ppm TDS for oil and gas?",
+    "forbidden_token_pairs": [
+      [
+        "Veolia",
+        "\\d"
+      ],
+      [
+        "OPUS",
+        "\\d"
+      ]
+    ],
+    "decline_signals": [
+      "do not",
+      "not in",
+      "outside",
+      "unable",
+      "do not carry"
+    ]
+  }
+]
