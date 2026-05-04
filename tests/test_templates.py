@@ -141,6 +141,59 @@ def test_template_dataclass_is_frozen() -> None:
         template.name = "other"  # type: ignore[misc]
 
 
+# -- V16: ≥2 tool names per example sequence -----------------------------------
+
+import re  # noqa: E402
+
+from mailpilot.agent import templates as templates_module  # noqa: E402
+
+
+def _known_tool_names() -> set[str]:
+    """Union of every tool name bound to any template in the registry."""
+    names: set[str] = set()
+    for template in TEMPLATES.values():
+        names.update(tool.name for tool in template.tools)
+    return names
+
+
+def _fragment_constants() -> dict[str, str]:
+    """Return all module-level _UPPER_SNAKE str constants in templates.py.
+
+    These are the protocol fragments composed into template protocols
+    per V33. Picking them up by naming convention keeps the test honest
+    if a new fragment lands without an explicit registry entry.
+    """
+    return {
+        name: value
+        for name, value in vars(templates_module).items()
+        if name.startswith("_") and name[1:].isupper() and isinstance(value, str)
+    }
+
+
+@pytest.mark.parametrize(
+    ("fragment_name", "fragment"),
+    list(_fragment_constants().items()),
+    ids=list(_fragment_constants().keys()),
+)
+def test_fragment_does_not_collapse_to_single_tool_example(
+    fragment_name: str, fragment: str
+) -> None:
+    """V16: any fragment that names a tool must name >=2 distinct tools.
+
+    A single-tool example collapses to literal -- the agent emits exactly
+    that one tool name and fails to generalise. Either no tool names, or
+    >=2 distinct names; never exactly 1.
+    """
+    known = _known_tool_names()
+    mentioned = {
+        name for name in known if re.search(rf"\b{re.escape(name)}\b", fragment)
+    }
+    assert len(mentioned) != 1, (
+        f"fragment {fragment_name!r} names exactly 1 tool ({mentioned!r}); "
+        f"V16 requires either 0 or >=2 distinct tool names per fragment"
+    )
+
+
 # -- _build_agent integration --------------------------------------------------
 
 

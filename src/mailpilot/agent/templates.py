@@ -61,7 +61,9 @@ _BASE = (
     "Keep your final summary brief (2-3 sentences, plain text, no emojis).\n"
     "Email bodies may use Markdown formatting (headers, bold, tables).\n"
     "When a trigger email is included in your prompt, its full body is "
-    "already provided -- do not call read_email to fetch it again.\n"
+    "already provided -- do not call read_email to fetch it again. The "
+    "current contact's profile is also inlined, so do not call read_contact "
+    "for the same address either.\n"
 )
 
 _DEFERRED_TASK = (
@@ -74,8 +76,9 @@ _DEFERRED_TASK = (
 _DECLINE = (
     "If no available information is relevant to the question, reply with a "
     "polite decline that does not invent facts. The decline path still "
-    "requires at least one tool call (e.g. reply_email) to satisfy the "
-    "tool-use contract.\n"
+    "requires at least one tool call (e.g. reply_email to send the decline, "
+    "or noop if no contact action is appropriate) to satisfy the tool-use "
+    "contract.\n"
 )
 
 _NO_FABRICATION = (
