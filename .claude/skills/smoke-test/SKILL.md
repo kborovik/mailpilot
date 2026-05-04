@@ -50,9 +50,10 @@ Located at `.claude/skills/smoke-test/scripts/`. All QA-only -- KB-content maint
 
 **Runtime (used during the test, in B3/B4/B6):**
 
-- `qa.py pick [--type inscope|outscope] [--id ID]` -- emit one Q/A pair as JSON. Random unless `--id` given. Default type is `inscope`. The pair includes the question to send and the verifiable evidence the agent's reply must contain.
-- `qa.py check --id ID --reply-text "<body>" | --reply-file PATH` -- validate the agent's reply against that pair. Exit 0 = pass, 1 = fail. JSON on stdout lists missing tokens / fabrications / decline-signal absence.
-- `qa_pairs.json` -- 29 in-scope + 5 out-of-scope pairs. In-scope pairs name a model number + 1-3 numeric specs that MUST appear in the agent's reply, plus the source `.md` file the agent must cite. Out-of-scope pairs name (vendor, spec-shape) regex pairs the reply MUST NOT match, plus decline-signal phrases the reply MUST contain.
+- `qa.py pick [--type inscope|outscope] [--id ID]` -- emit one Q/A pair as JSON. Random unless `--id` given. Default type is `inscope`. The pair includes the question to send and the source `.md` file the agent must cite (in-scope) or the decline contract (out-of-scope).
+- `qa.py source --id ID` -- impersonate `inbound@lab5.ca`, load the pair's `source_file` from the demo Drive folder (`1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat`), print its Markdown content to stdout. Exit non-zero when the file is absent (KB-drift signal -- the pair points at a doc the agent could not have grounded in either). Used by gate B4 so the operator can grade groundedness against the live source.
+- `qa.py check --id ID --reply-text "<body>" | --reply-file PATH` -- **out-of-scope only** post-§V.31. Validates a decline reply against `forbidden_token_pairs` and `decline_signals`. Exit 0 = pass, 1 = fail, 2 = caller passed an in-scope id (in-scope grading is operator-judged; see gate B4). JSON on stdout lists fabrications / decline-signal absence.
+- `qa_pairs.json` -- 29 in-scope + 5 out-of-scope pairs. In-scope pairs retain `expected_tokens` for historical-run repro but the field is no longer consumed by any gate; the live source loaded via `qa.py source` is the grounding evidence. Out-of-scope pairs name (vendor, spec-shape) regex pairs the reply MUST NOT match, plus decline-signal phrases the reply MUST contain.
 
 **Maintenance (run only after the demo Drive folder content changes):**
 
@@ -374,15 +375,40 @@ Match by `SUBJECT_B1` (likely with `Re:` prefix). Record the wall-clock time the
 - Reply present, threaded under `SUBJECT_B1`.
 - `LATENCY_B1 <= 60s`. **If the reply takes longer, that is a regression of the lab5.ca/demo promise -- record as a Critical defect.** (Polling cadence is 5s, so granularity is coarse; if the first observation lands at 65s and it was the first reply on the thread, treat the run as borderline and re-test.)
 - Reply on the demo side (`mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>`) → `is_routed == true`, `workflow_id == DEMO_WORKFLOW_ID`, `route_method == classified`. The classifier ran -- not `thread_match`, since this is a fresh thread.
-- Reply body **grounded in the KB** -- run the QA verifier against the reply's `body_text`:
+- Reply body **grounded in the KB** -- operator-judged per SPEC §V.31. Substring match against curated `expected_tokens` was retired (false negatives on phrasing variation like `0.48 mm` vs `0.48mm`); the operator now grades the reply against the live source doc. Procedure:
 
-  ```
-  python3 .claude/skills/smoke-test/scripts/qa.py check \
-    --id "$QA_ID_B1" \
-    --reply-text "$(mailpilot email view <REPLY_EMAIL_ID> | python3 -c 'import json,sys; print(json.load(sys.stdin)["email"]["body_text"])')"
-  ```
+  1. Load the source doc the pair points at:
 
-  Exit 0 = pass. Exit 1 = grounding regression: the JSON output names which `expected_tokens` are missing and whether the source file was cited. Both signals are mandatory; a reply that mentions every spec but skips the source citation still fails the prompt-fidelity contract.
+     ```
+     python3 .claude/skills/smoke-test/scripts/qa.py source --id "$QA_ID_B1"
+     ```
+
+     Exit non-zero = `source_file` is no longer in the demo Drive folder (KB drift) -- record as a defect and stop B4. The script impersonates `inbound@lab5.ca` and looks the file up in folder `1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat`, the same folder the agent grounded against.
+
+  2. Read the agent's reply body:
+
+     ```
+     mailpilot email view <REPLY_EMAIL_ID> | python3 -c 'import json,sys; print(json.load(sys.stdin)["email"]["body_text"])'
+     ```
+
+  3. As operator, emit a structured JSON verdict on stdout (no free-form rating). Schema, exact field names:
+
+     ```json
+     {
+       "qa_id": "<QA_ID_B1>",
+       "question": "<question text>",
+       "source_file": "<source_file from pair>",
+       "answers_question": true,
+       "every_factual_claim_supported_by_source": true,
+       "cites_source_file": true,
+       "unsupported_claims": [],
+       "verdict": "pass"
+     }
+     ```
+
+     Each unsupported factual claim in the reply MUST appear verbatim in `unsupported_claims` (structural defence against LLM-judge sycophancy -- the field forces the grader to enumerate concrete misses rather than hand-wave a passing rating). `verdict` MUST be `"pass"` if and only if all three booleans are true AND `unsupported_claims` is empty; otherwise `"fail"`.
+
+  Anything other than `verdict == "pass"` is a grounding regression -- record the verdict JSON in Part D. `qa_pairs.json.expected_tokens` is retained for historical-run repro only and is no longer consumed by any gate.
 
 ### B5. Verify the agent actually used the Drive tools
 
@@ -425,6 +451,8 @@ Save `TRIGGER_EMAIL_ID_B2`, capture `T_SEND_B2`, poll the outbound mailbox for `
 
 **Gate B6 (polite decline, no fabrication):**
 
+Out-of-scope decline keeps the script verifier (per SPEC §V.31): regex appropriately fits shape detection (vendor name near a digit-shaped fabrication, decline-phrase presence) and the surface area is small. The operator-judged path applies only to in-scope grounding (B4).
+
 - Reply present within 60s.
 - Reply body validated by the QA verifier:
 
@@ -434,7 +462,7 @@ Save `TRIGGER_EMAIL_ID_B2`, capture `T_SEND_B2`, poll the outbound mailbox for `
     --reply-text "$(mailpilot email view <REPLY_EMAIL_ID> | python3 -c 'import json,sys; print(json.load(sys.stdin)["email"]["body_text"])')"
   ```
 
-  Exit 0 = pass. Exit 1 = fabrication regression OR missing decline-signal language. The JSON output names which `forbidden_token_pairs` matched (vendor name within 60 chars of a digit -- the fabrication signature) and whether at least one `decline_signals` phrase was found.
+  Exit 0 = pass. Exit 1 = fabrication regression OR missing decline-signal language. Exit 2 = caller passed an in-scope id by mistake (use B4's operator-judged flow instead). The JSON output names which `forbidden_token_pairs` matched (vendor name within 60 chars of a digit -- the fabrication signature) and whether at least one `decline_signals` phrase was found.
 - The `agent.invoke` for B6 still shows a KB-consulting tool call followed by `reply_email`. `search_drive_markdown` (returning `[]`) is the expected path -- the agent searches with terms from the question, gets no hits, and declines. `list_drive_markdown` is also acceptable for this decline path. Missing both means the agent declined without consulting the KB -- it might have got lucky on this question, but the prompt contract was not honoured. Record as a defect.
 
 ### B7. Verify the CRM activity timeline
