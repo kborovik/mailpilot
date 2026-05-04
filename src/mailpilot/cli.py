@@ -1402,11 +1402,13 @@ def _validate_theme(theme: str) -> None:
 @workflow.command("create")
 @click.option("--name", required=True, help="Workflow name.")
 @click.option(
-    "--type",
-    "workflow_type",
+    "--template",
     required=True,
-    type=click.Choice(["inbound", "outbound"]),
-    help="Workflow direction. Immutable after creation.",
+    type=click.Choice(["outbound-general", "inbound-general", "inbound-google-drive"]),
+    help=(
+        "Workflow template. Owns the agent's tool set and protocol. "
+        "Immutable after creation; direction is derived from the template."
+    ),
 )
 @click.option("--account-id", required=True, help="Owning Gmail account ID.")
 @click.option("--objective", default=None, help="Workflow objective.")
@@ -1434,7 +1436,7 @@ def _validate_theme(theme: str) -> None:
 )
 def workflow_create(
     name: str,
-    workflow_type: str,
+    template: str,
     account_id: str,
     objective: str | None,
     instructions: str | None,
@@ -1476,7 +1478,7 @@ def workflow_create(
         created = create_workflow(
             connection,
             name=name,
-            workflow_type=workflow_type,
+            template=template,
             account_id=account_id,
             theme=theme or "blue",
         )
@@ -1580,7 +1582,13 @@ def workflow_search(query: str, limit: int) -> None:
     "workflow_type",
     default=None,
     type=click.Choice(["inbound", "outbound"]),
-    help="Filter by workflow type.",
+    help="Filter by workflow direction.",
+)
+@click.option(
+    "--template",
+    default=None,
+    type=click.Choice(["outbound-general", "inbound-general", "inbound-google-drive"]),
+    help="Filter by workflow template.",
 )
 @click.option("--limit", default=100, help="Maximum results.")
 @click.option("--since", default=None, help="ISO datetime lower bound on created_at.")
@@ -1588,6 +1596,7 @@ def workflow_list(
     account_id: str | None,
     status: str | None,
     workflow_type: str | None,
+    template: str | None,
     limit: int,
     since: str | None,
 ) -> None:
@@ -1603,6 +1612,7 @@ def workflow_list(
             account_id=account_id,
             status=status,
             workflow_type=workflow_type,
+            template=template,
             limit=limit,
             since=since,
         )
@@ -1672,6 +1682,61 @@ def workflow_stop(workflow_id: str) -> None:
         output_entity("workflow", paused)
     finally:
         connection.close()
+
+
+# -- Template commands ---------------------------------------------------------
+
+
+@main.group()
+def template() -> None:
+    """Inspect built-in workflow templates (read-only, code-defined)."""
+
+
+@template.command("list")
+@click.option(
+    "--direction",
+    default=None,
+    type=click.Choice(["inbound", "outbound"]),
+    help="Filter by template direction.",
+)
+def template_list(direction: str | None) -> None:
+    """List all workflow templates as summaries."""
+    from mailpilot.agent.templates import TEMPLATES
+    from mailpilot.models import WorkflowTemplateSummary
+
+    summaries: list[WorkflowTemplateSummary] = []
+    for tpl in TEMPLATES.values():
+        if direction is not None and tpl.direction != direction:
+            continue
+        summaries.append(
+            WorkflowTemplateSummary(
+                name=tpl.name,
+                direction=tpl.direction,
+                description=tpl.description,
+                tool_count=len(tpl.tools),
+            )
+        )
+    output({"templates": [s.model_dump(mode="json") for s in summaries]})
+
+
+@template.command("view")
+@click.argument("name")
+def template_view(name: str) -> None:
+    """Show full template record (tools + protocol)."""
+    from mailpilot.agent.templates import TEMPLATES
+    from mailpilot.models import WorkflowTemplateRecord
+
+    tpl = TEMPLATES.get(name)  # pyright: ignore[reportArgumentType]
+    if tpl is None:
+        output_error(f"template not found: {name}", "not_found")
+    record = WorkflowTemplateRecord(
+        name=tpl.name,
+        direction=tpl.direction,
+        description=tpl.description,
+        tools=[t.name for t in tpl.tools],
+        protocol=tpl.protocol,
+    )
+    output_entity("template", record)
 
 
 # -- Enrollment commands -------------------------------------------------------

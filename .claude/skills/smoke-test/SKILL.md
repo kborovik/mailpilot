@@ -119,7 +119,7 @@ Capture `TEST_START_A` (ISO) and `SUBJECT_A` (`[ST-<HHMMSS>] <topic>`) before A1
 ```
 mailpilot workflow create \
   --name "Outbound Smoke A" \
-  --type outbound \
+  --template outbound-general \
   --account-id <OUTBOUND_ACCOUNT_ID> \
   --objective "Send a single email about <TOPIC_A> and mark the enrollment completed or failed based on the reply" \
   --instructions "You are a sales rep for Lab5. Send ONE email to the contact about <TOPIC_A>. Subject MUST be exactly '<SUBJECT_A>'. Body MUST use Markdown (greeting, 2-3 sentence paragraph, a 3-row 2-column table). When you receive a reply, do not send another email -- read the reply and call record_enrollment_outcome with status='completed' if the reply expresses interest or status='failed' if it declines, then stop. Do not call disable_contact -- this is per-workflow outcome tracking, not a global contact block. Do not create follow-up tasks."
@@ -315,7 +315,7 @@ Operator-style instructions citing the real folder ID. The agent's behaviour com
 ```
 mailpilot workflow create \
   --name "Demo (lab5.ca/demo)" \
-  --type inbound \
+  --template inbound-google-drive \
   --account-id <INBOUND_ACCOUNT_ID> \
   --objective "Answer water-treatment product questions grounded in the MailPilot Demo Drive folder; politely decline questions about products not in the KB." \
   --instructions "You are the lab5.ca/demo agent. The Markdown product knowledge base lives in Google Drive folder 1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat. For every reply: call search_drive_markdown with that folder ID and a query derived from the incoming question (key product terms, model numbers, application). Pick the top relevant hit and call read_drive_markdown on it before composing the reply grounded in that file's content. Cite the source file name in the body. If search_drive_markdown returns no hits for the question's terms (e.g., the asker is asking about Pentair, Evoqua, or Grundfos products that are not in the folder), reply with a short polite decline that explains the KB does not cover that product and do NOT fabricate specifications. Body MUST use plain Markdown. When the reply contains product specifications (model numbers, flow rates, dimensions, capacities), present them as a GitHub-flavored Markdown pipe table with a header row -- e.g., `| Specification | Value |` followed by `|---|---|` and one row per spec. Do NOT use asterisks, colons, or single-spaced lines as a substitute for a table. Subject MUST preserve the incoming thread subject. After replying, call record_enrollment_outcome with outcome='completed'. Do not create follow-up tasks."

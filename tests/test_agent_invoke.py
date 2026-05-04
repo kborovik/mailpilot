@@ -24,7 +24,6 @@ from conftest import (
     make_test_workflow,
 )
 from mailpilot.agent.invoke import (
-    _SYSTEM_PREFIX,  # pyright: ignore[reportPrivateUsage]
     _advisory_lock_keys,  # pyright: ignore[reportPrivateUsage]
     _build_agent,  # pyright: ignore[reportPrivateUsage]
     _wrap_create_task,  # pyright: ignore[reportPrivateUsage]
@@ -55,11 +54,14 @@ def _activate(connection: psycopg.Connection[dict[str, Any]], workflow_id: str) 
 
 def _setup(
     connection: psycopg.Connection[dict[str, Any]],
+    workflow_type: str = "outbound",
 ) -> tuple[Any, Any, Any]:
-    """Create account, contact, and active outbound workflow."""
+    """Create account, contact, and an active workflow of the requested direction."""
     account = make_test_account(connection, email="sender@example.com")
     contact = make_test_contact(connection, email="lead@acme.com", domain="acme.com")
-    workflow = make_test_workflow(connection, account_id=account.id)
+    workflow = make_test_workflow(
+        connection, account_id=account.id, workflow_type=workflow_type
+    )
     _activate(connection, workflow.id)
     create_enrollment(connection, workflow.id, contact.id)
     return account, contact, workflow
@@ -349,9 +351,7 @@ def test_inbound_email_trigger(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     """When an inbound email is provided, it appears in the agent prompt."""
-    account, contact, workflow = _setup(database_connection)
-    # Make it inbound for this test.
-    update_workflow(database_connection, workflow.id, type="inbound")
+    account, contact, workflow = _setup(database_connection, workflow_type="inbound")
     settings = make_test_settings(
         anthropic_api_key="sk-test", anthropic_model="test-model"
     )
@@ -392,8 +392,7 @@ def test_inbound_email_trigger_includes_email_id_and_sender(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     """Inbound email trigger includes email ID and sender so agent can reply."""
-    account, contact, workflow = _setup(database_connection)
-    update_workflow(database_connection, workflow.id, type="inbound")
+    account, contact, workflow = _setup(database_connection, workflow_type="inbound")
     settings = make_test_settings(
         anthropic_api_key="sk-test", anthropic_model="test-model"
     )
@@ -631,8 +630,7 @@ def test_agent_calls_reply_email(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     """Agent can call reply_email tool to reply in-thread."""
-    account, contact, workflow = _setup(database_connection)
-    update_workflow(database_connection, workflow.id, type="inbound")
+    account, contact, workflow = _setup(database_connection, workflow_type="inbound")
     settings = make_test_settings(
         anthropic_api_key="sk-test", anthropic_model="test-model"
     )
@@ -684,25 +682,6 @@ def test_agent_calls_reply_email(
     assert call_kwargs["thread_id"] == "thread-reply-invoke"
 
 
-# -- Tests: system prefix content ----------------------------------------------
-
-
-def test_system_prefix_guides_contact_status_update() -> None:
-    """System prefix must instruct agents to record enrollment outcome."""
-    assert "record_enrollment_outcome" in _SYSTEM_PREFIX
-
-
-def test_system_prefix_allows_markdown_in_emails() -> None:
-    """System prefix must not prohibit markdown in email content."""
-    assert "No markdown" not in _SYSTEM_PREFIX
-
-
-def test_system_prefix_tells_agent_trigger_email_is_pre_supplied() -> None:
-    """Trigger email body is inlined in the user prompt, so the agent must
-    not waste a round-trip calling read_email to fetch it."""
-    assert "read_email" in _SYSTEM_PREFIX
-
-
 def test_workflow_agent_has_explicit_name_for_otel_traces() -> None:
     """Pydantic AI's `agent run` span carries `gen_ai.agent.name`, derived
     from the Agent's `name=` argument. Setting it explicitly keeps traces
@@ -716,6 +695,7 @@ def test_workflow_agent_has_explicit_name_for_otel_traces() -> None:
     workflow = Workflow(
         id="01900000-0000-7000-8000-000000000001",
         name="N",
+        template="outbound-general",
         type="outbound",
         account_id="01900000-0000-7000-8000-000000000002",
         status="active",

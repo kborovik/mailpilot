@@ -26,9 +26,11 @@ def make_workflow(
     workflow_type: str = "inbound",
 ) -> Workflow:
     now = datetime.now(UTC)
+    template = "inbound-general" if workflow_type == "inbound" else "outbound-general"
     return Workflow(
         id=workflow_id,
         name=name,
+        template=template,  # pyright: ignore[reportArgumentType]
         type=workflow_type,  # pyright: ignore[reportArgumentType]
         account_id="account-1",
         status="active",

@@ -98,6 +98,11 @@ class ContactSummary(BaseModel):
 
 WorkflowType = Literal["inbound", "outbound"]
 WorkflowStatus = Literal["draft", "active", "paused"]
+WorkflowTemplateName = Literal[
+    "outbound-general",
+    "inbound-general",
+    "inbound-google-drive",
+]
 
 
 class Workflow(BaseModel):
@@ -105,6 +110,7 @@ class Workflow(BaseModel):
 
     id: str
     name: str
+    template: WorkflowTemplateName
     type: WorkflowType
     account_id: str
     status: WorkflowStatus = "draft"
@@ -120,10 +126,30 @@ class WorkflowSummary(BaseModel):
 
     id: str
     name: str
+    template: WorkflowTemplateName
     type: WorkflowType
     account_id: str
     status: WorkflowStatus
     created_at: datetime
+
+
+class WorkflowTemplateSummary(BaseModel):
+    """List-view projection of a workflow template (code-defined, read-only)."""
+
+    name: WorkflowTemplateName
+    direction: WorkflowType
+    description: str
+    tool_count: int
+
+
+class WorkflowTemplateRecord(BaseModel):
+    """Full read-only record of a workflow template for CLI `template view`."""
+
+    name: WorkflowTemplateName
+    direction: WorkflowType
+    description: str
+    tools: list[str]
+    protocol: str
 
 
 EnrollmentStatus = Literal["active", "paused"]

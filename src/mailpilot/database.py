@@ -807,32 +807,46 @@ def disable_contact(
 def create_workflow(
     connection: psycopg.Connection[dict[str, Any]],
     name: str,
-    workflow_type: str,
+    template: str,
     account_id: str,
     theme: str = "blue",
 ) -> Workflow:
     """Create a new workflow.
 
+    The workflow's ``type`` (``inbound`` / ``outbound``) is derived from
+    the template's declared direction -- callers do not pass ``type``.
+
     Args:
         connection: Open database connection.
         name: Workflow name.
-        workflow_type: "inbound" or "outbound".
+        template: Template name (e.g. ``outbound-general``). Drives both
+            the agent shape and the workflow's direction.
         account_id: Account FK.
         theme: Email color theme (default "blue").
 
     Returns:
         Created workflow.
     """
+    from mailpilot.agent.templates import TEMPLATES
+
+    if template not in TEMPLATES:
+        raise ValueError(
+            f"unknown workflow template {template!r}; valid: {sorted(TEMPLATES.keys())}"
+        )
+    direction = TEMPLATES[template].direction  # pyright: ignore[reportArgumentType]
     row = connection.execute(
         """\
-        INSERT INTO workflow (id, name, type, account_id, theme)
-        VALUES (%(id)s, %(name)s, %(type)s, %(account_id)s, %(theme)s)
+        INSERT INTO workflow (id, name, template, type, account_id, theme)
+        VALUES (
+            %(id)s, %(name)s, %(template)s, %(type)s, %(account_id)s, %(theme)s
+        )
         RETURNING *
         """,
         {
             "id": _new_id(),
             "name": name,
-            "type": workflow_type,
+            "template": template,
+            "type": direction,
             "account_id": account_id,
             "theme": theme,
         },
@@ -868,16 +882,18 @@ def list_workflows(
     account_id: str | None = None,
     status: str | None = None,
     workflow_type: str | None = None,
+    template: str | None = None,
     limit: int = 100,
     since: str | None = None,
 ) -> list[WorkflowSummary]:
-    """List workflows as summaries with optional account, status, and type filters.
+    """List workflows as summaries with optional filters.
 
     Args:
         connection: Open database connection.
         account_id: Filter by account ID.
         status: Filter by workflow status (e.g., "active").
         workflow_type: Filter by workflow type ("inbound" or "outbound").
+        template: Filter by template name.
         limit: Maximum results.
         since: ISO datetime lower bound on ``created_at``.
 
@@ -895,12 +911,15 @@ def list_workflows(
     if workflow_type is not None:
         conditions.append(SQL("type = %(workflow_type)s"))
         params["workflow_type"] = workflow_type
+    if template is not None:
+        conditions.append(SQL("template = %(template)s"))
+        params["template"] = template
     if since is not None:
         conditions.append(SQL("created_at >= %(since)s"))
         params["since"] = since
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
-        "SELECT id, name, type, account_id, status, created_at "
+        "SELECT id, name, template, type, account_id, status, created_at "
         "FROM workflow {} ORDER BY created_at LIMIT %(limit)s"
     ).format(where)
     rows = connection.execute(query, params).fetchall()
@@ -925,7 +944,7 @@ def search_workflows(
     pattern = f"%{query}%"
     rows = connection.execute(
         """\
-        SELECT id, name, type, account_id, status, created_at
+        SELECT id, name, template, type, account_id, status, created_at
         FROM workflow
         WHERE LOWER(name) LIKE LOWER(%(pattern)s)
            OR LOWER(objective) LIKE LOWER(%(pattern)s)
@@ -957,6 +976,16 @@ def update_workflow(
         Updated workflow, or None if not found.
     """
     allowed = {"name", "objective", "instructions", "theme"}
+    if "template" in fields:
+        raise ValueError(
+            "workflow.template is immutable; "
+            "delete and recreate the workflow to change template"
+        )
+    if "type" in fields:
+        raise ValueError(
+            "workflow.type is derived from the template at create time "
+            "and cannot be updated"
+        )
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return get_workflow(connection, workflow_id)

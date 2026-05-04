@@ -533,14 +533,32 @@ def test_update_workflow(database_connection: psycopg.Connection[dict[str, Any]]
 def test_update_workflow_ignores_immutable_fields(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
+    """Non-allowed fields like `account_id` are silently dropped from update."""
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
-    updated = update_workflow(
-        database_connection, workflow.id, type="inbound", account_id="other"
-    )
+    updated = update_workflow(database_connection, workflow.id, account_id="other")
     assert updated is not None
-    assert updated.type == "outbound"
     assert updated.account_id == account.id
+
+
+def test_update_workflow_rejects_template_change(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """V32: `template` change must raise -- forces delete+recreate."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    with pytest.raises(ValueError, match="template is immutable"):
+        update_workflow(database_connection, workflow.id, template="inbound-general")
+
+
+def test_update_workflow_rejects_type_change(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """V32: `type` is derived from template at create time and cannot be updated."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    with pytest.raises(ValueError, match="type is derived"):
+        update_workflow(database_connection, workflow.id, type="inbound")
 
 
 def test_activate_workflow(database_connection: psycopg.Connection[dict[str, Any]]):
@@ -633,13 +651,13 @@ def test_list_workflows_by_type(
         database_connection,
         account_id=account.id,
         name="Outreach",
-        workflow_type="outbound",
+        template="outbound-general",
     )
     make_test_workflow(
         database_connection,
         account_id=account.id,
         name="Auto-reply",
-        workflow_type="inbound",
+        template="inbound-general",
     )
     outbound = list_workflows(database_connection, workflow_type="outbound")
     assert len(outbound) == 1

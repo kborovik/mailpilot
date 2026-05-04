@@ -21,7 +21,7 @@ from typing import Any
 
 import logfire
 import psycopg
-from pydantic_ai import Agent, RunContext, Tool
+from pydantic_ai import Agent, RunContext
 from pydantic_ai.messages import ModelRequest, ToolReturnPart
 from pydantic_ai.models import Model
 
@@ -316,50 +316,21 @@ def _wrap_noop(
 # -- Agent construction --------------------------------------------------------
 
 
-_TOOLS: list[Tool[AgentDeps]] = [
-    Tool(_wrap_send_email, name="send_email"),
-    Tool(_wrap_reply_email, name="reply_email"),
-    Tool(_wrap_create_task, name="create_task"),
-    Tool(_wrap_cancel_task, name="cancel_task"),
-    Tool(_wrap_record_enrollment_outcome, name="record_enrollment_outcome"),
-    Tool(_wrap_disable_contact, name="disable_contact"),
-    Tool(_wrap_list_enrollments, name="list_enrollments"),
-    Tool(_wrap_search_emails, name="search_emails"),
-    Tool(_wrap_read_contact, name="read_contact"),
-    Tool(_wrap_read_company, name="read_company"),
-    Tool(_wrap_read_email, name="read_email"),
-    Tool(_wrap_list_drive_markdown, name="list_drive_markdown"),
-    Tool(_wrap_read_drive_markdown, name="read_drive_markdown"),
-    Tool(_wrap_search_drive_markdown, name="search_drive_markdown"),
-    Tool(_wrap_noop, name="noop"),
-]
-
-
-_SYSTEM_PREFIX = (
-    "Keep your final summary brief (2-3 sentences, plain text, no emojis).\n"
-    "Email bodies may use Markdown formatting (headers, bold, tables).\n"
-    "When a trigger email is included in your prompt, its full body is "
-    "already provided -- do not call read_email to fetch it again.\n"
-    "After completing the workflow objective for a contact, call "
-    "record_enrollment_outcome with outcome='completed' and a brief reason.\n"
-    "If the workflow instructions reference a Google Drive folder of "
-    "Markdown notes, ground every reply in that folder. Prefer "
-    "search_drive_markdown(folder_id, query) to target the most relevant "
-    "documents -- enumerating the whole folder with list_drive_markdown "
-    "wastes context once the KB grows past a handful of files. Read the "
-    "top matches with read_drive_markdown before composing the reply. If "
-    "no document is relevant to the question, reply with a polite decline "
-    "and do not invent facts.\n\n"
-)
-
-
 def _build_agent(workflow: Workflow) -> Agent[AgentDeps, str]:
-    """Build a Pydantic AI agent for a workflow."""
+    """Build a Pydantic AI agent for a workflow.
+
+    The workflow's template (V32, V33) owns both the bound tool set and the
+    system-prompt protocol. Workflow-specific instructions are appended to
+    the template protocol.
+    """
+    from mailpilot.agent.templates import TEMPLATES
+
+    template = TEMPLATES[workflow.template]
     return Agent(
         name="mailpilot.workflow",
         deps_type=AgentDeps,
-        instructions=_SYSTEM_PREFIX + workflow.instructions,
-        tools=_TOOLS,
+        instructions=template.protocol + workflow.instructions,
+        tools=list(template.tools),
     )
 
 
@@ -490,7 +461,7 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
             ``enrollment_run`` (CLI manual via ``mailpilot enrollment run``),
             ``task`` (background drain via ``run.execute_task``),
             ``email`` (email-driven), or ``manual`` (default for direct
-            programmatic calls). See SPEC §V12.
+            programmatic calls). See SPEC §V11.
 
     Returns:
         Dict with invocation result, or None if skipped (lock held).

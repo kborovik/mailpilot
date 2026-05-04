@@ -2006,6 +2006,7 @@ def _make_workflow(**overrides: Any) -> Workflow:
     defaults: dict[str, Any] = {
         "id": _WORKFLOW_ID,
         "name": "Demo outreach",
+        "template": "outbound-general",
         "type": "outbound",
         "account_id": _ACCOUNT_ID,
         "status": "draft",
@@ -2039,8 +2040,8 @@ def test_workflow_create(runner: CliRunner, mock_connection: MagicMock) -> None:
                 "create",
                 "--name",
                 "Demo outreach",
-                "--type",
-                "outbound",
+                "--template",
+                "outbound-general",
                 "--account-id",
                 _ACCOUNT_ID,
                 "--draft",
@@ -2051,7 +2052,7 @@ def test_workflow_create(runner: CliRunner, mock_connection: MagicMock) -> None:
     mock_create.assert_called_once_with(
         mock_connection,
         name="Demo outreach",
-        workflow_type="outbound",
+        template="outbound-general",
         account_id=_ACCOUNT_ID,
         theme="blue",
     )
@@ -2092,8 +2093,8 @@ def test_workflow_create_with_objective_and_instructions(
                 "create",
                 "--name",
                 "Demo outreach",
-                "--type",
-                "outbound",
+                "--template",
+                "outbound-general",
                 "--account-id",
                 _ACCOUNT_ID,
                 "--objective",
@@ -2142,8 +2143,8 @@ def test_workflow_create_with_inline_instructions(
                 "create",
                 "--name",
                 "Demo outreach",
-                "--type",
-                "outbound",
+                "--template",
+                "outbound-general",
                 "--account-id",
                 _ACCOUNT_ID,
                 "--objective",
@@ -2175,8 +2176,8 @@ def test_workflow_create_instructions_mutual_exclusion(
                 "create",
                 "--name",
                 "Test",
-                "--type",
-                "outbound",
+                "--template",
+                "outbound-general",
                 "--account-id",
                 _ACCOUNT_ID,
                 "--instructions",
@@ -2202,7 +2203,7 @@ def test_workflow_create_rejects_invalid_type(
             "create",
             "--name",
             "Bad",
-            "--type",
+            "--template",
             "sideways",
             "--account-id",
             _ACCOUNT_ID,
@@ -2225,8 +2226,8 @@ def test_workflow_create_empty_name(
                 "create",
                 "--name",
                 "",
-                "--type",
-                "outbound",
+                "--template",
+                "outbound-general",
                 "--account-id",
                 "acc-1",
             ],
@@ -2253,8 +2254,8 @@ def test_workflow_create_account_not_found(
                 "create",
                 "--name",
                 "Test",
-                "--type",
-                "outbound",
+                "--template",
+                "outbound-general",
                 "--account-id",
                 "acc-missing",
                 "--draft",
@@ -2293,8 +2294,8 @@ def test_workflow_create_auto_activates(
                 "create",
                 "--name",
                 "Demo outreach",
-                "--type",
-                "outbound",
+                "--template",
+                "outbound-general",
                 "--account-id",
                 _ACCOUNT_ID,
                 "--objective",
@@ -2332,8 +2333,8 @@ def test_workflow_create_draft_skips_activation(
                 "create",
                 "--name",
                 "Demo outreach",
-                "--type",
-                "outbound",
+                "--template",
+                "outbound-general",
                 "--account-id",
                 _ACCOUNT_ID,
                 "--objective",
@@ -2364,8 +2365,8 @@ def test_workflow_create_missing_fields_without_draft(
                 "create",
                 "--name",
                 "Demo outreach",
-                "--type",
-                "outbound",
+                "--template",
+                "outbound-general",
                 "--account-id",
                 _ACCOUNT_ID,
             ],
@@ -2397,8 +2398,8 @@ def test_workflow_create_with_theme(
                 "create",
                 "--name",
                 "Themed",
-                "--type",
-                "outbound",
+                "--template",
+                "outbound-general",
                 "--account-id",
                 _ACCOUNT_ID,
                 "--theme",
@@ -2411,7 +2412,7 @@ def test_workflow_create_with_theme(
     mock_create.assert_called_once_with(
         mock_connection,
         name="Themed",
-        workflow_type="outbound",
+        template="outbound-general",
         account_id=_ACCOUNT_ID,
         theme="green",
     )
@@ -2433,8 +2434,8 @@ def test_workflow_create_invalid_theme(
                 "create",
                 "--name",
                 "Bad",
-                "--type",
-                "outbound",
+                "--template",
+                "outbound-general",
                 "--account-id",
                 _ACCOUNT_ID,
                 "--theme",
@@ -2625,6 +2626,7 @@ def test_workflow_list(runner: CliRunner, mock_connection: MagicMock) -> None:
         account_id=None,
         status=None,
         workflow_type=None,
+        template=None,
         limit=100,
         since=None,
     )
@@ -2650,6 +2652,7 @@ def test_workflow_list_by_account(
         account_id=_ACCOUNT_ID,
         status=None,
         workflow_type=None,
+        template=None,
         limit=100,
         since=None,
     )
@@ -2692,6 +2695,7 @@ def test_workflow_list_with_filters(
         account_id=None,
         status="active",
         workflow_type="outbound",
+        template=None,
         limit=100,
         since=None,
     )
@@ -5103,3 +5107,64 @@ def test_envelope_list_wraps_under_plural_key(
     data = json.loads(result.output)
     assert set(data.keys()) == {"accounts", "ok"}
     assert isinstance(data["accounts"], list)
+
+
+# -- template list / view ------------------------------------------------------
+
+
+def test_template_list(runner: CliRunner) -> None:
+    """`template list` returns all 3 templates with summary fields."""
+    result = runner.invoke(main, ["template", "list"])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert set(data.keys()) == {"templates", "ok"}
+    names = {t["name"] for t in data["templates"]}
+    assert names == {"outbound-general", "inbound-general", "inbound-google-drive"}
+    for tpl in data["templates"]:
+        assert set(tpl.keys()) == {"name", "direction", "description", "tool_count"}
+        assert tpl["tool_count"] >= 1
+
+
+def test_template_list_filter_by_direction_inbound(runner: CliRunner) -> None:
+    """`--direction inbound` returns only inbound templates."""
+    result = runner.invoke(main, ["template", "list", "--direction", "inbound"])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    names = {t["name"] for t in data["templates"]}
+    assert names == {"inbound-general", "inbound-google-drive"}
+
+
+def test_template_list_filter_by_direction_outbound(runner: CliRunner) -> None:
+    """`--direction outbound` returns only outbound templates."""
+    result = runner.invoke(main, ["template", "list", "--direction", "outbound"])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    names = {t["name"] for t in data["templates"]}
+    assert names == {"outbound-general"}
+
+
+def test_template_view_returns_full_record(runner: CliRunner) -> None:
+    """`template view <name>` returns name, direction, description, tools, protocol."""
+    result = runner.invoke(main, ["template", "view", "inbound-google-drive"])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert set(data.keys()) == {"template", "ok"}
+    record = data["template"]
+    assert record["name"] == "inbound-google-drive"
+    assert record["direction"] == "inbound"
+    assert isinstance(record["protocol"], str)
+    assert record["protocol"]
+    assert "search_drive_markdown" in record["tools"]
+    assert "list_drive_markdown" in record["tools"]
+    assert "read_drive_markdown" in record["tools"]
+
+
+def test_template_view_unknown_returns_not_found(runner: CliRunner) -> None:
+    """Unknown template name -> error envelope with not_found code."""
+    result = runner.invoke(main, ["template", "view", "made-up-template"])
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "not_found"
