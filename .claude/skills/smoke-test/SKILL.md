@@ -399,6 +399,7 @@ Run a Logfire query for the `agent.invoke` span produced by B4's reply. Within t
 - `search_drive_markdown` returned a non-error list (no `error` key in the tool return) and the list is non-empty.
 - `read_drive_markdown` returned a dict with non-empty `content`.
 - An agent that uses `list_drive_markdown` instead of `search_drive_markdown` for the in-scope question is a regression: with ≥10 docs in the folder, full enumeration is the failure mode the new tool exists to prevent. Record as a defect even if the reply is otherwise correct. Inventing a `file_id` without searching first is also a prompt-fidelity regression.
+- The `reply_email` span returned no `error` key. A return with `error == "format"` means the spec-table lint (§V.29) rejected the body -- the agent rendered specs as space-aligned text instead of a Markdown pipe-table. Record as a prompt-fidelity defect for B4.
 
 ### B6. Send the out-of-scope question
 
