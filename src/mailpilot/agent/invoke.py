@@ -398,7 +398,15 @@ def _build_user_prompt(  # noqa: PLR0913
     if contact.domain:
         sections.append(f"Domain: {contact.domain}")
 
-    sections.append(_format_email_history(email_history))
+    # V35: trigger email body is inlined under "New inbound email:" by
+    # _format_trigger; exclude it from email_history so the body never appears
+    # twice in a single prompt.
+    prior_history = (
+        [m for m in email_history if m.id != email.id]
+        if email is not None
+        else email_history
+    )
+    sections.append(_format_email_history(prior_history))
     sections.append(
         _format_trigger(
             email, task_description, task_context, contact_email=contact.email

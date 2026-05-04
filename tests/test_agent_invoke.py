@@ -26,6 +26,7 @@ from conftest import (
 from mailpilot.agent.invoke import (
     _advisory_lock_keys,  # pyright: ignore[reportPrivateUsage]
     _build_agent,  # pyright: ignore[reportPrivateUsage]
+    _build_user_prompt,  # pyright: ignore[reportPrivateUsage]
     _wrap_create_task,  # pyright: ignore[reportPrivateUsage]
     _wrap_disable_contact,  # pyright: ignore[reportPrivateUsage]
     _wrap_record_enrollment_outcome,  # pyright: ignore[reportPrivateUsage]
@@ -459,6 +460,134 @@ def test_deferred_task_trigger(
     all_text = str(captured_messages)
     assert "Follow up on demo request" in all_text
     assert "days_since_last" in all_text
+
+
+# -- Tests: V35 trigger-email dedupe in user prompt ----------------------------
+
+
+def test_inbound_trigger_excluded_from_email_history_when_only_email(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """V35: when the trigger is the only email in history, the email_history
+    block is suppressed and the trigger body appears exactly once."""
+    from mailpilot.database import create_email
+
+    account, contact, workflow = _setup(database_connection, workflow_type="inbound")
+    trigger = create_email(
+        database_connection,
+        gmail_message_id="msg-trigger-solo",
+        gmail_thread_id="thread-trigger-solo",
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        direction="inbound",
+        subject="Question about pricing",
+        body_text="UNIQUE_TRIGGER_BODY_MARKER about pricing.",
+    )
+    assert trigger is not None
+
+    prompt = _build_user_prompt(
+        workflow=workflow,
+        contact=contact,
+        email_history=[trigger],
+        email=trigger,
+    )
+
+    assert "No prior email history with this contact." in prompt
+    assert "Email history (1 messages):" not in prompt
+    assert prompt.count("UNIQUE_TRIGGER_BODY_MARKER about pricing.") == 1
+
+
+def test_inbound_trigger_dedupes_against_prior_history(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """V35: trigger row excluded from email_history when prior emails exist;
+    history count reflects N-1 and trigger body appears exactly once total."""
+    from mailpilot.database import create_email
+
+    account, contact, workflow = _setup(database_connection, workflow_type="inbound")
+    prior = create_email(
+        database_connection,
+        gmail_message_id="msg-prior",
+        gmail_thread_id="thread-prior",
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        direction="outbound",
+        subject="Initial outreach",
+        body_text="UNIQUE_PRIOR_BODY_MARKER previously sent.",
+    )
+    assert prior is not None
+    trigger = create_email(
+        database_connection,
+        gmail_message_id="msg-trigger-with-prior",
+        gmail_thread_id="thread-trigger-with-prior",
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        direction="inbound",
+        subject="Re: outreach",
+        body_text="UNIQUE_TRIGGER_BODY_MARKER reply received.",
+    )
+    assert trigger is not None
+
+    # Order doesn't matter for the dedupe logic; mimic list_emails ordering.
+    prompt = _build_user_prompt(
+        workflow=workflow,
+        contact=contact,
+        email_history=[trigger, prior],
+        email=trigger,
+    )
+
+    assert "Email history (1 messages):" in prompt
+    assert "Email history (2 messages):" not in prompt
+    assert "UNIQUE_PRIOR_BODY_MARKER previously sent." in prompt
+    assert prompt.count("UNIQUE_TRIGGER_BODY_MARKER reply received.") == 1
+
+
+def test_outbound_history_unchanged_without_trigger(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """V35 regression guard: when no trigger email is provided (outbound path),
+    email_history is rendered in full -- no dedupe filter applied."""
+    from mailpilot.database import create_email
+
+    account, contact, workflow = _setup(database_connection, workflow_type="outbound")
+    first = create_email(
+        database_connection,
+        gmail_message_id="msg-out-1",
+        gmail_thread_id="thread-out-1",
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        direction="outbound",
+        subject="Outreach #1",
+        body_text="UNIQUE_FIRST_BODY_MARKER first send.",
+    )
+    second = create_email(
+        database_connection,
+        gmail_message_id="msg-out-2",
+        gmail_thread_id="thread-out-2",
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        direction="outbound",
+        subject="Outreach #2",
+        body_text="UNIQUE_SECOND_BODY_MARKER follow-up.",
+    )
+    assert first is not None
+    assert second is not None
+
+    prompt = _build_user_prompt(
+        workflow=workflow,
+        contact=contact,
+        email_history=[second, first],
+        email=None,
+    )
+
+    assert "Email history (2 messages):" in prompt
+    assert "UNIQUE_FIRST_BODY_MARKER first send." in prompt
+    assert "UNIQUE_SECOND_BODY_MARKER follow-up." in prompt
 
 
 # -- Tests: early-exit paths ---------------------------------------------------
