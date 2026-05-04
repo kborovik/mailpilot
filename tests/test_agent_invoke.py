@@ -436,7 +436,8 @@ def test_inbound_email_trigger_includes_email_id_and_sender(
 def test_deferred_task_trigger(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """When task_description is provided, it appears in the agent prompt."""
+    """V36: trigger='task' with a task_description renders the Deferred task
+    block."""
     _account, contact, workflow = _setup(database_connection)
     settings = make_test_settings(
         anthropic_api_key="sk-test", anthropic_model="test-model"
@@ -454,6 +455,7 @@ def test_deferred_task_trigger(
             contact,
             task_description="Follow up on demo request",
             task_context={"days_since_last": 7},
+            trigger="task",
             model_override=_capturing_model(captured_messages),
         )
 
@@ -588,6 +590,106 @@ def test_outbound_history_unchanged_without_trigger(
     assert "Email history (2 messages):" in prompt
     assert "UNIQUE_FIRST_BODY_MARKER first send." in prompt
     assert "UNIQUE_SECOND_BODY_MARKER follow-up." in prompt
+
+
+# -- Tests: V36 trigger-block matches span trigger attribute ------------------
+
+
+def test_enrollment_run_outbound_renders_first_reach_out(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """V36: trigger='enrollment_run' with no email renders the first-reach-out
+    framing, never the deferred-task block."""
+    _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
+
+    prompt = _build_user_prompt(
+        workflow=workflow,
+        contact=contact,
+        email_history=[],
+        email=None,
+        trigger="enrollment_run",
+    )
+
+    assert "First reach-out for this enrollment." in prompt
+    assert "Deferred task:" not in prompt
+
+
+def test_task_trigger_renders_deferred_task_block(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """V36 regression guard: trigger='task' with a persisted task description
+    keeps rendering the Deferred task: block."""
+    _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
+
+    prompt = _build_user_prompt(
+        workflow=workflow,
+        contact=contact,
+        email_history=[],
+        email=None,
+        task_description="Follow up on demo request",
+        task_context={"days_since_last": 7},
+        trigger="task",
+    )
+
+    assert "Deferred task:" in prompt
+    assert "Follow up on demo request" in prompt
+    assert "days_since_last" in prompt
+    assert "First reach-out" not in prompt
+
+
+def test_enrollment_run_with_email_uses_email_branch(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """V36: when an email is present, the inbound-email branch wins over the
+    enrollment_run framing -- existing precedence preserved."""
+    from mailpilot.database import create_email
+
+    account, contact, workflow = _setup(database_connection, workflow_type="inbound")
+    email = create_email(
+        database_connection,
+        gmail_message_id="msg-enr-with-email",
+        gmail_thread_id="thread-enr-with-email",
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        direction="inbound",
+        subject="Continued enrollment",
+        body_text="UNIQUE_EMAIL_BRANCH_MARKER question.",
+    )
+    assert email is not None
+
+    prompt = _build_user_prompt(
+        workflow=workflow,
+        contact=contact,
+        email_history=[email],
+        email=email,
+        trigger="enrollment_run",
+    )
+
+    assert "New inbound email:" in prompt
+    assert "UNIQUE_EMAIL_BRANCH_MARKER question." in prompt
+    assert "First reach-out" not in prompt
+    assert "Deferred task:" not in prompt
+
+
+def test_manual_trigger_no_email_no_task_renders_outbound_fallback(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """V36: trigger='manual' with no email and no task_description falls back
+    to the existing 'This is an outbound invocation.' prose."""
+    _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
+
+    prompt = _build_user_prompt(
+        workflow=workflow,
+        contact=contact,
+        email_history=[],
+        email=None,
+        trigger="manual",
+    )
+
+    assert "This is an outbound invocation." in prompt
+    assert "Deferred task:" not in prompt
+    assert "First reach-out" not in prompt
 
 
 # -- Tests: early-exit paths ---------------------------------------------------

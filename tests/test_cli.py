@@ -3023,10 +3023,14 @@ def test_enrollment_run_inbound_with_email(
 
     assert result.exit_code == 0, result.output
     mock_invoke.assert_called_once()
-    # Agent invoked with the unprocessed email attached
+    # Agent invoked with the unprocessed email attached.
+    # V36: the enrollment_run path passes trigger="enrollment_run" and
+    # MUST NOT synthesize a task_description -- prompt framing is owned
+    # by the trigger branch in _format_trigger.
     call_kwargs = mock_invoke.call_args[1]
     assert call_kwargs["email"] == inbound_email
-    assert call_kwargs["task_description"] == "manual inbound run"
+    assert call_kwargs["trigger"] == "enrollment_run"
+    assert "task_description" not in call_kwargs
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["status"] == "completed"
@@ -3082,9 +3086,12 @@ def test_enrollment_run_inbound_no_email(
 
     assert result.exit_code == 0, result.output
     mock_invoke.assert_called_once()
+    # V36: enrollment_run path no longer synthesizes a task_description; the
+    # `trigger` arg drives prompt framing.
     call_kwargs = mock_invoke.call_args[1]
     assert call_kwargs["email"] is None
-    assert call_kwargs["task_description"] == "manual inbound run"
+    assert call_kwargs["trigger"] == "enrollment_run"
+    assert "task_description" not in call_kwargs
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["status"] == "completed"

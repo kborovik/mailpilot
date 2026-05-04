@@ -1838,19 +1838,20 @@ def enrollment_run(workflow_id: str, contact_id: str) -> None:
         email = None
         if wf.type == "inbound":
             email = get_unprocessed_inbound_email(connection, wf.id, contact.id)
-        description = f"manual {wf.type} run"
         envelope: dict[str, object] = {
             "workflow_id": wf.id,
             "contact_id": contact.id,
         }
         try:
+            # V36: prompt framing comes from `trigger`, not a synthesised
+            # task_description. enrollment_run is an initial reach-out, not
+            # resumed deferred work.
             result = invoke_workflow_agent(
                 connection,
                 settings,
                 wf,
                 contact,
                 email=email,
-                task_description=description,
                 trigger="enrollment_run",
             )
         except Exception as exc:

@@ -358,12 +358,24 @@ def _format_trigger(
     task_description: str,
     task_context: dict[str, Any] | None,
     contact_email: str = "",
+    trigger: str = "manual",
 ) -> str:
-    """Format the trigger context section of the prompt."""
+    """Format the trigger context section of the prompt.
+
+    V36: framing matches the ``agent.invoke`` span ``trigger`` attribute
+    (V11). ``enrollment_run`` gets a dedicated first-reach-out block;
+    ``Deferred task:`` is reserved for ``trigger="task"``.
+    """
     if email is not None:
         header = f"\nNew inbound email:\nEmail ID: {email.id}\nFrom: {contact_email}"
         return f"{header}\nSubject: {email.subject}\nBody:\n{email.body_text}"
-    if task_description:
+    if trigger == "enrollment_run":
+        return (
+            "\nFirst reach-out for this enrollment. "
+            "Compose the initial outbound message per the workflow objective "
+            "and instructions."
+        )
+    if trigger == "task" and task_description:
         lines = ["\nDeferred task:", f"Description: {task_description}"]
         if task_context:
             lines.append(f"Context: {task_context}")
@@ -381,6 +393,7 @@ def _build_user_prompt(  # noqa: PLR0913
     email: Email | None = None,
     task_description: str = "",
     task_context: dict[str, Any] | None = None,
+    trigger: str = "manual",
 ) -> str:
     """Assemble the user prompt for the agent."""
     sections: list[str] = [
@@ -409,7 +422,11 @@ def _build_user_prompt(  # noqa: PLR0913
     sections.append(_format_email_history(prior_history))
     sections.append(
         _format_trigger(
-            email, task_description, task_context, contact_email=contact.email
+            email,
+            task_description,
+            task_context,
+            contact_email=contact.email,
+            trigger=trigger,
         )
     )
 
@@ -557,6 +574,7 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
                 email=email,
                 task_description=task_description,
                 task_context=task_context,
+                trigger=trigger,
             )
 
             span.set_attribute("prompt_length", len(prompt))
