@@ -52,6 +52,7 @@ def test_workflow_type_literal():
     workflow = Workflow(
         id="1",
         name="W",
+        template="outbound-general",
         type="outbound",
         account_id="a1",
         created_at=NOW,
@@ -66,6 +67,7 @@ def test_workflow_invalid_type_raises():
         Workflow(
             id="1",
             name="W",
+            template="outbound-general",
             type="invalid",  # type: ignore[arg-type]
             account_id="a1",
             created_at=NOW,

@@ -116,12 +116,22 @@ def make_test_workflow(
     account_id: str,
     name: str = "Test Workflow",
     workflow_type: str = "outbound",
+    template: str | None = None,
 ) -> Workflow:
-    """Create a test workflow in the database."""
+    """Create a test workflow in the database.
+
+    Tests may pass ``template`` directly. Legacy callers pass ``workflow_type``
+    (``inbound`` / ``outbound``) which maps to the corresponding ``-general``
+    template.
+    """
+    if template is None:
+        template = (
+            "inbound-general" if workflow_type == "inbound" else "outbound-general"
+        )
     return create_workflow(
         connection,
         name=name,
-        workflow_type=workflow_type,
+        template=template,
         account_id=account_id,
     )
 

@@ -21,7 +21,7 @@ from typing import Any
 
 import logfire
 import psycopg
-from pydantic_ai import Agent, RunContext, Tool
+from pydantic_ai import Agent, RunContext
 from pydantic_ai.messages import ModelRequest, ToolReturnPart
 from pydantic_ai.models import Model
 
@@ -316,50 +316,21 @@ def _wrap_noop(
 # -- Agent construction --------------------------------------------------------
 
 
-_TOOLS: list[Tool[AgentDeps]] = [
-    Tool(_wrap_send_email, name="send_email"),
-    Tool(_wrap_reply_email, name="reply_email"),
-    Tool(_wrap_create_task, name="create_task"),
-    Tool(_wrap_cancel_task, name="cancel_task"),
-    Tool(_wrap_record_enrollment_outcome, name="record_enrollment_outcome"),
-    Tool(_wrap_disable_contact, name="disable_contact"),
-    Tool(_wrap_list_enrollments, name="list_enrollments"),
-    Tool(_wrap_search_emails, name="search_emails"),
-    Tool(_wrap_read_contact, name="read_contact"),
-    Tool(_wrap_read_company, name="read_company"),
-    Tool(_wrap_read_email, name="read_email"),
-    Tool(_wrap_list_drive_markdown, name="list_drive_markdown"),
-    Tool(_wrap_read_drive_markdown, name="read_drive_markdown"),
-    Tool(_wrap_search_drive_markdown, name="search_drive_markdown"),
-    Tool(_wrap_noop, name="noop"),
-]
-
-
-_SYSTEM_PREFIX = (
-    "Keep your final summary brief (2-3 sentences, plain text, no emojis).\n"
-    "Email bodies may use Markdown formatting (headers, bold, tables).\n"
-    "When a trigger email is included in your prompt, its full body is "
-    "already provided -- do not call read_email to fetch it again.\n"
-    "After completing the workflow objective for a contact, call "
-    "record_enrollment_outcome with outcome='completed' and a brief reason.\n"
-    "If the workflow instructions reference a Google Drive folder of "
-    "Markdown notes, ground every reply in that folder. Prefer "
-    "search_drive_markdown(folder_id, query) to target the most relevant "
-    "documents -- enumerating the whole folder with list_drive_markdown "
-    "wastes context once the KB grows past a handful of files. Read the "
-    "top matches with read_drive_markdown before composing the reply. If "
-    "no document is relevant to the question, reply with a polite decline "
-    "and do not invent facts.\n\n"
-)
-
-
 def _build_agent(workflow: Workflow) -> Agent[AgentDeps, str]:
-    """Build a Pydantic AI agent for a workflow."""
+    """Build a Pydantic AI agent for a workflow.
+
+    The workflow's template (V32, V33) owns both the bound tool set and the
+    system-prompt protocol. Workflow-specific instructions are appended to
+    the template protocol.
+    """
+    from mailpilot.agent.templates import TEMPLATES
+
+    template = TEMPLATES[workflow.template]
     return Agent(
         name="mailpilot.workflow",
         deps_type=AgentDeps,
-        instructions=_SYSTEM_PREFIX + workflow.instructions,
-        tools=_TOOLS,
+        instructions=template.protocol + workflow.instructions,
+        tools=list(template.tools),
     )
 
 
@@ -387,12 +358,24 @@ def _format_trigger(
     task_description: str,
     task_context: dict[str, Any] | None,
     contact_email: str = "",
+    trigger: str = "manual",
 ) -> str:
-    """Format the trigger context section of the prompt."""
+    """Format the trigger context section of the prompt.
+
+    V36: framing matches the ``agent.invoke`` span ``trigger`` attribute
+    (V11). ``enrollment_run`` gets a dedicated first-reach-out block;
+    ``Deferred task:`` is reserved for ``trigger="task"``.
+    """
     if email is not None:
         header = f"\nNew inbound email:\nEmail ID: {email.id}\nFrom: {contact_email}"
         return f"{header}\nSubject: {email.subject}\nBody:\n{email.body_text}"
-    if task_description:
+    if trigger == "enrollment_run":
+        return (
+            "\nFirst reach-out for this enrollment. "
+            "Compose the initial outbound message per the workflow objective "
+            "and instructions."
+        )
+    if trigger == "task" and task_description:
         lines = ["\nDeferred task:", f"Description: {task_description}"]
         if task_context:
             lines.append(f"Context: {task_context}")
@@ -410,6 +393,7 @@ def _build_user_prompt(  # noqa: PLR0913
     email: Email | None = None,
     task_description: str = "",
     task_context: dict[str, Any] | None = None,
+    trigger: str = "manual",
 ) -> str:
     """Assemble the user prompt for the agent."""
     sections: list[str] = [
@@ -427,10 +411,22 @@ def _build_user_prompt(  # noqa: PLR0913
     if contact.domain:
         sections.append(f"Domain: {contact.domain}")
 
-    sections.append(_format_email_history(email_history))
+    # V35: trigger email body is inlined under "New inbound email:" by
+    # _format_trigger; exclude it from email_history so the body never appears
+    # twice in a single prompt.
+    prior_history = (
+        [m for m in email_history if m.id != email.id]
+        if email is not None
+        else email_history
+    )
+    sections.append(_format_email_history(prior_history))
     sections.append(
         _format_trigger(
-            email, task_description, task_context, contact_email=contact.email
+            email,
+            task_description,
+            task_context,
+            contact_email=contact.email,
+            trigger=trigger,
         )
     )
 
@@ -490,7 +486,7 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
             ``enrollment_run`` (CLI manual via ``mailpilot enrollment run``),
             ``task`` (background drain via ``run.execute_task``),
             ``email`` (email-driven), or ``manual`` (default for direct
-            programmatic calls). See SPEC §V12.
+            programmatic calls). See SPEC §V11.
 
     Returns:
         Dict with invocation result, or None if skipped (lock held).
@@ -578,6 +574,7 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
                 email=email,
                 task_description=task_description,
                 task_context=task_context,
+                trigger=trigger,
             )
 
             span.set_attribute("prompt_length", len(prompt))

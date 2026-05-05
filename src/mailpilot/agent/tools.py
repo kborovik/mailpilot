@@ -26,6 +26,7 @@ Tools per ADR-03:
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import psycopg
@@ -36,6 +37,42 @@ from mailpilot.models import Account
 from mailpilot.settings import Settings
 
 _VALID_DISABLE_STATUSES = ("bounced", "unsubscribed")
+
+# Per §V.29: detect spec-shape rows (label + 2+ spaces + number) on lines that
+# do not use Markdown pipe-table syntax. Three or more such lines without a
+# `|---|` separator anywhere in the body indicates a spec sheet rendered as
+# space-aligned text rather than a proper pipe-table -- recurring drift per
+# §B.5 / §B.9 that prompt-only fixes did not hold.
+_SPEC_ROW_RE = re.compile(r"^[^|]+?\s{2,}[\$]?[\d,]+(\.\d+)?")
+_PIPE_SEPARATOR_RE = re.compile(r"\|\s*-{3,}\s*\|")
+
+
+def _check_spec_table(body: str) -> dict[str, str] | None:
+    """Lint email body for spec rows missing a pipe-table separator (§V.29).
+
+    Returns the format error dict when the body has >=3 lines matching the
+    spec-row shape (label, two-or-more spaces, number) without any pipe
+    character on the line, and no Markdown pipe-table separator
+    (``|---|`` / ``| --- |``) anywhere in the body. Returns ``None``
+    otherwise so the caller can proceed to send.
+    """
+    if _PIPE_SEPARATOR_RE.search(body):
+        return None
+    spec_rows = 0
+    for line in body.splitlines():
+        if "|" in line:
+            continue
+        if _SPEC_ROW_RE.match(line):
+            spec_rows += 1
+            if spec_rows >= 3:
+                return {
+                    "error": "format",
+                    "message": (
+                        "spec body MUST use Markdown pipe-table w/ "
+                        "|---| header separator"
+                    ),
+                }
+    return None
 
 
 def send_email(  # noqa: PLR0913
@@ -55,6 +92,9 @@ def send_email(  # noqa: PLR0913
     Thin wrapper over :func:`mailpilot.email_ops.send_email`. Converts
     typed policy exceptions into the LLM-facing error dict shape.
     """
+    format_error = _check_spec_table(body)
+    if format_error is not None:
+        return format_error
     try:
         email = email_ops.send_email(
             connection,
@@ -93,6 +133,9 @@ def reply_email(  # noqa: PLR0913
 
     Converts typed policy exceptions into the LLM-facing error dict.
     """
+    format_error = _check_spec_table(body)
+    if format_error is not None:
+        return format_error
     try:
         email = email_ops.reply_email(
             connection,

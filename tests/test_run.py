@@ -28,6 +28,7 @@ def _make_workflow(**overrides: Any) -> Workflow:
     defaults: dict[str, Any] = {
         "id": _WORKFLOW_ID,
         "name": "Test workflow",
+        "template": "outbound-general",
         "type": "outbound",
         "account_id": _ACCOUNT_ID,
         "status": "active",

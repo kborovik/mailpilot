@@ -56,6 +56,12 @@ CREATE INDEX IF NOT EXISTS idx_contact_company_id ON contact(company_id);
 CREATE TABLE IF NOT EXISTS workflow (
     id                TEXT PRIMARY KEY,
     account_id        TEXT NOT NULL REFERENCES account(id),
+    template          TEXT NOT NULL
+                      CHECK (template IN (
+                          'outbound-general',
+                          'inbound-general',
+                          'inbound-google-drive'
+                      )),
     type              TEXT NOT NULL CHECK (type IN ('inbound', 'outbound')),
     name              TEXT NOT NULL,
     objective         TEXT NOT NULL DEFAULT '',

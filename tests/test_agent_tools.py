@@ -292,6 +292,194 @@ def test_reply_email_blocked_contact(
     gmail_client.send_message.assert_not_called()
 
 
+# -- _check_spec_table (V29) ---------------------------------------------------
+
+
+def test_send_email_pure_prose_passes(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    make_test_contact(
+        database_connection, email="recipient@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    gmail_client = _make_gmail_client(account)
+
+    body = (
+        "Hi there,\n\n"
+        "Thanks for reaching out. Happy to help -- I will get back to you "
+        "with the details shortly.\n\n"
+        "Best,\nThe team"
+    )
+
+    result = send_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        to="recipient@example.com",
+        subject="Hello",
+        body=body,
+    )
+
+    assert "error" not in result
+    gmail_client.send_message.assert_called_once()
+
+
+def test_send_email_pipe_table_passes(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    make_test_contact(
+        database_connection, email="recipient@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    gmail_client = _make_gmail_client(account)
+
+    body = (
+        "Here are the specs you asked about:\n\n"
+        "| Specification | Value |\n"
+        "|---|---|\n"
+        "| Continuous Flow Rate | 110 GPM |\n"
+        "| Peak Flow Rate | 165 GPM |\n"
+        "| Resin Volume | 36 cu ft |\n\n"
+        "Let me know if you need anything else."
+    )
+
+    result = send_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        to="recipient@example.com",
+        subject="Specs",
+        body=body,
+    )
+
+    assert "error" not in result
+    gmail_client.send_message.assert_called_once()
+
+
+def test_send_email_spec_shape_no_table_rejects(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    make_test_contact(
+        database_connection, email="recipient@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    gmail_client = _make_gmail_client(account)
+
+    body = (
+        "Here are the specs:\n\n"
+        "Continuous Flow Rate  110 GPM\n"
+        "Peak Flow Rate  165 GPM\n"
+        "Resin Volume  36 cu ft\n"
+    )
+
+    result = send_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        to="recipient@example.com",
+        subject="Specs",
+        body=body,
+    )
+
+    assert result["error"] == "format"
+    assert "|---|" in result["message"]
+    gmail_client.send_message.assert_not_called()
+
+
+def test_reply_email_decline_body_passes(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    contact = make_test_contact(
+        database_connection, email="sender@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Veolia OPUS II?",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        gmail_message_id="inbound-decline",
+        gmail_thread_id="thread-decline",
+    )
+    assert inbound is not None
+
+    gmail_client = _make_gmail_client(account)
+
+    body = (
+        "Thanks for your question about the Veolia OPUS II. Unfortunately "
+        "we do not carry that line, so I cannot share specs for it. Happy "
+        "to help with our own catalogue if useful."
+    )
+
+    result = reply_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        email_id=inbound.id,
+        body=body,
+    )
+
+    assert "error" not in result
+    gmail_client.send_message.assert_called_once()
+
+
+def test_send_email_mixed_body_with_separator_passes(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    make_test_contact(
+        database_connection, email="recipient@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    gmail_client = _make_gmail_client(account)
+
+    # Body has spec-shape lines mixed with at least one pipe-table separator
+    # somewhere -- the separator presence short-circuits the heuristic.
+    body = (
+        "Quick numbers below.\n\n"
+        "Continuous Flow Rate  110 GPM\n"
+        "Peak Flow Rate  165 GPM\n"
+        "Resin Volume  36 cu ft\n\n"
+        "Detailed table:\n\n"
+        "| Spec | Value |\n"
+        "|---|---|\n"
+        "| Salt Usage | 12 lb |\n"
+    )
+
+    result = send_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        to="recipient@example.com",
+        subject="Mixed",
+        body=body,
+    )
+
+    assert "error" not in result
+    gmail_client.send_message.assert_called_once()
+
+
 # -- create_task ---------------------------------------------------------------
 
 

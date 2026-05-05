@@ -1,14 +1,24 @@
-"""Smoke-test runtime helper: pick a Q/A pair, check the agent's reply.
+"""Smoke-test runtime helper: pick a Q/A pair, load its source doc, check decline shape.
 
 Subcommands:
   pick   [--type inscope|outscope] [--id ID]
          Emit one Q/A pair as JSON on stdout. Random unless --id given.
          Default --type=inscope.
 
+  source --id ID
+         Load the pair's `source_file` from the demo Drive folder via
+         DriveClient impersonating `inbound@lab5.ca` and print its
+         Markdown content to stdout. Exit non-zero when the file is
+         absent from the folder (KB-drift signal). Used by gate B4 so
+         the operator can grade groundedness against the live source.
+
   check  --id ID --reply-text "..." | --reply-file PATH
-         Validate the agent's reply against the pair's expectations.
+         Outscope-only post-V31. Validate an out-of-scope decline reply
+         against the pair's `forbidden_token_pairs` and `decline_signals`.
+         Inscope grading is operator-judged in gate B4 (see SKILL.md);
+         calling `check` with an inscope pair exits 2.
          Emits {"id":..., "pass": bool, "reasons": [...], "details": {...}}
-         on stdout. Exit 0 = pass, 1 = fail.
+         on stdout. Exit 0 = pass, 1 = fail, 2 = inscope rejected.
 
 Pairs live in qa_pairs.json next to this script.
 """
@@ -23,6 +33,11 @@ import sys
 from pathlib import Path
 
 PAIRS_PATH = Path(__file__).parent / "qa_pairs.json"
+
+# §V.31: source loader impersonates the same subject the demo agent uses,
+# so a Drive ACL drift surfaces here the same way it would in production.
+DEMO_FOLDER_ID = "1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat"
+DEMO_SUBJECT = "inbound@lab5.ca"
 
 
 def load_pairs() -> list[dict]:
@@ -50,27 +65,42 @@ def pick(args: argparse.Namespace) -> int:
     return 0
 
 
-def check_inscope(pair: dict, reply: str) -> tuple[bool, list[str], dict]:
-    expected = pair.get("expected_tokens", [])
-    missing = [t for t in expected if t not in reply]
-    src = pair.get("source_file", "")
-    src_stem = Path(src).stem if src else ""
-    src_cited = bool(src_stem) and (src in reply or src_stem in reply)
-    reasons: list[str] = []
-    if missing:
-        reasons.append(f"missing expected tokens: {missing}")
-    if src_stem and not src_cited:
-        reasons.append(f"source file not cited: {src!r} (or stem {src_stem!r})")
-    ok = not reasons
-    return (
-        ok,
-        reasons,
-        {
-            "expected_tokens": expected,
-            "missing_tokens": missing,
-            "source_cited": src_cited,
-        },
-    )
+def source(args: argparse.Namespace) -> int:
+    pairs = load_pairs()
+    pair = next((p for p in pairs if p["id"] == args.id), None)
+    if not pair:
+        print(json.dumps({"error": "not_found", "id": args.id}), file=sys.stderr)
+        return 1
+    source_file = pair.get("source_file", "")
+    if not source_file:
+        print(
+            json.dumps({"error": "pair_missing_source_file", "id": args.id}),
+            file=sys.stderr,
+        )
+        return 1
+    # Lazy import: keeps `qa.py pick`/`check` cheap and avoids forcing
+    # google-api-python-client on operators who only run the existing paths.
+    from mailpilot.drive import DriveClient
+
+    client = DriveClient(DEMO_SUBJECT)
+    files = client.list_markdown(DEMO_FOLDER_ID)
+    match = next((f for f in files if f["name"] == source_file), None)
+    if not match:
+        print(
+            json.dumps(
+                {
+                    "error": "source_file_not_in_drive",
+                    "id": args.id,
+                    "source_file": source_file,
+                    "folder_id": DEMO_FOLDER_ID,
+                }
+            ),
+            file=sys.stderr,
+        )
+        return 1
+    doc = client.read_markdown(match["file_id"])
+    sys.stdout.write(doc.get("content", ""))
+    return 0
 
 
 _DIGIT_RUN_RE = re.compile(r"\d[\d,.]*")
@@ -129,16 +159,31 @@ def check(args: argparse.Namespace) -> int:
     if not pair:
         print(json.dumps({"error": "not_found", "id": args.id}), file=sys.stderr)
         return 1
+    if pair["type"] == "inscope":
+        # §V.31: inscope grading moved to operator judgement (gate B4).
+        # Substring-match against curated `expected_tokens` produced false
+        # negatives on phrasing variation; a verdict from the operator with
+        # the live source loaded is the new contract.
+        print(
+            json.dumps(
+                {
+                    "error": "inscope_grading_moved",
+                    "id": args.id,
+                    "message": (
+                        "inscope grading is now operator-judged in B4; see SKILL.md"
+                    ),
+                }
+            ),
+            file=sys.stderr,
+        )
+        return 2
     if args.reply_file:
         reply = Path(args.reply_file).read_text(encoding="utf-8")
     elif args.reply_text is not None:
         reply = args.reply_text
     else:
         reply = sys.stdin.read()
-    if pair["type"] == "inscope":
-        ok, reasons, details = check_inscope(pair, reply)
-    else:
-        ok, reasons, details = check_outscope(pair, reply)
+    ok, reasons, details = check_outscope(pair, reply)
     print(
         json.dumps(
             {
@@ -164,7 +209,17 @@ def main() -> int:
     p_pick.add_argument("--id", help="pin to a specific pair id")
     p_pick.set_defaults(func=pick)
 
-    p_check = sub.add_parser("check", help="validate an agent reply against a pair")
+    p_source = sub.add_parser(
+        "source",
+        help="load the pair's source_file from the demo Drive folder and print it",
+    )
+    p_source.add_argument("--id", required=True)
+    p_source.set_defaults(func=source)
+
+    p_check = sub.add_parser(
+        "check",
+        help="validate an out-of-scope decline reply (inscope grading moved to B4)",
+    )
     p_check.add_argument("--id", required=True)
     grp = p_check.add_mutually_exclusive_group()
     grp.add_argument("--reply-text", help="reply body verbatim")

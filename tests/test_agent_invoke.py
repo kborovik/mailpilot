@@ -24,9 +24,9 @@ from conftest import (
     make_test_workflow,
 )
 from mailpilot.agent.invoke import (
-    _SYSTEM_PREFIX,  # pyright: ignore[reportPrivateUsage]
     _advisory_lock_keys,  # pyright: ignore[reportPrivateUsage]
     _build_agent,  # pyright: ignore[reportPrivateUsage]
+    _build_user_prompt,  # pyright: ignore[reportPrivateUsage]
     _wrap_create_task,  # pyright: ignore[reportPrivateUsage]
     _wrap_disable_contact,  # pyright: ignore[reportPrivateUsage]
     _wrap_record_enrollment_outcome,  # pyright: ignore[reportPrivateUsage]
@@ -55,11 +55,14 @@ def _activate(connection: psycopg.Connection[dict[str, Any]], workflow_id: str) 
 
 def _setup(
     connection: psycopg.Connection[dict[str, Any]],
+    workflow_type: str = "outbound",
 ) -> tuple[Any, Any, Any]:
-    """Create account, contact, and active outbound workflow."""
+    """Create account, contact, and an active workflow of the requested direction."""
     account = make_test_account(connection, email="sender@example.com")
     contact = make_test_contact(connection, email="lead@acme.com", domain="acme.com")
-    workflow = make_test_workflow(connection, account_id=account.id)
+    workflow = make_test_workflow(
+        connection, account_id=account.id, workflow_type=workflow_type
+    )
     _activate(connection, workflow.id)
     create_enrollment(connection, workflow.id, contact.id)
     return account, contact, workflow
@@ -349,9 +352,7 @@ def test_inbound_email_trigger(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     """When an inbound email is provided, it appears in the agent prompt."""
-    account, contact, workflow = _setup(database_connection)
-    # Make it inbound for this test.
-    update_workflow(database_connection, workflow.id, type="inbound")
+    account, contact, workflow = _setup(database_connection, workflow_type="inbound")
     settings = make_test_settings(
         anthropic_api_key="sk-test", anthropic_model="test-model"
     )
@@ -392,8 +393,7 @@ def test_inbound_email_trigger_includes_email_id_and_sender(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     """Inbound email trigger includes email ID and sender so agent can reply."""
-    account, contact, workflow = _setup(database_connection)
-    update_workflow(database_connection, workflow.id, type="inbound")
+    account, contact, workflow = _setup(database_connection, workflow_type="inbound")
     settings = make_test_settings(
         anthropic_api_key="sk-test", anthropic_model="test-model"
     )
@@ -436,7 +436,8 @@ def test_inbound_email_trigger_includes_email_id_and_sender(
 def test_deferred_task_trigger(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """When task_description is provided, it appears in the agent prompt."""
+    """V36: trigger='task' with a task_description renders the Deferred task
+    block."""
     _account, contact, workflow = _setup(database_connection)
     settings = make_test_settings(
         anthropic_api_key="sk-test", anthropic_model="test-model"
@@ -454,12 +455,241 @@ def test_deferred_task_trigger(
             contact,
             task_description="Follow up on demo request",
             task_context={"days_since_last": 7},
+            trigger="task",
             model_override=_capturing_model(captured_messages),
         )
 
     all_text = str(captured_messages)
     assert "Follow up on demo request" in all_text
     assert "days_since_last" in all_text
+
+
+# -- Tests: V35 trigger-email dedupe in user prompt ----------------------------
+
+
+def test_inbound_trigger_excluded_from_email_history_when_only_email(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """V35: when the trigger is the only email in history, the email_history
+    block is suppressed and the trigger body appears exactly once."""
+    from mailpilot.database import create_email
+
+    account, contact, workflow = _setup(database_connection, workflow_type="inbound")
+    trigger = create_email(
+        database_connection,
+        gmail_message_id="msg-trigger-solo",
+        gmail_thread_id="thread-trigger-solo",
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        direction="inbound",
+        subject="Question about pricing",
+        body_text="UNIQUE_TRIGGER_BODY_MARKER about pricing.",
+    )
+    assert trigger is not None
+
+    prompt = _build_user_prompt(
+        workflow=workflow,
+        contact=contact,
+        email_history=[trigger],
+        email=trigger,
+    )
+
+    assert "No prior email history with this contact." in prompt
+    assert "Email history (1 messages):" not in prompt
+    assert prompt.count("UNIQUE_TRIGGER_BODY_MARKER about pricing.") == 1
+
+
+def test_inbound_trigger_dedupes_against_prior_history(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """V35: trigger row excluded from email_history when prior emails exist;
+    history count reflects N-1 and trigger body appears exactly once total."""
+    from mailpilot.database import create_email
+
+    account, contact, workflow = _setup(database_connection, workflow_type="inbound")
+    prior = create_email(
+        database_connection,
+        gmail_message_id="msg-prior",
+        gmail_thread_id="thread-prior",
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        direction="outbound",
+        subject="Initial outreach",
+        body_text="UNIQUE_PRIOR_BODY_MARKER previously sent.",
+    )
+    assert prior is not None
+    trigger = create_email(
+        database_connection,
+        gmail_message_id="msg-trigger-with-prior",
+        gmail_thread_id="thread-trigger-with-prior",
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        direction="inbound",
+        subject="Re: outreach",
+        body_text="UNIQUE_TRIGGER_BODY_MARKER reply received.",
+    )
+    assert trigger is not None
+
+    # Order doesn't matter for the dedupe logic; mimic list_emails ordering.
+    prompt = _build_user_prompt(
+        workflow=workflow,
+        contact=contact,
+        email_history=[trigger, prior],
+        email=trigger,
+    )
+
+    assert "Email history (1 messages):" in prompt
+    assert "Email history (2 messages):" not in prompt
+    assert "UNIQUE_PRIOR_BODY_MARKER previously sent." in prompt
+    assert prompt.count("UNIQUE_TRIGGER_BODY_MARKER reply received.") == 1
+
+
+def test_outbound_history_unchanged_without_trigger(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """V35 regression guard: when no trigger email is provided (outbound path),
+    email_history is rendered in full -- no dedupe filter applied."""
+    from mailpilot.database import create_email
+
+    account, contact, workflow = _setup(database_connection, workflow_type="outbound")
+    first = create_email(
+        database_connection,
+        gmail_message_id="msg-out-1",
+        gmail_thread_id="thread-out-1",
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        direction="outbound",
+        subject="Outreach #1",
+        body_text="UNIQUE_FIRST_BODY_MARKER first send.",
+    )
+    second = create_email(
+        database_connection,
+        gmail_message_id="msg-out-2",
+        gmail_thread_id="thread-out-2",
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        direction="outbound",
+        subject="Outreach #2",
+        body_text="UNIQUE_SECOND_BODY_MARKER follow-up.",
+    )
+    assert first is not None
+    assert second is not None
+
+    prompt = _build_user_prompt(
+        workflow=workflow,
+        contact=contact,
+        email_history=[second, first],
+        email=None,
+    )
+
+    assert "Email history (2 messages):" in prompt
+    assert "UNIQUE_FIRST_BODY_MARKER first send." in prompt
+    assert "UNIQUE_SECOND_BODY_MARKER follow-up." in prompt
+
+
+# -- Tests: V36 trigger-block matches span trigger attribute ------------------
+
+
+def test_enrollment_run_outbound_renders_first_reach_out(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """V36: trigger='enrollment_run' with no email renders the first-reach-out
+    framing, never the deferred-task block."""
+    _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
+
+    prompt = _build_user_prompt(
+        workflow=workflow,
+        contact=contact,
+        email_history=[],
+        email=None,
+        trigger="enrollment_run",
+    )
+
+    assert "First reach-out for this enrollment." in prompt
+    assert "Deferred task:" not in prompt
+
+
+def test_task_trigger_renders_deferred_task_block(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """V36 regression guard: trigger='task' with a persisted task description
+    keeps rendering the Deferred task: block."""
+    _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
+
+    prompt = _build_user_prompt(
+        workflow=workflow,
+        contact=contact,
+        email_history=[],
+        email=None,
+        task_description="Follow up on demo request",
+        task_context={"days_since_last": 7},
+        trigger="task",
+    )
+
+    assert "Deferred task:" in prompt
+    assert "Follow up on demo request" in prompt
+    assert "days_since_last" in prompt
+    assert "First reach-out" not in prompt
+
+
+def test_enrollment_run_with_email_uses_email_branch(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """V36: when an email is present, the inbound-email branch wins over the
+    enrollment_run framing -- existing precedence preserved."""
+    from mailpilot.database import create_email
+
+    account, contact, workflow = _setup(database_connection, workflow_type="inbound")
+    email = create_email(
+        database_connection,
+        gmail_message_id="msg-enr-with-email",
+        gmail_thread_id="thread-enr-with-email",
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        direction="inbound",
+        subject="Continued enrollment",
+        body_text="UNIQUE_EMAIL_BRANCH_MARKER question.",
+    )
+    assert email is not None
+
+    prompt = _build_user_prompt(
+        workflow=workflow,
+        contact=contact,
+        email_history=[email],
+        email=email,
+        trigger="enrollment_run",
+    )
+
+    assert "New inbound email:" in prompt
+    assert "UNIQUE_EMAIL_BRANCH_MARKER question." in prompt
+    assert "First reach-out" not in prompt
+    assert "Deferred task:" not in prompt
+
+
+def test_manual_trigger_no_email_no_task_renders_outbound_fallback(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """V36: trigger='manual' with no email and no task_description falls back
+    to the existing 'This is an outbound invocation.' prose."""
+    _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
+
+    prompt = _build_user_prompt(
+        workflow=workflow,
+        contact=contact,
+        email_history=[],
+        email=None,
+        trigger="manual",
+    )
+
+    assert "This is an outbound invocation." in prompt
+    assert "Deferred task:" not in prompt
+    assert "First reach-out" not in prompt
 
 
 # -- Tests: early-exit paths ---------------------------------------------------
@@ -631,8 +861,7 @@ def test_agent_calls_reply_email(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     """Agent can call reply_email tool to reply in-thread."""
-    account, contact, workflow = _setup(database_connection)
-    update_workflow(database_connection, workflow.id, type="inbound")
+    account, contact, workflow = _setup(database_connection, workflow_type="inbound")
     settings = make_test_settings(
         anthropic_api_key="sk-test", anthropic_model="test-model"
     )
@@ -684,25 +913,6 @@ def test_agent_calls_reply_email(
     assert call_kwargs["thread_id"] == "thread-reply-invoke"
 
 
-# -- Tests: system prefix content ----------------------------------------------
-
-
-def test_system_prefix_guides_contact_status_update() -> None:
-    """System prefix must instruct agents to record enrollment outcome."""
-    assert "record_enrollment_outcome" in _SYSTEM_PREFIX
-
-
-def test_system_prefix_allows_markdown_in_emails() -> None:
-    """System prefix must not prohibit markdown in email content."""
-    assert "No markdown" not in _SYSTEM_PREFIX
-
-
-def test_system_prefix_tells_agent_trigger_email_is_pre_supplied() -> None:
-    """Trigger email body is inlined in the user prompt, so the agent must
-    not waste a round-trip calling read_email to fetch it."""
-    assert "read_email" in _SYSTEM_PREFIX
-
-
 def test_workflow_agent_has_explicit_name_for_otel_traces() -> None:
     """Pydantic AI's `agent run` span carries `gen_ai.agent.name`, derived
     from the Agent's `name=` argument. Setting it explicitly keeps traces
@@ -716,6 +926,7 @@ def test_workflow_agent_has_explicit_name_for_otel_traces() -> None:
     workflow = Workflow(
         id="01900000-0000-7000-8000-000000000001",
         name="N",
+        template="outbound-general",
         type="outbound",
         account_id="01900000-0000-7000-8000-000000000002",
         status="active",
