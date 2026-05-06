@@ -24,6 +24,8 @@ import psycopg
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.messages import ModelRequest, ToolReturnPart
 from pydantic_ai.models import Model
+from pydantic_ai.models.anthropic import AnthropicModel, AnthropicModelSettings
+from pydantic_ai.providers.anthropic import AnthropicProvider
 
 from mailpilot import database
 from mailpilot.agent import tools as agent_tools
@@ -334,6 +336,28 @@ def _build_agent(workflow: Workflow) -> Agent[AgentDeps, str]:
     )
 
 
+def _build_anthropic_model(settings: Settings) -> AnthropicModel:
+    """Construct the AnthropicModel with V37 cache_control settings.
+
+    Cache breakpoints on the system prompt and tool definitions let
+    multi-turn invocations re-bill the stable prefix as
+    ``cache_read_input_tokens`` instead of fresh input.
+    """
+    if not settings.anthropic_api_key:
+        raise ValueError(
+            "anthropic_api_key is required for agent invocation; "
+            "set it via `mailpilot config set anthropic_api_key ...`",
+        )
+    return AnthropicModel(
+        settings.anthropic_model,
+        provider=AnthropicProvider(api_key=settings.anthropic_api_key),
+        settings=AnthropicModelSettings(
+            anthropic_cache_tool_definitions=True,
+            anthropic_cache_instructions=True,
+        ),
+    )
+
+
 # -- Prompt assembly -----------------------------------------------------------
 
 
@@ -457,7 +481,7 @@ def _extract_tool_errors(result: Any) -> list[dict[str, str]]:
 # -- Main entry point ----------------------------------------------------------
 
 
-def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
+def invoke_workflow_agent(  # noqa: PLR0913
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
     workflow: Workflow,
@@ -541,18 +565,7 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
             if model_override is not None:
                 model = model_override
             else:
-                from pydantic_ai.models.anthropic import AnthropicModel
-                from pydantic_ai.providers.anthropic import AnthropicProvider
-
-                if not settings.anthropic_api_key:
-                    raise ValueError(
-                        "anthropic_api_key is required for agent invocation; "
-                        "set it via `mailpilot config set anthropic_api_key ...`",
-                    )
-                model = AnthropicModel(
-                    settings.anthropic_model,
-                    provider=AnthropicProvider(api_key=settings.anthropic_api_key),
-                )
+                model = _build_anthropic_model(settings)
 
             gmail_client = GmailClient(account.email)
             drive_client = DriveClient(account.email)
@@ -603,6 +616,11 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
             span.set_attribute("output_tokens", usage.output_tokens)
             span.set_attribute("total_tokens", usage.input_tokens + usage.output_tokens)
             span.set_attribute("llm_requests", usage.requests)
+            # V37: bubble Anthropic prompt-cache token counts to the rollup
+            # span. Pydantic AI's RunUsage already sums these across child
+            # chat turns, so no per-turn span walk is needed.
+            span.set_attribute("cache_read_input_tokens", usage.cache_read_tokens)
+            span.set_attribute("cache_creation_input_tokens", usage.cache_write_tokens)
 
             # Tool-use enforcement.
             tool_call_count = usage.tool_calls

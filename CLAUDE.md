@@ -86,6 +86,10 @@ make py-update          # uv sync --upgrade
 make py-reset           # rebuild venv
 ```
 
+## Shell tools
+
+`rg` (ripgrep) > `awk` ∨ `grep` for code search. Why: macOS ships BSD awk; syntax diverges from GNU awk → portability hazard. ASCII-friendly, recursive by default, gitignore-aware.
+
 ## TDD process
 
 1. Failing test first.

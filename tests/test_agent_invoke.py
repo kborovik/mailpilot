@@ -26,6 +26,7 @@ from conftest import (
 from mailpilot.agent.invoke import (
     _advisory_lock_keys,  # pyright: ignore[reportPrivateUsage]
     _build_agent,  # pyright: ignore[reportPrivateUsage]
+    _build_anthropic_model,  # pyright: ignore[reportPrivateUsage]
     _build_user_prompt,  # pyright: ignore[reportPrivateUsage]
     _wrap_create_task,  # pyright: ignore[reportPrivateUsage]
     _wrap_disable_contact,  # pyright: ignore[reportPrivateUsage]
@@ -1014,3 +1015,73 @@ def test_invoke_surfaces_tool_errors_in_result(
         f"{result.get('tool_errors')!r}"
     )
     assert result["tool_errors"][0]["tool"] == "disable_contact"
+
+
+# -- Tests: V37 prompt-cache settings -----------------------------------------
+
+
+def test_build_anthropic_model_carries_cache_settings() -> None:
+    """V37: workflow agent's AnthropicModel sets cache_control breakpoints.
+
+    Pydantic AI translates ``anthropic_cache_tool_definitions`` and
+    ``anthropic_cache_instructions`` into ``cache_control`` blocks on the
+    last tool definition and last system block of the outbound Anthropic
+    request. Inspecting the bound settings is the structural contract;
+    the wire-level translation is exercised by Pydantic AI's own tests.
+    """
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="claude-sonnet-4-6"
+    )
+    model = _build_anthropic_model(settings)
+    assert model.settings is not None
+    assert model.settings.get("anthropic_cache_tool_definitions") is True
+    assert model.settings.get("anthropic_cache_instructions") is True
+
+
+def test_build_anthropic_model_requires_api_key() -> None:
+    """Missing api_key raises a clear error rather than reaching the API."""
+    settings = make_test_settings(
+        anthropic_api_key="", anthropic_model="claude-sonnet-4-6"
+    )
+    with pytest.raises(ValueError, match="anthropic_api_key"):
+        _build_anthropic_model(settings)
+
+
+def test_invoke_span_has_cache_token_attributes(
+    database_connection: psycopg.Connection[dict[str, Any]],
+    capfire: CaptureLogfire,
+) -> None:
+    """V37: agent.invoke rollup span carries cache_read/creation token attrs.
+
+    Pydantic AI's RunUsage already sums cache token counts across child
+    chat turns. The presence of both attrs (≥0) is the contract -- the
+    actual non-zero rate lands via the smoke-test follow-up against a
+    real Anthropic endpoint.
+    """
+    _account, contact, workflow = _setup(database_connection)
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
+        invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            model_override=FunctionModel(_model_that_calls_noop),
+        )
+
+    invoke_spans = [
+        s
+        for s in capfire.exporter.exported_spans_as_dict()
+        if s["name"] == "agent.invoke"
+    ]
+    assert len(invoke_spans) == 1
+    attrs = invoke_spans[0]["attributes"]
+    assert "cache_read_input_tokens" in attrs
+    assert "cache_creation_input_tokens" in attrs
+    assert attrs["cache_read_input_tokens"] >= 0
+    assert attrs["cache_creation_input_tokens"] >= 0

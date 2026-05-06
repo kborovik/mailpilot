@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 import logfire
 from pydantic import BaseModel
 from pydantic_ai import Agent
-from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.models.anthropic import AnthropicModel, AnthropicModelSettings
 from pydantic_ai.providers.anthropic import AnthropicProvider
 
 if TYPE_CHECKING:
@@ -54,8 +54,20 @@ _AGENT: Agent[None, ClassificationResult] = Agent(
 
 @lru_cache(maxsize=4)
 def _get_model(api_key: str, model_name: str) -> AnthropicModel:
-    """Cache the AnthropicModel/AnthropicProvider pair by (api_key, model_name)."""
-    return AnthropicModel(model_name, provider=AnthropicProvider(api_key=api_key))
+    """Cache the AnthropicModel/AnthropicProvider pair by (api_key, model_name).
+
+    V37: cache_control breakpoints on the system prompt and tool definitions
+    let repeated classifier calls re-bill the stable prefix as
+    ``cache_read_input_tokens``.
+    """
+    return AnthropicModel(
+        model_name,
+        provider=AnthropicProvider(api_key=api_key),
+        settings=AnthropicModelSettings(
+            anthropic_cache_tool_definitions=True,
+            anthropic_cache_instructions=True,
+        ),
+    )
 
 
 def classify_email(
