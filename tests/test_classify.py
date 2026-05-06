@@ -14,6 +14,7 @@ from conftest import make_test_settings
 from mailpilot.agent import classify as classify_module
 from mailpilot.agent.classify import (
     _AGENT,  # pyright: ignore[reportPrivateUsage]
+    _get_model,  # pyright: ignore[reportPrivateUsage]
     classify_email,
 )
 from mailpilot.models import Workflow
@@ -220,3 +221,18 @@ def test_classifier_agent_has_explicit_name_for_otel_traces() -> None:
     each Agent an explicit `name=` keeps `gen_ai.agent.name` legible instead
     of leaking the private `_AGENT` variable name into telemetry."""
     assert _AGENT.name == "mailpilot.classifier"
+
+
+def test_get_model_carries_cache_settings() -> None:
+    """V37: classifier's AnthropicModel sets cache_control breakpoints.
+
+    Pydantic AI translates ``anthropic_cache_tool_definitions`` and
+    ``anthropic_cache_instructions`` into ``cache_control`` blocks on the
+    last tool definition and last system block of the outbound Anthropic
+    request. Inspecting the bound settings is the structural contract.
+    """
+    _get_model.cache_clear()
+    model = _get_model("sk-test-cache", "claude-sonnet-4-6")
+    assert model.settings is not None
+    assert model.settings.get("anthropic_cache_tool_definitions") is True
+    assert model.settings.get("anthropic_cache_instructions") is True
