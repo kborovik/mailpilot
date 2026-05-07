@@ -79,7 +79,7 @@ def classify_email(
 ) -> str | None:
     """Classify an inbound email to a workflow.
 
-    Lightweight LLM call using Pydantic AI structured output (see ADR-04):
+    Lightweight LLM call using Pydantic AI structured output (see §V.12):
     - Input: email subject, body, sender + list of active workflows
       (name, objective)
     - Output: workflow_id or None (unrouted)

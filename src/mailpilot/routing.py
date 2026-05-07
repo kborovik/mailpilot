@@ -1,4 +1,4 @@
-"""Email routing pipeline (ADR-04).
+"""Email routing pipeline (see §V.12).
 
 Pipeline that assigns inbound emails to the correct workflow:
 
@@ -61,7 +61,7 @@ def route_email(
     sender_email: str,
     settings: Settings,
 ) -> Email:
-    """Route an inbound email through the ADR-04 pipeline.
+    """Route an inbound email through the §V.12 pipeline.
 
     Runs bounce detection, then the three-step routing pipeline
     (thread match -> LLM classification -> unrouted). Creates a

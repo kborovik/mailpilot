@@ -6,8 +6,6 @@ use this for the lifecycle/error layer operators monitor.
 
 Stderr keeps stdout strict-JSON for single-shot CLI commands like
 ``mailpilot enrollment run`` whose stdout is consumed by parsers.
-
-See ADR-07 "Operator log layer".
 """
 
 from __future__ import annotations

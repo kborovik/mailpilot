@@ -189,7 +189,7 @@ EnrollmentOutcome = Literal["completed", "failed"]
 class EnrollmentWithOutcome(BaseModel):
     """Enrollment plus the latest outcome activity, if any.
 
-    Outcomes (`completed` / `failed`) are timeline-only per ADR-08 -- they do
+    Outcomes (`completed` / `failed`) are timeline-only per §V.10 -- they do
     not live on the enrollment row. This composite carries the most recent
     `enrollment_completed` / `enrollment_failed` activity so the agent can
     coordinate across contacts in a single read.

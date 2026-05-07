@@ -1207,8 +1207,8 @@ def list_enrollments_with_outcomes(
 ) -> list[EnrollmentWithOutcome]:
     """List enrollments in a workflow with their latest outcome activity.
 
-    Per ADR-08, outcomes (`completed` / `failed`) are timeline-only and do
-    not change `enrollment.status`. This helper LEFT JOINs the most recent
+    Outcomes (`completed` / `failed`) are timeline-only and do not change
+    `enrollment.status` (§V.10). This helper LEFT JOINs the most recent
     `enrollment_completed` / `enrollment_failed` activity per row so the
     agent can answer "has this objective already been satisfied for any
     contact in this workflow?" in a single query.

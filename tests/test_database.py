@@ -2678,7 +2678,7 @@ def test_complete_task_stores_result(
 
 # -- List vs view contract -----------------------------------------------------
 #
-# Per ADR / CLAUDE.md "list (summary), view ID (full record)" rule:
+# Per CLAUDE.md "list (summary), view ID (full record)" rule:
 # every `list_*` returns the matching `<Entity>Summary` projection (a strict
 # subset of the full model), and every `get_*` returns the full domain model.
 # These tests pin the contract so accidental field additions to a Summary

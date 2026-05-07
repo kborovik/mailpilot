@@ -587,7 +587,7 @@ def extract_text_from_message(message: dict[str, Any]) -> str:
     Walks MIME parts recursively. Uses text/plain parts only.
     Normalizes whitespace: strips trailing spaces per line, collapses
     runs of 3+ blank lines to 2, and strips leading/trailing blank lines.
-    Returns empty string if no text/plain part found (per ADR-02).
+    Returns empty string if no text/plain part found (per §C plain-text-only rule).
 
     Args:
         message: Full Gmail message dict (format="full").

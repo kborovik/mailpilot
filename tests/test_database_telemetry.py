@@ -1,4 +1,4 @@
-"""ADR-07 span-emission contract tests for database.py.
+"""Span-emission contract tests for database.py.
 
 Verifies that ``database connection failed`` error log is emitted when
 the database connection fails (e.g. database does not exist).

@@ -1,4 +1,4 @@
-"""Tests for the email routing pipeline (ADR-04)."""
+"""Tests for the email routing pipeline (§V.12)."""
 
 from __future__ import annotations
 

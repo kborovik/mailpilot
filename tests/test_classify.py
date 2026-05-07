@@ -1,4 +1,4 @@
-"""Tests for the LLM-based email classifier (ADR-04 step 2)."""
+"""Tests for the LLM-based email classifier (§V.12 step 3)."""
 
 from __future__ import annotations
 

@@ -8,7 +8,7 @@ Dependency injection: each tool receives explicit dependency parameters
 (``connection``, ``account``, ``workflow_id``, etc.) that issue #12 will
 wire from ``RunContext[AgentDeps]``.
 
-Tools per ADR-03:
+Tools (see §I agent tools):
     - ``send_email`` -- send via Gmail API with contact status + cooldown guards
     - ``reply_email`` -- reply in-thread with auto-resolved recipient and subject
     - ``create_task`` -- schedule deferred work
@@ -313,7 +313,7 @@ def list_enrollments(
     person A at the same company already completed the objective). Each
     row includes ``latest_outcome`` (``completed`` / ``failed`` / ``None``),
     ``latest_outcome_reason``, and ``latest_outcome_at`` -- pulled from the
-    activity timeline since outcomes are timeline-only per ADR-08.
+    activity timeline since outcomes are timeline-only per §V.10.
 
     Args:
         connection: Open database connection.
