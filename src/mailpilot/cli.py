@@ -1711,6 +1711,134 @@ def workflow_export(account_id: str) -> None:
         connection.close()
 
 
+_WORKFLOW_IMPORT_UPDATABLE = ("objective", "instructions", "theme")
+
+
+def _import_workflow_create(
+    connection: Any, account_id: str, name: str, template: str, entry: dict[str, Any]
+) -> dict[str, object]:
+    from mailpilot.database import activate_workflow, create_workflow, update_workflow
+
+    theme = entry.get("theme") or "blue"
+    created = create_workflow(
+        connection,
+        name=name,
+        template=template,
+        account_id=account_id,
+        theme=theme,
+    )
+    extras: dict[str, object] = {}
+    objective = entry.get("objective")
+    instructions = entry.get("instructions")
+    if objective:
+        extras["objective"] = objective
+    if instructions:
+        extras["instructions"] = instructions
+    if extras:
+        update_workflow(connection, created.id, **extras)
+    if objective and instructions:
+        activate_workflow(connection, created.id)
+    return {"name": name, "action": "created"}
+
+
+def _import_workflow_update(
+    connection: Any, current: Any, entry: dict[str, Any]
+) -> dict[str, object]:
+    from mailpilot.database import update_workflow
+
+    diff: dict[str, object] = {}
+    for field in _WORKFLOW_IMPORT_UPDATABLE:
+        if field not in entry:
+            continue
+        payload_value = entry[field] if entry[field] is not None else ""
+        if getattr(current, field) != payload_value:
+            diff[field] = payload_value
+    if not diff:
+        return {"name": current.name, "action": "unchanged"}
+    update_workflow(connection, current.id, **diff)
+    return {"name": current.name, "action": "updated"}
+
+
+def _import_workflow_row(
+    connection: Any, account_id: str, existing: dict[str, Any], entry: dict[str, Any]
+) -> dict[str, object]:
+    name = entry.get("name")
+    template = entry.get("template")
+    if not isinstance(name, str) or not isinstance(template, str):
+        return {
+            "name": name if isinstance(name, str) else "",
+            "error": "validation_error",
+            "message": "row missing required 'name' or 'template'",
+        }
+    current = existing.get(name)
+    if current is None:
+        return _import_workflow_create(connection, account_id, name, template, entry)
+    if current.template != template:
+        return {
+            "name": name,
+            "error": "template_immutable",
+            "message": (
+                f"workflow.template is immutable; existing "
+                f"{current.template!r}, payload {template!r}"
+            ),
+        }
+    return _import_workflow_update(connection, current, entry)
+
+
+@workflow.command("import")
+@click.option("--account-id", required=True, help="Owning Gmail account ID.")
+@click.option(
+    "--file",
+    "file",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Path to JSON payload. If omitted, read from stdin.",
+)
+def workflow_import(account_id: str, file: str | None) -> None:
+    """Import workflows for an account from a declarative JSON payload (§V.39).
+
+    The payload is the same shape produced by ``workflow export``: a list of
+    objects with ``name``, ``template``, ``objective``, ``instructions``,
+    ``theme``. Upsert is keyed on ``(account_id, name)``. Workflows absent
+    from the DB are created (and activated when both ``objective`` and
+    ``instructions`` are non-empty). Workflows already present are updated
+    in-place for changed fields only; ``template`` differences emit a per-row
+    ``template_immutable`` error and the batch continues. ``status`` is never
+    written by import -- it remains operational state owned by start/stop.
+    """
+    import pathlib
+    import sys
+
+    from mailpilot.database import (
+        get_account,
+        initialize_database,
+        list_workflows_full,
+    )
+
+    raw = pathlib.Path(file).read_text() if file else sys.stdin.read()
+    try:
+        entries = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        output_error(f"malformed JSON: {exc}", "validation_error")
+    if not isinstance(entries, list):
+        output_error(
+            "payload must be a JSON array of workflow objects", "validation_error"
+        )
+
+    connection = initialize_database(_database_url())
+    try:
+        if get_account(connection, account_id) is None:
+            output_error(f"account not found: {account_id}", "not_found")
+        existing = {w.name: w for w in list_workflows_full(connection, account_id)}
+        results = [
+            _import_workflow_row(connection, account_id, existing, entry)
+            for entry in entries
+        ]
+        output({"workflows": results})
+    finally:
+        connection.close()
+
+
 # -- Template commands ---------------------------------------------------------
 
 
