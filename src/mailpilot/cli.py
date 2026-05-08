@@ -484,9 +484,15 @@ def company_view(company_id: str) -> None:
 
 
 @company.command("export")
-@click.argument("file", type=click.Path())
-def company_export(file: str) -> None:
-    """Export all companies to a JSON file."""
+@click.option(
+    "--file",
+    "file",
+    default=None,
+    type=click.Path(dir_okay=False),
+    help="Optional path to also write the JSON array. Stdout still emits envelope.",
+)
+def company_export(file: str | None) -> None:
+    """Export all companies as a declarative JSON payload (V5)."""
     import pathlib
 
     from mailpilot.database import get_company, initialize_database, list_companies
@@ -496,28 +502,76 @@ def company_export(file: str) -> None:
         summaries = list_companies(connection, limit=100_000)
         full = [get_company(connection, s.id) for s in summaries]
         data = [c.model_dump(mode="json") for c in full if c is not None]
-        pathlib.Path(file).write_text(json.dumps(data, indent=2))
-        output({"exported": len(data), "file": file})
+        if file is not None:
+            pathlib.Path(file).write_text(json.dumps(data, indent=2))
+        output({"companies": data})
     finally:
         connection.close()
 
 
 @company.command("import")
-@click.argument("file", type=click.Path(exists=True))
-def company_import(file: str) -> None:
-    """Import companies from a JSON file."""
-    import pathlib
+@click.option(
+    "--file",
+    "file",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Path to JSON array of company objects. If omitted, read from stdin.",
+)
+def company_import(file: str | None) -> None:
+    """Import companies from a declarative JSON array (V39 batch-error pattern).
 
-    from mailpilot.database import create_company, initialize_database
+    Each row resolves to either ``{"name": ..., "action": "created"}`` or
+    ``{"name": ..., "error": CODE, "message": ...}``; per-row failures do not
+    abort the batch. Existing ``domain`` (UNIQUE) yields ``error="duplicate"``.
+    """
+    import pathlib
+    import sys
+
+    from mailpilot.database import (
+        create_company,
+        initialize_database,
+        list_companies,
+    )
+
+    raw = pathlib.Path(file).read_text() if file else sys.stdin.read()
+    try:
+        entries = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        output_error(f"malformed JSON: {exc}", "validation_error")
+    if not isinstance(entries, list):
+        output_error(
+            "payload must be a JSON array of company objects", "validation_error"
+        )
 
     connection = initialize_database(_database_url())
     try:
-        entries = json.loads(pathlib.Path(file).read_text())
-        count = 0
+        existing = {c.domain for c in list_companies(connection, limit=100_000)}
+        results: list[dict[str, object]] = []
         for entry in entries:
-            create_company(connection, name=entry["name"], domain=entry["domain"])
-            count += 1
-        output({"imported": count, "file": file})
+            name = entry.get("name") if isinstance(entry, dict) else None
+            domain = entry.get("domain") if isinstance(entry, dict) else None
+            if not isinstance(name, str) or not isinstance(domain, str):
+                results.append(
+                    {
+                        "name": name if isinstance(name, str) else "",
+                        "error": "validation_error",
+                        "message": "row missing required 'name' or 'domain'",
+                    }
+                )
+                continue
+            if domain in existing:
+                results.append(
+                    {
+                        "name": name,
+                        "error": "duplicate",
+                        "message": f"company with domain {domain!r} already exists",
+                    }
+                )
+                continue
+            create_company(connection, name=name, domain=domain)
+            existing.add(domain)
+            results.append({"name": name, "action": "created"})
+        output({"companies": results})
     finally:
         connection.close()
 
@@ -672,9 +726,15 @@ def contact_view(contact_id: str) -> None:
 
 
 @contact.command("export")
-@click.argument("file", type=click.Path())
-def contact_export(file: str) -> None:
-    """Export all contacts to a JSON file."""
+@click.option(
+    "--file",
+    "file",
+    default=None,
+    type=click.Path(dir_okay=False),
+    help="Optional path to also write the JSON array. Stdout still emits envelope.",
+)
+def contact_export(file: str | None) -> None:
+    """Export all contacts as a declarative JSON payload (V5)."""
     import pathlib
 
     from mailpilot.database import get_contact, initialize_database, list_contacts
@@ -684,26 +744,71 @@ def contact_export(file: str) -> None:
         summaries = list_contacts(connection, limit=100_000)
         full = [get_contact(connection, s.id) for s in summaries]
         data = [c.model_dump(mode="json") for c in full if c is not None]
-        pathlib.Path(file).write_text(json.dumps(data, indent=2))
-        output({"exported": len(data), "file": file})
+        if file is not None:
+            pathlib.Path(file).write_text(json.dumps(data, indent=2))
+        output({"contacts": data})
     finally:
         connection.close()
 
 
 @contact.command("import")
-@click.argument("file", type=click.Path(exists=True))
-def contact_import(file: str) -> None:
-    """Import contacts from a JSON file."""
-    import pathlib
+@click.option(
+    "--file",
+    "file",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Path to JSON array of contact objects. If omitted, read from stdin.",
+)
+def contact_import(file: str | None) -> None:
+    """Import contacts from a declarative JSON array (V39 batch-error pattern).
 
-    from mailpilot.database import create_contact, initialize_database
+    Each row resolves to either ``{"email": ..., "action": "created"}`` or
+    ``{"email": ..., "error": CODE, "message": ...}``; per-row failures do not
+    abort the batch. Existing ``email`` (UNIQUE) yields ``error="duplicate"``.
+    """
+    import pathlib
+    import sys
+
+    from mailpilot.database import (
+        create_contact,
+        initialize_database,
+        list_contacts,
+    )
+
+    raw = pathlib.Path(file).read_text() if file else sys.stdin.read()
+    try:
+        entries = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        output_error(f"malformed JSON: {exc}", "validation_error")
+    if not isinstance(entries, list):
+        output_error(
+            "payload must be a JSON array of contact objects", "validation_error"
+        )
 
     connection = initialize_database(_database_url())
     try:
-        entries = json.loads(pathlib.Path(file).read_text())
-        count = 0
+        existing = {c.email for c in list_contacts(connection, limit=100_000)}
+        results: list[dict[str, object]] = []
         for entry in entries:
-            email = entry["email"]
+            email = entry.get("email") if isinstance(entry, dict) else None
+            if not isinstance(email, str):
+                results.append(
+                    {
+                        "email": "",
+                        "error": "validation_error",
+                        "message": "row missing required 'email'",
+                    }
+                )
+                continue
+            if email in existing:
+                results.append(
+                    {
+                        "email": email,
+                        "error": "duplicate",
+                        "message": f"contact with email {email!r} already exists",
+                    }
+                )
+                continue
             domain = entry.get("domain") or email.split("@")[-1]
             create_contact(
                 connection,
@@ -713,8 +818,9 @@ def contact_import(file: str) -> None:
                 last_name=entry.get("last_name"),
                 company_id=entry.get("company_id"),
             )
-            count += 1
-        output({"imported": count, "file": file})
+            existing.add(email)
+            results.append({"email": email, "action": "created"})
+        output({"contacts": results})
     finally:
         connection.close()
 

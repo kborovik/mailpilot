@@ -32,8 +32,8 @@ py-lint:
 clean: ## Export data, re-create database
 	$(eval TS := $(shell date +%Y%m%d-%H%M%S))
 	$(call header,Exporting companies and contacts)
-	mailpilot company export $(DATA_DIR)/companies-$(TS).json || true
-	mailpilot contact export $(DATA_DIR)/contacts-$(TS).json || true
+	mailpilot company export --file $(DATA_DIR)/companies-$(TS).json > /dev/null || true
+	mailpilot contact export --file $(DATA_DIR)/contacts-$(TS).json > /dev/null || true
 	$(call header,Re-creating database)
 	dropdb --if-exists mailpilot
 	createdb mailpilot
