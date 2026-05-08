@@ -1684,6 +1684,33 @@ def workflow_stop(workflow_id: str) -> None:
         connection.close()
 
 
+_WORKFLOW_EXPORT_FIELDS = ("name", "template", "objective", "instructions", "theme")
+
+
+@workflow.command("export")
+@click.option("--account-id", required=True, help="Owning Gmail account ID.")
+def workflow_export(account_id: str) -> None:
+    """Export workflows for an account as a declarative JSON payload."""
+    from mailpilot.database import (
+        get_account,
+        initialize_database,
+        list_workflows_full,
+    )
+
+    connection = initialize_database(_database_url())
+    try:
+        if get_account(connection, account_id) is None:
+            output_error(f"account not found: {account_id}", "not_found")
+        workflows = list_workflows_full(connection, account_id)
+        payload = [
+            {field: getattr(w, field) for field in _WORKFLOW_EXPORT_FIELDS}
+            for w in workflows
+        ]
+        output({"workflows": payload})
+    finally:
+        connection.close()
+
+
 # -- Template commands ---------------------------------------------------------
 
 

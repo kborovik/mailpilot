@@ -59,6 +59,7 @@ from mailpilot.database import (
     list_tags,
     list_tasks,
     list_workflows,
+    list_workflows_full,
     pause_workflow,
     search_companies,
     search_contacts,
@@ -520,6 +521,32 @@ def test_list_workflows_by_account(
     results = list_workflows(database_connection, account_id=a1.id)
     assert len(results) == 1
     assert results[0].name == "W1"
+
+
+def test_list_workflows_full_orders_by_name(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """V39: ``workflow export`` payload must be name-ordered for deterministic diffs."""
+    account = make_test_account(database_connection)
+    make_test_workflow(database_connection, account_id=account.id, name="Charlie")
+    make_test_workflow(database_connection, account_id=account.id, name="Alpha")
+    make_test_workflow(database_connection, account_id=account.id, name="Bravo")
+    results = list_workflows_full(database_connection, account.id)
+    assert [w.name for w in results] == ["Alpha", "Bravo", "Charlie"]
+    # Returns full Workflow rows (not summaries) -- objective/instructions present.
+    assert all(hasattr(w, "objective") for w in results)
+    assert all(hasattr(w, "instructions") for w in results)
+
+
+def test_list_workflows_full_scopes_to_account(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    a1 = make_test_account(database_connection, email="a@test.com")
+    a2 = make_test_account(database_connection, email="b@test.com")
+    make_test_workflow(database_connection, account_id=a1.id, name="A-only")
+    make_test_workflow(database_connection, account_id=a2.id, name="B-only")
+    results = list_workflows_full(database_connection, a1.id)
+    assert [w.name for w in results] == ["A-only"]
 
 
 def test_update_workflow(database_connection: psycopg.Connection[dict[str, Any]]):

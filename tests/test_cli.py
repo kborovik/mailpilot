@@ -2840,6 +2840,94 @@ def test_workflow_stop_invalid_state(
     assert data["error"] == "invalid_state"
 
 
+# -- workflow export -----------------------------------------------------------
+
+
+def test_workflow_export_envelope(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    account = _make_account()
+    workflow = _make_workflow(
+        objective="Book demos",
+        instructions="You are a sales rep.",
+        theme="green",
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch(
+            "mailpilot.database.list_workflows_full", return_value=[workflow]
+        ) as mock_list,
+    ):
+        result = runner.invoke(
+            main, ["workflow", "export", "--account-id", _ACCOUNT_ID]
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_list.assert_called_once_with(mock_connection, _ACCOUNT_ID)
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert isinstance(data["workflows"], list)
+    assert len(data["workflows"]) == 1
+    row = data["workflows"][0]
+    assert set(row.keys()) == {
+        "name",
+        "template",
+        "objective",
+        "instructions",
+        "theme",
+    }
+    assert row["name"] == "Demo outreach"
+    assert row["template"] == "outbound-general"
+    assert row["objective"] == "Book demos"
+    assert row["instructions"] == "You are a sales rep."
+    assert row["theme"] == "green"
+
+
+def test_workflow_export_account_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=None),
+    ):
+        result = runner.invoke(
+            main, ["workflow", "export", "--account-id", "acc-missing"]
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+    assert "account" in data["message"]
+
+
+def test_workflow_export_preserves_db_order(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    account = _make_account()
+    ordered = [
+        _make_workflow(id="01234567-0000-7000-0000-00000000000a", name="Alpha"),
+        _make_workflow(id="01234567-0000-7000-0000-00000000000b", name="Bravo"),
+        _make_workflow(id="01234567-0000-7000-0000-00000000000c", name="Charlie"),
+    ]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.database.list_workflows_full", return_value=ordered),
+    ):
+        result = runner.invoke(
+            main, ["workflow", "export", "--account-id", _ACCOUNT_ID]
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    names = [row["name"] for row in data["workflows"]]
+    assert names == ["Alpha", "Bravo", "Charlie"]
+
+
 # -- enrollment run ------------------------------------------------------------
 
 

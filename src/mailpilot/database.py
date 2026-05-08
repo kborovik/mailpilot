@@ -926,6 +926,30 @@ def list_workflows(
     return [WorkflowSummary.model_validate(row) for row in rows]
 
 
+def list_workflows_full(
+    connection: psycopg.Connection[dict[str, Any]],
+    account_id: str,
+) -> list[Workflow]:
+    """List all workflows for an account as full rows ordered by name.
+
+    Used by ``workflow export`` to emit a declarative payload keyed on
+    ``(account_id, name)`` per §V.39. Ordering by ``name`` makes the
+    export output deterministic for diffs and round-trip testing.
+
+    Args:
+        connection: Open database connection.
+        account_id: Owning account ID.
+
+    Returns:
+        Full ``Workflow`` rows ordered by ``name``.
+    """
+    rows = connection.execute(
+        "SELECT * FROM workflow WHERE account_id = %(account_id)s ORDER BY name",
+        {"account_id": account_id},
+    ).fetchall()
+    return [Workflow.model_validate(row) for row in rows]
+
+
 def search_workflows(
     connection: psycopg.Connection[dict[str, Any]],
     query: str,
