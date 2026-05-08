@@ -2029,14 +2029,29 @@ def test_remove_contact_tag_emits_activity_atomically(
 
     contact = make_test_contact(database_connection)
     add_contact_tag(database_connection, contact_id=contact.id, name="cold")
-    assert (
-        remove_contact_tag(database_connection, contact_id=contact.id, name="cold")
-        is True
+    removed = remove_contact_tag(
+        database_connection, contact_id=contact.id, name="cold"
     )
+    assert removed is not None
+    assert removed.name == "cold"
+    assert removed.contact_id == contact.id
+    assert removed.company_id is None
     types = [
         a.type for a in list_activities(database_connection, contact_id=contact.id)
     ]
     assert "tag_removed" in types
+
+
+def test_remove_contact_tag_not_found_returns_none(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from mailpilot.database import remove_contact_tag
+
+    contact = make_test_contact(database_connection)
+    assert (
+        remove_contact_tag(database_connection, contact_id=contact.id, name="ghost")
+        is None
+    )
 
 
 def test_add_company_tag_emits_company_activity(
@@ -2060,12 +2075,13 @@ def test_remove_company_tag_emits_activity_atomically(
 
     company = make_test_company(database_connection)
     add_company_tag(database_connection, company_id=company.id, name="enterprise")
-    assert (
-        remove_company_tag(
-            database_connection, company_id=company.id, name="enterprise"
-        )
-        is True
+    removed = remove_company_tag(
+        database_connection, company_id=company.id, name="enterprise"
     )
+    assert removed is not None
+    assert removed.name == "enterprise"
+    assert removed.company_id == company.id
+    assert removed.contact_id is None
     types = [
         a.type for a in list_activities(database_connection, company_id=company.id)
     ]
@@ -2223,7 +2239,10 @@ def test_delete_enrollment(
     contact = make_test_contact(database_connection)
     create_enrollment(database_connection, workflow.id, contact.id)
     deleted = delete_enrollment(database_connection, workflow.id, contact.id)
-    assert deleted is True
+    assert deleted is not None
+    assert deleted.workflow_id == workflow.id
+    assert deleted.contact_id == contact.id
+    assert deleted.status == "active"
     assert get_enrollment(database_connection, workflow.id, contact.id) is None
 
 
@@ -2231,7 +2250,7 @@ def test_delete_enrollment_not_found(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     deleted = delete_enrollment(database_connection, "nonexistent", "nonexistent")
-    assert deleted is False
+    assert deleted is None
 
 
 def test_list_enrollments_detailed(

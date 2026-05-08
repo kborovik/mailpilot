@@ -1295,13 +1295,13 @@ def tag_remove(contact_id: str | None, company_id: str | None, name: str) -> Non
             except ValueError as exc:
                 output_error(str(exc), "validation_error")
             owner = ("company", company_id)
-        normalized = _normalize_tag_name(name)
-        if not deleted:
+        if deleted is None:
+            normalized = _normalize_tag_name(name)
             output_error(
                 f"tag '{normalized}' not found on {owner[0]} {owner[1]}",
                 "not_found",
             )
-        output({"removed": True, "tag": normalized, "owner_type": owner[0]})
+        output_entity("tag", deleted)
     finally:
         connection.close()
 
@@ -2145,9 +2145,9 @@ def enrollment_remove(workflow_id: str, contact_id: str) -> None:
     connection = initialize_database(_database_url())
     try:
         deleted = delete_enrollment(connection, workflow_id, contact_id)
-        if not deleted:
+        if deleted is None:
             output_error("enrollment not found", "not_found")
-        output({"workflow_id": workflow_id, "contact_id": contact_id})
+        output_entity("enrollment", deleted)
     finally:
         connection.close()
 

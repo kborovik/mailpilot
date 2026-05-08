@@ -1281,8 +1281,8 @@ def delete_enrollment(
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str,
     contact_id: str,
-) -> bool:
-    """Remove an enrollment.
+) -> Enrollment | None:
+    """Remove an enrollment and return the deleted row.
 
     Args:
         connection: Open database connection.
@@ -1290,17 +1290,21 @@ def delete_enrollment(
         contact_id: Contact FK.
 
     Returns:
-        True if the row was deleted, False if not found.
+        The deleted ``Enrollment`` (carries ``status`` at time of removal),
+        or ``None`` if no matching row existed.
     """
-    cursor = connection.execute(
+    row = connection.execute(
         """\
         DELETE FROM enrollment
         WHERE workflow_id = %(workflow_id)s AND contact_id = %(contact_id)s
+        RETURNING *
         """,
         {"workflow_id": workflow_id, "contact_id": contact_id},
-    )
+    ).fetchone()
     connection.commit()
-    return cursor.rowcount > 0
+    if row is None:
+        return None
+    return Enrollment.model_validate(row)
 
 
 def list_enrollments_detailed(
@@ -2514,21 +2518,25 @@ def remove_contact_tag(
     connection: psycopg.Connection[dict[str, Any]],
     contact_id: str,
     name: str,
-) -> bool:
-    """Remove a tag from a contact and emit a `tag_removed` activity atomically."""
+) -> Tag | None:
+    """Remove a tag from a contact and emit a `tag_removed` activity atomically.
+
+    Returns the deleted ``Tag`` row, or ``None`` if no tag with the given
+    name existed on the contact.
+    """
     normalized = _normalize_tag_name(name)
     contact_row = connection.execute(
         "SELECT company_id FROM contact WHERE id = %s", (contact_id,)
     ).fetchone()
     if contact_row is None:
         raise ValueError(f"contact not found: {contact_id}")
-    cursor = connection.execute(
-        "DELETE FROM tag WHERE contact_id = %s AND name = %s",
+    deleted_row = connection.execute(
+        "DELETE FROM tag WHERE contact_id = %s AND name = %s RETURNING *",
         (contact_id, normalized),
-    )
-    if cursor.rowcount == 0:
+    ).fetchone()
+    if deleted_row is None:
         connection.commit()
-        return False
+        return None
     connection.execute(
         """\
         INSERT INTO activity (
@@ -2548,23 +2556,27 @@ def remove_contact_tag(
         },
     )
     connection.commit()
-    return True
+    return Tag.model_validate(deleted_row)
 
 
 def remove_company_tag(
     connection: psycopg.Connection[dict[str, Any]],
     company_id: str,
     name: str,
-) -> bool:
-    """Remove a tag from a company and emit a `tag_removed` activity atomically."""
+) -> Tag | None:
+    """Remove a tag from a company and emit a `tag_removed` activity atomically.
+
+    Returns the deleted ``Tag`` row, or ``None`` if no tag with the given
+    name existed on the company.
+    """
     normalized = _normalize_tag_name(name)
-    cursor = connection.execute(
-        "DELETE FROM tag WHERE company_id = %s AND name = %s",
+    deleted_row = connection.execute(
+        "DELETE FROM tag WHERE company_id = %s AND name = %s RETURNING *",
         (company_id, normalized),
-    )
-    if cursor.rowcount == 0:
+    ).fetchone()
+    if deleted_row is None:
         connection.commit()
-        return False
+        return None
     connection.execute(
         """\
         INSERT INTO activity (
@@ -2583,7 +2595,7 @@ def remove_company_tag(
         },
     )
     connection.commit()
-    return True
+    return Tag.model_validate(deleted_row)
 
 
 # -- Note ----------------------------------------------------------------------

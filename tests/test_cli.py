@@ -4387,11 +4387,12 @@ def test_tag_add_rejects_invalid_name(
 
 def test_tag_remove(runner: CliRunner, mock_connection: MagicMock) -> None:
     contact = _make_contact()
+    removed = _make_tag(contact_id="cid-1", name="prospect")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch(
-            "mailpilot.database.remove_contact_tag", return_value=True
+            "mailpilot.database.remove_contact_tag", return_value=removed
         ) as mock_delete,
         patch("mailpilot.database.get_contact", return_value=contact),
     ):
@@ -4408,7 +4409,9 @@ def test_tag_remove(runner: CliRunner, mock_connection: MagicMock) -> None:
     )
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["removed"] is True
+    assert data["tag"]["name"] == "prospect"
+    assert data["tag"]["contact_id"] == "cid-1"
+    assert data["tag"]["company_id"] is None
 
 
 def test_tag_remove_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:
@@ -4417,7 +4420,7 @@ def test_tag_remove_not_found(runner: CliRunner, mock_connection: MagicMock) -> 
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.remove_contact_tag", return_value=False),
+        patch("mailpilot.database.remove_contact_tag", return_value=None),
     ):
         result = runner.invoke(
             main,
@@ -5072,10 +5075,13 @@ def test_enrollment_add_contact_not_found(
 
 
 def test_enrollment_remove(runner: CliRunner, mock_connection: MagicMock) -> None:
+    removed = _make_enrollment(status="paused")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.delete_enrollment", return_value=True) as mock_delete,
+        patch(
+            "mailpilot.database.delete_enrollment", return_value=removed
+        ) as mock_delete,
     ):
         result = runner.invoke(
             main,
@@ -5093,8 +5099,9 @@ def test_enrollment_remove(runner: CliRunner, mock_connection: MagicMock) -> Non
     mock_delete.assert_called_once_with(mock_connection, _WORKFLOW_ID, _CONTACT_ID)
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["workflow_id"] == _WORKFLOW_ID
-    assert data["contact_id"] == _CONTACT_ID
+    assert data["enrollment"]["workflow_id"] == _WORKFLOW_ID
+    assert data["enrollment"]["contact_id"] == _CONTACT_ID
+    assert data["enrollment"]["status"] == "paused"
 
 
 def test_enrollment_remove_not_found(
@@ -5103,7 +5110,7 @@ def test_enrollment_remove_not_found(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.delete_enrollment", return_value=False),
+        patch("mailpilot.database.delete_enrollment", return_value=None),
     ):
         result = runner.invoke(
             main,
