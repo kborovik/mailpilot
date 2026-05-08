@@ -115,21 +115,20 @@ If the count is zero or `not_found`, the failure is Drive ACL, not KB content --
 
 Capture `TEST_START_A` (ISO) and `SUBJECT_A` (`[ST-<HHMMSS>] <topic>`) before A1.
 
-### A1. Create the outbound workflow
+### A1. Import the outbound workflow
+
+The workflow definition is declarative -- it lives in `tests/fixtures/workflows-outbound.json` and is round-tripped via `workflow import` (SPEC §V.39). The fixture contains `${TOPIC_A}` and `${SUBJECT_A}` placeholders that resolve from the shell variables set per the Conventions section; substitute them with `envsubst` before piping the payload to `workflow import` on stdin:
 
 ```
-mailpilot workflow create \
-  --name "Outbound Smoke A" \
-  --template outbound-general \
-  --account-id <OUTBOUND_ACCOUNT_ID> \
-  --objective "Send a single email about <TOPIC_A> and mark the enrollment completed or failed based on the reply" \
-  --instructions "You are a sales rep for Lab5. Send ONE email to the contact about <TOPIC_A>. Subject MUST be exactly '<SUBJECT_A>'. Body MUST use Markdown (greeting, 2-3 sentence paragraph, a 3-row 2-column table). When you receive a reply, do not send another email -- read the reply and call record_enrollment_outcome with status='completed' if the reply expresses interest or status='failed' if it declines, then stop. Do not call disable_contact -- this is per-workflow outcome tracking, not a global contact block. Do not create follow-up tasks."
+TOPIC_A="$TOPIC_A" SUBJECT_A="$SUBJECT_A" envsubst < tests/fixtures/workflows-outbound.json \
+  | mailpilot workflow import --account-id <OUTBOUND_ACCOUNT_ID>
 ```
 
-Activate if create did not auto-activate:
+`workflow import` upserts the row keyed on `(account_id, name)` and auto-activates when both objective and instructions are non-empty -- no separate `workflow start` call needed. Capture the workflow ID for later steps:
 
 ```
-mailpilot workflow start <OUTBOUND_WORKFLOW_ID>
+OUTBOUND_WORKFLOW_ID=$(mailpilot workflow list --account-id <OUTBOUND_ACCOUNT_ID> \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["workflows"][0]["id"])')
 ```
 
 Save `OUTBOUND_WORKFLOW_ID`.
@@ -309,23 +308,21 @@ Do not stop the sync loop. Do not run `make clean`. Do not recreate accounts or 
 
 Capture `TEST_START_B` (ISO, must be later than A's last activity) and two distinct subjects -- `SUBJECT_B1` (in-scope) and `SUBJECT_B2` (out-of-scope) -- per the Conventions section. Both must differ from `SUBJECT_A`.
 
-### B1. Create the demo inbound workflow
+### B1. Import the demo inbound workflow
 
-Operator-style instructions citing the real folder ID. The agent's behaviour comes from this prompt -- changing the wording changes what we test.
+The workflow definition is declarative -- the operator-style instructions citing the real folder ID live in `tests/fixtures/workflows-inbound.json` and are round-tripped via `workflow import` (SPEC §V.39). The agent's behaviour comes from that prompt -- changing the wording changes what we test, so edit the fixture, do not type a different command.
 
 ```
-mailpilot workflow create \
-  --name "Demo (lab5.ca/demo)" \
-  --template inbound-google-drive \
+mailpilot workflow import \
   --account-id <INBOUND_ACCOUNT_ID> \
-  --objective "Answer water-treatment product questions grounded in the MailPilot Demo Drive folder; politely decline questions about products not in the KB." \
-  --instructions "You are the lab5.ca/demo agent. The Markdown product knowledge base lives in Google Drive folder 1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat. For every reply: call search_drive_markdown with that folder ID and a query derived from the incoming question (key product terms, model numbers, application). Pick the top relevant hit and call read_drive_markdown on it before composing the reply grounded in that file's content. Cite the source file name in the body. If search_drive_markdown returns no hits for the question's terms (e.g., the asker is asking about Pentair, Evoqua, or Grundfos products that are not in the folder), reply with a short polite decline that explains the KB does not cover that product and do NOT fabricate specifications. Body MUST use plain Markdown. When the reply contains product specifications (model numbers, flow rates, dimensions, capacities), present them as a GitHub-flavored Markdown pipe table with a header row -- e.g., `| Specification | Value |` followed by `|---|---|` and one row per spec. Do NOT use asterisks, colons, or single-spaced lines as a substitute for a table. Subject MUST preserve the incoming thread subject. After replying, call record_enrollment_outcome with outcome='completed'. Do not create follow-up tasks."
+  --file tests/fixtures/workflows-inbound.json
 ```
 
-Activate and pre-enroll the sender:
+`workflow import` upserts the row keyed on `(account_id, name)` and auto-activates when both objective and instructions are non-empty -- no separate `workflow start` call needed. Capture the workflow ID and pre-enroll the sender:
 
 ```
-mailpilot workflow start <DEMO_WORKFLOW_ID>
+DEMO_WORKFLOW_ID=$(mailpilot workflow list --account-id <INBOUND_ACCOUNT_ID> \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["workflows"][0]["id"])')
 mailpilot enrollment add --workflow-id <DEMO_WORKFLOW_ID> --contact-id <OUTBOUND_CONTACT_ID>
 ```
 
