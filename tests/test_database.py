@@ -59,6 +59,7 @@ from mailpilot.database import (
     list_tags,
     list_tasks,
     list_workflows,
+    list_workflows_full,
     pause_workflow,
     search_companies,
     search_contacts,
@@ -520,6 +521,32 @@ def test_list_workflows_by_account(
     results = list_workflows(database_connection, account_id=a1.id)
     assert len(results) == 1
     assert results[0].name == "W1"
+
+
+def test_list_workflows_full_orders_by_name(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """V39: ``workflow export`` payload must be name-ordered for deterministic diffs."""
+    account = make_test_account(database_connection)
+    make_test_workflow(database_connection, account_id=account.id, name="Charlie")
+    make_test_workflow(database_connection, account_id=account.id, name="Alpha")
+    make_test_workflow(database_connection, account_id=account.id, name="Bravo")
+    results = list_workflows_full(database_connection, account.id)
+    assert [w.name for w in results] == ["Alpha", "Bravo", "Charlie"]
+    # Returns full Workflow rows (not summaries) -- objective/instructions present.
+    assert all(hasattr(w, "objective") for w in results)
+    assert all(hasattr(w, "instructions") for w in results)
+
+
+def test_list_workflows_full_scopes_to_account(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    a1 = make_test_account(database_connection, email="a@test.com")
+    a2 = make_test_account(database_connection, email="b@test.com")
+    make_test_workflow(database_connection, account_id=a1.id, name="A-only")
+    make_test_workflow(database_connection, account_id=a2.id, name="B-only")
+    results = list_workflows_full(database_connection, a1.id)
+    assert [w.name for w in results] == ["A-only"]
 
 
 def test_update_workflow(database_connection: psycopg.Connection[dict[str, Any]]):
@@ -2002,14 +2029,29 @@ def test_remove_contact_tag_emits_activity_atomically(
 
     contact = make_test_contact(database_connection)
     add_contact_tag(database_connection, contact_id=contact.id, name="cold")
-    assert (
-        remove_contact_tag(database_connection, contact_id=contact.id, name="cold")
-        is True
+    removed = remove_contact_tag(
+        database_connection, contact_id=contact.id, name="cold"
     )
+    assert removed is not None
+    assert removed.name == "cold"
+    assert removed.contact_id == contact.id
+    assert removed.company_id is None
     types = [
         a.type for a in list_activities(database_connection, contact_id=contact.id)
     ]
     assert "tag_removed" in types
+
+
+def test_remove_contact_tag_not_found_returns_none(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from mailpilot.database import remove_contact_tag
+
+    contact = make_test_contact(database_connection)
+    assert (
+        remove_contact_tag(database_connection, contact_id=contact.id, name="ghost")
+        is None
+    )
 
 
 def test_add_company_tag_emits_company_activity(
@@ -2033,12 +2075,13 @@ def test_remove_company_tag_emits_activity_atomically(
 
     company = make_test_company(database_connection)
     add_company_tag(database_connection, company_id=company.id, name="enterprise")
-    assert (
-        remove_company_tag(
-            database_connection, company_id=company.id, name="enterprise"
-        )
-        is True
+    removed = remove_company_tag(
+        database_connection, company_id=company.id, name="enterprise"
     )
+    assert removed is not None
+    assert removed.name == "enterprise"
+    assert removed.company_id == company.id
+    assert removed.contact_id is None
     types = [
         a.type for a in list_activities(database_connection, company_id=company.id)
     ]
@@ -2196,7 +2239,10 @@ def test_delete_enrollment(
     contact = make_test_contact(database_connection)
     create_enrollment(database_connection, workflow.id, contact.id)
     deleted = delete_enrollment(database_connection, workflow.id, contact.id)
-    assert deleted is True
+    assert deleted is not None
+    assert deleted.workflow_id == workflow.id
+    assert deleted.contact_id == contact.id
+    assert deleted.status == "active"
     assert get_enrollment(database_connection, workflow.id, contact.id) is None
 
 
@@ -2204,7 +2250,7 @@ def test_delete_enrollment_not_found(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     deleted = delete_enrollment(database_connection, "nonexistent", "nonexistent")
-    assert deleted is False
+    assert deleted is None
 
 
 def test_list_enrollments_detailed(

@@ -484,9 +484,15 @@ def company_view(company_id: str) -> None:
 
 
 @company.command("export")
-@click.argument("file", type=click.Path())
-def company_export(file: str) -> None:
-    """Export all companies to a JSON file."""
+@click.option(
+    "--file",
+    "file",
+    default=None,
+    type=click.Path(dir_okay=False),
+    help="Optional path to also write the JSON array. Stdout still emits envelope.",
+)
+def company_export(file: str | None) -> None:
+    """Export all companies as a declarative JSON payload (V5)."""
     import pathlib
 
     from mailpilot.database import get_company, initialize_database, list_companies
@@ -496,28 +502,76 @@ def company_export(file: str) -> None:
         summaries = list_companies(connection, limit=100_000)
         full = [get_company(connection, s.id) for s in summaries]
         data = [c.model_dump(mode="json") for c in full if c is not None]
-        pathlib.Path(file).write_text(json.dumps(data, indent=2))
-        output({"exported": len(data), "file": file})
+        if file is not None:
+            pathlib.Path(file).write_text(json.dumps(data, indent=2))
+        output({"companies": data})
     finally:
         connection.close()
 
 
 @company.command("import")
-@click.argument("file", type=click.Path(exists=True))
-def company_import(file: str) -> None:
-    """Import companies from a JSON file."""
-    import pathlib
+@click.option(
+    "--file",
+    "file",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Path to JSON array of company objects. If omitted, read from stdin.",
+)
+def company_import(file: str | None) -> None:
+    """Import companies from a declarative JSON array (V39 batch-error pattern).
 
-    from mailpilot.database import create_company, initialize_database
+    Each row resolves to either ``{"name": ..., "action": "created"}`` or
+    ``{"name": ..., "error": CODE, "message": ...}``; per-row failures do not
+    abort the batch. Existing ``domain`` (UNIQUE) yields ``error="duplicate"``.
+    """
+    import pathlib
+    import sys
+
+    from mailpilot.database import (
+        create_company,
+        initialize_database,
+        list_companies,
+    )
+
+    raw = pathlib.Path(file).read_text() if file else sys.stdin.read()
+    try:
+        entries = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        output_error(f"malformed JSON: {exc}", "validation_error")
+    if not isinstance(entries, list):
+        output_error(
+            "payload must be a JSON array of company objects", "validation_error"
+        )
 
     connection = initialize_database(_database_url())
     try:
-        entries = json.loads(pathlib.Path(file).read_text())
-        count = 0
+        existing = {c.domain for c in list_companies(connection, limit=100_000)}
+        results: list[dict[str, object]] = []
         for entry in entries:
-            create_company(connection, name=entry["name"], domain=entry["domain"])
-            count += 1
-        output({"imported": count, "file": file})
+            name = entry.get("name") if isinstance(entry, dict) else None
+            domain = entry.get("domain") if isinstance(entry, dict) else None
+            if not isinstance(name, str) or not isinstance(domain, str):
+                results.append(
+                    {
+                        "name": name if isinstance(name, str) else "",
+                        "error": "validation_error",
+                        "message": "row missing required 'name' or 'domain'",
+                    }
+                )
+                continue
+            if domain in existing:
+                results.append(
+                    {
+                        "name": name,
+                        "error": "duplicate",
+                        "message": f"company with domain {domain!r} already exists",
+                    }
+                )
+                continue
+            create_company(connection, name=name, domain=domain)
+            existing.add(domain)
+            results.append({"name": name, "action": "created"})
+        output({"companies": results})
     finally:
         connection.close()
 
@@ -672,9 +726,15 @@ def contact_view(contact_id: str) -> None:
 
 
 @contact.command("export")
-@click.argument("file", type=click.Path())
-def contact_export(file: str) -> None:
-    """Export all contacts to a JSON file."""
+@click.option(
+    "--file",
+    "file",
+    default=None,
+    type=click.Path(dir_okay=False),
+    help="Optional path to also write the JSON array. Stdout still emits envelope.",
+)
+def contact_export(file: str | None) -> None:
+    """Export all contacts as a declarative JSON payload (V5)."""
     import pathlib
 
     from mailpilot.database import get_contact, initialize_database, list_contacts
@@ -684,26 +744,71 @@ def contact_export(file: str) -> None:
         summaries = list_contacts(connection, limit=100_000)
         full = [get_contact(connection, s.id) for s in summaries]
         data = [c.model_dump(mode="json") for c in full if c is not None]
-        pathlib.Path(file).write_text(json.dumps(data, indent=2))
-        output({"exported": len(data), "file": file})
+        if file is not None:
+            pathlib.Path(file).write_text(json.dumps(data, indent=2))
+        output({"contacts": data})
     finally:
         connection.close()
 
 
 @contact.command("import")
-@click.argument("file", type=click.Path(exists=True))
-def contact_import(file: str) -> None:
-    """Import contacts from a JSON file."""
-    import pathlib
+@click.option(
+    "--file",
+    "file",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Path to JSON array of contact objects. If omitted, read from stdin.",
+)
+def contact_import(file: str | None) -> None:
+    """Import contacts from a declarative JSON array (V39 batch-error pattern).
 
-    from mailpilot.database import create_contact, initialize_database
+    Each row resolves to either ``{"email": ..., "action": "created"}`` or
+    ``{"email": ..., "error": CODE, "message": ...}``; per-row failures do not
+    abort the batch. Existing ``email`` (UNIQUE) yields ``error="duplicate"``.
+    """
+    import pathlib
+    import sys
+
+    from mailpilot.database import (
+        create_contact,
+        initialize_database,
+        list_contacts,
+    )
+
+    raw = pathlib.Path(file).read_text() if file else sys.stdin.read()
+    try:
+        entries = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        output_error(f"malformed JSON: {exc}", "validation_error")
+    if not isinstance(entries, list):
+        output_error(
+            "payload must be a JSON array of contact objects", "validation_error"
+        )
 
     connection = initialize_database(_database_url())
     try:
-        entries = json.loads(pathlib.Path(file).read_text())
-        count = 0
+        existing = {c.email for c in list_contacts(connection, limit=100_000)}
+        results: list[dict[str, object]] = []
         for entry in entries:
-            email = entry["email"]
+            email = entry.get("email") if isinstance(entry, dict) else None
+            if not isinstance(email, str):
+                results.append(
+                    {
+                        "email": "",
+                        "error": "validation_error",
+                        "message": "row missing required 'email'",
+                    }
+                )
+                continue
+            if email in existing:
+                results.append(
+                    {
+                        "email": email,
+                        "error": "duplicate",
+                        "message": f"contact with email {email!r} already exists",
+                    }
+                )
+                continue
             domain = entry.get("domain") or email.split("@")[-1]
             create_contact(
                 connection,
@@ -713,8 +818,9 @@ def contact_import(file: str) -> None:
                 last_name=entry.get("last_name"),
                 company_id=entry.get("company_id"),
             )
-            count += 1
-        output({"imported": count, "file": file})
+            existing.add(email)
+            results.append({"email": email, "action": "created"})
+        output({"contacts": results})
     finally:
         connection.close()
 
@@ -1189,13 +1295,13 @@ def tag_remove(contact_id: str | None, company_id: str | None, name: str) -> Non
             except ValueError as exc:
                 output_error(str(exc), "validation_error")
             owner = ("company", company_id)
-        normalized = _normalize_tag_name(name)
-        if not deleted:
+        if deleted is None:
+            normalized = _normalize_tag_name(name)
             output_error(
                 f"tag '{normalized}' not found on {owner[0]} {owner[1]}",
                 "not_found",
             )
-        output({"removed": True, "tag": normalized, "owner_type": owner[0]})
+        output_entity("tag", deleted)
     finally:
         connection.close()
 
@@ -1684,6 +1790,161 @@ def workflow_stop(workflow_id: str) -> None:
         connection.close()
 
 
+_WORKFLOW_EXPORT_FIELDS = ("name", "template", "objective", "instructions", "theme")
+
+
+@workflow.command("export")
+@click.option("--account-id", required=True, help="Owning Gmail account ID.")
+def workflow_export(account_id: str) -> None:
+    """Export workflows for an account as a declarative JSON payload."""
+    from mailpilot.database import (
+        get_account,
+        initialize_database,
+        list_workflows_full,
+    )
+
+    connection = initialize_database(_database_url())
+    try:
+        if get_account(connection, account_id) is None:
+            output_error(f"account not found: {account_id}", "not_found")
+        workflows = list_workflows_full(connection, account_id)
+        payload = [
+            {field: getattr(w, field) for field in _WORKFLOW_EXPORT_FIELDS}
+            for w in workflows
+        ]
+        output({"workflows": payload})
+    finally:
+        connection.close()
+
+
+_WORKFLOW_IMPORT_UPDATABLE = ("objective", "instructions", "theme")
+
+
+def _import_workflow_create(
+    connection: Any, account_id: str, name: str, template: str, entry: dict[str, Any]
+) -> dict[str, object]:
+    from mailpilot.database import activate_workflow, create_workflow, update_workflow
+
+    theme = entry.get("theme") or "blue"
+    created = create_workflow(
+        connection,
+        name=name,
+        template=template,
+        account_id=account_id,
+        theme=theme,
+    )
+    extras: dict[str, object] = {}
+    objective = entry.get("objective")
+    instructions = entry.get("instructions")
+    if objective:
+        extras["objective"] = objective
+    if instructions:
+        extras["instructions"] = instructions
+    if extras:
+        update_workflow(connection, created.id, **extras)
+    if objective and instructions:
+        activate_workflow(connection, created.id)
+    return {"name": name, "action": "created"}
+
+
+def _import_workflow_update(
+    connection: Any, current: Any, entry: dict[str, Any]
+) -> dict[str, object]:
+    from mailpilot.database import update_workflow
+
+    diff: dict[str, object] = {}
+    for field in _WORKFLOW_IMPORT_UPDATABLE:
+        if field not in entry:
+            continue
+        payload_value = entry[field] if entry[field] is not None else ""
+        if getattr(current, field) != payload_value:
+            diff[field] = payload_value
+    if not diff:
+        return {"name": current.name, "action": "unchanged"}
+    update_workflow(connection, current.id, **diff)
+    return {"name": current.name, "action": "updated"}
+
+
+def _import_workflow_row(
+    connection: Any, account_id: str, existing: dict[str, Any], entry: dict[str, Any]
+) -> dict[str, object]:
+    name = entry.get("name")
+    template = entry.get("template")
+    if not isinstance(name, str) or not isinstance(template, str):
+        return {
+            "name": name if isinstance(name, str) else "",
+            "error": "validation_error",
+            "message": "row missing required 'name' or 'template'",
+        }
+    current = existing.get(name)
+    if current is None:
+        return _import_workflow_create(connection, account_id, name, template, entry)
+    if current.template != template:
+        return {
+            "name": name,
+            "error": "template_immutable",
+            "message": (
+                f"workflow.template is immutable; existing "
+                f"{current.template!r}, payload {template!r}"
+            ),
+        }
+    return _import_workflow_update(connection, current, entry)
+
+
+@workflow.command("import")
+@click.option("--account-id", required=True, help="Owning Gmail account ID.")
+@click.option(
+    "--file",
+    "file",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Path to JSON payload. If omitted, read from stdin.",
+)
+def workflow_import(account_id: str, file: str | None) -> None:
+    """Import workflows for an account from a declarative JSON payload (§V.39).
+
+    The payload is the same shape produced by ``workflow export``: a list of
+    objects with ``name``, ``template``, ``objective``, ``instructions``,
+    ``theme``. Upsert is keyed on ``(account_id, name)``. Workflows absent
+    from the DB are created (and activated when both ``objective`` and
+    ``instructions`` are non-empty). Workflows already present are updated
+    in-place for changed fields only; ``template`` differences emit a per-row
+    ``template_immutable`` error and the batch continues. ``status`` is never
+    written by import -- it remains operational state owned by start/stop.
+    """
+    import pathlib
+    import sys
+
+    from mailpilot.database import (
+        get_account,
+        initialize_database,
+        list_workflows_full,
+    )
+
+    raw = pathlib.Path(file).read_text() if file else sys.stdin.read()
+    try:
+        entries = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        output_error(f"malformed JSON: {exc}", "validation_error")
+    if not isinstance(entries, list):
+        output_error(
+            "payload must be a JSON array of workflow objects", "validation_error"
+        )
+
+    connection = initialize_database(_database_url())
+    try:
+        if get_account(connection, account_id) is None:
+            output_error(f"account not found: {account_id}", "not_found")
+        existing = {w.name: w for w in list_workflows_full(connection, account_id)}
+        results = [
+            _import_workflow_row(connection, account_id, existing, entry)
+            for entry in entries
+        ]
+        output({"workflows": results})
+    finally:
+        connection.close()
+
+
 # -- Template commands ---------------------------------------------------------
 
 
@@ -1884,9 +2145,9 @@ def enrollment_remove(workflow_id: str, contact_id: str) -> None:
     connection = initialize_database(_database_url())
     try:
         deleted = delete_enrollment(connection, workflow_id, contact_id)
-        if not deleted:
+        if deleted is None:
             output_error("enrollment not found", "not_found")
-        output({"workflow_id": workflow_id, "contact_id": contact_id})
+        output_entity("enrollment", deleted)
     finally:
         connection.close()
 

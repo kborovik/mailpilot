@@ -441,6 +441,85 @@ def test_reply_email_decline_body_passes(
     gmail_client.send_message.assert_called_once()
 
 
+def test_send_email_non_numeric_specs_rejects(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§B.14 regression: KDF specs with non-numeric values (e.g. `Mesh Size
+    20x50`, `Type  Granular`) must trip the lint even though the value field
+    is not a number."""
+
+    account = make_test_account(database_connection)
+    make_test_contact(
+        database_connection, email="recipient@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    gmail_client = _make_gmail_client(account)
+
+    body = (
+        "Here are the KDF media specs:\n\n"
+        "Type  Granular Activated Carbon\n"
+        "Mesh Size  20x50\n"
+        "Color  Black\n"
+    )
+
+    result = send_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        to="recipient@example.com",
+        subject="Specs",
+        body=body,
+    )
+
+    assert result["error"] == "format"
+    assert "|---|" in result["message"]
+    gmail_client.send_message.assert_not_called()
+
+
+def test_send_email_ascii_rule_line_separator_rejects(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§B.14 regression: ASCII rule-line (`---...`) standalone separators
+    between spec rows do NOT count as a pipe-table separator -- only `|---|`
+    does -- so an agent using `------` as a faux separator still trips the
+    lint."""
+
+    account = make_test_account(database_connection)
+    make_test_contact(
+        database_connection, email="recipient@example.com", domain="example.com"
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    gmail_client = _make_gmail_client(account)
+
+    body = (
+        "Section A\n"
+        "Continuous Flow Rate  110 GPM\n"
+        "Peak Flow Rate  165 GPM\n"
+        "------------------------------\n"
+        "Section B\n"
+        "Resin Volume  36 cu ft\n"
+    )
+
+    result = send_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        to="recipient@example.com",
+        subject="Specs",
+        body=body,
+    )
+
+    assert result["error"] == "format"
+    assert "|---|" in result["message"]
+    gmail_client.send_message.assert_not_called()
+
+
 def test_send_email_mixed_body_with_separator_passes(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):

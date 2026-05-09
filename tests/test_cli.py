@@ -647,11 +647,11 @@ def test_company_update_not_found(
 # -- company export ------------------------------------------------------------
 
 
-def test_company_export(
+def test_company_export_envelope_and_file(
     runner: CliRunner, mock_connection: MagicMock, tmp_path: Any
 ) -> None:
-    company_a = _make_company(id="id-1")
-    company_b = _make_company(id="id-2")
+    company_a = _make_company(id="id-1", domain="acme.com")
+    company_b = _make_company(id="id-2", domain="beta.com")
     summaries = [
         CompanySummary.model_validate(c.model_dump()) for c in (company_a, company_b)
     ]
@@ -662,22 +662,42 @@ def test_company_export(
         patch("mailpilot.database.list_companies", return_value=summaries),
         patch("mailpilot.database.get_company", side_effect=[company_a, company_b]),
     ):
-        result = runner.invoke(main, ["company", "export", export_file])
+        result = runner.invoke(main, ["company", "export", "--file", export_file])
 
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["exported"] == 2
-    exported = json.loads(pathlib.Path(export_file).read_text())
-    assert len(exported) == 2
-    assert exported[0]["id"] == "id-1"
-    assert "profile_summary" in exported[0]
+    assert isinstance(data["companies"], list)
+    assert len(data["companies"]) == 2
+    assert data["companies"][0]["id"] == "id-1"
+    assert "profile_summary" in data["companies"][0]
+    on_disk = json.loads(pathlib.Path(export_file).read_text())
+    assert on_disk == data["companies"]
+
+
+def test_company_export_stdout_only(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    company = _make_company(id="id-1", domain="acme.com")
+    summaries = [CompanySummary.model_validate(company.model_dump())]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_companies", return_value=summaries),
+        patch("mailpilot.database.get_company", return_value=company),
+    ):
+        result = runner.invoke(main, ["company", "export"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert len(data["companies"]) == 1
 
 
 # -- company import ------------------------------------------------------------
 
 
-def test_company_import(
+def test_company_import_creates_via_file(
     runner: CliRunner, mock_connection: MagicMock, tmp_path: Any
 ) -> None:
     entries = [
@@ -689,12 +709,13 @@ def test_company_import(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_companies", return_value=[]),
         patch(
             "mailpilot.database.create_company",
             side_effect=[_make_company(domain=e["domain"]) for e in entries],
         ) as mock_create,
     ):
-        result = runner.invoke(main, ["company", "import", str(import_file)])
+        result = runner.invoke(main, ["company", "import", "--file", str(import_file)])
 
     assert result.exit_code == 0
     assert mock_create.call_count == 2
@@ -702,7 +723,75 @@ def test_company_import(
     mock_create.assert_any_call(mock_connection, name="Beta Inc", domain="beta.com")
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["imported"] == 2
+    assert data["companies"] == [
+        {"name": "Acme Corp", "action": "created"},
+        {"name": "Beta Inc", "action": "created"},
+    ]
+
+
+def test_company_import_via_stdin(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    entries = [{"name": "Acme Corp", "domain": "acme.com"}]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_companies", return_value=[]),
+        patch(
+            "mailpilot.database.create_company",
+            return_value=_make_company(domain="acme.com"),
+        ),
+    ):
+        result = runner.invoke(main, ["company", "import"], input=json.dumps(entries))
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["companies"] == [{"name": "Acme Corp", "action": "created"}]
+
+
+def test_company_import_per_row_error_continues_batch(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """Duplicate domain on row 1 must not block create on row 2 (V39)."""
+    existing = [_make_company(id="id-existing", domain="acme.com")]
+    existing_summaries = [
+        CompanySummary.model_validate(c.model_dump()) for c in existing
+    ]
+    entries = [
+        {"name": "Acme Corp", "domain": "acme.com"},
+        {"name": "Beta Inc", "domain": "beta.com"},
+    ]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_companies", return_value=existing_summaries),
+        patch(
+            "mailpilot.database.create_company",
+            return_value=_make_company(domain="beta.com"),
+        ) as mock_create,
+    ):
+        result = runner.invoke(main, ["company", "import"], input=json.dumps(entries))
+
+    assert result.exit_code == 0
+    mock_create.assert_called_once_with(
+        mock_connection, name="Beta Inc", domain="beta.com"
+    )
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["companies"][0]["error"] == "duplicate"
+    assert data["companies"][0]["name"] == "Acme Corp"
+    assert data["companies"][1] == {"name": "Beta Inc", "action": "created"}
+
+
+def test_company_import_malformed_json(runner: CliRunner) -> None:
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(main, ["company", "import"], input="not json")
+
+    assert result.exit_code == 1
+    err = json.loads(result.output)
+    assert err["ok"] is False
+    assert err["error"] == "validation_error"
 
 
 # -- contact helpers -----------------------------------------------------------
@@ -1066,11 +1155,11 @@ def test_contact_view_not_found(runner: CliRunner, mock_connection: MagicMock) -
 # -- contact export ------------------------------------------------------------
 
 
-def test_contact_export(
+def test_contact_export_envelope_and_file(
     runner: CliRunner, mock_connection: MagicMock, tmp_path: Any
 ) -> None:
-    contact_a = _make_contact(id="id-1")
-    contact_b = _make_contact(id="id-2")
+    contact_a = _make_contact(id="id-1", email="alice@acme.com")
+    contact_b = _make_contact(id="id-2", email="bob@beta.com")
     summaries = [
         ContactSummary.model_validate(c.model_dump()) for c in (contact_a, contact_b)
     ]
@@ -1081,22 +1170,42 @@ def test_contact_export(
         patch("mailpilot.database.list_contacts", return_value=summaries),
         patch("mailpilot.database.get_contact", side_effect=[contact_a, contact_b]),
     ):
-        result = runner.invoke(main, ["contact", "export", export_file])
+        result = runner.invoke(main, ["contact", "export", "--file", export_file])
 
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["exported"] == 2
-    exported = json.loads(pathlib.Path(export_file).read_text())
-    assert len(exported) == 2
-    assert exported[0]["id"] == "id-1"
-    assert "domain" in exported[0]
+    assert isinstance(data["contacts"], list)
+    assert len(data["contacts"]) == 2
+    assert data["contacts"][0]["id"] == "id-1"
+    assert "domain" in data["contacts"][0]
+    on_disk = json.loads(pathlib.Path(export_file).read_text())
+    assert on_disk == data["contacts"]
+
+
+def test_contact_export_stdout_only(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    contact = _make_contact(id="id-1", email="alice@acme.com")
+    summaries = [ContactSummary.model_validate(contact.model_dump())]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_contacts", return_value=summaries),
+        patch("mailpilot.database.get_contact", return_value=contact),
+    ):
+        result = runner.invoke(main, ["contact", "export"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert len(data["contacts"]) == 1
 
 
 # -- contact import ------------------------------------------------------------
 
 
-def test_contact_import(
+def test_contact_import_creates_via_file(
     runner: CliRunner, mock_connection: MagicMock, tmp_path: Any
 ) -> None:
     entries = [
@@ -1108,6 +1217,7 @@ def test_contact_import(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_contacts", return_value=[]),
         patch(
             "mailpilot.database.create_contact",
             side_effect=[
@@ -1116,7 +1226,7 @@ def test_contact_import(
             ],
         ) as mock_create,
     ):
-        result = runner.invoke(main, ["contact", "import", str(import_file)])
+        result = runner.invoke(main, ["contact", "import", "--file", str(import_file)])
 
     assert result.exit_code == 0
     assert mock_create.call_count == 2
@@ -1138,7 +1248,80 @@ def test_contact_import(
     )
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["imported"] == 2
+    assert data["contacts"] == [
+        {"email": "alice@acme.com", "action": "created"},
+        {"email": "bob@beta.com", "action": "created"},
+    ]
+
+
+def test_contact_import_via_stdin(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    entries = [{"email": "alice@acme.com"}]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_contacts", return_value=[]),
+        patch(
+            "mailpilot.database.create_contact",
+            return_value=_make_contact(email="alice@acme.com", domain="acme.com"),
+        ),
+    ):
+        result = runner.invoke(main, ["contact", "import"], input=json.dumps(entries))
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["contacts"] == [{"email": "alice@acme.com", "action": "created"}]
+
+
+def test_contact_import_per_row_error_continues_batch(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """Duplicate email on row 1 must not block create on row 2 (V39)."""
+    existing = [_make_contact(id="id-existing", email="alice@acme.com")]
+    existing_summaries = [
+        ContactSummary.model_validate(c.model_dump()) for c in existing
+    ]
+    entries = [
+        {"email": "alice@acme.com"},
+        {"email": "bob@beta.com"},
+    ]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_contacts", return_value=existing_summaries),
+        patch(
+            "mailpilot.database.create_contact",
+            return_value=_make_contact(email="bob@beta.com", domain="beta.com"),
+        ) as mock_create,
+    ):
+        result = runner.invoke(main, ["contact", "import"], input=json.dumps(entries))
+
+    assert result.exit_code == 0
+    mock_create.assert_called_once_with(
+        mock_connection,
+        email="bob@beta.com",
+        domain="beta.com",
+        first_name=None,
+        last_name=None,
+        company_id=None,
+    )
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["contacts"][0]["error"] == "duplicate"
+    assert data["contacts"][0]["email"] == "alice@acme.com"
+    assert data["contacts"][1] == {"email": "bob@beta.com", "action": "created"}
+
+
+def test_contact_import_malformed_json(runner: CliRunner) -> None:
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(main, ["contact", "import"], input="not json")
+
+    assert result.exit_code == 1
+    err = json.loads(result.output)
+    assert err["ok"] is False
+    assert err["error"] == "validation_error"
 
 
 # -- Email ---------------------------------------------------------------------
@@ -2840,6 +3023,453 @@ def test_workflow_stop_invalid_state(
     assert data["error"] == "invalid_state"
 
 
+# -- workflow export -----------------------------------------------------------
+
+
+def test_workflow_export_envelope(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    account = _make_account()
+    workflow = _make_workflow(
+        objective="Book demos",
+        instructions="You are a sales rep.",
+        theme="green",
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch(
+            "mailpilot.database.list_workflows_full", return_value=[workflow]
+        ) as mock_list,
+    ):
+        result = runner.invoke(
+            main, ["workflow", "export", "--account-id", _ACCOUNT_ID]
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_list.assert_called_once_with(mock_connection, _ACCOUNT_ID)
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert isinstance(data["workflows"], list)
+    assert len(data["workflows"]) == 1
+    row = data["workflows"][0]
+    assert set(row.keys()) == {
+        "name",
+        "template",
+        "objective",
+        "instructions",
+        "theme",
+    }
+    assert row["name"] == "Demo outreach"
+    assert row["template"] == "outbound-general"
+    assert row["objective"] == "Book demos"
+    assert row["instructions"] == "You are a sales rep."
+    assert row["theme"] == "green"
+
+
+def test_workflow_export_account_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=None),
+    ):
+        result = runner.invoke(
+            main, ["workflow", "export", "--account-id", "acc-missing"]
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+    assert "account" in data["message"]
+
+
+def test_workflow_export_preserves_db_order(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    account = _make_account()
+    ordered = [
+        _make_workflow(id="01234567-0000-7000-0000-00000000000a", name="Alpha"),
+        _make_workflow(id="01234567-0000-7000-0000-00000000000b", name="Bravo"),
+        _make_workflow(id="01234567-0000-7000-0000-00000000000c", name="Charlie"),
+    ]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.database.list_workflows_full", return_value=ordered),
+    ):
+        result = runner.invoke(
+            main, ["workflow", "export", "--account-id", _ACCOUNT_ID]
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    names = [row["name"] for row in data["workflows"]]
+    assert names == ["Alpha", "Bravo", "Charlie"]
+
+
+# -- workflow import -----------------------------------------------------------
+
+
+def _import_payload(**overrides: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "name": "Demo outreach",
+        "template": "outbound-general",
+        "objective": "Book demos",
+        "instructions": "You are a sales rep.",
+        "theme": "green",
+    }
+    return {**base, **overrides}
+
+
+def test_workflow_import_create_path_activates(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    account = _make_account()
+    created = _make_workflow(theme="green")
+    file = tmp_path / "wf.json"
+    file.write_text(json.dumps([_import_payload()]))
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.database.list_workflows_full", return_value=[]),
+        patch(
+            "mailpilot.database.create_workflow", return_value=created
+        ) as mock_create,
+        patch(
+            "mailpilot.database.update_workflow", return_value=created
+        ) as mock_update,
+        patch(
+            "mailpilot.database.activate_workflow", return_value=created
+        ) as mock_activate,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "import",
+                "--account-id",
+                _ACCOUNT_ID,
+                "--file",
+                str(file),
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_create.assert_called_once_with(
+        mock_connection,
+        name="Demo outreach",
+        template="outbound-general",
+        account_id=_ACCOUNT_ID,
+        theme="green",
+    )
+    mock_update.assert_called_once_with(
+        mock_connection,
+        created.id,
+        objective="Book demos",
+        instructions="You are a sales rep.",
+    )
+    mock_activate.assert_called_once_with(mock_connection, created.id)
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["workflows"] == [{"name": "Demo outreach", "action": "created"}]
+
+
+def test_workflow_import_create_path_draft_no_activation(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    account = _make_account()
+    created = _make_workflow(objective="", instructions="")
+    file = tmp_path / "wf.json"
+    file.write_text(
+        json.dumps([_import_payload(objective="Book demos", instructions="")])
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.database.list_workflows_full", return_value=[]),
+        patch("mailpilot.database.create_workflow", return_value=created),
+        patch("mailpilot.database.update_workflow", return_value=created),
+        patch("mailpilot.database.activate_workflow") as mock_activate,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "import",
+                "--account-id",
+                _ACCOUNT_ID,
+                "--file",
+                str(file),
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_activate.assert_not_called()
+
+
+def test_workflow_import_update_path_diff_only(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    account = _make_account()
+    existing = _make_workflow(
+        objective="Old objective",
+        instructions="Old instructions",
+        theme="blue",
+        status="active",
+    )
+    file = tmp_path / "wf.json"
+    file.write_text(
+        json.dumps(
+            [
+                _import_payload(
+                    objective="New objective",
+                    instructions="Old instructions",
+                    theme="blue",
+                )
+            ]
+        )
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.database.list_workflows_full", return_value=[existing]),
+        patch("mailpilot.database.create_workflow") as mock_create,
+        patch(
+            "mailpilot.database.update_workflow", return_value=existing
+        ) as mock_update,
+        patch("mailpilot.database.activate_workflow") as mock_activate,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "import",
+                "--account-id",
+                _ACCOUNT_ID,
+                "--file",
+                str(file),
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_create.assert_not_called()
+    mock_activate.assert_not_called()
+    mock_update.assert_called_once_with(
+        mock_connection, existing.id, objective="New objective"
+    )
+    data = json.loads(result.output)
+    assert data["workflows"] == [{"name": "Demo outreach", "action": "updated"}]
+
+
+def test_workflow_import_unchanged_no_mutation(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    account = _make_account()
+    existing = _make_workflow(
+        objective="Book demos",
+        instructions="You are a sales rep.",
+        theme="green",
+        status="active",
+    )
+    file = tmp_path / "wf.json"
+    file.write_text(json.dumps([_import_payload()]))
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.database.list_workflows_full", return_value=[existing]),
+        patch("mailpilot.database.create_workflow") as mock_create,
+        patch("mailpilot.database.update_workflow") as mock_update,
+        patch("mailpilot.database.activate_workflow") as mock_activate,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "import",
+                "--account-id",
+                _ACCOUNT_ID,
+                "--file",
+                str(file),
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_create.assert_not_called()
+    mock_update.assert_not_called()
+    mock_activate.assert_not_called()
+    data = json.loads(result.output)
+    assert data["workflows"] == [{"name": "Demo outreach", "action": "unchanged"}]
+
+
+def test_workflow_import_template_immutable_row_error(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    account = _make_account()
+    existing = _make_workflow(template="inbound-general", type="inbound")
+    file = tmp_path / "wf.json"
+    file.write_text(
+        json.dumps(
+            [
+                _import_payload(template="outbound-general"),
+                _import_payload(name="Other workflow", template="inbound-general"),
+            ]
+        )
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.database.list_workflows_full", return_value=[existing]),
+        patch(
+            "mailpilot.database.create_workflow",
+            return_value=_make_workflow(name="Other workflow"),
+        ) as mock_create,
+        patch("mailpilot.database.update_workflow", return_value=existing),
+        patch("mailpilot.database.activate_workflow"),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "import",
+                "--account-id",
+                _ACCOUNT_ID,
+                "--file",
+                str(file),
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    rows = data["workflows"]
+    assert len(rows) == 2
+    assert rows[0]["name"] == "Demo outreach"
+    assert rows[0]["error"] == "template_immutable"
+    assert "inbound-general" in rows[0]["message"]
+    assert rows[1] == {"name": "Other workflow", "action": "created"}
+    mock_create.assert_called_once()
+
+
+def test_workflow_import_from_stdin(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    account = _make_account()
+    created = _make_workflow()
+    payload = json.dumps([_import_payload()])
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.database.list_workflows_full", return_value=[]),
+        patch("mailpilot.database.create_workflow", return_value=created),
+        patch("mailpilot.database.update_workflow", return_value=created),
+        patch("mailpilot.database.activate_workflow", return_value=created),
+    ):
+        result = runner.invoke(
+            main,
+            ["workflow", "import", "--account-id", _ACCOUNT_ID],
+            input=payload,
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["workflows"] == [{"name": "Demo outreach", "action": "created"}]
+
+
+def test_workflow_import_malformed_json_top_error(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    account = _make_account()
+    file = tmp_path / "wf.json"
+    file.write_text("{not json")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "import",
+                "--account-id",
+                _ACCOUNT_ID,
+                "--file",
+                str(file),
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "JSON" in data["message"] or "json" in data["message"].lower()
+
+
+def test_workflow_import_payload_not_array(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    account = _make_account()
+    file = tmp_path / "wf.json"
+    file.write_text(json.dumps({"workflows": []}))
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "import",
+                "--account-id",
+                _ACCOUNT_ID,
+                "--file",
+                str(file),
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+
+
+def test_workflow_import_account_not_found(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    file = tmp_path / "wf.json"
+    file.write_text(json.dumps([_import_payload()]))
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=None),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "import",
+                "--account-id",
+                "acc-missing",
+                "--file",
+                str(file),
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+    assert "account" in data["message"]
+
+
 # -- enrollment run ------------------------------------------------------------
 
 
@@ -3757,11 +4387,12 @@ def test_tag_add_rejects_invalid_name(
 
 def test_tag_remove(runner: CliRunner, mock_connection: MagicMock) -> None:
     contact = _make_contact()
+    removed = _make_tag(contact_id="cid-1", name="prospect")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch(
-            "mailpilot.database.remove_contact_tag", return_value=True
+            "mailpilot.database.remove_contact_tag", return_value=removed
         ) as mock_delete,
         patch("mailpilot.database.get_contact", return_value=contact),
     ):
@@ -3778,7 +4409,9 @@ def test_tag_remove(runner: CliRunner, mock_connection: MagicMock) -> None:
     )
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["removed"] is True
+    assert data["tag"]["name"] == "prospect"
+    assert data["tag"]["contact_id"] == "cid-1"
+    assert data["tag"]["company_id"] is None
 
 
 def test_tag_remove_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:
@@ -3787,7 +4420,7 @@ def test_tag_remove_not_found(runner: CliRunner, mock_connection: MagicMock) -> 
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.remove_contact_tag", return_value=False),
+        patch("mailpilot.database.remove_contact_tag", return_value=None),
     ):
         result = runner.invoke(
             main,
@@ -4442,10 +5075,13 @@ def test_enrollment_add_contact_not_found(
 
 
 def test_enrollment_remove(runner: CliRunner, mock_connection: MagicMock) -> None:
+    removed = _make_enrollment(status="paused")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.delete_enrollment", return_value=True) as mock_delete,
+        patch(
+            "mailpilot.database.delete_enrollment", return_value=removed
+        ) as mock_delete,
     ):
         result = runner.invoke(
             main,
@@ -4463,8 +5099,9 @@ def test_enrollment_remove(runner: CliRunner, mock_connection: MagicMock) -> Non
     mock_delete.assert_called_once_with(mock_connection, _WORKFLOW_ID, _CONTACT_ID)
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["workflow_id"] == _WORKFLOW_ID
-    assert data["contact_id"] == _CONTACT_ID
+    assert data["enrollment"]["workflow_id"] == _WORKFLOW_ID
+    assert data["enrollment"]["contact_id"] == _CONTACT_ID
+    assert data["enrollment"]["status"] == "paused"
 
 
 def test_enrollment_remove_not_found(
@@ -4473,7 +5110,7 @@ def test_enrollment_remove_not_found(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.delete_enrollment", return_value=False),
+        patch("mailpilot.database.delete_enrollment", return_value=None),
     ):
         result = runner.invoke(
             main,
