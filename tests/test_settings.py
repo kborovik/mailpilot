@@ -15,13 +15,13 @@ def test_default_settings():
     assert str(settings.database_url) == "postgresql://localhost/mailpilot"
     assert settings.anthropic_model == "claude-sonnet-4-6"
     assert settings.logfire_environment == "development"
-    assert settings.google_pubsub_topic == "gmail-watch"
+    assert settings.google_pubsub_topic == "mailpilot-topic-dev"
 
 
 def test_run_interval_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("mailpilot.settings.CONFIG_PATH", tmp_path / "config.json")
     settings = Settings()
-    assert settings.run_interval == 30
+    assert settings.run_interval == 60
 
 
 def test_settings_from_kwargs():

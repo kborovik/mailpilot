@@ -65,8 +65,8 @@ Keys (all overridable via uppercase env var of the same name):
 - `anthropic_model` -- e.g. `claude-sonnet-4-6`.
 - `google_application_credentials` -- path to service-account JSON. Required
   for Gmail and Drive access.
-- `google_pubsub_topic` -- default `gmail-watch`.
-- `google_pubsub_subscription` -- default `mailpilot-watch`.
+- `google_pubsub_topic` -- default `mailpilot-topic-dev`.
+- `google_pubsub_subscription` -- default `mailpilot-sub-dev`.
 - `logfire_token` -- optional. Enables cloud telemetry.
 - `logfire_environment` -- `development` or `production`.
 - `run_interval` -- fallback poll interval for the sync loop, seconds.
