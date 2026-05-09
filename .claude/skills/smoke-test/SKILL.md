@@ -243,7 +243,7 @@ Wait for a task with `email_id` set to the routed reply and `status == "complete
 
 - Task exists with `email_id == <routed reply id>` and `status == "completed"`.
 - `mailpilot enrollment list --workflow-id <OUTBOUND_WORKFLOW_ID>` still shows status `active` -- by design (ADR-08, `enrollment.status` is operational only). The terminal outcome is recorded as an `enrollment_completed` or `enrollment_failed` activity row, verified in A8.
-- **No additional outbound emails were sent.** Re-run `mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_A>` and confirm only the original outbound from A3 is present. If the count > 1, the agent kept replying despite the decline signal -- record as a defect.
+- **No additional outbound emails were sent.** Re-run `mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_A>` and confirm only the original outbound from A3 is present. If the count > 1, the agent kept replying despite the decline signal -- record as a Bug.
 
 **On failure:** Task never created → check that A6's email has `workflow_id` set and the run loop is alive. Task `failed` → `mailpilot task view <TASK_ID>` for the reason.
 
@@ -370,7 +370,7 @@ Match by `SUBJECT_B1` (likely with `Re:` prefix). Record the wall-clock time the
 **Gate B4 (the demo promise):**
 
 - Reply present, threaded under `SUBJECT_B1`.
-- `LATENCY_B1 <= 60s`. **If the reply takes longer, that is a regression of the lab5.ca/demo promise -- record as a Critical defect.** (Polling cadence is 5s, so granularity is coarse; if the first observation lands at 65s and it was the first reply on the thread, treat the run as borderline and re-test.)
+- `LATENCY_B1 <= 60s`. **If the reply takes longer, that is a regression of the lab5.ca/demo promise -- record as a Critical Bug.** (Polling cadence is 5s, so granularity is coarse; if the first observation lands at 65s and it was the first reply on the thread, treat the run as borderline and re-test.)
 - Reply on the demo side (`mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>`) → `is_routed == true`, `workflow_id == DEMO_WORKFLOW_ID`, `route_method == classified`. The classifier ran -- not `thread_match`, since this is a fresh thread.
 - Reply body **grounded in the KB** -- operator-judged per SPEC §V.31. Substring match against curated `expected_tokens` was retired (false negatives on phrasing variation like `0.48 mm` vs `0.48mm`); the operator now grades the reply against the live source doc. Procedure:
   1. Load the source doc the pair points at:
@@ -379,7 +379,7 @@ Match by `SUBJECT_B1` (likely with `Re:` prefix). Record the wall-clock time the
      python3 .claude/skills/smoke-test/scripts/qa.py source --id "$QA_ID_B1"
      ```
 
-     Exit non-zero = `source_file` is no longer in the demo Drive folder (KB drift) -- record as a defect and stop B4. The script impersonates `inbound@lab5.ca` and looks the file up in folder `1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat`, the same folder the agent grounded against.
+     Exit non-zero = `source_file` is no longer in the demo Drive folder (KB drift) -- record as a Bug and stop B4. The script impersonates `inbound@lab5.ca` and looks the file up in folder `1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat`, the same folder the agent grounded against.
 
   2. Read the agent's reply body:
 
@@ -404,7 +404,7 @@ Match by `SUBJECT_B1` (likely with `Re:` prefix). Record the wall-clock time the
 
      Each unsupported factual claim in the reply MUST appear verbatim in `unsupported_claims` (structural defence against LLM-judge sycophancy -- the field forces the grader to enumerate concrete misses rather than hand-wave a passing rating). `verdict` MUST be `"pass"` if and only if all three booleans are true AND `unsupported_claims` is empty; otherwise `"fail"`.
 
-  Anything other than `verdict == "pass"` is a grounding regression -- record the verdict JSON in Part D. `qa_pairs.json.expected_tokens` is retained for historical-run repro only and is no longer consumed by any gate.
+  Anything other than `verdict == "pass"` is a grounding regression -- record the verdict JSON in §2 Bugs. `qa_pairs.json.expected_tokens` is retained for historical-run repro only and is no longer consumed by any gate.
 
 ### B5. Verify the agent actually used the Drive tools
 
@@ -420,8 +420,8 @@ Run a Logfire query for the `agent.invoke` span produced by B4's reply. Within t
 - All four tool calls present in this order.
 - `search_drive_markdown` returned a non-error list (no `error` key in the tool return) and the list is non-empty.
 - `read_drive_markdown` returned a dict with non-empty `content`.
-- An agent that uses `list_drive_markdown` instead of `search_drive_markdown` for the in-scope question is a regression: with ≥10 docs in the folder, full enumeration is the failure mode the new tool exists to prevent. Record as a defect even if the reply is otherwise correct. Inventing a `file_id` without searching first is also a prompt-fidelity regression.
-- The `reply_email` span returned no `error` key. A return with `error == "format"` means the spec-table lint (§V.29) rejected the body -- the agent rendered specs as space-aligned text instead of a Markdown pipe-table. Record as a prompt-fidelity defect for B4.
+- An agent that uses `list_drive_markdown` instead of `search_drive_markdown` for the in-scope question is a regression: with ≥10 docs in the folder, full enumeration is the failure mode the new tool exists to prevent. Record as a Bug even if the reply is otherwise correct. Inventing a `file_id` without searching first is also a prompt-fidelity regression.
+- The `reply_email` span returned no `error` key. A return with `error == "format"` means the spec-table lint (§V.29) rejected the body -- the agent rendered specs as space-aligned text instead of a Markdown pipe-table. Record as a prompt-fidelity Bug for B4.
 
 ### B6. Send the out-of-scope question
 
@@ -460,7 +460,7 @@ Out-of-scope decline keeps the script verifier (per SPEC §V.31): regex appropri
 
   Exit 0 = pass. Exit 1 = fabrication regression OR missing decline-signal language. Exit 2 = caller passed an in-scope id by mistake (use B4's operator-judged flow instead). The JSON output names which `forbidden_token_pairs` matched (vendor name within 60 chars of a digit -- the fabrication signature) and whether at least one `decline_signals` phrase was found.
 
-- The `agent.invoke` for B6 still shows a KB-consulting tool call followed by `reply_email`. `search_drive_markdown` (returning `[]`) is the expected path -- the agent searches with terms from the question, gets no hits, and declines. `list_drive_markdown` is also acceptable for this decline path. Missing both means the agent declined without consulting the KB -- it might have got lucky on this question, but the prompt contract was not honoured. Record as a defect.
+- The `agent.invoke` for B6 still shows a KB-consulting tool call followed by `reply_email`. `search_drive_markdown` (returning `[]`) is the expected path -- the agent searches with terms from the question, gets no hits, and declines. `list_drive_markdown` is also acceptable for this decline path. Missing both means the agent declined without consulting the KB -- it might have got lucky on this question, but the prompt contract was not honoured. Record as a Bug.
 
 ### B7. Verify the CRM activity timeline
 
@@ -489,7 +489,7 @@ mailpilot email list \
   --since <TEST_START_B>
 ```
 
-**Gate B8:** Zero rows. Any non-zero count means the still-active outbound workflow reacted to B's traffic -- record as a defect.
+**Gate B8:** Zero rows. Any non-zero count means the still-active outbound workflow reacted to B's traffic -- record as a Bug.
 
 Sanity check the operator triggers are still there (B3 and B6 are agent-driven from B's perspective but operator-driven from A's perspective, so they carry `workflow_id == null` on the outbound mailbox):
 
@@ -497,7 +497,7 @@ Sanity check the operator triggers are still there (B3 and B6 are agent-driven f
 mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>
 ```
 
-Expect exactly 2 rows (the B3 and B6 triggers), each with `workflow_id == null`. Any deviation is a separate signal -- either an unexpected outbound send (record as a defect) or a missing trigger (re-run B3/B6).
+Expect exactly 2 rows (the B3 and B6 triggers), each with `workflow_id == null`. Any deviation is a separate signal -- either an unexpected outbound send (record as a Bug) or a missing trigger (re-run B3/B6).
 
 ### B9. Stop the sync loop
 
@@ -517,11 +517,70 @@ Window `[TEST_START_B, now]`. Spans to verify:
 
 ## Phase 5: Final report
 
-Produce a report covering both scenarios. Both are mandatory; a missing scenario is a test failure, not a permitted skip. The report has five parts -- A (phase results), B (cross-cutting Logfire pass), C (analytical findings), D (defects), E (notes and suggestions). Parts D and E are mandatory even on a clean run; together they are the input surface for `/sdd:spec`. Skipping them strands findings.
+Three sections, actionable-only: §1 Execution, §2 Bugs, §3 Invariants. Plus the Spec hand-off block. Both scenarios mandatory; a missing scenario is a test failure, not a permitted skip. The report is a queue of `/sdd:spec` inputs, not a narrative -- if an item is not actionable, it does not appear.
 
-**Auto-write the report to disk.** As the final step of Phase 5, the assistant MUST write the full rendered report (Parts A through E plus the Spec hand-off block) to a file in the current working directory named `smoke-test-<YYYY-MM-DD>-<HHMMSS>.md` (UTC), using the `Write` tool. This happens _after_ any auto-invoked `/sdd:spec` calls so the hand-off block reflects their outcomes. Print the absolute path of the written file as the very last line of the chat response. The on-disk copy is the durable artifact; the chat rendering is for live review.
+**Auto-write to disk.** As the final step of Phase 5, write the rendered report (§1, §2, §3, hand-off) to `./smoke-test-<YYYY-MM-DD>-<HHMMSS>.md` (UTC) using the `Write` tool, _after_ any auto-invoked `/sdd:spec` calls so the hand-off block reflects their outcomes. Print the absolute path as the very last line of the chat response.
 
-### Part A: Phase results
+### Derivation aids (NOT rendered to the report)
+
+These are scan inputs that feed §2 (concrete failures) and §3 (under-specified contracts). Do NOT render the SQL queries, the 13-cat checklist, or per-category narrative as sections in the output.
+
+**Logfire pass.** Run once across both scenarios via `/logfire:debug` with the test window:
+
+```sql
+-- Volume by span name (find noise)
+SELECT span_name, COUNT(*) AS count, AVG(duration) AS avg_ms
+FROM records
+WHERE start_timestamp >= '<EARLIEST_TEST_START>'
+GROUP BY span_name
+ORDER BY count DESC
+LIMIT 30
+```
+
+```sql
+-- Errors and warnings
+SELECT start_timestamp, span_name, message, attributes
+FROM records
+WHERE start_timestamp >= '<EARLIEST_TEST_START>'
+  AND (is_exception = true OR level = 'warn')
+ORDER BY start_timestamp
+LIMIT 50
+```
+
+```sql
+-- Agent invocations (one row per agent.invoke)
+SELECT start_timestamp, attributes->>'workflow_type' AS type,
+       attributes->>'trigger' AS trigger,
+       attributes->>'tool_call_count' AS tools,
+       attributes->>'cache_read_input_tokens' AS cache_read,
+       attributes->>'input_tokens' AS in_tok,
+       attributes->>'output_tokens' AS out_tok
+FROM records
+WHERE start_timestamp >= '<EARLIEST_TEST_START>'
+  AND span_name = 'agent.invoke'
+ORDER BY start_timestamp
+LIMIT 50
+```
+
+**Scan checklist** (categories, scenario-agnostic; skip cleanly if the run did not exercise one). Use these to find anything that should escalate to §2 Bugs or §3 Invariants:
+
+1. CLI usability -- awkward sequencing, missing fields, unhelpful error messages.
+2. Logfire observability -- missing spans/attributes, noisy span families, broken parent-child causality.
+3. Agent prompt fidelity -- DOs/DON'Ts honoured, format constraints, stop conditions, decline vs fabricate, reasoning matches tool calls.
+4. Agent context window -- prompt cache active, tool inventory appropriate, redundant context.
+5. Latency -- end-to-end per stage, scenario SLAs, cold vs warm.
+6. Cost / token economics -- per-invoke tokens, cache hit ratio, classifier cost share.
+7. Tool-call efficiency -- calls per outcome, redundant calls, refusal-round waste.
+8. Routing & classification quality -- `route_method` distribution, classifier reasoning sanity, false-skip cases.
+9. Concurrent workflow safety -- cross-workflow / cross-account leakage.
+10. Tool integration health -- per-integration error rate, informative tool errors.
+11. Data integrity -- agent claims vs DB rows, no orphans, no silent drops.
+12. Determinism / variance -- run-over-run drift on critical paths.
+13. Other -- timing, races, performance, anything off-grid.
+
+### §1 Execution
+
+Phase-results matrix + 3-bullet Logfire signal summary. One screen.
 
 ```
 Smoke Test Results
@@ -550,183 +609,68 @@ Scenario B: KB-grounded demo (lab5.ca/demo, outbound workflow still active)
   B8 Outbound stayed quiet ... PASS  (0 new outbound sends during B)
   B9 Stop sync loop .......... PASS
 
-Entity IDs (shared by both scenarios):
+Entity IDs:
   Outbound account: <id>   Inbound account: <id>   Company: <id>
   Outbound contact: <id>   Inbound contact: <id>
   Outbound workflow: <id>  Demo workflow: <id>
-  KB folder ID: 1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat
 
-Email summary (Scenario A):
-  Outbound send:    <id>  subject: <SUBJECT_A>
-  Inbound delivery: <id>  skipped_no_workflows (expected -- no inbound workflow yet)
-  Operator reply:   <id>  email_id: <INBOUND_SIDE_EMAIL_ID>
-  Reply round-trip: <id>  workflow_id: <OUTBOUND_WORKFLOW_ID> via thread_match
-
-Email summary (Scenario B):
-  In-scope trigger:    <id>  subject: <SUBJECT_B1>
-  In-scope delivery:   <id>  workflow_id: <DEMO_WORKFLOW_ID> via classified
-  In-scope reply:      <id>  latency: <Ns>  cited file: <name>  body grounded: yes
-  Out-of-scope trigger:<id>  subject: <SUBJECT_B2>
-  Out-of-scope reply:  <id>  latency: <Ns>  fabricated specs: NO  declined politely: yes
-
-Loop sentinels:
-  Scenario A: agent.invoke count == 2 (expected 2)
-  Scenario B: agent.invoke count == 2 (expected 2)
-  Outbound workflow during B: 0 new outbound sends (expected 0)
-  Drive tool calls in B: list_drive_markdown >= 2, read_drive_markdown >= 1
+Logfire signals:
+  - Top span by volume: <span_name> (<N> calls)
+  - Errors / warnings: <N> (<one-line summary or "none">)
+  - Cache-hit ratio (multi-turn invokes): <pct> (<one-line note if below ~0.5>)
 ```
 
-If a phase failed, stop Part A at the failing phase with the failure JSON and any captured stdout from the background `mailpilot run`.
+If a phase failed, stop §1 at the failing phase with the failure JSON and any captured stdout from the background `mailpilot run`.
 
-### Part B: Cross-cutting Logfire pass
+### §2 Bugs
 
-Use `/logfire:debug` with the test window. Run once across both scenarios:
+Observable failures, one paragraph each. Mandatory section -- write `Bugs: none.` if nothing fired.
 
-```sql
--- Volume by span name (find noise)
-SELECT span_name, COUNT(*) AS count, AVG(duration) AS avg_ms
-FROM records
-WHERE start_timestamp >= '<EARLIEST_TEST_START>'
-GROUP BY span_name
-ORDER BY count DESC
-LIMIT 30
-```
+A Bug = an observable failure: a gate that did not pass, a regression of a public promise, a wrong functional output, or a broken presentation. Things that "worked as designed" do not appear here. Latent risks surfaced by inspection (no concrete failure this run) belong in §3 Invariants.
 
-```sql
--- Errors and warnings
-SELECT start_timestamp, span_name, message, attributes
-FROM records
-WHERE start_timestamp >= '<EARLIEST_TEST_START>'
-  AND (is_exception = true OR level = 'warn')
-ORDER BY start_timestamp
-LIMIT 50
-```
+**Bug block format.** One paragraph per entry, this exact shape:
 
-```sql
--- Agent invocations (one row per agent.invoke)
-SELECT start_timestamp, attributes->>'workflow_type' AS type,
-       attributes->>'trigger' AS trigger,
-       attributes->>'tool_call_count' AS tools,
-       attributes->>'input_tokens' AS in_tok,
-       attributes->>'output_tokens' AS out_tok
-FROM records
-WHERE start_timestamp >= '<EARLIEST_TEST_START>'
-  AND span_name = 'agent.invoke'
-ORDER BY start_timestamp
-LIMIT 50
-```
-
-### Part C: Analytical findings
-
-Scan checklist. Walk these categories and write the substantive observations directly under each. Each observation either escalates to a **Defect** (Part D, with `Spec action:`) when it represents a failure, or descends to a **Note** or **Suggestion** (Part E, also with `Spec action:` for suggestions) when it is FYI or improvement-shaped. Part C itself is the analytical narrative -- not the spec input surface. Do not file external tickets from Part C; the routing happens in D and E.
-
-The categories below are scenario-agnostic. Skip a category cleanly if the run did not exercise it (e.g. no Drive use → skip Tool integration health for Drive). Add scenario-specific public-promise checks (lab5.ca/demo SLA, etc.) inline under the appropriate category — they are not a separate item.
-
-1. **CLI usability** -- commands needing awkward sequencing or workarounds; missing fields in JSON output; error messages that did not point at the cause.
-
-2. **Logfire observability** -- missing spans, missing attributes on existing spans, noisy span families (quantify with the volume query), broken parent-child causality, rollup span vs per-turn coverage. Are the attributes a future operator would need to debug a regression actually present?
-
-3. **Agent prompt fidelity** -- did agents honor explicit DOs and DON'Ts in `workflow.instructions`? Were format constraints (subject preserved, body shape, citation present) respected? Were stop conditions honored ("do not reply again", "after replying call `record_enrollment_outcome`")? Did the agent decline rather than fabricate when instructed to? Compare the agent's stated reasoning (`agent_reasoning`) against its tool-call sequence -- do they match?
-
-4. **Agent context window formation** -- inspect `chat claude-sonnet-4-6` span attributes (`gen_ai.system_instructions`, `gen_ai.tool.definitions`, `gen_ai.input.messages`, `gen_ai.usage.*`). Is prompt caching active (non-null `cache_read_input_tokens` / `cache_creation_input_tokens`)? Is the tool inventory appropriate for the workflow type or pulled wholesale? How does input-token count grow turn-by-turn within a multi-turn invocation? Any redundant context (e.g. `read_email` / `read_contact` calls when the trigger email and contact are already inlined per template framing)?
-
-5. **Latency / processing speed** -- end-to-end latency (event → outcome): trigger send → routing → agent.invoke start → reply landed. Where does the time go? Median and worst per stage: classifier, agent.invoke total, per-tool durations, Gmail send, Drive read. Any stage > scenario SLA. Cold-start vs warm-loop deltas. Pub/Sub round-trip vs polling fallback latency.
-
-6. **Cost / token economics** -- input/output tokens per `agent.invoke`, by `workflow_type` and `trigger`. Cache hit ratio (`cache_read_input_tokens / total_input_tokens`) -- below ~0.5 on multi-turn invocations is a caching-not-wired signal. Tokens-per-completed-outcome vs tokens-per-failed-outcome. Classifier cost as a fraction of total LLM cost. Any single invocation that ran many turns for a small outcome (cost/value mismatch).
-
-7. **Tool-call efficiency** -- tool calls per outcome (median, max). Redundant calls (read_email when trigger is inlined; read_contact when contact is inlined). Tool-call retry loops on transient errors. Wasted refusal rounds -- the `tool_call_count=5 before refusal` pattern. Tool-arg shape (e.g. `query` field empty on `search_drive_markdown`, `folder_id` mismatched). Did the agent recover from a tool error or propagate it to a refusal?
-
-8. **Routing & classification quality** -- distribution of `route_method` (`thread_match`, `classified`, `skipped_*`). Classifier reasoning sanity-check: does `agent_reasoning` actually match the picked workflow's objective? Suspected misclassifications (classified as workflow X when thread_match was the right answer, or vice versa). False-skip cases (skipped_no_workflows when a workflow existed but didn't match candidate filter).
-
-9. **Concurrent workflow safety** -- with multiple workflows active, did each one stay scoped to its own threads? Cross-workflow leakage (workflow A's agent reacts to workflow B's traffic) is the high-priority signal -- inspect `agent.invoke` spans grouped by `workflow_id` against the time windows of unrelated scenarios. Same for cross-account leakage when multiple accounts run concurrently.
-
-10. **Tool integration health** -- which external integrations did this run exercise (Gmail, Drive, Pub/Sub, DB, Anthropic API)? Per-integration error rate, span attributes (`drive_unavailable`, gmail 4xx/5xx, pubsub backoff). Did agents see informative tool-result errors and adapt, or did they silently propagate failure? Are tool-result spans surfacing the attributes a debugger needs (folder_id, file_id, message_id, hit count)?
-
-11. **Data integrity** -- does what the agent says it did match what's in the DB? Tool calls vs activity rows (`email_sent` for every successful `send_email`, `enrollment_completed` for every `record_enrollment_outcome` with `outcome='completed'`). `email_id` in tool arguments matches an actually-sent email. No orphaned `task` rows, no orphaned enrollments. No silent drop between agent action and persistence.
-
-12. **Determinism / variance** -- when the same scenario runs back-to-back, how much do tool sequences and reply bodies differ? Variance is expected; large variance on critical paths (different doc grounded across runs, different decline shape) is a prompt-stability signal worth flagging.
-
-13. **Other deficiencies** -- timing, race conditions, performance, anything that doesn't fit above.
-
-### Part D: Defects
-
-Mandatory section, even on a clean run -- write `Defects: none.` if nothing fired. This is the operator-readable failure ledger and the primary input surface for `/sdd:spec`. Notes and suggestions live in Part E and MUST NOT mix with Defects.
-
-A Defect = an observable failure: a gate that did not pass, a regression of a public promise, a wrong functional output, or a broken presentation. Things that "worked as designed" are Notes (Part E). Things that "could be better" are Suggestions (Part E).
-
-**Defect block format.** Each entry is one paragraph in this exact shape:
-
-> **Defect N -- <one-line title> (<severity>).** <observable failure: what the test saw vs expected.> Caught at gate <gate id>. <entity / span / file involved.> Suspected cause: <one clause>. <SPEC §V / §T cross-reference if contradicting an existing invariant.> <Logfire signal if the trace proves cause.>
->
-> **Spec action:** `<routing tag>` -- `<exact /sdd:spec invocation to file it>`
-
-`<routing tag>` is one of:
-
-- `bug` -- file an incident in §B. Use when a concrete failure occurred. BACKPROP decides whether a new §V invariant accompanies the §B entry. Invocation: `/sdd:spec bug: <defect body sentence(s)>`
-- `bug+invariant` -- file an incident in §B AND propose a specific new §V invariant in the bug body so BACKPROP appends both. Use when the failure has a clear recurrence class and the invariant can be stated in one sentence. Invocation: `/sdd:spec bug: <defect body>. Propose §V: <invariant text>`
-- `invariant` -- amend §V only, no §B entry. Use when the smoke test exposed an under-specified contract but no concrete incident occurred this run (e.g., a latent risk surfaced by inspection, not by a failed gate). Defects with `invariant` routing are rare; most belong in Part E as Suggestions instead. Invocation: `/sdd:spec amend §V add: <invariant text>`
-- `code-only` -- file no spec entry. Use only when the failure is mechanical (typo, one-off fix, harness flake) with zero recurrence class. The defect is still recorded in Part D for hand-off. No `/sdd:spec` invocation.
-
-**Severity** is one of `Critical`, `High`, `Medium`, `Low`. Number sequentially (`Defect 1`, `Defect 2`, ...).
-
-- `Critical` -- regression of a public promise (lab5.ca/demo SLA, KB grounding, fabrication-free decline). Always at least `bug` routing.
-- `High` -- wrong functional output a real user would see (wrong doc grounded, wrong specs returned, agent silently dropped a tool call). Always at least `bug` routing.
-- `Medium` -- correct functional output with broken presentation (table rendered as plain lines, missing citation, body too long). Routing typically `bug` or `code-only`.
-- `Low` -- harness-only issues (verifier heuristics, false-negative checks). Routing typically `code-only`.
-
-**Defect body shape (so `/sdd:spec bug:` can BACKPROP it):**
-
-- Open with the observable failure (what the test saw, what was expected).
-- Cite the gate that caught it (`A3`, `B4`, `B5`, ...) and the entity / span / file involved.
-- Name the suspected root cause in one clause -- BACKPROP needs this for §B's `cause` column.
-- Cross-reference SPEC §V / §T when the defect contradicts an existing invariant or task.
-- Cite Logfire signals (span name, attribute) when the trace already proves the cause.
-- Plain prose, no bullets inside the block. ASCII only.
-
-**Example Defect (illustrative -- regenerate, do not paste verbatim):**
-
-> **Defect 1 -- outbound agent over-applies KB grounding (Critical).** A3 first attempt failed: with no KB-related instructions in the prompt, the outbound agent still called `search_drive_markdown` for the random topic, found nothing, and refused to send. Workflow had to be amended with explicit "do NOT call list/search/read_drive_markdown" to send. Logfire shows `tool_call_count=5` on the first `agent.invoke` before the refusal. Suspected cause: template registry exposes Drive tools to outbound agents that do not reference a KB. Contradicts the spirit of SPEC §V14.
->
-> **Spec action:** `bug+invariant` -- `/sdd:spec bug: A3 first attempt failed because the outbound agent called search_drive_markdown for a topic with no KB and refused to send. tool_call_count=5 on agent.invoke before the refusal. Cause: Drive tools are unconditionally in the outbound agent inventory. Propose §V: outbound workflows whose instructions do not reference a Google Drive folder MUST NOT receive Drive tools (search/list/read_drive_markdown) in their tool inventory.`
-
-**Auto-file rules.** After the chat-rendered report (before the .md file is written to disk), the assistant MUST sequentially invoke the `Spec action:` line for each Defect according to this matrix:
-
-| Severity | `bug` / `bug+invariant`      | `invariant` | `code-only` |
-| -------- | ---------------------------- | ----------- | ----------- |
-| Critical | auto-invoke                  | auto-invoke | print only  |
-| High     | auto-invoke                  | auto-invoke | print only  |
-| Medium   | print only (operator review) | print only  | print only  |
-| Low      | print only                   | print only  | print only  |
-
-"Auto-invoke" = call `/sdd:spec` with the exact invocation from the `Spec action:` line. Run them one at a time so each `## Next` reply token (`ok` / `revise` / `cancel`) applies to a single defect -- never batch. Record the result (`filed as §B.7 with §V.27`, `cancelled by operator`, etc.) in the hand-off block.
-
-"Print only" = the `Spec action:` line appears in the hand-off block under "Operator review" so the operator can paste it into a `/sdd:spec` call themselves.
-
-### Part E: Notes and suggestions
-
-Mandatory section, even on a clean run. Notes record things that worked; Suggestions propose improvements. Neither is auto-filed; both flow through operator review.
-
-**Note block format.** Use for things that worked as designed and are worth recording so the run is greppable later (e.g., "concurrent multi-workflow operation verified clean", "SPEC §V31 grounding contract held"). Notes carry no spec action.
-
-> **Note N -- <title>.** <one short paragraph: what worked, why it matters, gate it tied to.>
-
-**Suggestion block format.** Use for non-bug improvements: prompt-fidelity hardening, instrumentation gaps, CLI ergonomics, latent-risk mitigations surfaced by inspection rather than by a failed gate. Each Suggestion carries an explicit `Spec action:` so the operator knows the exact `/sdd:spec` invocation to run if they choose to file:
-
-> **Suggestion N -- <title>.** <one paragraph: observation, proposed change, why it helps.>
+> **Bug N -- <one-line title> (<severity>).** <observable failure: what the test saw vs expected.> Caught at gate <gate id>. <entity / span / file involved.> Suspected cause: <one clause>. <SPEC §V / §T cross-reference if contradicting an existing invariant.> <Logfire signal if the trace proves cause.>
 >
 > **Spec action:** `<routing tag>` -- `<exact /sdd:spec invocation>`
 
-Routing tags for Suggestions:
+Routing tag:
 
-- `none` -- FYI only; no spec entry warranted. Most Suggestions land here.
-- `propose-invariant` -- add a §V invariant. Invocation: `/sdd:spec amend §V add: <invariant text>`
-- `propose-task` -- add a §T task. Invocation: `/sdd:spec amend §T add: <task description>`
+- `bug` -- file an incident in §B. Use when a concrete failure occurred. BACKPROP decides whether a new §V accompanies. Invocation: `/sdd:spec bug: <body sentence(s)>`
+- `bug+invariant` -- file in §B AND propose a specific new §V in the body so BACKPROP appends both. Use when the failure has a clear recurrence class and the invariant can be stated in one sentence. Invocation: `/sdd:spec bug: <body>. Propose §V: <invariant text>`
+- `code-only` -- record only; no spec entry. Use only for mechanical / harness-flake failures with zero recurrence class.
 
-Suggestions are NEVER auto-invoked. The `Spec action:` line exists so the operator has a copy-paste-ready invocation if they decide the suggestion is worth filing.
+Severity (number sequentially `Bug 1`, `Bug 2`, ...):
 
-Number Defects, Notes, and Suggestions sequentially across the run so each item has a unique number (`Defect 1`, `Defect 2`, `Note 3`, `Suggestion 4`, ...).
+- `Critical` -- regression of a public promise (lab5.ca/demo SLA, KB grounding, fabrication-free decline). Always at least `bug` routing.
+- `High` -- wrong functional output a real user would see. Always at least `bug` routing.
+- `Medium` -- correct output, broken presentation. Routing typically `bug` or `code-only`.
+- `Low` -- harness-only issues. Routing typically `code-only`.
 
-End Part E with the runtime line:
+**Auto-file matrix.** After the chat-rendered report (before the .md file is written to disk), invoke the `Spec action:` line for each Bug per this matrix:
+
+| Severity | `bug` / `bug+invariant`      | `code-only` |
+| -------- | ---------------------------- | ----------- |
+| Critical | auto-invoke                  | print only  |
+| High     | auto-invoke                  | print only  |
+| Medium   | print only (operator review) | print only  |
+| Low      | print only                   | print only  |
+
+"Auto-invoke" = call `/sdd:spec` with the exact `Spec action:` invocation. Run them sequentially so each `## Next` reply token (`ok` / `revise` / `cancel`) applies to a single Bug -- never batch. Record outcome (`filed as §B.7 with §V.27`, `cancelled by operator`, etc.) in the hand-off block. "Print only" means the line goes into the hand-off "Operator review" list, ready for the operator to paste.
+
+### §3 Invariants
+
+Under-specified contracts surfaced by inspection -- no concrete failure this run, but the run revealed a gap in §V. Mandatory section -- write `Invariants: none.` if nothing fired. Always print-only; the operator pastes if they choose to file.
+
+**Invariant block format.**
+
+> **Invariant N -- <title>.** <one paragraph: observation, proposed change, why it helps. Plain prose, no bullets.>
+>
+> **Spec action:** `propose-invariant` -- `/sdd:spec amend §V add: <invariant text>`
+
+Number sequentially across the run so each item has a unique number (`Bug 1`, `Bug 2`, `Invariant 3`, ...).
+
+End §3 with the runtime line:
 
 ```
 Total runtime: ~<N> minutes. <one-sentence verdict>.
@@ -734,31 +678,28 @@ Total runtime: ~<N> minutes. <one-sentence verdict>.
 
 ### Spec hand-off block
 
-After Part E, after auto-invocations have run, print:
+After §3, after auto-invocations have run, print:
 
 ```
 Spec hand-off
 =============
-Auto-filed (Critical/High Defects):
-  - Defect <N> -- <title>: <result, e.g., "filed as §B.7 with §V.27", "cancelled by operator">
+Auto-filed (Critical/High Bugs):
+  - Bug <N> -- <title>: <result, e.g., "filed as §B.7 with §V.27", "cancelled by operator">
   - ...
 
-Operator review (print-only Defects + Suggestions with non-`none` routing):
-  /sdd:spec bug: <Defect N body...>                          # Defect N (<severity>, <routing>)
-  /sdd:spec amend §V add: <invariant text>                   # Suggestion N (propose-invariant)
+Operator review (print-only Bugs + all Invariants):
+  /sdd:spec bug: <Bug N body...>                          # Bug N (<severity>, <routing>)
+  /sdd:spec amend §V add: <invariant text>                # Invariant N
   ...
-
-Skipped (Notes + `none`-routed Suggestions + `code-only` Defects):
-  N items, see Parts D and E above.
 ```
 
-Each line under "Operator review" MUST be the exact `Spec action:` invocation from the originating Defect or Suggestion -- ready to paste into a `/sdd:spec` call. The trailing `# comment` names the originator so the operator can find it in the body.
+Each line under "Operator review" MUST be the exact `Spec action:` invocation -- ready to paste. The trailing `# comment` names the originator so the operator can find it in the body.
 
-If a `/sdd:spec` invocation is cancelled or revised by the user mid-run, record the outcome in the auto-filed list and continue with the next defect.
+If a `/sdd:spec` invocation is cancelled or revised by the user mid-run, record the outcome in the auto-filed list and continue with the next Bug.
 
 ### Write to disk
 
-After the hand-off block has been chat-rendered and the auto-invocations have settled, write the entire report (Parts A-E plus hand-off) to `./smoke-test-<YYYY-MM-DD>-<HHMMSS>.md` (UTC) via the `Write` tool. Print the absolute path as the final line of the chat response. The on-disk file is the durable artifact for later spec work; the chat rendering is for live review only.
+After the hand-off block has been chat-rendered and auto-invocations have settled, write the entire report (§1, §2, §3 + hand-off) to `./smoke-test-<YYYY-MM-DD>-<HHMMSS>.md` (UTC) via the `Write` tool. Print the absolute path as the final line of the chat response. The on-disk file is the durable artifact for later spec work; the chat rendering is for live review only.
 
 ---
 
