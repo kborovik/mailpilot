@@ -2,7 +2,7 @@
 name: release
 description: Cut a SemVer release for `mailpilot`, build the `.whl` artifact, push tag and main, and publish a GitHub release with the wheel attached as a downloadable asset. Local-then-remote workflow — extends `/gh:release` semantics with `uv build` + `gh release create`. Triggers when the user says "release", "ship", "publish", "cut a version", "build the wheel", "deploy".
 argument-hint: [patch|minor|major|x.y.z|retag-baseline]
-allowed-tools: Bash(git *), Bash(uv build), Bash(gh release *), Bash(ls dist/*), Read, Edit
+allowed-tools: Bash(git *), Bash(uv build), Bash(uv lock), Bash(gh release *), Bash(ls dist/*), Read, Edit
 ---
 
 Cut a SemVer release for `mailpilot`, build the `.whl` artifact, push, and publish a GitHub release with the wheel attached.
@@ -113,6 +113,7 @@ Render breakdown so bump derivation is auditable. Required fields:
 - **Bump derivation**: explicit one-liner showing rule fired — e.g. `0 breaking + 0 feat → patch (default)`, `1 breaking → major`, `arg "x.y.z" → pinned`, `no prior tag & ⊥ arg → baseline (no bump)`, `arg "retag-baseline" → recovery (no bump, manifest unchanged)`.
 - **Target tag**: `v<x.y.z>`.
 - **Tags scheduled for deletion** (retag-baseline only): list every prior tag matching §3 pattern.
+- **Lockfile refresh**: `uv lock` → `uv.lock` staged with `pyproject.toml` (skipped in baseline ∨ retag-baseline mode).
 - **Push refs**: `origin main`, `origin v<x.y.z>` (skipped in retag-baseline mode → see §13).
 - **Wheel path**: `dist/mailpilot-<x.y.z>-py3-none-any.whl`.
 - **GitHub release cmd**: `gh release create v<x.y.z> --verify-tag --notes-from-tag dist/mailpilot-<x.y.z>-py3-none-any.whl`.
@@ -125,7 +126,8 @@ Wait for user confirmation. ⊥ confirm → exit, ⊥ side effects.
 (Skip if baseline mode ∨ retag-baseline mode — manifest already at target.)
 
 - Edit `pyproject.toml` → set `[project].version` = target.
-- Stage: `git add pyproject.toml`.
+- Run `uv lock` → refresh `uv.lock` so the `mailpilot` package version field tracks the manifest. Why: stale lockfile causes the next `uv run` to mutate `uv.lock` outside a release commit, leaking the bump into an unrelated change.
+- Stage: `git add pyproject.toml uv.lock`.
 
 ### §11 Commit
 
@@ -211,6 +213,7 @@ Apply `core:steno` skill to release notes. Drop articles ∧ filler, fragments �
 ## Requirements
 
 - Manifest = `pyproject.toml`. Build backend = `uv_build` (declared in `[build-system]`). Single wheel emitted: `mailpilot-<x.y.z>-py3-none-any.whl`.
+- `uv.lock` ! re-locked alongside the manifest bump and committed in the same `chore: release v<x.y.z>` commit. Why: `uv.lock` records the workspace package version; leaving it stale means the next `uv` invocation rewrites it outside any release commit.
 - SemVer only — `x.y.z`, ⊥ pre-release suffixes.
 - Annotated tag (`-a` / `--annotate`), ⊥ lightweight.
 - All `git tag --annotate` ∧ `git commit` calls pass `--cleanup=verbatim` — git's default `commit.cleanup=strip` would silently drop `#`-prefix lines (release-note section headers) from messages.
