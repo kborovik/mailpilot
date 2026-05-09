@@ -27,7 +27,7 @@ Agent-operated CRM. Gmail = comms layer. Claude Code = strategist; internal Pyda
   - `template` = read-only, code-defined (registry in `src/mailpilot/agent/templates.py` per §V.32). Verbs: `list [--direction inbound|outbound]`, `view NAME`. ⊥ create/update/delete — new template = code change + PR.
 - agent tools (`src/mailpilot/agent/tools.py`): `send_email`, `reply_email`, `search_emails`, `read_email`, `read_contact`, `read_company`, `list_enrollments`, `create_task`, `cancel_task`, `record_enrollment_outcome`, `disable_contact`, `list_drive_markdown`, `read_drive_markdown`, `search_drive_markdown`, `noop`. ∀ tool → typed sig, dict return, err dict on failure.
 - pubsub (`src/mailpilot/pubsub.py`): topic `gmail-watch`, sub `mailpilot-watch`. `setup_pubsub()` idempotent. `start_subscriber(settings, callback)` streaming pull. `make_notification_callback(queue, wakeup_event)` decode → enqueue → `wakeup_event.set()`. `renew_watches()` refresh @ T-24h.
-- config (`src/mailpilot/settings.py`): `database_url`, `anthropic_api_key`, `anthropic_model` (default `claude-sonnet-4-6`), `google_application_credentials`, `google_pubsub_topic`, `google_pubsub_subscription`, `logfire_token`, `logfire_environment` ∈ {`development`, `production`}, `run_interval` (default 30s).
+- config (`src/mailpilot/settings.py`): `database_url`, `anthropic_api_key`, `anthropic_model` (default `claude-sonnet-4-6`), `google_application_credentials`, `google_pubsub_topic`, `google_pubsub_subscription`, `logfire_token`, `logfire_environment` ∈ {`development`, `production`}, `run_interval` (default 60s).
 - module: `src/mailpilot/gmail.py` → `GmailClient`; `src/mailpilot/drive.py` → `DriveClient`. Mirror shape.
 - entrypoint: `mailpilot = "mailpilot.cli:main"`.
 
