@@ -38,12 +38,17 @@ from mailpilot.settings import Settings
 
 _VALID_DISABLE_STATUSES = ("bounced", "unsubscribed")
 
-# Per §V.29: detect spec-shape rows (label + 2+ spaces + number) on lines that
-# do not use Markdown pipe-table syntax. Three or more such lines without a
-# `|---|` separator anywhere in the body indicates a spec sheet rendered as
-# space-aligned text rather than a proper pipe-table -- recurring drift per
-# §B.5 / §B.9 that prompt-only fixes did not hold.
-_SPEC_ROW_RE = re.compile(r"^[^|]+?\s{2,}[\$]?[\d,]+(\.\d+)?")
+# Per §V.29: detect spec-shape rows (label + 2+ spaces + any non-whitespace
+# value) on lines that do not use Markdown pipe-table syntax. Three or more
+# such lines without a `|---|` separator anywhere in the body indicates a
+# spec sheet rendered as space-aligned text rather than a proper pipe-table.
+# Recurring drift per §B.5 / §B.9 / §B.14 that prompt-only fixes did not hold;
+# numeric-only matching pre-§B.14 missed non-numeric KDF rows like
+# "Mesh Size  20x50". ASCII rule-line runs (`-{6,}`, `={6,}`, `_{6,}` on a
+# standalone line) do NOT count as a pipe-table separator -- only `|---|`
+# does -- so an agent emitting `------` between key/value rows still trips
+# the lint.
+_SPEC_ROW_RE = re.compile(r"^[^|]+?\s{2,}\S")
 _PIPE_SEPARATOR_RE = re.compile(r"\|\s*-{3,}\s*\|")
 
 
