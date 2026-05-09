@@ -74,6 +74,37 @@ def test_completion_unsupported_shell(runner: CliRunner) -> None:
     assert result.exit_code != 0
 
 
+# -- --skill -------------------------------------------------------------------
+
+
+def test_skill_prints_packaged_body_verbatim() -> None:
+    from importlib.resources import files
+
+    expected = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    result = CliRunner().invoke(main, ["--skill"])
+    assert result.exit_code == 0
+    assert result.stdout == expected
+    assert result.stderr == ""
+
+
+def test_skill_resource_path_resolves() -> None:
+    from importlib.resources import files
+
+    skill_path = files("mailpilot").joinpath("SKILL.md")
+    assert skill_path.is_file()
+
+
+def test_skill_missing_file_hard_fails() -> None:
+    mock_resource = MagicMock()
+    mock_resource.read_text.side_effect = FileNotFoundError("no SKILL.md")
+    with patch("importlib.resources.files") as mock_files:
+        mock_files.return_value.joinpath.return_value = mock_resource
+        result = CliRunner().invoke(main, ["--skill"])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert "SKILL.md missing" in result.stderr
+
+
 # -- account create ------------------------------------------------------------
 
 

@@ -124,6 +124,28 @@ def _print_completion(
     ctx.exit(0)
 
 
+def _print_skill(ctx: click.Context, param: click.Parameter, value: bool) -> None:
+    """Eager callback: emit the packaged SKILL.md body verbatim and exit.
+
+    Runs before Click validates that a subcommand was given, so
+    ``mailpilot --skill`` works without supplying a subcommand. Hard-fails
+    with a stderr diagnostic when the package data is missing.
+    """
+    if not value or ctx.resilient_parsing:
+        return
+    from importlib.resources import files
+
+    skill_path = files("mailpilot").joinpath("SKILL.md")
+    try:
+        body = skill_path.read_text(encoding="utf-8")
+    except (FileNotFoundError, IsADirectoryError, OSError) as exc:
+        click.echo(f"mailpilot: SKILL.md missing from package: {exc}", err=True)
+        ctx.exit(1)
+        return
+    click.echo(body, nl=False)
+    ctx.exit(0)
+
+
 @click.group()
 @click.version_option()
 @click.option("--debug", is_flag=True, help="Enable debug logging.")
@@ -135,6 +157,15 @@ def _print_completion(
     expose_value=False,
     callback=_print_completion,
     help="Print shell completion script and exit.",
+)
+@click.option(
+    "--skill",
+    is_flag=True,
+    default=False,
+    is_eager=True,
+    expose_value=False,
+    callback=_print_skill,
+    help="Print the packaged SKILL.md body and exit.",
 )
 @click.pass_context
 def main(ctx: click.Context, debug: bool) -> None:
