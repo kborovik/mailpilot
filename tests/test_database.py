@@ -60,7 +60,9 @@ from mailpilot.database import (
     list_tasks,
     list_workflows,
     list_workflows_full,
+    manual_retry_task,
     pause_workflow,
+    reschedule_task_for_retry,
     search_companies,
     search_contacts,
     search_emails,
@@ -2720,6 +2722,148 @@ def test_complete_task_stores_result(
     assert completed.result["reasoning"] == agent_result["reasoning"]
     assert completed.result["tool_calls"] == agent_result["tool_calls"]
     assert completed.completed_at is not None
+
+
+def test_reschedule_task_for_retry_bumps_attempt_and_advances_scheduled_at(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """V44: status stays pending; attempt_count bumped; scheduled_at
+    advances by backoff."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    task = create_task(
+        database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="follow up",
+        scheduled_at="2026-04-22T12:00:00Z",
+    )
+
+    rescheduled = reschedule_task_for_retry(
+        database_connection,
+        task.id,
+        backoff_seconds=30,
+        exc=RuntimeError("503 unavailable"),
+    )
+
+    assert rescheduled is not None
+    assert rescheduled.status == "pending"
+    assert rescheduled.attempt_count == 1
+    assert rescheduled.completed_at is None
+    last = rescheduled.result["last_error"]
+    assert isinstance(last, dict)
+    assert last["type"] == "RuntimeError"
+    assert "503" in cast(str, last["message"])
+
+    # Re-driving bumps attempt_count again
+    rescheduled = reschedule_task_for_retry(
+        database_connection,
+        task.id,
+        backoff_seconds=120,
+        exc=RuntimeError("again"),
+    )
+    assert rescheduled is not None
+    assert rescheduled.attempt_count == 2
+
+
+def test_reschedule_task_for_retry_returns_none_for_unknown_id(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    rescheduled = reschedule_task_for_retry(
+        database_connection,
+        "01234567-0000-7000-0000-000000000000",
+        backoff_seconds=30,
+        exc=RuntimeError("nope"),
+    )
+    assert rescheduled is None
+
+
+def test_manual_retry_task_resets_failed_row(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """V44: failed -> pending, attempt_count=0, scheduled_at=now()."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    task = create_task(
+        database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="follow up",
+        scheduled_at="2026-04-22T12:00:00Z",
+    )
+    complete_task(
+        database_connection,
+        task.id,
+        status="failed",
+        result={"reason": "boom"},
+    )
+
+    reset = manual_retry_task(database_connection, task.id)
+
+    assert reset is not None
+    assert reset.status == "pending"
+    assert reset.attempt_count == 0
+    assert reset.completed_at is None
+
+
+def test_manual_retry_task_resets_cancelled_row(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    task = create_task(
+        database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="follow up",
+        scheduled_at="2026-04-22T12:00:00Z",
+    )
+    cancel_task(database_connection, task.id)
+
+    reset = manual_retry_task(database_connection, task.id)
+
+    assert reset is not None
+    assert reset.status == "pending"
+
+
+def test_manual_retry_task_refuses_completed_row(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """V44: completed rows refuse retry -- tools already fired, replay
+    risks duplicate side-effects."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    task = create_task(
+        database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="follow up",
+        scheduled_at="2026-04-22T12:00:00Z",
+    )
+    complete_task(database_connection, task.id, status="completed", result={})
+
+    assert manual_retry_task(database_connection, task.id) is None
+
+
+def test_manual_retry_task_refuses_pending_row(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """V44: pending rows are no-op -- already queued."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    task = create_task(
+        database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="follow up",
+        scheduled_at="2026-04-22T12:00:00Z",
+    )
+    assert manual_retry_task(database_connection, task.id) is None
 
 
 # -- List vs view contract -----------------------------------------------------

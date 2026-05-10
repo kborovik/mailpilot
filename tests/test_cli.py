@@ -5690,6 +5690,78 @@ def test_task_cancel_not_pending(runner: CliRunner, mock_connection: MagicMock) 
     assert "not pending" in data["message"]
 
 
+# -- task retry ---------------------------------------------------------------
+
+
+def test_task_retry_resets_failed_row(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    failed = _make_task(status="failed")
+    reset = _make_task(status="pending", attempt_count=0)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_task", return_value=failed),
+        patch("mailpilot.database.manual_retry_task", return_value=reset) as mock_retry,
+    ):
+        result = runner.invoke(main, ["task", "retry", "--task-id", failed.id])
+
+    assert result.exit_code == 0, result.output
+    mock_retry.assert_called_once_with(mock_connection, failed.id)
+    data = json.loads(result.output)
+    assert data["task"]["status"] == "pending"
+    assert data["task"]["attempt_count"] == 0
+
+
+def test_task_retry_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_task", return_value=None),
+    ):
+        result = runner.invoke(main, ["task", "retry", "--task-id", "missing"])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+
+
+def test_task_retry_pending_invalid_state(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    pending = _make_task(status="pending")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_task", return_value=pending),
+        patch("mailpilot.database.manual_retry_task", return_value=None),
+    ):
+        result = runner.invoke(main, ["task", "retry", "--task-id", pending.id])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "invalid_state"
+
+
+def test_task_retry_completed_invalid_state(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """V44: completed rows refuse retry -- replay risks duplicate
+    side-effects since tools already fired."""
+    completed = _make_task(status="completed")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_task", return_value=completed),
+        patch("mailpilot.database.manual_retry_task", return_value=None),
+    ):
+        result = runner.invoke(main, ["task", "retry", "--task-id", completed.id])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "invalid_state"
+
+
 # -- run command ---------------------------------------------------------------
 
 

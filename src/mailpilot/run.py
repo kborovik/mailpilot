@@ -14,6 +14,7 @@ import logfire
 import psycopg
 
 from mailpilot.agent import invoke_workflow_agent
+from mailpilot.agent.retry import BACKOFF_SECONDS, MAX_ATTEMPTS, is_transient
 from mailpilot.database import (
     complete_task,
     create_tasks_for_routed_emails,
@@ -24,6 +25,7 @@ from mailpilot.database import (
     get_workflow,
     list_accounts,
     list_pending_tasks,
+    reschedule_task_for_retry,
 )
 from mailpilot.gmail import GmailClient
 from mailpilot.models import Task
@@ -125,18 +127,7 @@ def execute_task(
                 trigger="task",
             )
         except Exception as exc:
-            logfire.exception(
-                "run.task.agent_failed",
-                task_id=task.id,
-            )
-            operator_event("error", source="run.task.agent_failed", message=str(exc))
-            connection.rollback()
-            complete_task(
-                connection,
-                task.id,
-                status="failed",
-                result={"reason": str(exc)},
-            )
+            _handle_agent_failure(connection, task, exc)
             return
 
         if result is None:
@@ -147,6 +138,51 @@ def execute_task(
             return
 
         complete_task(connection, task.id, status="completed", result=result)
+
+
+def _handle_agent_failure(
+    connection: psycopg.Connection[dict[str, Any]],
+    task: Task,
+    exc: Exception,
+) -> None:
+    """Branch transient (retry) vs terminal (`failed`) per `§V.44`."""
+    connection.rollback()
+    next_attempt = task.attempt_count + 1
+    transient = is_transient(exc)
+    if transient and next_attempt < MAX_ATTEMPTS:
+        backoff = BACKOFF_SECONDS[task.attempt_count]
+        logfire.warn(
+            "run.task.transient_retry",
+            task_id=task.id,
+            attempt=next_attempt,
+            max_attempts=MAX_ATTEMPTS,
+            backoff_seconds=backoff,
+            exc_type=type(exc).__name__,
+        )
+        operator_event(
+            "task.retry",
+            task_id=task.id,
+            attempt=next_attempt,
+            exc=type(exc).__name__,
+        )
+        reschedule_task_for_retry(connection, task.id, backoff, exc)
+        return
+    logfire.exception(
+        "run.task.agent_failed",
+        task_id=task.id,
+    )
+    operator_event("error", source="run.task.agent_failed", message=str(exc))
+    terminal_reason = "max_attempts" if transient else "non_transient"
+    complete_task(
+        connection,
+        task.id,
+        status="failed",
+        result={
+            "reason": str(exc),
+            "attempt_count": next_attempt,
+            "terminal": terminal_reason,
+        },
+    )
 
 
 def run_loop(
