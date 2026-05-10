@@ -11,7 +11,7 @@ Agent-operated CRM. Gmail = comms layer. Claude Code = strategist; internal Pyda
 - IDs = UUIDv7 (`uuid.uuid7()` via `_new_id()`).
 - Gmail scope = `gmail.modify` only. ⊥ additional Gmail scopes.
 - Drive scope = `drive.readonly` only. Read-only KB grounding. ⊥ write/modify.
-- Auth = service account & domain-wide delegation. Per-account impersonation via `credentials.with_subject(email)`. ⊥ OAuth user login.
+- Auth = service account & domain-wide delegation per §V.42. Credential source ∈ {file path (`google_application_credentials` setting ∨ `GOOGLE_APPLICATION_CREDENTIALS` env var), Application Default Credentials (e.g. GCE metadata server, Workload Identity, Cloud Run identity)}. Per-account impersonation: file creds → `credentials.with_subject(email)`; ADC creds → `service_account.Credentials(signer=iam.Signer(...), service_account_email=<sa>, subject=email, ...)`. ⊥ OAuth user login.
 - Email body = plain text only (control chars stripped). ⊥ HTML body persistence. ⊥ embeddings, ⊥ vector store, ⊥ ingestion pipeline.
 - KB files = `.md` in Drive folder named in `workflow.instructions`. ⊥ in-app PDF/Docs/HTML conversion.
 - ASCII-only project artifacts (code, docs, CLI output). Agent-generated email body content exempt.
