@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
-from mailpilot.drive import DriveClient
+from mailpilot.drive import DriveClient, build_drive_service
 
 
 def _make_service(
@@ -171,3 +171,28 @@ def test_read_markdown_decodes_utf8_with_replacement_on_invalid_bytes() -> None:
 
     assert result["content"].startswith("hi ")
     assert "there" in result["content"]
+
+
+def test_build_drive_service_caps_socket_timeout_at_60_seconds() -> None:
+    """V44: Drive socket-timeout cap bounds stall window so the retry
+    classifier sees ``socket.timeout`` quickly."""
+    with (
+        patch("mailpilot.gmail.build_delegated_credentials") as mock_creds,
+        patch("googleapiclient.discovery.build") as mock_build,
+        patch("httplib2.Http") as mock_http,
+        patch("google_auth_httplib2.AuthorizedHttp") as mock_authed,
+    ):
+        mock_creds.return_value = MagicMock()
+        mock_http.return_value = MagicMock()
+        mock_authed.return_value = MagicMock()
+
+        build_drive_service("user@example.com")
+
+    mock_http.assert_called_once_with(timeout=60)
+    mock_authed.assert_called_once_with(
+        mock_creds.return_value, http=mock_http.return_value
+    )
+    build_kwargs = mock_build.call_args.kwargs
+    build_args = mock_build.call_args.args
+    assert build_args == ("drive", "v3")
+    assert build_kwargs == {"http": mock_authed.return_value}

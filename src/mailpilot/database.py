@@ -2027,11 +2027,102 @@ def list_tasks(
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
         "SELECT id, workflow_id, contact_id, email_id, description, "
-        "scheduled_at, status "
+        "scheduled_at, status, attempt_count "
         "FROM task {} ORDER BY scheduled_at DESC LIMIT %(limit)s"
     ).format(where)
     rows = connection.execute(query, params).fetchall()
     return [TaskSummary.model_validate(row) for row in rows]
+
+
+def reschedule_task_for_retry(
+    connection: psycopg.Connection[dict[str, Any]],
+    task_id: str,
+    backoff_seconds: int,
+    exc: BaseException,
+) -> Task | None:
+    """Reschedule a transient-failure task for another attempt.
+
+    Status remains ``pending``. ``attempt_count`` is incremented and
+    ``scheduled_at`` is advanced by ``backoff_seconds``. The row's
+    ``result`` JSON captures a summary of the last failure so an
+    operator inspecting the row mid-retry-loop sees what's been tried.
+
+    Args:
+        connection: Open database connection.
+        task_id: Task ID.
+        backoff_seconds: Delay to add before the next attempt fires.
+        exc: Exception from the failed attempt; used to populate the
+            ``result.last_error`` summary.
+
+    Returns:
+        Updated task, or ``None`` if the row does not exist.
+    """
+    summary = {
+        "last_error": {
+            "type": type(exc).__name__,
+            "message": str(exc),
+        },
+    }
+    row = connection.execute(
+        """\
+        UPDATE task
+        SET attempt_count = attempt_count + 1,
+            scheduled_at = CURRENT_TIMESTAMP + (%(delay)s || ' seconds')::interval,
+            result = %(result)s
+        WHERE id = %(id)s
+        RETURNING *
+        """,
+        {
+            "id": task_id,
+            "delay": str(backoff_seconds),
+            "result": Json(summary),
+        },
+    ).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Task.model_validate(row)
+
+
+def manual_retry_task(
+    connection: psycopg.Connection[dict[str, Any]],
+    task_id: str,
+) -> Task | None:
+    """Reset a terminal task row for a fresh retry, operator-initiated.
+
+    Allowed only on rows with status ``failed`` or ``cancelled``.
+    Refuses ``completed`` rows (tools already fired - retry would
+    duplicate side-effects) and ``pending`` rows (already queued, no-op).
+
+    Resets ``status='pending'``, ``attempt_count=0``, ``scheduled_at=now()``,
+    and clears ``completed_at``. The row's ``UPDATE`` of ``status`` and
+    ``scheduled_at`` fires ``pg_notify('task_pending')`` via
+    ``task_pending_trigger`` so the run loop wakes immediately.
+
+    Args:
+        connection: Open database connection.
+        task_id: Task ID.
+
+    Returns:
+        Reset task, or ``None`` if the row does not exist or is not in
+        a retryable state.
+    """
+    row = connection.execute(
+        """\
+        UPDATE task
+        SET status = 'pending',
+            attempt_count = 0,
+            scheduled_at = CURRENT_TIMESTAMP,
+            completed_at = NULL
+        WHERE id = %(id)s AND status IN ('failed', 'cancelled')
+        RETURNING *
+        """,
+        {"id": task_id},
+    ).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Task.model_validate(row)
 
 
 def get_unprocessed_inbound_email(

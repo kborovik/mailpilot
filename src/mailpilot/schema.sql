@@ -120,26 +120,29 @@ CREATE INDEX IF NOT EXISTS idx_email_gmail_thread_id ON email(gmail_thread_id);
 CREATE INDEX IF NOT EXISTS idx_email_rfc2822_message_id ON email(rfc2822_message_id);
 
 CREATE TABLE IF NOT EXISTS task (
-    id            TEXT PRIMARY KEY,
-    workflow_id   TEXT NOT NULL REFERENCES workflow(id),
-    contact_id    TEXT NOT NULL REFERENCES contact(id),
-    email_id      TEXT REFERENCES email(id),
-    description   TEXT NOT NULL,
-    context       JSONB NOT NULL DEFAULT '{}',
-    scheduled_at  TIMESTAMPTZ NOT NULL,
-    status        TEXT NOT NULL DEFAULT 'pending'
-                  CHECK (status IN ('pending', 'completed', 'failed', 'cancelled')),
-    result        JSONB NOT NULL DEFAULT '{}',
-    completed_at  TIMESTAMPTZ,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    id             TEXT PRIMARY KEY,
+    workflow_id    TEXT NOT NULL REFERENCES workflow(id),
+    contact_id     TEXT NOT NULL REFERENCES contact(id),
+    email_id       TEXT REFERENCES email(id),
+    description    TEXT NOT NULL,
+    context        JSONB NOT NULL DEFAULT '{}',
+    scheduled_at   TIMESTAMPTZ NOT NULL,
+    status         TEXT NOT NULL DEFAULT 'pending'
+                   CHECK (status IN ('pending', 'completed', 'failed', 'cancelled')),
+    result         JSONB NOT NULL DEFAULT '{}',
+    attempt_count  INTEGER NOT NULL DEFAULT 0,
+    completed_at   TIMESTAMPTZ,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_task_workflow_id ON task(workflow_id);
 CREATE INDEX IF NOT EXISTS idx_task_contact_id ON task(contact_id);
 CREATE INDEX IF NOT EXISTS idx_task_scheduled_at ON task(scheduled_at) WHERE status = 'pending';
 
--- PG NOTIFY trigger: fires on every task INSERT so the sync loop can
--- drain the task queue immediately instead of waiting for the next poll.
+-- PG NOTIFY trigger: fires on every task INSERT and on UPDATEs that change
+-- status or scheduled_at so the sync loop can drain the queue immediately
+-- when a transient retry reschedule lands. Terminal-status updates also
+-- wake the loop; the resulting empty drain is benign noise.
 CREATE OR REPLACE FUNCTION notify_task_pending() RETURNS trigger AS $$
 BEGIN
     PERFORM pg_notify('task_pending', '');
@@ -149,7 +152,7 @@ $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS task_pending_trigger ON task;
 CREATE TRIGGER task_pending_trigger
-    AFTER INSERT ON task
+    AFTER INSERT OR UPDATE OF status, scheduled_at ON task
     FOR EACH ROW
     EXECUTE FUNCTION notify_task_pending();
 

@@ -21,9 +21,21 @@ _DRIVE_SCOPE = ["https://www.googleapis.com/auth/drive.readonly"]
 
 _MARKDOWN_MIME_TYPE = "text/markdown"
 
+_DRIVE_HTTP_TIMEOUT_SECONDS = 60
+"""Socket-level timeout on the Drive transport so a hung TCP read
+surfaces as ``socket.timeout`` quickly. The bounded auto-retry
+classifier (``mailpilot.agent.retry.is_transient``) treats those as
+transient per `§V.44`."""
+
 
 def build_drive_service(email: str) -> DriveService:
     """Build a Drive API service instance with delegated credentials.
+
+    The transport is wrapped with ``httplib2.Http(timeout=...)`` so a
+    hung TCP read on Drive surfaces as ``socket.timeout`` within the
+    bound. Per `§V.44`, those timeouts feed the bounded auto-retry
+    classifier; the bound also caps how long a single Drive call can
+    stall the agent's read window.
 
     Args:
         email: Gmail address to impersonate via domain-wide delegation.
@@ -31,12 +43,18 @@ def build_drive_service(email: str) -> DriveService:
     Returns:
         Drive API service resource.
     """
+    import httplib2
+    from google_auth_httplib2 import AuthorizedHttp
     from googleapiclient.discovery import build
 
     from mailpilot.gmail import build_delegated_credentials
 
     delegated = build_delegated_credentials(_DRIVE_SCOPE, email)
-    return build("drive", "v3", credentials=delegated)
+    authed_http = AuthorizedHttp(
+        delegated,
+        http=httplib2.Http(timeout=_DRIVE_HTTP_TIMEOUT_SECONDS),
+    )
+    return build("drive", "v3", http=authed_http)
 
 
 class DriveClient:

@@ -2384,3 +2384,33 @@ def task_cancel(task_id: str) -> None:
         output_entity("task", cancelled)
     finally:
         connection.close()
+
+
+@task.command("retry")
+@click.option("--task-id", required=True, help="Task ID to retry.")
+def task_retry(task_id: str) -> None:
+    """Reset a failed or cancelled task for a fresh attempt.
+
+    Refuses ``completed`` rows (tools already fired -- replay risks
+    duplicate side-effects) and ``pending`` rows (already queued).
+    """
+    from mailpilot.database import (
+        get_task,
+        initialize_database,
+        manual_retry_task,
+    )
+
+    connection = initialize_database(_database_url())
+    try:
+        existing = get_task(connection, task_id)
+        if existing is None:
+            output_error(f"task not found: {task_id}", "not_found")
+        reset = manual_retry_task(connection, task_id)
+        if reset is None:
+            output_error(
+                f"task not retryable in status {existing.status!r}: {task_id}",
+                "invalid_state",
+            )
+        output_entity("task", reset)
+    finally:
+        connection.close()

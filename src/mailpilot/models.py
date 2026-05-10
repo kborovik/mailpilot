@@ -265,6 +265,7 @@ class Task(BaseModel):
     scheduled_at: datetime
     status: TaskStatus = "pending"
     result: dict[str, object] = {}
+    attempt_count: int = 0
     completed_at: datetime | None = None
     created_at: datetime
 
@@ -279,6 +280,7 @@ class TaskSummary(BaseModel):
     description: str
     scheduled_at: datetime
     status: TaskStatus
+    attempt_count: int = 0
 
 
 ActivityType = Literal[

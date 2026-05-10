@@ -278,9 +278,10 @@ def test_execute_task_lock_held(
     mock_complete.assert_not_called()
 
 
-def test_execute_task_agent_error(
+def test_execute_task_agent_error_non_transient_terminal(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
+    """Non-transient exception goes terminal immediately, no retry."""
     from conftest import make_test_settings
     from mailpilot.run import execute_task
 
@@ -299,15 +300,171 @@ def test_execute_task_agent_error(
             side_effect=RuntimeError("LLM error"),
         ),
         patch("mailpilot.run.complete_task") as mock_complete,
+        patch("mailpilot.run.reschedule_task_for_retry") as mock_reschedule,
     ):
         execute_task(database_connection, settings, task)
 
+    mock_reschedule.assert_not_called()
     mock_complete.assert_called_once_with(
         database_connection,
         _TASK_ID,
         status="failed",
-        result={"reason": "LLM error"},
+        result={
+            "reason": "LLM error",
+            "attempt_count": 1,
+            "terminal": "non_transient",
+        },
     )
+
+
+def test_execute_task_transient_error_reschedules(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Transient error w/ budget left -> reschedule, not terminal."""
+    from unittest.mock import MagicMock
+
+    from googleapiclient.errors import HttpError
+
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings()
+    task = _make_task()
+    workflow = _make_workflow()
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+
+    resp = MagicMock()
+    resp.status = 503
+    transient = HttpError(resp, b"{}", uri="https://example.com")
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch("mailpilot.run.invoke_workflow_agent", side_effect=transient),
+        patch("mailpilot.run.complete_task") as mock_complete,
+        patch("mailpilot.run.reschedule_task_for_retry") as mock_reschedule,
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_complete.assert_not_called()
+    mock_reschedule.assert_called_once()
+    args = mock_reschedule.call_args.args
+    assert args[0] is database_connection
+    assert args[1] == _TASK_ID
+    assert args[2] == 30  # BACKOFF_SECONDS[0]
+    assert args[3] is transient
+
+
+def test_execute_task_transient_error_budget_exhausted_terminal(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Transient error w/ attempt_count == MAX-1 -> terminal failed."""
+    from unittest.mock import MagicMock
+
+    from googleapiclient.errors import HttpError
+
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings()
+    task = _make_task(attempt_count=3)  # 4th attempt = budget exhausted
+    workflow = _make_workflow()
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+
+    resp = MagicMock()
+    resp.status = 503
+    transient = HttpError(resp, b"{}", uri="https://example.com")
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch("mailpilot.run.invoke_workflow_agent", side_effect=transient),
+        patch("mailpilot.run.complete_task") as mock_complete,
+        patch("mailpilot.run.reschedule_task_for_retry") as mock_reschedule,
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_reschedule.assert_not_called()
+    mock_complete.assert_called_once()
+    kwargs = mock_complete.call_args.kwargs
+    assert kwargs["status"] == "failed"
+    assert kwargs["result"]["attempt_count"] == 4
+    assert kwargs["result"]["terminal"] == "max_attempts"
+
+
+def test_execute_task_apitimeout_is_terminal_v43_carve_out(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """V43 carve-out: anthropic.APITimeoutError mid-turn cannot be
+    re-driven safely, must go terminal regardless of attempt budget."""
+    import httpx
+    from anthropic import APITimeoutError
+
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings()
+    task = _make_task()
+    workflow = _make_workflow()
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+
+    timeout_err = APITimeoutError(
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    )
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch("mailpilot.run.invoke_workflow_agent", side_effect=timeout_err),
+        patch("mailpilot.run.complete_task") as mock_complete,
+        patch("mailpilot.run.reschedule_task_for_retry") as mock_reschedule,
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_reschedule.assert_not_called()
+    mock_complete.assert_called_once()
+    assert mock_complete.call_args.kwargs["status"] == "failed"
+    assert mock_complete.call_args.kwargs["result"]["terminal"] == "non_transient"
+
+
+def test_execute_task_httpx_readtimeout_is_terminal_v43_carve_out(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """V43 carve-out: httpx.ReadTimeout from the Anthropic transport
+    is not transient for retry purposes."""
+    import httpx
+
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings()
+    task = _make_task()
+    workflow = _make_workflow()
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch(
+            "mailpilot.run.invoke_workflow_agent",
+            side_effect=httpx.ReadTimeout("read timeout"),
+        ),
+        patch("mailpilot.run.complete_task") as mock_complete,
+        patch("mailpilot.run.reschedule_task_for_retry") as mock_reschedule,
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_reschedule.assert_not_called()
+    mock_complete.assert_called_once()
+    assert mock_complete.call_args.kwargs["result"]["terminal"] == "non_transient"
 
 
 def test_execute_task_with_email(
