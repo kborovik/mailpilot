@@ -63,8 +63,13 @@ Keys (all overridable via uppercase env var of the same name):
 - `database_url` -- PostgreSQL DSN. Default `postgresql://localhost/mailpilot`.
 - `anthropic_api_key` -- required for agent invocations.
 - `anthropic_model` -- e.g. `claude-sonnet-4-6`.
-- `google_application_credentials` -- path to service-account JSON. Required
-  for Gmail and Drive access.
+- `google_application_credentials` -- path to service-account JSON. Optional
+  when running on a platform that exposes Application Default Credentials (GCE
+  attached service account, GKE Workload Identity, Cloud Run identity); leave
+  unset to use ADC. Set explicitly otherwise. Domain-wide delegation works in
+  both modes; ADC mode signs JWTs via the IAM Credentials API and requires the
+  active service account to hold `roles/iam.serviceAccountTokenCreator` on
+  itself.
 - `google_pubsub_topic` -- default `mailpilot-topic-dev`.
 - `google_pubsub_subscription` -- default `mailpilot-sub-dev`.
 - `logfire_token` -- optional. Enables cloud telemetry.
