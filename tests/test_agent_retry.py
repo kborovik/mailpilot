@@ -65,15 +65,15 @@ def test_timeout_error_transient() -> None:
     assert is_transient(TimeoutError("read timed out")) is True
 
 
-def test_anthropic_api_timeout_error_not_transient_v43_carve_out() -> None:
-    """V43 carve-out: LLM read-timeout cannot be safely retried mid-turn."""
+def test_anthropic_api_timeout_error_not_transient_v43_exclusion() -> None:
+    """V43 exclusion: LLM read-timeout cannot be safely retried mid-turn."""
     request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
     err = APITimeoutError(request=request)
     assert is_transient(err) is False
 
 
-def test_httpx_read_timeout_not_transient_v43_carve_out() -> None:
-    """V43 carve-out: bare httpx.ReadTimeout from the Anthropic transport
+def test_httpx_read_timeout_not_transient_v43_exclusion() -> None:
+    """V43 exclusion: bare httpx.ReadTimeout from the Anthropic transport
     must not be retried."""
     assert is_transient(httpx.ReadTimeout("timeout")) is False
 

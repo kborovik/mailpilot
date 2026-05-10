@@ -42,13 +42,18 @@ _ANTHROPIC_TRANSIENT_STATUSES = frozenset({502, 503, 529})
 
 Critically excludes the LLM's own *timeout* class (``APITimeoutError``)
 - those are filtered earlier in :func:`is_transient` so the `§V.43`
-carve-out holds even if the timeout exception inherits from
+exclusion holds even if the timeout exception inherits from
 ``APIStatusError`` in some SDK version.
 """
 
 
-def _matches_carve_out(exc: BaseException) -> bool:
-    """`§V.43` carve-out: Anthropic LLM read-timeouts must never retry."""
+def _is_llm_read_timeout(exc: BaseException) -> bool:
+    """Anthropic LLM read-timeout: bubble as terminal per `§V.43`.
+
+    A timeout on the LLM HTTP call may have interrupted a multi-turn run
+    after a tool already fired (``send_email``, ``reply_email``, Drive
+    read), so re-driving the task could duplicate side-effects.
+    """
     import httpx
     from anthropic import APITimeoutError
 
@@ -67,8 +72,8 @@ def _google_status(exc: BaseException) -> int | None:
 def _anthropic_status(exc: BaseException) -> int | None:
     """Status code on an Anthropic ``APIStatusError``, else ``None``.
 
-    Excludes the carve-out class (``APITimeoutError``) which the caller
-    has already filtered out.
+    ``APITimeoutError`` is not handled here -- the caller filters it
+    out earlier so it bubbles as terminal per `§V.43`.
     """
     from anthropic import APIStatusError
 
@@ -86,10 +91,10 @@ def is_transient(exc: BaseException) -> bool:
     Returns:
         ``True`` for the V44 allow-list (Google 429/5xx, Anthropic
         502/503/529, Drive socket timeouts). ``False`` otherwise --
-        including for the V43 carve-out (Anthropic LLM read-timeouts)
+        including for the V43 exclusion (Anthropic LLM read-timeouts)
         and any unrecognised exception class.
     """
-    if _matches_carve_out(exc):
+    if _is_llm_read_timeout(exc):
         return False
 
     google_status = _google_status(exc)
