@@ -19,6 +19,7 @@ import zlib
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
 import logfire
 import psycopg
 from pydantic_ai import Agent, RunContext
@@ -337,11 +338,17 @@ def _build_agent(workflow: Workflow) -> Agent[AgentDeps, str]:
 
 
 def _build_anthropic_model(settings: Settings) -> AnthropicModel:
-    """Construct the AnthropicModel with V37 cache_control settings.
+    """Construct the AnthropicModel with V37 cache_control + V43 read-timeout.
 
     Cache breakpoints on the system prompt and tool definitions let
     multi-turn invocations re-bill the stable prefix as
     ``cache_read_input_tokens`` instead of fresh input.
+
+    The HTTP client carries a 240s read-timeout (4x the httpx default of
+    60s) so long-context Anthropic calls do not surface ``TimeoutError``
+    mid-conversation, which would bubble to ``run.task.agent_failed``
+    with no retry (idempotency: tool-call mid-turn cannot be safely
+    re-driven). See SPEC.md V43, B16.
     """
     if not settings.anthropic_api_key:
         raise ValueError(
@@ -350,7 +357,10 @@ def _build_anthropic_model(settings: Settings) -> AnthropicModel:
         )
     return AnthropicModel(
         settings.anthropic_model,
-        provider=AnthropicProvider(api_key=settings.anthropic_api_key),
+        provider=AnthropicProvider(
+            api_key=settings.anthropic_api_key,
+            http_client=httpx.AsyncClient(timeout=httpx.Timeout(240.0)),
+        ),
         settings=AnthropicModelSettings(
             anthropic_cache_tool_definitions=True,
             anthropic_cache_instructions=True,

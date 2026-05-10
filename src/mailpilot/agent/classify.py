@@ -11,6 +11,7 @@ import json
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
+import httpx
 import logfire
 from pydantic import BaseModel
 from pydantic_ai import Agent
@@ -59,10 +60,17 @@ def _get_model(api_key: str, model_name: str) -> AnthropicModel:
     V37: cache_control breakpoints on the system prompt and tool definitions
     let repeated classifier calls re-bill the stable prefix as
     ``cache_read_input_tokens``.
+
+    V43: 240s read-timeout on the HTTP client (4x the httpx default of 60s)
+    so long-context classifier calls do not surface ``TimeoutError``. See
+    SPEC.md V43, B16.
     """
     return AnthropicModel(
         model_name,
-        provider=AnthropicProvider(api_key=api_key),
+        provider=AnthropicProvider(
+            api_key=api_key,
+            http_client=httpx.AsyncClient(timeout=httpx.Timeout(240.0)),
+        ),
         settings=AnthropicModelSettings(
             anthropic_cache_tool_definitions=True,
             anthropic_cache_instructions=True,

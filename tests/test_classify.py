@@ -236,3 +236,16 @@ def test_get_model_carries_cache_settings() -> None:
     assert model.settings is not None
     assert model.settings.get("anthropic_cache_tool_definitions") is True
     assert model.settings.get("anthropic_cache_instructions") is True
+
+
+def test_get_model_uses_240s_read_timeout() -> None:
+    """V43: classifier's AnthropicProvider HTTP client carries a 240s read-timeout.
+
+    Default httpx read-timeout is 60s; under model load that intersects
+    long-context classifier latency and surfaces ``TimeoutError`` mid-call
+    (see SPEC.md B16). 240s = 4x headroom. No retry on timeout.
+    """
+    _get_model.cache_clear()
+    model = _get_model("sk-test-timeout", "claude-sonnet-4-6")
+    http_client = model._provider.client._client  # pyright: ignore[reportPrivateUsage]
+    assert http_client.timeout.read == 240.0

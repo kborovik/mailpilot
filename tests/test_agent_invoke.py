@@ -1047,6 +1047,23 @@ def test_build_anthropic_model_requires_api_key() -> None:
         _build_anthropic_model(settings)
 
 
+def test_build_anthropic_model_uses_240s_read_timeout() -> None:
+    """V43: workflow agent's AnthropicProvider HTTP client carries a 240s read-timeout.
+
+    Default httpx read-timeout is 60s; under model load that intersects
+    long-context multi-turn agent latency and surfaces ``TimeoutError``
+    mid-conversation, which would bubble to ``run.task.agent_failed`` with
+    no retry (see SPEC.md B16). 240s = 4x headroom; idempotency forbids
+    retry across tool calls.
+    """
+    settings = make_test_settings(
+        anthropic_api_key="sk-test-timeout", anthropic_model="claude-sonnet-4-6"
+    )
+    model = _build_anthropic_model(settings)
+    http_client = model._provider.client._client  # pyright: ignore[reportPrivateUsage]
+    assert http_client.timeout.read == 240.0
+
+
 def test_invoke_span_has_cache_token_attributes(
     database_connection: psycopg.Connection[dict[str, Any]],
     capfire: CaptureLogfire,
