@@ -27,54 +27,40 @@ _PUBSUB_SCOPES = ["https://www.googleapis.com/auth/pubsub"]
 
 
 def _resolve_project_id(settings: Settings) -> str:
-    """Read the GCP project ID from the service account JSON file.
+    """Resolve the GCP project ID for Pub/Sub.
+
+    Delegates to :func:`mailpilot.gmail.resolve_project_id`, which reads
+    from the configured key file when one is set and otherwise queries
+    Application Default Credentials (e.g. the GCE metadata server).
 
     Args:
-        settings: Application settings with google_application_credentials.
+        settings: Application settings (kept for call-site symmetry; the
+            actual lookup is process-wide).
 
     Returns:
         Project ID string.
 
     Raises:
-        SystemExit: If credentials path is missing or file lacks project_id.
+        SystemExit: If no project ID can be resolved from either source.
     """
-    path = settings.google_application_credentials
-    if not path:
-        raise SystemExit(
-            "google_application_credentials not configured -- set via "
-            "'mailpilot config set google_application_credentials "
-            "/path/to/key.json'"
-        )
-    with open(path) as f:
-        data: dict[str, Any] = json.load(f)
-    project_id = data.get("project_id")
-    if not project_id:
-        raise SystemExit(f"No project_id found in {path}")
-    return project_id
+    del settings  # resolution is global, not per-Settings instance
+    from mailpilot.gmail import resolve_project_id
+
+    return resolve_project_id()
 
 
 def _load_credentials(settings: Settings) -> Any:
-    """Load service account credentials scoped for Pub/Sub.
+    """Load credentials scoped for Pub/Sub.
 
-    The Pub/Sub clients otherwise fall back to Application Default
-    Credentials (gcloud user login), which on a developer machine can
-    be expired and produces a 600-second retry loop on the first RPC
-    before failing. Loading the configured service account file
-    directly mirrors how ``GmailClient`` authenticates and avoids that
-    trap entirely.
+    Delegates to :func:`mailpilot.gmail.build_default_credentials` so
+    this module shares the configured-file-then-ADC fallback used by
+    every other Google client in the codebase.
     """
-    from google.oauth2.service_account import Credentials
+    del settings  # resolution is global; settings argument retained for symmetry
 
-    path = settings.google_application_credentials
-    if not path:
-        raise SystemExit(
-            "google_application_credentials not configured -- set via "
-            "'mailpilot config set google_application_credentials "
-            "/path/to/key.json'"
-        )
-    return Credentials.from_service_account_file(  # type: ignore[no-untyped-call]
-        path, scopes=_PUBSUB_SCOPES
-    )
+    from mailpilot.gmail import build_default_credentials
+
+    return build_default_credentials(_PUBSUB_SCOPES)
 
 
 def _topic_path(project_id: str, settings: Settings) -> str:

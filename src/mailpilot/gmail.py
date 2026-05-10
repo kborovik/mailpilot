@@ -1,9 +1,21 @@
 """Gmail API client using service account with domain-wide delegation.
 
-Authentication: service account credentials path resolved from the
-``google_application_credentials`` setting, falling back to the
-``GOOGLE_APPLICATION_CREDENTIALS`` env var. Per-account impersonation via
-``.with_subject()``.
+Authentication: service account credentials resolved in this order --
+
+1. ``google_application_credentials`` setting (path to JSON key file)
+2. ``GOOGLE_APPLICATION_CREDENTIALS`` env var (path to JSON key file)
+3. Application Default Credentials (ADC) -- e.g. the GCE instance
+   service account, discovered via the metadata server. DWD impersonation
+   is then performed by signing JWT assertions remotely via the IAM
+   Credentials API (no local private key required).
+
+Per-account impersonation via ``with_subject(email)`` for file-based
+credentials, or via ``service_account.Credentials(subject=email)`` over
+an ``iam.Signer`` for ADC-based credentials.
+
+Required IAM in ADC mode: the active service account must hold
+``roles/iam.serviceAccountTokenCreator`` on itself so it can sign JWTs
+on its own behalf. The IAM Credentials API must be enabled.
 
 Scope: ``https://www.googleapis.com/auth/gmail.modify``
 """
@@ -107,17 +119,13 @@ def _retry_on_transient(func: Any) -> Any:
     return wrapper
 
 
-def resolve_credentials_path() -> str:
-    """Resolve the service account credentials file path.
+def _credential_file_path() -> str:
+    """Return configured service account JSON path, or "" if none set.
 
     Reads ``google_application_credentials`` from settings first, then
-    falls back to the ``GOOGLE_APPLICATION_CREDENTIALS`` env var.
-
-    Returns:
-        Path to the service account JSON file.
-
-    Raises:
-        SystemExit: If no credentials file is configured.
+    falls back to the ``GOOGLE_APPLICATION_CREDENTIALS`` env var. An
+    empty return value signals to fall through to Application Default
+    Credentials (ADC).
     """
     import os
 
@@ -126,21 +134,148 @@ def resolve_credentials_path() -> str:
     path = get_settings().google_application_credentials
     if not path:
         path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
-    if not path:
-        raise SystemExit(
-            "No service account credentials configured -- set via "
-            "'mailpilot config set google_application_credentials "
-            "/path/to/key.json' or the GOOGLE_APPLICATION_CREDENTIALS env var"
-        )
     return path
+
+
+def has_google_credentials() -> bool:
+    """True if any Google credential source is reachable.
+
+    Checks the configured key-file path first, then probes ADC. Used by
+    the sync loop to gate Pub/Sub subscriber startup and watch renewal
+    so dev runs without GCP skip those branches.
+    """
+    if _credential_file_path():
+        return True
+    from google.auth import default
+    from google.auth.exceptions import DefaultCredentialsError
+
+    try:
+        default()
+    except DefaultCredentialsError:
+        return False
+    return True
+
+
+def _adc_service_account_email(source_credentials: Any) -> str:
+    """Resolve the service account email backing ADC credentials.
+
+    On a fresh ``compute_engine.Credentials`` instance the
+    ``service_account_email`` attribute is the placeholder ``"default"``
+    until the credentials are refreshed against the metadata server.
+    """
+    from google.auth.transport.requests import Request
+
+    sa_email = getattr(source_credentials, "service_account_email", "") or ""
+    if not sa_email or sa_email == "default":
+        source_credentials.refresh(Request())
+        sa_email = source_credentials.service_account_email
+    return sa_email
+
+
+def build_delegated_credentials(scopes: list[str], subject: str) -> Any:
+    """Build a service-account credential impersonating ``subject``.
+
+    Uses a local key file when one is configured; otherwise falls back
+    to ADC plus the IAM Credentials API for remote JWT signing. Both
+    paths return a credential that performs domain-wide delegation for
+    ``subject`` over ``scopes``.
+
+    Args:
+        scopes: OAuth scopes the returned credential is good for.
+        subject: User email address to impersonate via DWD.
+
+    Returns:
+        A google-auth credential ready for the googleapiclient
+        ``build(..., credentials=...)`` call.
+    """
+    from google.oauth2.service_account import Credentials
+
+    path = _credential_file_path()
+    if path:
+        file_credentials = Credentials.from_service_account_file(  # type: ignore[no-untyped-call]
+            path,
+            scopes=scopes,
+        )
+        return file_credentials.with_subject(subject)
+
+    from google.auth import default, iam
+    from google.auth.transport.requests import Request
+
+    source_credentials, _ = default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+    sa_email = _adc_service_account_email(source_credentials)
+    signer = iam.Signer(Request(), source_credentials, sa_email)
+    return Credentials(  # type: ignore[no-untyped-call]
+        signer=signer,
+        service_account_email=sa_email,
+        token_uri="https://oauth2.googleapis.com/token",
+        scopes=scopes,
+        subject=subject,
+    )
+
+
+def build_default_credentials(scopes: list[str]) -> Any:
+    """Build credentials for non-impersonated calls (e.g. Pub/Sub).
+
+    Uses the configured service account JSON file when present;
+    otherwise falls back to Application Default Credentials. Pinning to
+    one source avoids the gcloud-user-login trap where an expired user
+    token can send Pub/Sub into a 600-second gRPC retry loop.
+
+    Args:
+        scopes: OAuth scopes the returned credential is good for.
+    """
+    path = _credential_file_path()
+    if path:
+        from google.oauth2.service_account import Credentials
+
+        return Credentials.from_service_account_file(  # type: ignore[no-untyped-call]
+            path,
+            scopes=scopes,
+        )
+
+    from google.auth import default
+
+    credentials, _ = default(scopes=scopes)
+    return credentials
+
+
+def resolve_project_id() -> str:
+    """Resolve the active GCP project ID.
+
+    Reads ``project_id`` from the configured key file when present;
+    otherwise asks ADC for the project bound to the active credentials.
+
+    Raises:
+        SystemExit: If neither source yields a project ID.
+    """
+    import json
+
+    path = _credential_file_path()
+    if path:
+        with open(path) as f:
+            data: dict[str, Any] = json.load(f)
+        project_id = data.get("project_id")
+        if not project_id:
+            raise SystemExit(f"No project_id found in {path}")
+        return project_id
+
+    from google.auth import default
+
+    _, project_id = default()
+    if not project_id:
+        raise SystemExit(
+            "Could not resolve GCP project_id from Application Default "
+            "Credentials -- set 'mailpilot config set "
+            "google_application_credentials /path/to/key.json' or run on "
+            "an instance whose metadata server reports a project."
+        )
+    return project_id
 
 
 def build_gmail_service(email: str) -> GmailService:
     """Build a Gmail API service instance with delegated credentials.
-
-    Uses service account credentials to impersonate the given email address.
-    Credentials are resolved from the ``google_application_credentials``
-    setting or the ``GOOGLE_APPLICATION_CREDENTIALS`` env var.
 
     Args:
         email: Gmail address to impersonate via domain-wide delegation.
@@ -148,14 +283,9 @@ def build_gmail_service(email: str) -> GmailService:
     Returns:
         Gmail API service resource.
     """
-    from google.oauth2.service_account import Credentials
     from googleapiclient.discovery import build
 
-    credentials = Credentials.from_service_account_file(  # type: ignore[no-untyped-call]
-        resolve_credentials_path(),
-        scopes=_GMAIL_SCOPE,
-    )
-    delegated = credentials.with_subject(email)
+    delegated = build_delegated_credentials(_GMAIL_SCOPE, email)
     return build("gmail", "v1", credentials=delegated)
 
 

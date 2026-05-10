@@ -62,6 +62,7 @@ from mailpilot.gmail import (
     GmailClient,
     extract_text_from_message,
     get_message_headers,
+    has_google_credentials,
     parse_sender,
     strip_control_chars,
 )
@@ -183,7 +184,7 @@ def start_sync_loop(  # noqa: PLR0915
     # Start Pub/Sub subscriber (real-time Gmail notifications).
     sync_queue: queue.Queue[str] = queue.Queue()
     subscriber_future = None
-    if settings.google_application_credentials:
+    if has_google_credentials():
         subscriber_future = _start_pubsub_logging_errors(
             connection, settings, sync_queue, wakeup_event
         )
@@ -435,7 +436,7 @@ def _renew_watches_logging_errors(
     settings: Settings,
 ) -> None:
     """Renew Gmail watches, catching and logging errors."""
-    if not settings.google_application_credentials:
+    if not has_google_credentials():
         return
     try:
         from mailpilot.pubsub import renew_watches

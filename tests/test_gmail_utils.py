@@ -215,39 +215,144 @@ def test_parse_sender_three_part_name():
 # -- credentials resolution ---------------------------------------------------
 
 
-def test_resolve_credentials_path_from_settings(monkeypatch: pytest.MonkeyPatch):
+def test_credential_file_path_from_settings(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
     settings = Settings(google_application_credentials="/tmp/service-account.json")
     with patch("mailpilot.settings.get_settings", return_value=settings):
-        assert gmail.resolve_credentials_path() == "/tmp/service-account.json"
+        assert (
+            gmail._credential_file_path()  # pyright: ignore[reportPrivateUsage]
+            == "/tmp/service-account.json"
+        )
 
 
-def test_resolve_credentials_path_falls_back_to_env(
+def test_credential_file_path_falls_back_to_env(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/env/key.json")
     settings = Settings(google_application_credentials="")
     with patch("mailpilot.settings.get_settings", return_value=settings):
-        assert gmail.resolve_credentials_path() == "/env/key.json"
+        assert (
+            gmail._credential_file_path()  # pyright: ignore[reportPrivateUsage]
+            == "/env/key.json"
+        )
 
 
-def test_resolve_credentials_path_settings_wins_over_env(
+def test_credential_file_path_settings_wins_over_env(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/env/key.json")
     settings = Settings(google_application_credentials="/cfg/key.json")
     with patch("mailpilot.settings.get_settings", return_value=settings):
-        assert gmail.resolve_credentials_path() == "/cfg/key.json"
+        assert (
+            gmail._credential_file_path()  # pyright: ignore[reportPrivateUsage]
+            == "/cfg/key.json"
+        )
 
 
-def test_resolve_credentials_path_missing(monkeypatch: pytest.MonkeyPatch):
+def test_credential_file_path_returns_empty_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+    settings = Settings(google_application_credentials="")
+    with patch("mailpilot.settings.get_settings", return_value=settings):
+        assert gmail._credential_file_path() == ""  # pyright: ignore[reportPrivateUsage]
+
+
+def test_has_google_credentials_true_when_file_configured(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/env/key.json")
+    settings = Settings(google_application_credentials="")
+    with patch("mailpilot.settings.get_settings", return_value=settings):
+        assert gmail.has_google_credentials() is True
+
+
+def test_has_google_credentials_true_when_adc_available(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
     settings = Settings(google_application_credentials="")
     with (
         patch("mailpilot.settings.get_settings", return_value=settings),
-        pytest.raises(SystemExit, match="No service account credentials"),
+        patch("google.auth.default", return_value=(object(), "proj")),
     ):
-        gmail.resolve_credentials_path()
+        assert gmail.has_google_credentials() is True
+
+
+def test_has_google_credentials_false_when_no_source(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from google.auth.exceptions import DefaultCredentialsError
+
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+    settings = Settings(google_application_credentials="")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=settings),
+        patch("google.auth.default", side_effect=DefaultCredentialsError()),
+    ):
+        assert gmail.has_google_credentials() is False
+
+
+def test_build_delegated_credentials_uses_file_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """File path → from_service_account_file + with_subject (no ADC)."""
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+    settings = Settings(google_application_credentials="/tmp/key.json")
+
+    file_creds = type("C", (), {"with_subject": lambda self, s: ("sub", s)})()
+
+    with (
+        patch("mailpilot.settings.get_settings", return_value=settings),
+        patch(
+            "google.oauth2.service_account.Credentials.from_service_account_file",
+            return_value=file_creds,
+        ) as mock_from_file,
+    ):
+        result = gmail.build_delegated_credentials(["scope1"], "user@example.com")
+
+    mock_from_file.assert_called_once_with("/tmp/key.json", scopes=["scope1"])
+    assert result == ("sub", "user@example.com")
+
+
+def test_build_delegated_credentials_falls_back_to_adc(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """No file → ADC + iam.Signer + service_account.Credentials(subject=...)."""
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+    settings = Settings(google_application_credentials="")
+
+    source_creds = type(
+        "Source",
+        (),
+        {"service_account_email": "sa@proj.iam.gserviceaccount.com"},
+    )()
+    sentinel_signer = object()
+    sentinel_credentials = object()
+
+    with (
+        patch("mailpilot.settings.get_settings", return_value=settings),
+        patch(
+            "google.auth.default", return_value=(source_creds, "proj")
+        ) as mock_default,
+        patch("google.auth.iam.Signer", return_value=sentinel_signer) as mock_signer,
+        patch(
+            "google.oauth2.service_account.Credentials",
+            return_value=sentinel_credentials,
+        ) as mock_credentials_cls,
+    ):
+        result = gmail.build_delegated_credentials(["scope1"], "user@example.com")
+
+    mock_default.assert_called_once_with(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+    mock_signer.assert_called_once()
+    mock_credentials_cls.assert_called_once()
+    kwargs = mock_credentials_cls.call_args.kwargs
+    assert kwargs["service_account_email"] == "sa@proj.iam.gserviceaccount.com"
+    assert kwargs["subject"] == "user@example.com"
+    assert kwargs["scopes"] == ["scope1"]
+    assert result is sentinel_credentials
 
 
 # -- get_messages_batch --------------------------------------------------------

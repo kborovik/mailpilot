@@ -188,7 +188,7 @@ def test_start_sync_loop_signal_handler_escalates_to_default(
 def test_start_sync_loop_calls_pubsub_when_configured(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """When google credentials are set, Pub/Sub setup is attempted."""
+    """When Google credentials are reachable, Pub/Sub setup is attempted."""
     settings = make_test_settings(
         google_application_credentials="/tmp/creds.json",
     )
@@ -202,6 +202,7 @@ def test_start_sync_loop_calls_pubsub_when_configured(
         ) as mock_pubsub,
         patch("mailpilot.sync._run_periodic_iteration"),
         patch("mailpilot.sync.signal.signal"),
+        patch("mailpilot.sync.has_google_credentials", return_value=True),
     ):
         mock_shutdown = MagicMock()
         mock_shutdown.is_set.side_effect = [False, True]
@@ -217,7 +218,7 @@ def test_start_sync_loop_calls_pubsub_when_configured(
 def test_start_sync_loop_skips_pubsub_when_no_credentials(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """When google credentials are empty, Pub/Sub setup is skipped."""
+    """When no Google credentials are reachable, Pub/Sub setup is skipped."""
     settings = make_test_settings(google_application_credentials="")
 
     with (
@@ -229,6 +230,7 @@ def test_start_sync_loop_skips_pubsub_when_no_credentials(
         ) as mock_pubsub,
         patch("mailpilot.sync._run_periodic_iteration"),
         patch("mailpilot.sync.signal.signal"),
+        patch("mailpilot.sync.has_google_credentials", return_value=False),
     ):
         mock_shutdown = MagicMock()
         mock_shutdown.is_set.side_effect = [False, True]
@@ -261,6 +263,7 @@ def test_start_sync_loop_wires_wakeup_event_to_pubsub_and_listener(
         ) as mock_pubsub,
         patch("mailpilot.sync._run_periodic_iteration"),
         patch("mailpilot.sync.signal.signal"),
+        patch("mailpilot.sync.has_google_credentials", return_value=True),
     ):
         mock_shutdown = MagicMock()
         # while-check False, post-wait check False (run iteration), while-check True (exit)
@@ -461,6 +464,7 @@ def test_start_sync_loop_time_gates_full_sweep(
         patch("mailpilot.sync._drain_pending_tasks"),
         patch("mailpilot.sync._renew_watches_logging_errors"),
         patch("mailpilot.sync.signal.signal"),
+        patch("mailpilot.sync.has_google_credentials", return_value=False),
         patch("mailpilot.sync.time.monotonic") as mock_monotonic,
     ):
         # Three iterations; one time.monotonic() call per iteration.

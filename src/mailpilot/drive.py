@@ -31,16 +31,11 @@ def build_drive_service(email: str) -> DriveService:
     Returns:
         Drive API service resource.
     """
-    from google.oauth2.service_account import Credentials
     from googleapiclient.discovery import build
 
-    from mailpilot.gmail import resolve_credentials_path
+    from mailpilot.gmail import build_delegated_credentials
 
-    credentials = Credentials.from_service_account_file(  # type: ignore[no-untyped-call]
-        resolve_credentials_path(),
-        scopes=_DRIVE_SCOPE,
-    )
-    delegated = credentials.with_subject(email)
+    delegated = build_delegated_credentials(_DRIVE_SCOPE, email)
     return build("drive", "v3", credentials=delegated)
 
 
