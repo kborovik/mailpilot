@@ -165,7 +165,7 @@ mailpilot enrollment run --workflow-id <OUTBOUND_WORKFLOW_ID> --contact-id <INBO
 - `enrollment run` output: `"status": "completed"` and `"tool_calls" >= 1`.
 - `mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound` shows the outbound email with `subject == SUBJECT_A`.
 - The email's `body_text` contains `|` (table) and either `**` or `#` (Markdown).
-- `mailpilot enrollment list --workflow-id <OUTBOUND_WORKFLOW_ID>` shows enrollment status `active`. Per ADR-08 `enrollment.status` is operational only (`active` or `paused`); the agent never mutates it directly. The send-completion outcome lives in the activity timeline (verified in A8), not on the enrollment row.
+- `mailpilot enrollment list --workflow-id <OUTBOUND_WORKFLOW_ID>` shows enrollment status `active`. Per SPEC §V.10, `enrollment.status` is operational only (`active` or `paused`); the agent never mutates it directly. The send-completion outcome lives in the activity timeline (verified in A8), not on the enrollment row.
 
 Save `OUTBOUND_EMAIL_ID`.
 
@@ -242,7 +242,7 @@ Wait for a task with `email_id` set to the routed reply and `status == "complete
 **Gate A7:**
 
 - Task exists with `email_id == <routed reply id>` and `status == "completed"`.
-- `mailpilot enrollment list --workflow-id <OUTBOUND_WORKFLOW_ID>` still shows status `active` -- by design (ADR-08, `enrollment.status` is operational only). The terminal outcome is recorded as an `enrollment_completed` or `enrollment_failed` activity row, verified in A8.
+- `mailpilot enrollment list --workflow-id <OUTBOUND_WORKFLOW_ID>` still shows status `active` -- by design (SPEC §V.10, `enrollment.status` is operational only). The terminal outcome is recorded as an `enrollment_completed` or `enrollment_failed` activity row, verified in A8.
 - **No additional outbound emails were sent.** Re-run `mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_A>` and confirm only the original outbound from A3 is present. If the count > 1, the agent kept replying despite the decline signal -- record as a Bug.
 
 **On failure:** Task never created → check that A6's email has `workflow_id` set and the run loop is alive. Task `failed` → `mailpilot task view <TASK_ID>` for the reason.
@@ -255,9 +255,9 @@ Runtime paths emit `activity` rows automatically (no manual `activity create`). 
 mailpilot activity list --contact-id <INBOUND_CONTACT_ID> --since <TEST_START_A>
 ```
 
-**Gate A8 (activity wiring):** activity types follow the `enrollment_*` vocabulary in ADR-08.
+**Gate A8 (activity wiring):** activity types follow the `enrollment_*` / `email_*` vocabulary enforced by `activity.type` CHECK constraint in `src/mailpilot/schema.sql`.
 
-- `enrollment_added` with `detail.workflow_id == OUTBOUND_WORKFLOW_ID` (emitted by `enrollment add`).
+- `enrollment_added` with `workflow_id == OUTBOUND_WORKFLOW_ID` on the activity row itself (FK column on `activity`, not inside the `detail` JSONB; `detail` carries `{"workflow_name": ...}` as a display label). Emitted by `enrollment add`.
 - `email_sent` with `summary == SUBJECT_A` (emitted by `email_ops.send_email` when the outbound agent sent in A3).
 - `email_received` with the operator-reply subject (emitted by sync's `_store_inbound_message` when the reply landed in the outbound mailbox in A6).
 - Exactly one of `enrollment_completed` or `enrollment_failed` (emitted by `agent.tools.record_enrollment_outcome` in A7); summary equals the agent's `reason`.
@@ -468,9 +468,9 @@ Out-of-scope decline keeps the script verifier (per SPEC §V.31): regex appropri
 mailpilot activity list --contact-id <OUTBOUND_CONTACT_ID> --since <TEST_START_B>
 ```
 
-**Gate B7 (activity wiring):** activity types follow the `enrollment_*` vocabulary in ADR-08.
+**Gate B7 (activity wiring):** activity types follow the `enrollment_*` / `email_*` vocabulary enforced by `activity.type` CHECK constraint in `src/mailpilot/schema.sql`.
 
-- `enrollment_added` with `detail.workflow_id == DEMO_WORKFLOW_ID` (from B1).
+- `enrollment_added` with `workflow_id == DEMO_WORKFLOW_ID` on the activity row itself (FK column, not `detail` JSONB). From B1.
 - 2 `email_received` activities -- the demo mailbox received the trigger emails for B1 and B2.
 - 2 `email_sent` activities from the agent replies (subjects begin with `Re:`).
 - 2 `enrollment_completed` activities (one per question, both emitted by `record_enrollment_outcome`).
