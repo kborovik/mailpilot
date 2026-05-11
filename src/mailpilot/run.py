@@ -16,19 +16,15 @@ from mailpilot.agent import invoke_workflow_agent
 from mailpilot.agent.retry import BACKOFF_SECONDS, MAX_ATTEMPTS, is_transient
 from mailpilot.database import (
     complete_task,
-    get_account,
     get_contact,
     get_email,
     get_enrollment,
     get_workflow,
-    list_accounts,
     reschedule_task_for_retry,
 )
-from mailpilot.gmail import GmailClient
 from mailpilot.models import Task
 from mailpilot.operator_log import operator_event
 from mailpilot.settings import Settings
-from mailpilot.sync import sync_account
 
 
 def execute_task(
@@ -180,25 +176,3 @@ def _handle_agent_failure(
             "terminal": terminal_reason,
         },
     )
-
-
-def _sync_all_accounts(
-    connection: psycopg.Connection[dict[str, Any]],
-    settings: Settings,
-) -> None:
-    """Sync all Gmail accounts. Errors per account are logged, not raised."""
-    summaries = list_accounts(connection, limit=1000)
-    for summary in summaries:
-        account = get_account(connection, summary.id)
-        if account is None:
-            continue
-        try:
-            client = GmailClient(account.email)
-            sync_account(connection, account, client, settings)
-        except Exception as exc:
-            logfire.exception(
-                "run.sync.account_failed",
-                account_id=account.id,
-                email=account.email,
-            )
-            operator_event("error", source="run.sync.account_failed", message=str(exc))
