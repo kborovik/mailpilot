@@ -10,9 +10,12 @@ When adding new commands, keep imports inside the function body.
 from __future__ import annotations
 
 import json
-from typing import Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import click
+
+if TYPE_CHECKING:
+    from logfire import ScrubMatch
 
 # Keep in sync with ActivityType in models.py and CHECK constraint in schema.sql.
 _ACTIVITY_TYPES = [
@@ -37,6 +40,20 @@ def _database_url() -> str:
     return str(get_settings().database_url)
 
 
+def scrub_tool_response_callback(match: ScrubMatch) -> Any:
+    """Exempt agent ``tool_response`` payloads from default Logfire scrubbing.
+
+    Pydantic-AI ``running tool`` spans carry the structured tool return value
+    under the ``tool_response`` attribute. Without this exemption the default
+    substring matcher redacts strings like ``"authorized"`` inside KB markdown,
+    making §V.31 grounding regressions unverifiable from traces alone. Per
+    §V.50, agent tool outputs are non-sensitive by design.
+    """
+    if match.path[:2] == ("attributes", "tool_response"):
+        return match.value
+    return None
+
+
 def configure_logging(debug: bool = False) -> None:
     """Configure Logfire from settings."""
     import logfire
@@ -55,6 +72,7 @@ def configure_logging(debug: bool = False) -> None:
         send_to_logfire="if-token-present",
         inspect_arguments=False,
         metrics=logfire.MetricsOptions(collect_in_spans=True),
+        scrubbing=logfire.ScrubbingOptions(callback=scrub_tool_response_callback),
     )
     logfire.instrument_pydantic_ai()
 
