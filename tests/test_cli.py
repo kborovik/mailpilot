@@ -5814,7 +5814,7 @@ def test_run_command(runner: CliRunner, mock_connection: MagicMock) -> None:
     mock_loop.assert_called_once_with(mock_connection, make_test_settings())
 
 
-# -- envelope shape contract (SPEC §V13) ---------------------------------------
+# -- envelope shape contract (SPEC §V.5) --------------------------------------
 
 
 def test_envelope_view_wraps_under_singular_key(
