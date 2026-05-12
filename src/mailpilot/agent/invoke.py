@@ -319,12 +319,15 @@ def _wrap_noop(
 # -- Agent construction --------------------------------------------------------
 
 
-def _build_agent(workflow: Workflow) -> Agent[AgentDeps, str]:
+def _build_agent(workflow: Workflow, trigger: str = "manual") -> Agent[AgentDeps, str]:
     """Build a Pydantic AI agent for a workflow.
 
     The workflow's template (V32, V33) owns both the bound tool set and the
     system-prompt protocol. Workflow-specific instructions are appended to
-    the template protocol.
+    the template protocol. The deferred-task fragment branches on ``trigger``
+    per V49: ``trigger='task'`` uses the terminal-outcome instruction;
+    other triggers use the initial-send-only instruction (prevents premature
+    ``record_enrollment_outcome`` on first reach-out).
     """
     from mailpilot.agent.templates import TEMPLATES
 
@@ -332,7 +335,7 @@ def _build_agent(workflow: Workflow) -> Agent[AgentDeps, str]:
     return Agent(
         name="mailpilot.workflow",
         deps_type=AgentDeps,
-        instructions=template.protocol + workflow.instructions,
+        instructions=template.build_protocol(trigger) + workflow.instructions,
         tools=list(template.tools),
     )
 
@@ -571,7 +574,7 @@ def invoke_workflow_agent(  # noqa: PLR0913
             ]
 
             # Build agent and deps.
-            agent = _build_agent(workflow)
+            agent = _build_agent(workflow, trigger=trigger)
             if model_override is not None:
                 model = model_override
             else:

@@ -43,13 +43,33 @@ from mailpilot.models import WorkflowTemplateName, WorkflowType
 
 @dataclass(frozen=True)
 class WorkflowTemplate:
-    """Named binding of agent tools + protocol composed from fragments."""
+    """Named binding of agent tools + protocol composed from fragments.
+
+    The deferred-task fragment is selected per-invocation by ``trigger``
+    (V49): ``trigger='task'`` -> _DEFERRED_TASK_TASK (terminal-outcome
+    instruction); other triggers (``enrollment_run``, ``manual``,
+    ``email``) -> _DEFERRED_TASK_INITIAL (initial-send-only instruction;
+    prevents premature ``record_enrollment_outcome`` on first reach-out).
+    Canonical fragment order per V33: _BASE -> _DEFERRED_TASK_<branch> ->
+    [overlay]? -> _DECLINE -> _NO_FABRICATION.
+    """
 
     name: WorkflowTemplateName
     direction: WorkflowType
     description: str
-    protocol: str
+    protocol_pre: str
+    protocol_post: str
     tools: tuple[Tool[AgentDeps], ...]
+
+    def build_protocol(self, trigger: str) -> str:
+        """Compose protocol per ``trigger`` per V49."""
+        deferred = _DEFERRED_TASK_TASK if trigger == "task" else _DEFERRED_TASK_INITIAL
+        return self.protocol_pre + deferred + self.protocol_post
+
+    @property
+    def protocol(self) -> str:
+        """Default protocol (``trigger='task'``). Used by ``template view`` CLI."""
+        return self.build_protocol("task")
 
 
 # -- Protocol fragments --------------------------------------------------------
@@ -66,11 +86,19 @@ _BASE = (
     "for the same address either.\n"
 )
 
-_DEFERRED_TASK = (
+_DEFERRED_TASK_TASK = (
     "After completing the workflow objective for a contact, call "
     "record_enrollment_outcome with outcome='completed' and a brief reason. "
     "If work cannot complete now but should resume later, schedule a deferred "
     "task via create_task with a future scheduled_at.\n"
+)
+
+_DEFERRED_TASK_INITIAL = (
+    "Send the initial email and stop; do not call record_enrollment_outcome "
+    "on this invocation. The outcome will be assessed when a reply arrives "
+    "or when a follow-up task drains. If the initial send is not appropriate "
+    "right now but should resume later, schedule a deferred task via "
+    "create_task with a future scheduled_at.\n"
 )
 
 _DECLINE = (
@@ -135,14 +163,16 @@ TEMPLATES: dict[WorkflowTemplateName, WorkflowTemplate] = {
         name="outbound-general",
         direction="outbound",
         description="Outbound email/CRM workflow without external knowledge base.",
-        protocol=_BASE + _DEFERRED_TASK + _DECLINE + _NO_FABRICATION,
+        protocol_pre=_BASE,
+        protocol_post=_DECLINE + _NO_FABRICATION,
         tools=_CORE,
     ),
     "inbound-general": WorkflowTemplate(
         name="inbound-general",
         direction="inbound",
         description="Inbound auto-reply workflow without external knowledge base.",
-        protocol=_BASE + _DEFERRED_TASK + _DECLINE + _NO_FABRICATION,
+        protocol_pre=_BASE,
+        protocol_post=_DECLINE + _NO_FABRICATION,
         tools=_CORE,
     ),
     "inbound-google-drive": WorkflowTemplate(
@@ -151,9 +181,8 @@ TEMPLATES: dict[WorkflowTemplateName, WorkflowTemplate] = {
         description=(
             "Inbound auto-reply grounded in a Google Drive Markdown knowledge base."
         ),
-        protocol=(
-            _BASE + _DEFERRED_TASK + _DRIVE_GROUNDING + _DECLINE + _NO_FABRICATION
-        ),
+        protocol_pre=_BASE,
+        protocol_post=_DRIVE_GROUNDING + _DECLINE + _NO_FABRICATION,
         tools=_CORE + _DRIVE,
     ),
 }
