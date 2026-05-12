@@ -53,6 +53,20 @@ def mock_connection() -> MagicMock:
     return MagicMock()
 
 
+@pytest.fixture(autouse=True)
+def _silence_operator_event(monkeypatch: pytest.MonkeyPatch) -> None:  # pyright: ignore[reportUnusedFunction]
+    """Mute stderr operator_event emission for JSON-envelope-only CLI tests.
+
+    `mailpilot.operator_log.operator_event` writes one line to stderr per
+    SPEC §V.47 mutation. Click 8.2+ `result.output` interleaves stdout and
+    stderr in write order, so the leading event line would corrupt the
+    `json.loads(result.output)` assertions this file is built around.
+    The dedicated telemetry tests live in `tests/test_cli_telemetry.py`
+    and intentionally do not pull in this fixture.
+    """
+    monkeypatch.setattr("mailpilot.operator_log.operator_event", lambda *_a, **_k: None)
+
+
 # -- --completion --------------------------------------------------------------
 
 
@@ -265,10 +279,12 @@ def test_account_view_not_found(runner: CliRunner, mock_connection: MagicMock) -
 def test_account_update_display_name(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
+    before = _make_account(display_name="Old Name")
     updated = _make_account(display_name="New Name")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=before),
         patch("mailpilot.database.update_account", return_value=updated) as mock_update,
     ):
         result = runner.invoke(
@@ -291,6 +307,7 @@ def test_account_update_no_fields(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
         patch("mailpilot.database.update_account", return_value=account) as mock_update,
     ):
         result = runner.invoke(main, ["account", "update", account.id])
@@ -308,6 +325,7 @@ def test_account_update_not_found(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=None),
         patch("mailpilot.database.update_account", return_value=None),
     ):
         result = runner.invoke(
@@ -625,10 +643,12 @@ def test_company_create_empty_domain(
 
 
 def test_company_update_name(runner: CliRunner, mock_connection: MagicMock) -> None:
+    before = _make_company(name="Old Name")
     updated = _make_company(name="New Name")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=before),
         patch("mailpilot.database.update_company", return_value=updated) as mock_update,
     ):
         result = runner.invoke(
@@ -649,6 +669,7 @@ def test_company_update_no_fields(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=company),
         patch("mailpilot.database.update_company", return_value=company) as mock_update,
     ):
         result = runner.invoke(main, ["company", "update", company.id])
@@ -665,6 +686,7 @@ def test_company_update_not_found(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=None),
         patch("mailpilot.database.update_company", return_value=None),
     ):
         result = runner.invoke(
@@ -936,10 +958,12 @@ def test_contact_create_company_not_found(
 def test_contact_update_first_name(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
+    before = _make_contact(first_name="Alice")
     updated = _make_contact(first_name="Alicia")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_contact", return_value=before),
         patch("mailpilot.database.update_contact", return_value=updated) as mock_update,
     ):
         result = runner.invoke(
@@ -962,6 +986,7 @@ def test_contact_update_no_fields(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_contact", return_value=contact),
         patch("mailpilot.database.update_contact", return_value=contact) as mock_update,
     ):
         result = runner.invoke(main, ["contact", "update", contact.id])
@@ -976,6 +1001,7 @@ def test_contact_update_not_found(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_contact", return_value=None),
         patch("mailpilot.database.update_contact", return_value=None),
     ):
         result = runner.invoke(
@@ -2670,10 +2696,12 @@ def test_workflow_create_invalid_theme(
 
 
 def test_workflow_update_name(runner: CliRunner, mock_connection: MagicMock) -> None:
+    before = _make_workflow(name="Original")
     updated = _make_workflow(name="Renamed")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=before),
         patch(
             "mailpilot.database.update_workflow", return_value=updated
         ) as mock_update,
@@ -2693,10 +2721,12 @@ def test_workflow_update_with_instructions_file(
 ) -> None:
     instructions_file = tmp_path / "instructions.md"
     instructions_file.write_text("Reply politely.")
+    before = _make_workflow(instructions="")
     updated = _make_workflow(instructions="Reply politely.")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=before),
         patch(
             "mailpilot.database.update_workflow", return_value=updated
         ) as mock_update,
@@ -2721,10 +2751,12 @@ def test_workflow_update_with_instructions_file(
 def test_workflow_update_with_inline_instructions(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
+    before = _make_workflow(instructions="")
     updated = _make_workflow(instructions="Be concise.")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=before),
         patch(
             "mailpilot.database.update_workflow", return_value=updated
         ) as mock_update,
@@ -2780,6 +2812,7 @@ def test_workflow_update_not_found(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=None),
         patch("mailpilot.database.update_workflow", return_value=None),
     ):
         result = runner.invoke(main, ["workflow", "update", "nope", "--name", "X"])
@@ -2789,10 +2822,12 @@ def test_workflow_update_not_found(
 
 
 def test_workflow_update_theme(runner: CliRunner, mock_connection: MagicMock) -> None:
+    before = _make_workflow(theme="blue")
     updated = _make_workflow(theme="orange")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=before),
         patch(
             "mailpilot.database.update_workflow", return_value=updated
         ) as mock_update,
@@ -5824,10 +5859,12 @@ def test_envelope_update_wraps_under_singular_key(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     """`<entity> update` MUST emit `{"<singular>": {...}, "ok": true}`."""
+    before = _make_account(display_name="Original")
     account = _make_account(display_name="Renamed")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=before),
         patch("mailpilot.database.update_account", return_value=account),
     ):
         result = runner.invoke(

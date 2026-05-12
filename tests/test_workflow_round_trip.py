@@ -108,7 +108,7 @@ def _invoke(
     ):
         result = runner.invoke(main, args)
     assert result.exit_code == 0, result.output
-    return json.loads(result.output)
+    return json.loads(result.stdout)
 
 
 def test_workflow_export_import_round_trip_and_idempotence(

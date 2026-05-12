@@ -290,13 +290,21 @@ def account() -> None:
 def account_create(email: str, display_name: str) -> None:
     """Create a new Gmail account."""
     from mailpilot.database import create_account, initialize_database
+    from mailpilot.operator_log import cli_mutation, operator_event
 
     if not email.strip():
         output_error("email cannot be empty", "validation_error")
     connection = initialize_database(_database_url())
     try:
-        created = create_account(connection, email=email, display_name=display_name)
-        output_entity("account", created)
+        with cli_mutation("account", "create", email=email):
+            created = create_account(connection, email=email, display_name=display_name)
+            operator_event(
+                "account.create",
+                entity_id=created.id,
+                email=created.email,
+                changed=["email", "display_name"],
+            )
+            output_entity("account", created)
     finally:
         connection.close()
 
@@ -337,17 +345,32 @@ def account_view(account_id: str) -> None:
 @click.option("--display-name", default=None, help="Display name.")
 def account_update(account_id: str, display_name: str | None) -> None:
     """Update a Gmail account."""
-    from mailpilot.database import initialize_database, update_account
+    from mailpilot.database import get_account, initialize_database, update_account
+    from mailpilot.operator_log import cli_mutation, operator_event
 
     connection = initialize_database(_database_url())
     try:
+        before = get_account(connection, account_id)
+        if before is None:
+            output_error(f"account not found: {account_id}", "not_found")
         fields: dict[str, object] = {}
         if display_name is not None:
             fields["display_name"] = display_name
-        updated = update_account(connection, account_id, **fields)
-        if updated is None:
-            output_error(f"account not found: {account_id}", "not_found")
-        output_entity("account", updated)
+        with cli_mutation("account", "update", entity_id=account_id):
+            updated = update_account(connection, account_id, **fields)
+            if updated is None:
+                output_error(f"account not found: {account_id}", "not_found")
+            changed = [
+                field
+                for field in ("display_name",)
+                if getattr(before, field) != getattr(updated, field)
+            ]
+            operator_event(
+                "account.update",
+                entity_id=account_id,
+                changed=changed,
+            )
+            output_entity("account", updated)
     finally:
         connection.close()
 
@@ -437,13 +460,21 @@ def company() -> None:
 def company_create(domain: str, name: str) -> None:
     """Create a new company."""
     from mailpilot.database import create_company, initialize_database
+    from mailpilot.operator_log import cli_mutation, operator_event
 
     if not domain.strip():
         output_error("domain cannot be empty", "validation_error")
     connection = initialize_database(_database_url())
     try:
-        created = create_company(connection, name=name, domain=domain)
-        output_entity("company", created)
+        with cli_mutation("company", "create", domain=domain):
+            created = create_company(connection, name=name, domain=domain)
+            operator_event(
+                "company.create",
+                entity_id=created.id,
+                domain=created.domain,
+                changed=["name", "domain"],
+            )
+            output_entity("company", created)
     finally:
         connection.close()
 
@@ -453,17 +484,32 @@ def company_create(domain: str, name: str) -> None:
 @click.option("--name", default=None, help="Company name.")
 def company_update(company_id: str, name: str | None) -> None:
     """Update a company."""
-    from mailpilot.database import initialize_database, update_company
+    from mailpilot.database import get_company, initialize_database, update_company
+    from mailpilot.operator_log import cli_mutation, operator_event
 
     connection = initialize_database(_database_url())
     try:
+        before = get_company(connection, company_id)
+        if before is None:
+            output_error(f"company not found: {company_id}", "not_found")
         fields: dict[str, object] = {}
         if name is not None:
             fields["name"] = name
-        updated = update_company(connection, company_id, **fields)
-        if updated is None:
-            output_error(f"company not found: {company_id}", "not_found")
-        output_entity("company", updated)
+        with cli_mutation("company", "update", entity_id=company_id):
+            updated = update_company(connection, company_id, **fields)
+            if updated is None:
+                output_error(f"company not found: {company_id}", "not_found")
+            changed = [
+                field
+                for field in ("name",)
+                if getattr(before, field) != getattr(updated, field)
+            ]
+            operator_event(
+                "company.update",
+                entity_id=company_id,
+                changed=changed,
+            )
+            output_entity("company", updated)
     finally:
         connection.close()
 
@@ -563,6 +609,7 @@ def company_import(file: str | None) -> None:
         initialize_database,
         list_companies,
     )
+    from mailpilot.operator_log import cli_mutation, operator_event
 
     raw = pathlib.Path(file).read_text() if file else sys.stdin.read()
     try:
@@ -576,33 +623,48 @@ def company_import(file: str | None) -> None:
 
     connection = initialize_database(_database_url())
     try:
-        existing = {c.domain for c in list_companies(connection, limit=100_000)}
-        results: list[dict[str, object]] = []
-        for entry in entries:
-            name = entry.get("name") if isinstance(entry, dict) else None
-            domain = entry.get("domain") if isinstance(entry, dict) else None
-            if not isinstance(name, str) or not isinstance(domain, str):
-                results.append(
-                    {
-                        "name": name if isinstance(name, str) else "",
-                        "error": "validation_error",
-                        "message": "row missing required 'name' or 'domain'",
-                    }
+        with cli_mutation("company", "import", row_count=len(entries)):
+            existing = {c.domain for c in list_companies(connection, limit=100_000)}
+            results: list[dict[str, object]] = []
+            for entry in entries:
+                name = entry.get("name") if isinstance(entry, dict) else None
+                domain = entry.get("domain") if isinstance(entry, dict) else None
+                if not isinstance(name, str) or not isinstance(domain, str):
+                    results.append(
+                        {
+                            "name": name if isinstance(name, str) else "",
+                            "error": "validation_error",
+                            "message": "row missing required 'name' or 'domain'",
+                        }
+                    )
+                    operator_event(
+                        "company.import",
+                        name=name if isinstance(name, str) else "",
+                        changed=[],
+                    )
+                    continue
+                if domain in existing:
+                    results.append(
+                        {
+                            "name": name,
+                            "error": "duplicate",
+                            "message": (
+                                f"company with domain {domain!r} already exists"
+                            ),
+                        }
+                    )
+                    operator_event("company.import", name=name, changed=[])
+                    continue
+                create_company(connection, name=name, domain=domain)
+                existing.add(domain)
+                results.append({"name": name, "action": "created"})
+                operator_event(
+                    "company.import",
+                    name=name,
+                    domain=domain,
+                    changed=["name", "domain"],
                 )
-                continue
-            if domain in existing:
-                results.append(
-                    {
-                        "name": name,
-                        "error": "duplicate",
-                        "message": f"company with domain {domain!r} already exists",
-                    }
-                )
-                continue
-            create_company(connection, name=name, domain=domain)
-            existing.add(domain)
-            results.append({"name": name, "action": "created"})
-        output({"companies": results})
+            output({"companies": results})
     finally:
         connection.close()
 
@@ -632,21 +694,30 @@ def contact_create(
         get_company,
         initialize_database,
     )
+    from mailpilot.operator_log import cli_mutation, operator_event
 
     domain = email.rsplit("@", maxsplit=1)[-1]
     connection = initialize_database(_database_url())
     try:
         if company_id is not None and get_company(connection, company_id) is None:
             output_error(f"company not found: {company_id}", "not_found")
-        created = create_contact(
-            connection,
-            email=email,
-            domain=domain,
-            first_name=first_name,
-            last_name=last_name,
-            company_id=company_id,
-        )
-        output_entity("contact", created)
+        with cli_mutation("contact", "create", email=email, company_id=company_id):
+            created = create_contact(
+                connection,
+                email=email,
+                domain=domain,
+                first_name=first_name,
+                last_name=last_name,
+                company_id=company_id,
+            )
+            operator_event(
+                "contact.create",
+                entity_id=created.id,
+                email=created.email,
+                company_id=company_id,
+                changed=["email", "domain", "first_name", "last_name", "company_id"],
+            )
+            output_entity("contact", created)
     finally:
         connection.close()
 
@@ -665,10 +736,14 @@ def contact_update(
     company_id: str | None,
 ) -> None:
     """Update a contact."""
-    from mailpilot.database import initialize_database, update_contact
+    from mailpilot.database import get_contact, initialize_database, update_contact
+    from mailpilot.operator_log import cli_mutation, operator_event
 
     connection = initialize_database(_database_url())
     try:
+        before = get_contact(connection, contact_id)
+        if before is None:
+            output_error(f"contact not found: {contact_id}", "not_found")
         fields: dict[str, object] = {}
         if email is not None:
             fields["email"] = email
@@ -679,10 +754,27 @@ def contact_update(
             fields["last_name"] = last_name
         if company_id is not None:
             fields["company_id"] = company_id
-        updated = update_contact(connection, contact_id, **fields)
-        if updated is None:
-            output_error(f"contact not found: {contact_id}", "not_found")
-        output_entity("contact", updated)
+        with cli_mutation("contact", "update", entity_id=contact_id):
+            updated = update_contact(connection, contact_id, **fields)
+            if updated is None:
+                output_error(f"contact not found: {contact_id}", "not_found")
+            changed = [
+                field
+                for field in (
+                    "email",
+                    "domain",
+                    "first_name",
+                    "last_name",
+                    "company_id",
+                )
+                if getattr(before, field) != getattr(updated, field)
+            ]
+            operator_event(
+                "contact.update",
+                entity_id=contact_id,
+                changed=changed,
+            )
+            output_entity("contact", updated)
     finally:
         connection.close()
 
@@ -805,6 +897,7 @@ def contact_import(file: str | None) -> None:
         initialize_database,
         list_contacts,
     )
+    from mailpilot.operator_log import cli_mutation, operator_event
 
     raw = pathlib.Path(file).read_text() if file else sys.stdin.read()
     try:
@@ -818,40 +911,55 @@ def contact_import(file: str | None) -> None:
 
     connection = initialize_database(_database_url())
     try:
-        existing = {c.email for c in list_contacts(connection, limit=100_000)}
-        results: list[dict[str, object]] = []
-        for entry in entries:
-            email = entry.get("email") if isinstance(entry, dict) else None
-            if not isinstance(email, str):
-                results.append(
-                    {
-                        "email": "",
-                        "error": "validation_error",
-                        "message": "row missing required 'email'",
-                    }
+        with cli_mutation("contact", "import", row_count=len(entries)):
+            existing = {c.email for c in list_contacts(connection, limit=100_000)}
+            results: list[dict[str, object]] = []
+            for entry in entries:
+                email = entry.get("email") if isinstance(entry, dict) else None
+                if not isinstance(email, str):
+                    results.append(
+                        {
+                            "email": "",
+                            "error": "validation_error",
+                            "message": "row missing required 'email'",
+                        }
+                    )
+                    operator_event("contact.import", email="", changed=[])
+                    continue
+                if email in existing:
+                    results.append(
+                        {
+                            "email": email,
+                            "error": "duplicate",
+                            "message": (f"contact with email {email!r} already exists"),
+                        }
+                    )
+                    operator_event("contact.import", email=email, changed=[])
+                    continue
+                domain = entry.get("domain") or email.split("@")[-1]
+                create_contact(
+                    connection,
+                    email=email,
+                    domain=domain,
+                    first_name=entry.get("first_name"),
+                    last_name=entry.get("last_name"),
+                    company_id=entry.get("company_id"),
                 )
-                continue
-            if email in existing:
-                results.append(
-                    {
-                        "email": email,
-                        "error": "duplicate",
-                        "message": f"contact with email {email!r} already exists",
-                    }
+                existing.add(email)
+                results.append({"email": email, "action": "created"})
+                operator_event(
+                    "contact.import",
+                    email=email,
+                    domain=domain,
+                    changed=[
+                        "email",
+                        "domain",
+                        "first_name",
+                        "last_name",
+                        "company_id",
+                    ],
                 )
-                continue
-            domain = entry.get("domain") or email.split("@")[-1]
-            create_contact(
-                connection,
-                email=email,
-                domain=domain,
-                first_name=entry.get("first_name"),
-                last_name=entry.get("last_name"),
-                company_id=entry.get("company_id"),
-            )
-            existing.add(email)
-            results.append({"email": email, "action": "created"})
-        output({"contacts": results})
+            output({"contacts": results})
     finally:
         connection.close()
 
@@ -1245,6 +1353,7 @@ def tag_add(contact_id: str | None, company_id: str | None, name: str) -> None:
         get_contact,
         initialize_database,
     )
+    from mailpilot.operator_log import cli_mutation, operator_event
 
     if not name.strip():
         output_error("tag name cannot be empty", "validation_error")
@@ -1258,27 +1367,44 @@ def tag_add(contact_id: str | None, company_id: str | None, name: str) -> None:
         if contact_id is not None:
             if get_contact(connection, contact_id) is None:
                 output_error(f"contact {contact_id} not found", "not_found")
-            try:
-                created = add_contact_tag(connection, contact_id=contact_id, name=name)
-            except ValueError as exc:
-                output_error(str(exc), "validation_error")
             owner = ("contact", contact_id)
         else:
             assert company_id is not None
             if get_company(connection, company_id) is None:
                 output_error(f"company {company_id} not found", "not_found")
-            try:
-                created = add_company_tag(connection, company_id=company_id, name=name)
-            except ValueError as exc:
-                output_error(str(exc), "validation_error")
             owner = ("company", company_id)
-        if created is None:
-            normalized = _normalize_tag_name(name)
-            output_error(
-                f"tag '{normalized}' already exists on {owner[0]} {owner[1]}",
-                "already_exists",
+        with cli_mutation(
+            "tag", "add", name=name, owner_type=owner[0], owner_id=owner[1]
+        ):
+            if contact_id is not None:
+                try:
+                    created = add_contact_tag(
+                        connection, contact_id=contact_id, name=name
+                    )
+                except ValueError as exc:
+                    output_error(str(exc), "validation_error")
+            else:
+                assert company_id is not None
+                try:
+                    created = add_company_tag(
+                        connection, company_id=company_id, name=name
+                    )
+                except ValueError as exc:
+                    output_error(str(exc), "validation_error")
+            if created is None:
+                normalized = _normalize_tag_name(name)
+                output_error(
+                    f"tag '{normalized}' already exists on {owner[0]} {owner[1]}",
+                    "already_exists",
+                )
+            operator_event(
+                "tag.add",
+                name=created.name,
+                owner_type=owner[0],
+                owner_id=owner[1],
+                changed=["name"],
             )
-        output_entity("tag", created)
+            output_entity("tag", created)
     finally:
         connection.close()
 
@@ -1297,6 +1423,7 @@ def tag_remove(contact_id: str | None, company_id: str | None, name: str) -> Non
         remove_company_tag,
         remove_contact_tag,
     )
+    from mailpilot.operator_log import cli_mutation, operator_event
 
     if (contact_id is None) == (company_id is None):
         output_error(
@@ -1308,31 +1435,44 @@ def tag_remove(contact_id: str | None, company_id: str | None, name: str) -> Non
         if contact_id is not None:
             if get_contact(connection, contact_id) is None:
                 output_error(f"contact {contact_id} not found", "not_found")
-            try:
-                deleted = remove_contact_tag(
-                    connection, contact_id=contact_id, name=name
-                )
-            except ValueError as exc:
-                output_error(str(exc), "validation_error")
             owner = ("contact", contact_id)
         else:
             assert company_id is not None
             if get_company(connection, company_id) is None:
                 output_error(f"company {company_id} not found", "not_found")
-            try:
-                deleted = remove_company_tag(
-                    connection, company_id=company_id, name=name
-                )
-            except ValueError as exc:
-                output_error(str(exc), "validation_error")
             owner = ("company", company_id)
-        if deleted is None:
-            normalized = _normalize_tag_name(name)
-            output_error(
-                f"tag '{normalized}' not found on {owner[0]} {owner[1]}",
-                "not_found",
+        with cli_mutation(
+            "tag", "remove", name=name, owner_type=owner[0], owner_id=owner[1]
+        ):
+            if contact_id is not None:
+                try:
+                    deleted = remove_contact_tag(
+                        connection, contact_id=contact_id, name=name
+                    )
+                except ValueError as exc:
+                    output_error(str(exc), "validation_error")
+            else:
+                assert company_id is not None
+                try:
+                    deleted = remove_company_tag(
+                        connection, company_id=company_id, name=name
+                    )
+                except ValueError as exc:
+                    output_error(str(exc), "validation_error")
+            if deleted is None:
+                normalized = _normalize_tag_name(name)
+                output_error(
+                    f"tag '{normalized}' not found on {owner[0]} {owner[1]}",
+                    "not_found",
+                )
+            operator_event(
+                "tag.remove",
+                name=deleted.name,
+                owner_type=owner[0],
+                owner_id=owner[1],
+                changed=["name"],
             )
-        output_entity("tag", deleted)
+            output_entity("tag", deleted)
     finally:
         connection.close()
 
@@ -1424,6 +1564,7 @@ def note_add(contact_id: str | None, company_id: str | None, body: str) -> None:
         get_contact,
         initialize_database,
     )
+    from mailpilot.operator_log import cli_mutation, operator_event
 
     if not body.strip():
         output_error("note body cannot be empty", "validation_error")
@@ -1437,13 +1578,26 @@ def note_add(contact_id: str | None, company_id: str | None, body: str) -> None:
         if contact_id is not None:
             if get_contact(connection, contact_id) is None:
                 output_error(f"contact {contact_id} not found", "not_found")
-            created = add_contact_note(connection, contact_id=contact_id, body=body)
+            owner = ("contact", contact_id)
         else:
             assert company_id is not None
             if get_company(connection, company_id) is None:
                 output_error(f"company {company_id} not found", "not_found")
-            created = add_company_note(connection, company_id=company_id, body=body)
-        output_entity("note", created)
+            owner = ("company", company_id)
+        with cli_mutation("note", "add", owner_type=owner[0], owner_id=owner[1]):
+            if contact_id is not None:
+                created = add_contact_note(connection, contact_id=contact_id, body=body)
+            else:
+                assert company_id is not None
+                created = add_company_note(connection, company_id=company_id, body=body)
+            operator_event(
+                "note.add",
+                entity_id=created.id,
+                owner_type=owner[0],
+                owner_id=owner[1],
+                changed=["body"],
+            )
+            output_entity("note", created)
     finally:
         connection.close()
 
@@ -1536,6 +1690,49 @@ def _validate_theme(theme: str) -> None:
         )
 
 
+def _create_and_populate_workflow(
+    connection: Any,
+    *,
+    name: str,
+    template: str,
+    account_id: str,
+    theme: str | None,
+    objective: str | None,
+    resolved_instructions: str | None,
+    activate: bool,
+) -> tuple[Any, list[str]]:
+    """Run the V47 mutation sequence: create -> update extras -> optional activate.
+
+    Returns the populated workflow row and the list of fields written.
+    """
+    from mailpilot.database import activate_workflow, create_workflow, update_workflow
+
+    created = create_workflow(
+        connection,
+        name=name,
+        template=template,
+        account_id=account_id,
+        theme=theme or "blue",
+    )
+    extras: dict[str, object] = {}
+    if objective is not None:
+        extras["objective"] = objective
+    if resolved_instructions is not None:
+        extras["instructions"] = resolved_instructions
+    if extras:
+        created = update_workflow(connection, created.id, **extras) or created
+    if activate:
+        created = activate_workflow(connection, created.id)
+    changed = ["name", "template", "account_id", "theme"]
+    if objective is not None:
+        changed.append("objective")
+    if resolved_instructions is not None:
+        changed.append("instructions")
+    if activate:
+        changed.append("status")
+    return created, changed
+
+
 @workflow.command("create")
 @click.option("--name", required=True, help="Workflow name.")
 @click.option(
@@ -1582,13 +1779,8 @@ def workflow_create(
     draft: bool,
 ) -> None:
     """Create a new workflow."""
-    from mailpilot.database import (
-        activate_workflow,
-        create_workflow,
-        get_account,
-        initialize_database,
-        update_workflow,
-    )
+    from mailpilot.database import get_account, initialize_database
+    from mailpilot.operator_log import cli_mutation, operator_event
 
     if not name.strip():
         output_error("workflow name cannot be empty", "validation_error")
@@ -1608,27 +1800,35 @@ def workflow_create(
             "validation_error",
         )
     resolved = _resolve_instructions(instructions, instructions_file)
+    activate = not draft and has_objective and has_instructions
     connection = initialize_database(_database_url())
     try:
         if get_account(connection, account_id) is None:
             output_error(f"account not found: {account_id}", "not_found")
-        created = create_workflow(
-            connection,
-            name=name,
-            template=template,
+        with cli_mutation(
+            "workflow",
+            "create",
             account_id=account_id,
-            theme=theme or "blue",
-        )
-        extras: dict[str, object] = {}
-        if objective is not None:
-            extras["objective"] = objective
-        if resolved is not None:
-            extras["instructions"] = resolved
-        if extras:
-            created = update_workflow(connection, created.id, **extras) or created
-        if not draft and has_objective and has_instructions:
-            created = activate_workflow(connection, created.id)
-        output_entity("workflow", created)
+            template=template,
+        ):
+            created, changed = _create_and_populate_workflow(
+                connection,
+                name=name,
+                template=template,
+                account_id=account_id,
+                theme=theme,
+                objective=objective,
+                resolved_instructions=resolved,
+                activate=activate,
+            )
+            operator_event(
+                "workflow.create",
+                entity_id=created.id,
+                account_id=account_id,
+                template=template,
+                changed=changed,
+            )
+            output_entity("workflow", created)
     finally:
         connection.close()
 
@@ -1662,7 +1862,8 @@ def workflow_update(
     theme: str | None,
 ) -> None:
     """Update a workflow."""
-    from mailpilot.database import initialize_database, update_workflow
+    from mailpilot.database import get_workflow, initialize_database, update_workflow
+    from mailpilot.operator_log import cli_mutation, operator_event
 
     if theme is not None:
         _validate_theme(theme)
@@ -1674,6 +1875,9 @@ def workflow_update(
     resolved = _resolve_instructions(instructions, instructions_file)
     connection = initialize_database(_database_url())
     try:
+        before = get_workflow(connection, workflow_id)
+        if before is None:
+            output_error(f"workflow not found: {workflow_id}", "not_found")
         fields: dict[str, object] = {}
         if name is not None:
             fields["name"] = name
@@ -1683,10 +1887,21 @@ def workflow_update(
             fields["instructions"] = resolved
         if theme is not None:
             fields["theme"] = theme
-        updated = update_workflow(connection, workflow_id, **fields)
-        if updated is None:
-            output_error(f"workflow not found: {workflow_id}", "not_found")
-        output_entity("workflow", updated)
+        with cli_mutation("workflow", "update", entity_id=workflow_id):
+            updated = update_workflow(connection, workflow_id, **fields)
+            if updated is None:
+                output_error(f"workflow not found: {workflow_id}", "not_found")
+            changed = [
+                field
+                for field in ("name", "objective", "instructions", "theme")
+                if getattr(before, field) != getattr(updated, field)
+            ]
+            operator_event(
+                "workflow.update",
+                entity_id=workflow_id,
+                changed=changed,
+            )
+            output_entity("workflow", updated)
     finally:
         connection.close()
 
@@ -1779,27 +1994,34 @@ def workflow_view(workflow_id: str) -> None:
 def workflow_start(workflow_id: str) -> None:
     """Start a workflow (requires non-empty objective and instructions)."""
     from mailpilot.database import activate_workflow, initialize_database
+    from mailpilot.operator_log import cli_mutation, operator_event
 
     connection = initialize_database(_database_url())
     try:
-        try:
-            activated = activate_workflow(connection, workflow_id)
-        except ValueError as exc:
-            message = str(exc)
-            if "objective" in message:
-                output_error(
-                    f"cannot start: objective is empty. "
-                    f'Run: workflow update {workflow_id} --objective "..."',
-                    "invalid_state",
-                )
-            if "instructions" in message:
-                output_error(
-                    f"cannot start: instructions are empty. "
-                    f'Run: workflow update {workflow_id} --instructions "..."',
-                    "invalid_state",
-                )
-            output_error(message, "invalid_state")
-        output_entity("workflow", activated)
+        with cli_mutation("workflow", "start", entity_id=workflow_id):
+            try:
+                activated = activate_workflow(connection, workflow_id)
+            except ValueError as exc:
+                message = str(exc)
+                if "objective" in message:
+                    output_error(
+                        f"cannot start: objective is empty. "
+                        f'Run: workflow update {workflow_id} --objective "..."',
+                        "invalid_state",
+                    )
+                if "instructions" in message:
+                    output_error(
+                        f"cannot start: instructions are empty. "
+                        f'Run: workflow update {workflow_id} --instructions "..."',
+                        "invalid_state",
+                    )
+                output_error(message, "invalid_state")
+            operator_event(
+                "workflow.start",
+                entity_id=workflow_id,
+                changed=["status"],
+            )
+            output_entity("workflow", activated)
     finally:
         connection.close()
 
@@ -1809,14 +2031,21 @@ def workflow_start(workflow_id: str) -> None:
 def workflow_stop(workflow_id: str) -> None:
     """Stop an active workflow."""
     from mailpilot.database import initialize_database, pause_workflow
+    from mailpilot.operator_log import cli_mutation, operator_event
 
     connection = initialize_database(_database_url())
     try:
-        try:
-            paused = pause_workflow(connection, workflow_id)
-        except ValueError as exc:
-            output_error(str(exc), "invalid_state")
-        output_entity("workflow", paused)
+        with cli_mutation("workflow", "stop", entity_id=workflow_id):
+            try:
+                paused = pause_workflow(connection, workflow_id)
+            except ValueError as exc:
+                output_error(str(exc), "invalid_state")
+            operator_event(
+                "workflow.stop",
+                entity_id=workflow_id,
+                changed=["status"],
+            )
+            output_entity("workflow", paused)
     finally:
         connection.close()
 
@@ -1855,6 +2084,7 @@ def _import_workflow_create(
     connection: Any, account_id: str, name: str, template: str, entry: dict[str, Any]
 ) -> dict[str, object]:
     from mailpilot.database import activate_workflow, create_workflow, update_workflow
+    from mailpilot.operator_log import operator_event
 
     theme = entry.get("theme") or "blue"
     created = create_workflow(
@@ -1873,8 +2103,23 @@ def _import_workflow_create(
         extras["instructions"] = instructions
     if extras:
         update_workflow(connection, created.id, **extras)
-    if objective and instructions:
+    activated = bool(objective and instructions)
+    if activated:
         activate_workflow(connection, created.id)
+    changed = ["name", "template", "account_id", "theme"]
+    if objective:
+        changed.append("objective")
+    if instructions:
+        changed.append("instructions")
+    if activated:
+        changed.append("status")
+    operator_event(
+        "workflow.import",
+        entity_id=created.id,
+        account_id=account_id,
+        name=name,
+        changed=changed,
+    )
     return {"name": name, "action": "created"}
 
 
@@ -1882,6 +2127,7 @@ def _import_workflow_update(
     connection: Any, current: Any, entry: dict[str, Any]
 ) -> dict[str, object]:
     from mailpilot.database import update_workflow
+    from mailpilot.operator_log import operator_event
 
     diff: dict[str, object] = {}
     for field in _WORKFLOW_IMPORT_UPDATABLE:
@@ -1891,17 +2137,39 @@ def _import_workflow_update(
         if getattr(current, field) != payload_value:
             diff[field] = payload_value
     if not diff:
+        operator_event(
+            "workflow.import",
+            entity_id=current.id,
+            account_id=current.account_id,
+            name=current.name,
+            changed=[],
+        )
         return {"name": current.name, "action": "unchanged"}
     update_workflow(connection, current.id, **diff)
+    operator_event(
+        "workflow.import",
+        entity_id=current.id,
+        account_id=current.account_id,
+        name=current.name,
+        changed=list(diff.keys()),
+    )
     return {"name": current.name, "action": "updated"}
 
 
 def _import_workflow_row(
     connection: Any, account_id: str, existing: dict[str, Any], entry: dict[str, Any]
 ) -> dict[str, object]:
+    from mailpilot.operator_log import operator_event
+
     name = entry.get("name")
     template = entry.get("template")
     if not isinstance(name, str) or not isinstance(template, str):
+        operator_event(
+            "workflow.import",
+            account_id=account_id,
+            name=name if isinstance(name, str) else "",
+            changed=[],
+        )
         return {
             "name": name if isinstance(name, str) else "",
             "error": "validation_error",
@@ -1911,6 +2179,13 @@ def _import_workflow_row(
     if current is None:
         return _import_workflow_create(connection, account_id, name, template, entry)
     if current.template != template:
+        operator_event(
+            "workflow.import",
+            entity_id=current.id,
+            account_id=account_id,
+            name=name,
+            changed=[],
+        )
         return {
             "name": name,
             "error": "template_immutable",
@@ -1951,6 +2226,7 @@ def workflow_import(account_id: str, file: str | None) -> None:
         initialize_database,
         list_workflows_full,
     )
+    from mailpilot.operator_log import cli_mutation
 
     raw = pathlib.Path(file).read_text() if file else sys.stdin.read()
     try:
@@ -1966,12 +2242,18 @@ def workflow_import(account_id: str, file: str | None) -> None:
     try:
         if get_account(connection, account_id) is None:
             output_error(f"account not found: {account_id}", "not_found")
-        existing = {w.name: w for w in list_workflows_full(connection, account_id)}
-        results = [
-            _import_workflow_row(connection, account_id, existing, entry)
-            for entry in entries
-        ]
-        output({"workflows": results})
+        with cli_mutation(
+            "workflow",
+            "import",
+            account_id=account_id,
+            row_count=len(entries),
+        ):
+            existing = {w.name: w for w in list_workflows_full(connection, account_id)}
+            results = [
+                _import_workflow_row(connection, account_id, existing, entry)
+                for entry in entries
+            ]
+            output({"workflows": results})
     finally:
         connection.close()
 
@@ -2052,6 +2334,7 @@ def enrollment_add(workflow_id: str, contact_id: str) -> None:
         get_workflow,
         initialize_database,
     )
+    from mailpilot.operator_log import cli_mutation, operator_event
 
     connection = initialize_database(_database_url())
     try:
@@ -2061,23 +2344,38 @@ def enrollment_add(workflow_id: str, contact_id: str) -> None:
         contact = get_contact(connection, contact_id)
         if contact is None:
             output_error(f"contact not found: {contact_id}", "not_found")
-        created = create_enrollment(connection, workflow_id, contact_id)
-        if created is not None:
-            create_activity(
-                connection,
-                contact_id=contact_id,
-                activity_type="enrollment_added",
-                summary=f"Assigned to {workflow.name}",
-                detail={"workflow_name": workflow.name},
-                company_id=contact.company_id,
-                workflow_id=workflow_id,
-            )
-            output_entity("enrollment", created)
-            return
-        existing = get_enrollment(connection, workflow_id, contact_id)
-        if existing is not None:
-            output_entity("enrollment", existing)
-            return
+        with cli_mutation(
+            "enrollment", "add", workflow_id=workflow_id, contact_id=contact_id
+        ):
+            created = create_enrollment(connection, workflow_id, contact_id)
+            if created is not None:
+                create_activity(
+                    connection,
+                    contact_id=contact_id,
+                    activity_type="enrollment_added",
+                    summary=f"Assigned to {workflow.name}",
+                    detail={"workflow_name": workflow.name},
+                    company_id=contact.company_id,
+                    workflow_id=workflow_id,
+                )
+                operator_event(
+                    "enrollment.add",
+                    workflow_id=workflow_id,
+                    contact_id=contact_id,
+                    changed=["status"],
+                )
+                output_entity("enrollment", created)
+                return
+            existing = get_enrollment(connection, workflow_id, contact_id)
+            if existing is not None:
+                operator_event(
+                    "enrollment.add",
+                    workflow_id=workflow_id,
+                    contact_id=contact_id,
+                    changed=[],
+                )
+                output_entity("enrollment", existing)
+                return
     finally:
         connection.close()
 
@@ -2172,13 +2470,23 @@ def enrollment_run(workflow_id: str, contact_id: str) -> None:
 def enrollment_remove(workflow_id: str, contact_id: str) -> None:
     """Remove an enrollment."""
     from mailpilot.database import delete_enrollment, initialize_database
+    from mailpilot.operator_log import cli_mutation, operator_event
 
     connection = initialize_database(_database_url())
     try:
-        deleted = delete_enrollment(connection, workflow_id, contact_id)
-        if deleted is None:
-            output_error("enrollment not found", "not_found")
-        output_entity("enrollment", deleted)
+        with cli_mutation(
+            "enrollment", "remove", workflow_id=workflow_id, contact_id=contact_id
+        ):
+            deleted = delete_enrollment(connection, workflow_id, contact_id)
+            if deleted is None:
+                output_error("enrollment not found", "not_found")
+            operator_event(
+                "enrollment.remove",
+                workflow_id=workflow_id,
+                contact_id=contact_id,
+                changed=["status"],
+            )
+            output_entity("enrollment", deleted)
     finally:
         connection.close()
 
@@ -2270,6 +2578,7 @@ def enrollment_update(
         initialize_database,
         update_enrollment,
     )
+    from mailpilot.operator_log import cli_mutation, operator_event
 
     connection = initialize_database(_database_url())
     try:
@@ -2279,24 +2588,38 @@ def enrollment_update(
         fields: dict[str, object] = {"status": status}
         if reason is not None:
             fields["reason"] = reason
-        updated = update_enrollment(connection, workflow_id, contact_id, **fields)
-        if updated is None:
-            output_error("enrollment not found", "not_found")
-        if before.status != status:
-            contact = get_contact(connection, contact_id)
-            activity_type = (
-                "enrollment_paused" if status == "paused" else "enrollment_resumed"
-            )
-            create_activity(
-                connection,
-                contact_id=contact_id,
-                activity_type=activity_type,
-                summary=reason or f"Enrollment {status}",
-                detail={"reason": reason or ""},
-                company_id=contact.company_id if contact is not None else None,
+        with cli_mutation(
+            "enrollment", "update", workflow_id=workflow_id, contact_id=contact_id
+        ):
+            updated = update_enrollment(connection, workflow_id, contact_id, **fields)
+            if updated is None:
+                output_error("enrollment not found", "not_found")
+            if before.status != status:
+                contact = get_contact(connection, contact_id)
+                activity_type = (
+                    "enrollment_paused" if status == "paused" else "enrollment_resumed"
+                )
+                create_activity(
+                    connection,
+                    contact_id=contact_id,
+                    activity_type=activity_type,
+                    summary=reason or f"Enrollment {status}",
+                    detail={"reason": reason or ""},
+                    company_id=contact.company_id if contact is not None else None,
+                    workflow_id=workflow_id,
+                )
+            changed = [
+                field
+                for field in ("status", "reason")
+                if getattr(before, field) != getattr(updated, field)
+            ]
+            operator_event(
+                "enrollment.update",
                 workflow_id=workflow_id,
+                contact_id=contact_id,
+                changed=changed,
             )
-        output_entity("enrollment", updated)
+            output_entity("enrollment", updated)
     finally:
         connection.close()
 
