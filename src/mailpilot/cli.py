@@ -76,7 +76,7 @@ def output(data: dict[str, Any]) -> None:
 def output_entity(key: str, model: Any) -> None:
     """Emit a single entity wrapped under its singular key.
 
-    Per SPEC §V13: `<entity> view|create|update` -> `{"<singular>": {...}, "ok": true}`.
+    Per SPEC §V.5: `<entity> view|create|update` -> `{"<singular>": {...}, "ok": true}`.
     Symmetric with `output({"<plural>": [...]})` used by list commands.
     """
     click.echo(

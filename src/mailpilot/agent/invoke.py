@@ -520,7 +520,7 @@ def invoke_workflow_agent(  # noqa: PLR0913
             ``enrollment_run`` (CLI manual via ``mailpilot enrollment run``),
             ``task`` (background drain via ``run.execute_task``),
             ``email`` (email-driven), or ``manual`` (default for direct
-            programmatic calls). See SPEC §V11.
+            programmatic calls). See SPEC §V.11.
 
     Returns:
         Dict with invocation result, or None if skipped (lock held).
