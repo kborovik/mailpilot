@@ -74,8 +74,11 @@ TOPIC=$(sort -R /usr/share/dict/words 2>/dev/null \
 [ -z "$TOPIC" ] && TOPIC=$(head -c 12 /dev/urandom | base32 | tr -d '=' | head -c 10)
 SUBJECT="[DEMO-$(date +%H%M%S)] ${TOPIC}"
 
-TEST_START=$(uv run python -c 'import datetime; print(datetime.datetime.now(datetime.UTC).isoformat())')
+TEST_START_EPOCH=$(uv run python -c 'import datetime; print(int(datetime.datetime.now(datetime.UTC).timestamp()))')
+TEST_START=$(uv run python -c "import datetime; print(datetime.datetime.fromtimestamp($TEST_START_EPOCH, tz=datetime.UTC).isoformat())")
 ```
+
+`TEST_START_EPOCH` is the Unix-seconds form consumed by Gmail's `after:` search operator in Step 5; `TEST_START` is the ISO form used in Logfire SQL windows in Steps 7 and 8. Both refer to the same instant (the ISO is derived from the epoch).
 
 Generate `TOPIC` via Bash per run. Do NOT invent a topic in your head and do NOT reuse one from a prior run -- LLMs anchor on examples and have been observed copying the same subject across runs, which collides Logfire windows.
 
@@ -101,28 +104,41 @@ and stop. The production instance never saw the question; Logfire would be empty
 
 ### Step 5: G1 -- reply round-trip
 
-Poll the outbound mailbox up to 12 attempts, 5s apart (~60s):
+Poll Gmail directly via service-account impersonation of `outbound@lab5.ca` (per SPEC `§V.42` and `§V.46` -- liveness probes must hit the production-facing surface, not the local mailpilot DB which would require a separately-started `mailpilot run` to stay fresh). Up to 12 attempts, 5s apart (~60s):
 
 ```
+TAIL="${SUBJECT#*] }"
+REPLY_ID=""
+REPLY_BODY=""
 for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
-  REPLY_ID=$(uv run mailpilot email list \
-    --account-id "$OUTBOUND_ACCOUNT_ID" \
-    --direction inbound \
-    --since "$TEST_START" \
-    | python3 -c '
-import json, sys
-tail = "'"${SUBJECT#*] }"'"
-emails = json.load(sys.stdin)["emails"]
-for e in emails:
-    if tail in e.get("subject", ""):
-        print(e["id"]); break
-')
-  if [ -n "$REPLY_ID" ]; then break; fi
+  HIT_JSON=$(uv run python -c "
+import json
+from mailpilot.gmail import GmailClient, extract_text_from_message
+
+client = GmailClient('outbound@lab5.ca')
+stubs = client.list_messages(
+    query='from:demo@lab5.ca after:$TEST_START_EPOCH',
+    label_ids=['INBOX'],
+)
+for stub in stubs:
+    full = client.get_message(stub['id'])
+    if full is None:
+        continue
+    headers = {h['name'].lower(): h['value'] for h in full.get('payload', {}).get('headers', [])}
+    if '$TAIL' in headers.get('subject', ''):
+        print(json.dumps({'id': stub['id'], 'body': extract_text_from_message(full)}))
+        break
+")
+  if [ -n "$HIT_JSON" ]; then
+    REPLY_ID=$(printf '%s' "$HIT_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+    REPLY_BODY=$(printf '%s' "$HIT_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"])')
+    break
+  fi
   sleep 5
 done
 ```
 
-Match by the unique `<topic>` tail since Gmail typically prepends `Re: ` to the subject.
+`REPLY_ID` is the Gmail message id (used only for trace/log; Step 6 consumes `REPLY_BODY` directly). Match by the unique `<topic>` tail since Gmail typically prepends `Re: ` to the subject.
 
 If `REPLY_ID` is empty after ~60s: this is a **G1 FAIL** -- record `no reply within 60s`, but still run Step 7 (Logfire) so the summary has signal.
 
@@ -136,11 +152,10 @@ uv run python .claude/skills/smoke-test/scripts/qa.py source --id "$QA_ID"
 
 If the loader exits non-zero, the source doc is absent from the live folder -- this is a KB-drift signal and counts as **G2 FAIL** (the pair points at a doc the agent could not have grounded in either; replace the QA pair or restore the doc).
 
-Fetch the reply body:
+The reply body was captured into `$REPLY_BODY` by Step 5 (Gmail-side `extract_text_from_message` strips MIME wrapping and normalises whitespace). Echo it for the verdict:
 
 ```
-uv run mailpilot email view "$REPLY_ID" \
-  | python3 -c 'import json, sys; print(json.load(sys.stdin)["email"]["body_text"])'
+printf '%s\n' "$REPLY_BODY"
 ```
 
 Then emit a structured JSON verdict per SPEC `§V.31`:
@@ -271,6 +286,8 @@ This skill does not retry, does not amend the spec, and does not auto-file an is
 ## Spec references
 
 - SPEC `§V.45` -- this skill's contract.
+- SPEC `§V.46` -- liveness probes must hit the production-facing surface (G1 queries Gmail directly, not the local mailpilot DB).
+- SPEC `§V.42` -- Gmail credential construction via `GmailClient("outbound@lab5.ca")` (delegated impersonation; supports both file-creds and ADC).
 - SPEC `§V.31` -- in-scope grounding gate (G2 inherits the operator-judged JSON verdict structure).
 - SPEC `§V.22` -- `deployment_environment` filter (G3).
 - SPEC `§V.11` -- `agent.invoke` `trigger` attribute (G3 span match).
