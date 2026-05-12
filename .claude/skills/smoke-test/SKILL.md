@@ -34,7 +34,7 @@ Both scenarios are **mandatory**. `make clean` runs **once**, at the very start.
 - **Test start ISO timestamp.** Capture before each scenario; reuse for `--since` filters and Logfire windows.
 - **Polling.** When waiting for sync, routing, or agent results: poll up to 12 attempts, 5s apart (~60s total). Do not call `mailpilot account sync` directly -- the background `mailpilot run` loop owns sync.
 - **CLI parsing.** All commands use `uv run mailpilot`. Parse JSON output of every command, extract IDs for the next step. Do not capture into a shell variable and re-emit with `echo "$VAR" | python3 -c ...` -- zsh's built-in `echo` interprets backslash escapes in the JSON (e.g. converts the literal two-char `\n` inside `body_text` into a real newline) and the resulting stream is no longer valid JSON. Either pipe `mailpilot ... | python3 -c ...` directly, or use `printf '%s' "$VAR"`.
-- **Envelope shape (SPEC §V13).** `<entity> view`/`create`/`update` returns `{"<singular>": {...}, "ok": true}`; `<entity> list`/`search` returns `{"<plural>": [...], "ok": true}`. Always extract through the wrap: `json.load(sys.stdin)["email"]["workflow_id"]`, not `json.load(sys.stdin)["workflow_id"]`. Operational commands (`enrollment run`, `account sync`, `tag remove`, `enrollment remove`, `*_export`/`*_import`, `config get/set`, `status`) keep their bespoke shapes.
+- **Envelope shape (SPEC §V.5).** `<entity> view`/`create`/`update` returns `{"<singular>": {...}, "ok": true}`; `<entity> list`/`search` returns `{"<plural>": [...], "ok": true}`. Always extract through the wrap: `json.load(sys.stdin)["email"]["workflow_id"]`, not `json.load(sys.stdin)["workflow_id"]`. Operational commands (`enrollment run`, `tag remove`, `enrollment remove`, `*_export`/`*_import`, `config get/set`, `status`) keep their bespoke shapes. `account sync` returns `{"accounts": [...], "ok": true}` per §V.5 plural envelope.
 - **ASCII only.** No emojis. Use `->`, `--`, plain pipes.
 
 ## Prerequisites
@@ -158,14 +158,14 @@ mailpilot enrollment add --workflow-id <OUTBOUND_WORKFLOW_ID> --contact-id <INBO
 mailpilot enrollment run --workflow-id <OUTBOUND_WORKFLOW_ID> --contact-id <INBOUND_CONTACT_ID>
 ```
 
-`mailpilot enrollment run` MUST be invoked exactly once per `(workflow_id, contact_id)`. If the outbound email is not visible in the next gate's `email list` poll, keep polling — do NOT re-invoke `enrollment run`. A second invocation against the same enrollment produces a redundant `agent.invoke` (the agent searches for the prior send and noops correctly, but burns an LLM round-trip and inflates the trace). See SPEC §V12 / §T18 / §B2.
+`mailpilot enrollment run` MUST be invoked exactly once per `(workflow_id, contact_id)`. If the outbound email is not visible in the next gate's `email list` poll, keep polling — do NOT re-invoke `enrollment run`. A second invocation against the same enrollment produces a redundant `agent.invoke` (the agent searches for the prior send and noops correctly, but burns an LLM round-trip and inflates the trace). See SPEC §V.12 / §T.18 / §B.2.
 
 **Gate A3:**
 
 - `enrollment run` output: `"status": "completed"` and `"tool_calls" >= 1`.
 - `mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound` shows the outbound email with `subject == SUBJECT_A`.
 - The email's `body_text` contains `|` (table) and either `**` or `#` (Markdown).
-- `mailpilot enrollment list --workflow-id <OUTBOUND_WORKFLOW_ID>` shows enrollment status `active`. Per ADR-08 `enrollment.status` is operational only (`active` or `paused`); the agent never mutates it directly. The send-completion outcome lives in the activity timeline (verified in A8), not on the enrollment row.
+- `mailpilot enrollment list --workflow-id <OUTBOUND_WORKFLOW_ID>` shows enrollment status `active`. Per SPEC §V.10, `enrollment.status` is operational only (`active` or `paused`); the agent never mutates it directly. The send-completion outcome lives in the activity timeline (verified in A8), not on the enrollment row.
 
 Save `OUTBOUND_EMAIL_ID`.
 
@@ -242,7 +242,7 @@ Wait for a task with `email_id` set to the routed reply and `status == "complete
 **Gate A7:**
 
 - Task exists with `email_id == <routed reply id>` and `status == "completed"`.
-- `mailpilot enrollment list --workflow-id <OUTBOUND_WORKFLOW_ID>` still shows status `active` -- by design (ADR-08, `enrollment.status` is operational only). The terminal outcome is recorded as an `enrollment_completed` or `enrollment_failed` activity row, verified in A8.
+- `mailpilot enrollment list --workflow-id <OUTBOUND_WORKFLOW_ID>` still shows status `active` -- by design (SPEC §V.10, `enrollment.status` is operational only). The terminal outcome is recorded as an `enrollment_completed` or `enrollment_failed` activity row, verified in A8.
 - **No additional outbound emails were sent.** Re-run `mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_A>` and confirm only the original outbound from A3 is present. If the count > 1, the agent kept replying despite the decline signal -- record as a Bug.
 
 **On failure:** Task never created → check that A6's email has `workflow_id` set and the run loop is alive. Task `failed` → `mailpilot task view <TASK_ID>` for the reason.
@@ -255,9 +255,9 @@ Runtime paths emit `activity` rows automatically (no manual `activity create`). 
 mailpilot activity list --contact-id <INBOUND_CONTACT_ID> --since <TEST_START_A>
 ```
 
-**Gate A8 (activity wiring):** activity types follow the `enrollment_*` vocabulary in ADR-08.
+**Gate A8 (activity wiring):** activity types follow the `enrollment_*` / `email_*` vocabulary enforced by `activity.type` CHECK constraint in `src/mailpilot/schema.sql`.
 
-- `enrollment_added` with `detail.workflow_id == OUTBOUND_WORKFLOW_ID` (emitted by `enrollment add`).
+- `enrollment_added` with `workflow_id == OUTBOUND_WORKFLOW_ID` on the activity row itself (FK column on `activity`, not inside the `detail` JSONB; `detail` carries `{"workflow_name": ...}` as a display label). Emitted by `enrollment add`.
 - `email_sent` with `summary == SUBJECT_A` (emitted by `email_ops.send_email` when the outbound agent sent in A3).
 - `email_received` with the operator-reply subject (emitted by sync's `_store_inbound_message` when the reply landed in the outbound mailbox in A6).
 - Exactly one of `enrollment_completed` or `enrollment_failed` (emitted by `agent.tools.record_enrollment_outcome` in A7); summary equals the agent's `reason`.
@@ -269,7 +269,7 @@ If any expected type is missing, the runtime activity wiring regressed for that 
 
 Do this review now, before B, so the window cleanly bounds A's spans. Use `/logfire:debug` with project=`mailpilot` and window `[TEST_START_A, now]`. Spans to verify:
 
-- `agent.invoke` -- count by `trigger` attribute, not by total. Per SPEC §V12 / §T18, the span carries an explicit `trigger` label set by the caller path:
+- `agent.invoke` -- count by `trigger` attribute, not by total. Per SPEC §V.12 / §T.18, the span carries an explicit `trigger` label set by the caller path:
   - `trigger="task"` -- expect exactly **1** (A7 reply handling, drained by background `mailpilot run`). More than 1 → agent kept replying (loop regression). This is the regression signal for Scenario A.
   - `trigger="enrollment_run"` -- expect at least **1** (A3 send via foreground `enrollment run`). Tolerated regardless of count: an operator double-fire produces extra `enrollment_run` spans that correctly noop, so they cost an LLM round-trip but do not signal regression. T19 / B2 prefer single-invocation discipline (see A3) but the trace contract here permits more.
   - `trigger="email"` / `trigger="manual"` -- not expected in Scenario A; flag if present.
@@ -468,9 +468,9 @@ Out-of-scope decline keeps the script verifier (per SPEC §V.31): regex appropri
 mailpilot activity list --contact-id <OUTBOUND_CONTACT_ID> --since <TEST_START_B>
 ```
 
-**Gate B7 (activity wiring):** activity types follow the `enrollment_*` vocabulary in ADR-08.
+**Gate B7 (activity wiring):** activity types follow the `enrollment_*` / `email_*` vocabulary enforced by `activity.type` CHECK constraint in `src/mailpilot/schema.sql`.
 
-- `enrollment_added` with `detail.workflow_id == DEMO_WORKFLOW_ID` (from B1).
+- `enrollment_added` with `workflow_id == DEMO_WORKFLOW_ID` on the activity row itself (FK column, not `detail` JSONB). From B1.
 - 2 `email_received` activities -- the demo mailbox received the trigger emails for B1 and B2.
 - 2 `email_sent` activities from the agent replies (subjects begin with `Re:`).
 - 2 `enrollment_completed` activities (one per question, both emitted by `record_enrollment_outcome`).

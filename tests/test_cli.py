@@ -347,9 +347,10 @@ def test_account_sync_all_accounts(
     assert mock_sync.call_count == 2
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["total_stored"] == 8
-    assert [r["email"] for r in data["results"]] == ["a@example.com", "b@example.com"]
-    assert [r["stored"] for r in data["results"]] == [3, 5]
+    assert set(data.keys()) == {"accounts", "ok"}
+    assert [r["email"] for r in data["accounts"]] == ["a@example.com", "b@example.com"]
+    assert [r["stored"] for r in data["accounts"]] == [3, 5]
+    assert sum(r["stored"] for r in data["accounts"]) == 8
 
 
 def test_account_sync_single_account(
@@ -370,9 +371,10 @@ def test_account_sync_single_account(
     mock_get.assert_called_once_with(mock_connection, account.id)
     mock_list.assert_not_called()
     data = json.loads(result.output)
-    assert data["total_stored"] == 2
-    assert len(data["results"]) == 1
-    assert data["results"][0]["email"] == "only@example.com"
+    assert set(data.keys()) == {"accounts", "ok"}
+    assert len(data["accounts"]) == 1
+    assert data["accounts"][0]["email"] == "only@example.com"
+    assert data["accounts"][0]["stored"] == 2
 
 
 def test_account_sync_unknown_id(runner: CliRunner, mock_connection: MagicMock) -> None:
@@ -414,10 +416,10 @@ def test_account_sync_error_isolated_per_account(
 
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
-    assert data["total_stored"] == 4
-    assert data["results"][0]["error"] == "gmail 500"
-    assert "stored" not in data["results"][0]
-    assert data["results"][1]["stored"] == 4
+    assert set(data.keys()) == {"accounts", "ok"}
+    assert data["accounts"][0]["error"] == "gmail 500"
+    assert "stored" not in data["accounts"][0]
+    assert data["accounts"][1]["stored"] == 4
 
 
 # -- company helpers -----------------------------------------------------------
