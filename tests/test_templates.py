@@ -122,6 +122,69 @@ def test_non_drive_templates_protocol_excludes_grounding() -> None:
         assert "read_drive_markdown" not in protocol
 
 
+# -- V49: trigger-aware deferred-task fragment ---------------------------------
+
+
+_RECORD_OUTCOME_INSTRUCTION = (
+    "After completing the workflow objective for a contact, "
+    "call record_enrollment_outcome"
+)
+_INITIAL_INSTRUCTION = "Send the initial email and stop"
+
+
+@pytest.mark.parametrize("template", list(TEMPLATES.values()), ids=lambda t: t.name)
+def test_build_protocol_task_carries_record_outcome_instruction(
+    template: WorkflowTemplate,
+) -> None:
+    """V49: ``trigger='task'`` keeps the terminal-outcome instruction."""
+    protocol = template.build_protocol("task")
+    assert _RECORD_OUTCOME_INSTRUCTION in protocol
+    assert _INITIAL_INSTRUCTION not in protocol
+
+
+@pytest.mark.parametrize(
+    "trigger", ["enrollment_run", "manual", "email", "anything_else"]
+)
+@pytest.mark.parametrize("template", list(TEMPLATES.values()), ids=lambda t: t.name)
+def test_build_protocol_non_task_uses_initial_branch(
+    template: WorkflowTemplate, trigger: str
+) -> None:
+    """V49: non-``task`` triggers swap to the initial-send-only instruction."""
+    protocol = template.build_protocol(trigger)
+    assert _INITIAL_INSTRUCTION in protocol
+    assert _RECORD_OUTCOME_INSTRUCTION not in protocol
+
+
+@pytest.mark.parametrize("trigger", ["task", "enrollment_run", "manual"])
+@pytest.mark.parametrize("template", list(TEMPLATES.values()), ids=lambda t: t.name)
+def test_build_protocol_preserves_v33_fragment_order(
+    template: WorkflowTemplate, trigger: str
+) -> None:
+    """V33: canonical order _BASE -> deferred -> [overlay]? -> _DECLINE ->
+    _NO_FABRICATION preserved across triggers."""
+    protocol = template.build_protocol(trigger)
+    base_idx = protocol.find("Keep your final summary brief")
+    decline_idx = protocol.find("polite decline")
+    nofab_idx = protocol.find("Never fabricate")
+    assert 0 <= base_idx < decline_idx < nofab_idx, (
+        f"template {template.name!r} trigger={trigger!r}: V33 order broken "
+        f"(base={base_idx}, decline={decline_idx}, nofab={nofab_idx})"
+    )
+    if template.name == "inbound-google-drive":
+        grounding_idx = protocol.find("Workflow instructions reference a Google Drive")
+        assert 0 < grounding_idx < decline_idx, (
+            "V33: _DRIVE_GROUNDING must precede _DECLINE in inbound-google-drive"
+        )
+
+
+def test_protocol_property_returns_task_branch() -> None:
+    """``WorkflowTemplate.protocol`` property mirrors ``build_protocol('task')``
+    so ``mailpilot template view`` and existing CLI consumers stay on the
+    terminal-outcome composition by default."""
+    for template in TEMPLATES.values():
+        assert template.protocol == template.build_protocol("task")
+
+
 def test_outbound_general_direction() -> None:
     assert TEMPLATES["outbound-general"].direction == "outbound"
 
@@ -230,10 +293,57 @@ def test_build_agent_binds_template_tools(template_name: str) -> None:
         f"template {template.name!r}: expected {expected}, got {bound_names}"
     )
 
-    # Protocol prefix + workflow instructions concatenated.
+    # Protocol prefix + workflow instructions concatenated. _build_agent
+    # defaults to ``trigger="manual"`` per V49 -> initial-mode protocol.
     instructions_list = agent._instructions  # pyright: ignore[reportPrivateUsage]
     assert isinstance(instructions_list, list)
     str_parts = [item for item in instructions_list if isinstance(item, str)]
     instructions = "".join(str_parts)
-    assert instructions.startswith(template.protocol)
+    assert instructions.startswith(template.build_protocol("manual"))
     assert instructions.endswith("WORKFLOW-SPECIFIC-INSTRUCTIONS")
+
+
+@pytest.mark.parametrize("template_name", list(TEMPLATES.keys()))
+def test_build_agent_trigger_routes_protocol_branch(template_name: str) -> None:
+    """V49: ``_build_agent`` swaps the deferred-task branch per ``trigger``.
+
+    ``trigger='task'`` keeps the terminal-outcome instruction; non-``task``
+    triggers swap to the initial-send-only branch so the agent's system
+    prompt cannot direct premature ``record_enrollment_outcome`` calls
+    on first reach-out.
+    """
+    from datetime import UTC, datetime
+
+    from mailpilot.agent.invoke import (
+        _build_agent,  # pyright: ignore[reportPrivateUsage]
+    )
+    from mailpilot.models import Workflow
+
+    template = TEMPLATES[template_name]  # type: ignore[index]
+    now = datetime.now(UTC)
+    workflow = Workflow(
+        id="01900000-0000-7000-8000-000000000003",
+        name="W",
+        template=template.name,
+        type=template.direction,
+        account_id="01900000-0000-7000-8000-000000000004",
+        status="active",
+        instructions="",
+        created_at=now,
+        updated_at=now,
+    )
+
+    def _instructions(trigger: str) -> str:
+        agent = _build_agent(workflow, trigger=trigger)
+        parts = agent._instructions  # pyright: ignore[reportPrivateUsage]
+        assert isinstance(parts, list)
+        return "".join(item for item in parts if isinstance(item, str))
+
+    task_instructions = _instructions("task")
+    assert _RECORD_OUTCOME_INSTRUCTION in task_instructions
+    assert _INITIAL_INSTRUCTION not in task_instructions
+
+    for trigger in ("enrollment_run", "manual", "email"):
+        initial_instructions = _instructions(trigger)
+        assert _INITIAL_INSTRUCTION in initial_instructions
+        assert _RECORD_OUTCOME_INSTRUCTION not in initial_instructions

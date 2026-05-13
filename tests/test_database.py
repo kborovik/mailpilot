@@ -3081,6 +3081,68 @@ def test_activity_list_summary(
     assert not hasattr(activities[0], "detail")
 
 
+def test_activity_list_summary_includes_fk_columns(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.51: list-view projection MUST expose FK columns the schema declares."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    email = create_email(
+        database_connection,
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        direction="outbound",
+        subject="Hello",
+        body_text="Hi",
+        status="sent",
+        gmail_message_id="msg_fk_summary",
+    )
+    assert email is not None
+    task = create_task(
+        database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="follow up",
+        scheduled_at="2024-01-01T00:00:00+00:00",
+    )
+    create_activity(
+        database_connection,
+        contact_id=contact.id,
+        activity_type="email_sent",
+        summary="sent X",
+        email_id=email.id,
+        workflow_id=workflow.id,
+        task_id=task.id,
+    )
+    activities = list_activities(database_connection, contact_id=contact.id)
+    assert len(activities) == 1
+    row = activities[0]
+    assert row.email_id == email.id
+    assert row.workflow_id == workflow.id
+    assert row.task_id == task.id
+
+
+def test_activity_list_summary_fk_columns_null_when_absent(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.51: FK fields are present (null) when the activity has no FK linkage."""
+    contact = make_test_contact(database_connection)
+    create_activity(
+        database_connection,
+        contact_id=contact.id,
+        activity_type="tag_added",
+        summary="tagged X",
+    )
+    activities = list_activities(database_connection, contact_id=contact.id)
+    assert len(activities) == 1
+    row = activities[0]
+    assert row.email_id is None
+    assert row.workflow_id is None
+    assert row.task_id is None
+
+
 def test_note_list_summary_with_body_preview(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:

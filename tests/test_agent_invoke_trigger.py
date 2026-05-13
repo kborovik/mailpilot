@@ -1,6 +1,6 @@
 """Span-contract tests for the ``agent.invoke`` ``trigger`` attribute.
 
-SPEC §V12 requires the ``trigger`` attribute on the ``agent.invoke`` span
+SPEC §V.11 requires the ``trigger`` attribute on the ``agent.invoke`` span
 to reflect the caller path explicitly: ``enrollment_run`` for CLI manual
 runs, ``task`` for background drains, ``email`` for email-driven calls,
 ``manual`` for direct programmatic calls. Tests assert the value flows

@@ -251,9 +251,9 @@ def test_notification_callback_success_emits_one_span_with_email_attribute(
 
     Regression guard: an earlier version of the callback emitted both a span
     and a paired `logfire.debug("pubsub.notification.received", ...)` log,
-    doubling Logfire row volume on the hot path with no information benefit
-    (see SPEC.md §T13). This test pins the collapsed shape so a future
-    refactor cannot silently bring the duplicate log back.
+    doubling Logfire row volume on the hot path with no information benefit.
+    This test pins the collapsed shape so a future refactor cannot silently
+    bring the duplicate log back.
     """
     import queue
 
