@@ -326,6 +326,9 @@ class ActivitySummary(BaseModel):
     id: str
     contact_id: str | None
     company_id: str | None
+    email_id: str | None
+    workflow_id: str | None
+    task_id: str | None
     type: ActivityType
     summary: str
     created_at: datetime

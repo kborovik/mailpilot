@@ -2306,7 +2306,8 @@ def list_activities(
         params["since"] = since
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
-        "SELECT id, contact_id, company_id, type, summary, created_at "
+        "SELECT id, contact_id, company_id, email_id, workflow_id, task_id, "
+        "type, summary, created_at "
         "FROM activity {} ORDER BY created_at DESC LIMIT %(limit)s"
     ).format(where)
     rows = connection.execute(query, params).fetchall()
