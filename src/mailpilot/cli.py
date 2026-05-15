@@ -587,7 +587,7 @@ def company_view(company_id: str) -> None:
     help="Optional path to also write the JSON array. Stdout still emits envelope.",
 )
 def company_export(file: str | None) -> None:
-    """Export all companies as a declarative JSON payload (V5)."""
+    """Export all companies as a declarative JSON payload (§V.5)."""
     import pathlib
 
     from mailpilot.database import get_company, initialize_database, list_companies
@@ -613,7 +613,7 @@ def company_export(file: str | None) -> None:
     help="Path to JSON array of company objects. If omitted, read from stdin.",
 )
 def company_import(file: str | None) -> None:
-    """Import companies from a declarative JSON array (V39 batch-error pattern).
+    """Import companies from a declarative JSON array (§V.39 batch-error pattern).
 
     Each row resolves to either ``{"name": ..., "action": "created"}`` or
     ``{"name": ..., "error": CODE, "message": ...}``; per-row failures do not
@@ -629,7 +629,15 @@ def company_import(file: str | None) -> None:
     )
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    raw = pathlib.Path(file).read_text() if file else sys.stdin.read()
+    if file:
+        raw = pathlib.Path(file).read_text()
+    else:
+        if sys.stdin.isatty():
+            output_error(
+                "no input: provide --file PATH or pipe JSON via stdin",
+                "validation_error",
+            )
+        raw = sys.stdin.read()
     try:
         entries = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -875,7 +883,7 @@ def contact_view(contact_id: str) -> None:
     help="Optional path to also write the JSON array. Stdout still emits envelope.",
 )
 def contact_export(file: str | None) -> None:
-    """Export all contacts as a declarative JSON payload (V5)."""
+    """Export all contacts as a declarative JSON payload (§V.5)."""
     import pathlib
 
     from mailpilot.database import get_contact, initialize_database, list_contacts
@@ -901,7 +909,7 @@ def contact_export(file: str | None) -> None:
     help="Path to JSON array of contact objects. If omitted, read from stdin.",
 )
 def contact_import(file: str | None) -> None:
-    """Import contacts from a declarative JSON array (V39 batch-error pattern).
+    """Import contacts from a declarative JSON array (§V.39 batch-error pattern).
 
     Each row resolves to either ``{"email": ..., "action": "created"}`` or
     ``{"email": ..., "error": CODE, "message": ...}``; per-row failures do not
@@ -917,7 +925,15 @@ def contact_import(file: str | None) -> None:
     )
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    raw = pathlib.Path(file).read_text() if file else sys.stdin.read()
+    if file:
+        raw = pathlib.Path(file).read_text()
+    else:
+        if sys.stdin.isatty():
+            output_error(
+                "no input: provide --file PATH or pipe JSON via stdin",
+                "validation_error",
+            )
+        raw = sys.stdin.read()
     try:
         entries = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -1719,7 +1735,7 @@ def _create_and_populate_workflow(
     resolved_instructions: str | None,
     activate: bool,
 ) -> tuple[Any, list[str]]:
-    """Run the V47 mutation sequence: create -> update extras -> optional activate.
+    """Run the §V.47 mutation sequence: create -> update extras -> optional activate.
 
     Returns the populated workflow row and the list of fields written.
     """
@@ -2246,7 +2262,15 @@ def workflow_import(account_id: str, file: str | None) -> None:
     )
     from mailpilot.operator_log import cli_mutation
 
-    raw = pathlib.Path(file).read_text() if file else sys.stdin.read()
+    if file:
+        raw = pathlib.Path(file).read_text()
+    else:
+        if sys.stdin.isatty():
+            output_error(
+                "no input: provide --file PATH or pipe JSON via stdin",
+                "validation_error",
+            )
+        raw = sys.stdin.read()
     try:
         entries = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -2451,7 +2475,7 @@ def enrollment_run(workflow_id: str, contact_id: str) -> None:
             "contact_id": contact.id,
         }
         try:
-            # V36: prompt framing comes from `trigger`, not a synthesised
+            # §V.36: prompt framing comes from `trigger`, not a synthesised
             # task_description. enrollment_run is an initial reach-out, not
             # resumed deferred work.
             result = invoke_workflow_agent(

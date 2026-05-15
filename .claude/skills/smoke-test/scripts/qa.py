@@ -13,7 +13,7 @@ Subcommands:
          the operator can grade groundedness against the live source.
 
   check  --id ID --reply-text "..." | --reply-file PATH
-         Outscope-only post-V31. Validate an out-of-scope decline reply
+         Outscope-only post-§V.31. Validate an out-of-scope decline reply
          against the pair's `forbidden_token_pairs` and `decline_signals`.
          Inscope grading is operator-judged in gate B4 (see SKILL.md);
          calling `check` with an inscope pair exits 2.
