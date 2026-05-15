@@ -200,14 +200,18 @@ def _wrap_record_enrollment_outcome(
 
 def _wrap_disable_contact(
     ctx: RunContext[AgentDeps],
-    status: str,
     reason: str,
 ) -> dict[str, str]:
-    """Set a global block on the current contact (bounced or unsubscribed)."""
+    """Set a global block on the current contact.
+
+    `reason` is stored verbatim in `contact.disabled_reason`. Convention:
+    prefix with `"bounced: "` or `"unsubscribed: "` so the operator can
+    grep the source class. Once set, `send_email` and `reply_email`
+    refuse this contact across every workflow.
+    """
     return agent_tools.disable_contact(
         connection=ctx.deps.connection,
         contact_id=ctx.deps.contact_id,
-        status=status,
         reason=reason,
     )
 
@@ -443,10 +447,6 @@ def _build_user_prompt(  # noqa: PLR0913
     if contact.first_name or contact.last_name:
         name = f"{contact.first_name or ''} {contact.last_name or ''}".strip()
         sections.append(f"Name: {name}")
-    if contact.position:
-        sections.append(f"Position: {contact.position}")
-    if contact.domain:
-        sections.append(f"Domain: {contact.domain}")
 
     # V35: trigger email body is inlined under "New inbound email:" by
     # _format_trigger; exclude it from email_history so the body never appears

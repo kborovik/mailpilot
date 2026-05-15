@@ -1728,9 +1728,7 @@ def test_sync_stores_sender_and_recipients(
         _store_inbound_message,  # pyright: ignore[reportPrivateUsage]
     )
 
-    contact = make_test_contact(
-        database_connection, email="alice@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="alice@example.com")
     email = _store_inbound_message(
         database_connection,
         account,
@@ -1762,7 +1760,6 @@ def test_sync_inbound_emits_email_received_activity(
     contact = make_test_contact(
         database_connection,
         email="alice@example.com",
-        domain="example.com",
         company_id=company.id,
     )
     message = _make_gmail_message(
@@ -1809,9 +1806,7 @@ def test_sync_inbound_skips_activity_when_create_email_returns_none(
     )
 
     account = make_test_account(database_connection, email="inbox@lab5.ca")
-    contact = make_test_contact(
-        database_connection, email="alice@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="alice@example.com")
     # Pre-insert the same gmail_message_id so the second create_email returns None.
     create_email(
         database_connection,
@@ -1875,9 +1870,7 @@ def test_sync_stores_in_reply_to_and_references_headers(
             },
         ],
     )
-    contact = make_test_contact(
-        database_connection, email="alice@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="alice@example.com")
     email = _store_inbound_message(
         database_connection,
         account,
@@ -1910,7 +1903,6 @@ def test_sync_one_message_emits_skip_span_outside_recency_window(
     contact = make_test_contact(
         database_connection,
         email="alice@example.com",
-        domain="example.com",
     )
 
     email = _store_inbound_message(
@@ -1949,7 +1941,6 @@ def test_sync_one_message_emits_skip_span_when_no_active_workflows(
     contact = make_test_contact(
         database_connection,
         email="bob@example.com",
-        domain="example.com",
     )
 
     email = _store_inbound_message(
@@ -2002,7 +1993,6 @@ def test_sync_one_message_emits_skip_span_when_predates_workflows(
     contact = make_test_contact(
         database_connection,
         email="carol@example.com",
-        domain="example.com",
     )
 
     email = _store_inbound_message(

@@ -184,8 +184,7 @@ def _handle_bounce(
                     disable_contact(
                         connection,
                         original.contact_id,
-                        status="bounced",
-                        status_reason=f"Bounce detected on email {original.id}",
+                        reason=f"bounced: detected on email {original.id}",
                     )
             else:
                 logfire.warn(

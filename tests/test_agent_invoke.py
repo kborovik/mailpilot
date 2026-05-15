@@ -60,7 +60,7 @@ def _setup(
 ) -> tuple[Any, Any, Any]:
     """Create account, contact, and an active workflow of the requested direction."""
     account = make_test_account(connection, email="sender@example.com")
-    contact = make_test_contact(connection, email="lead@acme.com", domain="acme.com")
+    contact = make_test_contact(connection, email="lead@acme.com")
     workflow = make_test_workflow(
         connection, account_id=account.id, workflow_type=workflow_type
     )
@@ -964,8 +964,8 @@ def test_wrappers_do_not_take_contact_id_from_llm() -> None:
 # -- Tests: tool error surfacing -----------------------------------------------
 
 
-def _model_calls_disable_contact_with_bad_status() -> FunctionModel:
-    """Build a FunctionModel that calls disable_contact with an invalid status."""
+def _model_calls_record_enrollment_outcome_with_invalid_outcome() -> FunctionModel:
+    """Build a FunctionModel that calls record_enrollment_outcome with bad outcome."""
     call_count = 0
 
     def _respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -975,8 +975,8 @@ def _model_calls_disable_contact_with_bad_status() -> FunctionModel:
             return ModelResponse(
                 parts=[
                     ToolCallPart(
-                        tool_name="disable_contact",
-                        args={"status": "not-a-real-status", "reason": "test"},
+                        tool_name="record_enrollment_outcome",
+                        args={"outcome": "not-a-real-outcome", "reason": "test"},
                     )
                 ]
             )
@@ -1006,7 +1006,7 @@ def test_invoke_surfaces_tool_errors_in_result(
             settings,
             workflow,
             contact,
-            model_override=_model_calls_disable_contact_with_bad_status(),
+            model_override=_model_calls_record_enrollment_outcome_with_invalid_outcome(),
         )
 
     assert result is not None
@@ -1014,7 +1014,7 @@ def test_invoke_surfaces_tool_errors_in_result(
         "expected at least one tool error in the result, got: "
         f"{result.get('tool_errors')!r}"
     )
-    assert result["tool_errors"][0]["tool"] == "disable_contact"
+    assert result["tool_errors"][0]["tool"] == "record_enrollment_outcome"
 
 
 # -- Tests: V37 prompt-cache settings -----------------------------------------

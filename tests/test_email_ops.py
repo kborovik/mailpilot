@@ -97,9 +97,7 @@ def test_send_email_returns_email_row(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     account = make_test_account(database_connection)
-    make_test_contact(
-        database_connection, email="recipient@example.com", domain="example.com"
-    )
+    make_test_contact(database_connection, email="recipient@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
     gmail_client = _make_gmail_client(account)
@@ -147,10 +145,8 @@ def test_send_email_raises_contact_disabled_when_bounced(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     account = make_test_account(database_connection)
-    contact = make_test_contact(
-        database_connection, email="recipient@example.com", domain="example.com"
-    )
-    db_disable_contact(database_connection, contact.id, "bounced", "hard fail")
+    contact = make_test_contact(database_connection, email="recipient@example.com")
+    db_disable_contact(database_connection, contact.id, reason="bounced: hard fail")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
     gmail_client = _make_gmail_client(account)
@@ -174,9 +170,7 @@ def test_send_email_raises_cooldown_when_recent_cold_send(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     account = make_test_account(database_connection)
-    contact = make_test_contact(
-        database_connection, email="recipient@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="recipient@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
     create_email(
@@ -212,9 +206,7 @@ def test_send_email_no_workflow_id_skips_enrollment(
 ) -> None:
     """workflow_id=None is allowed (CLI ad-hoc send); no enrollment touched."""
     account = make_test_account(database_connection)
-    make_test_contact(
-        database_connection, email="recipient@example.com", domain="example.com"
-    )
+    make_test_contact(database_connection, email="recipient@example.com")
     gmail_client = _make_gmail_client(account)
 
     email = send_email(
@@ -260,9 +252,7 @@ def test_reply_email_resolves_thread_recipient_and_subject(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     account = make_test_account(database_connection)
-    contact = make_test_contact(
-        database_connection, email="sender@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="sender@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
     inbound = _make_inbound(database_connection, account.id, contact.id, workflow.id)
@@ -289,9 +279,7 @@ def test_reply_email_preserves_existing_re_prefix(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     account = make_test_account(database_connection)
-    contact = make_test_contact(
-        database_connection, email="sender@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="sender@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
     inbound = _make_inbound(
@@ -337,9 +325,7 @@ def test_reply_email_raises_missing_thread(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     account = make_test_account(database_connection)
-    contact = make_test_contact(
-        database_connection, email="sender@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="sender@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
     inbound = _make_inbound(
@@ -394,13 +380,13 @@ def test_reply_email_raises_contact_disabled(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     account = make_test_account(database_connection)
-    contact = make_test_contact(
-        database_connection, email="sender@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="sender@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
     inbound = _make_inbound(database_connection, account.id, contact.id, workflow.id)
-    db_disable_contact(database_connection, contact.id, "unsubscribed", "user opt-out")
+    db_disable_contact(
+        database_connection, contact.id, reason="unsubscribed: user opt-out"
+    )
     gmail_client = _make_gmail_client(account)
 
     with pytest.raises(ContactDisabledError):
@@ -421,9 +407,7 @@ def test_reply_email_passes_in_reply_to_kwarg(
     """The original's rfc2822_message_id is forwarded as in_reply_to to
     sync.send_email so threading headers are emitted."""
     account = make_test_account(database_connection)
-    contact = make_test_contact(
-        database_connection, email="sender@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="sender@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
     inbound = _make_inbound(
@@ -468,7 +452,6 @@ def test_send_email_emits_email_sent_activity(
     contact = make_test_contact(
         database_connection,
         email="recipient@example.com",
-        domain="example.com",
         company_id=company.id,
     )
     workflow = make_test_workflow(database_connection, account_id=account.id)
@@ -528,9 +511,7 @@ def test_send_email_skips_activity_when_contact_unknown(
     # No contact -> no activity. There is no contact_id to query by, so
     # assert at the company-id-less catch-all level: nothing for company
     # either.
-    contact = make_test_contact(
-        database_connection, email="brand-new@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="brand-new@example.com")
     assert (
         list_activities(
             database_connection, contact_id=contact.id, activity_type="email_sent"
@@ -546,9 +527,7 @@ def test_reply_email_emits_email_sent_activity(
     from mailpilot.database import list_activities
 
     account = make_test_account(database_connection)
-    contact = make_test_contact(
-        database_connection, email="sender@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="sender@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
     inbound = _make_inbound(

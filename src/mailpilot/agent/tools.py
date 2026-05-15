@@ -36,8 +36,6 @@ from mailpilot.drive import DriveClient
 from mailpilot.models import Account
 from mailpilot.settings import Settings
 
-_VALID_DISABLE_STATUSES = ("bounced", "unsubscribed")
-
 # Per §V.29: detect spec-shape rows (label + 2+ spaces + any non-whitespace
 # value) on lines that do not use Markdown pipe-table syntax. Three or more
 # such lines without a `|---|` separator anywhere in the body indicates a
@@ -276,36 +274,27 @@ def record_enrollment_outcome(
 def disable_contact(
     connection: psycopg.Connection[dict[str, Any]],
     contact_id: str,
-    status: str,
     reason: str,
 ) -> dict[str, str]:
-    """Set a global block on a contact (bounced or unsubscribed).
+    """Set a global block on a contact.
 
-    This is a hard block across all workflows. The send_email tool checks
-    contact status before sending.
+    Hard block across all workflows. ``send_email`` and ``reply_email``
+    refuse contacts whose ``disabled_reason`` is non-null. The reason
+    string is stored verbatim; convention is ``"bounced: <detail>"`` or
+    ``"unsubscribed: <detail>"``.
 
     Args:
         connection: Open database connection.
         contact_id: Contact ID.
-        status: "bounced" or "unsubscribed".
-        reason: Explanation (e.g., "hard bounce", "replied: do not contact").
+        reason: Explanation written to ``contact.disabled_reason``.
 
     Returns:
-        Dict with updated contact status, or error if not found.
+        Dict with updated contact ID and disabled_reason, or error if not found.
     """
-    if status not in _VALID_DISABLE_STATUSES:
-        return {
-            "error": "invalid_status",
-            "message": (
-                f"status must be one of {_VALID_DISABLE_STATUSES}, got: {status!r}"
-            ),
-        }
-    updated = database.disable_contact(
-        connection, contact_id, status=status, status_reason=reason
-    )
+    updated = database.disable_contact(connection, contact_id, reason=reason)
     if updated is None:
         return {"error": "not_found", "message": f"contact not found: {contact_id}"}
-    return {"id": updated.id, "status": updated.status}
+    return {"id": updated.id, "disabled_reason": updated.disabled_reason or ""}
 
 
 def list_enrollments(

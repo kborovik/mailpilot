@@ -37,17 +37,6 @@ class Company(BaseModel):
     id: str
     name: str
     domain: str
-    domain_aliases: list[str] = []
-    profile_summary: str | None = None
-    linkedin: str | None = None
-    industry: str | None = None
-    products_services: list[str] = []
-    employee_count: int | None = None
-    founded_year: int | None = None
-    locations: list[str] = []
-    company_type: str | None = None
-    recent_activity: str | None = None
-    qualification_notes: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -58,28 +47,24 @@ class CompanySummary(BaseModel):
     id: str
     name: str
     domain: str
-    industry: str | None
-    employee_count: int | None
     created_at: datetime
 
 
 class Contact(BaseModel):
-    """Individual contact linked to a company."""
+    """Individual contact linked to a company.
+
+    ``disabled_reason`` is the single status surface (§T.47): ``None`` means
+    active, any non-NULL string means the contact is globally blocked and
+    carries the human-readable reason (e.g. ``"bounced: hard bounce"``,
+    ``"unsubscribed: replied 2026-05-14"``).
+    """
 
     id: str
     email: str
-    domain: str
     company_id: str | None = None
-    email_type: str | None = None
     first_name: str | None = None
     last_name: str | None = None
-    position: str | None = None
-    seniority: str | None = None
-    department: str | None = None
-    profile_summary: str | None = None
-    linkedin: str | None = None
-    status: str = "active"
-    status_reason: str = ""
+    disabled_reason: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -92,7 +77,7 @@ class ContactSummary(BaseModel):
     first_name: str | None
     last_name: str | None
     company_id: str | None
-    status: str
+    disabled_reason: str | None
     created_at: datetime
 
 

@@ -61,7 +61,7 @@ def execute_task(
             return
 
         contact = get_contact(connection, task.contact_id)
-        if contact is None or contact.status in ("bounced", "unsubscribed"):
+        if contact is None or contact.disabled_reason is not None:
             logfire.info(
                 "run.task.skip_disabled_contact",
                 task_id=task.id,

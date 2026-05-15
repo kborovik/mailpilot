@@ -337,6 +337,73 @@ def test_company_import_idempotent_on_duplicate_rows(
     assert err.count("changed=[]") >= 1
 
 
+def test_company_create_with_note_includes_note_in_changed(
+    runner: CliRunner,
+    mock_connection: MagicMock,
+    capfire: CaptureLogfire,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`--note STR` extends operator_event `changed=` with `'note'` (§T.47)."""
+    company = _make_company()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_company", return_value=company),
+        patch("mailpilot.database.add_company_note"),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "create",
+                "--domain",
+                "acme.test",
+                "--name",
+                "Acme",
+                "--note",
+                "Inbound demo request.",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert _spans_named(capfire, "company.create")
+    err = result.stderr
+    assert "event=company.create" in err
+    assert "'note'" in err
+
+
+def test_contact_create_with_note_includes_note_in_changed(
+    runner: CliRunner,
+    mock_connection: MagicMock,
+    capfire: CaptureLogfire,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    contact = _make_contact()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_contact", return_value=contact),
+        patch("mailpilot.database.add_contact_note"),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "contact",
+                "create",
+                "--email",
+                contact.email,
+                "--note",
+                "First touch.",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert _spans_named(capfire, "contact.create")
+    err = result.stderr
+    assert "event=contact.create" in err
+    assert "'note'" in err
+
+
 def test_company_import_emits_changed_on_created_row(
     runner: CliRunner,
     mock_connection: MagicMock,

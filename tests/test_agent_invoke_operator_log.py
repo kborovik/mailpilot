@@ -57,9 +57,7 @@ def test_invoke_workflow_agent_emits_agent_run(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     account = make_test_account(database_connection, email="agent@example.com")
-    contact = make_test_contact(
-        database_connection, email="lead@acme.com", domain="acme.com"
-    )
+    contact = make_test_contact(database_connection, email="lead@acme.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
     create_enrollment(database_connection, workflow.id, contact.id)

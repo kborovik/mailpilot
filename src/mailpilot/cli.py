@@ -475,9 +475,14 @@ def company() -> None:
 @company.command("create")
 @click.option("--domain", required=True, help="Primary domain.")
 @click.option("--name", default="", help="Company name.")
-def company_create(domain: str, name: str) -> None:
+@click.option(
+    "--note",
+    default=None,
+    help="Optional first note body. Appended atomically as a `note` row.",
+)
+def company_create(domain: str, name: str, note: str | None) -> None:
     """Create a new company."""
-    from mailpilot.database import create_company, initialize_database
+    from mailpilot.database import add_company_note, create_company, initialize_database
     from mailpilot.operator_log import cli_mutation, operator_event
 
     if not domain.strip():
@@ -486,11 +491,15 @@ def company_create(domain: str, name: str) -> None:
     try:
         with cli_mutation("company", "create", domain=domain):
             created = create_company(connection, name=name, domain=domain)
+            changed = ["name", "domain"]
+            if note:
+                add_company_note(connection, created.id, note)
+                changed.append("note")
             operator_event(
                 "company.create",
                 entity_id=created.id,
                 domain=created.domain,
-                changed=["name", "domain"],
+                changed=changed,
             )
             output_entity("company", created)
     finally:
@@ -700,21 +709,27 @@ def contact() -> None:
 @click.option("--first-name", default=None, help="First name.")
 @click.option("--last-name", default=None, help="Last name.")
 @click.option("--company-id", default=None, help="Company ID.")
+@click.option(
+    "--note",
+    default=None,
+    help="Optional first note body. Appended atomically as a `note` row.",
+)
 def contact_create(
     email: str,
     first_name: str | None,
     last_name: str | None,
     company_id: str | None,
+    note: str | None,
 ) -> None:
     """Create a new contact."""
     from mailpilot.database import (
+        add_contact_note,
         create_contact,
         get_company,
         initialize_database,
     )
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    domain = email.rsplit("@", maxsplit=1)[-1]
     connection = initialize_database(_database_url())
     try:
         if company_id is not None and get_company(connection, company_id) is None:
@@ -723,17 +738,20 @@ def contact_create(
             created = create_contact(
                 connection,
                 email=email,
-                domain=domain,
                 first_name=first_name,
                 last_name=last_name,
                 company_id=company_id,
             )
+            changed = ["email", "first_name", "last_name", "company_id"]
+            if note:
+                add_contact_note(connection, created.id, note)
+                changed.append("note")
             operator_event(
                 "contact.create",
                 entity_id=created.id,
                 email=created.email,
                 company_id=company_id,
-                changed=["email", "domain", "first_name", "last_name", "company_id"],
+                changed=changed,
             )
             output_entity("contact", created)
     finally:
@@ -765,7 +783,6 @@ def contact_update(
         fields: dict[str, object] = {}
         if email is not None:
             fields["email"] = email
-            fields["domain"] = email.split("@")[-1]
         if first_name is not None:
             fields["first_name"] = first_name
         if last_name is not None:
@@ -780,7 +797,6 @@ def contact_update(
                 field
                 for field in (
                     "email",
-                    "domain",
                     "first_name",
                     "last_name",
                     "company_id",
@@ -814,21 +830,19 @@ def contact_search(query: str, limit: int) -> None:
 
 @contact.command("list")
 @click.option("--limit", default=100, help="Maximum results.")
-@click.option("--domain", default=None, help="Filter by domain.")
 @click.option("--company-id", default=None, help="Filter by company ID.")
-@click.option(
-    "--status",
-    default=None,
-    type=click.Choice(["active", "bounced", "unsubscribed"]),
-    help="Filter by contact status.",
-)
 @click.option("--since", default=None, help="ISO datetime lower bound on created_at.")
+@click.option(
+    "--include-disabled",
+    is_flag=True,
+    default=False,
+    help="Also list contacts with a non-null disabled_reason (default: hide).",
+)
 def contact_list(
     limit: int,
-    domain: str | None,
     company_id: str | None,
-    status: str | None,
     since: str | None,
+    include_disabled: bool,
 ) -> None:
     """List contacts as summaries."""
     from mailpilot.database import get_company, initialize_database, list_contacts
@@ -840,10 +854,9 @@ def contact_list(
         contacts = list_contacts(
             connection,
             limit=limit,
-            domain=domain,
             company_id=company_id,
-            status=status,
             since=since,
+            include_disabled=include_disabled,
         )
         output({"contacts": [c.model_dump(mode="json") for c in contacts]})
     finally:
@@ -954,11 +967,9 @@ def contact_import(file: str | None) -> None:
                     )
                     operator_event("contact.import", email=email, changed=[])
                     continue
-                domain = entry.get("domain") or email.split("@")[-1]
                 create_contact(
                     connection,
                     email=email,
-                    domain=domain,
                     first_name=entry.get("first_name"),
                     last_name=entry.get("last_name"),
                     company_id=entry.get("company_id"),
@@ -968,10 +979,8 @@ def contact_import(file: str | None) -> None:
                 operator_event(
                     "contact.import",
                     email=email,
-                    domain=domain,
                     changed=[
                         "email",
-                        "domain",
                         "first_name",
                         "last_name",
                         "company_id",

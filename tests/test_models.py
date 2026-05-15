@@ -30,22 +30,24 @@ def test_account_missing_required_raises():
         Account(id="1", created_at=NOW, updated_at=NOW)  # type: ignore[call-arg]
 
 
-def test_company_jsonb_defaults():
+def test_company_identity_fields():
     company = Company(
         id="1", name="Co", domain="co.com", created_at=NOW, updated_at=NOW
     )
-    assert company.domain_aliases == []
-    assert company.products_services == []
-    assert company.locations == []
+    assert company.name == "Co"
+    assert company.domain == "co.com"
+    assert not hasattr(company, "domain_aliases")
+    assert not hasattr(company, "industry")
 
 
 def test_contact_optional_fields():
-    contact = Contact(
-        id="1", email="a@b.com", domain="b.com", created_at=NOW, updated_at=NOW
-    )
+    contact = Contact(id="1", email="a@b.com", created_at=NOW, updated_at=NOW)
     assert contact.company_id is None
     assert contact.first_name is None
-    assert contact.position is None
+    assert contact.disabled_reason is None
+    assert not hasattr(contact, "domain")
+    assert not hasattr(contact, "position")
+    assert not hasattr(contact, "status")
 
 
 def test_workflow_type_literal():

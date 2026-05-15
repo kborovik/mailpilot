@@ -202,12 +202,9 @@ def test_search_companies(database_connection: psycopg.Connection[dict[str, Any]
 
 def test_update_company(database_connection: psycopg.Connection[dict[str, Any]]):
     company = make_test_company(database_connection)
-    updated = update_company(
-        database_connection, company.id, name="New Name", industry="Tech"
-    )
+    updated = update_company(database_connection, company.id, name="New Name")
     assert updated is not None
     assert updated.name == "New Name"
-    assert updated.industry == "Tech"
     assert updated.updated_at > company.updated_at
 
 
@@ -232,53 +229,54 @@ def test_create_contact_with_company(
     assert fetched.company_id == company.id
 
 
-def test_list_contacts_by_domain(
+def test_list_contacts_by_company(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    make_test_contact(database_connection, email="a@foo.com", domain="foo.com")
-    make_test_contact(database_connection, email="b@bar.com", domain="bar.com")
-    results = list_contacts(database_connection, domain="foo.com")
+    company = make_test_company(database_connection, name="Foo", domain="foo.com")
+    c1 = make_test_contact(
+        database_connection, email="a@foo.com", company_id=company.id
+    )
+    make_test_contact(database_connection, email="b@bar.com")
+    results = list_contacts(database_connection, company_id=company.id)
     assert len(results) == 1
-    assert results[0].email == "a@foo.com"
+    assert results[0].id == c1.id
 
 
-def test_list_contacts_by_status(
+def test_list_contacts_excludes_disabled_by_default(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    c1 = make_test_contact(database_connection, email="a@foo.com", domain="foo.com")
-    c2 = make_test_contact(database_connection, email="b@bar.com", domain="bar.com")
-    from mailpilot.database import update_contact
+    from mailpilot.database import disable_contact
 
-    update_contact(database_connection, c2.id, status="bounced")
-    active = list_contacts(database_connection, status="active")
+    c1 = make_test_contact(database_connection, email="a@foo.com")
+    c2 = make_test_contact(database_connection, email="b@bar.com")
+    disable_contact(database_connection, c2.id, reason="bounced: hard bounce")
+
+    active = list_contacts(database_connection)
     assert len(active) == 1
     assert active[0].id == c1.id
-    bounced = list_contacts(database_connection, status="bounced")
-    assert len(bounced) == 1
-    assert bounced[0].id == c2.id
+
+    everyone = list_contacts(database_connection, include_disabled=True)
+    assert {c.id for c in everyone} == {c1.id, c2.id}
+    disabled_row = next(c for c in everyone if c.id == c2.id)
+    assert disabled_row.disabled_reason == "bounced: hard bounce"
 
 
 def test_search_contacts(database_connection: psycopg.Connection[dict[str, Any]]):
-    make_test_contact(database_connection, email="alice@test.com", domain="test.com")
-    make_test_contact(database_connection, email="bob@test.com", domain="test.com")
+    make_test_contact(database_connection, email="alice@test.com")
+    make_test_contact(database_connection, email="bob@test.com")
     results = search_contacts(database_connection, "alice")
     assert len(results) == 1
 
 
 def test_update_contact(database_connection: psycopg.Connection[dict[str, Any]]):
     contact = make_test_contact(database_connection)
-    updated = update_contact(
-        database_connection, contact.id, first_name="Jane", position="CEO"
-    )
+    updated = update_contact(database_connection, contact.id, first_name="Jane")
     assert updated is not None
     assert updated.first_name == "Jane"
-    assert updated.position == "CEO"
 
 
 def test_get_contact_by_email(database_connection: psycopg.Connection[dict[str, Any]]):
-    contact = make_test_contact(
-        database_connection, email="alice@test.com", domain="test.com"
-    )
+    contact = make_test_contact(database_connection, email="alice@test.com")
     found = get_contact_by_email(database_connection, "alice@test.com")
     assert found is not None
     assert found.id == contact.id
@@ -301,7 +299,6 @@ def test_create_or_get_contact_by_email_creates_new(
         last_name="Smith",
     )
     assert contact.email == "new@example.com"
-    assert contact.domain == "example.com"
     assert contact.first_name == "Alice"
     assert contact.last_name == "Smith"
 
@@ -349,12 +346,8 @@ def test_get_contacts_by_emails_empty(
 def test_get_contacts_by_emails_returns_map_for_existing(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    alice = make_test_contact(
-        database_connection, email="alice@example.com", domain="example.com"
-    )
-    bob = make_test_contact(
-        database_connection, email="bob@example.com", domain="example.com"
-    )
+    alice = make_test_contact(database_connection, email="alice@example.com")
+    bob = make_test_contact(database_connection, email="bob@example.com")
     result = get_contacts_by_emails(
         database_connection, ["alice@example.com", "bob@example.com"]
     )
@@ -366,9 +359,7 @@ def test_get_contacts_by_emails_returns_map_for_existing(
 def test_get_contacts_by_emails_omits_missing(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    make_test_contact(
-        database_connection, email="alice@example.com", domain="example.com"
-    )
+    make_test_contact(database_connection, email="alice@example.com")
     result = get_contacts_by_emails(
         database_connection, ["alice@example.com", "ghost@example.com"]
     )
@@ -378,9 +369,7 @@ def test_get_contacts_by_emails_omits_missing(
 def test_get_contacts_by_emails_deduplicates_input(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    make_test_contact(
-        database_connection, email="alice@example.com", domain="example.com"
-    )
+    make_test_contact(database_connection, email="alice@example.com")
     result = get_contacts_by_emails(
         database_connection, ["alice@example.com", "alice@example.com"]
     )
@@ -400,8 +389,6 @@ def test_create_contacts_bulk_all_new(
         database_connection, ["alice@example.com", "bob@other.com"]
     )
     assert set(result.keys()) == {"alice@example.com", "bob@other.com"}
-    assert result["alice@example.com"].domain == "example.com"
-    assert result["bob@other.com"].domain == "other.com"
     # Rows actually persisted.
     assert get_contact_by_email(database_connection, "alice@example.com") is not None
     assert get_contact_by_email(database_connection, "bob@other.com") is not None
@@ -410,9 +397,7 @@ def test_create_contacts_bulk_all_new(
 def test_create_contacts_bulk_returns_existing_and_new(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    existing = make_test_contact(
-        database_connection, email="alice@example.com", domain="example.com"
-    )
+    existing = make_test_contact(database_connection, email="alice@example.com")
     result = create_contacts_bulk(
         database_connection, ["alice@example.com", "bob@example.com"]
     )
@@ -441,7 +426,7 @@ def test_create_contacts_bulk_handles_missing_at_symbol(
 ):
     result = create_contacts_bulk(database_connection, ["weirdaddress"])
     assert "weirdaddress" in result
-    assert result["weirdaddress"].domain == ""
+    assert result["weirdaddress"].email == "weirdaddress"
 
 
 def test_create_contacts_bulk_concurrent_is_safe(
@@ -1261,9 +1246,7 @@ def test_get_last_cold_outbound_returns_newest(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     account = make_test_account(database_connection)
-    contact = make_test_contact(
-        database_connection, email="r@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="r@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
 
     # Older cold outbound (first in its thread).
@@ -1304,9 +1287,7 @@ def test_get_last_cold_outbound_excludes_follow_ups(
 ):
     """A second outbound in the same thread is a follow-up, not cold outreach."""
     account = make_test_account(database_connection)
-    contact = make_test_contact(
-        database_connection, email="r@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="r@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
 
     # First outbound in thread (cold).
@@ -1348,9 +1329,7 @@ def test_get_last_cold_outbound_ignores_inbound(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     account = make_test_account(database_connection)
-    contact = make_test_contact(
-        database_connection, email="r@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="r@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
 
     create_email(
@@ -1371,9 +1350,7 @@ def test_get_last_cold_outbound_none_when_no_emails(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     account = make_test_account(database_connection)
-    contact = make_test_contact(
-        database_connection, email="r@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="r@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
 
     result = get_last_cold_outbound(
@@ -1387,9 +1364,7 @@ def test_get_last_cold_outbound_scoped_to_workflow(
 ):
     """Cooldown is per workflow -- a different workflow can send independently."""
     account = make_test_account(database_connection)
-    contact = make_test_contact(
-        database_connection, email="r@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="r@example.com")
     wf_a = make_test_workflow(
         database_connection, account_id=account.id, name="Campaign A"
     )
@@ -1649,8 +1624,8 @@ def test_create_activity_with_detail(
 def test_list_activities_by_contact(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    c1 = make_test_contact(database_connection, email="a@test.com", domain="test.com")
-    c2 = make_test_contact(database_connection, email="b@test.com", domain="test.com")
+    c1 = make_test_contact(database_connection, email="a@test.com")
+    c2 = make_test_contact(database_connection, email="b@test.com")
     make_test_activity(database_connection, contact_id=c1.id, summary="first")
     make_test_activity(database_connection, contact_id=c1.id, summary="second")
     make_test_activity(database_connection, contact_id=c2.id, summary="other")
@@ -1931,8 +1906,8 @@ def test_list_contacts_by_tag_name(
 ):
     from mailpilot.database import list_contacts_by_tag
 
-    a = make_test_contact(database_connection, email="x1@acme.test", domain="acme.test")
-    b = make_test_contact(database_connection, email="x2@acme.test", domain="acme.test")
+    a = make_test_contact(database_connection, email="x1@acme.test")
+    b = make_test_contact(database_connection, email="x2@acme.test")
     create_tag(database_connection, contact_id=a.id, name="hot")
     create_tag(database_connection, contact_id=b.id, name="hot")
     ids = list_contacts_by_tag(database_connection, name="hot")
@@ -2897,10 +2872,10 @@ def test_company_list_summary_get_full(
     make_test_company(database_connection)
     companies = list_companies(database_connection)
     assert isinstance(companies[0], CompanySummary)
-    assert not hasattr(companies[0], "profile_summary")
+    assert not hasattr(companies[0], "updated_at")
     full = get_company(database_connection, companies[0].id)
     assert full is not None
-    assert hasattr(full, "profile_summary")
+    assert hasattr(full, "updated_at")
 
 
 def test_contact_list_summary_get_full(
@@ -2911,10 +2886,11 @@ def test_contact_list_summary_get_full(
     make_test_contact(database_connection)
     contacts = list_contacts(database_connection)
     assert isinstance(contacts[0], ContactSummary)
-    assert not hasattr(contacts[0], "position")
+    assert not hasattr(contacts[0], "updated_at")
     full = get_contact(database_connection, contacts[0].id)
     assert full is not None
-    assert hasattr(full, "position")
+    assert hasattr(full, "updated_at")
+    assert full.disabled_reason is None
 
 
 def test_workflow_list_summary_get_full(
@@ -2981,10 +2957,10 @@ def test_company_search_summary_get_full(
     make_test_company(database_connection, name="Acme Corp", domain="acme.com")
     companies = search_companies(database_connection, "acme")
     assert isinstance(companies[0], CompanySummary)
-    assert not hasattr(companies[0], "profile_summary")
+    assert not hasattr(companies[0], "updated_at")
     full = get_company(database_connection, companies[0].id)
     assert full is not None
-    assert hasattr(full, "profile_summary")
+    assert hasattr(full, "updated_at")
 
 
 def test_contact_search_summary_get_full(
@@ -2995,10 +2971,10 @@ def test_contact_search_summary_get_full(
     make_test_contact(database_connection, email="alice@example.com")
     contacts = search_contacts(database_connection, "alice")
     assert isinstance(contacts[0], ContactSummary)
-    assert not hasattr(contacts[0], "position")
+    assert not hasattr(contacts[0], "updated_at")
     full = get_contact(database_connection, contacts[0].id)
     assert full is not None
-    assert hasattr(full, "position")
+    assert hasattr(full, "updated_at")
 
 
 def test_workflow_search_summary_get_full(
