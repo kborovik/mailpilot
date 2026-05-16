@@ -519,7 +519,7 @@ Window `[TEST_START_B, now]`. Spans to verify:
 
 Three sections, actionable-only: §1 Execution, §2 Bugs, §3 Invariants. Plus the Spec hand-off block. Both scenarios mandatory; a missing scenario is a test failure, not a permitted skip. The report is a queue of `/sdd:spec` inputs, not a narrative -- if an item is not actionable, it does not appear.
 
-**Auto-write to disk.** As the final step of Phase 5, write the rendered report (§1, §2, §3, hand-off) to `./smoke-test-<YYYY-MM-DD>-<HHMMSS>.md` (UTC) using the `Write` tool, _after_ any auto-invoked `/sdd:spec` calls so the hand-off block reflects their outcomes. Print the absolute path as the very last line of the chat response.
+The report is chat-only -- do NOT write it to disk. The operator reads it inline and pastes any "Operator review" lines they want to file. If they later want a durable copy, they will ask.
 
 ### Derivation aids (NOT rendered to the report)
 
@@ -647,7 +647,7 @@ Severity (number sequentially `Bug 1`, `Bug 2`, ...):
 - `Medium` -- correct output, broken presentation. Routing typically `bug` or `code-only`.
 - `Low` -- harness-only issues. Routing typically `code-only`.
 
-**Auto-file matrix.** After the chat-rendered report (before the .md file is written to disk), invoke the `Spec action:` line for each Bug per this matrix:
+**Auto-file matrix.** After the chat-rendered report, invoke the `Spec action:` line for each Bug per this matrix:
 
 | Severity | `bug` / `bug+invariant`      | `code-only` |
 | -------- | ---------------------------- | ----------- |
@@ -696,10 +696,6 @@ Operator review (print-only Bugs + all Invariants):
 Each line under "Operator review" MUST be the exact `Spec action:` invocation -- ready to paste. The trailing `# comment` names the originator so the operator can find it in the body.
 
 If a `/sdd:spec` invocation is cancelled or revised by the user mid-run, record the outcome in the auto-filed list and continue with the next Bug.
-
-### Write to disk
-
-After the hand-off block has been chat-rendered and auto-invocations have settled, write the entire report (§1, §2, §3 + hand-off) to `./smoke-test-<YYYY-MM-DD>-<HHMMSS>.md` (UTC) via the `Write` tool. Print the absolute path as the final line of the chat response. The on-disk file is the durable artifact for later spec work; the chat rendering is for live review only.
 
 ---
 
