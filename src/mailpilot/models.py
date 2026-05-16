@@ -37,17 +37,6 @@ class Company(BaseModel):
     id: str
     name: str
     domain: str
-    domain_aliases: list[str] = []
-    profile_summary: str | None = None
-    linkedin: str | None = None
-    industry: str | None = None
-    products_services: list[str] = []
-    employee_count: int | None = None
-    founded_year: int | None = None
-    locations: list[str] = []
-    company_type: str | None = None
-    recent_activity: str | None = None
-    qualification_notes: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -58,28 +47,24 @@ class CompanySummary(BaseModel):
     id: str
     name: str
     domain: str
-    industry: str | None
-    employee_count: int | None
     created_at: datetime
 
 
 class Contact(BaseModel):
-    """Individual contact linked to a company."""
+    """Individual contact linked to a company.
+
+    ``disabled_reason`` is the single status surface (§T.47): ``None`` means
+    active, any non-NULL string means the contact is globally blocked and
+    carries the human-readable reason (e.g. ``"bounced: hard bounce"``,
+    ``"unsubscribed: replied 2026-05-14"``).
+    """
 
     id: str
     email: str
-    domain: str
     company_id: str | None = None
-    email_type: str | None = None
     first_name: str | None = None
     last_name: str | None = None
-    position: str | None = None
-    seniority: str | None = None
-    department: str | None = None
-    profile_summary: str | None = None
-    linkedin: str | None = None
-    status: str = "active"
-    status_reason: str = ""
+    disabled_reason: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -92,7 +77,7 @@ class ContactSummary(BaseModel):
     first_name: str | None
     last_name: str | None
     company_id: str | None
-    status: str
+    disabled_reason: str | None
     created_at: datetime
 
 
@@ -370,6 +355,48 @@ class NoteSummary(BaseModel):
     company_id: str | None
     body_preview: str
     created_at: datetime
+
+
+class ContactView(BaseModel):
+    """View-only projection of `Contact` with inlined notes (§V.53).
+
+    Used by both CLI ``contact view`` and agent tool ``read_contact`` so the
+    operator and the agent see byte-identical context. ``notes`` carries the
+    contact's own notes (full body, ORDER BY ``created_at`` DESC, capped at
+    ``_INLINE_NOTES_CAP`` in ``database.py``); ``company_notes`` carries the
+    parent company's notes when ``company_id`` is set, else an empty list.
+    Totals reflect the actual row count in the database, not the cap.
+    """
+
+    id: str
+    email: str
+    company_id: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    disabled_reason: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    notes: list[Note] = []
+    notes_total: int = 0
+    company_notes: list[Note] = []
+    company_notes_total: int = 0
+
+
+class CompanyView(BaseModel):
+    """View-only projection of `Company` with inlined notes (§V.53).
+
+    Used by both CLI ``company view`` and agent tool ``read_company``. Only
+    the company's own notes are inlined (capped, full body, DESC); company is
+    a root entity with no parent to inherit from.
+    """
+
+    id: str
+    name: str
+    domain: str
+    created_at: datetime
+    updated_at: datetime
+    notes: list[Note] = []
+    notes_total: int = 0
 
 
 class SyncStatus(BaseModel):

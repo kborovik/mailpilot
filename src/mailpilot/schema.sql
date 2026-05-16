@@ -13,17 +13,6 @@ CREATE TABLE IF NOT EXISTS company (
     id                    TEXT PRIMARY KEY,
     name                  TEXT NOT NULL,
     domain                TEXT UNIQUE NOT NULL,
-    domain_aliases        JSONB NOT NULL DEFAULT '[]',
-    profile_summary       TEXT,
-    linkedin              TEXT,
-    industry              TEXT,
-    products_services     JSONB NOT NULL DEFAULT '[]',
-    employee_count        INTEGER,
-    founded_year          INTEGER,
-    locations             JSONB NOT NULL DEFAULT '[]',
-    company_type          TEXT,
-    recent_activity       TEXT,
-    qualification_notes   TEXT,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -33,25 +22,16 @@ CREATE INDEX IF NOT EXISTS idx_company_name ON company(LOWER(name));
 CREATE TABLE IF NOT EXISTS contact (
     id                    TEXT PRIMARY KEY,
     email                 TEXT UNIQUE NOT NULL,
-    domain                TEXT NOT NULL,
     company_id            TEXT REFERENCES company(id),
-    email_type            TEXT,
     first_name            TEXT,
     last_name             TEXT,
-    position              TEXT,
-    seniority             TEXT,
-    department            TEXT,
-    profile_summary       TEXT,
-    linkedin              TEXT,
-    status                TEXT NOT NULL DEFAULT 'active'
-                          CHECK (status IN ('active', 'bounced', 'unsubscribed')),
-    status_reason         TEXT NOT NULL DEFAULT '',
+    disabled_reason       TEXT,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_contact_domain ON contact(domain);
 CREATE INDEX IF NOT EXISTS idx_contact_company_id ON contact(company_id);
+CREATE INDEX IF NOT EXISTS idx_contact_active ON contact(id) WHERE disabled_reason IS NULL;
 
 CREATE TABLE IF NOT EXISTS workflow (
     id                TEXT PRIMARY KEY,

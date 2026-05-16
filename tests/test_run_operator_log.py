@@ -38,9 +38,6 @@ def _contact() -> Contact:
     return Contact(
         id=_CONTACT_ID,
         email="x@example.com",
-        domain="example.com",
-        status="active",
-        status_reason="",
         created_at=_NOW,
         updated_at=_NOW,
     )

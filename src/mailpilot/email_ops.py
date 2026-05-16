@@ -119,9 +119,9 @@ def send_email(  # noqa: PLR0913
     contact_id: str | None = None
     if contact is not None:
         contact_id = contact.id
-        if contact.status != "active":
+        if contact.disabled_reason is not None:
             raise ContactDisabledError(
-                f"contact is {contact.status}: {contact.status_reason}"
+                f"contact is disabled: {contact.disabled_reason}"
             )
         if workflow_id is not None:
             last = database.get_last_cold_outbound(
@@ -191,10 +191,8 @@ def reply_email(  # noqa: PLR0913
     contact = database.get_contact(connection, original.contact_id)
     if contact is None:
         raise ContactMissingError(f"contact not found: {original.contact_id}")
-    if contact.status != "active":
-        raise ContactDisabledError(
-            f"contact is {contact.status}: {contact.status_reason}"
-        )
+    if contact.disabled_reason is not None:
+        raise ContactDisabledError(f"contact is disabled: {contact.disabled_reason}")
 
     subject = original.subject
     if not subject.lower().startswith("re: "):

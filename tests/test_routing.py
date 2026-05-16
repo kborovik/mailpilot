@@ -377,9 +377,7 @@ def test_route_email_bounce_marks_original_outbound_bounced(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     account = make_test_account(database_connection, email="bounce@example.com")
-    contact = make_test_contact(
-        database_connection, email="recipient@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="recipient@example.com")
 
     outbound = create_email(
         database_connection,
@@ -422,9 +420,7 @@ def test_route_email_bounce_disables_original_contact(
     from mailpilot.database import get_contact
 
     account = make_test_account(database_connection, email="bdisable@example.com")
-    contact = make_test_contact(
-        database_connection, email="bounced@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="bounced@example.com")
 
     create_email(
         database_connection,
@@ -455,8 +451,8 @@ def test_route_email_bounce_disables_original_contact(
 
     updated_contact = get_contact(database_connection, contact.id)
     assert updated_contact is not None
-    assert updated_contact.status == "bounced"
-    assert updated_contact.status_reason != ""
+    assert updated_contact.disabled_reason is not None
+    assert updated_contact.disabled_reason.startswith("bounced:")
 
 
 def test_route_email_bounce_via_label(
@@ -464,9 +460,7 @@ def test_route_email_bounce_via_label(
 ) -> None:
     """Bounce detected via Gmail label even if sender is not mailer-daemon."""
     account = make_test_account(database_connection, email="blabel@example.com")
-    contact = make_test_contact(
-        database_connection, email="labelrecip@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="labelrecip@example.com")
 
     create_email(
         database_connection,
@@ -534,9 +528,7 @@ def test_route_email_creates_enrollment_on_route(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     account = make_test_account(database_connection, email="wcreate@example.com")
-    contact = make_test_contact(
-        database_connection, email="sender@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="sender@example.com")
     workflow = make_test_workflow(
         database_connection, account_id=account.id, workflow_type="inbound"
     )
@@ -577,9 +569,7 @@ def test_route_email_enrollment_idempotent(
 ) -> None:
     """Routing a second email in the same thread doesn't fail on duplicate enrollment."""
     account = make_test_account(database_connection, email="wcidem@example.com")
-    contact = make_test_contact(
-        database_connection, email="repeat@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="repeat@example.com")
     workflow = make_test_workflow(
         database_connection, account_id=account.id, workflow_type="inbound"
     )
@@ -634,9 +624,7 @@ def test_route_email_emits_enrollment_added_activity(
     from mailpilot.database import list_activities
 
     account = make_test_account(database_connection, email="wact@example.com")
-    contact = make_test_contact(
-        database_connection, email="sender@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="sender@example.com")
     workflow = make_test_workflow(
         database_connection,
         account_id=account.id,
@@ -690,9 +678,7 @@ def test_route_email_enrollment_added_only_once_on_duplicate_enrollment(
     from mailpilot.database import list_activities
 
     account = make_test_account(database_connection, email="wactdup@example.com")
-    contact = make_test_contact(
-        database_connection, email="repeat@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="repeat@example.com")
     workflow = make_test_workflow(
         database_connection, account_id=account.id, workflow_type="inbound"
     )

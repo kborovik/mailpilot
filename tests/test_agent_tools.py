@@ -81,9 +81,7 @@ def test_send_email_success(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     account = make_test_account(database_connection)
-    make_test_contact(
-        database_connection, email="recipient@example.com", domain="example.com"
-    )
+    make_test_contact(database_connection, email="recipient@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
     gmail_client = _make_gmail_client(account)
@@ -111,10 +109,8 @@ def test_send_email_blocked_by_contact_status(
     from mailpilot.database import disable_contact as db_disable_contact
 
     account = make_test_account(database_connection)
-    contact = make_test_contact(
-        database_connection, email="bounced@example.com", domain="example.com"
-    )
-    db_disable_contact(database_connection, contact.id, "bounced", "hard bounce")
+    contact = make_test_contact(database_connection, email="bounced@example.com")
+    db_disable_contact(database_connection, contact.id, reason="bounced: hard bounce")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
     gmail_client = _make_gmail_client(account)
@@ -139,9 +135,7 @@ def test_send_email_blocked_by_cooldown(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     account = make_test_account(database_connection)
-    contact = make_test_contact(
-        database_connection, email="recent@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="recent@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
 
@@ -183,9 +177,7 @@ def test_reply_email_resolves_thread_and_recipient(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     account = make_test_account(database_connection)
-    contact = make_test_contact(
-        database_connection, email="sender@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="sender@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
 
@@ -255,9 +247,7 @@ def test_reply_email_blocked_contact(
     from mailpilot.database import disable_contact as db_disable_contact
 
     account = make_test_account(database_connection)
-    contact = make_test_contact(
-        database_connection, email="bounced@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="bounced@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
 
@@ -273,7 +263,7 @@ def test_reply_email_blocked_contact(
     assert inbound is not None
 
     # Disable the contact after the email was received.
-    db_disable_contact(database_connection, contact.id, "bounced", "hard bounce")
+    db_disable_contact(database_connection, contact.id, reason="bounced: hard bounce")
 
     gmail_client = _make_gmail_client(account)
 
@@ -299,9 +289,7 @@ def test_send_email_pure_prose_passes(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     account = make_test_account(database_connection)
-    make_test_contact(
-        database_connection, email="recipient@example.com", domain="example.com"
-    )
+    make_test_contact(database_connection, email="recipient@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
     gmail_client = _make_gmail_client(account)
@@ -332,9 +320,7 @@ def test_send_email_pipe_table_passes(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     account = make_test_account(database_connection)
-    make_test_contact(
-        database_connection, email="recipient@example.com", domain="example.com"
-    )
+    make_test_contact(database_connection, email="recipient@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
     gmail_client = _make_gmail_client(account)
@@ -368,9 +354,7 @@ def test_send_email_spec_shape_no_table_rejects(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     account = make_test_account(database_connection)
-    make_test_contact(
-        database_connection, email="recipient@example.com", domain="example.com"
-    )
+    make_test_contact(database_connection, email="recipient@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
     gmail_client = _make_gmail_client(account)
@@ -402,9 +386,7 @@ def test_reply_email_decline_body_passes(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     account = make_test_account(database_connection)
-    contact = make_test_contact(
-        database_connection, email="sender@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="sender@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
     inbound = create_email(
@@ -449,9 +431,7 @@ def test_send_email_non_numeric_specs_rejects(
     is not a number."""
 
     account = make_test_account(database_connection)
-    make_test_contact(
-        database_connection, email="recipient@example.com", domain="example.com"
-    )
+    make_test_contact(database_connection, email="recipient@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
     gmail_client = _make_gmail_client(account)
@@ -488,9 +468,7 @@ def test_send_email_ascii_rule_line_separator_rejects(
     lint."""
 
     account = make_test_account(database_connection)
-    make_test_contact(
-        database_connection, email="recipient@example.com", domain="example.com"
-    )
+    make_test_contact(database_connection, email="recipient@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
     gmail_client = _make_gmail_client(account)
@@ -524,9 +502,7 @@ def test_send_email_mixed_body_with_separator_passes(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     account = make_test_account(database_connection)
-    make_test_contact(
-        database_connection, email="recipient@example.com", domain="example.com"
-    )
+    make_test_contact(database_connection, email="recipient@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
     gmail_client = _make_gmail_client(account)
@@ -737,15 +713,13 @@ def test_disable_contact_success(
     result = disable_contact(
         connection=database_connection,
         contact_id=contact.id,
-        status="unsubscribed",
-        reason="replied: do not contact",
+        reason="unsubscribed: replied do not contact",
     )
 
-    assert result["status"] == "unsubscribed"
+    assert result["disabled_reason"] == "unsubscribed: replied do not contact"
     updated = get_contact(database_connection, contact.id)
     assert updated is not None
-    assert updated.status == "unsubscribed"
-    assert updated.status_reason == "replied: do not contact"
+    assert updated.disabled_reason == "unsubscribed: replied do not contact"
 
 
 def test_disable_contact_not_found(
@@ -754,37 +728,30 @@ def test_disable_contact_not_found(
     result = disable_contact(
         connection=database_connection,
         contact_id="nonexistent",
-        status="bounced",
-        reason="hard bounce",
+        reason="bounced: hard bounce",
     )
 
     assert result["error"] == "not_found"
 
 
-def test_disable_contact_invalid_status_returns_error(
+def test_disable_contact_active_round_trip(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """Passing a status outside the DB CHECK constraint returns an error dict.
-
-    Regression: previously the CheckViolation bubbled up uncaught, leaving the
-    transaction in a failed state and crashing the agent invocation loop.
-    """
+    """A fresh contact has disabled_reason=None; disabling sets it."""
     contact = make_test_contact(database_connection)
+    fetched = get_contact(database_connection, contact.id)
+    assert fetched is not None
+    assert fetched.disabled_reason is None
 
-    result = disable_contact(
+    disable_contact(
         connection=database_connection,
         contact_id=contact.id,
-        status="not-a-real-status",
-        reason="test",
+        reason="bounced: hard bounce",
     )
 
-    assert result["error"] == "invalid_status"
-    assert "bounced" in result["message"] or "unsubscribed" in result["message"]
-
-    # Connection must still be usable after the rollback.
     refetched = get_contact(database_connection, contact.id)
     assert refetched is not None
-    assert refetched.status == "active"
+    assert refetched.disabled_reason == "bounced: hard bounce"
 
 
 # -- list_enrollments ----------------------------------------------------
@@ -935,22 +902,57 @@ def test_search_emails_filters_by_account(
 def test_read_contact_found(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    contact = make_test_contact(
-        database_connection, email="alice@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="alice@example.com")
 
     result = read_contact(connection=database_connection, email="alice@example.com")
 
     assert result is not None
+    assert "error" not in result
     assert result["id"] == contact.id
     assert result["email"] == "alice@example.com"
+    assert result["notes"] == []
+    assert result["notes_total"] == 0
+    assert result["company_notes"] == []
+    assert result["company_notes_total"] == 0
+
+
+def test_read_contact_inlines_notes(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """read_contact view ≡ load_contact_view per §V.53."""
+    from mailpilot.database import create_note
+
+    company = make_test_company(database_connection, name="Acme", domain="acme.com")
+    contact = make_test_contact(
+        database_connection, email="alice@acme.com", company_id=company.id
+    )
+    contact_note = create_note(
+        database_connection, body="Met at conference", contact_id=contact.id
+    )
+    company_note = create_note(
+        database_connection, body="Top customer", company_id=company.id
+    )
+
+    result = read_contact(connection=database_connection, email="alice@acme.com")
+
+    assert "error" not in result
+    assert len(result["notes"]) == 1
+    assert result["notes"][0]["id"] == contact_note.id
+    assert result["notes"][0]["body"] == "Met at conference"
+    assert result["notes_total"] == 1
+    assert len(result["company_notes"]) == 1
+    assert result["company_notes"][0]["id"] == company_note.id
+    assert result["company_notes_total"] == 1
 
 
 def test_read_contact_not_found(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     result = read_contact(connection=database_connection, email="nobody@example.com")
-    assert result is None
+    assert result == {
+        "error": "not_found",
+        "message": "contact not found: nobody@example.com",
+    }
 
 
 # -- read_company --------------------------------------------------------------
@@ -964,15 +966,41 @@ def test_read_company_found(
     result = read_company(connection=database_connection, domain="acme.com")
 
     assert result is not None
+    assert "error" not in result
     assert result["id"] == company.id
     assert result["domain"] == "acme.com"
+    assert result["notes"] == []
+    assert result["notes_total"] == 0
+
+
+def test_read_company_inlines_notes(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """read_company view ≡ load_company_view per §V.53."""
+    from mailpilot.database import create_note
+
+    company = make_test_company(database_connection, name="Acme", domain="acme.com")
+    note = create_note(
+        database_connection, body="High priority lead", company_id=company.id
+    )
+
+    result = read_company(connection=database_connection, domain="acme.com")
+
+    assert "error" not in result
+    assert len(result["notes"]) == 1
+    assert result["notes"][0]["id"] == note.id
+    assert result["notes"][0]["body"] == "High priority lead"
+    assert result["notes_total"] == 1
 
 
 def test_read_company_not_found(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     result = read_company(connection=database_connection, domain="nonexistent.com")
-    assert result is None
+    assert result == {
+        "error": "not_found",
+        "message": "company not found: nonexistent.com",
+    }
 
 
 # -- read_email ----------------------------------------------------------------
@@ -1242,9 +1270,7 @@ def test_no_custom_auto_activate_span(
     See issue #72.
     """
     account = make_test_account(database_connection)
-    contact = make_test_contact(
-        database_connection, email="activate@example.com", domain="example.com"
-    )
+    contact = make_test_contact(database_connection, email="activate@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
     create_enrollment(database_connection, workflow.id, contact.id)

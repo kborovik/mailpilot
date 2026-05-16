@@ -30,8 +30,10 @@ from mailpilot.models import (
     ActivitySummary,
     Company,
     CompanySummary,
+    CompanyView,
     Contact,
     ContactSummary,
+    ContactView,
     Email,
     EmailSummary,
     Enrollment,
@@ -46,6 +48,8 @@ from mailpilot.models import (
     Workflow,
     WorkflowSummary,
 )
+
+_INLINE_NOTES_CAP = 10
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -365,7 +369,7 @@ def list_companies(
         params["since"] = since
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
-        "SELECT id, name, domain, industry, employee_count, created_at "
+        "SELECT id, name, domain, created_at "
         "FROM company {where} ORDER BY LOWER(name) LIMIT %(limit)s"
     ).format(where=where)
     rows = connection.execute(query, params).fetchall()
@@ -390,7 +394,7 @@ def search_companies(
     pattern = f"%{query}%"
     rows = connection.execute(
         """\
-        SELECT id, name, domain, industry, employee_count, created_at
+        SELECT id, name, domain, created_at
         FROM company
         WHERE LOWER(name) LIKE LOWER(%(pattern)s)
            OR LOWER(domain) LIKE LOWER(%(pattern)s)
@@ -458,7 +462,6 @@ def update_company(
 def create_contact(
     connection: psycopg.Connection[dict[str, Any]],
     email: str,
-    domain: str,
     company_id: str | None = None,
     first_name: str | None = None,
     last_name: str | None = None,
@@ -468,7 +471,6 @@ def create_contact(
     Args:
         connection: Open database connection.
         email: Contact email address.
-        domain: Email domain.
         company_id: Optional company FK.
         first_name: Optional first name.
         last_name: Optional last name.
@@ -478,15 +480,14 @@ def create_contact(
     """
     row = connection.execute(
         """\
-        INSERT INTO contact (id, email, domain, company_id, first_name, last_name)
-        VALUES (%(id)s, %(email)s, %(domain)s, %(company_id)s,
+        INSERT INTO contact (id, email, company_id, first_name, last_name)
+        VALUES (%(id)s, %(email)s, %(company_id)s,
                 %(first_name)s, %(last_name)s)
         RETURNING *
         """,
         {
             "id": _new_id(),
             "email": email,
-            "domain": domain,
             "company_id": company_id,
             "first_name": first_name,
             "last_name": last_name,
@@ -575,11 +576,9 @@ def create_or_get_contact_by_email(
             return existing
         updated = update_contact(connection, existing.id, **backfill)
         return updated if updated is not None else existing
-    domain = email.split("@", 1)[1] if "@" in email else ""
     return create_contact(
         connection,
         email=email,
-        domain=domain,
         first_name=first_name,
         last_name=last_name,
     )
@@ -636,17 +635,16 @@ def create_contacts_bulk(
     if not unique:
         return {}
     ids = [_new_id() for _ in unique]
-    domains = [email.split("@", 1)[1] if "@" in email else "" for email in unique]
     rows = connection.execute(
         """\
-        INSERT INTO contact (id, email, domain)
-        SELECT id, email, domain
-        FROM unnest(%(ids)s::text[], %(emails)s::text[], %(domains)s::text[])
-             AS t(id, email, domain)
+        INSERT INTO contact (id, email)
+        SELECT id, email
+        FROM unnest(%(ids)s::text[], %(emails)s::text[])
+             AS t(id, email)
         ON CONFLICT (email) DO NOTHING
         RETURNING *
         """,
-        {"ids": ids, "emails": unique, "domains": domains},
+        {"ids": ids, "emails": unique},
     ).fetchall()
     connection.commit()
     inserted = {row["email"]: Contact.model_validate(row) for row in rows}
@@ -663,41 +661,37 @@ def create_contacts_bulk(
 def list_contacts(
     connection: psycopg.Connection[dict[str, Any]],
     limit: int = 100,
-    domain: str | None = None,
     company_id: str | None = None,
-    status: str | None = None,
     since: str | None = None,
+    include_disabled: bool = False,
 ) -> list[ContactSummary]:
     """List contacts as summaries with optional filters.
 
     Args:
         connection: Open database connection.
         limit: Maximum results.
-        domain: Filter by domain.
         company_id: Filter by company ID.
-        status: Filter by contact status ("active", "bounced", "unsubscribed").
         since: ISO datetime lower bound on ``created_at``.
+        include_disabled: When False (default), only contacts with
+            ``disabled_reason IS NULL`` are returned.
 
     Returns:
         List of contact summaries ordered by email.
     """
     conditions: list[SQL] = []
     params: dict[str, object] = {"limit": limit}
-    if domain is not None:
-        conditions.append(SQL("domain = %(domain)s"))
-        params["domain"] = domain
     if company_id is not None:
         conditions.append(SQL("company_id = %(company_id)s"))
         params["company_id"] = company_id
-    if status is not None:
-        conditions.append(SQL("status = %(status)s"))
-        params["status"] = status
     if since is not None:
         conditions.append(SQL("created_at >= %(since)s"))
         params["since"] = since
+    if not include_disabled:
+        conditions.append(SQL("disabled_reason IS NULL"))
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
-        "SELECT id, email, first_name, last_name, company_id, status, created_at "
+        "SELECT id, email, first_name, last_name, company_id, "
+        "disabled_reason, created_at "
         "FROM contact {} ORDER BY email LIMIT %(limit)s"
     ).format(where)
     rows = connection.execute(query, params).fetchall()
@@ -709,7 +703,7 @@ def search_contacts(
     query: str,
     limit: int = 100,
 ) -> list[ContactSummary]:
-    """Search contacts by email, name, or domain.
+    """Search contacts by email or name.
 
     Args:
         connection: Open database connection.
@@ -722,12 +716,12 @@ def search_contacts(
     pattern = f"%{query}%"
     rows = connection.execute(
         """\
-        SELECT id, email, first_name, last_name, company_id, status, created_at
+        SELECT id, email, first_name, last_name, company_id,
+               disabled_reason, created_at
         FROM contact
         WHERE LOWER(email) LIKE LOWER(%(pattern)s)
            OR LOWER(COALESCE(first_name, '')) LIKE LOWER(%(pattern)s)
            OR LOWER(COALESCE(last_name, '')) LIKE LOWER(%(pattern)s)
-           OR LOWER(domain) LIKE LOWER(%(pattern)s)
         ORDER BY email
         LIMIT %(limit)s
         """,
@@ -767,19 +761,20 @@ def update_contact(
 def disable_contact(
     connection: psycopg.Connection[dict[str, Any]],
     contact_id: str,
-    status: str,
-    status_reason: str,
+    reason: str,
 ) -> Contact | None:
-    """Set a global block on a contact (bounced or unsubscribed).
+    """Set a global block on a contact.
 
-    This is a hard block across all workflows. The send_email tool checks
-    contact.status before sending.
+    This is a hard block across all workflows. ``send_email`` and
+    ``reply_email`` refuse contacts whose ``disabled_reason`` is non-null.
+    Any non-empty reason string disables the contact; conventional values
+    include ``"bounced: <detail>"`` and ``"unsubscribed: <detail>"``.
 
     Args:
         connection: Open database connection.
         contact_id: Contact ID.
-        status: New status ("bounced" or "unsubscribed").
-        status_reason: Explanation for the block.
+        reason: Explanation for the block (stored verbatim in
+            ``disabled_reason``).
 
     Returns:
         Updated contact, or None if not found.
@@ -787,13 +782,12 @@ def disable_contact(
     row = connection.execute(
         """\
         UPDATE contact
-        SET status = %(status)s,
-            status_reason = %(status_reason)s,
+        SET disabled_reason = %(reason)s,
             updated_at = CURRENT_TIMESTAMP
         WHERE id = %(id)s
         RETURNING *
         """,
-        {"id": contact_id, "status": status, "status_reason": status_reason},
+        {"id": contact_id, "reason": reason},
     ).fetchone()
     connection.commit()
     if row is None:
@@ -2868,6 +2862,98 @@ def add_company_note(
     )
     connection.commit()
     return note
+
+
+# -- Composite View Loaders ----------------------------------------------------
+
+
+def _load_notes_for_owner(
+    connection: psycopg.Connection[dict[str, Any]],
+    owner_column: str,
+    owner_id: str,
+) -> tuple[list[Note], int]:
+    """Fetch latest notes for a single owner column plus the total row count.
+
+    Two queries (no JOIN) per §V.53: ``LIMIT _INLINE_NOTES_CAP ORDER BY
+    created_at DESC`` for the inline list, ``COUNT(*)`` for the total.
+    """
+    if owner_column not in {"contact_id", "company_id"}:
+        raise ValueError(f"unsupported owner column: {owner_column}")
+    list_query = SQL(
+        "SELECT * FROM note WHERE {col} = %s ORDER BY created_at DESC LIMIT %s"
+    ).format(col=Identifier(owner_column))
+    rows = connection.execute(list_query, (owner_id, _INLINE_NOTES_CAP)).fetchall()
+    notes = [Note.model_validate(row) for row in rows]
+    count_query = SQL("SELECT COUNT(*) AS total FROM note WHERE {col} = %s").format(
+        col=Identifier(owner_column)
+    )
+    count_row = connection.execute(count_query, (owner_id,)).fetchone()
+    total = int(count_row["total"]) if count_row is not None else 0
+    return notes, total
+
+
+def load_contact_view(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact_id: str,
+) -> ContactView | None:
+    """Load a contact with inlined notes (own + parent company) per §V.53.
+
+    Returns ``None`` when the contact does not exist. ``notes`` and
+    ``company_notes`` are capped at ``_INLINE_NOTES_CAP`` rows each, ordered
+    by ``created_at`` DESC, full body verbatim. Totals reflect the actual row
+    count, not the cap. ``company_notes`` is always ``[]`` when the contact
+    has no parent company.
+    """
+    contact = get_contact(connection, contact_id)
+    if contact is None:
+        return None
+    notes, notes_total = _load_notes_for_owner(connection, "contact_id", contact_id)
+    if contact.company_id is not None:
+        company_notes, company_notes_total = _load_notes_for_owner(
+            connection, "company_id", contact.company_id
+        )
+    else:
+        company_notes = []
+        company_notes_total = 0
+    return ContactView(
+        id=contact.id,
+        email=contact.email,
+        company_id=contact.company_id,
+        first_name=contact.first_name,
+        last_name=contact.last_name,
+        disabled_reason=contact.disabled_reason,
+        created_at=contact.created_at,
+        updated_at=contact.updated_at,
+        notes=notes,
+        notes_total=notes_total,
+        company_notes=company_notes,
+        company_notes_total=company_notes_total,
+    )
+
+
+def load_company_view(
+    connection: psycopg.Connection[dict[str, Any]],
+    company_id: str,
+) -> CompanyView | None:
+    """Load a company with inlined own notes per §V.53.
+
+    Returns ``None`` when the company does not exist. ``notes`` capped at
+    ``_INLINE_NOTES_CAP`` rows, ordered by ``created_at`` DESC, full body
+    verbatim. ``notes_total`` reflects the actual row count.
+    """
+    company = get_company(connection, company_id)
+    if company is None:
+        return None
+    notes, notes_total = _load_notes_for_owner(connection, "company_id", company_id)
+    return CompanyView(
+        id=company.id,
+        name=company.name,
+        domain=company.domain,
+        created_at=company.created_at,
+        updated_at=company.updated_at,
+        notes=notes,
+        notes_total=notes_total,
+    )
 
 
 # -- Sync Status ---------------------------------------------------------------

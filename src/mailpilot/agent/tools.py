@@ -36,8 +36,6 @@ from mailpilot.drive import DriveClient
 from mailpilot.models import Account
 from mailpilot.settings import Settings
 
-_VALID_DISABLE_STATUSES = ("bounced", "unsubscribed")
-
 # Per §V.29: detect spec-shape rows (label + 2+ spaces + any non-whitespace
 # value) on lines that do not use Markdown pipe-table syntax. Three or more
 # such lines without a `|---|` separator anywhere in the body indicates a
@@ -276,36 +274,27 @@ def record_enrollment_outcome(
 def disable_contact(
     connection: psycopg.Connection[dict[str, Any]],
     contact_id: str,
-    status: str,
     reason: str,
 ) -> dict[str, str]:
-    """Set a global block on a contact (bounced or unsubscribed).
+    """Set a global block on a contact.
 
-    This is a hard block across all workflows. The send_email tool checks
-    contact status before sending.
+    Hard block across all workflows. ``send_email`` and ``reply_email``
+    refuse contacts whose ``disabled_reason`` is non-null. The reason
+    string is stored verbatim; convention is ``"bounced: <detail>"`` or
+    ``"unsubscribed: <detail>"``.
 
     Args:
         connection: Open database connection.
         contact_id: Contact ID.
-        status: "bounced" or "unsubscribed".
-        reason: Explanation (e.g., "hard bounce", "replied: do not contact").
+        reason: Explanation written to ``contact.disabled_reason``.
 
     Returns:
-        Dict with updated contact status, or error if not found.
+        Dict with updated contact ID and disabled_reason, or error if not found.
     """
-    if status not in _VALID_DISABLE_STATUSES:
-        return {
-            "error": "invalid_status",
-            "message": (
-                f"status must be one of {_VALID_DISABLE_STATUSES}, got: {status!r}"
-            ),
-        }
-    updated = database.disable_contact(
-        connection, contact_id, status=status, status_reason=reason
-    )
+    updated = database.disable_contact(connection, contact_id, reason=reason)
     if updated is None:
         return {"error": "not_found", "message": f"contact not found: {contact_id}"}
-    return {"id": updated.id, "status": updated.status}
+    return {"id": updated.id, "disabled_reason": updated.disabled_reason or ""}
 
 
 def list_enrollments(
@@ -354,39 +343,53 @@ def search_emails(
 def read_contact(
     connection: psycopg.Connection[dict[str, Any]],
     email: str,
-) -> dict[str, Any] | None:
-    """Look up a contact by email address.
+) -> dict[str, Any]:
+    """Look up a contact by email address with inlined notes (§V.53).
+
+    Routes through ``database.load_contact_view`` so the agent and the
+    operator (CLI ``contact view``) see byte-identical context, including
+    own notes and parent-company notes.
 
     Args:
         connection: Open database connection.
         email: Contact email address.
 
     Returns:
-        Contact details or None if not found.
+        ContactView dict on success; per §V.15 error dict on lookup failure.
     """
     contact = database.get_contact_by_email(connection, email)
     if contact is None:
-        return None
-    return contact.model_dump()
+        return {"error": "not_found", "message": f"contact not found: {email}"}
+    view = database.load_contact_view(connection, contact.id)
+    if view is None:
+        return {"error": "not_found", "message": f"contact not found: {email}"}
+    return view.model_dump(mode="json")
 
 
 def read_company(
     connection: psycopg.Connection[dict[str, Any]],
     domain: str,
-) -> dict[str, Any] | None:
-    """Look up a company by domain.
+) -> dict[str, Any]:
+    """Look up a company by domain with inlined notes (§V.53).
+
+    Routes through ``database.load_company_view`` so the agent and the
+    operator (CLI ``company view``) see byte-identical context including
+    company notes.
 
     Args:
         connection: Open database connection.
         domain: Company primary domain.
 
     Returns:
-        Company details or None if not found.
+        CompanyView dict on success; per §V.15 error dict on lookup failure.
     """
     company = database.get_company_by_domain(connection, domain)
     if company is None:
-        return None
-    return company.model_dump()
+        return {"error": "not_found", "message": f"company not found: {domain}"}
+    view = database.load_company_view(connection, company.id)
+    if view is None:
+        return {"error": "not_found", "message": f"company not found: {domain}"}
+    return view.model_dump(mode="json")
 
 
 def read_email(

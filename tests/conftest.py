@@ -104,11 +104,10 @@ def make_test_company(
 def make_test_contact(
     connection: psycopg.Connection[dict[str, Any]],
     email: str = "contact@testcorp.com",
-    domain: str = "testcorp.com",
     company_id: str | None = None,
 ) -> Contact:
     """Create a test contact in the database."""
-    return create_contact(connection, email=email, domain=domain, company_id=company_id)
+    return create_contact(connection, email=email, company_id=company_id)
 
 
 def make_test_workflow(

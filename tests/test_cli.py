@@ -18,8 +18,10 @@ from mailpilot.models import (
     Activity,
     Company,
     CompanySummary,
+    CompanyView,
     Contact,
     ContactSummary,
+    ContactView,
     Email,
     Enrollment,
     EnrollmentSummary,
@@ -493,6 +495,53 @@ def test_company_create_domain_only(
     mock_create.assert_called_once_with(mock_connection, name="", domain="acme.com")
 
 
+def test_company_create_with_note_appends_note_atomically(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """`--note STR` writes a note row under the same cli_mutation span."""
+    company = _make_company()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_company", return_value=company),
+        patch("mailpilot.database.add_company_note") as mock_note,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "create",
+                "--domain",
+                "acme.com",
+                "--name",
+                "Acme",
+                "--note",
+                "Met at conference.",
+            ],
+        )
+
+    assert result.exit_code == 0
+    mock_note.assert_called_once_with(mock_connection, company.id, "Met at conference.")
+
+
+def test_company_create_without_note_skips_note_call(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    company = _make_company()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_company", return_value=company),
+        patch("mailpilot.database.add_company_note") as mock_note,
+    ):
+        result = runner.invoke(
+            main, ["company", "create", "--domain", "acme.com", "--name", "Acme"]
+        )
+
+    assert result.exit_code == 0
+    mock_note.assert_not_called()
+
+
 # -- company list --------------------------------------------------------------
 
 
@@ -561,25 +610,36 @@ def test_company_list_with_since(runner: CliRunner, mock_connection: MagicMock) 
 
 def test_company_view(runner: CliRunner, mock_connection: MagicMock) -> None:
     company = _make_company()
+    view = CompanyView(
+        id=company.id,
+        name=company.name,
+        domain=company.domain,
+        created_at=company.created_at,
+        updated_at=company.updated_at,
+        notes=[],
+        notes_total=0,
+    )
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_company", return_value=company) as mock_get,
+        patch("mailpilot.database.load_company_view", return_value=view) as mock_load,
     ):
         result = runner.invoke(main, ["company", "view", company.id])
 
     assert result.exit_code == 0
-    mock_get.assert_called_once_with(mock_connection, company.id)
+    mock_load.assert_called_once_with(mock_connection, company.id)
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["company"]["id"] == company.id
+    assert data["company"]["notes"] == []
+    assert data["company"]["notes_total"] == 0
 
 
 def test_company_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_company", return_value=None),
+        patch("mailpilot.database.load_company_view", return_value=None),
     ):
         result = runner.invoke(main, ["company", "view", "nonexistent-id"])
 
@@ -725,7 +785,8 @@ def test_company_export_envelope_and_file(
     assert isinstance(data["companies"], list)
     assert len(data["companies"]) == 2
     assert data["companies"][0]["id"] == "id-1"
-    assert "profile_summary" in data["companies"][0]
+    assert "profile_summary" not in data["companies"][0]
+    assert data["companies"][0]["domain"] == "acme.com"
     on_disk = json.loads(pathlib.Path(export_file).read_text())
     assert on_disk == data["companies"]
 
@@ -856,7 +917,6 @@ def _make_contact(**overrides: Any) -> Contact:
     defaults: dict[str, Any] = {
         "id": "01234567-0000-7000-0000-000000000003",
         "email": "alice@example.com",
-        "domain": "example.com",
         "created_at": _NOW,
         "updated_at": _NOW,
     }
@@ -891,7 +951,6 @@ def test_contact_create(runner: CliRunner, mock_connection: MagicMock) -> None:
     mock_create.assert_called_once_with(
         mock_connection,
         email="alice@example.com",
-        domain="example.com",
         first_name="Alice",
         last_name="Smith",
         company_id=None,
@@ -919,7 +978,6 @@ def test_contact_create_email_only(
     mock_create.assert_called_once_with(
         mock_connection,
         email="alice@example.com",
-        domain="example.com",
         first_name=None,
         last_name=None,
         company_id=None,
@@ -950,6 +1008,53 @@ def test_contact_create_company_not_found(
     data = json.loads(result.output)
     assert data["error"] == "not_found"
     assert "company" in data["message"]
+
+
+def test_contact_create_with_note_appends_note_atomically(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """`--note STR` writes a note row under the same cli_mutation span."""
+    contact = _make_contact()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_contact", return_value=contact),
+        patch("mailpilot.database.add_contact_note") as mock_note,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "contact",
+                "create",
+                "--email",
+                "alice@example.com",
+                "--note",
+                "Prospect from web form.",
+            ],
+        )
+
+    assert result.exit_code == 0
+    mock_note.assert_called_once_with(
+        mock_connection, contact.id, "Prospect from web form."
+    )
+
+
+def test_contact_create_without_note_skips_note_call(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    contact = _make_contact()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_contact", return_value=contact),
+        patch("mailpilot.database.add_contact_note") as mock_note,
+    ):
+        result = runner.invoke(
+            main, ["contact", "create", "--email", "alice@example.com"]
+        )
+
+    assert result.exit_code == 0
+    mock_note.assert_not_called()
 
 
 # -- contact update ------------------------------------------------------------
@@ -1100,8 +1205,6 @@ def test_contact_list_with_filters(
                 "list",
                 "--limit",
                 "5",
-                "--domain",
-                "example.com",
                 "--company-id",
                 "cid-1",
             ],
@@ -1111,14 +1214,13 @@ def test_contact_list_with_filters(
     mock_list.assert_called_once_with(
         mock_connection,
         limit=5,
-        domain="example.com",
         company_id="cid-1",
-        status=None,
         since=None,
+        include_disabled=False,
     )
 
 
-def test_contact_list_with_status(
+def test_contact_list_include_disabled(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     with (
@@ -1126,16 +1228,15 @@ def test_contact_list_with_status(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.list_contacts", return_value=[]) as mock_list,
     ):
-        result = runner.invoke(main, ["contact", "list", "--status", "bounced"])
+        result = runner.invoke(main, ["contact", "list", "--include-disabled"])
 
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
         mock_connection,
         limit=100,
-        domain=None,
         company_id=None,
-        status="bounced",
         since=None,
+        include_disabled=True,
     )
 
 
@@ -1153,10 +1254,9 @@ def test_contact_list_with_since(runner: CliRunner, mock_connection: MagicMock) 
     mock_list.assert_called_once_with(
         mock_connection,
         limit=100,
-        domain=None,
         company_id=None,
-        status=None,
         since="2024-01-01T00:00:00",
+        include_disabled=False,
     )
 
 
@@ -1183,25 +1283,43 @@ def test_contact_list_company_not_found(
 
 def test_contact_view(runner: CliRunner, mock_connection: MagicMock) -> None:
     contact = _make_contact()
+    view = ContactView(
+        id=contact.id,
+        email=contact.email,
+        company_id=contact.company_id,
+        first_name=contact.first_name,
+        last_name=contact.last_name,
+        disabled_reason=contact.disabled_reason,
+        created_at=contact.created_at,
+        updated_at=contact.updated_at,
+        notes=[],
+        notes_total=0,
+        company_notes=[],
+        company_notes_total=0,
+    )
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_contact", return_value=contact) as mock_get,
+        patch("mailpilot.database.load_contact_view", return_value=view) as mock_load,
     ):
         result = runner.invoke(main, ["contact", "view", contact.id])
 
     assert result.exit_code == 0
-    mock_get.assert_called_once_with(mock_connection, contact.id)
+    mock_load.assert_called_once_with(mock_connection, contact.id)
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["contact"]["id"] == contact.id
+    assert data["contact"]["notes"] == []
+    assert data["contact"]["notes_total"] == 0
+    assert data["contact"]["company_notes"] == []
+    assert data["contact"]["company_notes_total"] == 0
 
 
 def test_contact_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_contact", return_value=None),
+        patch("mailpilot.database.load_contact_view", return_value=None),
     ):
         result = runner.invoke(main, ["contact", "view", "nonexistent-id"])
 
@@ -1237,7 +1355,8 @@ def test_contact_export_envelope_and_file(
     assert isinstance(data["contacts"], list)
     assert len(data["contacts"]) == 2
     assert data["contacts"][0]["id"] == "id-1"
-    assert "domain" in data["contacts"][0]
+    assert "domain" not in data["contacts"][0]
+    assert "disabled_reason" in data["contacts"][0]
     on_disk = json.loads(pathlib.Path(export_file).read_text())
     assert on_disk == data["contacts"]
 
@@ -1279,10 +1398,7 @@ def test_contact_import_creates_via_file(
         patch("mailpilot.database.list_contacts", return_value=[]),
         patch(
             "mailpilot.database.create_contact",
-            side_effect=[
-                _make_contact(email=e["email"], domain=e["email"].split("@")[-1])
-                for e in entries
-            ],
+            side_effect=[_make_contact(email=e["email"]) for e in entries],
         ) as mock_create,
     ):
         result = runner.invoke(main, ["contact", "import", "--file", str(import_file)])
@@ -1292,7 +1408,6 @@ def test_contact_import_creates_via_file(
     mock_create.assert_any_call(
         mock_connection,
         email="alice@acme.com",
-        domain="acme.com",
         first_name="Alice",
         last_name="Smith",
         company_id=None,
@@ -1300,7 +1415,6 @@ def test_contact_import_creates_via_file(
     mock_create.assert_any_call(
         mock_connection,
         email="bob@beta.com",
-        domain="beta.com",
         first_name=None,
         last_name=None,
         company_id=None,
@@ -1323,7 +1437,7 @@ def test_contact_import_via_stdin(
         patch("mailpilot.database.list_contacts", return_value=[]),
         patch(
             "mailpilot.database.create_contact",
-            return_value=_make_contact(email="alice@acme.com", domain="acme.com"),
+            return_value=_make_contact(email="alice@acme.com"),
         ),
     ):
         result = runner.invoke(main, ["contact", "import"], input=json.dumps(entries))
@@ -1352,7 +1466,7 @@ def test_contact_import_per_row_error_continues_batch(
         patch("mailpilot.database.list_contacts", return_value=existing_summaries),
         patch(
             "mailpilot.database.create_contact",
-            return_value=_make_contact(email="bob@beta.com", domain="beta.com"),
+            return_value=_make_contact(email="bob@beta.com"),
         ) as mock_create,
     ):
         result = runner.invoke(main, ["contact", "import"], input=json.dumps(entries))
@@ -1361,7 +1475,6 @@ def test_contact_import_per_row_error_continues_batch(
     mock_create.assert_called_once_with(
         mock_connection,
         email="bob@beta.com",
-        domain="beta.com",
         first_name=None,
         last_name=None,
         company_id=None,
@@ -3596,7 +3709,6 @@ def test_enrollment_run(runner: CliRunner, mock_connection: MagicMock) -> None:
     contact = Contact(
         id=_CONTACT_ID,
         email="lead@acme.com",
-        domain="acme.com",
         created_at=_NOW,
         updated_at=_NOW,
     )
@@ -3677,7 +3789,6 @@ def test_enrollment_run_requires_active(
     contact = Contact(
         id=_CONTACT_ID,
         email="lead@acme.com",
-        domain="acme.com",
         created_at=_NOW,
         updated_at=_NOW,
     )
@@ -3711,7 +3822,6 @@ def test_enrollment_run_inbound_with_email(
     contact = Contact(
         id=_CONTACT_ID,
         email="lead@acme.com",
-        domain="acme.com",
         created_at=_NOW,
         updated_at=_NOW,
     )
@@ -3782,7 +3892,6 @@ def test_enrollment_run_inbound_no_email(
     contact = Contact(
         id=_CONTACT_ID,
         email="lead@acme.com",
-        domain="acme.com",
         created_at=_NOW,
         updated_at=_NOW,
     )
@@ -3868,7 +3977,6 @@ def test_enrollment_run_contact_not_enrolled(
     contact = Contact(
         id=_CONTACT_ID,
         email="lead@acme.com",
-        domain="acme.com",
         created_at=_NOW,
         updated_at=_NOW,
     )
@@ -3904,7 +4012,6 @@ def test_enrollment_run_paused_enrollment(
     contact = Contact(
         id=_CONTACT_ID,
         email="lead@acme.com",
-        domain="acme.com",
         created_at=_NOW,
         updated_at=_NOW,
     )
@@ -3950,7 +4057,6 @@ def test_enrollment_run_agent_failed(
     contact = Contact(
         id=_CONTACT_ID,
         email="lead@acme.com",
-        domain="acme.com",
         created_at=_NOW,
         updated_at=_NOW,
     )

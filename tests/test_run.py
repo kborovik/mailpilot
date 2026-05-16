@@ -44,9 +44,6 @@ def _make_contact(**overrides: Any) -> Contact:
     defaults: dict[str, Any] = {
         "id": _CONTACT_ID,
         "email": "test@example.com",
-        "domain": "example.com",
-        "status": "active",
-        "status_reason": "",
         "created_at": _NOW,
         "updated_at": _NOW,
     }
@@ -178,7 +175,7 @@ def test_execute_task_disabled_contact(
     settings = make_test_settings()
     task = _make_task()
     workflow = _make_workflow()
-    contact = _make_contact(status="bounced")
+    contact = _make_contact(disabled_reason="bounced: hard bounce")
 
     with (
         patch("mailpilot.run.get_workflow", return_value=workflow),
