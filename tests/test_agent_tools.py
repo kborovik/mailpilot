@@ -907,15 +907,52 @@ def test_read_contact_found(
     result = read_contact(connection=database_connection, email="alice@example.com")
 
     assert result is not None
+    assert "error" not in result
     assert result["id"] == contact.id
     assert result["email"] == "alice@example.com"
+    assert result["notes"] == []
+    assert result["notes_total"] == 0
+    assert result["company_notes"] == []
+    assert result["company_notes_total"] == 0
+
+
+def test_read_contact_inlines_notes(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """read_contact view ≡ load_contact_view per §V.53."""
+    from mailpilot.database import create_note
+
+    company = make_test_company(database_connection, name="Acme", domain="acme.com")
+    contact = make_test_contact(
+        database_connection, email="alice@acme.com", company_id=company.id
+    )
+    contact_note = create_note(
+        database_connection, body="Met at conference", contact_id=contact.id
+    )
+    company_note = create_note(
+        database_connection, body="Top customer", company_id=company.id
+    )
+
+    result = read_contact(connection=database_connection, email="alice@acme.com")
+
+    assert "error" not in result
+    assert len(result["notes"]) == 1
+    assert result["notes"][0]["id"] == contact_note.id
+    assert result["notes"][0]["body"] == "Met at conference"
+    assert result["notes_total"] == 1
+    assert len(result["company_notes"]) == 1
+    assert result["company_notes"][0]["id"] == company_note.id
+    assert result["company_notes_total"] == 1
 
 
 def test_read_contact_not_found(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     result = read_contact(connection=database_connection, email="nobody@example.com")
-    assert result is None
+    assert result == {
+        "error": "not_found",
+        "message": "contact not found: nobody@example.com",
+    }
 
 
 # -- read_company --------------------------------------------------------------
@@ -929,15 +966,41 @@ def test_read_company_found(
     result = read_company(connection=database_connection, domain="acme.com")
 
     assert result is not None
+    assert "error" not in result
     assert result["id"] == company.id
     assert result["domain"] == "acme.com"
+    assert result["notes"] == []
+    assert result["notes_total"] == 0
+
+
+def test_read_company_inlines_notes(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """read_company view ≡ load_company_view per §V.53."""
+    from mailpilot.database import create_note
+
+    company = make_test_company(database_connection, name="Acme", domain="acme.com")
+    note = create_note(
+        database_connection, body="High priority lead", company_id=company.id
+    )
+
+    result = read_company(connection=database_connection, domain="acme.com")
+
+    assert "error" not in result
+    assert len(result["notes"]) == 1
+    assert result["notes"][0]["id"] == note.id
+    assert result["notes"][0]["body"] == "High priority lead"
+    assert result["notes_total"] == 1
 
 
 def test_read_company_not_found(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     result = read_company(connection=database_connection, domain="nonexistent.com")
-    assert result is None
+    assert result == {
+        "error": "not_found",
+        "message": "company not found: nonexistent.com",
+    }
 
 
 # -- read_email ----------------------------------------------------------------

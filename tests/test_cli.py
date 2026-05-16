@@ -18,8 +18,10 @@ from mailpilot.models import (
     Activity,
     Company,
     CompanySummary,
+    CompanyView,
     Contact,
     ContactSummary,
+    ContactView,
     Email,
     Enrollment,
     EnrollmentSummary,
@@ -608,25 +610,36 @@ def test_company_list_with_since(runner: CliRunner, mock_connection: MagicMock) 
 
 def test_company_view(runner: CliRunner, mock_connection: MagicMock) -> None:
     company = _make_company()
+    view = CompanyView(
+        id=company.id,
+        name=company.name,
+        domain=company.domain,
+        created_at=company.created_at,
+        updated_at=company.updated_at,
+        notes=[],
+        notes_total=0,
+    )
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_company", return_value=company) as mock_get,
+        patch("mailpilot.database.load_company_view", return_value=view) as mock_load,
     ):
         result = runner.invoke(main, ["company", "view", company.id])
 
     assert result.exit_code == 0
-    mock_get.assert_called_once_with(mock_connection, company.id)
+    mock_load.assert_called_once_with(mock_connection, company.id)
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["company"]["id"] == company.id
+    assert data["company"]["notes"] == []
+    assert data["company"]["notes_total"] == 0
 
 
 def test_company_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_company", return_value=None),
+        patch("mailpilot.database.load_company_view", return_value=None),
     ):
         result = runner.invoke(main, ["company", "view", "nonexistent-id"])
 
@@ -1270,25 +1283,43 @@ def test_contact_list_company_not_found(
 
 def test_contact_view(runner: CliRunner, mock_connection: MagicMock) -> None:
     contact = _make_contact()
+    view = ContactView(
+        id=contact.id,
+        email=contact.email,
+        company_id=contact.company_id,
+        first_name=contact.first_name,
+        last_name=contact.last_name,
+        disabled_reason=contact.disabled_reason,
+        created_at=contact.created_at,
+        updated_at=contact.updated_at,
+        notes=[],
+        notes_total=0,
+        company_notes=[],
+        company_notes_total=0,
+    )
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_contact", return_value=contact) as mock_get,
+        patch("mailpilot.database.load_contact_view", return_value=view) as mock_load,
     ):
         result = runner.invoke(main, ["contact", "view", contact.id])
 
     assert result.exit_code == 0
-    mock_get.assert_called_once_with(mock_connection, contact.id)
+    mock_load.assert_called_once_with(mock_connection, contact.id)
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["contact"]["id"] == contact.id
+    assert data["contact"]["notes"] == []
+    assert data["contact"]["notes_total"] == 0
+    assert data["contact"]["company_notes"] == []
+    assert data["contact"]["company_notes_total"] == 0
 
 
 def test_contact_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_contact", return_value=None),
+        patch("mailpilot.database.load_contact_view", return_value=None),
     ):
         result = runner.invoke(main, ["contact", "view", "nonexistent-id"])
 

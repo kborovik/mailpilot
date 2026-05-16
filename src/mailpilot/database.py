@@ -30,8 +30,10 @@ from mailpilot.models import (
     ActivitySummary,
     Company,
     CompanySummary,
+    CompanyView,
     Contact,
     ContactSummary,
+    ContactView,
     Email,
     EmailSummary,
     Enrollment,
@@ -46,6 +48,8 @@ from mailpilot.models import (
     Workflow,
     WorkflowSummary,
 )
+
+_INLINE_NOTES_CAP = 10
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -2858,6 +2862,98 @@ def add_company_note(
     )
     connection.commit()
     return note
+
+
+# -- Composite View Loaders ----------------------------------------------------
+
+
+def _load_notes_for_owner(
+    connection: psycopg.Connection[dict[str, Any]],
+    owner_column: str,
+    owner_id: str,
+) -> tuple[list[Note], int]:
+    """Fetch latest notes for a single owner column plus the total row count.
+
+    Two queries (no JOIN) per §V.53: ``LIMIT _INLINE_NOTES_CAP ORDER BY
+    created_at DESC`` for the inline list, ``COUNT(*)`` for the total.
+    """
+    if owner_column not in {"contact_id", "company_id"}:
+        raise ValueError(f"unsupported owner column: {owner_column}")
+    list_query = SQL(
+        "SELECT * FROM note WHERE {col} = %s ORDER BY created_at DESC LIMIT %s"
+    ).format(col=Identifier(owner_column))
+    rows = connection.execute(list_query, (owner_id, _INLINE_NOTES_CAP)).fetchall()
+    notes = [Note.model_validate(row) for row in rows]
+    count_query = SQL("SELECT COUNT(*) AS total FROM note WHERE {col} = %s").format(
+        col=Identifier(owner_column)
+    )
+    count_row = connection.execute(count_query, (owner_id,)).fetchone()
+    total = int(count_row["total"]) if count_row is not None else 0
+    return notes, total
+
+
+def load_contact_view(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact_id: str,
+) -> ContactView | None:
+    """Load a contact with inlined notes (own + parent company) per §V.53.
+
+    Returns ``None`` when the contact does not exist. ``notes`` and
+    ``company_notes`` are capped at ``_INLINE_NOTES_CAP`` rows each, ordered
+    by ``created_at`` DESC, full body verbatim. Totals reflect the actual row
+    count, not the cap. ``company_notes`` is always ``[]`` when the contact
+    has no parent company.
+    """
+    contact = get_contact(connection, contact_id)
+    if contact is None:
+        return None
+    notes, notes_total = _load_notes_for_owner(connection, "contact_id", contact_id)
+    if contact.company_id is not None:
+        company_notes, company_notes_total = _load_notes_for_owner(
+            connection, "company_id", contact.company_id
+        )
+    else:
+        company_notes = []
+        company_notes_total = 0
+    return ContactView(
+        id=contact.id,
+        email=contact.email,
+        company_id=contact.company_id,
+        first_name=contact.first_name,
+        last_name=contact.last_name,
+        disabled_reason=contact.disabled_reason,
+        created_at=contact.created_at,
+        updated_at=contact.updated_at,
+        notes=notes,
+        notes_total=notes_total,
+        company_notes=company_notes,
+        company_notes_total=company_notes_total,
+    )
+
+
+def load_company_view(
+    connection: psycopg.Connection[dict[str, Any]],
+    company_id: str,
+) -> CompanyView | None:
+    """Load a company with inlined own notes per §V.53.
+
+    Returns ``None`` when the company does not exist. ``notes`` capped at
+    ``_INLINE_NOTES_CAP`` rows, ordered by ``created_at`` DESC, full body
+    verbatim. ``notes_total`` reflects the actual row count.
+    """
+    company = get_company(connection, company_id)
+    if company is None:
+        return None
+    notes, notes_total = _load_notes_for_owner(connection, "company_id", company_id)
+    return CompanyView(
+        id=company.id,
+        name=company.name,
+        domain=company.domain,
+        created_at=company.created_at,
+        updated_at=company.updated_at,
+        notes=notes,
+        notes_total=notes_total,
+    )
 
 
 # -- Sync Status ---------------------------------------------------------------

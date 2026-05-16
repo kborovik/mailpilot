@@ -241,8 +241,8 @@ def _wrap_search_emails(
 def _wrap_read_contact(
     ctx: RunContext[AgentDeps],
     email: str,
-) -> dict[str, Any] | None:
-    """Look up a contact by email address."""
+) -> dict[str, Any]:
+    """Look up a contact by email address with inlined notes."""
     return agent_tools.read_contact(
         connection=ctx.deps.connection,
         email=email,
@@ -252,8 +252,8 @@ def _wrap_read_contact(
 def _wrap_read_company(
     ctx: RunContext[AgentDeps],
     domain: str,
-) -> dict[str, Any] | None:
-    """Look up a company by domain."""
+) -> dict[str, Any]:
+    """Look up a company by domain with inlined notes."""
     return agent_tools.read_company(
         connection=ctx.deps.connection,
         domain=domain,

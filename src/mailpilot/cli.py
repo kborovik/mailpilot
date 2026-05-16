@@ -574,12 +574,12 @@ def company_list(limit: int, since: str | None) -> None:
 @company.command("view")
 @click.argument("company_id")
 def company_view(company_id: str) -> None:
-    """Show a company by ID."""
-    from mailpilot.database import get_company, initialize_database
+    """Show a company by ID with inlined notes."""
+    from mailpilot.database import initialize_database, load_company_view
 
     connection = initialize_database(_database_url())
     try:
-        found = get_company(connection, company_id)
+        found = load_company_view(connection, company_id)
         if found is None:
             output_error(f"company not found: {company_id}", "not_found")
         output_entity("company", found)
@@ -866,12 +866,12 @@ def contact_list(
 @contact.command("view")
 @click.argument("contact_id")
 def contact_view(contact_id: str) -> None:
-    """Show a contact by ID."""
-    from mailpilot.database import get_contact, initialize_database
+    """Show a contact by ID with inlined notes (own + parent company)."""
+    from mailpilot.database import initialize_database, load_contact_view
 
     connection = initialize_database(_database_url())
     try:
-        found = get_contact(connection, contact_id)
+        found = load_contact_view(connection, contact_id)
         if found is None:
             output_error(f"contact not found: {contact_id}", "not_found")
         output_entity("contact", found)

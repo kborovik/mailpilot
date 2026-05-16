@@ -3234,3 +3234,162 @@ def test_list_enrollments_detailed_since(
         )
         == 0
     )
+
+
+# -- load_contact_view / load_company_view (§V.53) -----------------------------
+
+
+def test_load_contact_view_returns_none_when_missing(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from mailpilot.database import load_contact_view
+
+    assert load_contact_view(database_connection, "nonexistent-id") is None
+
+
+def test_load_company_view_returns_none_when_missing(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from mailpilot.database import load_company_view
+
+    assert load_company_view(database_connection, "nonexistent-id") is None
+
+
+def test_load_contact_view_orphan_has_empty_arrays(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Contact w/o company_id => company_notes=[], company_notes_total=0."""
+    from mailpilot.database import load_contact_view
+
+    contact = make_test_contact(database_connection, email="solo@example.com")
+
+    view = load_contact_view(database_connection, contact.id)
+
+    assert view is not None
+    assert view.id == contact.id
+    assert view.company_id is None
+    assert view.notes == []
+    assert view.notes_total == 0
+    assert view.company_notes == []
+    assert view.company_notes_total == 0
+
+
+def test_load_contact_view_inlines_own_and_company_notes(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """notes + company_notes both inlined when company_id set, DESC order."""
+    from mailpilot.database import create_note, load_contact_view
+
+    company = make_test_company(database_connection, name="Acme", domain="acme.com")
+    contact = make_test_contact(
+        database_connection, email="alice@acme.com", company_id=company.id
+    )
+    older_contact_note = create_note(
+        database_connection, body="Older", contact_id=contact.id
+    )
+    newer_contact_note = create_note(
+        database_connection, body="Newer", contact_id=contact.id
+    )
+    company_note = create_note(
+        database_connection, body="Strategic account", company_id=company.id
+    )
+
+    view = load_contact_view(database_connection, contact.id)
+
+    assert view is not None
+    assert view.company_id == company.id
+    assert [n.id for n in view.notes] == [
+        newer_contact_note.id,
+        older_contact_note.id,
+    ]
+    assert view.notes_total == 2
+    assert [n.id for n in view.company_notes] == [company_note.id]
+    assert view.company_notes_total == 1
+
+
+def test_load_contact_view_caps_notes_at_ten(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """When >10 notes exist, list capped at 10 but total reflects actual count."""
+    from mailpilot.database import (
+        _INLINE_NOTES_CAP,  # pyright: ignore[reportPrivateUsage]
+        create_note,
+        load_contact_view,
+    )
+
+    contact = make_test_contact(database_connection, email="busy@example.com")
+    for i in range(_INLINE_NOTES_CAP + 5):
+        create_note(database_connection, body=f"note {i}", contact_id=contact.id)
+
+    view = load_contact_view(database_connection, contact.id)
+
+    assert view is not None
+    assert len(view.notes) == _INLINE_NOTES_CAP
+    assert view.notes_total == _INLINE_NOTES_CAP + 5
+
+
+def test_load_contact_view_preserves_full_body_verbatim(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Notes body must be verbatim, not preview-style truncation."""
+    from mailpilot.database import create_note, load_contact_view
+
+    contact = make_test_contact(database_connection, email="long@example.com")
+    long_body = "x" * 500
+    create_note(database_connection, body=long_body, contact_id=contact.id)
+
+    view = load_contact_view(database_connection, contact.id)
+
+    assert view is not None
+    assert view.notes[0].body == long_body
+
+
+def test_load_company_view_inlines_notes_desc(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from mailpilot.database import create_note, load_company_view
+
+    company = make_test_company(database_connection, name="Acme", domain="acme.com")
+    older = create_note(database_connection, body="Older", company_id=company.id)
+    newer = create_note(database_connection, body="Newer", company_id=company.id)
+
+    view = load_company_view(database_connection, company.id)
+
+    assert view is not None
+    assert view.id == company.id
+    assert [n.id for n in view.notes] == [newer.id, older.id]
+    assert view.notes_total == 2
+
+
+def test_load_company_view_caps_notes_at_ten(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from mailpilot.database import (
+        _INLINE_NOTES_CAP,  # pyright: ignore[reportPrivateUsage]
+        create_note,
+        load_company_view,
+    )
+
+    company = make_test_company(database_connection, name="Acme", domain="acme.com")
+    for i in range(_INLINE_NOTES_CAP + 3):
+        create_note(database_connection, body=f"note {i}", company_id=company.id)
+
+    view = load_company_view(database_connection, company.id)
+
+    assert view is not None
+    assert len(view.notes) == _INLINE_NOTES_CAP
+    assert view.notes_total == _INLINE_NOTES_CAP + 3
+
+
+# -- _BASE template fragment carries §V.53 directive --------------------------
+
+
+def test_base_fragment_mentions_notes_directive() -> None:
+    """_BASE must contain the §V.53 personalize-via-notes directive once."""
+    from mailpilot.agent.templates import (
+        _BASE,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    needle = "treat them as context for personalizing your response"
+    assert needle in _BASE
+    assert _BASE.count(needle) == 1

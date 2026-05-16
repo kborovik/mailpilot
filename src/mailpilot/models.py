@@ -357,6 +357,48 @@ class NoteSummary(BaseModel):
     created_at: datetime
 
 
+class ContactView(BaseModel):
+    """View-only projection of `Contact` with inlined notes (§V.53).
+
+    Used by both CLI ``contact view`` and agent tool ``read_contact`` so the
+    operator and the agent see byte-identical context. ``notes`` carries the
+    contact's own notes (full body, ORDER BY ``created_at`` DESC, capped at
+    ``_INLINE_NOTES_CAP`` in ``database.py``); ``company_notes`` carries the
+    parent company's notes when ``company_id`` is set, else an empty list.
+    Totals reflect the actual row count in the database, not the cap.
+    """
+
+    id: str
+    email: str
+    company_id: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    disabled_reason: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    notes: list[Note] = []
+    notes_total: int = 0
+    company_notes: list[Note] = []
+    company_notes_total: int = 0
+
+
+class CompanyView(BaseModel):
+    """View-only projection of `Company` with inlined notes (§V.53).
+
+    Used by both CLI ``company view`` and agent tool ``read_company``. Only
+    the company's own notes are inlined (capped, full body, DESC); company is
+    a root entity with no parent to inherit from.
+    """
+
+    id: str
+    name: str
+    domain: str
+    created_at: datetime
+    updated_at: datetime
+    notes: list[Note] = []
+    notes_total: int = 0
+
+
 class SyncStatus(BaseModel):
     """Singleton row tracking the running sync process."""
 

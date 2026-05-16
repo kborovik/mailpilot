@@ -84,6 +84,9 @@ _BASE = (
     "already provided -- do not call read_email to fetch it again. The "
     "current contact's profile is also inlined, so do not call read_contact "
     "for the same address either.\n"
+    "If read_contact or read_company returns notes or company_notes, treat "
+    "them as context for personalizing your response. Never invent facts "
+    "about a contact or company that aren't supported by their notes.\n"
 )
 
 _DEFERRED_TASK_TASK = (
