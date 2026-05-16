@@ -513,7 +513,7 @@ def test_list_workflows_by_account(
 def test_list_workflows_full_orders_by_name(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """V39: ``workflow export`` payload must be name-ordered for deterministic diffs."""
+    """§V.39: ``workflow export`` payload must be name-ordered for deterministic diffs."""
     account = make_test_account(database_connection)
     make_test_workflow(database_connection, account_id=account.id, name="Charlie")
     make_test_workflow(database_connection, account_id=account.id, name="Alpha")
@@ -558,7 +558,7 @@ def test_update_workflow_ignores_immutable_fields(
 def test_update_workflow_rejects_template_change(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """V32: `template` change must raise -- forces delete+recreate."""
+    """§V.32: `template` change must raise -- forces delete+recreate."""
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     with pytest.raises(ValueError, match="template is immutable"):
@@ -568,7 +568,7 @@ def test_update_workflow_rejects_template_change(
 def test_update_workflow_rejects_type_change(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """V32: `type` is derived from template at create time and cannot be updated."""
+    """§V.32: `type` is derived from template at create time and cannot be updated."""
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     with pytest.raises(ValueError, match="type is derived"):
@@ -2702,7 +2702,7 @@ def test_complete_task_stores_result(
 def test_reschedule_task_for_retry_bumps_attempt_and_advances_scheduled_at(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """V44: status stays pending; attempt_count bumped; scheduled_at
+    """§V.44: status stays pending; attempt_count bumped; scheduled_at
     advances by backoff."""
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
@@ -2757,7 +2757,7 @@ def test_reschedule_task_for_retry_returns_none_for_unknown_id(
 def test_manual_retry_task_resets_failed_row(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """V44: failed -> pending, attempt_count=0, scheduled_at=now()."""
+    """§V.44: failed -> pending, attempt_count=0, scheduled_at=now()."""
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
@@ -2807,7 +2807,7 @@ def test_manual_retry_task_resets_cancelled_row(
 def test_manual_retry_task_refuses_completed_row(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """V44: completed rows refuse retry -- tools already fired, replay
+    """§V.44: completed rows refuse retry -- tools already fired, replay
     risks duplicate side-effects."""
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
@@ -2827,7 +2827,7 @@ def test_manual_retry_task_refuses_completed_row(
 def test_manual_retry_task_refuses_pending_row(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """V44: pending rows are no-op -- already queued."""
+    """§V.44: pending rows are no-op -- already queued."""
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)

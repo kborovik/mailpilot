@@ -89,9 +89,9 @@ def is_transient(exc: BaseException) -> bool:
         exc: Exception raised by ``invoke_workflow_agent``.
 
     Returns:
-        ``True`` for the V44 allow-list (Google 429/5xx, Anthropic
+        ``True`` for the §V.44 allow-list (Google 429/5xx, Anthropic
         502/503/529, Drive socket timeouts). ``False`` otherwise --
-        including for the V43 exclusion (Anthropic LLM read-timeouts)
+        including for the §V.43 exclusion (Anthropic LLM read-timeouts)
         and any unrecognised exception class.
     """
     if _is_llm_read_timeout(exc):

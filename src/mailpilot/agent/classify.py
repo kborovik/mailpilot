@@ -57,13 +57,13 @@ _AGENT: Agent[None, ClassificationResult] = Agent(
 def _get_model(api_key: str, model_name: str) -> AnthropicModel:
     """Cache the AnthropicModel/AnthropicProvider pair by (api_key, model_name).
 
-    V37: cache_control breakpoints on the system prompt and tool definitions
-    let repeated classifier calls re-bill the stable prefix as
+    §V.37: cache_control breakpoints on the system prompt and tool
+    definitions let repeated classifier calls re-bill the stable prefix as
     ``cache_read_input_tokens``.
 
-    V43: 240s read-timeout on the HTTP client (4x the httpx default of 60s)
-    so long-context classifier calls do not surface ``TimeoutError``. See
-    SPEC.md V43, B16.
+    §V.43: 240s read-timeout on the HTTP client (4x the httpx default of
+    60s) so long-context classifier calls do not surface ``TimeoutError``.
+    See SPEC.md §V.43, §B.16.
     """
     return AnthropicModel(
         model_name,

@@ -437,7 +437,7 @@ def test_inbound_email_trigger_includes_email_id_and_sender(
 def test_deferred_task_trigger(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """V36: trigger='task' with a task_description renders the Deferred task
+    """§V.36: trigger='task' with a task_description renders the Deferred task
     block."""
     _account, contact, workflow = _setup(database_connection)
     settings = make_test_settings(
@@ -465,13 +465,13 @@ def test_deferred_task_trigger(
     assert "days_since_last" in all_text
 
 
-# -- Tests: V35 trigger-email dedupe in user prompt ----------------------------
+# -- Tests: §V.35 trigger-email dedupe in user prompt --------------------------
 
 
 def test_inbound_trigger_excluded_from_email_history_when_only_email(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """V35: when the trigger is the only email in history, the email_history
+    """§V.35: when the trigger is the only email in history, the email_history
     block is suppressed and the trigger body appears exactly once."""
     from mailpilot.database import create_email
 
@@ -504,7 +504,7 @@ def test_inbound_trigger_excluded_from_email_history_when_only_email(
 def test_inbound_trigger_dedupes_against_prior_history(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """V35: trigger row excluded from email_history when prior emails exist;
+    """§V.35: trigger row excluded from email_history when prior emails exist;
     history count reflects N-1 and trigger body appears exactly once total."""
     from mailpilot.database import create_email
 
@@ -551,7 +551,7 @@ def test_inbound_trigger_dedupes_against_prior_history(
 def test_outbound_history_unchanged_without_trigger(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """V35 regression guard: when no trigger email is provided (outbound path),
+    """§V.35 regression guard: when no trigger email is provided (outbound path),
     email_history is rendered in full -- no dedupe filter applied."""
     from mailpilot.database import create_email
 
@@ -593,13 +593,13 @@ def test_outbound_history_unchanged_without_trigger(
     assert "UNIQUE_SECOND_BODY_MARKER follow-up." in prompt
 
 
-# -- Tests: V36 trigger-block matches span trigger attribute ------------------
+# -- Tests: §V.36 trigger-block matches span trigger attribute ----------------
 
 
 def test_enrollment_run_outbound_renders_first_reach_out(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """V36: trigger='enrollment_run' with no email renders the first-reach-out
+    """§V.36: trigger='enrollment_run' with no email renders the first-reach-out
     framing, never the deferred-task block."""
     _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
 
@@ -618,7 +618,7 @@ def test_enrollment_run_outbound_renders_first_reach_out(
 def test_task_trigger_renders_deferred_task_block(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """V36 regression guard: trigger='task' with a persisted task description
+    """§V.36 regression guard: trigger='task' with a persisted task description
     keeps rendering the Deferred task: block."""
     _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
 
@@ -641,7 +641,7 @@ def test_task_trigger_renders_deferred_task_block(
 def test_enrollment_run_with_email_uses_email_branch(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """V36: when an email is present, the inbound-email branch wins over the
+    """§V.36: when an email is present, the inbound-email branch wins over the
     enrollment_run framing -- existing precedence preserved."""
     from mailpilot.database import create_email
 
@@ -676,7 +676,7 @@ def test_enrollment_run_with_email_uses_email_branch(
 def test_manual_trigger_no_email_no_task_renders_outbound_fallback(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """V36: trigger='manual' with no email and no task_description falls back
+    """§V.36: trigger='manual' with no email and no task_description falls back
     to the existing 'This is an outbound invocation.' prose."""
     _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
 
@@ -1017,11 +1017,11 @@ def test_invoke_surfaces_tool_errors_in_result(
     assert result["tool_errors"][0]["tool"] == "record_enrollment_outcome"
 
 
-# -- Tests: V37 prompt-cache settings -----------------------------------------
+# -- Tests: §V.37 prompt-cache settings ---------------------------------------
 
 
 def test_build_anthropic_model_carries_cache_settings() -> None:
-    """V37: workflow agent's AnthropicModel sets cache_control breakpoints.
+    """§V.37: workflow agent's AnthropicModel sets cache_control breakpoints.
 
     Pydantic AI translates ``anthropic_cache_tool_definitions`` and
     ``anthropic_cache_instructions`` into ``cache_control`` blocks on the
@@ -1048,12 +1048,12 @@ def test_build_anthropic_model_requires_api_key() -> None:
 
 
 def test_build_anthropic_model_uses_240s_read_timeout() -> None:
-    """V43: workflow agent's AnthropicProvider HTTP client carries a 240s read-timeout.
+    """§V.43: workflow agent's AnthropicProvider HTTP client carries a 240s read-timeout.
 
     Default httpx read-timeout is 60s; under model load that intersects
     long-context multi-turn agent latency and surfaces ``TimeoutError``
     mid-conversation, which would bubble to ``run.task.agent_failed`` with
-    no retry (see SPEC.md B16). 240s = 4x headroom; idempotency forbids
+    no retry (see SPEC.md §B.16). 240s = 4x headroom; idempotency forbids
     retry across tool calls.
     """
     settings = make_test_settings(
@@ -1068,7 +1068,7 @@ def test_invoke_span_has_cache_token_attributes(
     database_connection: psycopg.Connection[dict[str, Any]],
     capfire: CaptureLogfire,
 ) -> None:
-    """V37: agent.invoke rollup span carries cache_read/creation token attrs.
+    """§V.37: agent.invoke rollup span carries cache_read/creation token attrs.
 
     Pydantic AI's RunUsage already sums cache token counts across child
     chat turns. The presence of both attrs (≥0) is the contract -- the

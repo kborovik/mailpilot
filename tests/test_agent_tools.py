@@ -282,7 +282,7 @@ def test_reply_email_blocked_contact(
     gmail_client.send_message.assert_not_called()
 
 
-# -- _check_spec_table (V29) ---------------------------------------------------
+# -- _check_spec_table (§V.29) -------------------------------------------------
 
 
 def test_send_email_pure_prose_passes(

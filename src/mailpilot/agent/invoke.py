@@ -326,12 +326,12 @@ def _wrap_noop(
 def _build_agent(workflow: Workflow, trigger: str = "manual") -> Agent[AgentDeps, str]:
     """Build a Pydantic AI agent for a workflow.
 
-    The workflow's template (V32, V33) owns both the bound tool set and the
-    system-prompt protocol. Workflow-specific instructions are appended to
-    the template protocol. The deferred-task fragment branches on ``trigger``
-    per V49: ``trigger='task'`` uses the terminal-outcome instruction;
-    other triggers use the initial-send-only instruction (prevents premature
-    ``record_enrollment_outcome`` on first reach-out).
+    The workflow's template (§V.32, §V.33) owns both the bound tool set and
+    the system-prompt protocol. Workflow-specific instructions are appended
+    to the template protocol. The deferred-task fragment branches on
+    ``trigger`` per §V.49: ``trigger='task'`` uses the terminal-outcome
+    instruction; other triggers use the initial-send-only instruction
+    (prevents premature ``record_enrollment_outcome`` on first reach-out).
     """
     from mailpilot.agent.templates import TEMPLATES
 
@@ -345,7 +345,7 @@ def _build_agent(workflow: Workflow, trigger: str = "manual") -> Agent[AgentDeps
 
 
 def _build_anthropic_model(settings: Settings) -> AnthropicModel:
-    """Construct the AnthropicModel with V37 cache_control + V43 read-timeout.
+    """Construct the AnthropicModel with §V.37 cache_control + §V.43 read-timeout.
 
     Cache breakpoints on the system prompt and tool definitions let
     multi-turn invocations re-bill the stable prefix as
@@ -355,7 +355,7 @@ def _build_anthropic_model(settings: Settings) -> AnthropicModel:
     60s) so long-context Anthropic calls do not surface ``TimeoutError``
     mid-conversation, which would bubble to ``run.task.agent_failed``
     with no retry (idempotency: tool-call mid-turn cannot be safely
-    re-driven). See SPEC.md V43, B16.
+    re-driven). See SPEC.md §V.43, §B.16.
     """
     if not settings.anthropic_api_key:
         raise ValueError(
@@ -403,8 +403,8 @@ def _format_trigger(
 ) -> str:
     """Format the trigger context section of the prompt.
 
-    V36: framing matches the ``agent.invoke`` span ``trigger`` attribute
-    (V11). ``enrollment_run`` gets a dedicated first-reach-out block;
+    §V.36: framing matches the ``agent.invoke`` span ``trigger`` attribute
+    (§V.11). ``enrollment_run`` gets a dedicated first-reach-out block;
     ``Deferred task:`` is reserved for ``trigger="task"``.
     """
     if email is not None:
@@ -448,7 +448,7 @@ def _build_user_prompt(  # noqa: PLR0913
         name = f"{contact.first_name or ''} {contact.last_name or ''}".strip()
         sections.append(f"Name: {name}")
 
-    # V35: trigger email body is inlined under "New inbound email:" by
+    # §V.35: trigger email body is inlined under "New inbound email:" by
     # _format_trigger; exclude it from email_history so the body never appears
     # twice in a single prompt.
     prior_history = (
@@ -629,7 +629,7 @@ def invoke_workflow_agent(  # noqa: PLR0913
             span.set_attribute("output_tokens", usage.output_tokens)
             span.set_attribute("total_tokens", usage.input_tokens + usage.output_tokens)
             span.set_attribute("llm_requests", usage.requests)
-            # V37: bubble Anthropic prompt-cache token counts to the rollup
+            # §V.37: bubble Anthropic prompt-cache token counts to the rollup
             # span. Pydantic AI's RunUsage already sums these across child
             # chat turns, so no per-turn span walk is needed.
             span.set_attribute("cache_read_input_tokens", usage.cache_read_tokens)

@@ -396,7 +396,7 @@ def test_execute_task_transient_error_budget_exhausted_terminal(
 def test_execute_task_apitimeout_is_terminal_v43_exclusion(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """V43 exclusion: anthropic.APITimeoutError mid-turn cannot be
+    """§V.43 exclusion: anthropic.APITimeoutError mid-turn cannot be
     re-driven safely, must go terminal regardless of attempt budget."""
     import httpx
     from anthropic import APITimeoutError
@@ -433,7 +433,7 @@ def test_execute_task_apitimeout_is_terminal_v43_exclusion(
 def test_execute_task_httpx_readtimeout_is_terminal_v43_exclusion(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """V43 exclusion: httpx.ReadTimeout from the Anthropic transport
+    """§V.43 exclusion: httpx.ReadTimeout from the Anthropic transport
     is not transient for retry purposes."""
     import httpx
 

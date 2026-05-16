@@ -75,7 +75,7 @@ def test_execute_task_transient_retry_emits_task_retry_event(
     capsys: pytest.CaptureFixture[str],
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """V44: transient-retry path emits operator_event task.retry with
+    """§V.44: transient-retry path emits operator_event task.retry with
     task_id, attempt, exc."""
     from googleapiclient.errors import HttpError
 
@@ -107,7 +107,7 @@ def test_execute_task_terminal_retry_still_emits_error(
     capsys: pytest.CaptureFixture[str],
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """V19: terminal failure (transient + budget exhausted) still pairs
+    """§V.19: terminal failure (transient + budget exhausted) still pairs
     logfire.exception with operator_event(error)."""
     from googleapiclient.errors import HttpError
 

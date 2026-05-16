@@ -9,8 +9,8 @@ time.
 Templates are code-defined constants. Adding a new template (e.g.
 ``inbound-postgres``) is a code change + PR, not a workflow update.
 
-See SPEC.md sections V32 (registry shape), V33 (composition / ownership),
-V34 (naming convention).
+See SPEC.md sections §V.32 (registry shape), §V.33 (composition / ownership),
+§V.34 (naming convention).
 """
 
 from __future__ import annotations
@@ -46,11 +46,11 @@ class WorkflowTemplate:
     """Named binding of agent tools + protocol composed from fragments.
 
     The deferred-task fragment is selected per-invocation by ``trigger``
-    (V49): ``trigger='task'`` -> _DEFERRED_TASK_TASK (terminal-outcome
+    (§V.49): ``trigger='task'`` -> _DEFERRED_TASK_TASK (terminal-outcome
     instruction); other triggers (``enrollment_run``, ``manual``,
     ``email``) -> _DEFERRED_TASK_INITIAL (initial-send-only instruction;
     prevents premature ``record_enrollment_outcome`` on first reach-out).
-    Canonical fragment order per V33: _BASE -> _DEFERRED_TASK_<branch> ->
+    Canonical fragment order per §V.33: _BASE -> _DEFERRED_TASK_<branch> ->
     [overlay]? -> _DECLINE -> _NO_FABRICATION.
     """
 
@@ -62,7 +62,7 @@ class WorkflowTemplate:
     tools: tuple[Tool[AgentDeps], ...]
 
     def build_protocol(self, trigger: str) -> str:
-        """Compose protocol per ``trigger`` per V49."""
+        """Compose protocol per ``trigger`` per §V.49."""
         deferred = _DEFERRED_TASK_TASK if trigger == "task" else _DEFERRED_TASK_INITIAL
         return self.protocol_pre + deferred + self.protocol_post
 

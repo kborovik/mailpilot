@@ -224,7 +224,7 @@ def test_classifier_agent_has_explicit_name_for_otel_traces() -> None:
 
 
 def test_get_model_carries_cache_settings() -> None:
-    """V37: classifier's AnthropicModel sets cache_control breakpoints.
+    """§V.37: classifier's AnthropicModel sets cache_control breakpoints.
 
     Pydantic AI translates ``anthropic_cache_tool_definitions`` and
     ``anthropic_cache_instructions`` into ``cache_control`` blocks on the
@@ -239,11 +239,11 @@ def test_get_model_carries_cache_settings() -> None:
 
 
 def test_get_model_uses_240s_read_timeout() -> None:
-    """V43: classifier's AnthropicProvider HTTP client carries a 240s read-timeout.
+    """§V.43: classifier's AnthropicProvider HTTP client carries a 240s read-timeout.
 
     Default httpx read-timeout is 60s; under model load that intersects
     long-context classifier latency and surfaces ``TimeoutError`` mid-call
-    (see SPEC.md B16). 240s = 4x headroom. No retry on timeout.
+    (see SPEC.md §B.16). 240s = 4x headroom. No retry on timeout.
     """
     _get_model.cache_clear()
     model = _get_model("sk-test-timeout", "claude-sonnet-4-6")

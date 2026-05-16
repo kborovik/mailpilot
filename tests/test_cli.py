@@ -869,7 +869,7 @@ def test_company_import_via_stdin(
 def test_company_import_per_row_error_continues_batch(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    """Duplicate domain on row 1 must not block create on row 2 (V39)."""
+    """Duplicate domain on row 1 must not block create on row 2 (§V.39)."""
     existing = [_make_company(id="id-existing", domain="acme.com")]
     existing_summaries = [
         CompanySummary.model_validate(c.model_dump()) for c in existing
@@ -1451,7 +1451,7 @@ def test_contact_import_via_stdin(
 def test_contact_import_per_row_error_continues_batch(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    """Duplicate email on row 1 must not block create on row 2 (V39)."""
+    """Duplicate email on row 1 must not block create on row 2 (§V.39)."""
     existing = [_make_contact(id="id-existing", email="alice@acme.com")]
     existing_summaries = [
         ContactSummary.model_validate(c.model_dump()) for c in existing
@@ -3651,6 +3651,46 @@ def test_workflow_import_account_not_found(
     assert "account" in data["message"]
 
 
+# -- §V.53 stdin TTY guard -----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ("company", "import"),
+        ("contact", "import"),
+        ("workflow", "import", "--account-id", _ACCOUNT_ID),
+    ],
+    ids=["company", "contact", "workflow"],
+)
+def test_import_tty_stdin_errors_without_read(
+    runner: CliRunner, command: tuple[str, ...]
+) -> None:
+    """§V.53: TTY stdin (no --file, no pipe) -> validation_error, no read()."""
+    from click.testing import _NamedTextIOWrapper  # pyright: ignore[reportPrivateUsage]
+
+    read_mock = MagicMock(
+        side_effect=AssertionError(
+            "sys.stdin.read() must not be called when isatty()==True"
+        )
+    )
+
+    with (
+        patch.object(_NamedTextIOWrapper, "isatty", return_value=True),
+        patch.object(_NamedTextIOWrapper, "read", read_mock),
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+    ):
+        result = runner.invoke(main, list(command))
+
+    assert result.exit_code == 1, result.output
+    assert read_mock.call_count == 0
+    err = json.loads(result.stderr)
+    assert err["ok"] is False
+    assert err["error"] == "validation_error"
+    assert "no input" in err["message"]
+    assert "--file" in err["message"]
+
+
 # -- enrollment run ------------------------------------------------------------
 
 
@@ -3832,7 +3872,7 @@ def test_enrollment_run_inbound_with_email(
     assert result.exit_code == 0, result.output
     mock_invoke.assert_called_once()
     # Agent invoked with the unprocessed email attached.
-    # V36: the enrollment_run path passes trigger="enrollment_run" and
+    # §V.36: the enrollment_run path passes trigger="enrollment_run" and
     # MUST NOT synthesize a task_description -- prompt framing is owned
     # by the trigger branch in _format_trigger.
     call_kwargs = mock_invoke.call_args[1]
@@ -3893,7 +3933,7 @@ def test_enrollment_run_inbound_no_email(
 
     assert result.exit_code == 0, result.output
     mock_invoke.assert_called_once()
-    # V36: enrollment_run path no longer synthesizes a task_description; the
+    # §V.36: enrollment_run path no longer synthesizes a task_description; the
     # `trigger` arg drives prompt framing.
     call_kwargs = mock_invoke.call_args[1]
     assert call_kwargs["email"] is None
@@ -5889,7 +5929,7 @@ def test_task_retry_pending_invalid_state(
 def test_task_retry_completed_invalid_state(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    """V44: completed rows refuse retry -- replay risks duplicate
+    """§V.44: completed rows refuse retry -- replay risks duplicate
     side-effects since tools already fired."""
     completed = _make_task(status="completed")
     with (
