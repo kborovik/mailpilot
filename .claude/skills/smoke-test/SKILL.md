@@ -111,9 +111,42 @@ If the count is zero or `not_found`, the failure is Drive ACL, not KB content --
 
 ## Scenario A: Outbound workflow
 
-**Hypothesis:** The outbound workflow composes and sends an email; when the operator (Claude Code) replies manually, the outbound agent picks the reply up via `thread_match`, processes it, and reaches a terminal enrollment state without further auto-replies.
+**Hypothesis:** The outbound workflow composes and sends an email; when the operator (Claude Code) replies manually, the outbound agent picks the reply up via `thread_match`, processes it, and reaches a terminal enrollment state without further auto-replies. **Additionally** -- before composing, the agent reads the contact and company entities via `read_contact` / `read_company` (loading attached notes inlined in those tool returns) and personalizes the email by echoing each note's `Reference: <token>` verbatim into the body -- exercising the LLM's context window and validating the personalization path.
 
 Capture `TEST_START_A` (ISO) and `SUBJECT_A` (`[ST-<HHMMSS>] <topic>`) before A1.
+
+### A1a. Seed contact + company notes for personalization
+
+Tests two things: (1) the agent uses its context window -- reading both `read_contact` AND `read_company` before composing; and (2) the agent personalizes by echoing note content. The signal is a deterministic nonce: each note carries a `Reference: <token>` line that the workflow prompt requires the agent to copy verbatim into the email body. Token in body → agent read the note. Both tokens in body → agent read both entities.
+
+Generate two distinct hex nonces per run (do not reuse, do not invent in your head):
+
+```bash
+CONTACT_NOTE_TOKEN=$(head -c 6 /dev/urandom | xxd -p)
+COMPANY_NOTE_TOKEN=$(head -c 6 /dev/urandom | xxd -p)
+[ "$CONTACT_NOTE_TOKEN" != "$COMPANY_NOTE_TOKEN" ] || { echo "FAIL: token collision"; exit 1; }
+```
+
+Add the notes (XOR per §V.8 -- one of `--contact-id` / `--company-id`, never both):
+
+```
+mailpilot note add --contact-id <INBOUND_CONTACT_ID> \
+  --body "Reference: $CONTACT_NOTE_TOKEN. Inbound is VP of Lab Operations; their procurement workflow requires this contact-specific tracking code in every outbound email."
+
+mailpilot note add --company-id <COMPANY_ID> \
+  --body "Reference: $COMPANY_NOTE_TOKEN. Lab5 standardizes account-level correlation codes; this code MUST appear in customer correspondence per their procurement policy."
+```
+
+**Gate A1a:**
+
+- `mailpilot note list --contact-id <INBOUND_CONTACT_ID>` returns 1 note; its full body (via `mailpilot note view <id>`) contains `Reference: $CONTACT_NOTE_TOKEN`.
+- `mailpilot note list --company-id <COMPANY_ID>` returns 1 note; its body contains `Reference: $COMPANY_NOTE_TOKEN`.
+- `mailpilot activity list --contact-id <INBOUND_CONTACT_ID> --since <TEST_START_A>` shows 1 `note_added` row (the contact-side note; per §V.23 it carries both `contact_id` and `company_id`).
+- `mailpilot activity list --company-id <COMPANY_ID> --since <TEST_START_A>` shows 2 `note_added` rows (contact-side note via multi-target + company-side note).
+
+**Carries forward to:** A3 (body must contain both tokens; tool sequence must include both reads), A8 (note_added activity expectations).
+
+**Prerequisite (separate code change).** This step assumes the agent tools `read_contact` and `read_company` inline recent notes in their return shape (operator choice 2026-05-15 -- "Inline notes in read_contact/read_company"). That tool-surface change is a §V invariant edit and must land via `/sdd:spec` → `/sdd:build` before A3's personalization gate can pass; until it does, the agent has no way to see the tokens and A3's body-token assertion will fail. If the agent surface has not yet shipped, run A1a anyway (it exercises the CLI + activity wiring), and expect the A3 body-token gate to fail -- record as a Critical Bug for tracking, not a regression.
 
 ### A1. Import the outbound workflow
 
@@ -162,9 +195,10 @@ mailpilot enrollment run --workflow-id <OUTBOUND_WORKFLOW_ID> --contact-id <INBO
 
 **Gate A3:**
 
-- `enrollment run` output: `"status": "completed"` and `"tool_calls" >= 1`.
+- `enrollment run` output: `"status": "completed"` and `"tool_calls" >= 3` (`read_contact` + `read_company` + `send_email` at minimum).
 - `mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound` shows the outbound email with `subject == SUBJECT_A`.
 - The email's `body_text` contains `|` (table) and either `**` or `#` (Markdown).
+- **Personalization gate (A1a payoff).** The email's `body_text` contains BOTH `$CONTACT_NOTE_TOKEN` AND `$COMPANY_NOTE_TOKEN` verbatim. Either missing → either the agent skipped a `read_*` call or it ignored the note content; treat as a Bug (missing tool call = prompt-fidelity regression; tool call made but token missing = personalization regression). If A1a's prerequisite tool-surface change has NOT shipped (notes not inlined in `read_contact` / `read_company` returns), this gate WILL fail -- record as a Critical Bug to drive the fix, do not skip.
 - `mailpilot enrollment list --workflow-id <OUTBOUND_WORKFLOW_ID>` shows enrollment status `active`. Per SPEC §V.10, `enrollment.status` is operational only (`active` or `paused`); the agent never mutates it directly. The send-completion outcome lives in the activity timeline (verified in A8), not on the enrollment row.
 
 Save `OUTBOUND_EMAIL_ID`.
@@ -261,7 +295,16 @@ mailpilot activity list --contact-id <INBOUND_CONTACT_ID> --since <TEST_START_A>
 - `email_sent` with `summary == SUBJECT_A` (emitted by `email_ops.send_email` when the outbound agent sent in A3).
 - `email_received` with the operator-reply subject (emitted by sync's `_store_inbound_message` when the reply landed in the outbound mailbox in A6).
 - Exactly one of `enrollment_completed` or `enrollment_failed` (emitted by `agent.tools.record_enrollment_outcome` in A7); summary equals the agent's `reason`.
-- No `tag_added` or `note_added` rows from this scenario (we did not run those CLI commands).
+- 1 `note_added` row from A1a's contact-side `note add` (the row carries `contact_id == INBOUND_CONTACT_ID` and `company_id == COMPANY_ID` per §V.23 multi-target; the company-side `note add` does NOT appear here because it has no `contact_id`).
+- No `tag_added` rows from this scenario (we did not run `tag add`).
+
+Also assert company-side timeline:
+
+```
+mailpilot activity list --company-id <COMPANY_ID> --since <TEST_START_A>
+```
+
+Must contain 2 `note_added` rows -- the contact-side note (via multi-target) and the company-side note.
 
 If any expected type is missing, the runtime activity wiring regressed for that path.
 
@@ -273,7 +316,8 @@ Do this review now, before B, so the window cleanly bounds A's spans. Use `/logf
   - `trigger="task"` -- expect exactly **1** (A7 reply handling, drained by background `mailpilot run`). More than 1 → agent kept replying (loop regression). This is the regression signal for Scenario A.
   - `trigger="enrollment_run"` -- expect at least **1** (A3 send via foreground `enrollment run`). Tolerated regardless of count: an operator double-fire produces extra `enrollment_run` spans that correctly noop, so they cost an LLM round-trip but do not signal regression. T19 / B2 prefer single-invocation discipline (see A3) but the trace contract here permits more.
   - `trigger="email"` / `trigger="manual"` -- not expected in Scenario A; flag if present.
-- `running tool` -- A3: expect `send_email` plus optional context-gathering reads (`read_contact`, `read_company`); `record_enrollment_outcome` is **not** expected here (it fires after a reply, not on initial send). A7: expect `record_enrollment_outcome` and **no** `send_email` or `reply_email`.
+- `running tool` -- A3: expect `read_contact`, `read_company`, and `send_email` (both reads MUST appear per the A1a personalization contract; order may be interleaved). `record_enrollment_outcome` is **not** expected here (it fires after a reply, not on initial send). A7: expect `record_enrollment_outcome` and **no** `send_email` or `reply_email`.
+- `agent.invoke` (A3) `input_tokens` -- should noticeably exceed the no-notes baseline (~+200-400 tokens) because both note bodies are inlined into the `read_contact` / `read_company` tool returns. A baseline-equivalent count signals either the tool-surface change hasn't shipped (notes not inlined) or the agent skipped the reads.
 - `routing.route_email` -- the reply (A6) → `route_method=thread_match` and `workflow_id == OUTBOUND_WORKFLOW_ID`. The inbound-side email from A4 → `route_method=skipped_no_workflows` (no inbound workflow at the time).
 - `gmail.send_message` -- 2 calls total (A3 by agent + A5 by operator).
 - Any `is_exception=true` or `level=warn` spans -- record them.
