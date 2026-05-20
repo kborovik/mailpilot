@@ -20,7 +20,7 @@ Spec is authoritative → **SPEC.md** (§G goal, §C constraints, §I interfaces
 - `/sdd:explain` — math-glyph → prose.
 - `/sdd:glyph` — encoding rules for SPEC.md ∧ spec-adjacent writes (CLAUDE.md, plans, design docs).
 - `/smoke-test` — end-to-end Gmail smoke (`outbound@lab5.ca` ↔ `inbound@lab5.ca`, `demo@lab5.ca` KB).
-- `/demo-test` — liveness probe of public lab5.ca/demo (`outbound@lab5.ca` → `demo@lab5.ca`, prod-env Logfire check, PASS/FAIL only).
+- `/demo-test` — liveness probe of public lab5.ca/proof (`outbound@lab5.ca` → `demo@lab5.ca`, prod-env Logfire check, PASS/FAIL only).
 - `/gh:*` — GitHub ops (issue / pr-create / merge / release / commit / design). ⊥ drive `gh` ∨ `git push`-to-PR by hand.
 - `/logfire:*` — instrument, dev-session, debug.
 

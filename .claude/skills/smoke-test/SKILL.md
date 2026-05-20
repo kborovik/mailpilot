@@ -1,6 +1,6 @@
 ---
 name: smoke-test
-description: End-to-end MailPilot smoke test against real Gmail across outbound@lab5.ca and inbound@lab5.ca. One Phase 0 setup → 2 scenarios run sequentially without state reset. Scenario A = outbound workflow + manual operator reply. Scenario B = live KB-grounded inbound auto-reply demo at https://lab5.ca/demo/ (real Drive folder, in-scope grounded reply + out-of-scope polite decline). Outbound workflow stays active across B → verifies concurrent multi-account, multi-workflow operation. Both scenarios mandatory. Use whenever user says "smoke test", "run end-to-end", "verify the system works", or after non-trivial changes to sync, routing, agent execution, KB grounding, or Pub/Sub code -- even without explicit invocation.
+description: End-to-end MailPilot smoke test against real Gmail across outbound@lab5.ca and inbound@lab5.ca. One Phase 0 setup → 2 scenarios run sequentially without state reset. Scenario A = outbound workflow + manual operator reply. Scenario B = live KB-grounded inbound auto-reply demo at https://lab5.ca/proof/ (real Drive folder, in-scope grounded reply + out-of-scope polite decline). Outbound workflow stays active across B → verifies concurrent multi-account, multi-workflow operation. Both scenarios mandatory. Use whenever user says "smoke test", "run end-to-end", "verify the system works", or after non-trivial changes to sync, routing, agent execution, KB grounding, or Pub/Sub code -- even without explicit invocation.
 ---
 
 # Smoke Test
@@ -15,9 +15,9 @@ Two scenarios share one Phase 0 setup and one `mailpilot run` loop. Outbound wor
 | Scenario | Active workflows                    | Trigger                                  | Verifies                                                                                                        |
 | -------- | ----------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | A        | Outbound only                       | `mailpilot enrollment run`               | Outbound agent send → Gmail delivery → manual operator reply → thread_match routing → agent processes reply     |
-| B        | Outbound (terminal) + Demo (active) | `mailpilot email send` (operator-driven) | The lab5.ca/demo promise -- KB-grounded reply within 60s for in-scope question, polite decline for out-of-scope |
+| B        | Outbound (terminal) + Demo (active) | `mailpilot email send` (operator-driven) | The lab5.ca/proof promise -- KB-grounded reply within 60s for in-scope question, polite decline for out-of-scope |
 
-Both scenarios are **mandatory**. `make clean` runs **once**, at the very start. Scenario B IS the lab5.ca/demo system under test -- it must run.
+Both scenarios are **mandatory**. `make clean` runs **once**, at the very start. Scenario B IS the lab5.ca/proof system under test -- it must run.
 
 ## Conventions
 
@@ -330,9 +330,9 @@ Do not stop the sync loop. Do not run `make clean`. Do not recreate accounts or 
 
 ---
 
-## Scenario B: KB-grounded demo (lab5.ca/demo)
+## Scenario B: KB-grounded demo (lab5.ca/proof)
 
-**Hypothesis:** The lab5.ca/demo system delivers on its public promise -- "a professional response grounded in real data" within ~60 seconds for in-scope questions, and a polite explanatory reply (no fabricated specs) for questions outside the KB. With the outbound workflow from A still active, the demo workflow on `inbound@lab5.ca` correctly classifies an operator-sent question on a fresh thread, the agent grounds its answer in the real Drive KB via `list_drive_markdown` + `read_drive_markdown`, and the reply round-trips to the outbound mailbox.
+**Hypothesis:** The lab5.ca/proof system delivers on its public promise -- "a professional response grounded in real data" within ~60 seconds for in-scope questions, and a polite explanatory reply (no fabricated specs) for questions outside the KB. With the outbound workflow from A still active, the demo workflow on `inbound@lab5.ca` correctly classifies an operator-sent question on a fresh thread, the agent grounds its answer in the real Drive KB via `list_drive_markdown` + `read_drive_markdown`, and the reply round-trips to the outbound mailbox.
 
 **Real KB used.** This scenario uses the production KB folder, not a fixture:
 
@@ -403,7 +403,7 @@ Save `TRIGGER_EMAIL_ID_B1`, `TRIGGER_THREAD_ID_B1`, capture wall-clock send time
 
 ### B4. Wait for the demo agent to reply (60-second SLA)
 
-Critical gate. The lab5.ca/demo page promises delivery within ~60 seconds. Poll the outbound mailbox:
+Critical gate. The lab5.ca/proof page promises delivery within ~60 seconds. Poll the outbound mailbox:
 
 ```
 mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction inbound --since <TEST_START_B>
@@ -414,7 +414,7 @@ Match by `SUBJECT_B1` (likely with `Re:` prefix). Record the wall-clock time the
 **Gate B4 (the demo promise):**
 
 - Reply present, threaded under `SUBJECT_B1`.
-- `LATENCY_B1 <= 60s`. **If the reply takes longer, that is a regression of the lab5.ca/demo promise -- record as a Critical Bug.** (Polling cadence is 5s, so granularity is coarse; if the first observation lands at 65s and it was the first reply on the thread, treat the run as borderline and re-test.)
+- `LATENCY_B1 <= 60s`. **If the reply takes longer, that is a regression of the lab5.ca/proof promise -- record as a Critical Bug.** (Polling cadence is 5s, so granularity is coarse; if the first observation lands at 65s and it was the first reply on the thread, treat the run as borderline and re-test.)
 - Reply on the demo side (`mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>`) → `is_routed == true`, `workflow_id == DEMO_WORKFLOW_ID`, `route_method == classified`. The classifier ran -- not `thread_match`, since this is a fresh thread.
 - Reply body **grounded in the KB** -- operator-judged per SPEC §V.31. Substring match against curated `expected_tokens` was retired (false negatives on phrasing variation like `0.48 mm` vs `0.48mm`); the operator now grades the reply against the live source doc. Procedure:
   1. Load the source doc the pair points at:
@@ -469,7 +469,7 @@ Run a Logfire query for the `agent.invoke` span produced by B4's reply. Within t
 
 ### B6. Send the out-of-scope question
 
-Pick a random out-of-scope Q/A pair (Pentair, Evoqua, Grundfos, Suez, Veolia -- vendors explicitly named on lab5.ca/demo as out-of-scope):
+Pick a random out-of-scope Q/A pair (Pentair, Evoqua, Grundfos, Suez, Veolia -- vendors explicitly named on lab5.ca/proof as out-of-scope):
 
 ```
 QA_B2=$(python3 .claude/skills/smoke-test/scripts/qa.py pick --type outscope)
@@ -642,7 +642,7 @@ Scenario A: Outbound workflow (sole workflow active)
   A7 Agent processes reply ... PASS
   A8 Activity timeline ....... PASS
 
-Scenario B: KB-grounded demo (lab5.ca/demo, outbound workflow still active)
+Scenario B: KB-grounded demo (lab5.ca/proof, outbound workflow still active)
   B1 Create demo workflow .... PASS  (workflow list shows 2 active)
   B2 Sync loop still alive ... PASS
   B3 In-scope trigger send ... PASS
@@ -686,7 +686,7 @@ Routing tag:
 
 Severity (number sequentially `Bug 1`, `Bug 2`, ...):
 
-- `Critical` -- regression of a public promise (lab5.ca/demo SLA, KB grounding, fabrication-free decline). Always at least `bug` routing.
+- `Critical` -- regression of a public promise (lab5.ca/proof SLA, KB grounding, fabrication-free decline). Always at least `bug` routing.
 - `High` -- wrong functional output a real user would see. Always at least `bug` routing.
 - `Medium` -- correct output, broken presentation. Routing typically `bug` or `code-only`.
 - `Low` -- harness-only issues. Routing typically `code-only`.

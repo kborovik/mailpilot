@@ -2,7 +2,7 @@
 
 Agent-operated CRM with Gmail as the communication layer.
 
-**[See it in action](https://lab5.ca/demo/)**
+**[See it in action](https://lab5.ca/proof/)**
 
 ## Overview
 
