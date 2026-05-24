@@ -1,7 +1,7 @@
 [project]
 name = "mailpilot"
 version = "0.5.1"
-description = "CRM application for cold email outreach via Gmail"
+description = "Agent-operated CRM with Gmail as the comms layer"
 readme = "README.md"
 authors = [
     { name = "Konstantin Borovik", email = "github@lab5.ca" }
