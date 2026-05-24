@@ -1,13 +1,13 @@
 ---
 name: demo-test
-description: Liveness probe of the public lab5.ca/proof system. Sends one KB-grounded question from outbound@lab5.ca to demo@lab5.ca, waits for the production-deployed agent to reply (within ~60s), and asserts the required Logfire spans fired in the `production` deployment_environment with zero errors or warnings. Output is a single PASS / FAIL line plus a 3-bullet Logfire summary -- no detailed report, no auto-write to disk, no `/sdd:spec` invocation. Assumes warm state (the demo workflow already runs on demo@lab5.ca in production); does NOT `make clean`, does NOT create accounts or workflows. Use whenever the user asks to verify the demo, says "demo test", "is the demo alive?", "check lab5.ca/proof", "demo liveness", or after a production deploy of MailPilot when a quick spot-check is wanted.
+description: Liveness probe of the public lab5.ca/mailpilot/ system. Sends one KB-grounded question from outbound@lab5.ca to demo@lab5.ca, waits for the production-deployed agent to reply (within ~60s), and asserts the required Logfire spans fired in the `production` deployment_environment with zero errors or warnings. Output is a single PASS / FAIL line plus a 3-bullet Logfire summary -- no detailed report, no auto-write to disk, no `/sdd:spec` invocation. Assumes warm state (the demo workflow already runs on demo@lab5.ca in production); does NOT `make clean`, does NOT create accounts or workflows. Use whenever the user asks to verify the demo, says "demo test", "is the demo alive?", "check lab5.ca/mailpilot/", "demo liveness", or after a production deploy of MailPilot when a quick spot-check is wanted.
 ---
 
 # Demo Test
 
 ## What this tests
 
-The public demo at https://lab5.ca/proof/ promises: email a question to `demo@lab5.ca`, get a KB-grounded reply within ~60 seconds. This skill exercises exactly that promise against the deployed production instance.
+The public demo at https://lab5.ca/mailpilot// promises: email a question to `demo@lab5.ca`, get a KB-grounded reply within ~60 seconds. This skill exercises exactly that promise against the deployed production instance.
 
 It is a **liveness probe**, not a regression suite -- that is `/smoke-test`. Use `/demo-test` after a production deploy, or as a quick "is the demo alive?" spot-check.
 
