@@ -673,6 +673,49 @@ def test_enrollment_add_emits_span_and_event(
     assert "changed=['status']" in err
 
 
+def test_enrollment_add_scheduled_at_event_carries_field(
+    runner: CliRunner,
+    mock_connection: MagicMock,
+    capfire: CaptureLogfire,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """§V.55 + §V.47: when --scheduled-at is given, the operator event carries
+    ``scheduled_at=...`` and ``scheduled_first_send`` in ``changed``."""
+    enrollment = _make_enrollment()
+    workflow = _make_workflow(type="outbound")
+    contact = _make_contact()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=workflow),
+        patch("mailpilot.database.get_contact", return_value=contact),
+        patch("mailpilot.database.create_enrollment", return_value=enrollment),
+        patch("mailpilot.database.create_activity"),
+        patch("mailpilot.database.find_pending_first_touch_task", return_value=None),
+        patch("mailpilot.database.create_task"),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.id,
+                "--contact-id",
+                contact.id,
+                "--scheduled-at",
+                "2026-06-01T10:00:00+00:00",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert _spans_named(capfire, "enrollment.add")
+    err = result.stderr
+    assert "event=enrollment.add" in err
+    assert "scheduled_at=2026-06-01T10:00:00+00:00" in err
+    assert "'scheduled_first_send'" in err
+
+
 def test_enrollment_remove_emits_span_and_event(
     runner: CliRunner,
     mock_connection: MagicMock,

@@ -404,13 +404,16 @@ def _format_trigger(
     """Format the trigger context section of the prompt.
 
     §V.36: framing matches the ``agent.invoke`` span ``trigger`` attribute
-    (§V.11). ``enrollment_run`` gets a dedicated first-reach-out block;
-    ``Deferred task:`` is reserved for ``trigger="task"``.
+    (§V.11). ``enrollment_run`` and ``enrollment_schedule`` both render the
+    first-reach-out block (identical framing -- both signify "first
+    outbound message; no prior context"; §V.55 distinguishes them only at
+    the observability layer). ``Deferred task:`` is reserved for
+    ``trigger="task"``.
     """
     if email is not None:
         header = f"\nNew inbound email:\nEmail ID: {email.id}\nFrom: {contact_email}"
         return f"{header}\nSubject: {email.subject}\nBody:\n{email.body_text}"
-    if trigger == "enrollment_run":
+    if trigger in ("enrollment_run", "enrollment_schedule"):
         return (
             "\nFirst reach-out for this enrollment. "
             "Compose the initial outbound message per the workflow objective "
@@ -521,9 +524,12 @@ def invoke_workflow_agent(  # noqa: PLR0913
         model_override: Override the LLM model (for testing with FunctionModel).
         trigger: Caller path label for the ``agent.invoke`` span. One of
             ``enrollment_run`` (CLI manual via ``mailpilot enrollment run``),
-            ``task`` (background drain via ``run.execute_task``),
-            ``email`` (email-driven), or ``manual`` (default for direct
-            programmatic calls). See SPEC §V.11.
+            ``enrollment_schedule`` (CLI-scheduled first-touch drained from
+            the task queue per §V.55; framing identical to
+            ``enrollment_run``, observability distinct), ``task``
+            (background drain via ``run.execute_task``), ``email``
+            (email-driven), or ``manual`` (default for direct programmatic
+            calls). See SPEC §V.11.
 
     Returns:
         Dict with invocation result, or None if skipped (lock held).

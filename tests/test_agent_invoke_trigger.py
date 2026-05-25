@@ -122,6 +122,17 @@ def test_trigger_task(
     assert _agent_invoke_trigger(capfire) == "task"
 
 
+def test_trigger_enrollment_schedule(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.55: scheduled first-touch drain surfaces as a distinct trigger
+    label so Logfire separates CLI-scheduled sends from operator-immediate
+    ``enrollment_run`` and from generic ``task`` drains."""
+    _run(database_connection, trigger="enrollment_schedule")
+    assert _agent_invoke_trigger(capfire) == "enrollment_schedule"
+
+
 def test_trigger_default_is_manual(
     capfire: CaptureLogfire,
     database_connection: psycopg.Connection[dict[str, Any]],

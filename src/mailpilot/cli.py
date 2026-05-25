@@ -2372,11 +2372,64 @@ def enrollment() -> None:
     """Manage contact enrollments in workflows."""
 
 
+def _maybe_schedule_first_touch(
+    connection: Any,
+    workflow_id: str,
+    contact_id: str,
+    scheduled_iso: str | None,
+    changed: list[str],
+) -> None:
+    """Insert a pending first-touch task per §V.55 unless one already exists.
+
+    Idempotent: if ``find_pending_first_touch_task`` returns a row, no task
+    is created and ``changed`` is left alone. On insert, ``changed`` gains
+    ``"scheduled_first_send"`` so §V.47 operator events carry an accurate
+    diff list.
+    """
+    if scheduled_iso is None:
+        return
+    from mailpilot.database import (
+        create_task,
+        find_pending_first_touch_task,
+    )
+
+    if find_pending_first_touch_task(connection, workflow_id, contact_id) is not None:
+        return
+    create_task(
+        connection,
+        workflow_id=workflow_id,
+        contact_id=contact_id,
+        description="scheduled first reach-out",
+        scheduled_at=scheduled_iso,
+        context={"trigger": "enrollment_schedule"},
+        email_id=None,
+    )
+    changed.append("scheduled_first_send")
+
+
 @enrollment.command("add")
 @click.option("--workflow-id", required=True, help="Workflow ID.")
 @click.option("--contact-id", required=True, help="Contact ID.")
-def enrollment_add(workflow_id: str, contact_id: str) -> None:
-    """Enroll a contact in a workflow."""
+@click.option(
+    "--scheduled-at",
+    "scheduled_at",
+    default=None,
+    help=(
+        "ISO 8601 timestamp for scheduled first reach-out (outbound workflows "
+        "only). Inserts a pending task drained by the run loop per SPEC §V.55."
+    ),
+)
+def enrollment_add(workflow_id: str, contact_id: str, scheduled_at: str | None) -> None:
+    """Enroll a contact in a workflow.
+
+    When ``--scheduled-at`` is given on an outbound workflow, a pending
+    task is inserted so the run loop dispatches the initial outbound
+    message at that time. Re-running against an enrollment that already
+    has a pending first-touch task is a no-op (idempotent). Inbound
+    workflows reject ``--scheduled-at`` -- inbound is reactive.
+    """
+    from datetime import datetime
+
     from mailpilot.database import (
         create_activity,
         create_enrollment,
@@ -2387,18 +2440,35 @@ def enrollment_add(workflow_id: str, contact_id: str) -> None:
     )
     from mailpilot.operator_log import cli_mutation, operator_event
 
+    scheduled_iso: str | None = None
+    if scheduled_at is not None:
+        try:
+            scheduled_iso = datetime.fromisoformat(scheduled_at).isoformat()
+        except ValueError as exc:
+            output_error(f"invalid --scheduled-at value: {exc}", "validation_error")
+
     connection = initialize_database(_database_url())
     try:
         workflow = get_workflow(connection, workflow_id)
         if workflow is None:
             output_error(f"workflow not found: {workflow_id}", "not_found")
+        if scheduled_iso is not None and workflow.type != "outbound":
+            output_error(
+                "--scheduled-at only valid for outbound workflows",
+                "invalid_state",
+            )
         contact = get_contact(connection, contact_id)
         if contact is None:
             output_error(f"contact not found: {contact_id}", "not_found")
-        with cli_mutation(
-            "enrollment", "add", workflow_id=workflow_id, contact_id=contact_id
-        ):
+        mutation_attrs: dict[str, Any] = {
+            "workflow_id": workflow_id,
+            "contact_id": contact_id,
+        }
+        if scheduled_iso is not None:
+            mutation_attrs["scheduled_at"] = scheduled_iso
+        with cli_mutation("enrollment", "add", **mutation_attrs):
             created = create_enrollment(connection, workflow_id, contact_id)
+            target = created
             if created is not None:
                 create_activity(
                     connection,
@@ -2409,24 +2479,24 @@ def enrollment_add(workflow_id: str, contact_id: str) -> None:
                     company_id=contact.company_id,
                     workflow_id=workflow_id,
                 )
-                operator_event(
-                    "enrollment.add",
-                    workflow_id=workflow_id,
-                    contact_id=contact_id,
-                    changed=["status"],
-                )
-                output_entity("enrollment", created)
-                return
-            existing = get_enrollment(connection, workflow_id, contact_id)
-            if existing is not None:
-                operator_event(
-                    "enrollment.add",
-                    workflow_id=workflow_id,
-                    contact_id=contact_id,
-                    changed=[],
-                )
-                output_entity("enrollment", existing)
-                return
+                changed = ["status"]
+            else:
+                target = get_enrollment(connection, workflow_id, contact_id)
+                if target is None:
+                    return
+                changed = []
+            _maybe_schedule_first_touch(
+                connection, workflow_id, contact_id, scheduled_iso, changed
+            )
+            event_fields: dict[str, Any] = {
+                "workflow_id": workflow_id,
+                "contact_id": contact_id,
+            }
+            if scheduled_iso is not None:
+                event_fields["scheduled_at"] = scheduled_iso
+            event_fields["changed"] = changed
+            operator_event("enrollment.add", **event_fields)
+            output_entity("enrollment", target)
     finally:
         connection.close()
 

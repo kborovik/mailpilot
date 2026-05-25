@@ -615,6 +615,34 @@ def test_enrollment_run_outbound_renders_first_reach_out(
     assert "Deferred task:" not in prompt
 
 
+def test_enrollment_schedule_renders_first_reach_out(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.36 + §V.55: trigger='enrollment_schedule' renders the same
+    first-reach-out framing as 'enrollment_run' (byte-identical -- both
+    mean "first outbound message, no prior context")."""
+    _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
+
+    run_prompt = _build_user_prompt(
+        workflow=workflow,
+        contact=contact,
+        email_history=[],
+        email=None,
+        trigger="enrollment_run",
+    )
+    sched_prompt = _build_user_prompt(
+        workflow=workflow,
+        contact=contact,
+        email_history=[],
+        email=None,
+        trigger="enrollment_schedule",
+    )
+
+    assert sched_prompt == run_prompt
+    assert "First reach-out for this enrollment." in sched_prompt
+    assert "Deferred task:" not in sched_prompt
+
+
 def test_task_trigger_renders_deferred_task_block(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:

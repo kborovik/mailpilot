@@ -1915,6 +1915,37 @@ def list_pending_tasks(
     return [Task.model_validate(row) for row in rows]
 
 
+def find_pending_first_touch_task(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+    contact_id: str,
+) -> Task | None:
+    """Return a pending first-touch task for ``(workflow_id, contact_id)`` if any.
+
+    A first-touch task is the CLI-scheduled initial outbound send per §V.55:
+    ``email_id IS NULL`` (not tied to a triggering inbound email) and
+    ``status='pending'`` (not yet drained, not cancelled, not failed). Used
+    by ``mailpilot enrollment add --scheduled-at ...`` to skip a duplicate
+    insert when the operator re-runs against an enrollment that already has
+    one queued.
+    """
+    row = connection.execute(
+        """\
+        SELECT * FROM task
+        WHERE workflow_id = %(workflow_id)s
+          AND contact_id = %(contact_id)s
+          AND email_id IS NULL
+          AND status = 'pending'
+        ORDER BY scheduled_at
+        LIMIT 1
+        """,
+        {"workflow_id": workflow_id, "contact_id": contact_id},
+    ).fetchone()
+    if row is None:
+        return None
+    return Task.model_validate(row)
+
+
 def complete_task(
     connection: psycopg.Connection[dict[str, Any]],
     task_id: str,

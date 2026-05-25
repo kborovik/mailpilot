@@ -32,6 +32,7 @@ from mailpilot.database import (
     create_tasks_for_routed_emails,
     delete_enrollment,
     delete_tag,
+    find_pending_first_touch_task,
     get_account,
     get_account_by_email,
     get_company,
@@ -2422,6 +2423,127 @@ def test_list_tasks_with_filters(
     pending = list_tasks(database_connection, status="pending")
     assert len(pending) == 1
     assert pending[0].contact_id == contact_a.id
+
+
+def test_find_pending_first_touch_task_none(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.55 idempotency probe returns None when no first-touch task exists."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    assert (
+        find_pending_first_touch_task(database_connection, workflow.id, contact.id)
+        is None
+    )
+
+
+def test_find_pending_first_touch_task_match(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.55: returns the pending email-less task for the given pair."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    created = create_task(
+        database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="scheduled first reach-out",
+        scheduled_at="2026-04-22T12:00:00Z",
+        context={"trigger": "enrollment_schedule"},
+    )
+
+    found = find_pending_first_touch_task(database_connection, workflow.id, contact.id)
+    assert found is not None
+    assert found.id == created.id
+    assert found.email_id is None
+    assert found.status == "pending"
+
+
+def test_find_pending_first_touch_task_ignores_email_bound_tasks(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.55: inbound auto-tasks (email_id set) are not first-touch tasks."""
+    from datetime import timedelta
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    email = create_email(
+        database_connection,
+        gmail_message_id="msg-fp",
+        gmail_thread_id="thread-fp",
+        account_id=account.id,
+        direction="inbound",
+        subject="hi",
+        body_text="ping",
+        labels=["INBOX"],
+        received_at=workflow.created_at + timedelta(minutes=5),
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+    )
+    assert email is not None
+    create_task(
+        database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="handle inbound email",
+        scheduled_at="2026-04-22T12:00:00Z",
+        email_id=email.id,
+    )
+    assert (
+        find_pending_first_touch_task(database_connection, workflow.id, contact.id)
+        is None
+    )
+
+
+def test_find_pending_first_touch_task_ignores_terminal_status(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.55: only pending rows count; cancelled/completed do not block re-add."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    task = create_task(
+        database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="scheduled first reach-out",
+        scheduled_at="2026-04-22T12:00:00Z",
+        context={"trigger": "enrollment_schedule"},
+    )
+    cancel_task(database_connection, task.id)
+    assert (
+        find_pending_first_touch_task(database_connection, workflow.id, contact.id)
+        is None
+    )
+
+
+def test_find_pending_first_touch_task_scoped_to_pair(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.55: lookup honours (workflow_id, contact_id) -- other pairs invisible."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact_a = make_test_contact(database_connection, email="a@test.com")
+    contact_b = make_test_contact(database_connection, email="b@test.com")
+    create_task(
+        database_connection,
+        workflow_id=workflow.id,
+        contact_id=contact_a.id,
+        description="scheduled first reach-out",
+        scheduled_at="2026-04-22T12:00:00Z",
+        context={"trigger": "enrollment_schedule"},
+    )
+    assert (
+        find_pending_first_touch_task(database_connection, workflow.id, contact_b.id)
+        is None
+    )
+    assert (
+        find_pending_first_touch_task(database_connection, workflow.id, contact_a.id)
+        is not None
+    )
 
 
 def test_create_tasks_for_routed_emails(

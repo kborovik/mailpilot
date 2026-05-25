@@ -142,6 +142,77 @@ def test_execute_task_success(
     )
 
 
+def test_execute_task_threads_trigger_from_context(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.55 + §V.36: scheduled first-touch task carries
+    ``trigger=enrollment_schedule`` in its context; ``execute_task`` must
+    surface that to ``invoke_workflow_agent`` so the agent sees first-touch
+    framing, not deferred-task framing."""
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings()
+    task = _make_task(context={"trigger": "enrollment_schedule"})
+    workflow = _make_workflow()
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+
+    agent_result = {"tool_calls": 1, "reasoning": "Sent initial."}
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch(
+            "mailpilot.run.invoke_workflow_agent",
+            return_value=agent_result,
+        ) as mock_invoke,
+        patch("mailpilot.run.complete_task"),
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_invoke.assert_called_once_with(
+        database_connection,
+        settings,
+        workflow,
+        contact,
+        email=None,
+        task_description="follow up",
+        task_context={"trigger": "enrollment_schedule"},
+        trigger="enrollment_schedule",
+    )
+
+
+def test_execute_task_default_trigger_is_task(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.55 regression: a task row with no ``trigger`` in context defaults to
+    ``trigger='task'``, preserving the legacy drain semantics."""
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings()
+    task = _make_task(context={})
+    workflow = _make_workflow()
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch(
+            "mailpilot.run.invoke_workflow_agent",
+            return_value={"tool_calls": 1, "reasoning": "ok"},
+        ) as mock_invoke,
+        patch("mailpilot.run.complete_task"),
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_invoke.assert_called_once()
+    assert mock_invoke.call_args.kwargs["trigger"] == "task"
+
+
 def test_execute_task_inactive_workflow(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:

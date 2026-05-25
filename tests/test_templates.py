@@ -143,19 +143,24 @@ def test_build_protocol_task_carries_record_outcome_instruction(
 
 
 @pytest.mark.parametrize(
-    "trigger", ["enrollment_run", "manual", "email", "anything_else"]
+    "trigger",
+    ["enrollment_run", "enrollment_schedule", "manual", "email", "anything_else"],
 )
 @pytest.mark.parametrize("template", list(TEMPLATES.values()), ids=lambda t: t.name)
 def test_build_protocol_non_task_uses_initial_branch(
     template: WorkflowTemplate, trigger: str
 ) -> None:
-    """§V.49: non-``task`` triggers swap to the initial-send-only instruction."""
+    """§V.49 + §V.55: non-``task`` triggers swap to the initial-send-only
+    instruction. ``enrollment_schedule`` joins the non-task set because it
+    shares first-touch semantics with ``enrollment_run`` per §V.36."""
     protocol = template.build_protocol(trigger)
     assert _INITIAL_INSTRUCTION in protocol
     assert _RECORD_OUTCOME_INSTRUCTION not in protocol
 
 
-@pytest.mark.parametrize("trigger", ["task", "enrollment_run", "manual"])
+@pytest.mark.parametrize(
+    "trigger", ["task", "enrollment_run", "enrollment_schedule", "manual"]
+)
 @pytest.mark.parametrize("template", list(TEMPLATES.values()), ids=lambda t: t.name)
 def test_build_protocol_preserves_v33_fragment_order(
     template: WorkflowTemplate, trigger: str
@@ -343,7 +348,7 @@ def test_build_agent_trigger_routes_protocol_branch(template_name: str) -> None:
     assert _RECORD_OUTCOME_INSTRUCTION in task_instructions
     assert _INITIAL_INSTRUCTION not in task_instructions
 
-    for trigger in ("enrollment_run", "manual", "email"):
+    for trigger in ("enrollment_run", "enrollment_schedule", "manual", "email"):
         initial_instructions = _instructions(trigger)
         assert _INITIAL_INSTRUCTION in initial_instructions
         assert _RECORD_OUTCOME_INSTRUCTION not in initial_instructions

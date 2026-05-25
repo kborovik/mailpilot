@@ -47,9 +47,10 @@ class WorkflowTemplate:
 
     The deferred-task fragment is selected per-invocation by ``trigger``
     (§V.49): ``trigger='task'`` -> _DEFERRED_TASK_TASK (terminal-outcome
-    instruction); other triggers (``enrollment_run``, ``manual``,
-    ``email``) -> _DEFERRED_TASK_INITIAL (initial-send-only instruction;
-    prevents premature ``record_enrollment_outcome`` on first reach-out).
+    instruction); other triggers (``enrollment_run``,
+    ``enrollment_schedule`` per §V.55, ``manual``, ``email``) ->
+    _DEFERRED_TASK_INITIAL (initial-send-only instruction; prevents
+    premature ``record_enrollment_outcome`` on first reach-out).
     Canonical fragment order per §V.33: _BASE -> _DEFERRED_TASK_<branch> ->
     [overlay]? -> _DECLINE -> _NO_FABRICATION.
     """

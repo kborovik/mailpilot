@@ -108,6 +108,12 @@ def execute_task(
 
         email = get_email(connection, task.email_id) if task.email_id else None
 
+        # §V.55: scheduled first-touch tasks carry ``trigger=enrollment_schedule``
+        # in their context; the run loop must surface that to the agent span so
+        # initial-send framing replaces the deferred-task framing. Default to
+        # ``task`` for legacy task rows that pre-date scheduled enrollment.
+        context_trigger = task.context.get("trigger") if task.context else None
+        trigger = context_trigger if isinstance(context_trigger, str) else "task"
         try:
             result = invoke_workflow_agent(
                 connection,
@@ -117,7 +123,7 @@ def execute_task(
                 email=email,
                 task_description=task.description,
                 task_context=task.context,
-                trigger="task",
+                trigger=trigger,
             )
         except Exception as exc:
             _handle_agent_failure(connection, task, exc)

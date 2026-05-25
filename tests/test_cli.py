@@ -5232,6 +5232,138 @@ def test_enrollment_add_idempotent(
     assert data["enrollment"]["status"] == "active"
 
 
+def test_enrollment_add_with_scheduled_at_outbound_creates_task(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.55: --scheduled-at on outbound wf inserts a first-touch task row."""
+    enrollment = _make_enrollment()
+    workflow = _make_workflow(type="outbound")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=workflow),
+        patch("mailpilot.database.get_contact", return_value=_make_contact()),
+        patch("mailpilot.database.create_enrollment", return_value=enrollment),
+        patch("mailpilot.database.create_activity"),
+        patch(
+            "mailpilot.database.find_pending_first_touch_task", return_value=None
+        ) as mock_find,
+        patch("mailpilot.database.create_task") as mock_create_task,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--contact-id",
+                _CONTACT_ID,
+                "--scheduled-at",
+                "2026-06-01T10:00:00+00:00",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_find.assert_called_once_with(mock_connection, _WORKFLOW_ID, _CONTACT_ID)
+    create_kwargs = mock_create_task.call_args.kwargs
+    assert create_kwargs["workflow_id"] == _WORKFLOW_ID
+    assert create_kwargs["contact_id"] == _CONTACT_ID
+    assert create_kwargs["description"] == "scheduled first reach-out"
+    assert create_kwargs["scheduled_at"] == "2026-06-01T10:00:00+00:00"
+    assert create_kwargs["context"] == {"trigger": "enrollment_schedule"}
+    assert create_kwargs["email_id"] is None
+    data = json.loads(result.output)
+    assert data["enrollment"]["workflow_id"] == _WORKFLOW_ID
+
+
+def test_enrollment_add_with_scheduled_at_idempotent(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.55 idempotency: re-running w/ scheduled-at on enrollment that already
+    has a pending first-touch task does not insert a duplicate."""
+    existing_enrollment = _make_enrollment()
+    existing_task = Task(
+        id="01234567-0000-7000-0000-aaaaaaaaaaaa",
+        workflow_id=_WORKFLOW_ID,
+        contact_id=_CONTACT_ID,
+        email_id=None,
+        description="scheduled first reach-out",
+        context={"trigger": "enrollment_schedule"},
+        scheduled_at=_NOW,
+        status="pending",
+        result={},
+        completed_at=None,
+        created_at=_NOW,
+    )
+    workflow = _make_workflow(type="outbound")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=workflow),
+        patch("mailpilot.database.get_contact", return_value=_make_contact()),
+        patch("mailpilot.database.create_enrollment", return_value=None),
+        patch("mailpilot.database.get_enrollment", return_value=existing_enrollment),
+        patch(
+            "mailpilot.database.find_pending_first_touch_task",
+            return_value=existing_task,
+        ),
+        patch("mailpilot.database.create_task") as mock_create_task,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--contact-id",
+                _CONTACT_ID,
+                "--scheduled-at",
+                "2026-06-01T10:00:00+00:00",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_create_task.assert_not_called()
+    data = json.loads(result.output)
+    assert data["enrollment"]["workflow_id"] == _WORKFLOW_ID
+
+
+def test_enrollment_add_scheduled_at_inbound_rejected(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.55: --scheduled-at on inbound wf -> invalid_state error envelope."""
+    workflow = _make_workflow(type="inbound", template="inbound-general")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=workflow),
+        patch("mailpilot.database.create_enrollment") as mock_create_enroll,
+        patch("mailpilot.database.create_task") as mock_create_task,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--contact-id",
+                _CONTACT_ID,
+                "--scheduled-at",
+                "2026-06-01T10:00:00+00:00",
+            ],
+        )
+
+    assert result.exit_code == 1
+    mock_create_enroll.assert_not_called()
+    mock_create_task.assert_not_called()
+    data = json.loads(result.output)
+    assert data["error"] == "invalid_state"
+    assert "--scheduled-at" in data["message"]
+
+
 def test_enrollment_add_workflow_not_found(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
