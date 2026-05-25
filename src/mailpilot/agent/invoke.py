@@ -629,7 +629,7 @@ def invoke_workflow_agent(  # noqa: PLR0913
             span.set_attribute("tool_error_count", len(tool_errors))
 
             # Usage tracking.
-            usage = result.usage()
+            usage = result.usage
             span.set_attribute("model", settings.anthropic_model)
             span.set_attribute("input_tokens", usage.input_tokens)
             span.set_attribute("output_tokens", usage.output_tokens)
