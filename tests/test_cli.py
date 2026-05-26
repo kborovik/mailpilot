@@ -5169,6 +5169,7 @@ def test_enrollment_add(runner: CliRunner, mock_connection: MagicMock) -> None:
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=_make_workflow()),
         patch("mailpilot.database.get_contact", return_value=_make_contact()),
+        patch("mailpilot.database.get_account", return_value=_make_account()),
         patch(
             "mailpilot.database.create_enrollment", return_value=enrollment
         ) as mock_create,
@@ -5209,6 +5210,7 @@ def test_enrollment_add_idempotent(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=_make_workflow()),
         patch("mailpilot.database.get_contact", return_value=_make_contact()),
+        patch("mailpilot.database.get_account", return_value=_make_account()),
         patch("mailpilot.database.create_enrollment", return_value=None),
         patch("mailpilot.database.get_enrollment", return_value=existing),
         patch("mailpilot.database.create_activity") as mock_activity,
@@ -5243,6 +5245,7 @@ def test_enrollment_add_with_scheduled_at_outbound_creates_task(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=workflow),
         patch("mailpilot.database.get_contact", return_value=_make_contact()),
+        patch("mailpilot.database.get_account", return_value=_make_account()),
         patch("mailpilot.database.create_enrollment", return_value=enrollment),
         patch("mailpilot.database.create_activity"),
         patch(
@@ -5302,6 +5305,7 @@ def test_enrollment_add_with_scheduled_at_idempotent(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=workflow),
         patch("mailpilot.database.get_contact", return_value=_make_contact()),
+        patch("mailpilot.database.get_account", return_value=_make_account()),
         patch("mailpilot.database.create_enrollment", return_value=None),
         patch("mailpilot.database.get_enrollment", return_value=existing_enrollment),
         patch(
@@ -5415,6 +5419,116 @@ def test_enrollment_add_contact_not_found(
     data = json.loads(result.output)
     assert data["error"] == "not_found"
     assert "contact" in data["message"]
+
+
+def test_enrollment_add_self_loop_outbound_rejected(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.56: outbound wf + contact.email == account.email -> self_loop."""
+    account = _make_account(email="hello@lab5.ca")
+    workflow = _make_workflow(account_id=account.id)
+    contact = _make_contact(email="hello@lab5.ca")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=workflow),
+        patch("mailpilot.database.get_contact", return_value=contact),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.database.create_enrollment") as mock_create,
+        patch("mailpilot.database.create_activity") as mock_activity,
+        patch("mailpilot.operator_log.operator_event") as mock_event,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--contact-id",
+                _CONTACT_ID,
+            ],
+        )
+
+    assert result.exit_code == 1
+    mock_create.assert_not_called()
+    mock_activity.assert_not_called()
+    assert not any(
+        call.args and call.args[0] == "enrollment.add"
+        for call in mock_event.call_args_list
+    )
+    data = json.loads(result.output)
+    assert data["error"] == "self_loop"
+    assert "hello@lab5.ca" in data["message"]
+    assert "account email" in data["message"]
+
+
+def test_enrollment_add_self_loop_inbound_rejected(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.56: inbound wf same rule applies -- direction-agnostic."""
+    account = _make_account(email="hello@lab5.ca")
+    workflow = _make_workflow(
+        account_id=account.id, type="inbound", template="inbound-general"
+    )
+    contact = _make_contact(email="hello@lab5.ca")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=workflow),
+        patch("mailpilot.database.get_contact", return_value=contact),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.database.create_enrollment") as mock_create,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--contact-id",
+                _CONTACT_ID,
+            ],
+        )
+
+    assert result.exit_code == 1
+    mock_create.assert_not_called()
+    data = json.loads(result.output)
+    assert data["error"] == "self_loop"
+
+
+def test_enrollment_add_self_loop_case_insensitive(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.56: comparison is case-insensitive (Gmail addresses)."""
+    account = _make_account(email="hello@lab5.ca")
+    workflow = _make_workflow(account_id=account.id)
+    contact = _make_contact(email="HELLO@lab5.ca")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=workflow),
+        patch("mailpilot.database.get_contact", return_value=contact),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.database.create_enrollment") as mock_create,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--contact-id",
+                _CONTACT_ID,
+            ],
+        )
+
+    assert result.exit_code == 1
+    mock_create.assert_not_called()
+    data = json.loads(result.output)
+    assert data["error"] == "self_loop"
 
 
 # -- enrollment remove ---------------------------------------------------------

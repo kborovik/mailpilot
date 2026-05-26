@@ -651,6 +651,7 @@ def test_enrollment_add_emits_span_and_event(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=workflow),
         patch("mailpilot.database.get_contact", return_value=contact),
+        patch("mailpilot.database.get_account", return_value=_make_account()),
         patch("mailpilot.database.create_enrollment", return_value=enrollment),
         patch("mailpilot.database.create_activity"),
     ):
@@ -689,6 +690,7 @@ def test_enrollment_add_scheduled_at_event_carries_field(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=workflow),
         patch("mailpilot.database.get_contact", return_value=contact),
+        patch("mailpilot.database.get_account", return_value=_make_account()),
         patch("mailpilot.database.create_enrollment", return_value=enrollment),
         patch("mailpilot.database.create_activity"),
         patch("mailpilot.database.find_pending_first_touch_task", return_value=None),

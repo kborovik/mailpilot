@@ -2372,6 +2372,25 @@ def enrollment() -> None:
     """Manage contact enrollments in workflows."""
 
 
+def _reject_enrollment_self_loop(
+    account: Any,
+    contact: Any,
+    workflow_name: str,
+) -> None:
+    """Reject enrollment when contact.email matches workflow's account email.
+
+    Per SPEC §V.56 -- semantic self-loop (agent notionally emails itself).
+    Compare case-insensitively (Gmail addresses are case-insensitive). When
+    ``account`` is ``None`` (defensive: FK-orphaned workflow), no rejection.
+    """
+    if account is not None and account.email.lower() == contact.email.lower():
+        output_error(
+            f"cannot enroll contact {contact.email} in workflow "
+            f"{workflow_name}: contact email matches workflow's account email",
+            "self_loop",
+        )
+
+
 def _maybe_schedule_first_touch(
     connection: Any,
     workflow_id: str,
@@ -2433,6 +2452,7 @@ def enrollment_add(workflow_id: str, contact_id: str, scheduled_at: str | None) 
     from mailpilot.database import (
         create_activity,
         create_enrollment,
+        get_account,
         get_contact,
         get_enrollment,
         get_workflow,
@@ -2460,6 +2480,8 @@ def enrollment_add(workflow_id: str, contact_id: str, scheduled_at: str | None) 
         contact = get_contact(connection, contact_id)
         if contact is None:
             output_error(f"contact not found: {contact_id}", "not_found")
+        account = get_account(connection, workflow.account_id)
+        _reject_enrollment_self_loop(account, contact, workflow.name)
         mutation_attrs: dict[str, Any] = {
             "workflow_id": workflow_id,
             "contact_id": contact_id,
