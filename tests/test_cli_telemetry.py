@@ -470,6 +470,107 @@ def test_contact_update_changed_diff(
     assert "changed=['first_name']" in err
 
 
+def test_contact_disable_emits_span_and_event(
+    runner: CliRunner,
+    mock_connection: MagicMock,
+    capfire: CaptureLogfire,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    before = _make_contact(disabled_reason=None)
+    after = _make_contact(disabled_reason="bounced: hard")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_contact", return_value=before),
+        patch("mailpilot.database.disable_contact", return_value=after),
+    ):
+        result = runner.invoke(
+            main,
+            ["contact", "disable", before.id, "--reason", "bounced: hard"],
+        )
+
+    assert result.exit_code == 0, result.output
+    spans = _spans_named(capfire, "contact.disable")
+    assert spans
+    assert spans[0]["attributes"]["entity_id"] == before.id
+    err = result.stderr
+    assert "event=contact.disable" in err
+    assert f"entity_id={before.id}" in err
+    assert "changed=['disabled_reason']" in err
+
+
+def test_contact_disable_idempotent_same_reason(
+    runner: CliRunner,
+    mock_connection: MagicMock,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    same = _make_contact(disabled_reason="bounced: hard")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_contact", return_value=same),
+        patch("mailpilot.database.disable_contact", return_value=same),
+    ):
+        result = runner.invoke(
+            main,
+            ["contact", "disable", same.id, "--reason", "bounced: hard"],
+        )
+
+    assert result.exit_code == 0, result.output
+    err = result.stderr
+    assert "event=contact.disable" in err
+    assert "changed=[]" in err
+
+
+def test_contact_disable_new_reason_marks_changed(
+    runner: CliRunner,
+    mock_connection: MagicMock,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    before = _make_contact(disabled_reason="bounced: hard")
+    after = _make_contact(disabled_reason="unsubscribed: replied")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_contact", return_value=before),
+        patch("mailpilot.database.disable_contact", return_value=after),
+    ):
+        result = runner.invoke(
+            main,
+            ["contact", "disable", before.id, "--reason", "unsubscribed: replied"],
+        )
+
+    assert result.exit_code == 0, result.output
+    err = result.stderr
+    assert "changed=['disabled_reason']" in err
+
+
+def test_contact_disable_emits_error_on_db_raise(
+    runner: CliRunner,
+    mock_connection: MagicMock,
+    capfire: CaptureLogfire,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    before = _make_contact(disabled_reason=None)
+    boom = psycopg.OperationalError("db down")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_contact", return_value=before),
+        patch("mailpilot.database.disable_contact", side_effect=boom),
+    ):
+        result = runner.invoke(
+            main,
+            ["contact", "disable", before.id, "--reason", "bounced: hard"],
+        )
+
+    assert result.exit_code != 0
+    assert _err_event(result.stderr, "contact.disable") is not None
+    failed = _spans_named(capfire, "contact.disable.failed")
+    assert failed
+    assert failed[0]["attributes"]["logfire.level_num"] >= 17
+
+
 def test_contact_import_idempotent_on_duplicate_rows(
     runner: CliRunner,
     mock_connection: MagicMock,

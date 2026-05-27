@@ -821,6 +821,44 @@ def contact_update(
         connection.close()
 
 
+@contact.command("disable")
+@click.argument("contact_id")
+@click.option(
+    "--reason",
+    required=True,
+    help="Explanation written to disabled_reason.",
+)
+def contact_disable(contact_id: str, reason: str) -> None:
+    """Soft-disable a contact by writing disabled_reason."""
+    from mailpilot.database import disable_contact, get_contact, initialize_database
+    from mailpilot.operator_log import cli_mutation, operator_event
+
+    if reason.strip() == "":
+        output_error("reason cannot be empty", "validation_error")
+    connection = initialize_database(_database_url())
+    try:
+        before = get_contact(connection, contact_id)
+        if before is None:
+            output_error(f"contact not found: {contact_id}", "not_found")
+        with cli_mutation("contact", "disable", entity_id=contact_id):
+            updated = disable_contact(connection, contact_id, reason)
+            if updated is None:
+                output_error(f"contact not found: {contact_id}", "not_found")
+            changed = (
+                ["disabled_reason"]
+                if before.disabled_reason != updated.disabled_reason
+                else []
+            )
+            operator_event(
+                "contact.disable",
+                entity_id=contact_id,
+                changed=changed,
+            )
+            output_entity("contact", updated)
+    finally:
+        connection.close()
+
+
 @contact.command("search")
 @click.argument("query")
 @click.option("--limit", default=100, help="Maximum results.")

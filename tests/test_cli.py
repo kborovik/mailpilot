@@ -1119,6 +1119,88 @@ def test_contact_update_not_found(
     assert data["error"] == "not_found"
 
 
+# -- contact disable -----------------------------------------------------------
+
+
+def test_contact_disable_happy_path(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    before = _make_contact(disabled_reason=None)
+    after = _make_contact(disabled_reason="bounced: hard")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_contact", return_value=before),
+        patch("mailpilot.database.disable_contact", return_value=after) as mock_disable,
+    ):
+        result = runner.invoke(
+            main,
+            ["contact", "disable", before.id, "--reason", "bounced: hard"],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_disable.assert_called_once_with(mock_connection, before.id, "bounced: hard")
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["contact"]["disabled_reason"] == "bounced: hard"
+
+
+def test_contact_disable_empty_reason(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_contact") as mock_get,
+        patch("mailpilot.database.disable_contact") as mock_disable,
+    ):
+        result = runner.invoke(
+            main,
+            ["contact", "disable", "any-id", "--reason", "   "],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "validation_error"
+    mock_get.assert_not_called()
+    mock_disable.assert_not_called()
+
+
+def test_contact_disable_missing_reason(runner: CliRunner) -> None:
+    result = runner.invoke(main, ["contact", "disable", "any-id"])
+    assert result.exit_code != 0
+    assert "--reason" in result.output
+
+
+def test_contact_disable_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_contact", return_value=None),
+        patch("mailpilot.database.disable_contact") as mock_disable,
+    ):
+        result = runner.invoke(
+            main,
+            ["contact", "disable", "nonexistent-id", "--reason", "spam"],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "not_found"
+    mock_disable.assert_not_called()
+
+
+def test_contact_disable_help_lists_verb(runner: CliRunner) -> None:
+    result = runner.invoke(main, ["contact", "--help"])
+    assert result.exit_code == 0
+    for verb in ("create", "update", "disable", "search", "list", "view"):
+        assert verb in result.output
+
+
 # -- contact search ------------------------------------------------------------
 
 
