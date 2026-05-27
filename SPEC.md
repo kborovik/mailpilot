@@ -21,9 +21,9 @@ Agent-operated CRM. Gmail = comms layer. Claude Code = strategist; internal Pyda
 
 - cli: `mailpilot <noun> <verb> [args]` → JSON on stdout, exit code 0 ∨ 1, errors to stderr.
   - nouns: `account`, `company`, `contact`, `workflow`, `enrollment`, `task`, `email`, `activity`, `tag`, `note`, `template`.
-  - verbs: `list|search|view|create|update|add|remove|reply|send|start|stop|cancel|retry|run|sync|export|import`.
+  - verbs: `list|search|view|create|update|disable|add|remove|reply|send|start|stop|cancel|retry|run|sync|export|import`.
   - top-level: `run` (sync & task loop), `status`, `config get|set`, global `--version|--debug|--completion|--skill`.
-  - envelope: `list|search|sync|export|import` → `{"<plural>": [...], "ok": true}`; `view|create|update|add|remove|reply|send|start|stop|cancel|retry` → `{"<singular>": {...}, "ok": true}`; err → `{"error": CODE, "message": TEXT, "ok": false}`.
+  - envelope: `list|search|sync|export|import` → `{"<plural>": [...], "ok": true}`; `view|create|update|disable|add|remove|reply|send|start|stop|cancel|retry` → `{"<singular>": {...}, "ok": true}`; err → `{"error": CODE, "message": TEXT, "ok": false}`.
   - `template` = read-only, code-defined (registry in `src/mailpilot/agent/templates.py` per §V.32). Verbs: `list [--direction inbound|outbound]`, `view NAME`. ⊥ create/update/delete — new template = code change + PR.
 - agent tools (`src/mailpilot/agent/tools.py`): `send_email`, `reply_email`, `search_emails`, `read_email`, `read_contact`, `read_company`, `list_enrollments`, `create_task`, `cancel_task`, `record_enrollment_outcome`, `disable_contact`, `list_drive_markdown`, `read_drive_markdown`, `search_drive_markdown`, `noop`. ∀ tool → typed sig, dict return, err dict on failure.
 - pubsub (`src/mailpilot/pubsub.py`): topic `mailpilot-topic-dev`, sub `mailpilot-sub-dev` (defaults; per-env override via `MAILPILOT_GOOGLE_PUBSUB_TOPIC` / `..._SUBSCRIPTION`). `setup_pubsub()` idempotent. `start_subscriber(settings, callback)` streaming pull. `make_notification_callback(queue, wakeup_event)` decode → enqueue → `wakeup_event.set()`. `renew_watches()` refresh @ T-24h.
