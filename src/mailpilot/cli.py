@@ -1513,9 +1513,17 @@ def tag_remove(contact_id: str | None, company_id: str | None, name: str) -> Non
                 name=deleted.name,
                 owner_type=owner[0],
                 owner_id=owner[1],
-                changed=["name"],
+                changed=[f"{owner[0]}_id", "name"],
             )
-            output_entity("tag", deleted)
+            output(
+                {
+                    "tag": {
+                        "name": deleted.name,
+                        "owner_type": owner[0],
+                        "owner_id": owner[1],
+                    }
+                }
+            )
     finally:
         connection.close()
 
@@ -2627,9 +2635,16 @@ def enrollment_remove(workflow_id: str, contact_id: str) -> None:
                 "enrollment.remove",
                 workflow_id=workflow_id,
                 contact_id=contact_id,
-                changed=["status"],
+                changed=["workflow_id", "contact_id"],
             )
-            output_entity("enrollment", deleted)
+            output(
+                {
+                    "enrollment": {
+                        "workflow_id": workflow_id,
+                        "contact_id": contact_id,
+                    }
+                }
+            )
     finally:
         connection.close()
 

@@ -4600,6 +4600,12 @@ def test_tag_add_rejects_invalid_name(
 
 
 def test_tag_remove(runner: CliRunner, mock_connection: MagicMock) -> None:
+    """§V.5 hard-DELETE branch: payload ≡ natural-identifier projection only.
+
+    §V.47: `remove` operator-event `changed` ≡ relational key set
+    (composite key for contact-tag is `(contact_id, name)`).
+    Regression guard against §B.33 (pre-delete entity blob leaked into response).
+    """
     contact = _make_contact()
     removed = _make_tag(contact_id="cid-1", name="prospect")
     with (
@@ -4609,6 +4615,7 @@ def test_tag_remove(runner: CliRunner, mock_connection: MagicMock) -> None:
             "mailpilot.database.remove_contact_tag", return_value=removed
         ) as mock_delete,
         patch("mailpilot.database.get_contact", return_value=contact),
+        patch("mailpilot.operator_log.operator_event") as mock_event,
     ):
         result = runner.invoke(
             main,
@@ -4623,9 +4630,21 @@ def test_tag_remove(runner: CliRunner, mock_connection: MagicMock) -> None:
     )
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["tag"]["name"] == "prospect"
-    assert data["tag"]["contact_id"] == "cid-1"
-    assert data["tag"]["company_id"] is None
+    assert data["tag"] == {
+        "name": "prospect",
+        "owner_type": "contact",
+        "owner_id": "cid-1",
+    }
+    remove_events = [
+        call for call in mock_event.call_args_list if call.args[:1] == ("tag.remove",)
+    ]
+    assert len(remove_events) == 1
+    assert remove_events[0].kwargs == {
+        "name": "prospect",
+        "owner_type": "contact",
+        "owner_id": "cid-1",
+        "changed": ["contact_id", "name"],
+    }
 
 
 def test_tag_remove_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:
@@ -5535,6 +5554,11 @@ def test_enrollment_add_self_loop_case_insensitive(
 
 
 def test_enrollment_remove(runner: CliRunner, mock_connection: MagicMock) -> None:
+    """§V.5 hard-DELETE branch: payload ≡ composite-key projection only.
+
+    §V.47: `remove` operator-event `changed` ≡ relational key set.
+    Regression guard against §B.33 (pre-delete `status` leaked into response).
+    """
     removed = _make_enrollment(status="paused")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
@@ -5542,6 +5566,7 @@ def test_enrollment_remove(runner: CliRunner, mock_connection: MagicMock) -> Non
         patch(
             "mailpilot.database.delete_enrollment", return_value=removed
         ) as mock_delete,
+        patch("mailpilot.operator_log.operator_event") as mock_event,
     ):
         result = runner.invoke(
             main,
@@ -5559,9 +5584,21 @@ def test_enrollment_remove(runner: CliRunner, mock_connection: MagicMock) -> Non
     mock_delete.assert_called_once_with(mock_connection, _WORKFLOW_ID, _CONTACT_ID)
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["enrollment"]["workflow_id"] == _WORKFLOW_ID
-    assert data["enrollment"]["contact_id"] == _CONTACT_ID
-    assert data["enrollment"]["status"] == "paused"
+    assert data["enrollment"] == {
+        "workflow_id": _WORKFLOW_ID,
+        "contact_id": _CONTACT_ID,
+    }
+    remove_events = [
+        call
+        for call in mock_event.call_args_list
+        if call.args[:1] == ("enrollment.remove",)
+    ]
+    assert len(remove_events) == 1
+    assert remove_events[0].kwargs == {
+        "workflow_id": _WORKFLOW_ID,
+        "contact_id": _CONTACT_ID,
+        "changed": ["workflow_id", "contact_id"],
+    }
 
 
 def test_enrollment_remove_not_found(
