@@ -10,10 +10,12 @@ Convention:
     update_X(connection, id, ...) -> X
 """
 
+import hashlib
 import re
 import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
+from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from typing import Any, cast
 
@@ -41,6 +43,7 @@ from mailpilot.models import (
     EnrollmentWithOutcome,
     Note,
     NoteSummary,
+    SchemaMetadata,
     SyncStatus,
     Tag,
     Task,
@@ -48,6 +51,9 @@ from mailpilot.models import (
     Workflow,
     WorkflowSummary,
 )
+from mailpilot.operator_log import operator_event
+
+_MAILPILOT_VERSION = _pkg_version("mailpilot")
 
 _INLINE_NOTES_CAP = 10
 
@@ -81,6 +87,41 @@ def _build_update(
     )
 
 
+def _compute_schema_hash(sql: str) -> str:
+    """Hash schema.sql modulo comments and whitespace (§V.59).
+
+    Strips `--` line comments, collapses whitespace runs to single spaces,
+    then takes a sha256. Reformatting (added comments, blank-line shuffles)
+    leaves the hash stable; column / table changes flip it.
+    """
+    normalized = re.sub(r"--[^\n]*", "", sql)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _read_schema_metadata(
+    connection: psycopg.Connection[dict[str, Any]],
+) -> SchemaMetadata | None:
+    """Return the singleton `schema_metadata` row, or None if missing.
+
+    Row-missing and table-missing both collapse to None per §V.58 — both
+    are "drift" branches from the caller's view.
+    """
+    try:
+        row = connection.execute(
+            "SELECT mailpilot_version, schema_hash, applied_at "
+            "FROM schema_metadata WHERE id = 1"
+        ).fetchone()
+    except psycopg.errors.UndefinedTable:
+        # Even under autocommit=True, psycopg3 surfaces a failed-transaction
+        # state on the following query unless the rolled-back state is cleared.
+        connection.rollback()
+        return None
+    if row is None:
+        return None
+    return SchemaMetadata.model_validate(row)
+
+
 def initialize_database(database_url: str) -> psycopg.Connection[dict[str, Any]]:
     """Open a PostgreSQL connection and apply the schema.
 
@@ -112,10 +153,35 @@ def initialize_database(database_url: str) -> psycopg.Connection[dict[str, Any]]
     # INSERT INTO task (RowExclusiveLock). New columns/tables added to the
     # schema still flow through the canonical `make clean` workflow, which
     # drops everything and re-applies on an empty database.
+    schema_sql = SCHEMA_PATH.read_text()
+    current_hash = _compute_schema_hash(schema_sql)
     probe = connection.execute("SELECT to_regclass('account') AS oid").fetchone()  # type: ignore[union-attr]
     if probe is None or probe.get("oid") is None:
-        schema_sql = SCHEMA_PATH.read_text()
         connection.execute(schema_sql)  # type: ignore[arg-type]
+        connection.execute(
+            "INSERT INTO schema_metadata (mailpilot_version, schema_hash) "
+            "VALUES (%s, %s)",
+            (_MAILPILOT_VERSION, current_hash),
+        )
+    else:
+        recorded = _read_schema_metadata(connection)
+        if recorded is None or recorded.schema_hash != current_hash:
+            recorded_version = recorded.mailpilot_version if recorded else None
+            recorded_hash = recorded.schema_hash if recorded else None
+            logfire.warn(
+                "schema drift detected",
+                recorded_version=recorded_version,
+                current_version=_MAILPILOT_VERSION,
+                recorded_hash=recorded_hash,
+                current_hash=current_hash,
+            )
+            operator_event(
+                "schema.drift",
+                recorded_version=recorded_version,
+                current_version=_MAILPILOT_VERSION,
+                recorded_hash=recorded_hash,
+                current_hash=current_hash,
+            )
     connection.autocommit = False
     return connection
 
@@ -149,6 +215,34 @@ def get_status_counts(
             FROM (SELECT 1) AS _dummy
             """
         ).fetchone()
+        current_hash = _compute_schema_hash(SCHEMA_PATH.read_text())
+        recorded = _read_schema_metadata(connection)
+        schema_metadata_block: dict[str, object]
+        if recorded is None:
+            schema_metadata_block = {
+                "mailpilot_version": None,
+                "schema_hash": None,
+                "applied_at": None,
+                "drift": True,
+                "current_version": _MAILPILOT_VERSION,
+                "current_hash": current_hash,
+            }
+        elif recorded.schema_hash != current_hash:
+            schema_metadata_block = {
+                "mailpilot_version": recorded.mailpilot_version,
+                "schema_hash": recorded.schema_hash,
+                "applied_at": recorded.applied_at.isoformat(),
+                "drift": True,
+                "current_version": _MAILPILOT_VERSION,
+                "current_hash": current_hash,
+            }
+        else:
+            schema_metadata_block = {
+                "mailpilot_version": recorded.mailpilot_version,
+                "schema_hash": recorded.schema_hash,
+                "applied_at": recorded.applied_at.isoformat(),
+                "drift": False,
+            }
         return {
             "accounts": row["accounts"],  # type: ignore[index]
             "companies": row["companies"],  # type: ignore[index]
@@ -158,6 +252,7 @@ def get_status_counts(
             "activities": row["activities"],  # type: ignore[index]
             "tags": row["tags"],  # type: ignore[index]
             "notes": row["notes"],  # type: ignore[index]
+            "schema_metadata": schema_metadata_block,
         }
 
 

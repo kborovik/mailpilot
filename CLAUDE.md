@@ -111,7 +111,7 @@ Pydantic Logfire (OTel-based). `import logfire` directly — ⊥ per-module logg
 - Token: `mailpilot config set logfire_token <T>` ∨ `LOGFIRE_TOKEN` env.
 - Cloud send: `send_to_logfire='if-token-present'`.
 
-**Operator log.** `src/mailpilot/operator_log.py` → `operator_event(name, **fields)` → stderr line `HH:MM:SS event=NAME k1=v1 ...`. Always on. Curated events: `loop.start`, `loop.tick`, `loop.stop`, `pubsub.notify`, `sync.account`, `route.match`, `route.no_match`, `agent.run`, `task.drain`, `error`. ∀ new `logfire.exception` site reachable from `mailpilot run` ! paired `operator_event("error", source=<event>, message=str(exc))` per §V.19. Newlines in field values → spaces (one-line-per-event contract).
+**Operator log.** `src/mailpilot/operator_log.py` → `operator_event(name, **fields)` → stderr line `HH:MM:SS event=NAME k1=v1 ...`. Always on. Curated events: `loop.start`, `loop.tick`, `loop.stop`, `pubsub.notify`, `sync.account`, `route.match`, `route.no_match`, `agent.run`, `task.drain`, `schema.drift`, `error`. ∀ new `logfire.exception` site reachable from `mailpilot run` ! paired `operator_event("error", source=<event>, message=str(exc))` per §V.19. Newlines in field values → spaces (one-line-per-event contract).
 
 **Cloud project.** `mailpilot` (token-scoped). MCP queries ! `project='mailpilot'`, filter `WHERE deployment_environment = '<env>'` (§V.22).
 

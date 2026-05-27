@@ -205,3 +205,10 @@ CREATE TABLE IF NOT EXISTS sync_status (
     started_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     heartbeat_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS schema_metadata (
+    id                 INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    mailpilot_version  TEXT NOT NULL,
+    schema_hash        TEXT NOT NULL,
+    applied_at         TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

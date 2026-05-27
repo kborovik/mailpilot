@@ -408,3 +408,14 @@ class SyncStatus(BaseModel):
     pid: int
     started_at: datetime
     heartbeat_at: datetime
+
+
+class SchemaMetadata(BaseModel):
+    """Singleton row recording version + normalized schema hash.
+
+    Written at schema-apply time per §V.58.
+    """
+
+    mailpilot_version: str
+    schema_hash: str
+    applied_at: datetime

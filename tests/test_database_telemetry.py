@@ -4,13 +4,18 @@ Verifies that ``database connection failed`` error log is emitted when
 the database connection fails (e.g. database does not exist).
 """
 
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 from logfire.testing import CaptureLogfire
 
-from mailpilot.database import initialize_database
+from mailpilot.database import (
+    _MAILPILOT_VERSION,  # pyright: ignore[reportPrivateUsage]
+    _compute_schema_hash,  # pyright: ignore[reportPrivateUsage]
+    initialize_database,
+)
 
 
 def _db_spans(capfire: CaptureLogfire, name: str) -> list[dict[str, Any]]:
@@ -47,11 +52,31 @@ def test_initialize_database_skips_schema_when_account_table_exists():
     Probing for ``account`` via ``to_regclass`` is the cheap idempotency
     gate that avoids the lock entirely on already-initialized databases.
     """
+    probe_cursor = MagicMock()
+    probe_cursor.fetchone.return_value = {"oid": "account"}
+
+    # schema_metadata read returns a matching hash so no drift fires.
+    from mailpilot.database import SCHEMA_PATH
+
+    current_hash = _compute_schema_hash(SCHEMA_PATH.read_text())
+    metadata_cursor = MagicMock()
+    metadata_cursor.fetchone.return_value = {
+        "mailpilot_version": _MAILPILOT_VERSION,
+        "schema_hash": current_hash,
+        "applied_at": datetime(2026, 1, 1, tzinfo=UTC),
+    }
+
     mock_conn = MagicMock()
-    mock_cursor = MagicMock()
-    # Probe returns a non-None oid -- table exists.
-    mock_cursor.fetchone.return_value = {"oid": "account"}
-    mock_conn.execute.return_value = mock_cursor
+
+    def execute_side_effect(query: Any, *_params: Any) -> MagicMock:
+        text = str(query)
+        if "to_regclass" in text:
+            return probe_cursor
+        if "schema_metadata" in text:
+            return metadata_cursor
+        return MagicMock()
+
+    mock_conn.execute.side_effect = execute_side_effect
 
     with patch("mailpilot.database.psycopg.connect", return_value=mock_conn):
         initialize_database("postgresql://localhost/test")
