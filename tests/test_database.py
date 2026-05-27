@@ -47,7 +47,7 @@ from mailpilot.database import (
     get_last_cold_outbound,
     get_latest_email_in_thread,
     get_note,
-    get_status_counts,
+    get_status_payload,
     get_unprocessed_inbound_email,
     get_workflow,
     list_accounts,
@@ -1826,12 +1826,16 @@ def test_create_activity_requires_contact_or_company(
         )
 
 
-def test_status_counts_includes_activities(
+def test_status_payload_counts_block_includes_activities(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
+    from conftest import make_test_settings
+
     contact = make_test_contact(database_connection)
     make_test_activity(database_connection, contact_id=contact.id)
-    counts = get_status_counts(database_connection)
+    payload = get_status_payload(database_connection, make_test_settings())
+    counts = payload["counts"]
+    assert isinstance(counts, dict)
     assert counts["activities"] == 1
 
 
@@ -2010,12 +2014,16 @@ def test_search_tags_with_owner(
     assert results[0].contact_id == contact.id
 
 
-def test_status_counts_includes_tags(
+def test_status_payload_counts_block_includes_tags(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
+    from conftest import make_test_settings
+
     contact = make_test_contact(database_connection)
     make_test_tag(database_connection, contact_id=contact.id)
-    counts = get_status_counts(database_connection)
+    payload = get_status_payload(database_connection, make_test_settings())
+    counts = payload["counts"]
+    assert isinstance(counts, dict)
     assert counts["tags"] == 1
 
 
@@ -2254,12 +2262,16 @@ def test_get_note_not_found(
     assert found is None
 
 
-def test_status_counts_includes_notes(
+def test_status_payload_counts_block_includes_notes(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
+    from conftest import make_test_settings
+
     contact = make_test_contact(database_connection)
     make_test_note(database_connection, contact_id=contact.id)
-    counts = get_status_counts(database_connection)
+    payload = get_status_payload(database_connection, make_test_settings())
+    counts = payload["counts"]
+    assert isinstance(counts, dict)
     assert counts["notes"] == 1
 
 

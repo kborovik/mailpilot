@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS account (
     gmail_history_id     TEXT,
     watch_expiration     TIMESTAMPTZ,
     last_synced_at       TIMESTAMPTZ,
+    disabled_reason      TEXT,
     created_at           TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

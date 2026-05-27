@@ -12,6 +12,7 @@ Convention:
 
 import hashlib
 import re
+import urllib.parse
 import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
@@ -52,6 +53,7 @@ from mailpilot.models import (
     WorkflowSummary,
 )
 from mailpilot.operator_log import operator_event
+from mailpilot.settings import SECRET_KEYS, Settings
 
 _MAILPILOT_VERSION = _pkg_version("mailpilot")
 
@@ -189,70 +191,226 @@ def initialize_database(database_url: str) -> psycopg.Connection[dict[str, Any]]
 # -- Status --------------------------------------------------------------------
 
 
-def get_status_counts(
+def _scrub_database_url(url: str) -> str:
+    """Reduce a PostgreSQL URL to ``scheme://host[:port]/db``, dropping creds.
+
+    Uses ``urllib.parse.urlsplit`` so a passwordless URL round-trips unchanged
+    and a credentialed URL loses its userinfo netloc segment. Path is preserved
+    verbatim (the leading ``/`` is part of urlsplit's ``path``).
+    """
+    parts = urllib.parse.urlsplit(url)
+    host = parts.hostname or ""
+    netloc = f"{host}:{parts.port}" if parts.port is not None else host
+    return urllib.parse.urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+
+
+def _schema_block(
     connection: psycopg.Connection[dict[str, Any]],
 ) -> dict[str, object]:
-    """Get summary counts for the status command.
+    """Return the `schema` block shape per §V.58: {hash, applied_at, drift}.
+
+    Drift branches (row missing, table missing, hash mismatch) all surface
+    ``drift: true`` with whatever recorded values exist (or ``null``).
+    """
+    current_hash = _compute_schema_hash(SCHEMA_PATH.read_text())
+    recorded = _read_schema_metadata(connection)
+    if recorded is None:
+        return {"hash": None, "applied_at": None, "drift": True}
+    drift = recorded.schema_hash != current_hash
+    return {
+        "hash": recorded.schema_hash,
+        "applied_at": recorded.applied_at.isoformat(),
+        "drift": drift,
+    }
+
+
+def _sync_loop_block(
+    connection: psycopg.Connection[dict[str, Any]],
+) -> dict[str, object] | None:
+    """Return the `sync_loop` block per §V.60, or None when not running."""
+    row = connection.execute(
+        """\
+        SELECT
+            pid,
+            started_at,
+            heartbeat_at,
+            EXTRACT(EPOCH FROM (now() - heartbeat_at))::int AS heartbeat_age_seconds
+        FROM sync_status WHERE id = 'singleton'
+        """
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "running": True,
+        "pid": row["pid"],  # type: ignore[index]
+        "started_at": row["started_at"].isoformat(),  # type: ignore[index]
+        "heartbeat_at": row["heartbeat_at"].isoformat(),  # type: ignore[index]
+        "heartbeat_age_seconds": row["heartbeat_age_seconds"],  # type: ignore[index]
+    }
+
+
+def _accounts_block(
+    connection: psycopg.Connection[dict[str, Any]],
+) -> list[dict[str, object]]:
+    """Return per-account status rows per §V.60.
+
+    Server-computed ages (``last_synced_age_seconds``, ``watch_expires_in_hours``)
+    avoid Python clock skew; null inputs → null ages.
+    """
+    rows = connection.execute(
+        """\
+        SELECT
+            id,
+            email,
+            (disabled_reason IS NOT NULL) AS disabled,
+            gmail_history_id,
+            watch_expiration,
+            last_synced_at,
+            EXTRACT(EPOCH FROM (now() - last_synced_at))::int
+                AS last_synced_age_seconds,
+            (EXTRACT(EPOCH FROM (watch_expiration - now()))::int / 3600)
+                AS watch_expires_in_hours
+        FROM account
+        ORDER BY email
+        """
+    ).fetchall()
+    accounts: list[dict[str, object]] = []
+    for row in rows:
+        watch_expiration = row["watch_expiration"]
+        last_synced_at = row["last_synced_at"]
+        accounts.append(
+            {
+                "id": row["id"],
+                "email": row["email"],
+                "disabled": row["disabled"],
+                "last_synced_at": (
+                    last_synced_at.isoformat() if last_synced_at is not None else None
+                ),
+                "last_synced_age_seconds": row["last_synced_age_seconds"],
+                "gmail_history_id": row["gmail_history_id"],
+                "watch_expiration": (
+                    watch_expiration.isoformat()
+                    if watch_expiration is not None
+                    else None
+                ),
+                "watch_expires_in_hours": row["watch_expires_in_hours"],
+            }
+        )
+    return accounts
+
+
+def _tasks_block(
+    connection: psycopg.Connection[dict[str, Any]],
+) -> dict[str, object]:
+    """Return task-queue aggregates per §V.60.
+
+    Single SQL statement: pending counts split by due-vs-future, oldest
+    pending age (due-only), max attempt_count among pending, and failed_24h.
+    """
+    row = connection.execute(
+        """\
+        SELECT
+            (SELECT count(*) FROM task WHERE status = 'pending') AS pending,
+            (SELECT count(*) FROM task
+             WHERE status = 'pending' AND scheduled_at > now())
+                AS scheduled_future,
+            (SELECT EXTRACT(EPOCH FROM (now() - min(scheduled_at)))::int
+             FROM task
+             WHERE status = 'pending' AND scheduled_at <= now())
+                AS oldest_pending_age_seconds,
+            (SELECT max(attempt_count) FROM task WHERE status = 'pending')
+                AS max_attempt_count_pending,
+            (SELECT count(*) FROM task
+             WHERE status = 'failed'
+               AND completed_at >= now() - interval '24 hours')
+                AS failed_24h
+        """
+    ).fetchone()
+    return {
+        "pending": row["pending"],  # type: ignore[index]
+        "failed_24h": row["failed_24h"],  # type: ignore[index]
+        "scheduled_future": row["scheduled_future"],  # type: ignore[index]
+        "oldest_pending_age_seconds": row["oldest_pending_age_seconds"],  # type: ignore[index]
+        "max_attempt_count_pending": row["max_attempt_count_pending"],  # type: ignore[index]
+    }
+
+
+def _counts_block(
+    connection: psycopg.Connection[dict[str, Any]],
+) -> dict[str, object]:
+    """Return entity counts (sanity tail per §V.60). ``accounts`` excluded."""
+    row = connection.execute(
+        """\
+        SELECT
+            (SELECT COUNT(*) FROM company) AS companies,
+            (SELECT COUNT(*) FROM contact) AS contacts,
+            (SELECT COUNT(*) FROM workflow) AS workflows,
+            (SELECT COUNT(*) FROM email) AS emails,
+            (SELECT COUNT(*) FROM activity) AS activities,
+            (SELECT COUNT(*) FROM tag) AS tags,
+            (SELECT COUNT(*) FROM note) AS notes
+        """
+    ).fetchone()
+    return {
+        "companies": row["companies"],  # type: ignore[index]
+        "contacts": row["contacts"],  # type: ignore[index]
+        "workflows": row["workflows"],  # type: ignore[index]
+        "emails": row["emails"],  # type: ignore[index]
+        "activities": row["activities"],  # type: ignore[index]
+        "tags": row["tags"],  # type: ignore[index]
+        "notes": row["notes"],  # type: ignore[index]
+    }
+
+
+def _config_block(settings: Settings) -> dict[str, object]:
+    """Return the `config` block per §V.60.
+
+    Secret keys collapsed to ``*_set: bool`` so values never reach agent
+    transcripts or Logfire spans. ``database_url`` is scrubbed of userinfo
+    rather than dropped entirely so operators can still see host/db/port.
+    """
+    assert "anthropic_api_key" in SECRET_KEYS
+    assert "logfire_token" in SECRET_KEYS
+    assert "database_url" in SECRET_KEYS
+    return {
+        "anthropic_api_key_set": bool(settings.anthropic_api_key),
+        "anthropic_model": settings.anthropic_model,
+        "logfire_environment": settings.logfire_environment,
+        "logfire_token_set": bool(settings.logfire_token),
+        "google_pubsub_topic": settings.google_pubsub_topic,
+        "google_pubsub_subscription": settings.google_pubsub_subscription,
+        "database_url": _scrub_database_url(str(settings.database_url)),
+    }
+
+
+def get_status_payload(
+    connection: psycopg.Connection[dict[str, Any]],
+    settings: Settings,
+) -> dict[str, object]:
+    """Build the full ``mailpilot status`` payload per §V.60.
+
+    Top-level blocks (``version``, ``schema``, ``sync_loop``, ``accounts``,
+    ``tasks``, ``config``, ``counts``) are layout-stable for LLM-agent
+    troubleshooting; secrets are collapsed to booleans and the database URL
+    is scrubbed (§V.60).
 
     Args:
         connection: Open database connection.
+        settings: Loaded settings (callers pass ``get_settings()``).
 
     Returns:
-        Dict with accounts, companies, contacts, workflows, emails counts.
+        Dict matching the §V.60 envelope, ready to wrap as
+        ``{"status": <payload>, "ok": true}``.
     """
-    with logfire.span("db.status.counts"):
-        row = connection.execute(
-            """\
-            SELECT
-                (SELECT COUNT(*) FROM account) AS accounts,
-                (SELECT COUNT(*) FROM company) AS companies,
-                (SELECT COUNT(*) FROM contact) AS contacts,
-                (SELECT COUNT(*) FROM workflow) AS workflows,
-                (SELECT COUNT(*) FROM email) AS emails,
-                (SELECT COUNT(*) FROM activity) AS activities,
-                (SELECT COUNT(*) FROM tag) AS tags,
-                (SELECT COUNT(*) FROM note) AS notes
-            FROM (SELECT 1) AS _dummy
-            """
-        ).fetchone()
-        current_hash = _compute_schema_hash(SCHEMA_PATH.read_text())
-        recorded = _read_schema_metadata(connection)
-        schema_metadata_block: dict[str, object]
-        if recorded is None:
-            schema_metadata_block = {
-                "mailpilot_version": None,
-                "schema_hash": None,
-                "applied_at": None,
-                "drift": True,
-                "current_version": _MAILPILOT_VERSION,
-                "current_hash": current_hash,
-            }
-        elif recorded.schema_hash != current_hash:
-            schema_metadata_block = {
-                "mailpilot_version": recorded.mailpilot_version,
-                "schema_hash": recorded.schema_hash,
-                "applied_at": recorded.applied_at.isoformat(),
-                "drift": True,
-                "current_version": _MAILPILOT_VERSION,
-                "current_hash": current_hash,
-            }
-        else:
-            schema_metadata_block = {
-                "mailpilot_version": recorded.mailpilot_version,
-                "schema_hash": recorded.schema_hash,
-                "applied_at": recorded.applied_at.isoformat(),
-                "drift": False,
-            }
+    with logfire.span("db.status.payload"):
         return {
-            "accounts": row["accounts"],  # type: ignore[index]
-            "companies": row["companies"],  # type: ignore[index]
-            "contacts": row["contacts"],  # type: ignore[index]
-            "workflows": row["workflows"],  # type: ignore[index]
-            "emails": row["emails"],  # type: ignore[index]
-            "activities": row["activities"],  # type: ignore[index]
-            "tags": row["tags"],  # type: ignore[index]
-            "notes": row["notes"],  # type: ignore[index]
-            "schema_metadata": schema_metadata_block,
+            "version": _MAILPILOT_VERSION,
+            "schema": _schema_block(connection),
+            "sync_loop": _sync_loop_block(connection),
+            "accounts": _accounts_block(connection),
+            "tasks": _tasks_block(connection),
+            "config": _config_block(settings),
+            "counts": _counts_block(connection),
         }
 
 

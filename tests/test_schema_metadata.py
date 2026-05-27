@@ -13,12 +13,13 @@ import psycopg
 import pytest
 from logfire.testing import CaptureLogfire
 
+from conftest import make_test_settings
 from mailpilot import database as db_mod
 from mailpilot.database import (
     _MAILPILOT_VERSION,  # pyright: ignore[reportPrivateUsage]
     SCHEMA_PATH,
     _compute_schema_hash,  # pyright: ignore[reportPrivateUsage]
-    get_status_counts,
+    get_status_payload,
     initialize_database,
 )
 from mailpilot.models import SchemaMetadata
@@ -195,28 +196,29 @@ def test_initialize_legacy_db_drift_via_missing_table(
     assert "recorded_hash=None" in err
 
 
-# -- get_status_counts schema_metadata block (§V.58 envelope) -----------------
+# -- get_status_payload schema block (§V.58/§V.60 envelope) -------------------
 
 
-def test_status_envelope_no_drift_omits_current_fields(
+def test_status_envelope_no_drift_schema_block_shape(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    counts = get_status_counts(database_connection)
-    block = counts["schema_metadata"]
+    """No drift → ``schema`` exposes {hash, applied_at, drift=false} only."""
+    payload = get_status_payload(database_connection, make_test_settings())
+    block = payload["schema"]
     assert isinstance(block, dict)
+    assert set(block.keys()) == {"hash", "applied_at", "drift"}
     assert block["drift"] is False
-    assert block["mailpilot_version"] == _MAILPILOT_VERSION
     current_hash = _compute_schema_hash(SCHEMA_PATH.read_text())
-    assert block["schema_hash"] == current_hash
+    assert block["hash"] == current_hash
     assert isinstance(block["applied_at"], str)
-    assert "current_version" not in block
-    assert "current_hash" not in block
+    assert payload["version"] == _MAILPILOT_VERSION
 
 
-def test_status_envelope_drift_includes_current_fields(
+def test_status_envelope_drift_hash_mismatch(
     database_connection: psycopg.Connection[dict[str, Any]],
     monkeypatch: pytest.MonkeyPatch,
 ):
+    """Stale recorded hash → drift=true, recorded hash echoed verbatim."""
     stale = SchemaMetadata(
         mailpilot_version="0.0.0",
         schema_hash="deadbeef" * 8,
@@ -224,29 +226,25 @@ def test_status_envelope_drift_includes_current_fields(
     )
     monkeypatch.setattr(db_mod, "_read_schema_metadata", lambda _conn: stale)
 
-    counts = get_status_counts(database_connection)
-    block = counts["schema_metadata"]
+    payload = get_status_payload(database_connection, make_test_settings())
+    block = payload["schema"]
     assert isinstance(block, dict)
     assert block["drift"] is True
-    assert block["mailpilot_version"] == "0.0.0"
-    assert block["schema_hash"] == "deadbeef" * 8
-    assert block["current_version"] == _MAILPILOT_VERSION
-    current_hash = _compute_schema_hash(SCHEMA_PATH.read_text())
-    assert block["current_hash"] == current_hash
+    assert block["hash"] == "deadbeef" * 8
+    assert payload["version"] == _MAILPILOT_VERSION
 
 
 def test_status_envelope_drift_row_missing(
     database_connection: psycopg.Connection[dict[str, Any]],
     monkeypatch: pytest.MonkeyPatch,
 ):
+    """Missing row → drift=true with hash/applied_at = null."""
     monkeypatch.setattr(db_mod, "_read_schema_metadata", lambda _conn: None)
 
-    counts = get_status_counts(database_connection)
-    block = counts["schema_metadata"]
+    payload = get_status_payload(database_connection, make_test_settings())
+    block = payload["schema"]
     assert isinstance(block, dict)
     assert block["drift"] is True
-    assert block["mailpilot_version"] is None
-    assert block["schema_hash"] is None
+    assert block["hash"] is None
     assert block["applied_at"] is None
-    assert block["current_version"] == _MAILPILOT_VERSION
-    assert block["current_hash"] == _compute_schema_hash(SCHEMA_PATH.read_text())
+    assert payload["version"] == _MAILPILOT_VERSION

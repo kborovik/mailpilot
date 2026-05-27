@@ -17,6 +17,7 @@ class Account(BaseModel):
     gmail_history_id: str | None = None
     watch_expiration: datetime | None = None
     last_synced_at: datetime | None = None
+    disabled_reason: str | None = None
     created_at: datetime
     updated_at: datetime
 
