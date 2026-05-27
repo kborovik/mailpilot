@@ -717,6 +717,63 @@ def test_search_workflows_respects_limit(
     assert len(results) == 2
 
 
+def test_workflow_account_email_populated_across_returners(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.6 parent-NI clause: every ``Workflow`` / ``WorkflowSummary`` return
+    carries ``account_email`` joined from ``account.email``.
+    """
+    account = make_test_account(database_connection, email="owner@parent-ni.test")
+    created = make_test_workflow(database_connection, account_id=account.id)
+    assert created.account_id == account.id
+    assert created.account_email == "owner@parent-ni.test"
+
+    fetched = get_workflow(database_connection, created.id)
+    assert fetched is not None
+    assert fetched.account_email == "owner@parent-ni.test"
+
+    listed = list_workflows(database_connection, account_id=account.id)
+    assert len(listed) == 1
+    assert listed[0].account_id == account.id
+    assert listed[0].account_email == "owner@parent-ni.test"
+
+    full = list_workflows_full(database_connection, account.id)
+    assert len(full) == 1
+    assert full[0].account_email == "owner@parent-ni.test"
+
+    searched = search_workflows(database_connection, "Test")
+    assert searched[0].account_email == "owner@parent-ni.test"
+
+    updated = update_workflow(
+        database_connection,
+        created.id,
+        objective="Book demo",
+        instructions="Do.",
+    )
+    assert updated is not None
+    assert updated.account_email == "owner@parent-ni.test"
+
+    activated = activate_workflow(database_connection, created.id)
+    assert activated.account_email == "owner@parent-ni.test"
+
+    paused = pause_workflow(database_connection, created.id)
+    assert paused.account_email == "owner@parent-ni.test"
+
+
+def test_workflow_account_email_reflects_joined_account_per_workflow(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.6 parent-NI clause: JOIN scopes per workflow (no cross-talk)."""
+    a1 = make_test_account(database_connection, email="one@parent-ni.test")
+    a2 = make_test_account(database_connection, email="two@parent-ni.test")
+    make_test_workflow(database_connection, account_id=a1.id, name="W1")
+    make_test_workflow(database_connection, account_id=a2.id, name="W2")
+    listed = list_workflows(database_connection)
+    by_name = {row.name: row.account_email for row in listed}
+    assert by_name["W1"] == "one@parent-ni.test"
+    assert by_name["W2"] == "two@parent-ni.test"
+
+
 # -- Email ---------------------------------------------------------------------
 
 

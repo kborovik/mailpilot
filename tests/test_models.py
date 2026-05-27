@@ -57,6 +57,7 @@ def test_workflow_type_literal():
         template="outbound-general",
         type="outbound",
         account_id="a1",
+        account_email="a1@example.com",
         created_at=NOW,
         updated_at=NOW,
     )
@@ -72,6 +73,7 @@ def test_workflow_invalid_type_raises():
             template="outbound-general",
             type="invalid",  # type: ignore[arg-type]
             account_id="a1",
+            account_email="a1@example.com",
             created_at=NOW,
             updated_at=NOW,
         )

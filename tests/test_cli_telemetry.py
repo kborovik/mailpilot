@@ -82,6 +82,7 @@ def _make_workflow(**overrides: Any) -> Workflow:
         "template": "outbound-general",
         "type": "outbound",
         "account_id": _ACCOUNT_ID,
+        "account_email": "outbound@lab5.ca",
         "status": "draft",
         "theme": "blue",
         "objective": "",

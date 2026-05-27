@@ -958,6 +958,7 @@ def test_workflow_agent_has_explicit_name_for_otel_traces() -> None:
         template="outbound-general",
         type="outbound",
         account_id="01900000-0000-7000-8000-000000000002",
+        account_email="owner@example.com",
         status="active",
         objective="O",
         instructions="I",

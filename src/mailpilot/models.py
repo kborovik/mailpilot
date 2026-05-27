@@ -98,6 +98,7 @@ class Workflow(BaseModel):
     template: WorkflowTemplateName
     type: WorkflowType
     account_id: str
+    account_email: str
     status: WorkflowStatus = "draft"
     objective: str = ""
     instructions: str = ""
@@ -114,6 +115,7 @@ class WorkflowSummary(BaseModel):
     template: WorkflowTemplateName
     type: WorkflowType
     account_id: str
+    account_email: str
     status: WorkflowStatus
     created_at: datetime
 

@@ -34,6 +34,7 @@ def make_workflow(
         template=template,  # pyright: ignore[reportArgumentType]
         type=workflow_type,  # pyright: ignore[reportArgumentType]
         account_id="account-1",
+        account_email="account-1@example.com",
         status="active",
         objective=objective,
         instructions="",

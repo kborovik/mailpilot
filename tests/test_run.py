@@ -31,6 +31,7 @@ def _make_workflow(**overrides: Any) -> Workflow:
         "template": "outbound-general",
         "type": "outbound",
         "account_id": _ACCOUNT_ID,
+        "account_email": "owner@example.com",
         "status": "active",
         "objective": "Test",
         "instructions": "Do the thing.",

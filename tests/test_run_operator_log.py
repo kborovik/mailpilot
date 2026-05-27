@@ -23,6 +23,7 @@ def _wf() -> Workflow:
     return Workflow(
         id=_WORKFLOW_ID,
         account_id=_ACCOUNT_ID,
+        account_email="owner@example.com",
         name="Test workflow",
         template="outbound-general",
         type="outbound",

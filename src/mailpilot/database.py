@@ -830,11 +830,15 @@ def create_workflow(
     direction = TEMPLATES[template].direction  # pyright: ignore[reportArgumentType]
     row = connection.execute(
         """\
-        INSERT INTO workflow (id, name, template, type, account_id, theme)
-        VALUES (
-            %(id)s, %(name)s, %(template)s, %(type)s, %(account_id)s, %(theme)s
+        WITH inserted AS (
+            INSERT INTO workflow (id, name, template, type, account_id, theme)
+            VALUES (
+                %(id)s, %(name)s, %(template)s, %(type)s, %(account_id)s, %(theme)s
+            )
+            RETURNING *
         )
-        RETURNING *
+        SELECT inserted.*, account.email AS account_email
+        FROM inserted JOIN account ON account.id = inserted.account_id
         """,
         {
             "id": _new_id(),
@@ -863,7 +867,11 @@ def get_workflow(
         Workflow if found, None otherwise.
     """
     row = connection.execute(
-        "SELECT * FROM workflow WHERE id = %(id)s",
+        """\
+        SELECT workflow.*, account.email AS account_email
+        FROM workflow JOIN account ON account.id = workflow.account_id
+        WHERE workflow.id = %(id)s
+        """,
         {"id": workflow_id},
     ).fetchone()
     if row is None:
@@ -897,24 +905,27 @@ def list_workflows(
     conditions: list[SQL] = []
     params: dict[str, object] = {"limit": limit}
     if account_id is not None:
-        conditions.append(SQL("account_id = %(account_id)s"))
+        conditions.append(SQL("workflow.account_id = %(account_id)s"))
         params["account_id"] = account_id
     if status is not None:
-        conditions.append(SQL("status = %(status)s"))
+        conditions.append(SQL("workflow.status = %(status)s"))
         params["status"] = status
     if workflow_type is not None:
-        conditions.append(SQL("type = %(workflow_type)s"))
+        conditions.append(SQL("workflow.type = %(workflow_type)s"))
         params["workflow_type"] = workflow_type
     if template is not None:
-        conditions.append(SQL("template = %(template)s"))
+        conditions.append(SQL("workflow.template = %(template)s"))
         params["template"] = template
     if since is not None:
-        conditions.append(SQL("created_at >= %(since)s"))
+        conditions.append(SQL("workflow.created_at >= %(since)s"))
         params["since"] = since
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
-        "SELECT id, name, template, type, account_id, status, created_at "
-        "FROM workflow {} ORDER BY created_at LIMIT %(limit)s"
+        "SELECT workflow.id, workflow.name, workflow.template, workflow.type, "
+        "workflow.account_id, account.email AS account_email, "
+        "workflow.status, workflow.created_at "
+        "FROM workflow JOIN account ON account.id = workflow.account_id "
+        "{} ORDER BY workflow.created_at LIMIT %(limit)s"
     ).format(where)
     rows = connection.execute(query, params).fetchall()
     return [WorkflowSummary.model_validate(row) for row in rows]
@@ -938,7 +949,12 @@ def list_workflows_full(
         Full ``Workflow`` rows ordered by ``name``.
     """
     rows = connection.execute(
-        "SELECT * FROM workflow WHERE account_id = %(account_id)s ORDER BY name",
+        """\
+        SELECT workflow.*, account.email AS account_email
+        FROM workflow JOIN account ON account.id = workflow.account_id
+        WHERE workflow.account_id = %(account_id)s
+        ORDER BY workflow.name
+        """,
         {"account_id": account_id},
     ).fetchall()
     return [Workflow.model_validate(row) for row in rows]
@@ -962,11 +978,13 @@ def search_workflows(
     pattern = f"%{query}%"
     rows = connection.execute(
         """\
-        SELECT id, name, template, type, account_id, status, created_at
-        FROM workflow
-        WHERE LOWER(name) LIKE LOWER(%(pattern)s)
-           OR LOWER(objective) LIKE LOWER(%(pattern)s)
-        ORDER BY LOWER(name)
+        SELECT workflow.id, workflow.name, workflow.template, workflow.type,
+               workflow.account_id, account.email AS account_email,
+               workflow.status, workflow.created_at
+        FROM workflow JOIN account ON account.id = workflow.account_id
+        WHERE LOWER(workflow.name) LIKE LOWER(%(pattern)s)
+           OR LOWER(workflow.objective) LIKE LOWER(%(pattern)s)
+        ORDER BY LOWER(workflow.name)
         LIMIT %(limit)s
         """,
         {"pattern": pattern, "limit": limit},
@@ -1013,7 +1031,7 @@ def update_workflow(
     connection.commit()
     if row is None:
         return None
-    return Workflow.model_validate(row)
+    return get_workflow(connection, workflow_id)
 
 
 def activate_workflow(
@@ -1047,10 +1065,14 @@ def activate_workflow(
         raise ValueError("instructions must be non-empty to activate")
     row = connection.execute(
         """\
-        UPDATE workflow
-        SET status = 'active', updated_at = CURRENT_TIMESTAMP
-        WHERE id = %(id)s
-        RETURNING *
+        WITH updated AS (
+            UPDATE workflow
+            SET status = 'active', updated_at = CURRENT_TIMESTAMP
+            WHERE id = %(id)s
+            RETURNING *
+        )
+        SELECT updated.*, account.email AS account_email
+        FROM updated JOIN account ON account.id = updated.account_id
         """,
         {"id": workflow_id},
     ).fetchone()
@@ -1083,10 +1105,14 @@ def pause_workflow(
         raise ValueError(f"cannot pause workflow in status '{workflow.status}'")
     row = connection.execute(
         """\
-        UPDATE workflow
-        SET status = 'paused', updated_at = CURRENT_TIMESTAMP
-        WHERE id = %(id)s
-        RETURNING *
+        WITH updated AS (
+            UPDATE workflow
+            SET status = 'paused', updated_at = CURRENT_TIMESTAMP
+            WHERE id = %(id)s
+            RETURNING *
+        )
+        SELECT updated.*, account.email AS account_email
+        FROM updated JOIN account ON account.id = updated.account_id
         """,
         {"id": workflow_id},
     ).fetchone()

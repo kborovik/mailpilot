@@ -2446,6 +2446,7 @@ def _make_workflow(**overrides: Any) -> Workflow:
         "template": "outbound-general",
         "type": "outbound",
         "account_id": _ACCOUNT_ID,
+        "account_email": "test@example.com",
         "status": "draft",
         "objective": "",
         "instructions": "",
@@ -3158,6 +3159,44 @@ def test_workflow_view(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data["workflow"]["id"] == _WORKFLOW_ID
+
+
+def test_workflow_list_envelope_includes_account_email(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.6 parent-NI clause: list row carries ``account_email`` alongside ``account_id``."""
+    workflows = [
+        _make_workflow(id="id-1", account_email="one@example.com"),
+        _make_workflow(id="id-2", account_email="two@example.com"),
+    ]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_workflows", return_value=workflows),
+    ):
+        result = runner.invoke(main, ["workflow", "list"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["workflows"][0]["account_id"] == _ACCOUNT_ID
+    assert data["workflows"][0]["account_email"] == "one@example.com"
+    assert data["workflows"][1]["account_email"] == "two@example.com"
+
+
+def test_workflow_view_envelope_includes_account_email(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.6 parent-NI clause (extends to view): full-row envelope carries ``account_email``."""
+    workflow = _make_workflow(account_email="owner@parent-ni.test")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=workflow),
+    ):
+        result = runner.invoke(main, ["workflow", "view", _WORKFLOW_ID])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["workflow"]["account_id"] == _ACCOUNT_ID
+    assert data["workflow"]["account_email"] == "owner@parent-ni.test"
 
 
 def test_workflow_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:

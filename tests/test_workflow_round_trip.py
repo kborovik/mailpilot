@@ -176,3 +176,22 @@ def test_workflow_export_import_round_trip_and_idempotence(
         )
     assert all(row["action"] == "unchanged" for row in idempotent["workflows"])
     mock_update.assert_not_called()
+
+
+def test_workflow_export_payload_excludes_account_email(
+    runner: CliRunner,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.39 round-trip purity: ``account_email`` (§V.6 parent-NI clause) is a
+    read-only denormalization for view/list rendering. ``workflow export`` payload
+    must remain keyed on ``(account_id, name)`` and exclude denormalized fields,
+    else a fresh import would attempt to write a non-existent column.
+    """
+    account = make_test_account(database_connection)
+    _seed_workflows(database_connection, account.id)
+    exported = _invoke(
+        runner, database_connection, ["workflow", "export", "--account-id", account.id]
+    )["workflows"]
+    for row in exported:
+        assert "account_email" not in row
+        assert "account_id" not in row
