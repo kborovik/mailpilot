@@ -1,12 +1,16 @@
-"""Generate question/answer pairs for the MailPilot Demo KB.
+"""Generate stress-test question/answer pairs for the MailPilot Demo KB.
 
 For each markdown file in the demo Drive folder, ask Claude Haiku 4.5 to draft
-ONE concrete in-scope question whose answer is grounded in that file. The model
-also returns the expected_tokens (model number + 1-2 numeric specs) the agent's
-reply must contain. Pairs are written to qa_pairs.json.
+ONE COMPLEX in-scope question that stresses the retrieval-grounded sales agent.
+The model returns either a stress-grade pair (>=3 distinct specs, exact model
+disambiguation, 4-6 expected_tokens) OR a skip verdict for files that yield
+only trivial single-spec lookups. The skip path is load-bearing: it keeps the
+manifest sparse and hard, not exhaustive and easy. Pairs are written to
+qa_pairs.json.
 
 Out-of-scope pairs are appended from a hand-curated list (questions about
-vendors -- Pentair, Evoqua, Grundfos -- that are not in the KB).
+vendors -- Pentair, Evoqua, Grundfos -- that are not in the KB). Compare pairs
+(multi-source synthesis) are hand-curated directly in qa_pairs.json.
 
 Usage:  python generate_qa_pairs.py
 """
@@ -32,19 +36,37 @@ MODEL = "claude-haiku-4-5-20251001"
 OUT = Path(__file__).parent / "qa_pairs.json"
 
 SYSTEM = (
-    "You generate one (1) realistic customer question grounded in a vendor "
-    "datasheet, plus the verifiable evidence that an agent's correct reply "
-    "must contain. Constraints: "
-    "(1) The question MUST be answerable strictly from the document body. "
-    "(2) Pick a question whose answer references at least one model number "
-    "AND at least one numeric specification. "
-    "(3) Avoid yes/no or trivia questions; prefer 'what is the X of Y?' or "
-    "'which model handles Z?'. "
-    "(4) expected_tokens must be 2-4 verbatim substrings (case-sensitive) the "
-    "agent's reply MUST contain to be considered correct -- include the model "
-    "number(s) AND the numeric figure(s) the question targets. "
-    "(5) Output STRICT JSON only, no preamble, matching this schema: "
-    '{"question": "...", "expected_tokens": ["...", "..."]}'
+    "You generate ONE complex customer question that stress-tests a "
+    "retrieval-grounded sales agent over a vendor datasheet. The question "
+    "MUST be answerable strictly from the document body, AND it MUST be "
+    "hard enough that the agent's reply requires careful reading of "
+    "MULTIPLE rows or sections -- not a single-spec lookup. If the file "
+    "describes a single product with only one or two trivial specs (e.g. "
+    "a one-paragraph case study, a single-model brochure with no spec "
+    "table), return a skip verdict instead of forcing a weak question.\n\n"
+    "Constraints for an accepted question:\n"
+    "(1) The question MUST require pulling >=3 distinct specifications "
+    "from the document (mix flow rate, pressure, temperature, capacity, "
+    "model number, exchange capacity, operating limit, motor rating, "
+    "etc -- across different rows of the spec table).\n"
+    "(2) When the document lists multiple model variants in one table, "
+    "the question MUST pin a SPECIFIC model number so the agent has to "
+    "find the exact row (not the first or last). When the document "
+    "describes one product, the question MUST cover >=3 operating "
+    "parameters together (e.g. 'flow at 60Hz AND pressure at full load "
+    "AND temperature range').\n"
+    "(3) Prefer multi-clause questions: 'For model X, what is A, B, and "
+    "C?' or 'At condition Y, which model handles A and what is its "
+    "rated B and C?'. Avoid yes/no, trivia, or 'name one feature'.\n"
+    "(4) expected_tokens MUST be 4-6 verbatim substrings (case-sensitive) "
+    "the agent's reply MUST contain: include the EXACT model "
+    "number(s) AND every numeric figure (with units) the question "
+    "targets. Each token must be specific enough that a wrong-row reply "
+    "fails (e.g. '12,650 GPD' not just '12,650').\n"
+    "(5) Output STRICT JSON only, no preamble, matching ONE of these "
+    "two schemas:\n"
+    '  ACCEPT: {"question": "...", "expected_tokens": ["...", "...", "...", "..."]}\n'
+    '  SKIP:   {"skip": true, "reason": "..."}'
 )
 
 OUT_OF_SCOPE = [
@@ -166,21 +188,30 @@ def main() -> int:
     files = fetch_md_files()
     print(f"fetched {len(files)} markdowns from Drive")
     pairs: list[dict[str, object]] = []
+    kept = 0
     for i, (name, content) in enumerate(sorted(files.items()), 1):
         try:
             qa = draft_qa(client, name, content)
         except (json.JSONDecodeError, ValueError) as exc:
             print(f"  [{i:>2}] FAIL  {name}  ({exc})")
             continue
+        if qa.get("skip"):
+            print(f"  [{i:>2}] SKIP  {name}  ({qa.get('reason', 'no complex question')})")
+            continue
+        tokens = qa.get("expected_tokens") or []
+        if len(tokens) < 4:
+            print(f"  [{i:>2}] SKIP  {name}  (only {len(tokens)} tokens; stress floor is 4)")
+            continue
+        kept += 1
         pair = {
-            "id": f"qa-in-{i:03d}",
+            "id": f"qa-in-{kept:03d}",
             "type": "inscope",
             "source_file": name,
             "question": qa["question"],
-            "expected_tokens": qa["expected_tokens"],
+            "expected_tokens": tokens,
         }
         pairs.append(pair)
-        print(f"  [{i:>2}] OK    {name}  -> {qa['expected_tokens']}")
+        print(f"  [{i:>2}] OK    {name}  -> {tokens}")
     pairs.extend(OUT_OF_SCOPE)
     OUT.write_text(json.dumps(pairs, indent=2) + "\n", encoding="utf-8")
     in_count = sum(1 for p in pairs if p["type"] == "inscope")

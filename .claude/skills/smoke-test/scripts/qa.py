@@ -1,26 +1,32 @@
-"""Smoke-test runtime helper: pick a Q/A pair, load its source doc, check decline shape.
+"""Smoke-test runtime helper: pick a Q/A pair, load its source doc(s), check decline shape.
 
 Subcommands:
-  pick   [--type inscope|outscope] [--id ID]
+  pick   [--type inscope|outscope|compare] [--id ID]
          Emit one Q/A pair as JSON on stdout. Random unless --id given.
          Default --type=inscope.
 
   source --id ID
-         Load the pair's `source_file` from the demo Drive folder via
-         DriveClient impersonating `inbound@lab5.ca` and print its
-         Markdown content to stdout. Exit non-zero when the file is
-         absent from the folder (KB-drift signal). Used by gate B4 so
-         the operator can grade groundedness against the live source.
+         Load the pair's source markdown from the demo Drive folder via
+         DriveClient impersonating `inbound@lab5.ca` and print to stdout.
+         - inscope: single `source_file` -> prints that file's content.
+         - compare: `source_files` (list) -> prints each file's content
+           preceded by a `=== SOURCE: <name> ===` separator so the
+           operator can grade the agent's reply against every source.
+         Exit non-zero when ANY source file is absent from the folder
+         (KB-drift signal). Outscope pairs have no source -> exit 1.
 
   check  --id ID --reply-text "..." | --reply-file PATH
          Outscope-only post-§V.31. Validate an out-of-scope decline reply
          against the pair's `forbidden_token_pairs` and `decline_signals`.
-         Inscope grading is operator-judged in gate B4 (see SKILL.md);
-         calling `check` with an inscope pair exits 2.
+         Inscope and compare grading is operator-judged (gates B4 / B7,
+         see SKILL.md); calling `check` with a non-outscope pair exits 2.
          Emits {"id":..., "pass": bool, "reasons": [...], "details": {...}}
-         on stdout. Exit 0 = pass, 1 = fail, 2 = inscope rejected.
+         on stdout. Exit 0 = pass, 1 = fail, 2 = non-outscope rejected.
 
-Pairs live in qa_pairs.json next to this script.
+Pair schema (qa_pairs.json):
+  - inscope: type="inscope", source_file: str
+  - compare: type="compare", source_files: list[str]  (>=2 files)
+  - outscope: type="outscope", source_file: null
 """
 
 from __future__ import annotations
@@ -65,16 +71,33 @@ def pick(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_source_files(pair: dict) -> list[str]:
+    """Return the list of source filenames a pair points at.
+
+    inscope -> [source_file]; compare -> source_files; outscope -> [].
+    """
+    if pair.get("type") == "compare":
+        return list(pair.get("source_files") or [])
+    name = pair.get("source_file")
+    return [name] if name else []
+
+
 def source(args: argparse.Namespace) -> int:
     pairs = load_pairs()
     pair = next((p for p in pairs if p["id"] == args.id), None)
     if not pair:
         print(json.dumps({"error": "not_found", "id": args.id}), file=sys.stderr)
         return 1
-    source_file = pair.get("source_file", "")
-    if not source_file:
+    file_names = _resolve_source_files(pair)
+    if not file_names:
         print(
-            json.dumps({"error": "pair_missing_source_file", "id": args.id}),
+            json.dumps(
+                {
+                    "error": "pair_has_no_source",
+                    "id": args.id,
+                    "type": pair.get("type"),
+                }
+            ),
             file=sys.stderr,
         )
         return 1
@@ -84,22 +107,32 @@ def source(args: argparse.Namespace) -> int:
 
     client = DriveClient(DEMO_SUBJECT)
     files = client.list_markdown(DEMO_FOLDER_ID)
-    match = next((f for f in files if f["name"] == source_file), None)
-    if not match:
+    by_name = {f["name"]: f for f in files}
+    missing = [n for n in file_names if n not in by_name]
+    if missing:
         print(
             json.dumps(
                 {
-                    "error": "source_file_not_in_drive",
+                    "error": "source_files_not_in_drive",
                     "id": args.id,
-                    "source_file": source_file,
+                    "missing": missing,
                     "folder_id": DEMO_FOLDER_ID,
                 }
             ),
             file=sys.stderr,
         )
         return 1
-    doc = client.read_markdown(match["file_id"])
-    sys.stdout.write(doc.get("content", ""))
+    multi = len(file_names) > 1
+    for name in file_names:
+        doc = client.read_markdown(by_name[name]["file_id"])
+        content = doc.get("content", "")
+        if multi:
+            sys.stdout.write(f"=== SOURCE: {name} ===\n")
+        sys.stdout.write(content)
+        if multi:
+            if not content.endswith("\n"):
+                sys.stdout.write("\n")
+            sys.stdout.write("\n")
     return 0
 
 
@@ -159,18 +192,23 @@ def check(args: argparse.Namespace) -> int:
     if not pair:
         print(json.dumps({"error": "not_found", "id": args.id}), file=sys.stderr)
         return 1
-    if pair["type"] == "inscope":
-        # §V.31: inscope grading moved to operator judgement (gate B4).
-        # Substring-match against curated `expected_tokens` produced false
-        # negatives on phrasing variation; a verdict from the operator with
-        # the live source loaded is the new contract.
+    if pair["type"] != "outscope":
+        # §V.31: inscope grading moved to operator judgement (gate B4 for
+        # inscope, gate B7 for compare). Substring-match against curated
+        # `expected_tokens` produced false negatives on phrasing variation;
+        # a verdict from the operator with the live source(s) loaded is the
+        # new contract. `check` stays as a verifier for outscope decline
+        # shape only (regex against forbidden vendor/spec pairs).
+        gate = "B7" if pair["type"] == "compare" else "B4"
         print(
             json.dumps(
                 {
-                    "error": "inscope_grading_moved",
+                    "error": "non_outscope_grading_moved",
                     "id": args.id,
+                    "type": pair["type"],
                     "message": (
-                        "inscope grading is now operator-judged in B4; see SKILL.md"
+                        f"{pair['type']} grading is now operator-judged in gate "
+                        f"{gate}; see SKILL.md"
                     ),
                 }
             ),
@@ -205,7 +243,11 @@ def main() -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_pick = sub.add_parser("pick", help="emit a random Q/A pair as JSON")
-    p_pick.add_argument("--type", choices=["inscope", "outscope"], default="inscope")
+    p_pick.add_argument(
+        "--type",
+        choices=["inscope", "outscope", "compare"],
+        default="inscope",
+    )
     p_pick.add_argument("--id", help="pin to a specific pair id")
     p_pick.set_defaults(func=pick)
 
@@ -218,7 +260,10 @@ def main() -> int:
 
     p_check = sub.add_parser(
         "check",
-        help="validate an out-of-scope decline reply (inscope grading moved to B4)",
+        help=(
+            "validate an out-of-scope decline reply "
+            "(inscope grading moved to B4; compare moved to B7)"
+        ),
     )
     p_check.add_argument("--id", required=True)
     grp = p_check.add_mutually_exclusive_group()

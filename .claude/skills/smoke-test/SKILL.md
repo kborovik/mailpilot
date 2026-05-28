@@ -29,7 +29,7 @@ Both scenarios are **mandatory**. `make clean` runs **once**, at the very start.
   SUBJECT_A="[ST-$(date +%H%M%S)] ${TOPIC_A}"
   ```
 
-  Scenario B sends three trigger emails. Generate `SUBJECT_B1` (in-scope), `SUBJECT_B2` (out-of-scope), and `SUBJECT_B3` (compare-and-contrast) independently the same way. Verify all four (`SUBJECT_A`, `SUBJECT_B1`, `SUBJECT_B2`, `SUBJECT_B3`) are distinct before continuing. If `/usr/share/dict/words` is unavailable, fall back to `head -c 12 /dev/urandom | base32 | tr -d '=' | head -c 10`.
+  Scenario B sends five trigger emails. Generate `SUBJECT_B1` (in-scope), `SUBJECT_B2` (out-of-scope), `SUBJECT_B3` (compare-and-contrast), `SUBJECT_B75a` and `SUBJECT_B75b` (concurrent in-scope pair, gate B7.5) independently the same way. Verify all six (`SUBJECT_A`, `SUBJECT_B1`, `SUBJECT_B2`, `SUBJECT_B3`, `SUBJECT_B75a`, `SUBJECT_B75b`) are distinct before continuing. If `/usr/share/dict/words` is unavailable, fall back to `head -c 12 /dev/urandom | base32 | tr -d '=' | head -c 10`.
 
 - **Test start ISO timestamp.** Capture before each scenario; reuse for `--since` filters and Logfire windows.
 - **Polling.** When waiting for sync, routing, or agent results: poll up to 12 attempts, 5s apart (~60s total). Do not call `mailpilot account sync` directly -- the background `mailpilot run` loop owns sync.
@@ -626,6 +626,68 @@ Poll the outbound mailbox for `SUBJECT_B3` (likely `Re:` prefixed) the same way 
 
   Fewer `read_drive_markdown` calls than `EXPECTED_READ_COUNT` is the headline regression this gate catches -- the agent guessed at one of the products' specs instead of reading the doc. Record as a Bug even if the reply happens to be factually correct. More reads than expected (e.g., the agent followed a distractor) is acceptable as long as the four required calls above are present.
 
+### B7.5. Concurrent in-scope dual-send (multi-request / multi-tool-call stress)
+
+Two distinct in-scope questions arrive on the demo workflow at nearly the same wall-clock instant, on two fresh threads. Each must trigger its own `agent.invoke`, each must ground in its own KB source, and both replies must meet the 60s SLA. Catches three failure classes the single-send tests (B3, B6, B7) cannot:
+
+- Classifier serializes when it should parallelize (one classification blocking the next inbound).
+- Two concurrent agent invocations share mutable state (e.g., one workflow row updated mid-flight by the other, or a shared httplib2 transport reused across agent.invoke boundaries).
+- Drive `Tool(... sequential=True)` (§V.61) inadvertently serializes across agent invocations, not just within one -- defeating the stress test at the dispatcher layer.
+
+Pick two distinct in-scope pairs whose `source_file` differs (avoid same-doc collisions so groundedness is independently judgeable):
+
+```bash
+QA_B75a=$(python3 .claude/skills/smoke-test/scripts/qa.py pick --type inscope)
+QA_ID_B75a=$(printf '%s' "$QA_B75a" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+QUESTION_B75a=$(printf '%s' "$QA_B75a" | python3 -c 'import json,sys; print(json.load(sys.stdin)["question"])')
+SOURCE_FILE_B75a=$(printf '%s' "$QA_B75a" | python3 -c 'import json,sys; print(json.load(sys.stdin)["source_file"])')
+
+while :; do
+  QA_B75b=$(python3 .claude/skills/smoke-test/scripts/qa.py pick --type inscope)
+  SOURCE_FILE_B75b=$(printf '%s' "$QA_B75b" | python3 -c 'import json,sys; print(json.load(sys.stdin)["source_file"])')
+  [ "$SOURCE_FILE_B75b" != "$SOURCE_FILE_B75a" ] && break
+done
+QA_ID_B75b=$(printf '%s' "$QA_B75b" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+QUESTION_B75b=$(printf '%s' "$QA_B75b" | python3 -c 'import json,sys; print(json.load(sys.stdin)["question"])')
+```
+
+Generate two more distinct subjects per the Conventions section and verify all six (`SUBJECT_A`, `SUBJECT_B1`, `SUBJECT_B2`, `SUBJECT_B3`, `SUBJECT_B75a`, `SUBJECT_B75b`) are distinct before continuing.
+
+Fire both sends in parallel via Bash background jobs so they hit Gmail within milliseconds of each other:
+
+```bash
+T_SEND_B75=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+mailpilot email send \
+  --account-id <OUTBOUND_ACCOUNT_ID> \
+  --to inbound@lab5.ca \
+  --subject "$SUBJECT_B75a" \
+  --body "$QUESTION_B75a" &
+PID_B75a=$!
+
+mailpilot email send \
+  --account-id <OUTBOUND_ACCOUNT_ID> \
+  --to inbound@lab5.ca \
+  --subject "$SUBJECT_B75b" \
+  --body "$QUESTION_B75b" &
+PID_B75b=$!
+
+wait $PID_B75a $PID_B75b
+```
+
+Poll the outbound mailbox for BOTH replies (in either order), capping each at 60s wall-clock from `T_SEND_B75`. Capture `T_REPLY_B75a`, `T_REPLY_B75b` and the two `REPLY_EMAIL_ID_B75a` / `REPLY_EMAIL_ID_B75b` values.
+
+**Gate B7.5 (multi-request, multi-tool concurrency):**
+
+- BOTH replies present within 60s of `T_SEND_B75`. Either missing means the system stalled one trigger while serving the other -- record as a Critical Bug (regression of the lab5.ca/mailpilot/ SLA under concurrent load).
+- BOTH replies routed on the demo side with `workflow_id == DEMO_WORKFLOW_ID` and `route_method == classified` (each is a fresh thread). Either routed differently means the classifier serialized or misfired under load.
+- BOTH replies grounded in their own `source_file` per §V.31, operator-judged with the same verdict-JSON schema as B4. Run `qa.py source --id "$QA_ID_B75a"` and `qa.py source --id "$QA_ID_B75b"` separately, then grade each reply against its own source. A cross-grounded reply (B75a's body cites B75b's source, or vice versa) is a state-leak Bug -- shared mutable state across concurrent agent invocations.
+- Logfire window `[T_SEND_B75, T_SEND_B75 + 90s]`, scope to `workflow_id == DEMO_WORKFLOW_ID`:
+  - Exactly **2** `agent.invoke` spans, each with its own `email_id` attribute matching B75a / B75b.
+  - The two `agent.invoke` spans' wall-clock intervals MUST overlap (`start(later) < end(earlier)`). Strictly sequential execution defeats the stress test -- record as a Bug ("agent invocations serialized; expected concurrent") and investigate the run-loop / task-drain path. If a recent pydantic-ai or sync-loop change serialized at this layer, pin the working version while investigating.
+  - Each `agent.invoke` carries its own `search_drive_markdown` + `read_drive_markdown` + `reply_email` + `record_enrollment_outcome` chain. Tool spans across the two invocations MAY overlap (different threads, different `DriveClient` instances per `read_drive_markdown` call); a 60s+ Drive tool span anywhere in the window is the §B.34 race signature.
+  - Zero `is_exception=true` and zero `level=warn` spans on either invocation. A `drive_unavailable` tool return surfaced in the tool's structured response is acceptable (the broadened catch envelope from §T.60 step (b)); an unhandled exception escaping the tool wrapper is not.
+
 ### B8. Verify the CRM activity timeline
 
 ```
@@ -635,9 +697,9 @@ mailpilot activity list --contact-id <OUTBOUND_CONTACT_ID> --since <TEST_START_B
 **Gate B8 (activity wiring):** activity types follow the `enrollment_*` / `email_*` vocabulary enforced by `activity.type` CHECK constraint in `src/mailpilot/schema.sql`.
 
 - `enrollment_added` with `workflow_id == DEMO_WORKFLOW_ID` on the activity row itself (FK column, not `detail` JSONB). From B1.
-- 3 `email_received` activities -- the demo mailbox received the trigger emails for B3 (in-scope), B6 (out-of-scope), and B7 (compare).
-- 3 `email_sent` activities from the agent replies (subjects begin with `Re:`).
-- 3 `enrollment_completed` activities (one per question, all emitted by `record_enrollment_outcome`).
+- 5 `email_received` activities -- the demo mailbox received the trigger emails for B3 (in-scope), B6 (out-of-scope), B7 (compare), and the two B7.5 concurrent in-scope sends (B75a, B75b).
+- 5 `email_sent` activities from the agent replies (subjects begin with `Re:`).
+- 5 `enrollment_completed` activities (one per question, all emitted by `record_enrollment_outcome`).
 
 ### B9. Concurrent-workflow quiet check
 
@@ -661,7 +723,7 @@ Sanity check the operator triggers are still there (B3, B6, and B7 are agent-dri
 mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>
 ```
 
-Expect exactly 3 rows (the B3, B6, and B7 triggers), each with `workflow_id == null`. Any deviation is a separate signal -- either an unexpected outbound send (record as a Bug) or a missing trigger (re-run B3/B6/B7).
+Expect exactly 5 rows (the B3, B6, B7, B75a, and B75b triggers), each with `workflow_id == null`. Any deviation is a separate signal -- either an unexpected outbound send (record as a Bug) or a missing trigger (re-run the missing step).
 
 ### B10. Stop the sync loop
 
@@ -671,14 +733,15 @@ Send SIGTERM to the background `mailpilot run` (e.g. `kill <pid>`). Wait for `Sy
 
 Window `[TEST_START_B, now]`. Spans to verify:
 
-- `agent.invoke` -- exactly **3** invocations (B4 in-scope, B6 out-of-scope, B7 compare). More than 3 → demo agent re-fired or outbound workflow reacted to B's traffic.
-- `routing.route_email` -- all three demo-side trigger emails → `route_method=classified`. Outbound-side replies → `route_method=skipped_no_inbound_workflows`.
-- `classify_email` -- 3 invocations. All three `result` values match `DEMO_WORKFLOW_ID`.
+- `agent.invoke` -- exactly **5** invocations (B4 in-scope, B6 out-of-scope, B7 compare, B75a, B75b). More than 5 → demo agent re-fired or outbound workflow reacted to B's traffic. The B75a / B75b spans MUST have overlapping wall-clock intervals (concurrent execution) -- strict serialization at the agent layer fails gate B7.5.
+- `routing.route_email` -- all five demo-side trigger emails → `route_method=classified`. Outbound-side replies → `route_method=skipped_no_inbound_workflows`.
+- `classify_email` -- 5 invocations. All five `result` values match `DEMO_WORKFLOW_ID`.
 - `running tool` per invocation:
   - B4 (in-scope): `search_drive_markdown` + `read_drive_markdown` + `reply_email` + `record_enrollment_outcome`.
   - B6 (out-of-scope decline): `search_drive_markdown` (returning `[]`) + `reply_email` + `record_enrollment_outcome` (`read_drive_markdown` not required since no document matches).
   - B7 (compare-and-contrast): `search_drive_markdown` >=1 + `read_drive_markdown` exactly `EXPECTED_READ_COUNT` times (one per file in the pair's `source_files`) + `reply_email` + `record_enrollment_outcome`. Fewer reads than `EXPECTED_READ_COUNT` is the headline regression: agent guessed a doc instead of reading it. The set of `file_id` arguments to `read_drive_markdown` must equal the set Drive returned for the `source_files` names -- mismatch means the agent read the wrong doc.
-  - At least one KB-consulting tool call (`search_drive_markdown` or `list_drive_markdown`) is mandatory in all three. With ≥30 docs in the folder, `list_drive_markdown` instead of `search_drive_markdown` on B4 or B7 is a regression. On B6 (decline), `list_drive_markdown` is acceptable.
+  - B75a / B75b (concurrent in-scope): each carries `search_drive_markdown` + `read_drive_markdown` + `reply_email` + `record_enrollment_outcome`. The two `read_drive_markdown` spans (one per invocation) MAY overlap (different threads against different `DriveClient` instances). Any single Drive span at the 60s ceiling is the §B.34 race signature.
+  - At least one KB-consulting tool call (`search_drive_markdown` or `list_drive_markdown`) is mandatory in all five. With ≥30 docs in the folder, `list_drive_markdown` instead of `search_drive_markdown` on B4 / B7 / B75a / B75b is a regression. On B6 (decline), `list_drive_markdown` is acceptable.
 - `agent.invoke` (B7) `input_tokens` -- should be noticeably higher than B4 because the compare invocation pulls 2-4 full datasheets into the agent's context. A B7 token count at or below B4's signals the agent skipped one or more reads -- cross-check against the read-count gate.
 - Any `is_exception=true` or `level=warn` spans -- record. Drive 4xx/5xx surfacing as `drive_unavailable` from the tool is acceptable in the agent's tool-return ledger but should not be `is_exception=true` on the span.
 
@@ -775,7 +838,8 @@ Scenario B: KB-grounded demo (lab5.ca/mailpilot/, outbound workflow still active
   B5  Drive tools used ............. PASS  (search_drive_markdown -> read_drive_markdown -> reply_email -> record_enrollment_outcome)
   B6  Out-of-scope decline ......... PASS  (LATENCY_B2 = <Ns>; no fabricated specs)
   B7  Compare-and-contrast reply ... PASS  (LATENCY_B3 = <Ns>; <N> sources, <N> read_drive_markdown calls; no single-sourced specs)
-  B8  Activity timeline ............ PASS  (3 received / 3 sent / 3 enrollment_completed)
+  B7.5 Concurrent dual in-scope ..... PASS  (LATENCY_B75a = <Ns>, LATENCY_B75b = <Ns>; 2 overlapping agent.invoke spans; both grounded in own source)
+  B8  Activity timeline ............ PASS  (5 received / 5 sent / 5 enrollment_completed)
   B9  Outbound stayed quiet ........ PASS  (0 new outbound sends during B)
   B10 Stop sync loop ............... PASS
 
@@ -871,21 +935,22 @@ If a `/sdd:spec` invocation is cancelled or revised by the user mid-run, record 
 
 ## Timing
 
-Expected total: ~8 minutes. Phase 0 once, run loop once, no reset between scenarios. The added compare-and-contrast question (B7) costs roughly one extra 60s reply window over the prior baseline because it forces 2-4 `read_drive_markdown` calls and a multi-doc synthesis.
+Expected total: ~9 minutes. Phase 0 once, run loop once, no reset between scenarios. The added compare-and-contrast question (B7) costs roughly one extra 60s reply window over the prior baseline because it forces 2-4 `read_drive_markdown` calls and a multi-doc synthesis. The concurrent dual-send (B7.5) adds another ~60s window for the second of the two parallel replies (the two reply windows overlap, so the marginal cost is one reply window, not two).
 
-| Phase / scenario                     | Duration |
-| ------------------------------------ | -------- |
-| Phase 0 (once, 2 accounts)           | ~15s     |
-| A1 / B1 workflow setup               | ~5s      |
-| A2 start run loop                    | ~5s      |
-| A3 outbound agent                    | ~10s     |
-| A4 sync + route                      | ~10-60s  |
-| A5 / B3 / B6 / B7 operator send      | ~3s each |
-| A6 reply round-trip                  | ~10-60s  |
-| A7 task drain                        | ~10-60s  |
-| B4 in-scope reply (60s SLA)          | ~10-60s  |
-| B6 out-of-scope reply (60s SLA)      | ~10-60s  |
-| B7 compare reply (60s SLA)           | ~20-60s  |
-| A8 / B8 activity check               | ~3s      |
-| B10 stop run loop                    | ~3s      |
-| Report                               | ~10s     |
+| Phase / scenario                          | Duration |
+| ----------------------------------------- | -------- |
+| Phase 0 (once, 2 accounts)                | ~15s     |
+| A1 / B1 workflow setup                    | ~5s      |
+| A2 start run loop                         | ~5s     |
+| A3 outbound agent                         | ~10s     |
+| A4 sync + route                           | ~10-60s  |
+| A5 / B3 / B6 / B7 operator send           | ~3s each |
+| A6 reply round-trip                       | ~10-60s  |
+| A7 task drain                             | ~10-60s  |
+| B4 in-scope reply (60s SLA)               | ~10-60s  |
+| B6 out-of-scope reply (60s SLA)           | ~10-60s  |
+| B7 compare reply (60s SLA)                | ~20-60s  |
+| B7.5 concurrent dual reply (60s SLA each, overlapping) | ~20-60s |
+| A8 / B8 activity check                    | ~3s      |
+| B10 stop run loop                         | ~3s      |
+| Report                                    | ~10s     |
