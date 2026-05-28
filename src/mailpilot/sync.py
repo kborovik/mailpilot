@@ -21,6 +21,7 @@ Usage::
 
 from __future__ import annotations
 
+import concurrent.futures
 import itertools
 import os
 import queue
@@ -29,11 +30,12 @@ import threading
 import time
 from datetime import UTC, datetime, timedelta
 from email.utils import formataddr, getaddresses
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import click
 import logfire
 import psycopg
+from psycopg.rows import dict_row
 
 from mailpilot.database import (
     create_activity,
@@ -419,16 +421,60 @@ def _drain_pending_tasks(
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
 ) -> None:
-    """Execute all pending tasks that are due."""
-    from mailpilot.run import execute_task
+    """Execute all pending tasks that are due via a bounded worker pool.
 
+    Per §V.62: dispatch ready tasks concurrently under
+    ``settings.max_concurrent_tasks``. Each worker opens its own
+    ``psycopg.Connection`` so transaction state is not shared across
+    threads (psycopg connections are not thread-safe). Per-task retry
+    classification (§V.44) remains inside ``execute_task``; this layer
+    only catches escapes so a poisoned worker does not abort siblings.
+    """
     start = time.monotonic()
     pending = list_pending_tasks(connection)
-    for task in pending:
+    if not pending:
+        return
+    max_workers = max(1, settings.max_concurrent_tasks)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [
+            pool.submit(_execute_task_in_worker, settings, task) for task in pending
+        ]
+        for future in concurrent.futures.as_completed(futures):
+            future.result()
+    duration_ms = int((time.monotonic() - start) * 1000)
+    operator_event("task.drain", drained=len(pending), duration_ms=duration_ms)
+
+
+def _execute_task_in_worker(settings: Settings, task: Any) -> None:
+    """Open a worker-local connection and execute one task.
+
+    Per §V.62: each worker owns its connection lifecycle so concurrent
+    drains do not race on a shared cursor / transaction. Exceptions are
+    caught at this layer (after ``execute_task`` has had its chance to
+    classify per §V.44) so one bad task does not poison the pool;
+    paired logfire/operator events per §V.19 keep the operator stream
+    complete.
+    """
+    from mailpilot.run import execute_task
+
+    try:
+        connection = cast(
+            psycopg.Connection[dict[str, Any]],
+            psycopg.connect(str(settings.database_url), row_factory=dict_row),  # type: ignore[arg-type]
+        )
+    except Exception as exc:
+        logfire.exception(
+            "sync.drain.connect_failed", task_id=getattr(task, "id", None)
+        )
+        operator_event("error", source="sync.drain.connect_failed", message=str(exc))
+        return
+    try:
         execute_task(connection, settings, task)
-    if pending:
-        duration_ms = int((time.monotonic() - start) * 1000)
-        operator_event("task.drain", drained=len(pending), duration_ms=duration_ms)
+    except Exception as exc:
+        logfire.exception("sync.drain.task_failed", task_id=getattr(task, "id", None))
+        operator_event("error", source="sync.drain.task_failed", message=str(exc))
+    finally:
+        connection.close()
 
 
 def _renew_watches_logging_errors(
