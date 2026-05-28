@@ -497,7 +497,7 @@ def _extract_tool_errors(result: Any) -> list[dict[str, str]]:
 # -- Main entry point ----------------------------------------------------------
 
 
-def invoke_workflow_agent(  # noqa: PLR0913
+def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
     workflow: Workflow,
@@ -544,6 +544,14 @@ def invoke_workflow_agent(  # noqa: PLR0913
         workflow_type=workflow.type,
         trigger=trigger,
     ) as span:
+        # §V.11: surface the triggering email_id on the rollup span when the
+        # invocation is email-driven. ``trigger='email'`` is the direct path;
+        # ``trigger='task'`` flows through here when ``task.email_id`` is set
+        # (caller in ``run.py`` loads the email and passes it via ``email=``).
+        # Tasks with no associated email (e.g. scheduled first reach-out) leave
+        # the attr absent so per-message rollups skip them cleanly.
+        if email is not None and trigger in ("email", "task"):
+            span.set_attribute("email_id", email.id)
         # Acquire advisory lock.
         if not _try_acquire_advisory_lock(connection, workflow.id, contact.id):
             logfire.debug(

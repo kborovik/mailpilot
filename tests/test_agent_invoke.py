@@ -1131,3 +1131,170 @@ def test_invoke_span_has_cache_token_attributes(
     assert "cache_creation_input_tokens" in attrs
     assert attrs["cache_read_input_tokens"] >= 0
     assert attrs["cache_creation_input_tokens"] >= 0
+
+
+# -- Tests: §V.11(+) email_id attr on agent.invoke span -----------------------
+
+
+def test_invoke_span_has_email_id_when_trigger_email(
+    database_connection: psycopg.Connection[dict[str, Any]],
+    capfire: CaptureLogfire,
+) -> None:
+    """trigger='email' with an email arg surfaces email_id on the rollup span."""
+    from mailpilot.database import create_email
+
+    account, contact, workflow = _setup(database_connection, workflow_type="inbound")
+    email = create_email(
+        database_connection,
+        gmail_message_id="msg-eid-email",
+        gmail_thread_id="thread-eid-email",
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        direction="inbound",
+        subject="hi",
+        body_text="please reply",
+    )
+    assert email is not None
+
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
+        invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            email=email,
+            trigger="email",
+            model_override=FunctionModel(_model_that_calls_noop),
+        )
+
+    invoke_spans = [
+        s
+        for s in capfire.exporter.exported_spans_as_dict()
+        if s["name"] == "agent.invoke"
+    ]
+    assert len(invoke_spans) == 1
+    assert invoke_spans[0]["attributes"]["email_id"] == email.id
+
+
+def test_invoke_span_has_email_id_when_trigger_task_with_email(
+    database_connection: psycopg.Connection[dict[str, Any]],
+    capfire: CaptureLogfire,
+) -> None:
+    """trigger='task' on an email-driven task carries the same email_id the
+    run loop loaded from task.email_id."""
+    from mailpilot.database import create_email
+
+    account, contact, workflow = _setup(database_connection, workflow_type="inbound")
+    email = create_email(
+        database_connection,
+        gmail_message_id="msg-eid-task",
+        gmail_thread_id="thread-eid-task",
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        direction="inbound",
+        subject="task-driven",
+        body_text="reply please",
+    )
+    assert email is not None
+
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
+        invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            email=email,
+            trigger="task",
+            model_override=FunctionModel(_model_that_calls_noop),
+        )
+
+    invoke_spans = [
+        s
+        for s in capfire.exporter.exported_spans_as_dict()
+        if s["name"] == "agent.invoke"
+    ]
+    assert len(invoke_spans) == 1
+    assert invoke_spans[0]["attributes"]["email_id"] == email.id
+
+
+def test_invoke_span_no_email_id_when_trigger_task_without_email(
+    database_connection: psycopg.Connection[dict[str, Any]],
+    capfire: CaptureLogfire,
+) -> None:
+    """trigger='task' on a non-email task (task.email_id IS NULL) leaves
+    email_id absent so per-message rollups skip the row cleanly."""
+    _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
+        invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            trigger="task",
+            model_override=FunctionModel(_model_that_calls_noop),
+        )
+
+    invoke_spans = [
+        s
+        for s in capfire.exporter.exported_spans_as_dict()
+        if s["name"] == "agent.invoke"
+    ]
+    assert len(invoke_spans) == 1
+    assert "email_id" not in invoke_spans[0]["attributes"]
+
+
+def test_invoke_span_no_email_id_when_trigger_enrollment_run(
+    database_connection: psycopg.Connection[dict[str, Any]],
+    capfire: CaptureLogfire,
+) -> None:
+    """trigger='enrollment_run' (CLI-initiated outbound first reach-out) never
+    carries email_id and preserves existing trigger / workflow / contact attrs."""
+    _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
+        invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            trigger="enrollment_run",
+            model_override=FunctionModel(_model_that_calls_noop),
+        )
+
+    invoke_spans = [
+        s
+        for s in capfire.exporter.exported_spans_as_dict()
+        if s["name"] == "agent.invoke"
+    ]
+    assert len(invoke_spans) == 1
+    attrs = invoke_spans[0]["attributes"]
+    assert "email_id" not in attrs
+    assert attrs["trigger"] == "enrollment_run"
+    assert attrs["workflow_id"] == workflow.id
+    assert attrs["contact_id"] == contact.id
+    assert attrs["workflow_type"] == workflow.type
