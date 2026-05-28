@@ -37,7 +37,7 @@ clean: ## Export data, re-create database
 	$(call header,Re-creating database)
 	dropdb --if-exists mailpilot
 	createdb mailpilot
-	mailpilot status > /dev/null
+	mailpilot status
 
 py-update:
 	uv venv --clear && hash -r && uv sync --upgrade

@@ -19,8 +19,8 @@ Spec is authoritative → **SPEC.md** (§G goal, §C constraints, §I interfaces
 - `/sdd:backprop` — bug → spec protocol.
 - `/sdd:explain` — math-glyph → prose.
 - `/sdd:glyph` — encoding rules for SPEC.md ∧ spec-adjacent writes (CLAUDE.md, plans, design docs).
-- `/smoke-test` — end-to-end Gmail smoke (`outbound@lab5.ca` ↔ `inbound@lab5.ca`, `demo@lab5.ca` KB).
-- `/demo-test` — liveness probe of public lab5.ca/mailpilot/ (`outbound@lab5.ca` → `demo@lab5.ca`, prod-env Logfire check, PASS/FAIL only).
+- `/smoke-test` — end-to-end Gmail smoke (`outbound@lab5.ca` ↔ `inbound@lab5.ca`, `hello@lab5.ca` KB).
+- `/demo-test` — liveness probe of public lab5.ca/mailpilot/ (`outbound@lab5.ca` → `hello@lab5.ca`, prod-env Logfire check, PASS/FAIL only).
 - `/gh:*` — GitHub ops (issue / pr-create / merge / release / commit / design). ⊥ drive `gh` ∨ `git push`-to-PR by hand.
 - `/logfire:*` — instrument, dev-session, debug.
 
@@ -62,7 +62,7 @@ Concrete shape lives in code; spec invariants govern behaviour. Quick map:
 - **CRM** — Contact, Company, Tag, Note, Activity, Enrollment, Workflow. XOR rules §V.8 (tag, note), append-only §V.9 (activity, note), enrollment status §V.10, activity multi-target §V.23.
 - **Reporting** — Claude Code composes from CLI primitives. ⊥ built-in engine.
 - **Settings** — `~/.mailpilot/config.json` via `mailpilot config set KEY VALUE`. Keys per SPEC §I.
-- **Test accounts** — `outbound@lab5.ca`, `inbound@lab5.ca`, `demo@lab5.ca`. Service-account delegated. Re-create after `make clean` w/ `mailpilot account create --email ... --display-name ...`.
+- **Test accounts** — `outbound@lab5.ca`, `inbound@lab5.ca`, `hello@lab5.ca`. Service-account delegated. Re-create after `make clean` w/ `mailpilot account create --email ... --display-name ...`.
 
 ## LLM-First code style
 
