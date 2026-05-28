@@ -412,18 +412,35 @@ Save `TRIGGER_EMAIL_ID_B1`, `TRIGGER_THREAD_ID_B1`, capture wall-clock send time
 
 ### B4. Wait for the demo agent to reply (60-second SLA)
 
-Critical gate. The lab5.ca/mailpilot/ page promises delivery within ~60 seconds. Poll the outbound mailbox:
+Critical gate. The lab5.ca/mailpilot/ page promises delivery within ~60 seconds. Per SPEC `§V.63`, the latency verdict is derived from the agent.invoke span in Logfire, not from CLI poll cadence; the CLI poll is a `did-round-trip?` side-effect check only and uses the wider 120s cap (24 attempts × 5s) so a borderline run does not false-fail on the CLI loop alone.
+
+Poll the outbound mailbox (round-trip check only, cap 120s):
 
 ```
 mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction inbound --since <TEST_START_B>
 ```
 
-Match by `SUBJECT_B1` (likely with `Re:` prefix). Record the wall-clock time the reply first appears as `T_REPLY_B1`, compute `LATENCY_B1 = T_REPLY_B1 - T_SEND_B1`.
+Match by `SUBJECT_B1` (likely with `Re:` prefix). Note the reply's arrival as confirmation of round-trip; do not derive latency from this observation.
 
 **Gate B4 (the demo promise):**
 
-- Reply present, threaded under `SUBJECT_B1`.
-- `LATENCY_B1 <= 60s`. **If the reply takes longer, that is a regression of the lab5.ca/mailpilot/ promise -- record as a Critical Bug.** (Polling cadence is 5s, so granularity is coarse; if the first observation lands at 65s and it was the first reply on the thread, treat the run as borderline and re-test.)
+- Reply present, threaded under `SUBJECT_B1` (CLI round-trip check; cap 120s).
+- **Latency verdict via Logfire per §V.63.** Window `[T_SEND_B1, now]`, scope to the demo workflow:
+
+  ```sql
+  SELECT end_timestamp,
+         EXTRACT(EPOCH FROM (end_timestamp - TIMESTAMPTZ '<T_SEND_B1>')) AS latency_s
+  FROM records
+  WHERE deployment_environment = 'development'
+    AND span_name = 'agent.invoke'
+    AND start_timestamp >= '<T_SEND_B1>'
+    AND attributes->>'workflow_id' = '<DEMO_WORKFLOW_ID>'
+    AND attributes->>'trigger' = 'task'
+  ORDER BY start_timestamp
+  LIMIT 1
+  ```
+
+  `LATENCY_B1 = latency_s` from the row. **If `latency_s > 60`, that is a regression of the lab5.ca/mailpilot/ promise -- record as a Critical Bug.** Zero rows in the window means the demo workflow never fired; that is a separate Critical Bug (run-loop / Pub/Sub regression).
 - Reply on the demo side (`mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>`) → `is_routed == true`, `workflow_id == DEMO_WORKFLOW_ID`, `route_method == classified`. The classifier ran -- not `thread_match`, since this is a fresh thread.
 - Reply body **grounded in the KB** -- operator-judged per SPEC §V.31. Substring match against curated `expected_tokens` was retired (false negatives on phrasing variation like `0.48 mm` vs `0.48mm`); the operator now grades the reply against the live source doc. Procedure:
   1. Load the source doc the pair points at:
@@ -496,13 +513,14 @@ mailpilot email send \
   --body "<QUESTION_B2>"
 ```
 
-Save `TRIGGER_EMAIL_ID_B2`, capture `T_SEND_B2`, poll the outbound mailbox for `SUBJECT_B2` the same way as B4. Capture `T_REPLY_B2`. Carry `QA_ID_B2` forward to the gate.
+Save `TRIGGER_EMAIL_ID_B2`, capture `T_SEND_B2`, poll the outbound mailbox for `SUBJECT_B2` the same way as B4 (round-trip check only, cap 120s — latency verdict is Logfire-derived per §V.63). Carry `QA_ID_B2` forward to the gate.
 
 **Gate B6 (polite decline, no fabrication):**
 
 Out-of-scope decline keeps the script verifier (per SPEC §V.31): regex appropriately fits shape detection (vendor name near a digit-shaped fabrication, decline-phrase presence) and the surface area is small. The operator-judged path applies only to in-scope grounding (B4).
 
-- Reply present within 60s.
+- Reply present (CLI round-trip check; cap 120s).
+- **Latency verdict via Logfire per §V.63.** Same query shape as B4, swap `<T_SEND_B1>` for `<T_SEND_B2>`. `latency_s > 60` is a Critical Bug.
 - Reply body validated by the QA verifier:
 
   ```
@@ -573,11 +591,12 @@ mailpilot email send \
 
 Save `TRIGGER_EMAIL_ID_B3`, capture wall-clock send time as `T_SEND_B3`. Carry `QA_ID_B3`, `SOURCE_FILES_B3`, and `EXPECTED_READ_COUNT` forward.
 
-Poll the outbound mailbox for `SUBJECT_B3` (likely `Re:` prefixed) the same way as B4. Record `T_REPLY_B3` and compute `LATENCY_B3 = T_REPLY_B3 - T_SEND_B3`.
+Poll the outbound mailbox for `SUBJECT_B3` (likely `Re:` prefixed) the same way as B4 (round-trip check only, cap 120s — latency verdict is Logfire-derived per §V.63).
 
 **Gate B7 (multi-source grounding, no single-source synthesis):**
 
-- Reply present within 60s. Compare questions force a longer agent loop (>=2 `read_drive_markdown` calls), so latency near the 60s ceiling is more likely here than in B4 -- but a reply over 60s is still a Critical regression of the lab5.ca/mailpilot/ promise.
+- Reply present (CLI round-trip check; cap 120s). Compare questions force a longer agent loop (>=2 `read_drive_markdown` calls), so latency near the 60s ceiling is more likely here than in B4.
+- **Latency verdict via Logfire per §V.63.** Same query shape as B4, swap `<T_SEND_B1>` for `<T_SEND_B3>`. `latency_s > 60` is a Critical regression of the lab5.ca/mailpilot/ promise.
 - Reply on the demo side has `is_routed == true`, `workflow_id == DEMO_WORKFLOW_ID`, `route_method == classified`. Fresh thread, so not `thread_match`.
 - Reply body **grounded in EVERY source listed in `source_files`** -- operator-judged per the same §V.31 contract that governs B4. Procedure:
   1. Load all source docs in one bundle:
@@ -675,15 +694,32 @@ PID_B75b=$!
 wait $PID_B75a $PID_B75b
 ```
 
-Poll the outbound mailbox for BOTH replies (in either order), capping each at 60s wall-clock from `T_SEND_B75`. Capture `T_REPLY_B75a`, `T_REPLY_B75b` and the two `REPLY_EMAIL_ID_B75a` / `REPLY_EMAIL_ID_B75b` values.
+Poll the outbound mailbox for BOTH replies (in either order), capping each at 120s wall-clock from `T_SEND_B75` (round-trip check only; latency verdicts are Logfire-derived per §V.63). Capture `REPLY_EMAIL_ID_B75a` / `REPLY_EMAIL_ID_B75b` from the matches.
 
 **Gate B7.5 (multi-request, multi-tool concurrency):**
 
-- BOTH replies present within 60s of `T_SEND_B75`. Either missing means the system stalled one trigger while serving the other -- record as a Critical Bug (regression of the lab5.ca/mailpilot/ SLA under concurrent load).
+- BOTH replies present (CLI round-trip check; cap 120s each). Either missing means the system stalled one trigger while serving the other -- record as a Critical Bug (regression of the lab5.ca/mailpilot/ SLA under concurrent load).
+- **Per-span latency verdict via Logfire per §V.63.** Query the two agent.invoke spans by `email_id` (post §T.63; each span carries its own inbound trigger's id). Window `[T_SEND_B75, now]`, scope to the demo workflow:
+
+  ```sql
+  SELECT attributes->>'email_id' AS email_id,
+         end_timestamp,
+         EXTRACT(EPOCH FROM (end_timestamp - TIMESTAMPTZ '<T_SEND_B75>')) AS latency_s
+  FROM records
+  WHERE deployment_environment = 'development'
+    AND span_name = 'agent.invoke'
+    AND start_timestamp >= '<T_SEND_B75>'
+    AND attributes->>'workflow_id' = '<DEMO_WORKFLOW_ID>'
+    AND attributes->>'trigger' = 'task'
+  ORDER BY start_timestamp
+  LIMIT 5
+  ```
+
+  Expect exactly 2 rows, distinct `email_id` values. **Either `latency_s > 60` is a Critical SLA breach.** Fewer than 2 rows means the drain-layer concurrent worker pool (§V.62) regressed and one trigger was dropped or merged.
 - BOTH replies routed on the demo side with `workflow_id == DEMO_WORKFLOW_ID` and `route_method == classified` (each is a fresh thread). Either routed differently means the classifier serialized or misfired under load.
 - BOTH replies grounded in their own `source_file` per §V.31, operator-judged with the same verdict-JSON schema as B4. Run `qa.py source --id "$QA_ID_B75a"` and `qa.py source --id "$QA_ID_B75b"` separately, then grade each reply against its own source. A cross-grounded reply (B75a's body cites B75b's source, or vice versa) is a state-leak Bug -- shared mutable state across concurrent agent invocations.
 - Logfire window `[T_SEND_B75, T_SEND_B75 + 90s]`, scope to `workflow_id == DEMO_WORKFLOW_ID`:
-  - Exactly **2** `agent.invoke` spans, each with `workflow_id` matching `DEMO_WORKFLOW_ID` and `trigger='task'`. The `agent.invoke` rollup does not carry an `email_id` attribute at amend time, so attribute each span to B75a vs B75b via either (a) its `contact_id` (both spans share the same outbound contact here, so this disambiguates only by timing), (b) substring-matching `agent_reasoning` against the question's distinguishing terms, or (c) joining the span's child `running tool` spans on `trace_id` and inspecting the `reply_email` tool input. Option (b) is the simplest in practice.
+  - Exactly **2** `agent.invoke` spans, each with `workflow_id` matching `DEMO_WORKFLOW_ID`, `trigger='task'`, and a populated `email_id` attribute (per §V.11(+) / §T.63). Attribute B75a vs B75b by the inbound-side `email_id` recorded on each span — distinct values disambiguate the pair without `agent_reasoning` substring inspection.
   - The two `agent.invoke` spans' wall-clock intervals MUST overlap (`start(later) < end(earlier)`). Strictly sequential execution defeats the stress test -- record as a Bug ("agent invocations serialized; expected concurrent") and investigate the run-loop / task-drain path. If a recent pydantic-ai or sync-loop change serialized at this layer, pin the working version while investigating.
   - Each `agent.invoke` carries its own `search_drive_markdown` + `read_drive_markdown` + `reply_email` + `record_enrollment_outcome` chain. Tool spans across the two invocations MAY overlap (different threads, different `DriveClient` instances per `read_drive_markdown` call); a 60s+ Drive tool span anywhere in the window is the §B.34 race signature.
   - Zero `is_exception=true` and zero `level=warn` spans on either invocation. A `drive_unavailable` tool return surfaced in the tool's structured response is acceptable (the broadened catch envelope from §T.60 step (b)); an unhandled exception escaping the tool wrapper is not.

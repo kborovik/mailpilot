@@ -102,15 +102,17 @@ FAIL: mailpilot email send failed -- <one-line stderr summary>
 
 and stop. The production instance never saw the question; Logfire would be empty for this window.
 
-### Step 5: G1 -- reply round-trip
+### Step 5: G1 -- reply round-trip + Logfire latency verdict
 
-Poll Gmail directly via service-account impersonation of `outbound@lab5.ca` (per SPEC `§V.42` and `§V.46` -- liveness probes must hit the production-facing surface, not the local mailpilot DB which would require a separately-started `mailpilot run` to stay fresh). Up to 12 attempts, 5s apart (~60s):
+Per SPEC `§V.63`, the 60s latency verdict is derived from the production `agent.invoke` span in Logfire (Step 7 query already runs there); the CLI poll here is a `did-round-trip?` side-effect check only, capped at 120s (24 attempts × 5s) so a borderline reply does not false-fail the round-trip check.
+
+Poll Gmail directly via service-account impersonation of `outbound@lab5.ca` (per SPEC `§V.42` and `§V.46` -- liveness probes must hit the production-facing surface, not the local mailpilot DB which would require a separately-started `mailpilot run` to stay fresh). Up to 24 attempts, 5s apart (~120s):
 
 ```
 TAIL="${SUBJECT#*] }"
 REPLY_ID=""
 REPLY_BODY=""
-for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+for i in $(seq 1 24); do
   HIT_JSON=$(uv run python -c "
 import json
 from mailpilot.gmail import GmailClient, extract_text_from_message
@@ -140,7 +142,22 @@ done
 
 `REPLY_ID` is the Gmail message id (used only for trace/log; Step 6 consumes `REPLY_BODY` directly). Match by the unique `<topic>` tail since Gmail typically prepends `Re: ` to the subject.
 
-If `REPLY_ID` is empty after ~60s: this is a **G1 FAIL** -- record `no reply within 60s`, but still run Step 7 (Logfire) so the summary has signal.
+If `REPLY_ID` is empty after ~120s: this is a **G1 FAIL** -- record `no reply round-trip within 120s`, but still run Step 7 (Logfire) so the summary has signal.
+
+Otherwise, query Logfire for the production agent.invoke span's `end_timestamp` and compute latency from `T_SEND` (the wall-clock instant captured pre-`email send` in Step 3, equivalent to `TEST_START` here):
+
+```sql
+SELECT EXTRACT(EPOCH FROM (end_timestamp - TIMESTAMPTZ '$TEST_START')) AS latency_s
+FROM records
+WHERE deployment_environment = 'production'
+  AND span_name = 'agent.invoke'
+  AND start_timestamp >= '$TEST_START'
+  AND attributes->>'trigger' = 'task'
+ORDER BY start_timestamp
+LIMIT 1
+```
+
+`latency_s > 60` -> **G1 FAIL** -- record `agent latency=<latency_s>s exceeds 60s SLA`. Zero rows means the production deploy never processed the trigger; G1 FAIL with `no production agent.invoke span in window`. The 60s SLA verdict is the Logfire row, not the CLI poll cap.
 
 ### Step 6: G2 -- operator-judged groundedness
 
@@ -294,3 +311,4 @@ This skill does not retry, does not amend the spec, and does not auto-file an is
 - SPEC `§V.26` -- `gen_ai.tool.name` attribute (G3 span match).
 - SPEC `§V.37` -- cache_control attrs (Logfire summary bullet).
 - SPEC `§V.40` -- smoke-test report shape (explicitly NOT applied here).
+- SPEC `§V.63` -- gate-verdict source rule: latency verdict from `agent.invoke` span (G1), not CLI poll cadence.
