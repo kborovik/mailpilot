@@ -499,6 +499,80 @@ def test_send_email_ascii_rule_line_separator_rejects(
     gmail_client.send_message.assert_not_called()
 
 
+def test_send_email_single_space_bold_label_cluster_rejects(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§B.36 regression: `**label** *value*` cluster rendered with a single
+    space between the bold label and italic value -- the smoke-test
+    2026-05-28 B4 / B7 shape that slipped past the pre-§T.62 `\\s{2,}`
+    floor."""
+    account = make_test_account(database_connection)
+    make_test_contact(database_connection, email="recipient@example.com")
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    gmail_client = _make_gmail_client(account)
+
+    body = (
+        "Hi -- here are the specs:\n\n"
+        "**Peak Flow Rate** *26.6 GPM*\n"
+        "**Pressure Loss** *15 psi*\n"
+        "**Pipe Connection** *2 inch NPT*\n\n"
+        "Let me know."
+    )
+
+    result = send_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        to="recipient@example.com",
+        subject="Specs",
+        body=body,
+    )
+
+    assert result["error"] == "format"
+    assert "|---|" in result["message"]
+    gmail_client.send_message.assert_not_called()
+
+
+def test_send_email_prose_with_incidental_short_line_passes(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.29 prose immunity: a multi-clause prose body with one incidental
+    short line broken between long sentences must NOT trip the lint.
+    Consecutive tracking resets on the short line (no internal whitespace)
+    so the surrounding long lines never reach the 3-consecutive threshold."""
+    account = make_test_account(database_connection)
+    make_test_contact(database_connection, email="recipient@example.com")
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    gmail_client = _make_gmail_client(account)
+
+    body = (
+        "We completed the migration to the new system and validated all the "
+        "data integrity checks across both clusters this morning.\n"
+        "OK?\n"
+        "Remaining work involves user training and documentation updates "
+        "over the next two weeks before the public launch.\n"
+        "Thanks!"
+    )
+
+    result = send_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        to="recipient@example.com",
+        subject="Update",
+        body=body,
+    )
+
+    assert "error" not in result
+    gmail_client.send_message.assert_called_once()
+
+
 def test_send_email_mixed_body_with_separator_passes(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):

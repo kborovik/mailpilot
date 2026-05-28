@@ -36,38 +36,47 @@ from mailpilot.drive import DriveClient
 from mailpilot.models import Account
 from mailpilot.settings import Settings
 
-# Per §V.29: detect spec-shape rows (label + 2+ spaces + any non-whitespace
-# value) on lines that do not use Markdown pipe-table syntax. Three or more
-# such lines without a `|---|` separator anywhere in the body indicates a
-# spec sheet rendered as space-aligned text rather than a proper pipe-table.
-# Recurring drift per §B.5 / §B.9 / §B.14 that prompt-only fixes did not hold;
+# Per §V.29: detect spec-shape rows (label + any whitespace + non-whitespace
+# value, length capped at 80 chars) on lines that do not use Markdown
+# pipe-table syntax. Three or more *consecutive* such lines without a
+# `|---|` separator anywhere in the body indicates a spec sheet rendered as
+# space-aligned text rather than a proper pipe-table. Recurring drift per
+# §B.5 / §B.9 / §B.14 / §B.36 that prompt-only fixes did not hold;
 # numeric-only matching pre-§B.14 missed non-numeric KDF rows like
-# "Mesh Size  20x50". ASCII rule-line runs (`-{6,}`, `={6,}`, `_{6,}` on a
-# standalone line) do NOT count as a pipe-table separator -- only `|---|`
-# does -- so an agent emitting `------` between key/value rows still trips
-# the lint.
-_SPEC_ROW_RE = re.compile(r"^[^|]+?\s{2,}\S")
+# "Mesh Size  20x50"; the 2-space floor pre-§B.36 missed the single-space
+# `**label** *value*` cluster shape. Consecutive tracking preserves prose
+# immunity under the widened `\s+` floor: short greetings or `Best,`/`Thanks!`
+# closers separated from each other by blank or non-matching lines never
+# accumulate to the trigger threshold. ASCII rule-line runs (`-{6,}`, `={6,}`,
+# `_{6,}` on a standalone line) do NOT count as a pipe-table separator --
+# only `|---|` does -- so an agent emitting `------` between key/value rows
+# still trips the lint.
+_SPEC_ROW_RE = re.compile(r"^[^|]{1,80}\s+\S.*$")
 _PIPE_SEPARATOR_RE = re.compile(r"\|\s*-{3,}\s*\|")
 
 
 def _check_spec_table(body: str) -> dict[str, str] | None:
     """Lint email body for spec rows missing a pipe-table separator (§V.29).
 
-    Returns the format error dict when the body has >=3 lines matching the
-    spec-row shape (label, two-or-more spaces, number) without any pipe
-    character on the line, and no Markdown pipe-table separator
-    (``|---|`` / ``| --- |``) anywhere in the body. Returns ``None``
-    otherwise so the caller can proceed to send.
+    Returns the format error dict when the body has >=3 consecutive lines
+    matching the spec-row shape (1-80 non-pipe chars, one-or-more spaces,
+    non-whitespace) without any pipe character on those lines, and no
+    Markdown pipe-table separator (``|---|`` / ``| --- |``) anywhere in
+    the body. Non-matching lines reset the consecutive counter so prose
+    paragraphs (short greetings, blank-line-separated sentences) do not
+    accumulate to the trigger threshold. Returns ``None`` otherwise so the
+    caller can proceed to send.
     """
     if _PIPE_SEPARATOR_RE.search(body):
         return None
-    spec_rows = 0
+    consecutive = 0
     for line in body.splitlines():
         if "|" in line:
+            consecutive = 0
             continue
         if _SPEC_ROW_RE.match(line):
-            spec_rows += 1
-            if spec_rows >= 3:
+            consecutive += 1
+            if consecutive >= 3:
                 return {
                     "error": "format",
                     "message": (
@@ -75,6 +84,8 @@ def _check_spec_table(body: str) -> dict[str, str] | None:
                         "|---| header separator"
                     ),
                 }
+        else:
+            consecutive = 0
     return None
 
 
