@@ -114,6 +114,17 @@ def test_inbound_google_drive_protocol_carries_grounding() -> None:
     assert "read_drive_markdown" in protocol
 
 
+def test_inbound_google_drive_protocol_carries_search_budget_fallback() -> None:
+    """§V.28(+): after two consecutive search_drive_markdown misses the agent
+    must fall back to list_drive_markdown rather than spin further searches."""
+    protocol = TEMPLATES["inbound-google-drive"].protocol
+    assert "two consecutive search_drive_markdown" in protocol
+    assert "list_drive_markdown once instead" in protocol
+    assert "do not retry search_drive_markdown a third time" in protocol
+    # Regression: the existing >=3-reads-on-top-hits rule survives the amend.
+    assert "top >=3 results" in protocol
+
+
 def test_inbound_google_drive_drive_tools_marked_sequential() -> None:
     """§V.61 + §B.34: every Drive Tool binding must carry ``sequential=True``.
 

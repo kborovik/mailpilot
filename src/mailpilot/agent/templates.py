@@ -128,7 +128,10 @@ _DRIVE_GROUNDING = (
     "search_drive_markdown returns >=2 hits, call read_drive_markdown on the "
     "top >=3 results (or all hits if fewer than 3) before composing the "
     "reply, then pick the best match by model-number / spec match -- not "
-    "ranking order alone. Cite the source file in the reply.\n"
+    "ranking order alone. Cite the source file in the reply. If two "
+    "consecutive search_drive_markdown calls return too few hits to ground "
+    "the reply, stop searching and call list_drive_markdown once instead -- "
+    "do not retry search_drive_markdown a third time.\n"
 )
 
 
