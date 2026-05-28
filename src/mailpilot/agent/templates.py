@@ -152,10 +152,20 @@ _CORE: tuple[Tool[AgentDeps], ...] = (
     Tool(_wrap_noop, name="noop"),
 )
 
+# Per §V.61: each Drive tool binds a googleapiclient.discovery.Resource that
+# carries one shared httplib2.Http transport with no internal locks. Pydantic
+# AI dispatches sync tools via asyncio.to_thread, so an Anthropic-emitted
+# parallel fan-out would land two threads against the same Http and race the
+# httplib2 connection-pool dict (see §B.34 -- one read returned in ~1.1s while
+# its sibling hung 60.8s at the socket timeout). sequential=True tells the
+# dispatcher to serialize parallel emissions on these tools; non-Drive peer
+# tools keep parallel dispatch. Contract test in
+# tests/test_agent_drive_concurrency.py enumerates these registrations so a
+# future drop of the kwarg trips the suite.
 _DRIVE: tuple[Tool[AgentDeps], ...] = (
-    Tool(_wrap_list_drive_markdown, name="list_drive_markdown"),
-    Tool(_wrap_read_drive_markdown, name="read_drive_markdown"),
-    Tool(_wrap_search_drive_markdown, name="search_drive_markdown"),
+    Tool(_wrap_list_drive_markdown, name="list_drive_markdown", sequential=True),
+    Tool(_wrap_read_drive_markdown, name="read_drive_markdown", sequential=True),
+    Tool(_wrap_search_drive_markdown, name="search_drive_markdown", sequential=True),
 )
 
 

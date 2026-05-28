@@ -1,6 +1,6 @@
 ---
 name: smoke-test
-description: End-to-end MailPilot smoke test against real Gmail across outbound@lab5.ca and inbound@lab5.ca. One Phase 0 setup → 2 scenarios run sequentially without state reset. Scenario A = outbound workflow + manual operator reply. Scenario B = live KB-grounded inbound auto-reply demo at https://lab5.ca/mailpilot// (real Drive folder, in-scope grounded reply + out-of-scope polite decline). Outbound workflow stays active across B → verifies concurrent multi-account, multi-workflow operation. Both scenarios mandatory. Use whenever user says "smoke test", "run end-to-end", "verify the system works", or after non-trivial changes to sync, routing, agent execution, KB grounding, or Pub/Sub code -- even without explicit invocation.
+description: End-to-end MailPilot smoke test against real Gmail across outbound@lab5.ca and inbound@lab5.ca. One Phase 0 setup → 2 scenarios run sequentially without state reset. Scenario A = outbound workflow + manual operator reply. Scenario B = live KB-grounded inbound auto-reply demo at https://lab5.ca/mailpilot// (real Drive folder, in-scope single-source grounded reply + out-of-scope polite decline + multi-source compare-and-contrast across manufacturers e.g. Dow FilmTec vs Hydranautics vs LG Chem vs Toray RO membranes). Outbound workflow stays active across B → verifies concurrent multi-account, multi-workflow operation. Both scenarios mandatory. Use whenever user says "smoke test", "run end-to-end", "verify the system works", or after non-trivial changes to sync, routing, agent execution, KB grounding, or Pub/Sub code -- even without explicit invocation.
 ---
 
 # Smoke Test
@@ -15,7 +15,7 @@ Two scenarios share one Phase 0 setup and one `mailpilot run` loop. Outbound wor
 | Scenario | Active workflows                    | Trigger                                  | Verifies                                                                                                        |
 | -------- | ----------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | A        | Outbound only                       | `mailpilot enrollment run`               | Outbound agent send → Gmail delivery → manual operator reply → thread_match routing → agent processes reply     |
-| B        | Outbound (terminal) + Demo (active) | `mailpilot email send` (operator-driven) | The lab5.ca/mailpilot/ promise -- KB-grounded reply within 60s for in-scope question, polite decline for out-of-scope |
+| B        | Outbound (terminal) + Demo (active) | `mailpilot email send` (operator-driven) | The lab5.ca/mailpilot/ promise -- KB-grounded reply within 60s for an in-scope question, polite decline for out-of-scope, AND a multi-source compare-and-contrast across manufacturer datasheets |
 
 Both scenarios are **mandatory**. `make clean` runs **once**, at the very start. Scenario B IS the lab5.ca/mailpilot/ system under test -- it must run.
 
@@ -29,7 +29,7 @@ Both scenarios are **mandatory**. `make clean` runs **once**, at the very start.
   SUBJECT_A="[ST-$(date +%H%M%S)] ${TOPIC_A}"
   ```
 
-  Scenario B sends two trigger emails. Generate `SUBJECT_B1` (in-scope) and `SUBJECT_B2` (out-of-scope) independently the same way. Verify all three (`SUBJECT_A`, `SUBJECT_B1`, `SUBJECT_B2`) are distinct before continuing. If `/usr/share/dict/words` is unavailable, fall back to `head -c 12 /dev/urandom | base32 | tr -d '=' | head -c 10`.
+  Scenario B sends three trigger emails. Generate `SUBJECT_B1` (in-scope), `SUBJECT_B2` (out-of-scope), and `SUBJECT_B3` (compare-and-contrast) independently the same way. Verify all four (`SUBJECT_A`, `SUBJECT_B1`, `SUBJECT_B2`, `SUBJECT_B3`) are distinct before continuing. If `/usr/share/dict/words` is unavailable, fall back to `head -c 12 /dev/urandom | base32 | tr -d '=' | head -c 10`.
 
 - **Test start ISO timestamp.** Capture before each scenario; reuse for `--since` filters and Logfire windows.
 - **Polling.** When waiting for sync, routing, or agent results: poll up to 12 attempts, 5s apart (~60s total). Do not call `mailpilot account sync` directly -- the background `mailpilot run` loop owns sync.
@@ -46,18 +46,20 @@ Both scenarios are **mandatory**. `make clean` runs **once**, at the very start.
 
 ## Scripts
 
-Located at `.claude/skills/smoke-test/scripts/`. All QA-only -- KB-content maintenance (PDF conversion, verification, Drive push) lives outside the smoke test.
+Located at `.claude/skills/smoke-test/scripts/`. All QA-only -- KB-content maintenance (PDF conversion, verification, Drive push) lives outside the smoke test except for the Drive sync helper below.
 
-**Runtime (used during the test, in B3/B4/B6):**
+**Runtime (used during the test, in B3/B4/B6/B7):**
 
-- `qa.py pick [--type inscope|outscope] [--id ID]` -- emit one Q/A pair as JSON. Random unless `--id` given. Default type is `inscope`. The pair includes the question to send and the source `.md` file the agent must cite (in-scope) or the decline contract (out-of-scope).
-- `qa.py source --id ID` -- impersonate `inbound@lab5.ca`, load the pair's `source_file` from the demo Drive folder (`1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat`), print its Markdown content to stdout. Exit non-zero when the file is absent (KB-drift signal -- the pair points at a doc the agent could not have grounded in either). Used by gate B4 so the operator can grade groundedness against the live source.
-- `qa.py check --id ID --reply-text "<body>" | --reply-file PATH` -- **out-of-scope only** post-§V.31. Validates a decline reply against `forbidden_token_pairs` and `decline_signals`. Exit 0 = pass, 1 = fail, 2 = caller passed an in-scope id (in-scope grading is operator-judged; see gate B4). JSON on stdout lists fabrications / decline-signal absence.
-- `qa_pairs.json` -- 29 in-scope + 5 out-of-scope pairs. In-scope pairs retain `expected_tokens` for historical-run repro but the field is no longer consumed by any gate; the live source loaded via `qa.py source` is the grounding evidence. Out-of-scope pairs name (vendor, spec-shape) regex pairs the reply MUST NOT match, plus decline-signal phrases the reply MUST contain.
+- `qa.py pick [--type inscope|outscope|compare] [--id ID]` -- emit one Q/A pair as JSON. Random unless `--id` given. Default type is `inscope`. The pair includes the question to send and either the single source `.md` file the agent must cite (in-scope), the list of source files it must synthesize across (compare), or the decline contract (out-of-scope).
+- `qa.py source --id ID` -- impersonate `inbound@lab5.ca`, load the pair's source markdown from the demo Drive folder (`1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat`), print to stdout. For in-scope pairs that is one file; for compare pairs each file is preceded by a `=== SOURCE: <name> ===` separator so the operator can grade the reply against every source. Exit non-zero when ANY source file is absent (KB-drift signal -- the pair points at a doc the agent could not have grounded in either). Used by gate B4 (in-scope) and gate B7 (compare).
+- `qa.py check --id ID --reply-text "<body>" | --reply-file PATH` -- **out-of-scope only** post-§V.31. Validates a decline reply against `forbidden_token_pairs` and `decline_signals`. Exit 0 = pass, 1 = fail, 2 = caller passed a non-outscope id (in-scope grading is operator-judged in gate B4; compare grading is operator-judged in gate B7). JSON on stdout lists fabrications / decline-signal absence.
+- `qa_pairs.json` -- 29 in-scope + 11 compare + 5 out-of-scope pairs. In-scope pairs retain `expected_tokens` for historical-run repro but the field is no longer consumed by any gate; the live source loaded via `qa.py source` is the grounding evidence. Compare pairs carry `source_files: list[str]` (>=2 files) and force the agent to issue >=2 `read_drive_markdown` calls and synthesize across manufacturers (Dow FilmTec vs Hydranautics vs LG Chem vs Toray RO membranes, Pulsafeeder vs ProMinent dosing pumps, Watts UV-COM vs Trojan UVMax UV, Pure Aqua PAPV vs ROPV pressure vessels, etc.). Out-of-scope pairs name (vendor, spec-shape) regex pairs the reply MUST NOT match, plus decline-signal phrases the reply MUST contain.
 
 **Maintenance (run only after the demo Drive folder content changes):**
 
-- `generate_qa_pairs.py` -- regenerate `qa_pairs.json`. Reads each `.md` from the live Drive folder via the impersonated DriveClient, asks Haiku 4.5 to draft one in-scope question per file with verifiable expected_tokens. Out-of-scope pairs are hand-curated inside the script; edit them there to rotate vendors.
+- `kb-docs/` -- repo source-of-truth markdown for the demo KB. The agent reads from Drive, not from this directory; this is the file set that gets pushed to Drive by `sync_kb_to_drive.py`. Edit files here, then sync.
+- `sync_kb_to_drive.py` -- push every `*.md` from `kb-docs/` into the demo Drive folder. Impersonates `kb@lab5.ca` (Shared Drive Manager); requires the service account to be authorized for `https://www.googleapis.com/auth/drive` (the full RW scope, not the read-only scope the test loop uses). Idempotent: existing files are content-diffed and updated in place so `web_view_link` stays stable; new files get `anyoneWithLink:reader` so the link the agent quotes opens for external recipients. `--dry-run` reports planned actions without writing. Run after adding manufacturer datasheets to `kb-docs/` and before re-running the smoke test.
+- `generate_qa_pairs.py` -- regenerate `qa_pairs.json`. Reads each `.md` from the live Drive folder via the impersonated DriveClient, asks Haiku 4.5 to draft one in-scope question per file with verifiable expected_tokens. Out-of-scope pairs are hand-curated inside the script; compare pairs are hand-curated directly in `qa_pairs.json` (one good compare pair takes more author judgement than one in-scope pair, so the model isn't asked to draft them).
 
 ---
 
@@ -101,7 +103,7 @@ print(len(files), [f['name'] for f in files])
 "
 ```
 
-Expect **at least 10 markdown files** (the original three -- `pure-aqua-commercial-ro-systems.md`, `pure-aqua-industrial-water-softener.md`, `watts-uv-com-disinfection.md` -- plus distractors covering adjacent water-treatment products that are still in-scope but irrelevant to the B1 question). The size matters: with only 3 docs the agent can succeed by listing every file, which masks a regression where it forgets to use `search_drive_markdown` as the targeted entry point. If fewer than 10, B's `search` vs `list` discriminator (gate B5) is meaningless -- stop and add more KB docs before continuing.
+Expect **at least 30 markdown files** (the original water-treatment catalog, plus the five compare-and-contrast targets pushed by `sync_kb_to_drive.py`: `lg-chem-bw-440-r-g2-ro-membrane.md`, `toray-tm720-440-ro-membrane.md`, `prominent-gamma-l-metering-pump.md`, `trojan-uvmax-pro-uv-disinfection.md`, `ropv-r80300b-pressure-vessel-fiberglass.md`). The size matters for two reasons: the agent can no longer succeed by listing every file (regression-masking risk for `search` vs `list`), and the compare-target docs MUST be present or gate B7 cannot grade groundedness against the live sources. If any of the five compare-target files is missing, run `uv run python .claude/skills/smoke-test/scripts/sync_kb_to_drive.py` to push them from the repo source-of-truth before continuing.
 
 If the count is zero or `not_found`, the failure is Drive ACL, not KB content -- `inbound@lab5.ca`'s Shared Drive Reader membership is what makes files visible to the impersonated user. `anyoneWithLink:reader` alone does **not** make files appear here -- it only governs who can open the URL once it's pasted into the reply.
 
@@ -332,25 +334,32 @@ Do not stop the sync loop. Do not run `make clean`. Do not recreate accounts or 
 
 ## Scenario B: KB-grounded demo (lab5.ca/mailpilot/)
 
-**Hypothesis:** The lab5.ca/mailpilot/ system delivers on its public promise -- "a professional response grounded in real data" within ~60 seconds for in-scope questions, and a polite explanatory reply (no fabricated specs) for questions outside the KB. With the outbound workflow from A still active, the demo workflow on `inbound@lab5.ca` correctly classifies an operator-sent question on a fresh thread, the agent grounds its answer in the real Drive KB via `list_drive_markdown` + `read_drive_markdown`, and the reply round-trips to the outbound mailbox.
+**Hypothesis:** The lab5.ca/mailpilot/ system delivers on its public promise -- "a professional response grounded in real data" within ~60 seconds for in-scope questions, a polite explanatory reply (no fabricated specs) for questions outside the KB, and a structurally-sound multi-source synthesis when the question forces the agent to compare specs across vendor datasheets. With the outbound workflow from A still active, the demo workflow on `inbound@lab5.ca` correctly classifies each operator-sent question on a fresh thread, the agent grounds its answer in the real Drive KB via `list_drive_markdown` + `read_drive_markdown`, issues one `read_drive_markdown` per source document the compare question targets, and the reply round-trips to the outbound mailbox.
 
 **Real KB used.** This scenario uses the production KB folder, not a fixture:
 
 - Shared Drive: `MailPilot` (ID `0AJIvyECg210LUk9PVA`). Members: `kb@lab5.ca` Manager, `inbound@lab5.ca` Reader.
 - Folder name: `MailPilot Demo`
 - Folder ID: `1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat`
-- Markdown files (as of writing -- the Phase 0 KB visibility gate enumerates them and asserts the ≥10 floor; re-confirm via that gate before each run). Three answer-bearing seeds:
+- Markdown files (as of writing -- the Phase 0 KB visibility gate enumerates them and asserts the ≥30 floor; re-confirm via that gate before each run). In-scope single-source seeds:
   - `pure-aqua-commercial-ro-systems.md` -- TW-series RO systems (e.g., TW-18.0K-1240).
   - `pure-aqua-industrial-water-softener.md` -- SF-series softeners (e.g., SF-100S).
   - `watts-uv-com-disinfection.md` -- UV-COM disinfection units.
 
-  Plus ≥7 distractors on adjacent in-scope water-treatment topics so the search-vs-list discriminator (gate B5) is meaningful. The seeds are what the in-scope B1 question targets; the agent must locate one of them via `search_drive_markdown` rather than by listing the whole folder.
+  Compare-and-contrast targets (pushed by `sync_kb_to_drive.py` from `kb-docs/`):
+  - 8" brackish RO membranes (4-way bake-off): `dow-filmtec-eco-440i-ro-membrane.md`, `hydranautics-cpa4-ro-membrane.md`, `lg-chem-bw-440-r-g2-ro-membrane.md`, `toray-tm720-440-ro-membrane.md`.
+  - Chemical dosing pumps: `pulsafeeder-chem-tech-100-150-chemical-dosing-pump.md` vs `prominent-gamma-l-metering-pump.md`.
+  - UV disinfection: `watts-uv-com-disinfection.md` vs `trojan-uvmax-pro-uv-disinfection.md` (and `watts-smartstream-uv-disinfection.md` for an intra-vendor pair).
+  - FRP pressure vessels: `pure-aqua-papv-ro-pressure-vessels.md` vs `ropv-r80300b-pressure-vessel-fiberglass.md`.
+  - Iron-removal filter media (intra-vendor): `clack-birm-iron-removal-media.md` vs `clack-pyrolox-iron-manganese-media.md`.
+
+  Plus distractors on adjacent in-scope water-treatment topics so the search-vs-list discriminator (gate B5) is meaningful. The single-source seeds are what the in-scope B3 question targets; the agent must locate one of them via `search_drive_markdown` rather than by listing the whole folder. The compare targets are what B7 forces the agent to multi-read.
 
   PDFs sit alongside the `.md` files; the `mimeType='text/markdown'` filter on both `list_drive_markdown` and `search_drive_markdown` must skip them. If it does not, that is a defect.
 
 - Access model: because the KB lives in a Shared Drive, listing depends on the impersonated user being a Shared Drive member, not on per-file ACL. `anyoneWithLink:reader` is set on every file so the `web_view_link` returned by `read_drive_markdown` opens for strangers reading the agent's reply. If `list_drive_markdown` returns an empty list or `not_found`, the failure mode is almost always Shared Drive membership of `inbound@lab5.ca`, not file-level sharing -- fix that first, do not patch around it.
 
-Capture `TEST_START_B` (ISO, must be later than A's last activity) and two distinct subjects -- `SUBJECT_B1` (in-scope) and `SUBJECT_B2` (out-of-scope) -- per the Conventions section. Both must differ from `SUBJECT_A`.
+Capture `TEST_START_B` (ISO, must be later than A's last activity) and three distinct subjects -- `SUBJECT_B1` (in-scope), `SUBJECT_B2` (out-of-scope), `SUBJECT_B3` (compare-and-contrast) -- per the Conventions section. All three must differ from each other and from `SUBJECT_A`.
 
 ### B1. Import the demo inbound workflow
 
@@ -506,24 +515,135 @@ Out-of-scope decline keeps the script verifier (per SPEC §V.31): regex appropri
 
 - The `agent.invoke` for B6 still shows a KB-consulting tool call followed by `reply_email`. `search_drive_markdown` (returning `[]`) is the expected path -- the agent searches with terms from the question, gets no hits, and declines. `list_drive_markdown` is also acceptable for this decline path. Missing both means the agent declined without consulting the KB -- it might have got lucky on this question, but the prompt contract was not honoured. Record as a Bug.
 
-### B7. Verify the CRM activity timeline
+### B6.5. Concurrent-fanout race regression check
+
+This is a Logfire-only gate that piggybacks on B7's compare invocation (the only Scenario B turn that emits multiple `read_drive_markdown` calls). It exists to catch §B.34 -- the `httplib2.Http` thread-safety race where one parallel `read_drive_markdown` returned in ~1s while its sibling hung 60.83s at the socket timeout, killing the agent run. The structural fix is `sequential=True` on every Drive `Tool(...)` registration in `src/mailpilot/agent/templates.py` (§V.61); this gate verifies the dispatcher actually serializes parallel emissions in production.
+
+Run **after** B7's tool-use gate (the assertion needs B7's `agent.invoke` to be in Logfire). Window `[T_SEND_B3, T_REPLY_B3 + 10s]`, scope to B7's invocation:
+
+```sql
+WITH compare AS (
+  SELECT trace_id, span_id
+  FROM records
+  WHERE deployment_environment = 'development'
+    AND span_name = 'agent.invoke'
+    AND start_timestamp >= '<T_SEND_B3>'
+    AND start_timestamp <= '<T_REPLY_B3>'
+    AND attributes->>'workflow_id' = '<DEMO_WORKFLOW_ID>'
+  LIMIT 1
+)
+SELECT span_name, start_timestamp, end_timestamp,
+       attributes->>'gen_ai.tool.name' AS tool_name,
+       is_exception, level
+FROM records
+WHERE trace_id IN (SELECT trace_id FROM compare)
+  AND attributes->>'gen_ai.tool.name' = 'read_drive_markdown'
+ORDER BY start_timestamp
+LIMIT 20;
+```
+
+**Gate B6.5 (race signature absent):**
+
+- At least 2 `read_drive_markdown` spans inside the B7 `agent.invoke` (the compare-and-contrast question forces multi-doc fanout; fewer is a separate regression already caught by B7's `EXPECTED_READ_COUNT` check).
+- **No span duration >=60s.** A `read_drive_markdown` span at or past the 60s `_DRIVE_HTTP_TIMEOUT_SECONDS` cap is the §B.34 hang signature; it means a sibling read raced the shared `httplib2.Http` and stalled at the socket timeout. Record as a Critical Bug -- the race fix has regressed and the next failure will burn the §V.44 retry budget.
+- **No `is_exception=true` and no `level=warn` on any of these spans.** A bare `TimeoutError` / `socket.timeout` / `OSError` that escapes the tool wrapper means the broadened catch envelope in `src/mailpilot/agent/tools.py` was reverted; the structured `drive_unavailable` tool return (which lets the surviving sibling carry the agent run) is gone.
+- Sibling spans must not overlap. `sequential=True` in the dispatcher serializes parallel emissions, so for any two `read_drive_markdown` spans, the later one's `start_timestamp` >= the earlier one's `end_timestamp`. An overlap means a future Pydantic AI bump dropped the `sequential` honor on parallel tool dispatch; record as a Bug and pin the working pydantic-ai version while investigating.
+
+### B7. Send the compare-and-contrast question
+
+Pick a random compare pair from the manifest. Compare pairs force the agent to read >=2 manufacturer datasheets and synthesize across them -- the failure mode this gate catches is a reply that names all the products in question but pulls specs from only one source (or, worse, fabricates specs for products it never read):
+
+```
+QA_B3=$(python3 .claude/skills/smoke-test/scripts/qa.py pick --type compare)
+QA_ID_B3=$(printf '%s' "$QA_B3" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+QUESTION_B3=$(printf '%s' "$QA_B3" | python3 -c 'import json,sys; print(json.load(sys.stdin)["question"])')
+SOURCE_FILES_B3=$(printf '%s' "$QA_B3" | python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin)["source_files"]))')
+EXPECTED_READ_COUNT=$(printf '%s' "$QA_B3" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["source_files"]))')
+```
+
+Send the question on a fresh subject:
+
+```
+mailpilot email send \
+  --account-id <OUTBOUND_ACCOUNT_ID> \
+  --to inbound@lab5.ca \
+  --subject "<SUBJECT_B3>" \
+  --body "<QUESTION_B3>"
+```
+
+Save `TRIGGER_EMAIL_ID_B3`, capture wall-clock send time as `T_SEND_B3`. Carry `QA_ID_B3`, `SOURCE_FILES_B3`, and `EXPECTED_READ_COUNT` forward.
+
+Poll the outbound mailbox for `SUBJECT_B3` (likely `Re:` prefixed) the same way as B4. Record `T_REPLY_B3` and compute `LATENCY_B3 = T_REPLY_B3 - T_SEND_B3`.
+
+**Gate B7 (multi-source grounding, no single-source synthesis):**
+
+- Reply present within 60s. Compare questions force a longer agent loop (>=2 `read_drive_markdown` calls), so latency near the 60s ceiling is more likely here than in B4 -- but a reply over 60s is still a Critical regression of the lab5.ca/mailpilot/ promise.
+- Reply on the demo side has `is_routed == true`, `workflow_id == DEMO_WORKFLOW_ID`, `route_method == classified`. Fresh thread, so not `thread_match`.
+- Reply body **grounded in EVERY source listed in `source_files`** -- operator-judged per the same §V.31 contract that governs B4. Procedure:
+  1. Load all source docs in one bundle:
+
+     ```
+     python3 .claude/skills/smoke-test/scripts/qa.py source --id "$QA_ID_B3"
+     ```
+
+     Non-zero exit = at least one source is missing from Drive (KB drift) -- record as a Bug and stop B7 (the agent could not have grounded against the missing doc, so a regression here would be false). `qa.py source` prints each source preceded by a `=== SOURCE: <name> ===` separator so the operator can attribute claims to specific files.
+
+  2. Read the agent's reply body:
+
+     ```
+     mailpilot email view <REPLY_EMAIL_ID_B3> | python3 -c 'import json,sys; print(json.load(sys.stdin)["email"]["body_text"])'
+     ```
+
+  3. As operator, emit a structured JSON verdict on stdout. Schema, exact field names:
+
+     ```json
+     {
+       "qa_id": "<QA_ID_B3>",
+       "question": "<question text>",
+       "source_files": ["<file 1>", "<file 2>", "..."],
+       "answers_question": true,
+       "every_factual_claim_supported_by_source": true,
+       "every_source_contributes_at_least_one_claim": true,
+       "cites_all_source_files": true,
+       "unsupported_claims": [],
+       "single_sourced_compare": false,
+       "verdict": "pass"
+     }
+     ```
+
+     New fields versus B4:
+     - `every_source_contributes_at_least_one_claim` -- false if the reply names a product but pulls zero specs from its datasheet (the agent guessed or skipped that read).
+     - `single_sourced_compare` -- true if every concrete number in the reply could plausibly have come from just one of the source docs (failure to actually compare). Flip of the structural property the compare-test is checking.
+     - `unsupported_claims` -- list each factual claim verbatim that no source supports. Forces concrete enumeration to defend against LLM-judge sycophancy.
+
+     `verdict` MUST be `"pass"` if and only if `answers_question`, `every_factual_claim_supported_by_source`, `every_source_contributes_at_least_one_claim`, and `cites_all_source_files` are all true, AND `unsupported_claims` is empty, AND `single_sourced_compare` is false. Otherwise `"fail"`.
+
+- **Tool-use gate.** The `agent.invoke` for B7 must include:
+  1. `search_drive_markdown` >=1 (with a non-empty query and `folder_id=1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat`).
+  2. `read_drive_markdown` exactly `EXPECTED_READ_COUNT` times (one per file in `source_files`), each returning non-empty `content`.
+  3. `reply_email` (no `error` key in the tool return; format errors mean the spec-table lint rejected the body -- record as a §V.29 prompt-fidelity Bug).
+  4. `record_enrollment_outcome` (`outcome=completed`).
+
+  Fewer `read_drive_markdown` calls than `EXPECTED_READ_COUNT` is the headline regression this gate catches -- the agent guessed at one of the products' specs instead of reading the doc. Record as a Bug even if the reply happens to be factually correct. More reads than expected (e.g., the agent followed a distractor) is acceptable as long as the four required calls above are present.
+
+### B8. Verify the CRM activity timeline
 
 ```
 mailpilot activity list --contact-id <OUTBOUND_CONTACT_ID> --since <TEST_START_B>
 ```
 
-**Gate B7 (activity wiring):** activity types follow the `enrollment_*` / `email_*` vocabulary enforced by `activity.type` CHECK constraint in `src/mailpilot/schema.sql`.
+**Gate B8 (activity wiring):** activity types follow the `enrollment_*` / `email_*` vocabulary enforced by `activity.type` CHECK constraint in `src/mailpilot/schema.sql`.
 
 - `enrollment_added` with `workflow_id == DEMO_WORKFLOW_ID` on the activity row itself (FK column, not `detail` JSONB). From B1.
-- 2 `email_received` activities -- the demo mailbox received the trigger emails for B1 and B2.
-- 2 `email_sent` activities from the agent replies (subjects begin with `Re:`).
-- 2 `enrollment_completed` activities (one per question, both emitted by `record_enrollment_outcome`).
+- 3 `email_received` activities -- the demo mailbox received the trigger emails for B3 (in-scope), B6 (out-of-scope), and B7 (compare).
+- 3 `email_sent` activities from the agent replies (subjects begin with `Re:`).
+- 3 `enrollment_completed` activities (one per question, all emitted by `record_enrollment_outcome`).
 
-### B8. Concurrent-workflow quiet check
+### B9. Concurrent-workflow quiet check
 
 The Scenario A outbound workflow is still active throughout B. It must not have reacted to B's traffic.
 
-The outbound _account_ legitimately sends mail in B (the operator's two trigger emails in B3 and B6 leave from `outbound@`); those are not the signal we care about. The signal is whether the outbound _workflow_ generated any agent-driven sends. Filter by `workflow_id`:
+The outbound _account_ legitimately sends mail in B (the operator's three trigger emails in B3, B6, and B7 leave from `outbound@`); those are not the signal we care about. The signal is whether the outbound _workflow_ generated any agent-driven sends. Filter by `workflow_id`:
 
 ```
 mailpilot email list \
@@ -533,17 +653,17 @@ mailpilot email list \
   --since <TEST_START_B>
 ```
 
-**Gate B8:** Zero rows. Any non-zero count means the still-active outbound workflow reacted to B's traffic -- record as a Bug.
+**Gate B9:** Zero rows. Any non-zero count means the still-active outbound workflow reacted to B's traffic -- record as a Bug.
 
-Sanity check the operator triggers are still there (B3 and B6 are agent-driven from B's perspective but operator-driven from A's perspective, so they carry `workflow_id == null` on the outbound mailbox):
+Sanity check the operator triggers are still there (B3, B6, and B7 are agent-driven from B's perspective but operator-driven from A's perspective, so they carry `workflow_id == null` on the outbound mailbox):
 
 ```
 mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>
 ```
 
-Expect exactly 2 rows (the B3 and B6 triggers), each with `workflow_id == null`. Any deviation is a separate signal -- either an unexpected outbound send (record as a Bug) or a missing trigger (re-run B3/B6).
+Expect exactly 3 rows (the B3, B6, and B7 triggers), each with `workflow_id == null`. Any deviation is a separate signal -- either an unexpected outbound send (record as a Bug) or a missing trigger (re-run B3/B6/B7).
 
-### B9. Stop the sync loop
+### B10. Stop the sync loop
 
 Send SIGTERM to the background `mailpilot run` (e.g. `kill <pid>`). Wait for `Sync loop stopped` in the captured output. Confirm the `sync_status` table is empty. If the process does not exit within 10s, send SIGKILL and record this in the report.
 
@@ -551,10 +671,15 @@ Send SIGTERM to the background `mailpilot run` (e.g. `kill <pid>`). Wait for `Sy
 
 Window `[TEST_START_B, now]`. Spans to verify:
 
-- `agent.invoke` -- exactly **2** invocations (B4 and B6). More than 2 → demo agent re-fired or outbound workflow reacted to B's traffic.
-- `routing.route_email` -- both demo-side trigger emails → `route_method=classified`. Outbound-side replies → `route_method=skipped_no_inbound_workflows`.
-- `classify_email` -- 2 invocations. Both `result` values match `DEMO_WORKFLOW_ID`.
-- `running tool` per invocation -- B4 (in-scope): `search_drive_markdown` + `read_drive_markdown` + `reply_email` + `record_enrollment_outcome`. B6 (out-of-scope decline): `search_drive_markdown` (returning `[]`) + `reply_email` + `record_enrollment_outcome` (`read_drive_markdown` is not required here since no document matches). At least one KB-consulting tool call (`search_drive_markdown` or `list_drive_markdown`) is mandatory in both. With ≥10 docs in the folder, `list_drive_markdown` instead of `search_drive_markdown` on the in-scope path is a regression.
+- `agent.invoke` -- exactly **3** invocations (B4 in-scope, B6 out-of-scope, B7 compare). More than 3 → demo agent re-fired or outbound workflow reacted to B's traffic.
+- `routing.route_email` -- all three demo-side trigger emails → `route_method=classified`. Outbound-side replies → `route_method=skipped_no_inbound_workflows`.
+- `classify_email` -- 3 invocations. All three `result` values match `DEMO_WORKFLOW_ID`.
+- `running tool` per invocation:
+  - B4 (in-scope): `search_drive_markdown` + `read_drive_markdown` + `reply_email` + `record_enrollment_outcome`.
+  - B6 (out-of-scope decline): `search_drive_markdown` (returning `[]`) + `reply_email` + `record_enrollment_outcome` (`read_drive_markdown` not required since no document matches).
+  - B7 (compare-and-contrast): `search_drive_markdown` >=1 + `read_drive_markdown` exactly `EXPECTED_READ_COUNT` times (one per file in the pair's `source_files`) + `reply_email` + `record_enrollment_outcome`. Fewer reads than `EXPECTED_READ_COUNT` is the headline regression: agent guessed a doc instead of reading it. The set of `file_id` arguments to `read_drive_markdown` must equal the set Drive returned for the `source_files` names -- mismatch means the agent read the wrong doc.
+  - At least one KB-consulting tool call (`search_drive_markdown` or `list_drive_markdown`) is mandatory in all three. With ≥30 docs in the folder, `list_drive_markdown` instead of `search_drive_markdown` on B4 or B7 is a regression. On B6 (decline), `list_drive_markdown` is acceptable.
+- `agent.invoke` (B7) `input_tokens` -- should be noticeably higher than B4 because the compare invocation pulls 2-4 full datasheets into the agent's context. A B7 token count at or below B4's signals the agent skipped one or more reads -- cross-check against the read-count gate.
 - Any `is_exception=true` or `level=warn` spans -- record. Drive 4xx/5xx surfacing as `drive_unavailable` from the tool is acceptable in the agent's tool-return ledger but should not be `is_exception=true` on the span.
 
 ---
@@ -643,15 +768,16 @@ Scenario A: Outbound workflow (sole workflow active)
   A8 Activity timeline ....... PASS
 
 Scenario B: KB-grounded demo (lab5.ca/mailpilot/, outbound workflow still active)
-  B1 Create demo workflow .... PASS  (workflow list shows 2 active)
-  B2 Sync loop still alive ... PASS
-  B3 In-scope trigger send ... PASS
-  B4 60s grounded reply ...... PASS  (LATENCY_B1 = <Ns>; cited model: <e.g., TW-18.0K-1240>)
-  B5 Drive tools used ........ PASS  (search_drive_markdown -> read_drive_markdown -> reply_email -> record_enrollment_outcome)
-  B6 Out-of-scope decline .... PASS  (LATENCY_B2 = <Ns>; no fabricated specs)
-  B7 Activity timeline ....... PASS
-  B8 Outbound stayed quiet ... PASS  (0 new outbound sends during B)
-  B9 Stop sync loop .......... PASS
+  B1  Create demo workflow ......... PASS  (workflow list shows 2 active)
+  B2  Sync loop still alive ........ PASS
+  B3  In-scope trigger send ........ PASS
+  B4  60s grounded reply ........... PASS  (LATENCY_B1 = <Ns>; cited model: <e.g., TW-18.0K-1240>)
+  B5  Drive tools used ............. PASS  (search_drive_markdown -> read_drive_markdown -> reply_email -> record_enrollment_outcome)
+  B6  Out-of-scope decline ......... PASS  (LATENCY_B2 = <Ns>; no fabricated specs)
+  B7  Compare-and-contrast reply ... PASS  (LATENCY_B3 = <Ns>; <N> sources, <N> read_drive_markdown calls; no single-sourced specs)
+  B8  Activity timeline ............ PASS  (3 received / 3 sent / 3 enrollment_completed)
+  B9  Outbound stayed quiet ........ PASS  (0 new outbound sends during B)
+  B10 Stop sync loop ............... PASS
 
 Entity IDs:
   Outbound account: <id>   Inbound account: <id>   Company: <id>
@@ -745,20 +871,21 @@ If a `/sdd:spec` invocation is cancelled or revised by the user mid-run, record 
 
 ## Timing
 
-Expected total: ~7 minutes. Phase 0 once, run loop once, no reset between scenarios.
+Expected total: ~8 minutes. Phase 0 once, run loop once, no reset between scenarios. The added compare-and-contrast question (B7) costs roughly one extra 60s reply window over the prior baseline because it forces 2-4 `read_drive_markdown` calls and a multi-doc synthesis.
 
-| Phase / scenario                | Duration |
-| ------------------------------- | -------- |
-| Phase 0 (once, 2 accounts)      | ~15s     |
-| A1 / B1 workflow setup          | ~5s      |
-| A2 start run loop               | ~5s      |
-| A3 outbound agent               | ~10s     |
-| A4 sync + route                 | ~10-60s  |
-| A5 / B3 / B6 operator send      | ~3s each |
-| A6 reply round-trip             | ~10-60s  |
-| A7 task drain                   | ~10-60s  |
-| B4 in-scope reply (60s SLA)     | ~10-60s  |
-| B6 out-of-scope reply (60s SLA) | ~10-60s  |
-| A8 / B7 activity check          | ~3s      |
-| B9 stop run loop                | ~3s      |
-| Report                          | ~10s     |
+| Phase / scenario                     | Duration |
+| ------------------------------------ | -------- |
+| Phase 0 (once, 2 accounts)           | ~15s     |
+| A1 / B1 workflow setup               | ~5s      |
+| A2 start run loop                    | ~5s      |
+| A3 outbound agent                    | ~10s     |
+| A4 sync + route                      | ~10-60s  |
+| A5 / B3 / B6 / B7 operator send      | ~3s each |
+| A6 reply round-trip                  | ~10-60s  |
+| A7 task drain                        | ~10-60s  |
+| B4 in-scope reply (60s SLA)          | ~10-60s  |
+| B6 out-of-scope reply (60s SLA)      | ~10-60s  |
+| B7 compare reply (60s SLA)           | ~20-60s  |
+| A8 / B8 activity check               | ~3s      |
+| B10 stop run loop                    | ~3s      |
+| Report                               | ~10s     |

@@ -114,6 +114,29 @@ def test_inbound_google_drive_protocol_carries_grounding() -> None:
     assert "read_drive_markdown" in protocol
 
 
+def test_inbound_google_drive_drive_tools_marked_sequential() -> None:
+    """§V.61 + §B.34: every Drive Tool binding must carry ``sequential=True``.
+
+    The underlying ``httplib2.Http`` transport has no internal locks, so an
+    Anthropic-emitted parallel fan-out used to race the connection-pool dict
+    (one read returned in ~1s while its sibling hung 60s at the socket
+    timeout, killing the agent run). ``sequential=True`` tells the Pydantic
+    AI dispatcher to serialize parallel emissions on these tools; this
+    contract test catches a regression at registration (someone drops the
+    kwarg, or a new non-thread-safe tool lands without it)."""
+    drive_tool_names = {
+        "list_drive_markdown",
+        "read_drive_markdown",
+        "search_drive_markdown",
+    }
+    for tool in TEMPLATES["inbound-google-drive"].tools:
+        if tool.name in drive_tool_names:
+            assert tool.sequential is True, (
+                f"Drive tool {tool.name!r} must register with sequential=True "
+                f"per §V.61 -- httplib2.Http is not thread-safe"
+            )
+
+
 def test_non_drive_templates_protocol_excludes_grounding() -> None:
     """§V.33: _DRIVE_GROUNDING bound only to inbound-google-drive."""
     for name in ("outbound-general", "inbound-general"):

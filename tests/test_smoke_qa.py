@@ -166,9 +166,9 @@ def test_source_file_missing_in_drive_exits_nonzero_kb_drift_signal(
     assert rc == 1
     err = json.loads(capsys.readouterr().err)
     assert err == {
-        "error": "source_file_not_in_drive",
+        "error": "source_files_not_in_drive",
         "id": "qa-in-001",
-        "source_file": "alpha.md",
+        "missing": ["alpha.md"],
         "folder_id": qa_module.DEMO_FOLDER_ID,
     }
 
@@ -184,7 +184,7 @@ def test_check_inscope_is_fenced_with_exit_2(
 
     assert rc == 2
     err = json.loads(capsys.readouterr().err)
-    assert err["error"] == "inscope_grading_moved"
+    assert err["error"] == "non_outscope_grading_moved"
     assert err["id"] == "qa-in-001"
     assert "operator-judged" in err["message"]
 

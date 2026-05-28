@@ -7,6 +7,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import psycopg
+import pytest
 from logfire.testing import CaptureLogfire
 
 from conftest import (
@@ -1225,6 +1226,82 @@ def test_search_drive_markdown_other_http_error_returns_drive_unavailable() -> N
         folder_id="FOLDER",
         query="anything",
     )
+
+    assert isinstance(result, dict)
+    assert result["error"] == "drive_unavailable"
+
+
+# -- §V.61 + §B.34: broadened catch envelopes ---------------------------------
+# A hung sibling read in a parallel Drive fan-out used to escape the tool
+# wrapper as a bare TimeoutError, bubble to ``run.task.agent_failed``, and
+# burn the §V.44 retry budget on a deterministic local race. The catch arm
+# now folds ``socket.timeout`` / ``TimeoutError`` / ``OSError`` into the same
+# ``drive_unavailable`` tool return so the surviving sibling call carries
+# the agent run.
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        TimeoutError("read timed out"),
+        TimeoutError("timed out"),
+        OSError(104, "Connection reset"),
+    ],
+    ids=["socket_timeout", "timeout_error", "oserror"],
+)
+def test_list_drive_markdown_transport_fault_returns_drive_unavailable(
+    exc: BaseException,
+) -> None:
+    drive_client = MagicMock()
+    drive_client.list_markdown.side_effect = exc
+
+    result = list_drive_markdown(drive_client=drive_client, folder_id="FOLDER")
+
+    assert isinstance(result, dict)
+    assert result["error"] == "drive_unavailable"
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        TimeoutError("read timed out"),
+        TimeoutError("timed out"),
+        OSError(104, "Connection reset"),
+    ],
+    ids=["socket_timeout", "timeout_error", "oserror"],
+)
+def test_search_drive_markdown_transport_fault_returns_drive_unavailable(
+    exc: BaseException,
+) -> None:
+    drive_client = MagicMock()
+    drive_client.search_markdown.side_effect = exc
+
+    result = search_drive_markdown(
+        drive_client=drive_client,
+        folder_id="FOLDER",
+        query="anything",
+    )
+
+    assert isinstance(result, dict)
+    assert result["error"] == "drive_unavailable"
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        TimeoutError("read timed out"),
+        TimeoutError("timed out"),
+        OSError(104, "Connection reset"),
+    ],
+    ids=["socket_timeout", "timeout_error", "oserror"],
+)
+def test_read_drive_markdown_transport_fault_returns_drive_unavailable(
+    exc: BaseException,
+) -> None:
+    drive_client = MagicMock()
+    drive_client.read_markdown.side_effect = exc
+
+    result = read_drive_markdown(drive_client=drive_client, file_id="FID")
 
     assert isinstance(result, dict)
     assert result["error"] == "drive_unavailable"

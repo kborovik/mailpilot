@@ -444,6 +444,14 @@ def list_drive_markdown(
             "error": "drive_unavailable",
             "message": str(exc),
         }
+    except (TimeoutError, OSError) as exc:
+        # Per §V.61 + §B.34: surface transport stalls / socket faults as a
+        # structured tool return so a sibling parallel call carries the
+        # agent run instead of bubbling to a terminal task failure.
+        return {
+            "error": "drive_unavailable",
+            "message": str(exc),
+        }
 
 
 def search_drive_markdown(
@@ -482,6 +490,12 @@ def search_drive_markdown(
             "error": "drive_unavailable",
             "message": str(exc),
         }
+    except (TimeoutError, OSError) as exc:
+        # Per §V.61 + §B.34: see list_drive_markdown rationale.
+        return {
+            "error": "drive_unavailable",
+            "message": str(exc),
+        }
 
 
 def read_drive_markdown(
@@ -508,6 +522,15 @@ def read_drive_markdown(
                 "error": "not_found",
                 "message": f"drive file not found: {file_id}",
             }
+        return {
+            "error": "drive_unavailable",
+            "message": str(exc),
+        }
+    except (TimeoutError, OSError) as exc:
+        # Per §V.61 + §B.34: a hung sibling read in a parallel fan-out used
+        # to escape this catch and burn the §V.44 retry budget; the broadened
+        # arm folds transport-level faults into the same drive_unavailable
+        # tool-return so the surviving call carries the agent run.
         return {
             "error": "drive_unavailable",
             "message": str(exc),
