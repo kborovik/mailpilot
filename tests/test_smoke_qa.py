@@ -173,6 +173,101 @@ def test_source_file_missing_in_drive_exits_nonzero_kb_drift_signal(
     }
 
 
+def test_source_inscope_falls_back_to_first_alt_when_primary_missing(
+    qa_module: types.ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """§V.31(+) / §T.66: when the primary source_file is absent from Drive
+    but a source_file_alts entry is present, load the first available alt."""
+    pairs = [
+        {
+            "id": "qa-in-collision",
+            "type": "inscope",
+            "source_file": "primary-missing.md",
+            "source_file_alts": ["primary-missing.md", "alt-present.md"],
+            "question": "which alt is grounded?",
+            "expected_tokens": ["MODEL-1"],
+        },
+    ]
+    monkeypatch.setattr(qa_module, "load_pairs", lambda: pairs)
+    _install_fake_drive(
+        monkeypatch,
+        files=[{"file_id": "FILE-ALT", "name": "alt-present.md"}],
+        contents={"FILE-ALT": {"name": "alt-present.md", "content": "# alt body\n"}},
+    )
+
+    rc = qa_module.source(argparse.Namespace(id="qa-in-collision"))
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    # First-alt content only -- no === SOURCE: === separator (single file).
+    assert captured.out == "# alt body\n"
+    assert captured.err == ""
+    # Confirm we read the alt, not anything else.
+    assert _FakeDriveClient.instances[-1].read_calls == ["FILE-ALT"]
+
+
+def test_source_inscope_no_alts_default_empty_unchanged(
+    qa_module: types.ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """§T.66 (c): pairs without source_file_alts default to [] semantically
+    -- existing single-source behaviour is unchanged."""
+    pairs = [
+        {
+            "id": "qa-in-classic",
+            "type": "inscope",
+            "source_file": "alpha.md",
+            "question": "alpha?",
+            "expected_tokens": ["one"],
+        },
+    ]
+    monkeypatch.setattr(qa_module, "load_pairs", lambda: pairs)
+    _install_fake_drive(
+        monkeypatch,
+        files=[{"file_id": "FILE-A", "name": "alpha.md"}],
+        contents={"FILE-A": {"name": "alpha.md", "content": "alpha body\n"}},
+    )
+
+    rc = qa_module.source(argparse.Namespace(id="qa-in-classic"))
+
+    assert rc == 0
+    assert capsys.readouterr().out == "alpha body\n"
+    # No alts considered when key absent: _resolve_source_files returns
+    # just [primary] so fallback never triggers.
+    assert qa_module._resolve_source_files(pairs[0]) == ["alpha.md"]
+
+
+def test_source_inscope_all_candidates_missing_returns_full_missing_list(
+    qa_module: types.ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """§T.66: when neither primary nor any alt is present in Drive, exit 1
+    with the full candidate list as `missing` (KB-drift signal preserved)."""
+    pairs = [
+        {
+            "id": "qa-in-all-gone",
+            "type": "inscope",
+            "source_file": "primary.md",
+            "source_file_alts": ["primary.md", "alt-one.md", "alt-two.md"],
+            "question": "?",
+            "expected_tokens": ["x"],
+        },
+    ]
+    monkeypatch.setattr(qa_module, "load_pairs", lambda: pairs)
+    _install_fake_drive(monkeypatch, files=[{"file_id": "FILE-Z", "name": "other.md"}])
+
+    rc = qa_module.source(argparse.Namespace(id="qa-in-all-gone"))
+
+    assert rc == 1
+    err = json.loads(capsys.readouterr().err)
+    assert err["error"] == "source_files_not_in_drive"
+    assert err["missing"] == ["primary.md", "alt-one.md", "alt-two.md"]
+
+
 def test_check_inscope_is_fenced_with_exit_2(
     qa_module: types.ModuleType,
     capsys: pytest.CaptureFixture[str],

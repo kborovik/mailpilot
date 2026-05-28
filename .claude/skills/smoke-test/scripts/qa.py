@@ -8,12 +8,17 @@ Subcommands:
   source --id ID
          Load the pair's source markdown from the demo Drive folder via
          DriveClient impersonating `inbound@lab5.ca` and print to stdout.
-         - inscope: single `source_file` -> prints that file's content.
+         - inscope: primary `source_file` -> prints that file's content.
+           When the primary is absent from Drive AND `source_file_alts`
+           is populated (§V.31(+) / §T.66), fall back to the first alt
+           present in Drive so cross-source identifier collisions (e.g.
+           model WS36-600-2 lives in two datasheets with divergent specs
+           per §B.40) still render a viable grading source.
          - compare: `source_files` (list) -> prints each file's content
            preceded by a `=== SOURCE: <name> ===` separator so the
            operator can grade the agent's reply against every source.
-         Exit non-zero when ANY source file is absent from the folder
-         (KB-drift signal). Outscope pairs have no source -> exit 1.
+         Exit non-zero when NO resolvable source file is present in the
+         folder (KB-drift signal). Outscope pairs have no source -> exit 1.
 
   check  --id ID --reply-text "..." | --reply-file PATH
          Outscope-only post-§V.31. Validate an out-of-scope decline reply
@@ -24,7 +29,9 @@ Subcommands:
          on stdout. Exit 0 = pass, 1 = fail, 2 = non-outscope rejected.
 
 Pair schema (qa_pairs.json):
-  - inscope: type="inscope", source_file: str
+  - inscope: type="inscope", source_file: str,
+             source_file_alts: list[str] (optional, default [] -- carries
+             cross-source identifier-collision alternates per §V.31(+))
   - compare: type="compare", source_files: list[str]  (>=2 files)
   - outscope: type="outscope", source_file: null
 """
@@ -72,14 +79,20 @@ def pick(args: argparse.Namespace) -> int:
 
 
 def _resolve_source_files(pair: dict) -> list[str]:
-    """Return the list of source filenames a pair points at.
+    """Return the ordered candidate filenames a pair points at.
 
-    inscope -> [source_file]; compare -> source_files; outscope -> [].
+    inscope -> [source_file, *source_file_alts] (primary first; alts let
+    `source` fall back when the primary is absent from Drive per §V.31(+));
+    compare -> source_files (all required); outscope -> [].
     """
     if pair.get("type") == "compare":
         return list(pair.get("source_files") or [])
-    name = pair.get("source_file")
-    return [name] if name else []
+    primary = pair.get("source_file")
+    candidates: list[str] = [primary] if primary else []
+    for alt in pair.get("source_file_alts") or []:
+        if alt and alt not in candidates:
+            candidates.append(alt)
+    return candidates
 
 
 def source(args: argparse.Namespace) -> int:
@@ -108,22 +121,44 @@ def source(args: argparse.Namespace) -> int:
     client = DriveClient(DEMO_SUBJECT)
     files = client.list_markdown(DEMO_FOLDER_ID)
     by_name = {f["name"]: f for f in files}
-    missing = [n for n in file_names if n not in by_name]
-    if missing:
-        print(
-            json.dumps(
-                {
-                    "error": "source_files_not_in_drive",
-                    "id": args.id,
-                    "missing": missing,
-                    "folder_id": DEMO_FOLDER_ID,
-                }
-            ),
-            file=sys.stderr,
-        )
-        return 1
-    multi = len(file_names) > 1
-    for name in file_names:
+    # compare pairs require every listed source; inscope accepts the primary
+    # or (per §V.31(+)) the first alt present in Drive so cross-source
+    # identifier-collision pairs (§B.40) survive when one of the colliders
+    # rotates out of the KB.
+    if pair.get("type") == "compare":
+        missing = [n for n in file_names if n not in by_name]
+        if missing:
+            print(
+                json.dumps(
+                    {
+                        "error": "source_files_not_in_drive",
+                        "id": args.id,
+                        "missing": missing,
+                        "folder_id": DEMO_FOLDER_ID,
+                    }
+                ),
+                file=sys.stderr,
+            )
+            return 1
+        resolved = file_names
+    else:
+        resolved = [n for n in file_names if n in by_name]
+        if not resolved:
+            print(
+                json.dumps(
+                    {
+                        "error": "source_files_not_in_drive",
+                        "id": args.id,
+                        "missing": file_names,
+                        "folder_id": DEMO_FOLDER_ID,
+                    }
+                ),
+                file=sys.stderr,
+            )
+            return 1
+        resolved = resolved[:1]
+    multi = len(resolved) > 1
+    for name in resolved:
         doc = client.read_markdown(by_name[name]["file_id"])
         content = doc.get("content", "")
         if multi:

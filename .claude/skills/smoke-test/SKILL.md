@@ -460,6 +460,7 @@ Match by `SUBJECT_B1` (likely with `Re:` prefix). Note the reply's arrival as co
        "qa_id": "<QA_ID_B1>",
        "question": "<question text>",
        "source_file": "<source_file from pair>",
+       "source_file_alts": [],
        "answers_question": true,
        "every_factual_claim_supported_by_source": true,
        "cites_source_file": true,
@@ -468,7 +469,7 @@ Match by `SUBJECT_B1` (likely with `Re:` prefix). Note the reply's arrival as co
      }
      ```
 
-     Each unsupported factual claim in the reply MUST appear verbatim in `unsupported_claims` (structural defence against LLM-judge sycophancy -- the field forces the grader to enumerate concrete misses rather than hand-wave a passing rating). `verdict` MUST be `"pass"` if and only if all three booleans are true AND `unsupported_claims` is empty; otherwise `"fail"`.
+     Each unsupported factual claim in the reply MUST appear verbatim in `unsupported_claims` (structural defence against LLM-judge sycophancy -- the field forces the grader to enumerate concrete misses rather than hand-wave a passing rating). `source_file_alts` is the verbatim list from the pair (default `[]`); per amended §V.31, `cites_source_file == true` iff the agent's citation is in `{source_file} ∪ source_file_alts` (set union -- admits cross-source identifier collisions like model `WS36-600-2` appearing in two divergent datasheets per §B.40). `verdict` MUST be `"pass"` if and only if all three booleans are true AND `unsupported_claims` is empty; otherwise `"fail"`.
 
   Anything other than `verdict == "pass"` is a grounding regression -- record the verdict JSON in §2 Bugs. `qa_pairs.json.expected_tokens` is retained for historical-run repro only and is no longer consumed by any gate.
 

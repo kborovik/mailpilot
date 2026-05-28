@@ -233,6 +233,10 @@
     "id": "qa-in-022",
     "type": "inscope",
     "source_file": "pure-aqua-industrial-water-softener.md",
+    "source_file_alts": [
+      "pure-aqua-industrial-water-softener.md",
+      "pure-aqua-sf-100s-industrial-water-softener.md"
+    ],
     "question": "What is the continuous flow rate in GPM and peak flow rate in GPM for the WS36-600-2 model?",
     "expected_tokens": [
       "WS36-600-2",

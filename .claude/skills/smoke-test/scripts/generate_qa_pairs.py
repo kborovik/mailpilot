@@ -8,6 +8,13 @@ only trivial single-spec lookups. The skip path is load-bearing: it keeps the
 manifest sparse and hard, not exhaustive and easy. Pairs are written to
 qa_pairs.json.
 
+After drafting, a cross-source identifier-collision pass populates
+`source_file_alts` on any inscope pair whose model-shape `expected_tokens`
+also appear verbatim in another file's body (per §V.31(+) / §B.40 -- e.g.
+model `WS36-600-2` lives in two pure-aqua datasheets with divergent specs).
+This makes the operator-judged `cites_source_file` gate honour the live KB
+shape instead of regrading collisions by hand each run.
+
 Out-of-scope pairs are appended from a hand-curated list (questions about
 vendors -- Pentair, Evoqua, Grundfos -- that are not in the KB). Compare pairs
 (multi-source synthesis) are hand-curated directly in qa_pairs.json.
@@ -19,6 +26,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 from pathlib import Path
 
 from anthropic import Anthropic
@@ -182,6 +190,42 @@ def draft_qa(client: Anthropic, name: str, content: str) -> dict[str, object]:
     return json.loads(text)
 
 
+_MODEL_TOKEN_RE = re.compile(
+    r"^[A-Za-z][A-Za-z0-9]*[-/.][A-Za-z0-9.\-/]*\d[A-Za-z0-9.\-/]*$"
+)
+
+
+def annotate_collisions(
+    pairs: list[dict[str, object]], file_contents: dict[str, str]
+) -> None:
+    """Populate `source_file_alts` on inscope pairs whose model-shape tokens
+    also appear in other files per §V.31(+) / §B.40."""
+
+    for pair in pairs:
+        if pair.get("type") != "inscope":
+            continue
+        tokens = pair.get("expected_tokens") or []
+        if not isinstance(tokens, list):
+            continue
+        model_tokens = [
+            t for t in tokens if isinstance(t, str) and _MODEL_TOKEN_RE.fullmatch(t)
+        ]
+        if not model_tokens:
+            continue
+        primary = pair.get("source_file")
+        if not isinstance(primary, str) or not primary:
+            continue
+        colliders: set[str] = set()
+        for fname, body in file_contents.items():
+            if fname == primary:
+                continue
+            if any(token in body for token in model_tokens):
+                colliders.add(fname)
+        if not colliders:
+            continue
+        pair["source_file_alts"] = [primary, *sorted(colliders)]
+
+
 def main() -> int:
     settings = get_settings()
     client = Anthropic(api_key=settings.anthropic_api_key)
@@ -196,11 +240,15 @@ def main() -> int:
             print(f"  [{i:>2}] FAIL  {name}  ({exc})")
             continue
         if qa.get("skip"):
-            print(f"  [{i:>2}] SKIP  {name}  ({qa.get('reason', 'no complex question')})")
+            print(
+                f"  [{i:>2}] SKIP  {name}  ({qa.get('reason', 'no complex question')})"
+            )
             continue
         tokens = qa.get("expected_tokens") or []
         if len(tokens) < 4:
-            print(f"  [{i:>2}] SKIP  {name}  (only {len(tokens)} tokens; stress floor is 4)")
+            print(
+                f"  [{i:>2}] SKIP  {name}  (only {len(tokens)} tokens; stress floor is 4)"
+            )
             continue
         kept += 1
         pair = {
@@ -212,6 +260,7 @@ def main() -> int:
         }
         pairs.append(pair)
         print(f"  [{i:>2}] OK    {name}  -> {tokens}")
+    annotate_collisions(pairs, files)
     pairs.extend(OUT_OF_SCOPE)
     OUT.write_text(json.dumps(pairs, indent=2) + "\n", encoding="utf-8")
     in_count = sum(1 for p in pairs if p["type"] == "inscope")
