@@ -1,6 +1,7 @@
 """Tests for sync status database operations and the per-account sync pipeline."""
 
 import base64
+import concurrent.futures
 import os
 import signal
 from datetime import UTC, datetime, timedelta
@@ -291,6 +292,19 @@ def _iteration_spans(capfire: CaptureLogfire) -> list[dict[str, Any]]:
     ]
 
 
+def _empty_pool_and_inflight() -> tuple[
+    concurrent.futures.ThreadPoolExecutor,
+    dict[concurrent.futures.Future[None], float],
+]:
+    """Return a fresh pool and empty in_flight dict for _run_periodic_iteration tests.
+
+    Caller must shut the pool down. Used where the test setup creates no
+    pending tasks, so the pool is a placeholder only.
+    """
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    return pool, {}
+
+
 def test_run_periodic_iteration_tags_event_wakeup_source(
     capfire: CaptureLogfire,
     database_connection: psycopg.Connection[dict[str, Any]],
@@ -304,14 +318,20 @@ def test_run_periodic_iteration_tags_event_wakeup_source(
 
     settings = make_test_settings()
     sync_queue: _queue.Queue[str] = _queue.Queue()
+    pool, in_flight = _empty_pool_and_inflight()
 
-    _run_periodic_iteration(
-        database_connection,
-        settings,
-        sync_queue,
-        wakeup_source="event",
-        do_full_sweep=True,
-    )
+    try:
+        _run_periodic_iteration(
+            database_connection,
+            settings,
+            sync_queue,
+            wakeup_source="event",
+            do_full_sweep=True,
+            pool=pool,
+            in_flight=in_flight,
+        )
+    finally:
+        pool.shutdown(wait=True)
 
     spans = _iteration_spans(capfire)
     assert len(spans) == 1
@@ -331,14 +351,20 @@ def test_run_periodic_iteration_tags_timer_wakeup_source(
 
     settings = make_test_settings()
     sync_queue: _queue.Queue[str] = _queue.Queue()
+    pool, in_flight = _empty_pool_and_inflight()
 
-    _run_periodic_iteration(
-        database_connection,
-        settings,
-        sync_queue,
-        wakeup_source="timer",
-        do_full_sweep=True,
-    )
+    try:
+        _run_periodic_iteration(
+            database_connection,
+            settings,
+            sync_queue,
+            wakeup_source="timer",
+            do_full_sweep=True,
+            pool=pool,
+            in_flight=in_flight,
+        )
+    finally:
+        pool.shutdown(wait=True)
 
     spans = _iteration_spans(capfire)
     assert len(spans) == 1
@@ -358,15 +384,21 @@ def test_run_periodic_iteration_runs_sync_all_when_do_full_sweep_true(
 
     settings = make_test_settings()
     sync_queue: _queue.Queue[str] = _queue.Queue()
+    pool, in_flight = _empty_pool_and_inflight()
 
-    with patch("mailpilot.sync._sync_all_accounts") as mock_sync_all:
-        _run_periodic_iteration(
-            database_connection,
-            settings,
-            sync_queue,
-            wakeup_source="event",
-            do_full_sweep=True,
-        )
+    try:
+        with patch("mailpilot.sync._sync_all_accounts") as mock_sync_all:
+            _run_periodic_iteration(
+                database_connection,
+                settings,
+                sync_queue,
+                wakeup_source="event",
+                do_full_sweep=True,
+                pool=pool,
+                in_flight=in_flight,
+            )
+    finally:
+        pool.shutdown(wait=True)
 
     mock_sync_all.assert_called_once()
     spans = _iteration_spans(capfire)
@@ -387,15 +419,21 @@ def test_run_periodic_iteration_skips_sync_all_when_do_full_sweep_false(
 
     settings = make_test_settings()
     sync_queue: _queue.Queue[str] = _queue.Queue()
+    pool, in_flight = _empty_pool_and_inflight()
 
-    with patch("mailpilot.sync._sync_all_accounts") as mock_sync_all:
-        _run_periodic_iteration(
-            database_connection,
-            settings,
-            sync_queue,
-            wakeup_source="event",
-            do_full_sweep=False,
-        )
+    try:
+        with patch("mailpilot.sync._sync_all_accounts") as mock_sync_all:
+            _run_periodic_iteration(
+                database_connection,
+                settings,
+                sync_queue,
+                wakeup_source="event",
+                do_full_sweep=False,
+                pool=pool,
+                in_flight=in_flight,
+            )
+    finally:
+        pool.shutdown(wait=True)
 
     mock_sync_all.assert_not_called()
     spans = _iteration_spans(capfire)
@@ -425,18 +463,24 @@ def test_run_periodic_iteration_full_sweep_skips_already_synced(
     settings = make_test_settings()
     sync_queue: _queue.Queue[str] = _queue.Queue()
     sync_queue.put(notified.email)
+    pool, in_flight = _empty_pool_and_inflight()
 
-    with (
-        patch("mailpilot.sync.GmailClient"),
-        patch("mailpilot.sync.sync_account") as mock_sync_account,
-    ):
-        _run_periodic_iteration(
-            database_connection,
-            settings,
-            sync_queue,
-            wakeup_source="event",
-            do_full_sweep=True,
-        )
+    try:
+        with (
+            patch("mailpilot.sync.GmailClient"),
+            patch("mailpilot.sync.sync_account") as mock_sync_account,
+        ):
+            _run_periodic_iteration(
+                database_connection,
+                settings,
+                sync_queue,
+                wakeup_source="event",
+                do_full_sweep=True,
+                pool=pool,
+                in_flight=in_flight,
+            )
+    finally:
+        pool.shutdown(wait=True)
 
     synced_emails = [call.args[1].email for call in mock_sync_account.call_args_list]
     assert sorted(synced_emails) == sorted([notified.email, other.email])

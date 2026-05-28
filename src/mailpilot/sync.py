@@ -196,6 +196,15 @@ def start_sync_loop(  # noqa: PLR0915
         str(settings.database_url), wakeup_event, shutdown_event
     )
 
+    # Long-lived task worker pool (§V.62 bounded concurrency, §V.64 main
+    # loop never blocks on completion). ``in_flight`` maps each submitted
+    # future to its monotonic-clock submit time so ``_reap_completed_tasks``
+    # can emit ``task.drain`` with accurate ``duration_ms`` for finished
+    # batches.
+    max_workers = max(1, settings.max_concurrent_tasks)
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+    in_flight: dict[concurrent.futures.Future[None], float] = {}
+
     # Main loop.
     last_watch_renewal = last_full_sync = 0.0
     try:
@@ -222,6 +231,8 @@ def start_sync_loop(  # noqa: PLR0915
                 sync_queue,
                 "event" if event_set else "timer",
                 do_full_sweep=do_full_sweep,
+                pool=pool,
+                in_flight=in_flight,
             )
             if do_full_sweep:
                 last_full_sync = now
@@ -235,6 +246,11 @@ def start_sync_loop(  # noqa: PLR0915
             logfire.info("sync.pubsub.subscriber.stopped")
         shutdown_event.set()  # signal listener thread
         listener_thread.join(timeout=5)
+        # Wait for in-flight workers to complete before exit so SIGTERM
+        # does not orphan a half-finished agent.invoke. Final reap surfaces
+        # any task.drain event for futures that finished during shutdown.
+        pool.shutdown(wait=True)
+        _reap_completed_tasks(in_flight)
         delete_sync_status(connection)
         operator_event("loop.stop", pid=pid)
         logfire.info("sync.loop.stop", pid=pid)
@@ -311,19 +327,25 @@ def _next_iteration_count() -> int:
     return next(_iteration_counter)
 
 
-def _run_periodic_iteration(
+def _run_periodic_iteration(  # noqa: PLR0913
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
     sync_queue: queue.Queue[str],
     wakeup_source: WakeupSource,
     *,
     do_full_sweep: bool,
+    pool: concurrent.futures.ThreadPoolExecutor,
+    in_flight: dict[concurrent.futures.Future[None], float],
 ) -> None:
     """Run one iteration of the periodic sync + task drain cycle.
 
     ``do_full_sweep`` gates the safety-net ``_sync_all_accounts`` call.
     The caller (``start_sync_loop``) sets it to True at most once per
     ``run_interval`` so event-burst wakes do only the queue drain.
+
+    Per §V.64: reap completed task futures before doing per-tick work so
+    finished agent.invoke runs surface promptly while the main loop
+    continues on Pub/Sub notify -- the loop never blocks on drain.
     """
     iteration = _next_iteration_count()
     operator_event(
@@ -337,6 +359,11 @@ def _run_periodic_iteration(
         wakeup_source=wakeup_source,
         did_full_sweep=do_full_sweep,
     ):
+        # Surface completion of any prior-tick agent.invoke runs first;
+        # this is non-blocking, so a tick triggered purely by a Pub/Sub
+        # notify still reaches sync.account.run within the tick budget.
+        _reap_completed_tasks(in_flight)
+
         # Track accounts synced this tick so the full sweep doesn't re-run
         # work the Pub/Sub drain just did.
         synced: set[str] = set()
@@ -348,9 +375,9 @@ def _run_periodic_iteration(
         if do_full_sweep:
             _sync_all_accounts(connection, settings, synced)
 
-        # Bridge routed emails to tasks and drain the queue.
+        # Bridge routed emails to tasks and dispatch the queue.
         create_tasks_for_routed_emails(connection)
-        _drain_pending_tasks(connection, settings)
+        _drain_pending_tasks(connection, settings, pool, in_flight)
 
 
 def _drain_sync_queue(
@@ -420,29 +447,62 @@ def _sync_all_accounts(
 def _drain_pending_tasks(
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
+    pool: concurrent.futures.ThreadPoolExecutor,
+    in_flight: dict[concurrent.futures.Future[None], float],
 ) -> None:
-    """Execute all pending tasks that are due via a bounded worker pool.
+    """Dispatch all pending tasks that are due to the shared worker pool.
 
-    Per §V.62: dispatch ready tasks concurrently under
-    ``settings.max_concurrent_tasks``. Each worker opens its own
-    ``psycopg.Connection`` so transaction state is not shared across
-    threads (psycopg connections are not thread-safe). Per-task retry
-    classification (§V.44) remains inside ``execute_task``; this layer
-    only catches escapes so a poisoned worker does not abort siblings.
+    Per §V.62: bounded concurrency under ``settings.max_concurrent_tasks``;
+    each worker opens its own ``psycopg.Connection`` so transaction state
+    is not shared across threads. Per-task retry classification (§V.44)
+    stays inside ``execute_task``.
+
+    Per §V.64: submit-and-return -- the main run loop MUST NOT block on
+    in-flight ``agent.invoke`` futures so Pub/Sub-driven sync can continue
+    while workers run. Completion is observed lazily by
+    ``_reap_completed_tasks`` on subsequent ticks; ``task.drain`` operator
+    events fire from there, not from this dispatcher.
     """
-    start = time.monotonic()
     pending = list_pending_tasks(connection)
     if not pending:
         return
-    max_workers = max(1, settings.max_concurrent_tasks)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = [
-            pool.submit(_execute_task_in_worker, settings, task) for task in pending
-        ]
-        for future in concurrent.futures.as_completed(futures):
+    submit_time = time.monotonic()
+    for task in pending:
+        future = pool.submit(_execute_task_in_worker, settings, task)
+        in_flight[future] = submit_time
+
+
+def _reap_completed_tasks(
+    in_flight: dict[concurrent.futures.Future[None], float],
+) -> None:
+    """Remove finished futures from ``in_flight`` and emit ``task.drain``.
+
+    Per §V.64: non-blocking by design -- only futures whose ``done()`` is
+    True at call time are reaped. Called between sync ticks so the main
+    loop never waits on a slow worker. ``duration_ms`` measures from the
+    earliest submit time of the reaped batch so operator timing stays
+    comparable to the prior synchronous implementation.
+
+    Per-worker exception surfacing: ``_execute_task_in_worker`` already
+    catches and logs via paired ``logfire.exception`` / ``operator_event``
+    (§V.19). Re-raised escapes get the same treatment here so a future
+    cancelled by SIGTERM does not silently disappear.
+    """
+    if not in_flight:
+        return
+    completed = [future for future in in_flight if future.done()]
+    if not completed:
+        return
+    earliest_start = min(in_flight[future] for future in completed)
+    for future in completed:
+        del in_flight[future]
+        try:
             future.result()
-    duration_ms = int((time.monotonic() - start) * 1000)
-    operator_event("task.drain", drained=len(pending), duration_ms=duration_ms)
+        except Exception as exc:
+            logfire.exception("sync.drain.future_failed")
+            operator_event("error", source="sync.drain.future_failed", message=str(exc))
+    duration_ms = int((time.monotonic() - earliest_start) * 1000)
+    operator_event("task.drain", drained=len(completed), duration_ms=duration_ms)
 
 
 def _execute_task_in_worker(settings: Settings, task: Any) -> None:
