@@ -4,9 +4,17 @@ Builds and runs a Pydantic AI agent for a given workflow + contact pair.
 This is the central execution unit -- both inbound routing and outbound
 campaigns culminate here.
 
-Advisory locking: a PostgreSQL advisory lock keyed on
-``(workflow_id, contact_id)`` prevents concurrent invocations for the
-same pair. If the lock is already held, the invocation is skipped.
+Advisory locking: a PostgreSQL advisory lock prevents concurrent
+invocations from racing on the same unit of work. When a ``task_id``
+is supplied (drain path, §V.65), the lock is keyed on the task so
+distinct tasks for the same ``(workflow_id, contact_id)`` pair can run
+concurrently via the §V.62 worker pool. CLI paths
+(``enrollment_run``/``manual``) omit ``task_id`` and fall back to the
+coarse ``(workflow_id, contact_id)`` key, which preserves the original
+"prevent operator-initiated double-run on same enrollment" guarantee.
+If the lock is already held, the invocation is skipped before the
+``agent.invoke`` span opens so loser-of-race calls do not pollute the
+per-trigger count metric (§B.42).
 
 Tool-use enforcement: the agent must call at least one tool per run.
 ``noop(reason)`` is the explicit "do nothing" escape hatch. A run with
@@ -74,16 +82,41 @@ def _advisory_lock_keys(workflow_id: str, contact_id: str) -> tuple[int, int]:
     )
 
 
+def _advisory_lock_keys_for_task(task_id: str) -> tuple[int, int]:
+    """Compute two int32 advisory-lock keys from a task ID (§V.65).
+
+    Splits the task ID at its midpoint and CRC-32s each half so the full
+    UUID participates in both keys. Matches the 64-bit collision space of
+    ``_advisory_lock_keys`` and keeps the same ``(int4, int4)`` shape so
+    ``pg_try_advisory_lock`` can stay on the two-argument overload.
+    """
+    mid = len(task_id) // 2
+    return (
+        _to_signed_int32(zlib.crc32(task_id[:mid].encode())),
+        _to_signed_int32(zlib.crc32(task_id[mid:].encode())),
+    )
+
+
 def _try_acquire_advisory_lock(
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str,
     contact_id: str,
+    task_id: str | None = None,
 ) -> bool:
     """Try to acquire a session-level advisory lock. Non-blocking.
 
+    When ``task_id`` is supplied, the lock is keyed on the task so concurrent
+    drain workers handling distinct tasks for the same
+    ``(workflow_id, contact_id)`` pair do not serialize on each other
+    (§V.62 + §V.65). Otherwise the lock falls back to the coarse
+    ``(workflow_id, contact_id)`` key used by synchronous CLI paths.
+
     Returns True if lock was acquired, False if already held elsewhere.
     """
-    k1, k2 = _advisory_lock_keys(workflow_id, contact_id)
+    if task_id is not None:
+        k1, k2 = _advisory_lock_keys_for_task(task_id)
+    else:
+        k1, k2 = _advisory_lock_keys(workflow_id, contact_id)
     row = connection.execute(
         "SELECT pg_try_advisory_lock(%(k1)s, %(k2)s) AS acquired",
         {"k1": k1, "k2": k2},
@@ -95,9 +128,13 @@ def _release_advisory_lock(
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str,
     contact_id: str,
+    task_id: str | None = None,
 ) -> None:
-    """Release a session-level advisory lock."""
-    k1, k2 = _advisory_lock_keys(workflow_id, contact_id)
+    """Release a session-level advisory lock (mirrors _try_acquire scope)."""
+    if task_id is not None:
+        k1, k2 = _advisory_lock_keys_for_task(task_id)
+    else:
+        k1, k2 = _advisory_lock_keys(workflow_id, contact_id)
     connection.execute(
         "SELECT pg_advisory_unlock(%(k1)s, %(k2)s)",
         {"k1": k1, "k2": k2},
@@ -497,7 +534,7 @@ def _extract_tool_errors(result: Any) -> list[dict[str, str]]:
 # -- Main entry point ----------------------------------------------------------
 
 
-def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
+def invoke_workflow_agent(  # noqa: PLR0913
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
     workflow: Workflow,
@@ -507,6 +544,7 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
     task_context: dict[str, Any] | None = None,
     model_override: Model | str | None = None,
     trigger: str = "manual",
+    task_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Run the workflow's Pydantic AI agent for a contact.
 
@@ -530,6 +568,10 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
             (background drain via ``run.execute_task``), ``email``
             (email-driven), or ``manual`` (default for direct programmatic
             calls). See SPEC §V.11.
+        task_id: When the invocation is a drained task (§V.62 worker pool),
+            the task's ID. Used as the advisory-lock key so concurrent
+            workers handling distinct tasks for the same contact do not
+            serialize on each other (§V.65). CLI paths omit this.
 
     Returns:
         Dict with invocation result, or None if skipped (lock held).
@@ -537,6 +579,21 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
     Raises:
         AgentDidNotUseToolsError: If the agent completed without calling any tools.
     """
+    # §V.65 / §B.42: acquire the advisory lock BEFORE opening the
+    # ``agent.invoke`` span so loser-of-race calls do not emit a billable
+    # parent span. The per-trigger ``agent.invoke`` count then reflects
+    # real invocations, not noop attempts that bounce off the lock.
+    if not _try_acquire_advisory_lock(
+        connection, workflow.id, contact.id, task_id=task_id
+    ):
+        logfire.debug(
+            "agent.invoke.skipped_lock_held",
+            workflow_id=workflow.id,
+            contact_id=contact.id,
+            task_id=task_id,
+        )
+        return None
+
     with logfire.span(
         "agent.invoke",
         workflow_id=workflow.id,
@@ -552,15 +609,6 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
         # the attr absent so per-message rollups skip them cleanly.
         if email is not None and trigger in ("email", "task"):
             span.set_attribute("email_id", email.id)
-        # Acquire advisory lock.
-        if not _try_acquire_advisory_lock(connection, workflow.id, contact.id):
-            logfire.debug(
-                "agent.invoke.skipped_lock_held",
-                workflow_id=workflow.id,
-                contact_id=contact.id,
-            )
-            span.set_attribute("result", "skipped_lock_held")
-            return None
 
         try:
             # Load account for this workflow.
@@ -693,4 +741,4 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
             raise
 
         finally:
-            _release_advisory_lock(connection, workflow.id, contact.id)
+            _release_advisory_lock(connection, workflow.id, contact.id, task_id=task_id)

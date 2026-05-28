@@ -7,6 +7,7 @@ primitive -- all agent invocations flow through the task queue.
 
 from __future__ import annotations
 
+import random
 from typing import Any
 
 import logfire
@@ -20,11 +21,15 @@ from mailpilot.database import (
     get_email,
     get_enrollment,
     get_workflow,
+    reschedule_task_for_lock_contention,
     reschedule_task_for_retry,
 )
 from mailpilot.models import Task
 from mailpilot.operator_log import operator_event
 from mailpilot.settings import Settings
+
+_LOCK_CONTENTION_BACKOFF_SECONDS = 5
+_LOCK_CONTENTION_JITTER_SECONDS = 5
 
 
 def execute_task(
@@ -124,16 +129,27 @@ def execute_task(
                 task_description=task.description,
                 task_context=task.context,
                 trigger=trigger,
+                task_id=task.id,
             )
         except Exception as exc:
             _handle_agent_failure(connection, task, exc)
             return
 
         if result is None:
+            # §V.65: lock contention is not a retry -- the task ran nothing,
+            # attempt_count stays put. Push scheduled_at forward so the
+            # ``task_pending_trigger`` notify wakes the drain loop again;
+            # leaving the row ``pending`` with no signal stranded tasks
+            # behind their own lock under bursty inbound traffic (§B.42).
+            backoff = _LOCK_CONTENTION_BACKOFF_SECONDS + random.randint(
+                0, _LOCK_CONTENTION_JITTER_SECONDS
+            )
             logfire.info(
                 "run.task.lock_held",
                 task_id=task.id,
+                backoff_seconds=backoff,
             )
+            reschedule_task_for_lock_contention(connection, task.id, backoff)
             return
 
         complete_task(connection, task.id, status="completed", result=result)

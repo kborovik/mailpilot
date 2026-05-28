@@ -134,6 +134,7 @@ def test_execute_task_success(
         task_description="follow up",
         task_context={},
         trigger="task",
+        task_id=_TASK_ID,
     )
     mock_complete.assert_called_once_with(
         database_connection,
@@ -181,6 +182,7 @@ def test_execute_task_threads_trigger_from_context(
         task_description="follow up",
         task_context={"trigger": "enrollment_schedule"},
         trigger="enrollment_schedule",
+        task_id=_TASK_ID,
     )
 
 
@@ -326,6 +328,7 @@ def test_execute_task_missing_enrollment(
 def test_execute_task_lock_held(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
+    """§V.65 / §B.42: lock contention reschedules without bumping attempt_count."""
     from conftest import make_test_settings
     from mailpilot.run import execute_task
 
@@ -341,10 +344,51 @@ def test_execute_task_lock_held(
         patch("mailpilot.run.get_enrollment", return_value=enrollment),
         patch("mailpilot.run.invoke_workflow_agent", return_value=None),
         patch("mailpilot.run.complete_task") as mock_complete,
+        patch(
+            "mailpilot.run.reschedule_task_for_lock_contention"
+        ) as mock_reschedule_lock,
+        patch("mailpilot.run.reschedule_task_for_retry") as mock_reschedule_retry,
     ):
         execute_task(database_connection, settings, task)
 
     mock_complete.assert_not_called()
+    mock_reschedule_retry.assert_not_called()
+    mock_reschedule_lock.assert_called_once()
+    args = mock_reschedule_lock.call_args.args
+    assert args[0] is database_connection
+    assert args[1] == _TASK_ID
+    # backoff = 5s base + 0..5s jitter -> always within [5, 10].
+    assert 5 <= args[2] <= 10
+
+
+def test_execute_task_passes_task_id_to_invoke(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.65: drain path threads task.id through to invoke_workflow_agent so
+    the advisory lock is task-scoped, not (workflow_id, contact_id)-scoped."""
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings()
+    task = _make_task()
+    workflow = _make_workflow()
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+
+    agent_result = {"tool_calls": 1, "reasoning": "Done."}
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch(
+            "mailpilot.run.invoke_workflow_agent", return_value=agent_result
+        ) as mock_invoke,
+        patch("mailpilot.run.complete_task"),
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_invoke.assert_called_once()
+    assert mock_invoke.call_args.kwargs.get("task_id") == _TASK_ID
 
 
 def test_execute_task_agent_error_non_transient_terminal(
@@ -571,4 +615,5 @@ def test_execute_task_with_email(
         task_description="follow up",
         task_context={},
         trigger="task",
+        task_id=_TASK_ID,
     )

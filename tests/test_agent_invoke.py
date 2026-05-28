@@ -25,6 +25,7 @@ from conftest import (
 )
 from mailpilot.agent.invoke import (
     _advisory_lock_keys,  # pyright: ignore[reportPrivateUsage]
+    _advisory_lock_keys_for_task,  # pyright: ignore[reportPrivateUsage]
     _build_agent,  # pyright: ignore[reportPrivateUsage]
     _build_anthropic_model,  # pyright: ignore[reportPrivateUsage]
     _build_user_prompt,  # pyright: ignore[reportPrivateUsage]
@@ -203,7 +204,12 @@ def test_agent_calls_real_tool_passes_enforcement(
 def test_advisory_lock_skip_when_held(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """When advisory lock is already held, invocation is skipped (returns None)."""
+    """When advisory lock is already held, invocation is skipped (returns None).
+
+    Coarse-lock path (CLI ``enrollment_run``/``manual``): key derived from
+    ``(workflow_id, contact_id)``. Preserves the original §B.42 intent that
+    operator-initiated double-runs on the same enrollment serialize.
+    """
     _account, contact, workflow = _setup(database_connection)
     settings = make_test_settings(
         anthropic_api_key="sk-test", anthropic_model="test-model"
@@ -228,6 +234,139 @@ def test_advisory_lock_skip_when_held(
         assert result is None
     finally:
         blocker.close()
+
+
+def test_advisory_lock_task_scope_when_task_id_provided(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.65: drain-path invocation locks on ``task_id``, not (wf, contact).
+
+    Pre-acquire the *coarse* (workflow_id, contact_id) lock externally; the
+    task-scoped invocation must NOT see contention because it now uses a
+    task-derived key.
+    """
+    _account, contact, workflow = _setup(database_connection)
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+
+    from conftest import TEST_DATABASE_URL
+
+    blocker = psycopg.connect(TEST_DATABASE_URL)
+    try:
+        coarse_k1, coarse_k2 = _advisory_lock_keys(workflow.id, contact.id)
+        blocker.execute("SELECT pg_advisory_lock(%s, %s)", (coarse_k1, coarse_k2))
+
+        with (
+            patch("mailpilot.agent.invoke.GmailClient"),
+            patch("mailpilot.agent.invoke.DriveClient"),
+        ):
+            result = invoke_workflow_agent(
+                database_connection,
+                settings,
+                workflow,
+                contact,
+                trigger="task",
+                task_id="01234567-0000-7000-0000-000000000aaa",
+                model_override=FunctionModel(_model_that_calls_noop),
+            )
+        # Coarse-lock held does not block a task-scoped invocation.
+        assert result is not None
+        assert result["status"] == "completed"
+    finally:
+        blocker.close()
+
+
+def test_advisory_lock_task_scope_blocks_same_task_id(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.65: two drain workers grabbing the same task_id race on the same lock.
+
+    Regression guard: a duplicate-create race (per §V.18) presenting the same
+    task_id twice must still serialize so only one invocation runs.
+    """
+    _account, contact, workflow = _setup(database_connection)
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    task_id = "01234567-0000-7000-0000-000000000bbb"
+
+    from conftest import TEST_DATABASE_URL
+
+    blocker = psycopg.connect(TEST_DATABASE_URL)
+    try:
+        k1, k2 = _advisory_lock_keys_for_task(task_id)
+        blocker.execute("SELECT pg_advisory_lock(%s, %s)", (k1, k2))
+
+        result = invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            trigger="task",
+            task_id=task_id,
+            model_override=FunctionModel(_model_that_calls_noop),
+        )
+        assert result is None
+    finally:
+        blocker.close()
+
+
+def test_advisory_lock_loser_emits_no_agent_invoke_span(
+    database_connection: psycopg.Connection[dict[str, Any]],
+    capfire: CaptureLogfire,
+) -> None:
+    """§B.42 / §V.65: lock-loser does NOT emit a billable ``agent.invoke`` span.
+
+    Pre-§T.68 the parent span opened first and the lock check ran inside it,
+    so a loser-of-race produced a noop ``agent.invoke`` row in Logfire that
+    polluted per-trigger count metrics. Moving the check above the span makes
+    the loser a debug log only.
+    """
+    _account, contact, workflow = _setup(database_connection)
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    task_id = "01234567-0000-7000-0000-000000000ccc"
+
+    from conftest import TEST_DATABASE_URL
+
+    blocker = psycopg.connect(TEST_DATABASE_URL)
+    try:
+        k1, k2 = _advisory_lock_keys_for_task(task_id)
+        blocker.execute("SELECT pg_advisory_lock(%s, %s)", (k1, k2))
+
+        result = invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            trigger="task",
+            task_id=task_id,
+            model_override=FunctionModel(_model_that_calls_noop),
+        )
+        assert result is None
+
+        span_names = [span.name for span in capfire.exporter.exported_spans]
+        assert "agent.invoke" not in span_names
+    finally:
+        blocker.close()
+
+
+def test_advisory_lock_keys_for_task_deterministic_and_split() -> None:
+    """``_advisory_lock_keys_for_task`` is a pure function of ``task_id``.
+
+    Same task_id -> same keys (deterministic across processes). Different
+    task IDs that share a prefix get distinct second halves so the full ID
+    participates in the lock.
+    """
+    a = "01234567-0000-7000-0000-000000000001"
+    b = "01234567-0000-7000-0000-000000000002"
+
+    assert _advisory_lock_keys_for_task(a) == _advisory_lock_keys_for_task(a)
+    # Differ in the tail half -> the second key must differ even though the
+    # prefix matches.
+    assert _advisory_lock_keys_for_task(a)[1] != _advisory_lock_keys_for_task(b)[1]
 
 
 # -- Tests: email history context -----------------------------------------------

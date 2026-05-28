@@ -2390,6 +2390,46 @@ def reschedule_task_for_retry(
     return Task.model_validate(row)
 
 
+def reschedule_task_for_lock_contention(
+    connection: psycopg.Connection[dict[str, Any]],
+    task_id: str,
+    backoff_seconds: int,
+) -> Task | None:
+    """Push ``scheduled_at`` forward without bumping ``attempt_count``.
+
+    Used when the agent advisory lock was held by another worker (§V.65).
+    Lock contention is not a retry: the task ran nothing, side-effect
+    budget is untouched, ``attempt_count`` stays put. Bumping
+    ``scheduled_at`` fires the ``task_pending_trigger`` ``UPDATE`` notify
+    (§V.44 trigger extension) so the drain loop wakes again instead of
+    leaving the task ``pending`` with no signal (§B.42).
+
+    Args:
+        connection: Open database connection.
+        task_id: Task ID.
+        backoff_seconds: Delay before the next attempt fires.
+
+    Returns:
+        Updated task, or ``None`` if the row does not exist.
+    """
+    row = connection.execute(
+        """\
+        UPDATE task
+        SET scheduled_at = CURRENT_TIMESTAMP + (%(delay)s || ' seconds')::interval
+        WHERE id = %(id)s
+        RETURNING *
+        """,
+        {
+            "id": task_id,
+            "delay": str(backoff_seconds),
+        },
+    ).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Task.model_validate(row)
+
+
 def manual_retry_task(
     connection: psycopg.Connection[dict[str, Any]],
     task_id: str,
