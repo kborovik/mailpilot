@@ -215,18 +215,14 @@ Poll the inbound account:
 mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction inbound --since <TEST_START_A>
 ```
 
-Match by `SUBJECT_A`. When found, fetch detail:
-
-```
-mailpilot email view <INBOUND_SIDE_EMAIL_ID>
-```
+Match by `SUBJECT_A`. The `email list` row already projects `gmail_thread_id` (§V.51(+) / §T.65), so the thread-presence check below reads from the list directly -- no per-row `email view` round-trip needed.
 
 **Gate A4:**
 
 - The email exists in the inbound account's inbound emails.
 - `is_routed == true`.
 - `workflow_id == null` (no inbound workflow exists yet -- the `routing.route_email` span emits `route_method=skipped_no_workflows`).
-- `gmail_thread_id` is set. Save the inbound-side email ID as `INBOUND_SIDE_EMAIL_ID` for the reply.
+- `gmail_thread_id` is set on the list row (read directly from `email list` JSON; do not round-trip through `email view`). Save the inbound-side email ID as `INBOUND_SIDE_EMAIL_ID` for the reply.
 
 **On failure:** Email never arrived after 60s -- read the captured `mailpilot run` output for Pub/Sub or sync errors.
 

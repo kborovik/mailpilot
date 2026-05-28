@@ -234,6 +234,7 @@ class EmailSummary(BaseModel):
     sender: str
     status: str
     is_routed: bool
+    gmail_thread_id: str | None
     sent_at: datetime | None
     received_at: datetime | None
 

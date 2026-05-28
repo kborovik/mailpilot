@@ -1223,6 +1223,40 @@ def test_list_emails_by_workflow_id(
     assert results[0].subject == "Campaign"
 
 
+def test_list_emails_summary_includes_gmail_thread_id(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.51(+): Summary projection MUST include gmail_thread_id so callers
+    can answer thread-pivot questions (smoke-test A4 threading confirmation
+    per §B.39) from `list` without round-tripping per row through `view`.
+
+    Inbound rows synced from Gmail carry a thread id; outbound rows queued
+    locally before send carry null until Gmail accepts the send. Both shapes
+    must surface on the Summary projection.
+    """
+    account = make_test_account(database_connection)
+    synced = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="msg_threaded",
+        gmail_thread_id="thread_value_42",
+        subject="threaded message",
+    )
+    queued = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="queued for send",
+    )
+    assert synced is not None
+    assert queued is not None
+
+    results = {row.id: row for row in list_emails(database_connection)}
+    assert results[synced.id].gmail_thread_id == "thread_value_42"
+    assert results[queued.id].gmail_thread_id is None
+
+
 def test_list_emails_summary_includes_is_routed(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
