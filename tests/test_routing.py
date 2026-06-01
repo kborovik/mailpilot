@@ -1211,10 +1211,15 @@ def test_route_email_persists_route_method_classified(
     assert persisted.route_method == "classified"
 
 
-def test_route_email_persists_route_method_unrouted(
+def test_route_email_classifier_rejects_persists_null_route_method(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """Email.route_method must equal 'unrouted' when classifier rejects."""
+    """Classifier-ran-no-match -> persisted route_method NULL (is_routed=TRUE).
+
+    "unrouted" is a span-only label per §V.66: persisted enum admits only the
+    7 decision values; NULL carries the "pipeline ran, no enum bucket matched"
+    signal alongside is_routed=TRUE.
+    """
     account = make_test_account(database_connection, email="rmpur@example.com")
     workflow = make_test_workflow(
         database_connection, account_id=account.id, workflow_type="inbound"
@@ -1242,10 +1247,12 @@ def test_route_email_persists_route_method_unrouted(
             database_connection, new_email, "nobody@example.com", settings
         )
 
-    assert routed.route_method == "unrouted"
+    assert routed.route_method is None
+    assert routed.is_routed is True
     persisted = get_email(database_connection, new_email.id)
     assert persisted is not None
-    assert persisted.route_method == "unrouted"
+    assert persisted.route_method is None
+    assert persisted.is_routed is True
 
 
 def test_route_email_persists_route_method_skipped_no_inbound_workflows(

@@ -1183,6 +1183,7 @@ def test_list_emails_by_route_method(
         direction="inbound",
         gmail_message_id="msg_rm_a",
         subject="Classified A",
+        is_routed=True,
         route_method="classified",
     )
     create_email(
@@ -1190,8 +1191,9 @@ def test_list_emails_by_route_method(
         account_id=account.id,
         direction="inbound",
         gmail_message_id="msg_rm_b",
-        subject="Unrouted B",
-        route_method="unrouted",
+        subject="Thread B",
+        is_routed=True,
+        route_method="thread_match",
     )
     classified = list_emails(database_connection, route_method="classified")
     assert len(classified) == 1

@@ -89,10 +89,20 @@ CREATE TABLE IF NOT EXISTS email (
     status            TEXT NOT NULL DEFAULT 'received'
                       CHECK (status IN ('sent', 'received', 'bounced')),
     is_routed         BOOLEAN NOT NULL DEFAULT FALSE,
-    route_method      TEXT,
+    route_method      TEXT
+                      CHECK (route_method IS NULL OR route_method IN (
+                          'thread_match',
+                          'rfc_message_id_match',
+                          'classified',
+                          'skipped_outside_window',
+                          'skipped_no_workflows',
+                          'skipped_predates_workflows',
+                          'skipped_no_inbound_workflows'
+                      )),
     sent_at           TIMESTAMPTZ,
     received_at       TIMESTAMPTZ,
-    created_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (route_method IS NULL OR is_routed = TRUE)
 );
 
 CREATE INDEX IF NOT EXISTS idx_email_account_id ON email(account_id);

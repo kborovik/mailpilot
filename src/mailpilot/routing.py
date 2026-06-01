@@ -109,12 +109,19 @@ def route_email(
             if workflow_id is not None:
                 span.set_attribute("workflow_id", workflow_id)
 
+            # "unrouted" is a span-only label: classifier ran on real candidates
+            # but rejected them. §I / §V.66 persisted enum admits only the 7
+            # decision values + NULL (routing pipeline ran, no enum bucket
+            # matched). is_routed=TRUE carries the "pipeline completed" signal.
+            persisted_route_method = (
+                route_method if route_method != "unrouted" else None
+            )
             updated = update_email(
                 connection,
                 email.id,
                 workflow_id=workflow_id,
                 is_routed=True,
-                route_method=route_method,
+                route_method=persisted_route_method,
             )
             result = updated if updated is not None else email
 

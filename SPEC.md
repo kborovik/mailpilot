@@ -128,7 +128,7 @@ T67|x|impl §V.64 — decouple drain pool from main-loop tick|V20,V62,V64
 T68|x|impl §V.65 — scope agent advisory lock to unit of work|V20,V62,V64,V65
 T69|x|impl §V.28(+) — _DRIVE_GROUNDING 2-consecutive-miss fallback to list_drive_markdown|V20,V28
 T70|x|impl §I(+) — persist route_method on email; project on Email ∧ EmailSummary|V20,V51
-T71|.|impl §V.66 — email.route_method enum CHECK + is_routed coupling CHECK in schema.sql|V20,V66
+T71|x|impl §V.66 — email.route_method enum CHECK + is_routed coupling CHECK in schema.sql|V20,V66
 
 ## §B BUGS
 
