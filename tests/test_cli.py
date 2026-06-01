@@ -1641,6 +1641,7 @@ def test_email_list(runner: CliRunner, mock_connection: MagicMock) -> None:
         status=None,
         sender=None,
         recipient=None,
+        route_method=None,
     )
 
 
@@ -1692,6 +1693,7 @@ def test_email_list_with_filters(runner: CliRunner, mock_connection: MagicMock) 
         status=None,
         sender=None,
         recipient=None,
+        route_method=None,
     )
 
 
@@ -1735,6 +1737,7 @@ def test_email_list_with_new_filters(
         status="received",
         sender=None,
         recipient=None,
+        route_method=None,
     )
 
 
@@ -1915,6 +1918,7 @@ def test_email_list_with_from_and_to_filters(
         status=None,
         sender="alice@example.com",
         recipient="bob@example.com",
+        route_method=None,
     )
 
 

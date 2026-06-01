@@ -1091,3 +1091,197 @@ def test_route_email_rfc_match_no_referenced_ids_falls_through(
     # No active workflows -> unrouted, but importantly no exception raised.
     assert routed.is_routed is True
     assert routed.workflow_id is None
+
+
+# -- Persisted route_method (§I email projection, §T.70) ----------------------
+
+
+def test_route_email_persists_route_method_thread_match(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Email.route_method must equal the span attribute on thread_match."""
+    account = make_test_account(database_connection, email="rmpt@example.com")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="inbound"
+    )
+    _activate_workflow(database_connection, workflow.id)
+
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="prior",
+        gmail_thread_id="t-rmpt",
+        workflow_id=workflow.id,
+        is_routed=True,
+    )
+    new_email = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="reply",
+        gmail_thread_id="t-rmpt",
+    )
+    assert new_email is not None
+
+    routed = route_email(
+        database_connection, new_email, "sender@example.com", make_test_settings()
+    )
+
+    assert routed.route_method == "thread_match"
+    persisted = get_email(database_connection, new_email.id)
+    assert persisted is not None
+    assert persisted.route_method == "thread_match"
+
+
+def test_route_email_persists_route_method_rfc_message_id_match(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Email.route_method must equal the span attribute on rfc_message_id_match."""
+    account = make_test_account(database_connection, email="rmprfc@example.com")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="inbound"
+    )
+    _activate_workflow(database_connection, workflow.id)
+
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="initial",
+        gmail_thread_id="thread-rfc-out",
+        rfc2822_message_id="<rmprfc@mailpilot.test>",
+        workflow_id=workflow.id,
+        is_routed=True,
+    )
+    reply = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Re: initial",
+        gmail_thread_id="thread-rfc-in",
+        in_reply_to="<rmprfc@mailpilot.test>",
+    )
+    assert reply is not None
+
+    routed = route_email(
+        database_connection, reply, "alice@example.com", make_test_settings()
+    )
+
+    assert routed.route_method == "rfc_message_id_match"
+    persisted = get_email(database_connection, reply.id)
+    assert persisted is not None
+    assert persisted.route_method == "rfc_message_id_match"
+
+
+def test_route_email_persists_route_method_classified(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Email.route_method must equal 'classified' when LLM returns a workflow."""
+    account = make_test_account(database_connection, email="rmpc@example.com")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="inbound"
+    )
+    _activate_workflow(database_connection, workflow.id)
+
+    new_email = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Question about support",
+        body_text="please help",
+        gmail_thread_id="t-rmpc",
+    )
+    assert new_email is not None
+
+    settings = make_test_settings(
+        anthropic_api_key="sk-test",
+        anthropic_model="claude-sonnet-4-6",
+    )
+    model = _function_model_returning(workflow_id=workflow.id, reasoning="match")
+
+    with classify_module._AGENT.override(model=model):  # pyright: ignore[reportPrivateUsage]
+        routed = route_email(
+            database_connection, new_email, "asker@example.com", settings
+        )
+
+    assert routed.route_method == "classified"
+    persisted = get_email(database_connection, new_email.id)
+    assert persisted is not None
+    assert persisted.route_method == "classified"
+
+
+def test_route_email_persists_route_method_unrouted(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Email.route_method must equal 'unrouted' when classifier rejects."""
+    account = make_test_account(database_connection, email="rmpur@example.com")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="inbound"
+    )
+    _activate_workflow(database_connection, workflow.id)
+
+    new_email = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="spam",
+        body_text="prize",
+        gmail_thread_id="t-rmpur",
+    )
+    assert new_email is not None
+
+    settings = make_test_settings(
+        anthropic_api_key="sk-test",
+        anthropic_model="claude-sonnet-4-6",
+    )
+    model = _function_model_returning(workflow_id=None, reasoning="no match")
+
+    with classify_module._AGENT.override(model=model):  # pyright: ignore[reportPrivateUsage]
+        routed = route_email(
+            database_connection, new_email, "nobody@example.com", settings
+        )
+
+    assert routed.route_method == "unrouted"
+    persisted = get_email(database_connection, new_email.id)
+    assert persisted is not None
+    assert persisted.route_method == "unrouted"
+
+
+def test_route_email_persists_route_method_skipped_no_inbound_workflows(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Email.route_method must equal 'skipped_no_inbound_workflows' when account
+    has only outbound workflows."""
+    account = make_test_account(database_connection, email="rmpsni@example.com")
+    outbound_wf = make_test_workflow(
+        database_connection,
+        account_id=account.id,
+        name="Outbound only",
+        workflow_type="outbound",
+    )
+    update_workflow(
+        database_connection,
+        outbound_wf.id,
+        objective="Cold outreach",
+        instructions="Send cold emails",
+    )
+    activate_workflow(database_connection, outbound_wf.id)
+
+    new_email = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="orphan",
+        gmail_thread_id="t-rmpsni",
+    )
+    assert new_email is not None
+
+    routed = route_email(
+        database_connection, new_email, "nobody@example.com", make_test_settings()
+    )
+
+    assert routed.route_method == "skipped_no_inbound_workflows"
+    persisted = get_email(database_connection, new_email.id)
+    assert persisted is not None
+    assert persisted.route_method == "skipped_no_inbound_workflows"

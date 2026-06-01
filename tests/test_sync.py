@@ -2056,3 +2056,118 @@ def test_sync_one_message_emits_skip_span_when_predates_workflows(
     attrs = spans[0]["attributes"]
     assert attrs["route_method"] == "skipped_predates_workflows"
     assert str(attrs["email_id"]) == str(email.id)
+
+
+# -- Persisted route_method on skip paths (§I email projection, §T.70) --------
+
+
+def test_sync_one_message_persists_route_method_outside_recency_window(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Skipped-outside-window emails must persist route_method on the row."""
+    from mailpilot.database import get_email
+    from mailpilot.sync import (
+        _store_inbound_message,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    account = make_test_account(database_connection, email="oldpersist@example.com")
+    old_date = datetime.now(UTC) - timedelta(days=30)
+    message = _make_gmail_message(
+        message_id="old-persist-1",
+        thread_id="t-old-persist-1",
+        received_at=old_date,
+    )
+    contact = make_test_contact(database_connection, email="alice@example.com")
+
+    email = _store_inbound_message(
+        database_connection,
+        account,
+        message,
+        contacts_by_email={"alice@example.com": contact},
+        settings=make_test_settings(),
+        has_active_workflows=False,
+    )
+
+    assert email is not None
+    assert email.route_method == "skipped_outside_window"
+    persisted = get_email(database_connection, email.id)
+    assert persisted is not None
+    assert persisted.route_method == "skipped_outside_window"
+
+
+def test_sync_one_message_persists_route_method_no_active_workflows(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Skipped-no-workflows emails must persist route_method on the row."""
+    from mailpilot.database import get_email
+    from mailpilot.sync import (
+        _store_inbound_message,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    account = make_test_account(database_connection, email="nowfpersist@example.com")
+    message = _make_gmail_message(
+        message_id="nowf-persist-1",
+        thread_id="t-nowf-persist-1",
+    )
+    contact = make_test_contact(database_connection, email="bob@example.com")
+
+    email = _store_inbound_message(
+        database_connection,
+        account,
+        message,
+        contacts_by_email={"bob@example.com": contact},
+        settings=make_test_settings(),
+        has_active_workflows=False,
+    )
+
+    assert email is not None
+    assert email.route_method == "skipped_no_workflows"
+    persisted = get_email(database_connection, email.id)
+    assert persisted is not None
+    assert persisted.route_method == "skipped_no_workflows"
+
+
+def test_sync_one_message_persists_route_method_predates_workflows(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Skipped-predates-workflows emails must persist route_method on the row."""
+    from mailpilot.database import activate_workflow, get_email, update_workflow
+    from mailpilot.sync import (
+        _store_inbound_message,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    account = make_test_account(database_connection, email="predatepersist@example.com")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="inbound"
+    )
+    update_workflow(
+        database_connection,
+        workflow.id,
+        objective="Handle inquiries",
+        instructions="Reply helpfully",
+    )
+    activate_workflow(database_connection, workflow.id)
+
+    email_time = workflow.created_at - timedelta(hours=1)
+    message = _make_gmail_message(
+        message_id="predate-persist-1",
+        thread_id="t-predate-persist-1",
+        received_at=email_time,
+    )
+    contact = make_test_contact(database_connection, email="carol@example.com")
+
+    email = _store_inbound_message(
+        database_connection,
+        account,
+        message,
+        contacts_by_email={"carol@example.com": contact},
+        settings=make_test_settings(),
+        has_active_workflows=True,
+        earliest_workflow_at=workflow.created_at,
+    )
+
+    assert email is not None
+    assert email.route_method == "skipped_predates_workflows"
+    persisted = get_email(database_connection, email.id)
+    assert persisted is not None
+    assert persisted.route_method == "skipped_predates_workflows"

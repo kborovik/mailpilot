@@ -110,7 +110,11 @@ def route_email(
                 span.set_attribute("workflow_id", workflow_id)
 
             updated = update_email(
-                connection, email.id, workflow_id=workflow_id, is_routed=True
+                connection,
+                email.id,
+                workflow_id=workflow_id,
+                is_routed=True,
+                route_method=route_method,
             )
             result = updated if updated is not None else email
 

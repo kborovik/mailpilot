@@ -126,7 +126,7 @@ T66|x|impl §V.31(+) — source_file_alts in qa_pairs.json|V20,V31
 T67|x|impl §V.64 — decouple drain pool from main-loop tick|V20,V62,V64
 T68|x|impl §V.65 — scope agent advisory lock to unit of work|V20,V62,V64,V65
 T69|x|impl §V.28(+) — _DRIVE_GROUNDING 2-consecutive-miss fallback to list_drive_markdown|V20,V28
-T70|.|impl §I(+) — persist route_method on email; project on Email ∧ EmailSummary|V20,V51
+T70|x|impl §I(+) — persist route_method on email; project on Email ∧ EmailSummary|V20,V51
 
 ## §B BUGS
 

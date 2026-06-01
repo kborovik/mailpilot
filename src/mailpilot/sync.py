@@ -921,7 +921,14 @@ def _store_inbound_message(  # noqa: PLR0913
             account_id=email.account_id,
             route_method="skipped_outside_window",
         ):
-            pass  # email was created with is_routed=True already
+            updated = update_email(
+                connection,
+                email.id,
+                is_routed=True,
+                route_method="skipped_outside_window",
+            )
+            if updated is not None:
+                email = updated
         return email
     if not has_active_workflows:
         with logfire.span(
@@ -930,7 +937,12 @@ def _store_inbound_message(  # noqa: PLR0913
             account_id=email.account_id,
             route_method="skipped_no_workflows",
         ):
-            updated = update_email(connection, email.id, is_routed=True)
+            updated = update_email(
+                connection,
+                email.id,
+                is_routed=True,
+                route_method="skipped_no_workflows",
+            )
             if updated is not None:
                 email = updated
         return email
@@ -941,7 +953,12 @@ def _store_inbound_message(  # noqa: PLR0913
             account_id=email.account_id,
             route_method="skipped_predates_workflows",
         ):
-            updated = update_email(connection, email.id, is_routed=True)
+            updated = update_email(
+                connection,
+                email.id,
+                is_routed=True,
+                route_method="skipped_predates_workflows",
+            )
             if updated is not None:
                 email = updated
         return email

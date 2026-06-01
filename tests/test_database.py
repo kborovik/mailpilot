@@ -1173,6 +1173,55 @@ def test_list_emails_by_thread_id(
     assert results[0].subject == "Thread A"
 
 
+def test_list_emails_by_route_method(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="msg_rm_a",
+        subject="Classified A",
+        route_method="classified",
+    )
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="msg_rm_b",
+        subject="Unrouted B",
+        route_method="unrouted",
+    )
+    classified = list_emails(database_connection, route_method="classified")
+    assert len(classified) == 1
+    assert classified[0].subject == "Classified A"
+    assert classified[0].route_method == "classified"
+
+
+def test_update_email_persists_route_method(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    email = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="msg_rm_upd",
+        subject="To be routed",
+    )
+    assert email is not None
+    assert email.route_method is None
+    updated = update_email(
+        database_connection,
+        email.id,
+        is_routed=True,
+        route_method="thread_match",
+    )
+    assert updated is not None
+    assert updated.route_method == "thread_match"
+
+
 def test_list_emails_by_direction(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):

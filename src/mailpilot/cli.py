@@ -1077,6 +1077,12 @@ def email_search(query: str, limit: int) -> None:
 @click.option(
     "--to", "recipient", default=None, help="Filter by recipient email address."
 )
+@click.option(
+    "--route-method",
+    "route_method",
+    default=None,
+    help="Filter by persisted routing decision (e.g. classified, thread_match).",
+)
 def email_list(
     limit: int,
     contact_id: str | None,
@@ -1088,6 +1094,7 @@ def email_list(
     status: str | None,
     sender: str | None,
     recipient: str | None,
+    route_method: str | None,
 ) -> None:
     """List emails with optional filters."""
     from mailpilot.database import (
@@ -1118,6 +1125,7 @@ def email_list(
             status=status,
             sender=sender,
             recipient=recipient,
+            route_method=route_method,
         )
         output({"emails": [e.model_dump(mode="json") for e in emails]})
     finally:

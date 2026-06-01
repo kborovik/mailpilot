@@ -215,6 +215,7 @@ class Email(BaseModel):
     labels: list[str] = []
     status: str = "received"
     is_routed: bool = False
+    route_method: str | None = None
     sender: str = ""
     recipients: dict[str, list[str]] = {}
     sent_at: datetime | None = None
@@ -234,6 +235,7 @@ class EmailSummary(BaseModel):
     sender: str
     status: str
     is_routed: bool
+    route_method: str | None
     gmail_thread_id: str | None
     sent_at: datetime | None
     received_at: datetime | None

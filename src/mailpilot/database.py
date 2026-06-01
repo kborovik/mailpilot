@@ -23,7 +23,7 @@ from typing import Any, cast
 import logfire
 import psycopg
 from psycopg.rows import dict_row
-from psycopg.sql import SQL, Composed, Identifier, Placeholder
+from psycopg.sql import SQL, Composable, Composed, Identifier, Placeholder
 from psycopg.types.json import Json
 
 from mailpilot.models import (
@@ -1653,6 +1653,7 @@ def create_email(
     workflow_id: str | None = None,
     status: str = "received",
     is_routed: bool = False,
+    route_method: str | None = None,
     received_at: datetime | None = None,
     sent_at: datetime | None = None,
     labels: list[str] | None = None,
@@ -1682,6 +1683,8 @@ def create_email(
         workflow_id: Optional workflow FK.
         status: Email status ("sent" or "received").
         is_routed: Whether the routing pipeline has processed this email.
+        route_method: Persisted routing decision (per §I email projection;
+            e.g. ``thread_match``, ``classified``, ``skipped_outside_window``).
         received_at: When Gmail reports the message arrived (UTC datetime).
         sent_at: When the outbound message was handed to Gmail (UTC datetime).
         labels: Gmail label IDs attached to the message.
@@ -1703,14 +1706,15 @@ def create_email(
         """\
         INSERT INTO email (id, account_id, direction, subject,
             body_text, gmail_message_id, gmail_thread_id,
-            contact_id, workflow_id, status, is_routed,
+            contact_id, workflow_id, status, is_routed, route_method,
             received_at, sent_at, labels, rfc2822_message_id,
             in_reply_to, references_header,
             sender, recipients)
         VALUES (%(id)s, %(account_id)s, %(direction)s,
             %(subject)s, %(body_text)s, %(gmail_message_id)s,
             %(gmail_thread_id)s, %(contact_id)s, %(workflow_id)s,
-            %(status)s, %(is_routed)s, %(received_at)s, %(sent_at)s,
+            %(status)s, %(is_routed)s, %(route_method)s,
+            %(received_at)s, %(sent_at)s,
             %(labels)s, %(rfc2822_message_id)s,
             %(in_reply_to)s, %(references_header)s,
             %(sender)s, %(recipients)s)
@@ -1729,6 +1733,7 @@ def create_email(
             "workflow_id": workflow_id,
             "status": status,
             "is_routed": is_routed,
+            "route_method": route_method,
             "received_at": received_at,
             "sent_at": sent_at,
             "labels": Json(labels or []),
@@ -1779,6 +1784,7 @@ def list_emails(
     status: str | None = None,
     sender: str | None = None,
     recipient: str | None = None,
+    route_method: str | None = None,
 ) -> list[EmailSummary]:
     """List emails as summaries with optional filters.
 
@@ -1795,6 +1801,8 @@ def list_emails(
         sender: Filter by sender email address (case-insensitive).
         recipient: Filter by recipient address in recipients JSONB
             (case-insensitive, matches to/cc/bcc).
+        route_method: Filter by persisted routing decision (per
+            §I email projection).
 
     Returns:
         List of email summaries ordered by ``COALESCE(sent_at, received_at)``
@@ -1802,29 +1810,28 @@ def list_emails(
         operators can page newest-first using a timestamp visible in
         ``EmailSummary``.
     """
-    conditions: list[SQL] = []
+    conditions: list[Composable] = []
     params: dict[str, object] = {"limit": limit}
-    if contact_id is not None:
-        conditions.append(SQL("contact_id = %(contact_id)s"))
-        params["contact_id"] = contact_id
-    if account_id is not None:
-        conditions.append(SQL("account_id = %(account_id)s"))
-        params["account_id"] = account_id
+    # Simple equality filters keyed (param_name -> (column_name, value)).
+    equality_filters: dict[str, tuple[str, str | None]] = {
+        "contact_id": ("contact_id", contact_id),
+        "account_id": ("account_id", account_id),
+        "thread_id": ("gmail_thread_id", thread_id),
+        "direction": ("direction", direction),
+        "workflow_id": ("workflow_id", workflow_id),
+        "status": ("status", status),
+        "route_method": ("route_method", route_method),
+    }
+    for param_name, (column, value) in equality_filters.items():
+        if value is None:
+            continue
+        conditions.append(
+            SQL("{} = {}").format(Identifier(column), Placeholder(param_name))
+        )
+        params[param_name] = value
     if since is not None:
         conditions.append(SQL("COALESCE(sent_at, received_at) >= %(since)s"))
         params["since"] = since
-    if thread_id is not None:
-        conditions.append(SQL("gmail_thread_id = %(thread_id)s"))
-        params["thread_id"] = thread_id
-    if direction is not None:
-        conditions.append(SQL("direction = %(direction)s"))
-        params["direction"] = direction
-    if workflow_id is not None:
-        conditions.append(SQL("workflow_id = %(workflow_id)s"))
-        params["workflow_id"] = workflow_id
-    if status is not None:
-        conditions.append(SQL("status = %(status)s"))
-        params["status"] = status
     if sender is not None:
         conditions.append(SQL("LOWER(sender) = LOWER(%(sender)s)"))
         params["sender"] = sender
@@ -1836,8 +1843,8 @@ def list_emails(
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
         "SELECT id, account_id, contact_id, workflow_id, direction, "
-        "subject, sender, status, is_routed, gmail_thread_id, "
-        "sent_at, received_at "
+        "subject, sender, status, is_routed, route_method, "
+        "gmail_thread_id, sent_at, received_at "
         "FROM email {} "
         "ORDER BY COALESCE(sent_at, received_at) DESC LIMIT %(limit)s"
     ).format(where)
@@ -1870,8 +1877,8 @@ def search_emails(
         params["account_id"] = account_id
     query_sql = SQL(
         "SELECT id, account_id, contact_id, workflow_id, direction, "
-        "subject, sender, status, is_routed, gmail_thread_id, "
-        "sent_at, received_at "
+        "subject, sender, status, is_routed, route_method, "
+        "gmail_thread_id, sent_at, received_at "
         "FROM email "
         "WHERE (LOWER(subject) LIKE LOWER(%(pattern)s) "
         "   OR LOWER(body_text) LIKE LOWER(%(pattern)s) "
@@ -2082,6 +2089,7 @@ def update_email(
     allowed = {
         "workflow_id",
         "is_routed",
+        "route_method",
         "status",
         "contact_id",
         "rfc2822_message_id",
