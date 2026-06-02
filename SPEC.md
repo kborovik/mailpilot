@@ -129,7 +129,7 @@ T68|x|impl §V.25 — scope agent advisory lock to unit of work|V64,V23,V24,V25
 T69|x|impl §V.41(+) — _DRIVE_GROUNDING 2-consecutive-miss fallback to list_drive_markdown|V64,V41
 T70|x|impl §I(+) — persist route_method on email; project on Email ∧ EmailSummary|V64,V7
 T71|x|impl §V.20 — email.route_method enum CHECK + is_routed coupling CHECK in schema.sql|V64,V20
-T72|.|impl §V.18(+) — extend make clean to drop ∧ recreate mailpilot_test alongside mailpilot|V18,V64,V65
+T72|x|impl §V.18(+) — extend make clean to drop ∧ recreate mailpilot_test alongside mailpilot|V18,V64,V65
 
 ## §B BUGS
 

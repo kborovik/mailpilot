@@ -37,6 +37,8 @@ clean: ## Export data, re-create database
 	$(call header,Re-creating database)
 	dropdb --if-exists mailpilot
 	createdb mailpilot
+	dropdb --if-exists mailpilot_test
+	createdb mailpilot_test
 	mailpilot status
 
 py-update:
