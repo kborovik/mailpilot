@@ -1,7 +1,7 @@
-"""Span-emission contract tests for the Logfire scrubbing callback (§V.50).
+"""Span-emission contract tests for the Logfire scrubbing callback (§V.55).
 
 The default Logfire scrubber redacts attribute values that contain substrings
-like ``"auth"`` or ``"password"``. Per §V.50, ``tool_response`` payloads on
+like ``"auth"`` or ``"password"``. Per §V.55, ``tool_response`` payloads on
 Pydantic-AI ``running tool`` spans must be exempt so KB grounding regressions
 remain verifiable from traces alone. Other attribute paths must continue to
 flow through the default scrubber.

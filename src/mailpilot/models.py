@@ -177,7 +177,7 @@ EnrollmentOutcome = Literal["completed", "failed"]
 class EnrollmentWithOutcome(BaseModel):
     """Enrollment plus the latest outcome activity, if any.
 
-    Outcomes (`completed` / `failed`) are timeline-only per §V.10 -- they do
+    Outcomes (`completed` / `failed`) are timeline-only per §V.15 -- they do
     not live on the enrollment row. This composite carries the most recent
     `enrollment_completed` / `enrollment_failed` activity so the agent can
     coordinate across contacts in a single read.
@@ -364,7 +364,7 @@ class NoteSummary(BaseModel):
 
 
 class ContactView(BaseModel):
-    """View-only projection of `Contact` with inlined notes (§V.53).
+    """View-only projection of `Contact` with inlined notes (§V.8).
 
     Used by both CLI ``contact view`` and agent tool ``read_contact`` so the
     operator and the agent see byte-identical context. ``notes`` carries the
@@ -389,7 +389,7 @@ class ContactView(BaseModel):
 
 
 class CompanyView(BaseModel):
-    """View-only projection of `Company` with inlined notes (§V.53).
+    """View-only projection of `Company` with inlined notes (§V.8).
 
     Used by both CLI ``company view`` and agent tool ``read_company``. Only
     the company's own notes are inlined (capped, full body, DESC); company is
@@ -417,7 +417,7 @@ class SyncStatus(BaseModel):
 class SchemaMetadata(BaseModel):
     """Singleton row recording version + normalized schema hash.
 
-    Written at schema-apply time per §V.58.
+    Written at schema-apply time per §V.18.
     """
 
     mailpilot_version: str

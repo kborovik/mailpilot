@@ -283,7 +283,7 @@ def test_reply_email_blocked_contact(
     gmail_client.send_message.assert_not_called()
 
 
-# -- _check_spec_table (§V.29) -------------------------------------------------
+# -- _check_spec_table (§V.42) -------------------------------------------------
 
 
 def test_send_email_pure_prose_passes(
@@ -539,7 +539,7 @@ def test_send_email_single_space_bold_label_cluster_rejects(
 def test_send_email_prose_with_incidental_short_line_passes(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """§V.29 prose immunity: a multi-clause prose body with one incidental
+    """§V.42 prose immunity: a multi-clause prose body with one incidental
     short line broken between long sentences must NOT trip the lint.
     Consecutive tracking resets on the short line (no internal whitespace)
     so the surrounding long lines never reach the 3-consecutive threshold."""
@@ -994,7 +994,7 @@ def test_read_contact_found(
 def test_read_contact_inlines_notes(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """read_contact view ≡ load_contact_view per §V.53."""
+    """read_contact view ≡ load_contact_view per §V.8."""
     from mailpilot.database import create_note
 
     company = make_test_company(database_connection, name="Acme", domain="acme.com")
@@ -1051,7 +1051,7 @@ def test_read_company_found(
 def test_read_company_inlines_notes(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """read_company view ≡ load_company_view per §V.53."""
+    """read_company view ≡ load_company_view per §V.8."""
     from mailpilot.database import create_note
 
     company = make_test_company(database_connection, name="Acme", domain="acme.com")
@@ -1305,10 +1305,10 @@ def test_search_drive_markdown_other_http_error_returns_drive_unavailable() -> N
     assert result["error"] == "drive_unavailable"
 
 
-# -- §V.61 + §B.34: broadened catch envelopes ---------------------------------
+# -- §V.38 + §B.34: broadened catch envelopes ---------------------------------
 # A hung sibling read in a parallel Drive fan-out used to escape the tool
 # wrapper as a bare TimeoutError, bubble to ``run.task.agent_failed``, and
-# burn the §V.44 retry budget on a deterministic local race. The catch arm
+# burn the §V.49 retry budget on a deterministic local race. The catch arm
 # now folds ``socket.timeout`` / ``TimeoutError`` / ``OSError`` into the same
 # ``drive_unavailable`` tool return so the surviving sibling call carries
 # the agent run.

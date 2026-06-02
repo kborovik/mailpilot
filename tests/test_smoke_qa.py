@@ -1,4 +1,4 @@
-"""Tests for the smoke-test helper script `qa.py` (SPEC §V.31 / §T.11).
+"""Tests for the smoke-test helper script `qa.py` (SPEC §V.57 / §T.11).
 
 `qa.py` is not part of the importable `mailpilot` package, so it is loaded
 via `importlib.util` from its on-disk path inside the smoke-test skill.
@@ -178,7 +178,7 @@ def test_source_inscope_falls_back_to_first_alt_when_primary_missing(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """§V.31(+) / §T.66: when the primary source_file is absent from Drive
+    """§V.57(+) / §T.66: when the primary source_file is absent from Drive
     but a source_file_alts entry is present, load the first available alt."""
     pairs = [
         {

@@ -2,7 +2,7 @@
 
 Universal invariants are parametrized over every template in the registry;
 named tests assert per-template tool / protocol contracts that protect
-against the bugs §V.32 / §V.33 / §V.34 prevent (drive-tool over-binding,
+against the bugs §V.44 / §V.45 / §V.46 prevent (drive-tool over-binding,
 KB grounding rule leak, abstract naming).
 """
 
@@ -41,7 +41,7 @@ class TestUniversalTemplateInvariants:
         assert len(template.tools) > 0
 
     def test_name_prefix_matches_direction(self, template: WorkflowTemplate) -> None:
-        """§V.34: name = <direction>-<data-system>; prefix must match direction."""
+        """§V.46: name = <direction>-<data-system>; prefix must match direction."""
         assert template.name.startswith(f"{template.direction}-"), (
             f"template name {template.name!r} prefix does not match "
             f"direction {template.direction!r}"
@@ -51,15 +51,15 @@ class TestUniversalTemplateInvariants:
         assert template.description.strip() != ""
 
     def test_decline_protocol_present(self, template: WorkflowTemplate) -> None:
-        """§V.33: _DECLINE fragment composed into every template's protocol."""
+        """§V.45: _DECLINE fragment composed into every template's protocol."""
         assert "polite decline" in template.protocol
 
     def test_deferred_task_protocol_present(self, template: WorkflowTemplate) -> None:
-        """§V.33: _DEFERRED_TASK fragment composed into every template's protocol."""
+        """§V.45: _DEFERRED_TASK fragment composed into every template's protocol."""
         assert "record_enrollment_outcome" in template.protocol
 
     def test_no_fabrication_protocol_present(self, template: WorkflowTemplate) -> None:
-        """§V.33: _NO_FABRICATION fragment composed into every template's protocol."""
+        """§V.45: _NO_FABRICATION fragment composed into every template's protocol."""
         assert "fabricate" in template.protocol
 
     def test_protocol_warns_about_redundant_read_email(
@@ -108,14 +108,14 @@ def test_inbound_google_drive_includes_drive_tools() -> None:
 
 
 def test_inbound_google_drive_protocol_carries_grounding() -> None:
-    """§V.28: KB grounding rule lives only in inbound-google-drive protocol."""
+    """§V.41: KB grounding rule lives only in inbound-google-drive protocol."""
     protocol = TEMPLATES["inbound-google-drive"].protocol
     assert "search_drive_markdown" in protocol
     assert "read_drive_markdown" in protocol
 
 
 def test_inbound_google_drive_protocol_carries_search_budget_fallback() -> None:
-    """§V.28(+): after two consecutive search_drive_markdown misses the agent
+    """§V.41(+): after two consecutive search_drive_markdown misses the agent
     must fall back to list_drive_markdown rather than spin further searches."""
     protocol = TEMPLATES["inbound-google-drive"].protocol
     assert "two consecutive search_drive_markdown" in protocol
@@ -126,7 +126,7 @@ def test_inbound_google_drive_protocol_carries_search_budget_fallback() -> None:
 
 
 def test_inbound_google_drive_drive_tools_marked_sequential() -> None:
-    """§V.61 + §B.34: every Drive Tool binding must carry ``sequential=True``.
+    """§V.38 + §B.34: every Drive Tool binding must carry ``sequential=True``.
 
     The underlying ``httplib2.Http`` transport has no internal locks, so an
     Anthropic-emitted parallel fan-out used to race the connection-pool dict
@@ -144,19 +144,19 @@ def test_inbound_google_drive_drive_tools_marked_sequential() -> None:
         if tool.name in drive_tool_names:
             assert tool.sequential is True, (
                 f"Drive tool {tool.name!r} must register with sequential=True "
-                f"per §V.61 -- httplib2.Http is not thread-safe"
+                f"per §V.38 -- httplib2.Http is not thread-safe"
             )
 
 
 def test_non_drive_templates_protocol_excludes_grounding() -> None:
-    """§V.33: _DRIVE_GROUNDING bound only to inbound-google-drive."""
+    """§V.45: _DRIVE_GROUNDING bound only to inbound-google-drive."""
     for name in ("outbound-general", "inbound-general"):
         protocol = TEMPLATES[name].protocol
         assert "search_drive_markdown" not in protocol
         assert "read_drive_markdown" not in protocol
 
 
-# -- §V.49: trigger-aware deferred-task fragment -------------------------------
+# -- §V.31: trigger-aware deferred-task fragment -------------------------------
 
 
 _RECORD_OUTCOME_INSTRUCTION = (
@@ -170,7 +170,7 @@ _INITIAL_INSTRUCTION = "Send the initial email and stop"
 def test_build_protocol_task_carries_record_outcome_instruction(
     template: WorkflowTemplate,
 ) -> None:
-    """§V.49: ``trigger='task'`` keeps the terminal-outcome instruction."""
+    """§V.31: ``trigger='task'`` keeps the terminal-outcome instruction."""
     protocol = template.build_protocol("task")
     assert _RECORD_OUTCOME_INSTRUCTION in protocol
     assert _INITIAL_INSTRUCTION not in protocol
@@ -184,9 +184,9 @@ def test_build_protocol_task_carries_record_outcome_instruction(
 def test_build_protocol_non_task_uses_initial_branch(
     template: WorkflowTemplate, trigger: str
 ) -> None:
-    """§V.49 + §V.55: non-``task`` triggers swap to the initial-send-only
+    """§V.31 + §V.32: non-``task`` triggers swap to the initial-send-only
     instruction. ``enrollment_schedule`` joins the non-task set because it
-    shares first-touch semantics with ``enrollment_run`` per §V.36."""
+    shares first-touch semantics with ``enrollment_run`` per §V.30."""
     protocol = template.build_protocol(trigger)
     assert _INITIAL_INSTRUCTION in protocol
     assert _RECORD_OUTCOME_INSTRUCTION not in protocol
@@ -199,20 +199,20 @@ def test_build_protocol_non_task_uses_initial_branch(
 def test_build_protocol_preserves_v33_fragment_order(
     template: WorkflowTemplate, trigger: str
 ) -> None:
-    """§V.33: canonical order _BASE -> deferred -> [overlay]? -> _DECLINE ->
+    """§V.45: canonical order _BASE -> deferred -> [overlay]? -> _DECLINE ->
     _NO_FABRICATION preserved across triggers."""
     protocol = template.build_protocol(trigger)
     base_idx = protocol.find("Keep your final summary brief")
     decline_idx = protocol.find("polite decline")
     nofab_idx = protocol.find("Never fabricate")
     assert 0 <= base_idx < decline_idx < nofab_idx, (
-        f"template {template.name!r} trigger={trigger!r}: §V.33 order broken "
+        f"template {template.name!r} trigger={trigger!r}: §V.45 order broken "
         f"(base={base_idx}, decline={decline_idx}, nofab={nofab_idx})"
     )
     if template.name == "inbound-google-drive":
         grounding_idx = protocol.find("Workflow instructions reference a Google Drive")
         assert 0 < grounding_idx < decline_idx, (
-            "§V.33: _DRIVE_GROUNDING must precede _DECLINE in inbound-google-drive"
+            "§V.45: _DRIVE_GROUNDING must precede _DECLINE in inbound-google-drive"
         )
 
 
@@ -237,13 +237,13 @@ def test_inbound_google_drive_direction() -> None:
 
 
 def test_template_dataclass_is_frozen() -> None:
-    """§V.32: WorkflowTemplate immutability prevents runtime mutation."""
+    """§V.44: WorkflowTemplate immutability prevents runtime mutation."""
     template = TEMPLATES["outbound-general"]
     with pytest.raises((AttributeError, TypeError)):
         template.name = "other"  # type: ignore[misc]
 
 
-# -- §V.16: ≥2 tool names per example sequence ---------------------------------
+# -- §V.40: ≥2 tool names per example sequence ---------------------------------
 
 import re  # noqa: E402
 
@@ -262,7 +262,7 @@ def _fragment_constants() -> dict[str, str]:
     """Return all module-level _UPPER_SNAKE str constants in templates.py.
 
     These are the protocol fragments composed into template protocols
-    per §V.33. Picking them up by naming convention keeps the test honest
+    per §V.45. Picking them up by naming convention keeps the test honest
     if a new fragment lands without an explicit registry entry.
     """
     return {
@@ -280,7 +280,7 @@ def _fragment_constants() -> dict[str, str]:
 def test_fragment_does_not_collapse_to_single_tool_example(
     fragment_name: str, fragment: str
 ) -> None:
-    """§V.16: any fragment that names a tool must name >=2 distinct tools.
+    """§V.40: any fragment that names a tool must name >=2 distinct tools.
 
     A single-tool example collapses to literal -- the agent emits exactly
     that one tool name and fails to generalise. Either no tool names, or
@@ -292,7 +292,7 @@ def test_fragment_does_not_collapse_to_single_tool_example(
     }
     assert len(mentioned) != 1, (
         f"fragment {fragment_name!r} names exactly 1 tool ({mentioned!r}); "
-        f"§V.16 requires either 0 or >=2 distinct tool names per fragment"
+        f"§V.40 requires either 0 or >=2 distinct tool names per fragment"
     )
 
 
@@ -301,7 +301,7 @@ def test_fragment_does_not_collapse_to_single_tool_example(
 
 @pytest.mark.parametrize("template_name", list(TEMPLATES.keys()))
 def test_build_agent_binds_template_tools(template_name: str) -> None:
-    """§V.33: _build_agent binds exactly the template's tools and protocol."""
+    """§V.45: _build_agent binds exactly the template's tools and protocol."""
     from datetime import UTC, datetime
 
     from mailpilot.agent.invoke import (
@@ -334,7 +334,7 @@ def test_build_agent_binds_template_tools(template_name: str) -> None:
     )
 
     # Protocol prefix + workflow instructions concatenated. _build_agent
-    # defaults to ``trigger="manual"`` per §V.49 -> initial-mode protocol.
+    # defaults to ``trigger="manual"`` per §V.31 -> initial-mode protocol.
     instructions_list = agent._instructions  # pyright: ignore[reportPrivateUsage]
     assert isinstance(instructions_list, list)
     str_parts = [item for item in instructions_list if isinstance(item, str)]
@@ -345,7 +345,7 @@ def test_build_agent_binds_template_tools(template_name: str) -> None:
 
 @pytest.mark.parametrize("template_name", list(TEMPLATES.keys()))
 def test_build_agent_trigger_routes_protocol_branch(template_name: str) -> None:
-    """§V.49: ``_build_agent`` swaps the deferred-task branch per ``trigger``.
+    """§V.31: ``_build_agent`` swaps the deferred-task branch per ``trigger``.
 
     ``trigger='task'`` keeps the terminal-outcome instruction; non-``task``
     triggers swap to the initial-send-only branch so the agent's system

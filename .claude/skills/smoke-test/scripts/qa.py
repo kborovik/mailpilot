@@ -10,7 +10,7 @@ Subcommands:
          DriveClient impersonating `inbound@lab5.ca` and print to stdout.
          - inscope: primary `source_file` -> prints that file's content.
            When the primary is absent from Drive AND `source_file_alts`
-           is populated (§V.31(+) / §T.66), fall back to the first alt
+           is populated (§V.57(+) / §T.66), fall back to the first alt
            present in Drive so cross-source identifier collisions (e.g.
            model WS36-600-2 lives in two datasheets with divergent specs
            per §B.40) still render a viable grading source.
@@ -21,7 +21,7 @@ Subcommands:
          folder (KB-drift signal). Outscope pairs have no source -> exit 1.
 
   check  --id ID --reply-text "..." | --reply-file PATH
-         Outscope-only post-§V.31. Validate an out-of-scope decline reply
+         Outscope-only post-§V.57. Validate an out-of-scope decline reply
          against the pair's `forbidden_token_pairs` and `decline_signals`.
          Inscope and compare grading is operator-judged (gates B4 / B7,
          see SKILL.md); calling `check` with a non-outscope pair exits 2.
@@ -31,7 +31,7 @@ Subcommands:
 Pair schema (qa_pairs.json):
   - inscope: type="inscope", source_file: str,
              source_file_alts: list[str] (optional, default [] -- carries
-             cross-source identifier-collision alternates per §V.31(+))
+             cross-source identifier-collision alternates per §V.57(+))
   - compare: type="compare", source_files: list[str]  (>=2 files)
   - outscope: type="outscope", source_file: null
 """
@@ -47,7 +47,7 @@ from pathlib import Path
 
 PAIRS_PATH = Path(__file__).parent / "qa_pairs.json"
 
-# §V.31: source loader impersonates the same subject the demo agent uses,
+# §V.57: source loader impersonates the same subject the demo agent uses,
 # so a Drive ACL drift surfaces here the same way it would in production.
 DEMO_FOLDER_ID = "1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat"
 DEMO_SUBJECT = "inbound@lab5.ca"
@@ -82,7 +82,7 @@ def _resolve_source_files(pair: dict) -> list[str]:
     """Return the ordered candidate filenames a pair points at.
 
     inscope -> [source_file, *source_file_alts] (primary first; alts let
-    `source` fall back when the primary is absent from Drive per §V.31(+));
+    `source` fall back when the primary is absent from Drive per §V.57(+));
     compare -> source_files (all required); outscope -> [].
     """
     if pair.get("type") == "compare":
@@ -122,7 +122,7 @@ def source(args: argparse.Namespace) -> int:
     files = client.list_markdown(DEMO_FOLDER_ID)
     by_name = {f["name"]: f for f in files}
     # compare pairs require every listed source; inscope accepts the primary
-    # or (per §V.31(+)) the first alt present in Drive so cross-source
+    # or (per §V.57(+)) the first alt present in Drive so cross-source
     # identifier-collision pairs (§B.40) survive when one of the colliders
     # rotates out of the KB.
     if pair.get("type") == "compare":
@@ -178,7 +178,7 @@ def check_outscope(pair: dict, reply: str) -> tuple[bool, list[str], dict]:
     forbidden_pairs = pair.get("forbidden_token_pairs", [])
     decline_signals = pair.get("decline_signals", [])
     question = pair.get("question", "")
-    # §V.25: digits the agent could only be echoing (not fabricating) — present in
+    # §V.56: digits the agent could only be echoing (not fabricating) — present in
     # the original question. A match whose digit-runs all appear in the question
     # is a quoted recap, not a fabrication.
     question_digit_runs = set(_DIGIT_RUN_RE.findall(question))
@@ -228,7 +228,7 @@ def check(args: argparse.Namespace) -> int:
         print(json.dumps({"error": "not_found", "id": args.id}), file=sys.stderr)
         return 1
     if pair["type"] != "outscope":
-        # §V.31: inscope grading moved to operator judgement (gate B4 for
+        # §V.57: inscope grading moved to operator judgement (gate B4 for
         # inscope, gate B7 for compare). Substring-match against curated
         # `expected_tokens` produced false negatives on phrasing variation;
         # a verdict from the operator with the live source(s) loaded is the

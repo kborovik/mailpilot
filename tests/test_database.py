@@ -514,7 +514,7 @@ def test_list_workflows_by_account(
 def test_list_workflows_full_orders_by_name(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """§V.39: ``workflow export`` payload must be name-ordered for deterministic diffs."""
+    """§V.63: ``workflow export`` payload must be name-ordered for deterministic diffs."""
     account = make_test_account(database_connection)
     make_test_workflow(database_connection, account_id=account.id, name="Charlie")
     make_test_workflow(database_connection, account_id=account.id, name="Alpha")
@@ -559,7 +559,7 @@ def test_update_workflow_ignores_immutable_fields(
 def test_update_workflow_rejects_template_change(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """§V.32: `template` change must raise -- forces delete+recreate."""
+    """§V.44: `template` change must raise -- forces delete+recreate."""
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     with pytest.raises(ValueError, match="template is immutable"):
@@ -569,7 +569,7 @@ def test_update_workflow_rejects_template_change(
 def test_update_workflow_rejects_type_change(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """§V.32: `type` is derived from template at create time and cannot be updated."""
+    """§V.44: `type` is derived from template at create time and cannot be updated."""
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     with pytest.raises(ValueError, match="type is derived"):
@@ -720,7 +720,7 @@ def test_search_workflows_respects_limit(
 def test_workflow_account_email_populated_across_returners(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """§V.6 parent-NI clause: every ``Workflow`` / ``WorkflowSummary`` return
+    """§V.5 parent-NI clause: every ``Workflow`` / ``WorkflowSummary`` return
     carries ``account_email`` joined from ``account.email``.
     """
     account = make_test_account(database_connection, email="owner@parent-ni.test")
@@ -763,7 +763,7 @@ def test_workflow_account_email_populated_across_returners(
 def test_workflow_account_email_reflects_joined_account_per_workflow(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """§V.6 parent-NI clause: JOIN scopes per workflow (no cross-talk)."""
+    """§V.5 parent-NI clause: JOIN scopes per workflow (no cross-talk)."""
     a1 = make_test_account(database_connection, email="one@parent-ni.test")
     a2 = make_test_account(database_connection, email="two@parent-ni.test")
     make_test_workflow(database_connection, account_id=a1.id, name="W1")
@@ -1277,7 +1277,7 @@ def test_list_emails_by_workflow_id(
 def test_list_emails_summary_includes_gmail_thread_id(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """§V.51(+): Summary projection MUST include gmail_thread_id so callers
+    """§V.7(+): Summary projection MUST include gmail_thread_id so callers
     can answer thread-pivot questions (smoke-test A4 threading confirmation
     per §B.39) from `list` without round-tripping per row through `view`.
 
@@ -2582,7 +2582,7 @@ def test_list_tasks_with_filters(
 def test_find_pending_first_touch_task_none(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.55 idempotency probe returns None when no first-touch task exists."""
+    """§V.32 idempotency probe returns None when no first-touch task exists."""
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
@@ -2595,7 +2595,7 @@ def test_find_pending_first_touch_task_none(
 def test_find_pending_first_touch_task_match(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.55: returns the pending email-less task for the given pair."""
+    """§V.32: returns the pending email-less task for the given pair."""
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
@@ -2618,7 +2618,7 @@ def test_find_pending_first_touch_task_match(
 def test_find_pending_first_touch_task_ignores_email_bound_tasks(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.55: inbound auto-tasks (email_id set) are not first-touch tasks."""
+    """§V.32: inbound auto-tasks (email_id set) are not first-touch tasks."""
     from datetime import timedelta
 
     account = make_test_account(database_connection)
@@ -2655,7 +2655,7 @@ def test_find_pending_first_touch_task_ignores_email_bound_tasks(
 def test_find_pending_first_touch_task_ignores_terminal_status(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.55: only pending rows count; cancelled/completed do not block re-add."""
+    """§V.32: only pending rows count; cancelled/completed do not block re-add."""
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
@@ -2677,7 +2677,7 @@ def test_find_pending_first_touch_task_ignores_terminal_status(
 def test_find_pending_first_touch_task_scoped_to_pair(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.55: lookup honours (workflow_id, contact_id) -- other pairs invisible."""
+    """§V.32: lookup honours (workflow_id, contact_id) -- other pairs invisible."""
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact_a = make_test_contact(database_connection, email="a@test.com")
@@ -2978,7 +2978,7 @@ def test_complete_task_stores_result(
 def test_reschedule_task_for_retry_bumps_attempt_and_advances_scheduled_at(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.44: status stays pending; attempt_count bumped; scheduled_at
+    """§V.49: status stays pending; attempt_count bumped; scheduled_at
     advances by backoff."""
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
@@ -3033,7 +3033,7 @@ def test_reschedule_task_for_retry_returns_none_for_unknown_id(
 def test_manual_retry_task_resets_failed_row(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.44: failed -> pending, attempt_count=0, scheduled_at=now()."""
+    """§V.49: failed -> pending, attempt_count=0, scheduled_at=now()."""
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
@@ -3083,7 +3083,7 @@ def test_manual_retry_task_resets_cancelled_row(
 def test_manual_retry_task_refuses_completed_row(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.44: completed rows refuse retry -- tools already fired, replay
+    """§V.49: completed rows refuse retry -- tools already fired, replay
     risks duplicate side-effects."""
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
@@ -3103,7 +3103,7 @@ def test_manual_retry_task_refuses_completed_row(
 def test_manual_retry_task_refuses_pending_row(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.44: pending rows are no-op -- already queued."""
+    """§V.49: pending rows are no-op -- already queued."""
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
@@ -3336,7 +3336,7 @@ def test_activity_list_summary(
 def test_activity_list_summary_includes_fk_columns(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.51: list-view projection MUST expose FK columns the schema declares."""
+    """§V.7: list-view projection MUST expose FK columns the schema declares."""
     account = make_test_account(database_connection)
     contact = make_test_contact(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
@@ -3379,7 +3379,7 @@ def test_activity_list_summary_includes_fk_columns(
 def test_activity_list_summary_fk_columns_null_when_absent(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.51: FK fields are present (null) when the activity has no FK linkage."""
+    """§V.7: FK fields are present (null) when the activity has no FK linkage."""
     contact = make_test_contact(database_connection)
     create_activity(
         database_connection,
@@ -3512,7 +3512,7 @@ def test_list_enrollments_detailed_since(
     )
 
 
-# -- load_contact_view / load_company_view (§V.53) -----------------------------
+# -- load_contact_view / load_company_view (§V.8) -----------------------------
 
 
 def test_load_contact_view_returns_none_when_missing(
@@ -3657,11 +3657,11 @@ def test_load_company_view_caps_notes_at_ten(
     assert view.notes_total == _INLINE_NOTES_CAP + 3
 
 
-# -- _BASE template fragment carries §V.53 directive --------------------------
+# -- _BASE template fragment carries §V.8 directive --------------------------
 
 
 def test_base_fragment_mentions_notes_directive() -> None:
-    """_BASE must contain the §V.53 personalize-via-notes directive once."""
+    """_BASE must contain the §V.8 personalize-via-notes directive once."""
     from mailpilot.agent.templates import (
         _BASE,  # pyright: ignore[reportPrivateUsage]
     )

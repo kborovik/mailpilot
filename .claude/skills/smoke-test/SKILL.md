@@ -34,7 +34,7 @@ Both scenarios are **mandatory**. `make clean` runs **once**, at the very start.
 - **Test start ISO timestamp.** Capture before each scenario; reuse for `--since` filters and Logfire windows.
 - **Polling.** When waiting for sync, routing, or agent results: poll up to 12 attempts, 5s apart (~60s total). Do not call `mailpilot account sync` directly -- the background `mailpilot run` loop owns sync.
 - **CLI parsing.** All commands use `uv run mailpilot`. Parse JSON output of every command, extract IDs for the next step. Do not capture into a shell variable and re-emit with `echo "$VAR" | python3 -c ...` -- zsh's built-in `echo` interprets backslash escapes in the JSON (e.g. converts the literal two-char `\n` inside `body_text` into a real newline) and the resulting stream is no longer valid JSON. Either pipe `mailpilot ... | python3 -c ...` directly, or use `printf '%s' "$VAR"`.
-- **Envelope shape (SPEC §V.5).** `<entity> view`/`create`/`update` returns `{"<singular>": {...}, "ok": true}`; `<entity> list`/`search` returns `{"<plural>": [...], "ok": true}`. Always extract through the wrap: `json.load(sys.stdin)["email"]["workflow_id"]`, not `json.load(sys.stdin)["workflow_id"]`. Operational commands (`enrollment run`, `tag remove`, `enrollment remove`, `*_export`/`*_import`, `config get/set`, `status`) keep their bespoke shapes. `account sync` returns `{"accounts": [...], "ok": true}` per §V.5 plural envelope.
+- **Envelope shape (SPEC §V.4).** `<entity> view`/`create`/`update` returns `{"<singular>": {...}, "ok": true}`; `<entity> list`/`search` returns `{"<plural>": [...], "ok": true}`. Always extract through the wrap: `json.load(sys.stdin)["email"]["workflow_id"]`, not `json.load(sys.stdin)["workflow_id"]`. Operational commands (`enrollment run`, `tag remove`, `enrollment remove`, `*_export`/`*_import`, `config get/set`, `status`) keep their bespoke shapes. `account sync` returns `{"accounts": [...], "ok": true}` per §V.4 plural envelope.
 - **ASCII only.** No emojis. Use `->`, `--`, plain pipes.
 
 ## Prerequisites
@@ -52,7 +52,7 @@ Located at `.claude/skills/smoke-test/scripts/`. All QA-only -- KB-content maint
 
 - `qa.py pick [--type inscope|outscope|compare] [--id ID]` -- emit one Q/A pair as JSON. Random unless `--id` given. Default type is `inscope`. The pair includes the question to send and either the single source `.md` file the agent must cite (in-scope), the list of source files it must synthesize across (compare), or the decline contract (out-of-scope).
 - `qa.py source --id ID` -- impersonate `inbound@lab5.ca`, load the pair's source markdown from the demo Drive folder (`1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat`), print to stdout. For in-scope pairs that is one file; for compare pairs each file is preceded by a `=== SOURCE: <name> ===` separator so the operator can grade the reply against every source. Exit non-zero when ANY source file is absent (KB-drift signal -- the pair points at a doc the agent could not have grounded in either). Used by gate B4 (in-scope) and gate B7 (compare).
-- `qa.py check --id ID --reply-text "<body>" | --reply-file PATH` -- **out-of-scope only** post-§V.31. Validates a decline reply against `forbidden_token_pairs` and `decline_signals`. Exit 0 = pass, 1 = fail, 2 = caller passed a non-outscope id (in-scope grading is operator-judged in gate B4; compare grading is operator-judged in gate B7). JSON on stdout lists fabrications / decline-signal absence.
+- `qa.py check --id ID --reply-text "<body>" | --reply-file PATH` -- **out-of-scope only** post-§V.57. Validates a decline reply against `forbidden_token_pairs` and `decline_signals`. Exit 0 = pass, 1 = fail, 2 = caller passed a non-outscope id (in-scope grading is operator-judged in gate B4; compare grading is operator-judged in gate B7). JSON on stdout lists fabrications / decline-signal absence.
 - `qa_pairs.json` -- 29 in-scope + 11 compare + 5 out-of-scope pairs. In-scope pairs retain `expected_tokens` for historical-run repro but the field is no longer consumed by any gate; the live source loaded via `qa.py source` is the grounding evidence. Compare pairs carry `source_files: list[str]` (>=2 files) and force the agent to issue >=2 `read_drive_markdown` calls and synthesize across manufacturers (Dow FilmTec vs Hydranautics vs LG Chem vs Toray RO membranes, Pulsafeeder vs ProMinent dosing pumps, Watts UV-COM vs Trojan UVMax UV, Pure Aqua PAPV vs ROPV pressure vessels, etc.). Out-of-scope pairs name (vendor, spec-shape) regex pairs the reply MUST NOT match, plus decline-signal phrases the reply MUST contain.
 
 **Maintenance (run only after the demo Drive folder content changes):**
@@ -129,7 +129,7 @@ COMPANY_NOTE_TOKEN=$(head -c 6 /dev/urandom | xxd -p)
 [ "$CONTACT_NOTE_TOKEN" != "$COMPANY_NOTE_TOKEN" ] || { echo "FAIL: token collision"; exit 1; }
 ```
 
-Add the notes (XOR per §V.8 -- one of `--contact-id` / `--company-id`, never both):
+Add the notes (XOR per §V.13 -- one of `--contact-id` / `--company-id`, never both):
 
 ```
 mailpilot note add --contact-id <INBOUND_CONTACT_ID> \
@@ -143,7 +143,7 @@ mailpilot note add --company-id <COMPANY_ID> \
 
 - `mailpilot note list --contact-id <INBOUND_CONTACT_ID>` returns 1 note; its full body (via `mailpilot note view <id>`) contains `Reference: $CONTACT_NOTE_TOKEN`.
 - `mailpilot note list --company-id <COMPANY_ID>` returns 1 note; its body contains `Reference: $COMPANY_NOTE_TOKEN`.
-- `mailpilot activity list --contact-id <INBOUND_CONTACT_ID> --since <TEST_START_A>` shows 1 `note_added` row (the contact-side note; per §V.23 it carries both `contact_id` and `company_id`).
+- `mailpilot activity list --contact-id <INBOUND_CONTACT_ID> --since <TEST_START_A>` shows 1 `note_added` row (the contact-side note; per §V.17 it carries both `contact_id` and `company_id`).
 - `mailpilot activity list --company-id <COMPANY_ID> --since <TEST_START_A>` shows 2 `note_added` rows (contact-side note via multi-target + company-side note).
 
 **Carries forward to:** A3 (body must contain both tokens; tool sequence must include both reads), A8 (note_added activity expectations).
@@ -152,7 +152,7 @@ mailpilot note add --company-id <COMPANY_ID> \
 
 ### A1. Import the outbound workflow
 
-The workflow definition is declarative -- it lives in `tests/fixtures/workflows-outbound.json` and is round-tripped via `workflow import` (SPEC §V.39). The fixture contains `${TOPIC_A}` and `${SUBJECT_A}` placeholders that resolve from the shell variables set per the Conventions section; substitute them with `envsubst` before piping the payload to `workflow import` on stdin:
+The workflow definition is declarative -- it lives in `tests/fixtures/workflows-outbound.json` and is round-tripped via `workflow import` (SPEC §V.63). The fixture contains `${TOPIC_A}` and `${SUBJECT_A}` placeholders that resolve from the shell variables set per the Conventions section; substitute them with `envsubst` before piping the payload to `workflow import` on stdin:
 
 ```
 TOPIC_A="$TOPIC_A" SUBJECT_A="$SUBJECT_A" envsubst < tests/fixtures/workflows-outbound.json \
@@ -193,7 +193,7 @@ mailpilot enrollment add --workflow-id <OUTBOUND_WORKFLOW_ID> --contact-id <INBO
 mailpilot enrollment run --workflow-id <OUTBOUND_WORKFLOW_ID> --contact-id <INBOUND_CONTACT_ID>
 ```
 
-`mailpilot enrollment run` MUST be invoked exactly once per `(workflow_id, contact_id)`. If the outbound email is not visible in the next gate's `email list` poll, keep polling — do NOT re-invoke `enrollment run`. A second invocation against the same enrollment produces a redundant `agent.invoke` (the agent searches for the prior send and noops correctly, but burns an LLM round-trip and inflates the trace). See SPEC §V.12 / §T.18 / §B.2.
+`mailpilot enrollment run` MUST be invoked exactly once per `(workflow_id, contact_id)`. If the outbound email is not visible in the next gate's `email list` poll, keep polling — do NOT re-invoke `enrollment run`. A second invocation against the same enrollment produces a redundant `agent.invoke` (the agent searches for the prior send and noops correctly, but burns an LLM round-trip and inflates the trace). See SPEC §V.27 / §T.18 / §B.2.
 
 **Gate A3:**
 
@@ -201,7 +201,7 @@ mailpilot enrollment run --workflow-id <OUTBOUND_WORKFLOW_ID> --contact-id <INBO
 - `mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound` shows the outbound email with `subject == SUBJECT_A`.
 - The email's `body_text` contains `|` (table) and either `**` or `#` (Markdown).
 - **Personalization gate (A1a payoff).** The email's `body_text` contains BOTH `$CONTACT_NOTE_TOKEN` AND `$COMPANY_NOTE_TOKEN` verbatim. Either missing → either the agent skipped a `read_*` call or it ignored the note content; treat as a Bug (missing tool call = prompt-fidelity regression; tool call made but token missing = personalization regression). If A1a's prerequisite tool-surface change has NOT shipped (notes not inlined in `read_contact` / `read_company` returns), this gate WILL fail -- record as a Critical Bug to drive the fix, do not skip.
-- `mailpilot enrollment list --workflow-id <OUTBOUND_WORKFLOW_ID>` shows enrollment status `active`. Per SPEC §V.10, `enrollment.status` is operational only (`active` or `paused`); the agent never mutates it directly. The send-completion outcome lives in the activity timeline (verified in A8), not on the enrollment row.
+- `mailpilot enrollment list --workflow-id <OUTBOUND_WORKFLOW_ID>` shows enrollment status `active`. Per SPEC §V.15, `enrollment.status` is operational only (`active` or `paused`); the agent never mutates it directly. The send-completion outcome lives in the activity timeline (verified in A8), not on the enrollment row.
 
 Save `OUTBOUND_EMAIL_ID`.
 
@@ -215,7 +215,7 @@ Poll the inbound account:
 mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction inbound --since <TEST_START_A>
 ```
 
-Match by `SUBJECT_A`. The `email list` row already projects `gmail_thread_id` (§V.51(+) / §T.65), so the thread-presence check below reads from the list directly -- no per-row `email view` round-trip needed.
+Match by `SUBJECT_A`. The `email list` row already projects `gmail_thread_id` (§V.7(+) / §T.65), so the thread-presence check below reads from the list directly -- no per-row `email view` round-trip needed.
 
 **Gate A4:**
 
@@ -274,7 +274,7 @@ Wait for a task with `email_id` set to the routed reply and `status == "complete
 **Gate A7:**
 
 - Task exists with `email_id == <routed reply id>` and `status == "completed"`.
-- `mailpilot enrollment list --workflow-id <OUTBOUND_WORKFLOW_ID>` still shows status `active` -- by design (SPEC §V.10, `enrollment.status` is operational only). The terminal outcome is recorded as an `enrollment_completed` or `enrollment_failed` activity row, verified in A8.
+- `mailpilot enrollment list --workflow-id <OUTBOUND_WORKFLOW_ID>` still shows status `active` -- by design (SPEC §V.15, `enrollment.status` is operational only). The terminal outcome is recorded as an `enrollment_completed` or `enrollment_failed` activity row, verified in A8.
 - **No additional outbound emails were sent.** Re-run `mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_A>` and confirm only the original outbound from A3 is present. If the count > 1, the agent kept replying despite the decline signal -- record as a Bug.
 
 **On failure:** Task never created → check that A6's email has `workflow_id` set and the run loop is alive. Task `failed` → `mailpilot task view <TASK_ID>` for the reason.
@@ -293,7 +293,7 @@ mailpilot activity list --contact-id <INBOUND_CONTACT_ID> --since <TEST_START_A>
 - `email_sent` with `summary == SUBJECT_A` (emitted by `email_ops.send_email` when the outbound agent sent in A3).
 - `email_received` with the operator-reply subject (emitted by sync's `_store_inbound_message` when the reply landed in the outbound mailbox in A6).
 - Exactly one of `enrollment_completed` or `enrollment_failed` (emitted by `agent.tools.record_enrollment_outcome` in A7); summary equals the agent's `reason`.
-- 1 `note_added` row from A1a's contact-side `note add` (the row carries `contact_id == INBOUND_CONTACT_ID` and `company_id == COMPANY_ID` per §V.23 multi-target; the company-side `note add` does NOT appear here because it has no `contact_id`).
+- 1 `note_added` row from A1a's contact-side `note add` (the row carries `contact_id == INBOUND_CONTACT_ID` and `company_id == COMPANY_ID` per §V.17 multi-target; the company-side `note add` does NOT appear here because it has no `contact_id`).
 - No `tag_added` rows from this scenario (we did not run `tag add`).
 
 Also assert company-side timeline:
@@ -310,7 +310,7 @@ If any expected type is missing, the runtime activity wiring regressed for that 
 
 Do this review now, before B, so the window cleanly bounds A's spans. Use `/logfire:debug` with project=`mailpilot` and window `[TEST_START_A, now]`. Spans to verify:
 
-- `agent.invoke` -- count by `trigger` attribute, not by total. Per SPEC §V.12 / §T.18, the span carries an explicit `trigger` label set by the caller path:
+- `agent.invoke` -- count by `trigger` attribute, not by total. Per SPEC §V.27 / §T.18, the span carries an explicit `trigger` label set by the caller path:
   - `trigger="task"` -- expect exactly **1** (A7 reply handling, drained by background `mailpilot run`). More than 1 → agent kept replying (loop regression). This is the regression signal for Scenario A.
   - `trigger="enrollment_run"` -- expect at least **1** (A3 send via foreground `enrollment run`). Tolerated regardless of count: an operator double-fire produces extra `enrollment_run` spans that correctly noop, so they cost an LLM round-trip but do not signal regression. §T.19 / §B.2 prefer single-invocation discipline (see A3) but the trace contract here permits more.
   - `trigger="email"` / `trigger="manual"` -- not expected in Scenario A; flag if present.
@@ -359,7 +359,7 @@ Capture `TEST_START_B` (ISO, must be later than A's last activity) and three dis
 
 ### B1. Import the demo inbound workflow
 
-The workflow definition is declarative -- the operator-style instructions citing the real folder ID live in `tests/fixtures/workflows-inbound.json` and are round-tripped via `workflow import` (SPEC §V.39). The agent's behaviour comes from that prompt -- changing the wording changes what we test, so edit the fixture, do not type a different command.
+The workflow definition is declarative -- the operator-style instructions citing the real folder ID live in `tests/fixtures/workflows-inbound.json` and are round-tripped via `workflow import` (SPEC §V.63). The agent's behaviour comes from that prompt -- changing the wording changes what we test, so edit the fixture, do not type a different command.
 
 ```
 mailpilot workflow import \
@@ -408,7 +408,7 @@ Save `TRIGGER_EMAIL_ID_B1`, `TRIGGER_THREAD_ID_B1`, capture wall-clock send time
 
 ### B4. Wait for the demo agent to reply (60-second SLA)
 
-Critical gate. The lab5.ca/mailpilot/ page promises delivery within ~60 seconds. Per SPEC `§V.63`, the latency verdict is derived from the agent.invoke span in Logfire, not from CLI poll cadence; the CLI poll is a `did-round-trip?` side-effect check only and uses the wider 120s cap (24 attempts × 5s) so a borderline run does not false-fail on the CLI loop alone.
+Critical gate. The lab5.ca/mailpilot/ page promises delivery within ~60 seconds. Per SPEC `§V.61`, the latency verdict is derived from the agent.invoke span in Logfire, not from CLI poll cadence; the CLI poll is a `did-round-trip?` side-effect check only and uses the wider 120s cap (24 attempts × 5s) so a borderline run does not false-fail on the CLI loop alone.
 
 Poll the outbound mailbox (round-trip check only, cap 120s):
 
@@ -421,7 +421,7 @@ Match by `SUBJECT_B1` (likely with `Re:` prefix). Note the reply's arrival as co
 **Gate B4 (the demo promise):**
 
 - Reply present, threaded under `SUBJECT_B1` (CLI round-trip check; cap 120s).
-- **Latency verdict via Logfire per §V.63.** Window `[T_SEND_B1, now]`, scope to the demo workflow:
+- **Latency verdict via Logfire per §V.61.** Window `[T_SEND_B1, now]`, scope to the demo workflow:
 
   ```sql
   SELECT end_timestamp,
@@ -438,7 +438,7 @@ Match by `SUBJECT_B1` (likely with `Re:` prefix). Note the reply's arrival as co
 
   `LATENCY_B1 = latency_s` from the row. **If `latency_s > 60`, that is a regression of the lab5.ca/mailpilot/ promise -- record as a Critical Bug.** Zero rows in the window means the demo workflow never fired; that is a separate Critical Bug (run-loop / Pub/Sub regression).
 - Reply on the demo side (`mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>`) → `is_routed == true`, `workflow_id == DEMO_WORKFLOW_ID`, `route_method == classified`. The classifier ran -- not `thread_match`, since this is a fresh thread.
-- Reply body **grounded in the KB** -- operator-judged per SPEC §V.31. Substring match against curated `expected_tokens` was retired (false negatives on phrasing variation like `0.48 mm` vs `0.48mm`); the operator now grades the reply against the live source doc. Procedure:
+- Reply body **grounded in the KB** -- operator-judged per SPEC §V.57. Substring match against curated `expected_tokens` was retired (false negatives on phrasing variation like `0.48 mm` vs `0.48mm`); the operator now grades the reply against the live source doc. Procedure:
   1. Load the source doc the pair points at:
 
      ```
@@ -469,7 +469,7 @@ Match by `SUBJECT_B1` (likely with `Re:` prefix). Note the reply's arrival as co
      }
      ```
 
-     Each unsupported factual claim in the reply MUST appear verbatim in `unsupported_claims` (structural defence against LLM-judge sycophancy -- the field forces the grader to enumerate concrete misses rather than hand-wave a passing rating). `source_file_alts` is the verbatim list from the pair (default `[]`); per amended §V.31, `cites_source_file == true` iff the agent's citation is in `{source_file} ∪ source_file_alts` (set union -- admits cross-source identifier collisions like model `WS36-600-2` appearing in two divergent datasheets per §B.40). `verdict` MUST be `"pass"` if and only if all three booleans are true AND `unsupported_claims` is empty; otherwise `"fail"`.
+     Each unsupported factual claim in the reply MUST appear verbatim in `unsupported_claims` (structural defence against LLM-judge sycophancy -- the field forces the grader to enumerate concrete misses rather than hand-wave a passing rating). `source_file_alts` is the verbatim list from the pair (default `[]`); per amended §V.57, `cites_source_file == true` iff the agent's citation is in `{source_file} ∪ source_file_alts` (set union -- admits cross-source identifier collisions like model `WS36-600-2` appearing in two divergent datasheets per §B.40). `verdict` MUST be `"pass"` if and only if all three booleans are true AND `unsupported_claims` is empty; otherwise `"fail"`.
 
   Anything other than `verdict == "pass"` is a grounding regression -- record the verdict JSON in §2 Bugs. `qa_pairs.json.expected_tokens` is retained for historical-run repro only and is no longer consumed by any gate.
 
@@ -488,7 +488,7 @@ Run a Logfire query for the `agent.invoke` span produced by B4's reply. Within t
 - `search_drive_markdown` returned a non-error list (no `error` key in the tool return) and the list is non-empty.
 - `read_drive_markdown` returned a dict with non-empty `content`.
 - An agent that uses `list_drive_markdown` instead of `search_drive_markdown` for the in-scope question is a regression: with ≥10 docs in the folder, full enumeration is the failure mode the new tool exists to prevent. Record as a Bug even if the reply is otherwise correct. Inventing a `file_id` without searching first is also a prompt-fidelity regression.
-- The `reply_email` span returned no `error` key. A return with `error == "format"` means the spec-table lint (§V.29) rejected the body -- the agent rendered specs as space-aligned text instead of a Markdown pipe-table. Record as a prompt-fidelity Bug for B4.
+- The `reply_email` span returned no `error` key. A return with `error == "format"` means the spec-table lint (§V.42) rejected the body -- the agent rendered specs as space-aligned text instead of a Markdown pipe-table. Record as a prompt-fidelity Bug for B4.
 
 ### B6. Send the out-of-scope question
 
@@ -510,14 +510,14 @@ mailpilot email send \
   --body "<QUESTION_B2>"
 ```
 
-Save `TRIGGER_EMAIL_ID_B2`, capture `T_SEND_B2`, poll the outbound mailbox for `SUBJECT_B2` the same way as B4 (round-trip check only, cap 120s — latency verdict is Logfire-derived per §V.63). Carry `QA_ID_B2` forward to the gate.
+Save `TRIGGER_EMAIL_ID_B2`, capture `T_SEND_B2`, poll the outbound mailbox for `SUBJECT_B2` the same way as B4 (round-trip check only, cap 120s — latency verdict is Logfire-derived per §V.61). Carry `QA_ID_B2` forward to the gate.
 
 **Gate B6 (polite decline, no fabrication):**
 
-Out-of-scope decline keeps the script verifier (per SPEC §V.31): regex appropriately fits shape detection (vendor name near a digit-shaped fabrication, decline-phrase presence) and the surface area is small. The operator-judged path applies only to in-scope grounding (B4).
+Out-of-scope decline keeps the script verifier (per SPEC §V.57): regex appropriately fits shape detection (vendor name near a digit-shaped fabrication, decline-phrase presence) and the surface area is small. The operator-judged path applies only to in-scope grounding (B4).
 
 - Reply present (CLI round-trip check; cap 120s).
-- **Latency verdict via Logfire per §V.63.** Same query shape as B4, swap `<T_SEND_B1>` for `<T_SEND_B2>`. `latency_s > 60` is a Critical Bug.
+- **Latency verdict via Logfire per §V.61.** Same query shape as B4, swap `<T_SEND_B1>` for `<T_SEND_B2>`. `latency_s > 60` is a Critical Bug.
 - Reply body validated by the QA verifier:
 
   ```
@@ -532,7 +532,7 @@ Out-of-scope decline keeps the script verifier (per SPEC §V.31): regex appropri
 
 ### B6.5. Concurrent-fanout race regression check
 
-This is a Logfire-only gate that piggybacks on B7's compare invocation (the only Scenario B turn that emits multiple `read_drive_markdown` calls). It exists to catch §B.34 -- the `httplib2.Http` thread-safety race where one parallel `read_drive_markdown` returned in ~1s while its sibling hung 60.83s at the socket timeout, killing the agent run. The structural fix is `sequential=True` on every Drive `Tool(...)` registration in `src/mailpilot/agent/templates.py` (§V.61); this gate verifies the dispatcher actually serializes parallel emissions in production.
+This is a Logfire-only gate that piggybacks on B7's compare invocation (the only Scenario B turn that emits multiple `read_drive_markdown` calls). It exists to catch §B.34 -- the `httplib2.Http` thread-safety race where one parallel `read_drive_markdown` returned in ~1s while its sibling hung 60.83s at the socket timeout, killing the agent run. The structural fix is `sequential=True` on every Drive `Tool(...)` registration in `src/mailpilot/agent/templates.py` (§V.38); this gate verifies the dispatcher actually serializes parallel emissions in production.
 
 Run **after** B7's tool-use gate (the assertion needs B7's `agent.invoke` to be in Logfire). Window `[T_SEND_B3, T_REPLY_B3 + 10s]`, scope to B7's invocation:
 
@@ -560,7 +560,7 @@ LIMIT 20;
 **Gate B6.5 (race signature absent):**
 
 - At least 2 `read_drive_markdown` spans inside the B7 `agent.invoke` (the compare-and-contrast question forces multi-doc fanout; fewer is a separate regression already caught by B7's `EXPECTED_READ_COUNT` check).
-- **No span duration >=60s.** A `read_drive_markdown` span at or past the 60s `_DRIVE_HTTP_TIMEOUT_SECONDS` cap is the §B.34 hang signature; it means a sibling read raced the shared `httplib2.Http` and stalled at the socket timeout. Record as a Critical Bug -- the race fix has regressed and the next failure will burn the §V.44 retry budget.
+- **No span duration >=60s.** A `read_drive_markdown` span at or past the 60s `_DRIVE_HTTP_TIMEOUT_SECONDS` cap is the §B.34 hang signature; it means a sibling read raced the shared `httplib2.Http` and stalled at the socket timeout. Record as a Critical Bug -- the race fix has regressed and the next failure will burn the §V.49 retry budget.
 - **No `is_exception=true` and no `level=warn` on any of these spans.** A bare `TimeoutError` / `socket.timeout` / `OSError` that escapes the tool wrapper means the broadened catch envelope in `src/mailpilot/agent/tools.py` was reverted; the structured `drive_unavailable` tool return (which lets the surviving sibling carry the agent run) is gone.
 - Sibling spans must not overlap. `sequential=True` in the dispatcher serializes parallel emissions, so for any two `read_drive_markdown` spans, the later one's `start_timestamp` >= the earlier one's `end_timestamp`. An overlap means a future Pydantic AI bump dropped the `sequential` honor on parallel tool dispatch; record as a Bug and pin the working pydantic-ai version while investigating.
 
@@ -588,14 +588,14 @@ mailpilot email send \
 
 Save `TRIGGER_EMAIL_ID_B3`, capture wall-clock send time as `T_SEND_B3`. Carry `QA_ID_B3`, `SOURCE_FILES_B3`, and `EXPECTED_READ_COUNT` forward.
 
-Poll the outbound mailbox for `SUBJECT_B3` (likely `Re:` prefixed) the same way as B4 (round-trip check only, cap 120s — latency verdict is Logfire-derived per §V.63).
+Poll the outbound mailbox for `SUBJECT_B3` (likely `Re:` prefixed) the same way as B4 (round-trip check only, cap 120s — latency verdict is Logfire-derived per §V.61).
 
 **Gate B7 (multi-source grounding, no single-source synthesis):**
 
 - Reply present (CLI round-trip check; cap 120s). Compare questions force a longer agent loop (>=2 `read_drive_markdown` calls), so latency near the 60s ceiling is more likely here than in B4.
-- **Latency verdict via Logfire per §V.63.** Same query shape as B4, swap `<T_SEND_B1>` for `<T_SEND_B3>`. `latency_s > 60` is a Critical regression of the lab5.ca/mailpilot/ promise.
+- **Latency verdict via Logfire per §V.61.** Same query shape as B4, swap `<T_SEND_B1>` for `<T_SEND_B3>`. `latency_s > 60` is a Critical regression of the lab5.ca/mailpilot/ promise.
 - Reply on the demo side has `is_routed == true`, `workflow_id == DEMO_WORKFLOW_ID`, `route_method == classified`. Fresh thread, so not `thread_match`.
-- Reply body **grounded in EVERY source listed in `source_files`** -- operator-judged per the same §V.31 contract that governs B4. Procedure:
+- Reply body **grounded in EVERY source listed in `source_files`** -- operator-judged per the same §V.57 contract that governs B4. Procedure:
   1. Load all source docs in one bundle:
 
      ```
@@ -637,7 +637,7 @@ Poll the outbound mailbox for `SUBJECT_B3` (likely `Re:` prefixed) the same way 
 - **Tool-use gate.** The `agent.invoke` for B7 must include:
   1. `search_drive_markdown` >=1 (with a non-empty query and `folder_id=1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat`).
   2. `read_drive_markdown` exactly `EXPECTED_READ_COUNT` times (one per file in `source_files`), each returning non-empty `content`.
-  3. `reply_email` (no `error` key in the tool return; format errors mean the spec-table lint rejected the body -- record as a §V.29 prompt-fidelity Bug).
+  3. `reply_email` (no `error` key in the tool return; format errors mean the spec-table lint rejected the body -- record as a §V.42 prompt-fidelity Bug).
   4. `record_enrollment_outcome` (`outcome=completed`).
 
   Fewer `read_drive_markdown` calls than `EXPECTED_READ_COUNT` is the headline regression this gate catches -- the agent guessed at one of the products' specs instead of reading the doc. Record as a Bug even if the reply happens to be factually correct. More reads than expected (e.g., the agent followed a distractor) is acceptable as long as the four required calls above are present.
@@ -648,7 +648,7 @@ Two distinct in-scope questions arrive on the demo workflow at nearly the same w
 
 - Classifier serializes when it should parallelize (one classification blocking the next inbound).
 - Two concurrent agent invocations share mutable state (e.g., one workflow row updated mid-flight by the other, or a shared httplib2 transport reused across agent.invoke boundaries).
-- Drive `Tool(... sequential=True)` (§V.61) inadvertently serializes across agent invocations, not just within one -- defeating the stress test at the dispatcher layer.
+- Drive `Tool(... sequential=True)` (§V.38) inadvertently serializes across agent invocations, not just within one -- defeating the stress test at the dispatcher layer.
 
 Pick two distinct in-scope pairs whose `source_file` differs (avoid same-doc collisions so groundedness is independently judgeable):
 
@@ -691,12 +691,12 @@ PID_B75b=$!
 wait $PID_B75a $PID_B75b
 ```
 
-Poll the outbound mailbox for BOTH replies (in either order), capping each at 120s wall-clock from `T_SEND_B75` (round-trip check only; latency verdicts are Logfire-derived per §V.63). Capture `REPLY_EMAIL_ID_B75a` / `REPLY_EMAIL_ID_B75b` from the matches.
+Poll the outbound mailbox for BOTH replies (in either order), capping each at 120s wall-clock from `T_SEND_B75` (round-trip check only; latency verdicts are Logfire-derived per §V.61). Capture `REPLY_EMAIL_ID_B75a` / `REPLY_EMAIL_ID_B75b` from the matches.
 
 **Gate B7.5 (multi-request, multi-tool concurrency):**
 
 - BOTH replies present (CLI round-trip check; cap 120s each). Either missing means the system stalled one trigger while serving the other -- record as a Critical Bug (regression of the lab5.ca/mailpilot/ SLA under concurrent load).
-- **Per-span latency verdict via Logfire per §V.63.** Query the two agent.invoke spans by `email_id` (post §T.63; each span carries its own inbound trigger's id). Window `[T_SEND_B75, now]`, scope to the demo workflow:
+- **Per-span latency verdict via Logfire per §V.61.** Query the two agent.invoke spans by `email_id` (post §T.63; each span carries its own inbound trigger's id). Window `[T_SEND_B75, now]`, scope to the demo workflow:
 
   ```sql
   SELECT attributes->>'email_id' AS email_id,
@@ -712,11 +712,11 @@ Poll the outbound mailbox for BOTH replies (in either order), capping each at 12
   LIMIT 5
   ```
 
-  Expect exactly 2 rows, distinct `email_id` values. **Either `latency_s > 60` is a Critical SLA breach.** Fewer than 2 rows means the drain-layer concurrent worker pool (§V.62) regressed and one trigger was dropped or merged.
+  Expect exactly 2 rows, distinct `email_id` values. **Either `latency_s > 60` is a Critical SLA breach.** Fewer than 2 rows means the drain-layer concurrent worker pool (§V.23) regressed and one trigger was dropped or merged.
 - BOTH replies routed on the demo side with `workflow_id == DEMO_WORKFLOW_ID` and `route_method == classified` (each is a fresh thread). Either routed differently means the classifier serialized or misfired under load.
-- BOTH replies grounded in their own `source_file` per §V.31, operator-judged with the same verdict-JSON schema as B4. Run `qa.py source --id "$QA_ID_B75a"` and `qa.py source --id "$QA_ID_B75b"` separately, then grade each reply against its own source. A cross-grounded reply (B75a's body cites B75b's source, or vice versa) is a state-leak Bug -- shared mutable state across concurrent agent invocations.
+- BOTH replies grounded in their own `source_file` per §V.57, operator-judged with the same verdict-JSON schema as B4. Run `qa.py source --id "$QA_ID_B75a"` and `qa.py source --id "$QA_ID_B75b"` separately, then grade each reply against its own source. A cross-grounded reply (B75a's body cites B75b's source, or vice versa) is a state-leak Bug -- shared mutable state across concurrent agent invocations.
 - Logfire window `[T_SEND_B75, T_SEND_B75 + 90s]`, scope to `workflow_id == DEMO_WORKFLOW_ID`:
-  - Exactly **2** `agent.invoke` spans, each with `workflow_id` matching `DEMO_WORKFLOW_ID`, `trigger='task'`, and a populated `email_id` attribute (per §V.11(+) / §T.63). Attribute B75a vs B75b by the inbound-side `email_id` recorded on each span — distinct values disambiguate the pair without `agent_reasoning` substring inspection.
+  - Exactly **2** `agent.invoke` spans, each with `workflow_id` matching `DEMO_WORKFLOW_ID`, `trigger='task'`, and a populated `email_id` attribute (per §V.26(+) / §T.63). Attribute B75a vs B75b by the inbound-side `email_id` recorded on each span — distinct values disambiguate the pair without `agent_reasoning` substring inspection.
   - The two `agent.invoke` spans' wall-clock intervals MUST overlap (`start(later) < end(earlier)`). Strictly sequential execution defeats the stress test -- record as a Bug ("agent invocations serialized; expected concurrent") and investigate the run-loop / task-drain path. If a recent pydantic-ai or sync-loop change serialized at this layer, pin the working version while investigating.
   - Each `agent.invoke` carries its own `search_drive_markdown` + `read_drive_markdown` + `reply_email` + `record_enrollment_outcome` chain. Tool spans across the two invocations MAY overlap (different threads, different `DriveClient` instances per `read_drive_markdown` call); a 60s+ Drive tool span anywhere in the window is the §B.34 race signature.
   - Zero `is_exception=true` and zero `level=warn` spans on either invocation. A `drive_unavailable` tool return surfaced in the tool's structured response is acceptable (the broadened catch envelope from §T.60 step (b)); an unhandled exception escaping the tool wrapper is not.
@@ -923,7 +923,7 @@ Severity (number sequentially `Bug 1`, `Bug 2`, ...):
 | Medium   | print only (operator review) | print only  |
 | Low      | print only                   | print only  |
 
-"Auto-invoke" = call `/sdd:spec` with the exact `Spec action:` invocation. Run them sequentially so each `## Next` reply token (`ok` / `revise` / `cancel`) applies to a single Bug -- never batch. Record outcome (`filed as §B.7 with §V.27`, `cancelled by operator`, etc.) in the hand-off block. "Print only" means the line goes into the hand-off "Operator review" list, ready for the operator to paste.
+"Auto-invoke" = call `/sdd:spec` with the exact `Spec action:` invocation. Run them sequentially so each `## Next` reply token (`ok` / `revise` / `cancel`) applies to a single Bug -- never batch. Record outcome (`filed as §B.7 with §V.22`, `cancelled by operator`, etc.) in the hand-off block. "Print only" means the line goes into the hand-off "Operator review" list, ready for the operator to paste.
 
 ### §3 Invariants
 
@@ -951,7 +951,7 @@ After §3, after auto-invocations have run, print:
 Spec hand-off
 =============
 Auto-filed (Critical/High Bugs):
-  - Bug <N> -- <title>: <result, e.g., "filed as §B.7 with §V.27", "cancelled by operator">
+  - Bug <N> -- <title>: <result, e.g., "filed as §B.7 with §V.22", "cancelled by operator">
   - ...
 
 Operator review (print-only Bugs + all Invariants):

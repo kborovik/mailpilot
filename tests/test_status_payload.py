@@ -1,4 +1,4 @@
-"""Tests for `get_status_payload` (§V.60) and `_scrub_database_url`.
+"""Tests for `get_status_payload` (§V.11) and `_scrub_database_url`.
 
 Covers the nine cases enumerated in §T.59:
     (i)   fresh DB → empty accounts, zero task aggregates

@@ -1,4 +1,4 @@
-"""Tests for the email routing pipeline (§V.12)."""
+"""Tests for the email routing pipeline (§V.27)."""
 
 from __future__ import annotations
 
@@ -1216,7 +1216,7 @@ def test_route_email_classifier_rejects_persists_null_route_method(
 ) -> None:
     """Classifier-ran-no-match -> persisted route_method NULL (is_routed=TRUE).
 
-    "unrouted" is a span-only label per §V.66: persisted enum admits only the
+    "unrouted" is a span-only label per §V.20: persisted enum admits only the
     7 decision values; NULL carries the "pipeline ran, no enum bucket matched"
     signal alongside is_routed=TRUE.
     """

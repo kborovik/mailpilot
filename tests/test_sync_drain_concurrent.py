@@ -1,11 +1,11 @@
-"""Concurrent task-drain behavior per §V.62 / §V.64 / §T.61 / §T.67.
+"""Concurrent task-drain behavior per §V.23 / §V.24 / §T.61 / §T.67.
 
 Verifies the bounded ``ThreadPoolExecutor`` drain:
 
-- Per §V.62: tasks overlap up to ``settings.max_concurrent_tasks``, each
+- Per §V.23: tasks overlap up to ``settings.max_concurrent_tasks``, each
   worker opens its own connection, and a poisoned worker does not abort
   siblings.
-- Per §V.64: ``_drain_pending_tasks`` submits-and-returns -- the main
+- Per §V.24: ``_drain_pending_tasks`` submits-and-returns -- the main
   loop never blocks on completion; ``task.drain`` events are emitted by
   ``_reap_completed_tasks`` once futures finish.
 """
@@ -45,7 +45,7 @@ def test_drain_runs_tasks_concurrently_when_pool_has_room(
     database_connection: psycopg.Connection[dict[str, Any]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Per §V.62: two pending tasks with ``max_concurrent_tasks=4`` overlap."""
+    """Per §V.23: two pending tasks with ``max_concurrent_tasks=4`` overlap."""
     from mailpilot.sync import (
         _drain_pending_tasks,  # pyright: ignore[reportPrivateUsage]
     )
@@ -92,7 +92,7 @@ def test_drain_serializes_when_pool_size_is_one(
     database_connection: psycopg.Connection[dict[str, Any]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Per §V.62 regression-guard: ``max_concurrent_tasks=1`` preserves strict order."""
+    """Per §V.23 regression-guard: ``max_concurrent_tasks=1`` preserves strict order."""
     from mailpilot.sync import (
         _drain_pending_tasks,  # pyright: ignore[reportPrivateUsage]
     )
@@ -139,7 +139,7 @@ def test_drain_dispatcher_returns_without_blocking(
     database_connection: psycopg.Connection[dict[str, Any]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Per §V.64: ``_drain_pending_tasks`` must return immediately after submit.
+    """Per §V.24: ``_drain_pending_tasks`` must return immediately after submit.
 
     Long-running workers must not delay the main loop -- the dispatcher
     submits and returns, leaving completion to ``_reap_completed_tasks``.
@@ -196,7 +196,7 @@ def test_reap_emits_task_drain_after_futures_complete(
     database_connection: psycopg.Connection[dict[str, Any]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Per §V.64: ``task.drain`` operator event fires from the reaper.
+    """Per §V.24: ``task.drain`` operator event fires from the reaper.
 
     Five tasks dispatched, all complete, reaper emits one aggregated event.
     """
@@ -241,7 +241,7 @@ def test_reap_emits_task_drain_after_futures_complete(
 def test_reap_is_noop_when_no_futures_in_flight(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Per §V.64: reaper called on empty ``in_flight`` emits no event."""
+    """Per §V.24: reaper called on empty ``in_flight`` emits no event."""
     from mailpilot.sync import (
         _reap_completed_tasks,  # pyright: ignore[reportPrivateUsage]
     )
@@ -256,7 +256,7 @@ def test_reap_is_noop_when_no_futures_in_flight(
 def test_reap_skips_futures_still_running(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Per §V.64: reaper non-blocking -- in-progress futures stay in ``in_flight``."""
+    """Per §V.24: reaper non-blocking -- in-progress futures stay in ``in_flight``."""
     from mailpilot.sync import (
         _reap_completed_tasks,  # pyright: ignore[reportPrivateUsage]
     )
@@ -288,7 +288,7 @@ def test_each_worker_opens_its_own_connection(
     database_connection: psycopg.Connection[dict[str, Any]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Per §V.62: workers MUST NOT share a ``psycopg.Connection`` (not thread-safe)."""
+    """Per §V.23: workers MUST NOT share a ``psycopg.Connection`` (not thread-safe)."""
     from mailpilot.sync import (
         _drain_pending_tasks,  # pyright: ignore[reportPrivateUsage]
     )
@@ -335,7 +335,7 @@ def test_drain_continues_when_one_worker_raises(
     database_connection: psycopg.Connection[dict[str, Any]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Per §V.62 + §V.19: a poisoned worker logs ``error`` and does not abort siblings."""
+    """Per §V.23 + §V.51: a poisoned worker logs ``error`` and does not abort siblings."""
     from mailpilot.sync import (
         _drain_pending_tasks,  # pyright: ignore[reportPrivateUsage]
         _reap_completed_tasks,  # pyright: ignore[reportPrivateUsage]

@@ -239,7 +239,7 @@ def test_advisory_lock_skip_when_held(
 def test_advisory_lock_task_scope_when_task_id_provided(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.65: drain-path invocation locks on ``task_id``, not (wf, contact).
+    """§V.25: drain-path invocation locks on ``task_id``, not (wf, contact).
 
     Pre-acquire the *coarse* (workflow_id, contact_id) lock externally; the
     task-scoped invocation must NOT see contention because it now uses a
@@ -280,9 +280,9 @@ def test_advisory_lock_task_scope_when_task_id_provided(
 def test_advisory_lock_task_scope_blocks_same_task_id(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.65: two drain workers grabbing the same task_id race on the same lock.
+    """§V.25: two drain workers grabbing the same task_id race on the same lock.
 
-    Regression guard: a duplicate-create race (per §V.18) presenting the same
+    Regression guard: a duplicate-create race (per §V.16) presenting the same
     task_id twice must still serialize so only one invocation runs.
     """
     _account, contact, workflow = _setup(database_connection)
@@ -316,7 +316,7 @@ def test_advisory_lock_loser_emits_no_agent_invoke_span(
     database_connection: psycopg.Connection[dict[str, Any]],
     capfire: CaptureLogfire,
 ) -> None:
-    """§B.42 / §V.65: lock-loser does NOT emit a billable ``agent.invoke`` span.
+    """§B.42 / §V.25: lock-loser does NOT emit a billable ``agent.invoke`` span.
 
     Pre-§T.68 the parent span opened first and the lock check ran inside it,
     so a loser-of-race produced a noop ``agent.invoke`` row in Logfire that
@@ -576,7 +576,7 @@ def test_inbound_email_trigger_includes_email_id_and_sender(
 def test_deferred_task_trigger(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.36: trigger='task' with a task_description renders the Deferred task
+    """§V.30: trigger='task' with a task_description renders the Deferred task
     block."""
     _account, contact, workflow = _setup(database_connection)
     settings = make_test_settings(
@@ -604,13 +604,13 @@ def test_deferred_task_trigger(
     assert "days_since_last" in all_text
 
 
-# -- Tests: §V.35 trigger-email dedupe in user prompt --------------------------
+# -- Tests: §V.29 trigger-email dedupe in user prompt --------------------------
 
 
 def test_inbound_trigger_excluded_from_email_history_when_only_email(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.35: when the trigger is the only email in history, the email_history
+    """§V.29: when the trigger is the only email in history, the email_history
     block is suppressed and the trigger body appears exactly once."""
     from mailpilot.database import create_email
 
@@ -643,7 +643,7 @@ def test_inbound_trigger_excluded_from_email_history_when_only_email(
 def test_inbound_trigger_dedupes_against_prior_history(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.35: trigger row excluded from email_history when prior emails exist;
+    """§V.29: trigger row excluded from email_history when prior emails exist;
     history count reflects N-1 and trigger body appears exactly once total."""
     from mailpilot.database import create_email
 
@@ -690,7 +690,7 @@ def test_inbound_trigger_dedupes_against_prior_history(
 def test_outbound_history_unchanged_without_trigger(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.35 regression guard: when no trigger email is provided (outbound path),
+    """§V.29 regression guard: when no trigger email is provided (outbound path),
     email_history is rendered in full -- no dedupe filter applied."""
     from mailpilot.database import create_email
 
@@ -732,13 +732,13 @@ def test_outbound_history_unchanged_without_trigger(
     assert "UNIQUE_SECOND_BODY_MARKER follow-up." in prompt
 
 
-# -- Tests: §V.36 trigger-block matches span trigger attribute ----------------
+# -- Tests: §V.30 trigger-block matches span trigger attribute ----------------
 
 
 def test_enrollment_run_outbound_renders_first_reach_out(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.36: trigger='enrollment_run' with no email renders the first-reach-out
+    """§V.30: trigger='enrollment_run' with no email renders the first-reach-out
     framing, never the deferred-task block."""
     _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
 
@@ -757,7 +757,7 @@ def test_enrollment_run_outbound_renders_first_reach_out(
 def test_enrollment_schedule_renders_first_reach_out(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.36 + §V.55: trigger='enrollment_schedule' renders the same
+    """§V.30 + §V.32: trigger='enrollment_schedule' renders the same
     first-reach-out framing as 'enrollment_run' (byte-identical -- both
     mean "first outbound message, no prior context")."""
     _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
@@ -785,7 +785,7 @@ def test_enrollment_schedule_renders_first_reach_out(
 def test_task_trigger_renders_deferred_task_block(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.36 regression guard: trigger='task' with a persisted task description
+    """§V.30 regression guard: trigger='task' with a persisted task description
     keeps rendering the Deferred task: block."""
     _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
 
@@ -808,7 +808,7 @@ def test_task_trigger_renders_deferred_task_block(
 def test_enrollment_run_with_email_uses_email_branch(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.36: when an email is present, the inbound-email branch wins over the
+    """§V.30: when an email is present, the inbound-email branch wins over the
     enrollment_run framing -- existing precedence preserved."""
     from mailpilot.database import create_email
 
@@ -843,7 +843,7 @@ def test_enrollment_run_with_email_uses_email_branch(
 def test_manual_trigger_no_email_no_task_renders_outbound_fallback(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.36: trigger='manual' with no email and no task_description falls back
+    """§V.30: trigger='manual' with no email and no task_description falls back
     to the existing 'This is an outbound invocation.' prose."""
     _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
 
@@ -1185,11 +1185,11 @@ def test_invoke_surfaces_tool_errors_in_result(
     assert result["tool_errors"][0]["tool"] == "record_enrollment_outcome"
 
 
-# -- Tests: §V.37 prompt-cache settings ---------------------------------------
+# -- Tests: §V.47 prompt-cache settings ---------------------------------------
 
 
 def test_build_anthropic_model_carries_cache_settings() -> None:
-    """§V.37: workflow agent's AnthropicModel sets cache_control breakpoints.
+    """§V.47: workflow agent's AnthropicModel sets cache_control breakpoints.
 
     Pydantic AI translates ``anthropic_cache_tool_definitions`` and
     ``anthropic_cache_instructions`` into ``cache_control`` blocks on the
@@ -1216,7 +1216,7 @@ def test_build_anthropic_model_requires_api_key() -> None:
 
 
 def test_build_anthropic_model_uses_240s_read_timeout() -> None:
-    """§V.43: workflow agent's AnthropicProvider HTTP client carries a 240s read-timeout.
+    """§V.48: workflow agent's AnthropicProvider HTTP client carries a 240s read-timeout.
 
     Default httpx read-timeout is 60s; under model load that intersects
     long-context multi-turn agent latency and surfaces ``TimeoutError``
@@ -1236,7 +1236,7 @@ def test_invoke_span_has_cache_token_attributes(
     database_connection: psycopg.Connection[dict[str, Any]],
     capfire: CaptureLogfire,
 ) -> None:
-    """§V.37: agent.invoke rollup span carries cache_read/creation token attrs.
+    """§V.47: agent.invoke rollup span carries cache_read/creation token attrs.
 
     Pydantic AI's RunUsage already sums cache token counts across child
     chat turns. The presence of both attrs (≥0) is the contract -- the
@@ -1272,7 +1272,7 @@ def test_invoke_span_has_cache_token_attributes(
     assert attrs["cache_creation_input_tokens"] >= 0
 
 
-# -- Tests: §V.11(+) email_id attr on agent.invoke span -----------------------
+# -- Tests: §V.26(+) email_id attr on agent.invoke span -----------------------
 
 
 def test_invoke_span_has_email_id_when_trigger_email(

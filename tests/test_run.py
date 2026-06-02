@@ -147,7 +147,7 @@ def test_execute_task_success(
 def test_execute_task_threads_trigger_from_context(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.55 + §V.36: scheduled first-touch task carries
+    """§V.32 + §V.30: scheduled first-touch task carries
     ``trigger=enrollment_schedule`` in its context; ``execute_task`` must
     surface that to ``invoke_workflow_agent`` so the agent sees first-touch
     framing, not deferred-task framing."""
@@ -189,7 +189,7 @@ def test_execute_task_threads_trigger_from_context(
 def test_execute_task_default_trigger_is_task(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.55 regression: a task row with no ``trigger`` in context defaults to
+    """§V.32 regression: a task row with no ``trigger`` in context defaults to
     ``trigger='task'``, preserving the legacy drain semantics."""
     from conftest import make_test_settings
     from mailpilot.run import execute_task
@@ -328,7 +328,7 @@ def test_execute_task_missing_enrollment(
 def test_execute_task_lock_held(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.65 / §B.42: lock contention reschedules without bumping attempt_count."""
+    """§V.25 / §B.42: lock contention reschedules without bumping attempt_count."""
     from conftest import make_test_settings
     from mailpilot.run import execute_task
 
@@ -364,7 +364,7 @@ def test_execute_task_lock_held(
 def test_execute_task_passes_task_id_to_invoke(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.65: drain path threads task.id through to invoke_workflow_agent so
+    """§V.25: drain path threads task.id through to invoke_workflow_agent so
     the advisory lock is task-scoped, not (workflow_id, contact_id)-scoped."""
     from conftest import make_test_settings
     from mailpilot.run import execute_task
@@ -512,7 +512,7 @@ def test_execute_task_transient_error_budget_exhausted_terminal(
 def test_execute_task_apitimeout_is_terminal_v43_exclusion(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.43 exclusion: anthropic.APITimeoutError mid-turn cannot be
+    """§V.48 exclusion: anthropic.APITimeoutError mid-turn cannot be
     re-driven safely, must go terminal regardless of attempt budget."""
     import httpx
     from anthropic import APITimeoutError
@@ -549,7 +549,7 @@ def test_execute_task_apitimeout_is_terminal_v43_exclusion(
 def test_execute_task_httpx_readtimeout_is_terminal_v43_exclusion(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.43 exclusion: httpx.ReadTimeout from the Anthropic transport
+    """§V.48 exclusion: httpx.ReadTimeout from the Anthropic transport
     is not transient for retry purposes."""
     import httpx
 

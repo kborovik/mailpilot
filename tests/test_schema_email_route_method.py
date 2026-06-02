@@ -1,4 +1,4 @@
-"""Schema CHECK tests for email.route_method per §V.66.
+"""Schema CHECK tests for email.route_method per §V.20.
 
 Covers:
 - enum CHECK admits every value listed in §I email projection.

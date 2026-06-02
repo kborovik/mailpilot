@@ -46,20 +46,20 @@ Apply `/sdd:glyph` encoding to SPEC.md ∧ spec-adjacent writes (this file, plan
 - Agent-driven, ⊥ system-driven. System provides tools ∧ scheduling; LLM agents make all business decisions.
 - Type-safety non-negotiable. basedpyright strict.
 - TDD ∀ changes.
-- Background loops wake on events ⊥ timers. Canonical: `start_sync_loop` in `src/mailpilot/sync.py`. See §V.3.
+- Background loops wake on events ⊥ timers. Canonical: `start_sync_loop` in `src/mailpilot/sync.py`. See §V.21.
 
 ## Architecture pointers
 
 Concrete shape lives in code; spec invariants govern behaviour. Quick map:
 
 - **Gmail** — `gmail.modify` only, service account + DWD, per-account `with_subject(email)`. Custom `X-MailPilot-Version` ∧ `X-MailPilot-Account-Id` headers on sent. ThreadPoolExecutor per account. Pub/Sub streaming pull. History API + 404 → full re-sync. Body = plain text only.
-- **Drive KB** — `drive.readonly` only. Folder ID lives in `workflow.instructions`. Shared-Drive flags per §V.14, §V.24. Permission model = isolation per §V.17.
-- **Workflows** — agent shape owned by template registry (`src/mailpilot/agent/templates.py`). See §V.32-§V.34. ⊥ per-workflow tool ∨ protocol overrides.
+- **Drive KB** — `drive.readonly` only. Folder ID lives in `workflow.instructions`. Shared-Drive flags per §V.34, §V.36. Permission model = isolation per §V.35.
+- **Workflows** — agent shape owned by template registry (`src/mailpilot/agent/templates.py`). See §V.44-§V.46. ⊥ per-workflow tool ∨ protocol overrides.
 - **Email rendering** — `email_renderer.py` — Markdown → HTML, inline styles. `THEME_NAMES` ∈ {blue, green, orange, purple, red, slate}.
-- **CLI** — thin dispatcher, JSON-only stdout. See §V.1 (settings-first), §V.2 (lazy imports), §V.4-§V.6 (envelope ∧ summary contract). Full surface in SPEC §I.
+- **CLI** — thin dispatcher, JSON-only stdout. See §V.1 (settings-first), §V.2 (lazy imports), §V.3-§V.5 (envelope ∧ summary contract). Full surface in SPEC §I.
 - **Schema** — `src/mailpilot/schema.sql`. PostgreSQL 18. Connection: `database_url`. Auto-applied on first connection. Tables: `account`, `company`, `contact`, `workflow`, `enrollment`, `email`, `task`, `sync_status`, `activity`, `tag`, `note`.
-- **Database layer** — flat `database.py` w/ `# -- Entity ---` headers. ⊥ per-entity modules. Conventions: `create_X` / `get_X` / `list_X` / `update_X` / `search_X`. ∀ fn takes `psycopg.Connection`, returns model from `models.py` via `Model.model_validate(row)`. Dynamic SQL via `psycopg.sql` (⊥ f-strings). UUIDv7 IDs (§V.7). Race-safe inserts (§V.18). Bulk via `WHERE col = ANY(%s)` ∧ `INSERT ... SELECT FROM unnest(%s::type[])`.
-- **CRM** — Contact, Company, Tag, Note, Activity, Enrollment, Workflow. XOR rules §V.8 (tag, note), append-only §V.9 (activity, note), enrollment status §V.10, activity multi-target §V.23.
+- **Database layer** — flat `database.py` w/ `# -- Entity ---` headers. ⊥ per-entity modules. Conventions: `create_X` / `get_X` / `list_X` / `update_X` / `search_X`. ∀ fn takes `psycopg.Connection`, returns model from `models.py` via `Model.model_validate(row)`. Dynamic SQL via `psycopg.sql` (⊥ f-strings). UUIDv7 IDs (§V.12). Race-safe inserts (§V.16). Bulk via `WHERE col = ANY(%s)` ∧ `INSERT ... SELECT FROM unnest(%s::type[])`.
+- **CRM** — Contact, Company, Tag, Note, Activity, Enrollment, Workflow. XOR rules §V.13 (tag, note), append-only §V.14 (activity, note), enrollment status §V.15, activity multi-target §V.17.
 - **Reporting** — Claude Code composes from CLI primitives. ⊥ built-in engine.
 - **Settings** — `~/.mailpilot/config.json` via `mailpilot config set KEY VALUE`. Keys per SPEC §I.
 - **Test accounts** — `outbound@lab5.ca`, `inbound@lab5.ca`, `hello@lab5.ca`. Service-account delegated. Re-create after `make clean` w/ `mailpilot account create --email ... --display-name ...`.
@@ -103,17 +103,17 @@ Tests use `postgresql://localhost/mailpilot_test` (override w/ `DATABASE_URL`). 
 
 ## Observability
 
-Pydantic Logfire (OTel-based). `import logfire` directly — ⊥ per-module logger var. Invariants in SPEC §V.19, §V.22, §V.26.
+Pydantic Logfire (OTel-based). `import logfire` directly — ⊥ per-module logger var. Invariants in SPEC §V.51, §V.52, §V.53.
 
 - `logfire.debug(msg, **k)` / `logfire.warn(msg, **k)` — logging.
-- `logfire.span(name)` — sync stage tracing. ⊥ in agent tools — `instrument_pydantic_ai()` handles tool spans (§V.26 → `gen_ai.tool.name`).
+- `logfire.span(name)` — sync stage tracing. ⊥ in agent tools — `instrument_pydantic_ai()` handles tool spans (§V.53 → `gen_ai.tool.name`).
 - `configure_logging()` in `cli.py` — console output only w/ `--debug`.
 - Token: `mailpilot config set logfire_token <T>` ∨ `LOGFIRE_TOKEN` env.
 - Cloud send: `send_to_logfire='if-token-present'`.
 
-**Operator log.** `src/mailpilot/operator_log.py` → `operator_event(name, **fields)` → stderr line `HH:MM:SS event=NAME k1=v1 ...`. Always on. Curated events: `loop.start`, `loop.tick`, `loop.stop`, `pubsub.notify`, `sync.account`, `route.match`, `route.no_match`, `agent.run`, `task.drain`, `schema.drift`, `error`. ∀ new `logfire.exception` site reachable from `mailpilot run` ! paired `operator_event("error", source=<event>, message=str(exc))` per §V.19. Newlines in field values → spaces (one-line-per-event contract).
+**Operator log.** `src/mailpilot/operator_log.py` → `operator_event(name, **fields)` → stderr line `HH:MM:SS event=NAME k1=v1 ...`. Always on. Curated events: `loop.start`, `loop.tick`, `loop.stop`, `pubsub.notify`, `sync.account`, `route.match`, `route.no_match`, `agent.run`, `task.drain`, `schema.drift`, `error`. ∀ new `logfire.exception` site reachable from `mailpilot run` ! paired `operator_event("error", source=<event>, message=str(exc))` per §V.51. Newlines in field values → spaces (one-line-per-event contract).
 
-**Cloud project.** `mailpilot` (token-scoped). MCP queries ! `project='mailpilot'`, filter `WHERE deployment_environment = '<env>'` (§V.22).
+**Cloud project.** `mailpilot` (token-scoped). MCP queries ! `project='mailpilot'`, filter `WHERE deployment_environment = '<env>'` (§V.52).
 
 ## Help
 

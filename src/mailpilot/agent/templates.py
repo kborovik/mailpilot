@@ -9,8 +9,8 @@ time.
 Templates are code-defined constants. Adding a new template (e.g.
 ``inbound-postgres``) is a code change + PR, not a workflow update.
 
-See SPEC.md sections §V.32 (registry shape), §V.33 (composition / ownership),
-§V.34 (naming convention).
+See SPEC.md sections §V.44 (registry shape), §V.45 (composition / ownership),
+§V.46 (naming convention).
 """
 
 from __future__ import annotations
@@ -46,12 +46,12 @@ class WorkflowTemplate:
     """Named binding of agent tools + protocol composed from fragments.
 
     The deferred-task fragment is selected per-invocation by ``trigger``
-    (§V.49): ``trigger='task'`` -> _DEFERRED_TASK_TASK (terminal-outcome
+    (§V.31): ``trigger='task'`` -> _DEFERRED_TASK_TASK (terminal-outcome
     instruction); other triggers (``enrollment_run``,
-    ``enrollment_schedule`` per §V.55, ``manual``, ``email``) ->
+    ``enrollment_schedule`` per §V.32, ``manual``, ``email``) ->
     _DEFERRED_TASK_INITIAL (initial-send-only instruction; prevents
     premature ``record_enrollment_outcome`` on first reach-out).
-    Canonical fragment order per §V.33: _BASE -> _DEFERRED_TASK_<branch> ->
+    Canonical fragment order per §V.45: _BASE -> _DEFERRED_TASK_<branch> ->
     [overlay]? -> _DECLINE -> _NO_FABRICATION.
     """
 
@@ -63,7 +63,7 @@ class WorkflowTemplate:
     tools: tuple[Tool[AgentDeps], ...]
 
     def build_protocol(self, trigger: str) -> str:
-        """Compose protocol per ``trigger`` per §V.49."""
+        """Compose protocol per ``trigger`` per §V.31."""
         deferred = _DEFERRED_TASK_TASK if trigger == "task" else _DEFERRED_TASK_INITIAL
         return self.protocol_pre + deferred + self.protocol_post
 
@@ -155,7 +155,7 @@ _CORE: tuple[Tool[AgentDeps], ...] = (
     Tool(_wrap_noop, name="noop"),
 )
 
-# Per §V.61: each Drive tool binds a googleapiclient.discovery.Resource that
+# Per §V.38: each Drive tool binds a googleapiclient.discovery.Resource that
 # carries one shared httplib2.Http transport with no internal locks. Pydantic
 # AI dispatches sync tools via asyncio.to_thread, so an Anthropic-emitted
 # parallel fan-out would land two threads against the same Http and race the

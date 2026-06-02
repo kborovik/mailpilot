@@ -1,6 +1,6 @@
 """Span-emission and operator-event contract tests for CLI mutations.
 
-Enforces SPEC §V.47: every operator-initiated CRM-config CLI mutation
+Enforces SPEC §V.54: every operator-initiated CRM-config CLI mutation
 (noun in {account, company, contact, workflow, enrollment, tag, note};
 verb in {create, update, add, remove, start, stop, import}) wraps its
 DB call in ``logfire.span("<noun>.<verb>", ...)`` and emits a paired
@@ -160,7 +160,7 @@ def _preserve_capfire_exporter(monkeypatch: pytest.MonkeyPatch) -> None:  # pyri
     ``cli.main`` calls ``configure_logging`` per invocation; that re-runs
     ``logfire.configure(...)`` which replaces the ``capfire`` fixture's
     ``TestExporter``. Patching it to a no-op preserves the test exporter
-    so the §V.47 spans land where the assertions can read them.
+    so the §V.54 spans land where the assertions can read them.
     """
     monkeypatch.setattr("mailpilot.cli.configure_logging", lambda debug=False: None)
 
@@ -782,7 +782,7 @@ def test_enrollment_add_scheduled_at_event_carries_field(
     capfire: CaptureLogfire,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """§V.55 + §V.47: when --scheduled-at is given, the operator event carries
+    """§V.32 + §V.54: when --scheduled-at is given, the operator event carries
     ``scheduled_at=...`` and ``scheduled_first_send`` in ``changed``."""
     enrollment = _make_enrollment()
     workflow = _make_workflow(type="outbound")

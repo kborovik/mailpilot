@@ -1,4 +1,4 @@
-"""Email routing pipeline (see §V.12).
+"""Email routing pipeline (see §V.27).
 
 Pipeline that assigns inbound emails to the correct workflow:
 
@@ -61,7 +61,7 @@ def route_email(
     sender_email: str,
     settings: Settings,
 ) -> Email:
-    """Route an inbound email through the §V.12 pipeline.
+    """Route an inbound email through the §V.27 pipeline.
 
     Runs bounce detection, then the three-step routing pipeline
     (thread match -> LLM classification -> unrouted). Creates a
@@ -110,7 +110,7 @@ def route_email(
                 span.set_attribute("workflow_id", workflow_id)
 
             # "unrouted" is a span-only label: classifier ran on real candidates
-            # but rejected them. §I / §V.66 persisted enum admits only the 7
+            # but rejected them. §I / §V.20 persisted enum admits only the 7
             # decision values + NULL (routing pipeline ran, no enum bucket
             # matched). is_routed=TRUE carries the "pipeline completed" signal.
             persisted_route_method = (

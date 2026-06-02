@@ -25,7 +25,7 @@ _DRIVE_HTTP_TIMEOUT_SECONDS = 60
 """Socket-level timeout on the Drive transport so a hung TCP read
 surfaces as ``socket.timeout`` quickly. The bounded auto-retry
 classifier (``mailpilot.agent.retry.is_transient``) treats those as
-transient per `§V.44`."""
+transient per `§V.49`."""
 
 
 def build_drive_service(email: str) -> DriveService:
@@ -33,7 +33,7 @@ def build_drive_service(email: str) -> DriveService:
 
     The transport is wrapped with ``httplib2.Http(timeout=...)`` so a
     hung TCP read on Drive surfaces as ``socket.timeout`` within the
-    bound. Per `§V.44`, those timeouts feed the bounded auto-retry
+    bound. Per `§V.49`, those timeouts feed the bounded auto-retry
     classifier; the bound also caps how long a single Drive call can
     stall the agent's read window.
 

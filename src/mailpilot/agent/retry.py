@@ -1,11 +1,11 @@
 """Transient-failure classification for the agent task loop.
 
-Implements the bounded auto-retry policy described in `§V.44`. The
+Implements the bounded auto-retry policy described in `§V.49`. The
 classifier inspects exception type and (where applicable) HTTP status
 code, returning ``True`` only for failures that are safely re-drivable
 without risking duplicate side-effects on the next attempt.
 
-Carve-out (`§V.43`): Anthropic LLM read-timeouts (``httpx.ReadTimeout``,
+Carve-out (`§V.48`): Anthropic LLM read-timeouts (``httpx.ReadTimeout``,
 ``anthropic.APITimeoutError``) are *not* transient for retry purposes -
 they may interrupt a multi-turn run mid tool-call, after the underlying
 side-effect (``send_email``, ``reply_email``, Drive read) has already
@@ -41,14 +41,14 @@ _ANTHROPIC_TRANSIENT_STATUSES = frozenset({502, 503, 529})
 529 = Anthropic-specific "overloaded".
 
 Critically excludes the LLM's own *timeout* class (``APITimeoutError``)
-- those are filtered earlier in :func:`is_transient` so the `§V.43`
+- those are filtered earlier in :func:`is_transient` so the `§V.48`
 exclusion holds even if the timeout exception inherits from
 ``APIStatusError`` in some SDK version.
 """
 
 
 def _is_llm_read_timeout(exc: BaseException) -> bool:
-    """Anthropic LLM read-timeout: bubble as terminal per `§V.43`.
+    """Anthropic LLM read-timeout: bubble as terminal per `§V.48`.
 
     A timeout on the LLM HTTP call may have interrupted a multi-turn run
     after a tool already fired (``send_email``, ``reply_email``, Drive
@@ -73,7 +73,7 @@ def _anthropic_status(exc: BaseException) -> int | None:
     """Status code on an Anthropic ``APIStatusError``, else ``None``.
 
     ``APITimeoutError`` is not handled here -- the caller filters it
-    out earlier so it bubbles as terminal per `§V.43`.
+    out earlier so it bubbles as terminal per `§V.48`.
     """
     from anthropic import APIStatusError
 
@@ -83,15 +83,15 @@ def _anthropic_status(exc: BaseException) -> int | None:
 
 
 def is_transient(exc: BaseException) -> bool:
-    """Return ``True`` if ``exc`` is safe to retry per `§V.44`.
+    """Return ``True`` if ``exc`` is safe to retry per `§V.49`.
 
     Args:
         exc: Exception raised by ``invoke_workflow_agent``.
 
     Returns:
-        ``True`` for the §V.44 allow-list (Google 429/5xx, Anthropic
+        ``True`` for the §V.49 allow-list (Google 429/5xx, Anthropic
         502/503/529, Drive socket timeouts). ``False`` otherwise --
-        including for the §V.43 exclusion (Anthropic LLM read-timeouts)
+        including for the §V.48 exclusion (Anthropic LLM read-timeouts)
         and any unrecognised exception class.
     """
     if _is_llm_read_timeout(exc):

@@ -1,4 +1,4 @@
-"""Tests for the bounded auto-retry classifier (`§V.44`)."""
+"""Tests for the bounded auto-retry classifier (`§V.49`)."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def _api_status_error(status_code: int) -> APIStatusError:
 
 
 def test_constants() -> None:
-    """§V.44: 4 attempts total, backoff schedule [30, 120, 300]s."""
+    """§V.49: 4 attempts total, backoff schedule [30, 120, 300]s."""
     assert MAX_ATTEMPTS == 4
     assert BACKOFF_SECONDS == (30, 120, 300)
 
@@ -66,14 +66,14 @@ def test_timeout_error_transient() -> None:
 
 
 def test_anthropic_api_timeout_error_not_transient_v43_exclusion() -> None:
-    """§V.43 exclusion: LLM read-timeout cannot be safely retried mid-turn."""
+    """§V.48 exclusion: LLM read-timeout cannot be safely retried mid-turn."""
     request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
     err = APITimeoutError(request=request)
     assert is_transient(err) is False
 
 
 def test_httpx_read_timeout_not_transient_v43_exclusion() -> None:
-    """§V.43 exclusion: bare httpx.ReadTimeout from the Anthropic transport
+    """§V.48 exclusion: bare httpx.ReadTimeout from the Anthropic transport
     must not be retried."""
     assert is_transient(httpx.ReadTimeout("timeout")) is False
 

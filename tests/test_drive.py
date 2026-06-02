@@ -174,7 +174,7 @@ def test_read_markdown_decodes_utf8_with_replacement_on_invalid_bytes() -> None:
 
 
 def test_build_drive_service_caps_socket_timeout_at_60_seconds() -> None:
-    """§V.44: Drive socket-timeout cap bounds stall window so the retry
+    """§V.49: Drive socket-timeout cap bounds stall window so the retry
     classifier sees ``socket.timeout`` quickly."""
     with (
         patch("mailpilot.gmail.build_delegated_credentials") as mock_creds,

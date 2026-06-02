@@ -10,7 +10,7 @@ qa_pairs.json.
 
 After drafting, a cross-source identifier-collision pass populates
 `source_file_alts` on any inscope pair whose model-shape `expected_tokens`
-also appear verbatim in another file's body (per §V.31(+) / §B.40 -- e.g.
+also appear verbatim in another file's body (per §V.57(+) / §B.40 -- e.g.
 model `WS36-600-2` lives in two pure-aqua datasheets with divergent specs).
 This makes the operator-judged `cites_source_file` gate honour the live KB
 shape instead of regrading collisions by hand each run.
@@ -199,7 +199,7 @@ def annotate_collisions(
     pairs: list[dict[str, object]], file_contents: dict[str, str]
 ) -> None:
     """Populate `source_file_alts` on inscope pairs whose model-shape tokens
-    also appear in other files per §V.31(+) / §B.40."""
+    also appear in other files per §V.57(+) / §B.40."""
 
     for pair in pairs:
         if pair.get("type") != "inscope":

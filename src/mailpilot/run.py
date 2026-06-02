@@ -113,7 +113,7 @@ def execute_task(
 
         email = get_email(connection, task.email_id) if task.email_id else None
 
-        # §V.55: scheduled first-touch tasks carry ``trigger=enrollment_schedule``
+        # §V.32: scheduled first-touch tasks carry ``trigger=enrollment_schedule``
         # in their context; the run loop must surface that to the agent span so
         # initial-send framing replaces the deferred-task framing. Default to
         # ``task`` for legacy task rows that pre-date scheduled enrollment.
@@ -136,7 +136,7 @@ def execute_task(
             return
 
         if result is None:
-            # §V.65: lock contention is not a retry -- the task ran nothing,
+            # §V.25: lock contention is not a retry -- the task ran nothing,
             # attempt_count stays put. Push scheduled_at forward so the
             # ``task_pending_trigger`` notify wakes the drain loop again;
             # leaving the row ``pending`` with no signal stranded tasks
@@ -160,7 +160,7 @@ def _handle_agent_failure(
     task: Task,
     exc: Exception,
 ) -> None:
-    """Branch transient (retry) vs terminal (`failed`) per `§V.44`."""
+    """Branch transient (retry) vs terminal (`failed`) per `§V.49`."""
     connection.rollback()
     next_attempt = task.attempt_count + 1
     transient = is_transient(exc)

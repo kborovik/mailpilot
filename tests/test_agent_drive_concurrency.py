@@ -1,4 +1,4 @@
-"""§V.61 + §B.34 regression tests: Drive tools serialize parallel emissions.
+"""§V.38 + §B.34 regression tests: Drive tools serialize parallel emissions.
 
 The underlying ``googleapiclient.discovery.Resource`` is backed by a single
 ``httplib2.Http`` instance whose connection-pool dict has no internal locks.
@@ -6,7 +6,7 @@ Pydantic AI dispatches sync tools via ``asyncio.to_thread``, so an
 Anthropic-emitted parallel fan-out lands two worker threads against the same
 shared transport. The race surfaced in production as one ``read_drive_markdown``
 returning in ~1.1s while its sibling hung 60.8s at the socket timeout, which
-burned the §V.44 retry budget and turned a transient blip into a terminal
+burned the §V.49 retry budget and turned a transient blip into a terminal
 ``failed`` task.
 
 The structural fix is ``sequential=True`` on every Drive ``Tool(...)``
@@ -212,7 +212,7 @@ def test_drive_tool_sequential_true_serializes_parallel_dispatch() -> None:
     )
     assert service.max_concurrent == 1, (
         "sequential=True must keep transport reuse to one thread at a time; "
-        f"saw max_concurrent={service.max_concurrent} -- §V.61 broken"
+        f"saw max_concurrent={service.max_concurrent} -- §V.38 broken"
     )
 
 

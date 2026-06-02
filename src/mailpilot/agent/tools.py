@@ -36,7 +36,7 @@ from mailpilot.drive import DriveClient
 from mailpilot.models import Account
 from mailpilot.settings import Settings
 
-# Per §V.29: detect spec-shape rows (label + any whitespace + non-whitespace
+# Per §V.42: detect spec-shape rows (label + any whitespace + non-whitespace
 # value, length capped at 80 chars) on lines that do not use Markdown
 # pipe-table syntax. Three or more *consecutive* such lines without a
 # `|---|` separator anywhere in the body indicates a spec sheet rendered as
@@ -56,7 +56,7 @@ _PIPE_SEPARATOR_RE = re.compile(r"\|\s*-{3,}\s*\|")
 
 
 def _check_spec_table(body: str) -> dict[str, str] | None:
-    """Lint email body for spec rows missing a pipe-table separator (§V.29).
+    """Lint email body for spec rows missing a pipe-table separator (§V.42).
 
     Returns the format error dict when the body has >=3 consecutive lines
     matching the spec-row shape (1-80 non-pipe chars, one-or-more spaces,
@@ -318,7 +318,7 @@ def list_enrollments(
     person A at the same company already completed the objective). Each
     row includes ``latest_outcome`` (``completed`` / ``failed`` / ``None``),
     ``latest_outcome_reason``, and ``latest_outcome_at`` -- pulled from the
-    activity timeline since outcomes are timeline-only per §V.10.
+    activity timeline since outcomes are timeline-only per §V.15.
 
     Args:
         connection: Open database connection.
@@ -355,7 +355,7 @@ def read_contact(
     connection: psycopg.Connection[dict[str, Any]],
     email: str,
 ) -> dict[str, Any]:
-    """Look up a contact by email address with inlined notes (§V.53).
+    """Look up a contact by email address with inlined notes (§V.8).
 
     Routes through ``database.load_contact_view`` so the agent and the
     operator (CLI ``contact view``) see byte-identical context, including
@@ -366,7 +366,7 @@ def read_contact(
         email: Contact email address.
 
     Returns:
-        ContactView dict on success; per §V.15 error dict on lookup failure.
+        ContactView dict on success; per §V.39 error dict on lookup failure.
     """
     contact = database.get_contact_by_email(connection, email)
     if contact is None:
@@ -381,7 +381,7 @@ def read_company(
     connection: psycopg.Connection[dict[str, Any]],
     domain: str,
 ) -> dict[str, Any]:
-    """Look up a company by domain with inlined notes (§V.53).
+    """Look up a company by domain with inlined notes (§V.8).
 
     Routes through ``database.load_company_view`` so the agent and the
     operator (CLI ``company view``) see byte-identical context including
@@ -392,7 +392,7 @@ def read_company(
         domain: Company primary domain.
 
     Returns:
-        CompanyView dict on success; per §V.15 error dict on lookup failure.
+        CompanyView dict on success; per §V.39 error dict on lookup failure.
     """
     company = database.get_company_by_domain(connection, domain)
     if company is None:
@@ -456,7 +456,7 @@ def list_drive_markdown(
             "message": str(exc),
         }
     except (TimeoutError, OSError) as exc:
-        # Per §V.61 + §B.34: surface transport stalls / socket faults as a
+        # Per §V.38 + §B.34: surface transport stalls / socket faults as a
         # structured tool return so a sibling parallel call carries the
         # agent run instead of bubbling to a terminal task failure.
         return {
@@ -502,7 +502,7 @@ def search_drive_markdown(
             "message": str(exc),
         }
     except (TimeoutError, OSError) as exc:
-        # Per §V.61 + §B.34: see list_drive_markdown rationale.
+        # Per §V.38 + §B.34: see list_drive_markdown rationale.
         return {
             "error": "drive_unavailable",
             "message": str(exc),
@@ -538,8 +538,8 @@ def read_drive_markdown(
             "message": str(exc),
         }
     except (TimeoutError, OSError) as exc:
-        # Per §V.61 + §B.34: a hung sibling read in a parallel fan-out used
-        # to escape this catch and burn the §V.44 retry budget; the broadened
+        # Per §V.38 + §B.34: a hung sibling read in a parallel fan-out used
+        # to escape this catch and burn the §V.49 retry budget; the broadened
         # arm folds transport-level faults into the same drive_unavailable
         # tool-return so the surviving call carries the agent run.
         return {

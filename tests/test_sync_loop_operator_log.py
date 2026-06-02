@@ -182,7 +182,7 @@ def test_drain_pending_tasks_emits_task_drain_when_tasks_executed(
     database_connection: psycopg.Connection[dict[str, Any]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Per §V.64: ``task.drain`` emitted by ``_reap_completed_tasks`` once futures finish."""
+    """Per §V.24: ``task.drain`` emitted by ``_reap_completed_tasks`` once futures finish."""
     from mailpilot.sync import (
         _drain_pending_tasks,  # pyright: ignore[reportPrivateUsage]
         _reap_completed_tasks,  # pyright: ignore[reportPrivateUsage]

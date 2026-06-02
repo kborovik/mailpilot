@@ -7,7 +7,7 @@ allowed-tools: Bash(git *), Bash(uv build), Bash(uv lock), Bash(gh release *), B
 
 Cut a SemVer release for `mailpilot`, build the `.whl` artifact, push, and publish a GitHub release with the wheel attached.
 
-Spec: §V.38 (project release flow contract).
+Spec: §V.62 (project release flow contract).
 
 ## Scope
 
@@ -186,7 +186,7 @@ Push failures on `origin main` (e.g. branch protection, remote ahead) → bail w
 uv build
 ```
 
-Assert `dist/mailpilot-<x.y.z>-py3-none-any.whl` exists. ⊥ exists → bail with `ls dist/` output (build emitted unexpected name pattern → spec drift on §V.38). ⊥ retry blindly.
+Assert `dist/mailpilot-<x.y.z>-py3-none-any.whl` exists. ⊥ exists → bail with `ls dist/` output (build emitted unexpected name pattern → spec drift on §V.62). ⊥ retry blindly.
 
 ### §15 Publish GitHub release
 

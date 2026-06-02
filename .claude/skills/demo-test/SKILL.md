@@ -26,12 +26,12 @@ It is a **liveness probe**, not a regression suite -- that is `/smoke-test`. Use
 - ASCII only.
 - All `mailpilot` commands run via `uv run mailpilot`.
 - Parse JSON output by piping `mailpilot ... | python3 -c '...'` directly. Do NOT round-trip JSON through `echo "$VAR"` -- shell `echo` corrupts `\n` inside `body_text` and breaks parsing. Use `printf '%s' "$VAR"` when a variable is required.
-- Envelope shape per SPEC `§V.5`: `list|search|sync` -> `{"<plural>": [...], "ok": true}`; `view|send|...` -> `{"<singular>": {...}, "ok": true}`. Extract through the wrap.
+- Envelope shape per SPEC `§V.4`: `list|search|sync` -> `{"<plural>": [...], "ok": true}`; `view|send|...` -> `{"<singular>": {...}, "ok": true}`. Extract through the wrap.
 
 ## Prerequisites
 
 - `mailpilot` installed locally with config pointing at a local database (any -- the local CLI only persists the outbound send; no demo-workflow state is needed locally).
-- `mailpilot config get google_application_credentials` returns a valid path, or ADC reachable per SPEC `§V.42`.
+- `mailpilot config get google_application_credentials` returns a valid path, or ADC reachable per SPEC `§V.37`.
 - Network access to Gmail API, Drive API (for `qa.py source`), and the Logfire backend.
 - Logfire MCP reachable; project = `mailpilot`.
 
@@ -104,9 +104,9 @@ and stop. The production instance never saw the question; Logfire would be empty
 
 ### Step 5: G1 -- reply round-trip + Logfire latency verdict
 
-Per SPEC `§V.63`, the 60s latency verdict is derived from the production `agent.invoke` span in Logfire (Step 7 query already runs there); the CLI poll here is a `did-round-trip?` side-effect check only, capped at 120s (24 attempts × 5s) so a borderline reply does not false-fail the round-trip check.
+Per SPEC `§V.61`, the 60s latency verdict is derived from the production `agent.invoke` span in Logfire (Step 7 query already runs there); the CLI poll here is a `did-round-trip?` side-effect check only, capped at 120s (24 attempts × 5s) so a borderline reply does not false-fail the round-trip check.
 
-Poll Gmail directly via service-account impersonation of `outbound@lab5.ca` (per SPEC `§V.42` and `§V.46` -- liveness probes must hit the production-facing surface, not the local mailpilot DB which would require a separately-started `mailpilot run` to stay fresh). Up to 24 attempts, 5s apart (~120s):
+Poll Gmail directly via service-account impersonation of `outbound@lab5.ca` (per SPEC `§V.37` and `§V.60` -- liveness probes must hit the production-facing surface, not the local mailpilot DB which would require a separately-started `mailpilot run` to stay fresh). Up to 24 attempts, 5s apart (~120s):
 
 ```
 TAIL="${SUBJECT#*] }"
@@ -175,7 +175,7 @@ The reply body was captured into `$REPLY_BODY` by Step 5 (Gmail-side `extract_te
 printf '%s\n' "$REPLY_BODY"
 ```
 
-Then emit a structured JSON verdict per SPEC `§V.31`:
+Then emit a structured JSON verdict per SPEC `§V.57`:
 
 ```json
 {
@@ -256,7 +256,7 @@ WHERE deployment_environment = 'production'
 ```
 
 ```sql
--- Cache-hit ratio per SPEC §V.37 (sum across agent.invoke rollup spans in window)
+-- Cache-hit ratio per SPEC §V.47 (sum across agent.invoke rollup spans in window)
 SELECT
   sum((attributes->>'cache_read_input_tokens')::int)     AS read_cache_tokens,
   sum((attributes->>'cache_creation_input_tokens')::int) AS creation_cache_tokens,
@@ -271,7 +271,7 @@ Format the three bullets as:
 
 - `top span: <span_name> (n=<count>)`
 - `errors/warns in window: <count>`
-- `cache_read / (cache_read + input): <read>/<read+input> (<ratio>%)` -- or `cache attrs missing` if all three sums are NULL (production deploy predates §V.37 wiring).
+- `cache_read / (cache_read + input): <read>/<read+input> (<ratio>%)` -- or `cache attrs missing` if all three sums are NULL (production deploy predates §V.47 wiring).
 
 ## Output contract
 
@@ -285,9 +285,9 @@ Print exactly two blocks to stdout, in order, and nothing else:
 
 Do NOT:
 
-- Auto-write a `.md` file to the repo. (Contrast `/smoke-test`, which writes `smoke-test-<YYYY-MM-DD>-<HHMMSS>.md` per SPEC `§V.40`.)
+- Auto-write a `.md` file to the repo. (Contrast `/smoke-test`, which writes `smoke-test-<YYYY-MM-DD>-<HHMMSS>.md` per SPEC `§V.58`.)
 - Auto-invoke `/sdd:spec`.
-- Render a phase matrix, §1/§2/§3 sections, or any of the smoke-test report structure per `§V.40`.
+- Render a phase matrix, §1/§2/§3 sections, or any of the smoke-test report structure per `§V.58`.
 - Speculate about causes. This skill is a gate, not a diagnostic suite.
 
 ## On FAIL
@@ -302,13 +302,13 @@ This skill does not retry, does not amend the spec, and does not auto-file an is
 
 ## Spec references
 
-- SPEC `§V.45` -- this skill's contract.
-- SPEC `§V.46` -- liveness probes must hit the production-facing surface (G1 queries Gmail directly, not the local mailpilot DB).
-- SPEC `§V.42` -- Gmail credential construction via `GmailClient("outbound@lab5.ca")` (delegated impersonation; supports both file-creds and ADC).
-- SPEC `§V.31` -- in-scope grounding gate (G2 inherits the operator-judged JSON verdict structure).
-- SPEC `§V.22` -- `deployment_environment` filter (G3).
-- SPEC `§V.11` -- `agent.invoke` `trigger` attribute (G3 span match).
-- SPEC `§V.26` -- `gen_ai.tool.name` attribute (G3 span match).
-- SPEC `§V.37` -- cache_control attrs (Logfire summary bullet).
-- SPEC `§V.40` -- smoke-test report shape (explicitly NOT applied here).
-- SPEC `§V.63` -- gate-verdict source rule: latency verdict from `agent.invoke` span (G1), not CLI poll cadence.
+- SPEC `§V.59` -- this skill's contract.
+- SPEC `§V.60` -- liveness probes must hit the production-facing surface (G1 queries Gmail directly, not the local mailpilot DB).
+- SPEC `§V.37` -- Gmail credential construction via `GmailClient("outbound@lab5.ca")` (delegated impersonation; supports both file-creds and ADC).
+- SPEC `§V.57` -- in-scope grounding gate (G2 inherits the operator-judged JSON verdict structure).
+- SPEC `§V.52` -- `deployment_environment` filter (G3).
+- SPEC `§V.26` -- `agent.invoke` `trigger` attribute (G3 span match).
+- SPEC `§V.53` -- `gen_ai.tool.name` attribute (G3 span match).
+- SPEC `§V.47` -- cache_control attrs (Logfire summary bullet).
+- SPEC `§V.58` -- smoke-test report shape (explicitly NOT applied here).
+- SPEC `§V.61` -- gate-verdict source rule: latency verdict from `agent.invoke` span (G1), not CLI poll cadence.

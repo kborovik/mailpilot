@@ -90,7 +90,7 @@ def _build_update(
 
 
 def _compute_schema_hash(sql: str) -> str:
-    """Hash schema.sql modulo comments and whitespace (§V.59).
+    """Hash schema.sql modulo comments and whitespace (§V.19).
 
     Strips `--` line comments, collapses whitespace runs to single spaces,
     then takes a sha256. Reformatting (added comments, blank-line shuffles)
@@ -106,7 +106,7 @@ def _read_schema_metadata(
 ) -> SchemaMetadata | None:
     """Return the singleton `schema_metadata` row, or None if missing.
 
-    Row-missing and table-missing both collapse to None per §V.58 — both
+    Row-missing and table-missing both collapse to None per §V.18 — both
     are "drift" branches from the caller's view.
     """
     try:
@@ -207,7 +207,7 @@ def _scrub_database_url(url: str) -> str:
 def _schema_block(
     connection: psycopg.Connection[dict[str, Any]],
 ) -> dict[str, object]:
-    """Return the `schema` block shape per §V.58: {hash, applied_at, drift}.
+    """Return the `schema` block shape per §V.18: {hash, applied_at, drift}.
 
     Drift branches (row missing, table missing, hash mismatch) all surface
     ``drift: true`` with whatever recorded values exist (or ``null``).
@@ -227,7 +227,7 @@ def _schema_block(
 def _sync_loop_block(
     connection: psycopg.Connection[dict[str, Any]],
 ) -> dict[str, object] | None:
-    """Return the `sync_loop` block per §V.60, or None when not running."""
+    """Return the `sync_loop` block per §V.11, or None when not running."""
     row = connection.execute(
         """\
         SELECT
@@ -252,7 +252,7 @@ def _sync_loop_block(
 def _accounts_block(
     connection: psycopg.Connection[dict[str, Any]],
 ) -> list[dict[str, object]]:
-    """Return per-account status rows per §V.60.
+    """Return per-account status rows per §V.11.
 
     Server-computed ages (``last_synced_age_seconds``, ``watch_expires_in_hours``)
     avoid Python clock skew; null inputs → null ages.
@@ -302,7 +302,7 @@ def _accounts_block(
 def _tasks_block(
     connection: psycopg.Connection[dict[str, Any]],
 ) -> dict[str, object]:
-    """Return task-queue aggregates per §V.60.
+    """Return task-queue aggregates per §V.11.
 
     Single SQL statement: pending counts split by due-vs-future, oldest
     pending age (due-only), max attempt_count among pending, and failed_24h.
@@ -338,7 +338,7 @@ def _tasks_block(
 def _counts_block(
     connection: psycopg.Connection[dict[str, Any]],
 ) -> dict[str, object]:
-    """Return entity counts (sanity tail per §V.60). ``accounts`` excluded."""
+    """Return entity counts (sanity tail per §V.11). ``accounts`` excluded."""
     row = connection.execute(
         """\
         SELECT
@@ -363,7 +363,7 @@ def _counts_block(
 
 
 def _config_block(settings: Settings) -> dict[str, object]:
-    """Return the `config` block per §V.60.
+    """Return the `config` block per §V.11.
 
     Secret keys collapsed to ``*_set: bool`` so values never reach agent
     transcripts or Logfire spans. ``database_url`` is scrubbed of userinfo
@@ -387,19 +387,19 @@ def get_status_payload(
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
 ) -> dict[str, object]:
-    """Build the full ``mailpilot status`` payload per §V.60.
+    """Build the full ``mailpilot status`` payload per §V.11.
 
     Top-level blocks (``version``, ``schema``, ``sync_loop``, ``accounts``,
     ``tasks``, ``config``, ``counts``) are layout-stable for LLM-agent
     troubleshooting; secrets are collapsed to booleans and the database URL
-    is scrubbed (§V.60).
+    is scrubbed (§V.11).
 
     Args:
         connection: Open database connection.
         settings: Loaded settings (callers pass ``get_settings()``).
 
     Returns:
-        Dict matching the §V.60 envelope, ready to wrap as
+        Dict matching the §V.11 envelope, ready to wrap as
         ``{"status": <payload>, "ok": true}``.
     """
     with logfire.span("db.status.payload"):
@@ -1191,7 +1191,7 @@ def list_workflows_full(
     """List all workflows for an account as full rows ordered by name.
 
     Used by ``workflow export`` to emit a declarative payload keyed on
-    ``(account_id, name)`` per §V.39. Ordering by ``name`` makes the
+    ``(account_id, name)`` per §V.63. Ordering by ``name`` makes the
     export output deterministic for diffs and round-trip testing.
 
     Args:
@@ -1505,7 +1505,7 @@ def list_enrollments_with_outcomes(
     """List enrollments in a workflow with their latest outcome activity.
 
     Outcomes (`completed` / `failed`) are timeline-only and do not change
-    `enrollment.status` (§V.10). This helper LEFT JOINs the most recent
+    `enrollment.status` (§V.15). This helper LEFT JOINs the most recent
     `enrollment_completed` / `enrollment_failed` activity per row so the
     agent can answer "has this objective already been satisfied for any
     contact in this workflow?" in a single query.
@@ -2211,7 +2211,7 @@ def find_pending_first_touch_task(
 ) -> Task | None:
     """Return a pending first-touch task for ``(workflow_id, contact_id)`` if any.
 
-    A first-touch task is the CLI-scheduled initial outbound send per §V.55:
+    A first-touch task is the CLI-scheduled initial outbound send per §V.32:
     ``email_id IS NULL`` (not tied to a triggering inbound email) and
     ``status='pending'`` (not yet drained, not cancelled, not failed). Used
     by ``mailpilot enrollment add --scheduled-at ...`` to skip a duplicate
@@ -2405,11 +2405,11 @@ def reschedule_task_for_lock_contention(
 ) -> Task | None:
     """Push ``scheduled_at`` forward without bumping ``attempt_count``.
 
-    Used when the agent advisory lock was held by another worker (§V.65).
+    Used when the agent advisory lock was held by another worker (§V.25).
     Lock contention is not a retry: the task ran nothing, side-effect
     budget is untouched, ``attempt_count`` stays put. Bumping
     ``scheduled_at`` fires the ``task_pending_trigger`` ``UPDATE`` notify
-    (§V.44 trigger extension) so the drain loop wakes again instead of
+    (§V.49 trigger extension) so the drain loop wakes again instead of
     leaving the task ``pending`` with no signal (§B.42).
 
     Args:
@@ -3234,7 +3234,7 @@ def _load_notes_for_owner(
 ) -> tuple[list[Note], int]:
     """Fetch latest notes for a single owner column plus the total row count.
 
-    Two queries (no JOIN) per §V.53: ``LIMIT _INLINE_NOTES_CAP ORDER BY
+    Two queries (no JOIN) per §V.8: ``LIMIT _INLINE_NOTES_CAP ORDER BY
     created_at DESC`` for the inline list, ``COUNT(*)`` for the total.
     """
     if owner_column not in {"contact_id", "company_id"}:
@@ -3256,7 +3256,7 @@ def load_contact_view(
     connection: psycopg.Connection[dict[str, Any]],
     contact_id: str,
 ) -> ContactView | None:
-    """Load a contact with inlined notes (own + parent company) per §V.53.
+    """Load a contact with inlined notes (own + parent company) per §V.8.
 
     Returns ``None`` when the contact does not exist. ``notes`` and
     ``company_notes`` are capped at ``_INLINE_NOTES_CAP`` rows each, ordered
@@ -3295,7 +3295,7 @@ def load_company_view(
     connection: psycopg.Connection[dict[str, Any]],
     company_id: str,
 ) -> CompanyView | None:
-    """Load a company with inlined own notes per §V.53.
+    """Load a company with inlined own notes per §V.8.
 
     Returns ``None`` when the company does not exist. ``notes`` capped at
     ``_INLINE_NOTES_CAP`` rows, ordered by ``created_at`` DESC, full body

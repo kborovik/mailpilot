@@ -60,7 +60,7 @@ def _silence_operator_event(monkeypatch: pytest.MonkeyPatch) -> None:  # pyright
     """Mute stderr operator_event emission for JSON-envelope-only CLI tests.
 
     `mailpilot.operator_log.operator_event` writes one line to stderr per
-    SPEC §V.47 mutation. Click 8.2+ `result.output` interleaves stdout and
+    SPEC §V.54 mutation. Click 8.2+ `result.output` interleaves stdout and
     stderr in write order, so the leading event line would corrupt the
     `json.loads(result.output)` assertions this file is built around.
     The dedicated telemetry tests live in `tests/test_cli_telemetry.py`
@@ -869,7 +869,7 @@ def test_company_import_via_stdin(
 def test_company_import_per_row_error_continues_batch(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    """Duplicate domain on row 1 must not block create on row 2 (§V.39)."""
+    """Duplicate domain on row 1 must not block create on row 2 (§V.63)."""
     existing = [_make_company(id="id-existing", domain="acme.com")]
     existing_summaries = [
         CompanySummary.model_validate(c.model_dump()) for c in existing
@@ -1533,7 +1533,7 @@ def test_contact_import_via_stdin(
 def test_contact_import_per_row_error_continues_batch(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    """Duplicate email on row 1 must not block create on row 2 (§V.39)."""
+    """Duplicate email on row 1 must not block create on row 2 (§V.63)."""
     existing = [_make_contact(id="id-existing", email="alice@acme.com")]
     existing_summaries = [
         ContactSummary.model_validate(c.model_dump()) for c in existing
@@ -3168,7 +3168,7 @@ def test_workflow_view(runner: CliRunner, mock_connection: MagicMock) -> None:
 def test_workflow_list_envelope_includes_account_email(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    """§V.6 parent-NI clause: list row carries ``account_email`` alongside ``account_id``."""
+    """§V.5 parent-NI clause: list row carries ``account_email`` alongside ``account_id``."""
     workflows = [
         _make_workflow(id="id-1", account_email="one@example.com"),
         _make_workflow(id="id-2", account_email="two@example.com"),
@@ -3189,7 +3189,7 @@ def test_workflow_list_envelope_includes_account_email(
 def test_workflow_view_envelope_includes_account_email(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    """§V.6 parent-NI clause (extends to view): full-row envelope carries ``account_email``."""
+    """§V.5 parent-NI clause (extends to view): full-row envelope carries ``account_email``."""
     workflow = _make_workflow(account_email="owner@parent-ni.test")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
@@ -3776,7 +3776,7 @@ def test_workflow_import_account_not_found(
     assert "account" in data["message"]
 
 
-# -- §V.53 stdin TTY guard -----------------------------------------------------
+# -- §V.8 stdin TTY guard -----------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -3791,7 +3791,7 @@ def test_workflow_import_account_not_found(
 def test_import_tty_stdin_errors_without_read(
     runner: CliRunner, command: tuple[str, ...]
 ) -> None:
-    """§V.53: TTY stdin (no --file, no pipe) -> validation_error, no read()."""
+    """§V.8: TTY stdin (no --file, no pipe) -> validation_error, no read()."""
     from click.testing import _NamedTextIOWrapper  # pyright: ignore[reportPrivateUsage]
 
     read_mock = MagicMock(
@@ -3997,7 +3997,7 @@ def test_enrollment_run_inbound_with_email(
     assert result.exit_code == 0, result.output
     mock_invoke.assert_called_once()
     # Agent invoked with the unprocessed email attached.
-    # §V.36: the enrollment_run path passes trigger="enrollment_run" and
+    # §V.30: the enrollment_run path passes trigger="enrollment_run" and
     # MUST NOT synthesize a task_description -- prompt framing is owned
     # by the trigger branch in _format_trigger.
     call_kwargs = mock_invoke.call_args[1]
@@ -4058,7 +4058,7 @@ def test_enrollment_run_inbound_no_email(
 
     assert result.exit_code == 0, result.output
     mock_invoke.assert_called_once()
-    # §V.36: enrollment_run path no longer synthesizes a task_description; the
+    # §V.30: enrollment_run path no longer synthesizes a task_description; the
     # `trigger` arg drives prompt framing.
     call_kwargs = mock_invoke.call_args[1]
     assert call_kwargs["email"] is None
@@ -4725,9 +4725,9 @@ def test_tag_add_rejects_invalid_name(
 
 
 def test_tag_remove(runner: CliRunner, mock_connection: MagicMock) -> None:
-    """§V.5 hard-DELETE branch: payload ≡ natural-identifier projection only.
+    """§V.4 hard-DELETE branch: payload ≡ natural-identifier projection only.
 
-    §V.47: `remove` operator-event `changed` ≡ relational key set
+    §V.54: `remove` operator-event `changed` ≡ relational key set
     (composite key for contact-tag is `(contact_id, name)`).
     Regression guard against §B.33 (pre-delete entity blob leaked into response).
     """
@@ -5381,7 +5381,7 @@ def test_enrollment_add_idempotent(
 def test_enrollment_add_with_scheduled_at_outbound_creates_task(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    """§V.55: --scheduled-at on outbound wf inserts a first-touch task row."""
+    """§V.32: --scheduled-at on outbound wf inserts a first-touch task row."""
     enrollment = _make_enrollment()
     workflow = _make_workflow(type="outbound")
     with (
@@ -5427,7 +5427,7 @@ def test_enrollment_add_with_scheduled_at_outbound_creates_task(
 def test_enrollment_add_with_scheduled_at_idempotent(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    """§V.55 idempotency: re-running w/ scheduled-at on enrollment that already
+    """§V.32 idempotency: re-running w/ scheduled-at on enrollment that already
     has a pending first-touch task does not insert a duplicate."""
     existing_enrollment = _make_enrollment()
     existing_task = Task(
@@ -5481,7 +5481,7 @@ def test_enrollment_add_with_scheduled_at_idempotent(
 def test_enrollment_add_scheduled_at_inbound_rejected(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    """§V.55: --scheduled-at on inbound wf -> invalid_state error envelope."""
+    """§V.32: --scheduled-at on inbound wf -> invalid_state error envelope."""
     workflow = _make_workflow(type="inbound", template="inbound-general")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
@@ -5568,7 +5568,7 @@ def test_enrollment_add_contact_not_found(
 def test_enrollment_add_self_loop_outbound_rejected(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    """§V.56: outbound wf + contact.email == account.email -> self_loop."""
+    """§V.33: outbound wf + contact.email == account.email -> self_loop."""
     account = _make_account(email="hello@lab5.ca")
     workflow = _make_workflow(account_id=account.id)
     contact = _make_contact(email="hello@lab5.ca")
@@ -5610,7 +5610,7 @@ def test_enrollment_add_self_loop_outbound_rejected(
 def test_enrollment_add_self_loop_inbound_rejected(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    """§V.56: inbound wf same rule applies -- direction-agnostic."""
+    """§V.33: inbound wf same rule applies -- direction-agnostic."""
     account = _make_account(email="hello@lab5.ca")
     workflow = _make_workflow(
         account_id=account.id, type="inbound", template="inbound-general"
@@ -5645,7 +5645,7 @@ def test_enrollment_add_self_loop_inbound_rejected(
 def test_enrollment_add_self_loop_case_insensitive(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    """§V.56: comparison is case-insensitive (Gmail addresses)."""
+    """§V.33: comparison is case-insensitive (Gmail addresses)."""
     account = _make_account(email="hello@lab5.ca")
     workflow = _make_workflow(account_id=account.id)
     contact = _make_contact(email="HELLO@lab5.ca")
@@ -5679,9 +5679,9 @@ def test_enrollment_add_self_loop_case_insensitive(
 
 
 def test_enrollment_remove(runner: CliRunner, mock_connection: MagicMock) -> None:
-    """§V.5 hard-DELETE branch: payload ≡ composite-key projection only.
+    """§V.4 hard-DELETE branch: payload ≡ composite-key projection only.
 
-    §V.47: `remove` operator-event `changed` ≡ relational key set.
+    §V.54: `remove` operator-event `changed` ≡ relational key set.
     Regression guard against §B.33 (pre-delete `status` leaked into response).
     """
     removed = _make_enrollment(status="paused")
@@ -6337,7 +6337,7 @@ def test_task_retry_pending_invalid_state(
 def test_task_retry_completed_invalid_state(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    """§V.44: completed rows refuse retry -- replay risks duplicate
+    """§V.49: completed rows refuse retry -- replay risks duplicate
     side-effects since tools already fired."""
     completed = _make_task(status="completed")
     with (
@@ -6368,7 +6368,7 @@ def test_run_command(runner: CliRunner, mock_connection: MagicMock) -> None:
     mock_loop.assert_called_once_with(mock_connection, make_test_settings())
 
 
-# -- envelope shape contract (SPEC §V.5) --------------------------------------
+# -- envelope shape contract (SPEC §V.4) --------------------------------------
 
 
 def test_envelope_view_wraps_under_singular_key(

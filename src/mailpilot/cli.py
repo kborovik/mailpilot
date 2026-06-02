@@ -46,8 +46,8 @@ def scrub_tool_response_callback(match: ScrubMatch) -> Any:
     Pydantic-AI ``running tool`` spans carry the structured tool return value
     under the ``tool_response`` attribute. Without this exemption the default
     substring matcher redacts strings like ``"authorized"`` inside KB markdown,
-    making §V.31 grounding regressions unverifiable from traces alone. Per
-    §V.50, agent tool outputs are non-sensitive by design.
+    making §V.57 grounding regressions unverifiable from traces alone. Per
+    §V.55, agent tool outputs are non-sensitive by design.
     """
     if match.path[:2] == ("attributes", "tool_response"):
         return match.value
@@ -94,7 +94,7 @@ def output(data: dict[str, Any]) -> None:
 def output_entity(key: str, model: Any) -> None:
     """Emit a single entity wrapped under its singular key.
 
-    Per SPEC §V.5: `<entity> view|create|update` -> `{"<singular>": {...}, "ok": true}`.
+    Per SPEC §V.4: `<entity> view|create|update` -> `{"<singular>": {...}, "ok": true}`.
     Symmetric with `output({"<plural>": [...]})` used by list commands.
     """
     click.echo(
@@ -582,7 +582,7 @@ def company_view(company_id: str) -> None:
     help="Optional path to also write the JSON array. Stdout still emits envelope.",
 )
 def company_export(file: str | None) -> None:
-    """Export all companies as a declarative JSON payload (§V.5)."""
+    """Export all companies as a declarative JSON payload (§V.4)."""
     import pathlib
 
     from mailpilot.database import get_company, initialize_database, list_companies
@@ -608,7 +608,7 @@ def company_export(file: str | None) -> None:
     help="Path to JSON array of company objects. If omitted, read from stdin.",
 )
 def company_import(file: str | None) -> None:
-    """Import companies from a declarative JSON array (§V.39 batch-error pattern).
+    """Import companies from a declarative JSON array (§V.63 batch-error pattern).
 
     Each row resolves to either ``{"name": ..., "action": "created"}`` or
     ``{"name": ..., "error": CODE, "message": ...}``; per-row failures do not
@@ -920,7 +920,7 @@ def contact_view(contact_id: str) -> None:
     help="Optional path to also write the JSON array. Stdout still emits envelope.",
 )
 def contact_export(file: str | None) -> None:
-    """Export all contacts as a declarative JSON payload (§V.5)."""
+    """Export all contacts as a declarative JSON payload (§V.4)."""
     import pathlib
 
     from mailpilot.database import get_contact, initialize_database, list_contacts
@@ -946,7 +946,7 @@ def contact_export(file: str | None) -> None:
     help="Path to JSON array of contact objects. If omitted, read from stdin.",
 )
 def contact_import(file: str | None) -> None:
-    """Import contacts from a declarative JSON array (§V.39 batch-error pattern).
+    """Import contacts from a declarative JSON array (§V.63 batch-error pattern).
 
     Each row resolves to either ``{"email": ..., "action": "created"}`` or
     ``{"email": ..., "error": CODE, "message": ...}``; per-row failures do not
@@ -1784,7 +1784,7 @@ def _create_and_populate_workflow(
     resolved_instructions: str | None,
     activate: bool,
 ) -> tuple[Any, list[str]]:
-    """Run the §V.47 mutation sequence: create -> update extras -> optional activate.
+    """Run the §V.54 mutation sequence: create -> update extras -> optional activate.
 
     Returns the populated workflow row and the list of fields written.
     """
@@ -2290,7 +2290,7 @@ def _import_workflow_row(
     help="Path to JSON payload. If omitted, read from stdin.",
 )
 def workflow_import(account_id: str, file: str | None) -> None:
-    """Import workflows for an account from a declarative JSON payload (§V.39).
+    """Import workflows for an account from a declarative JSON payload (§V.63).
 
     The payload is the same shape produced by ``workflow export``: a list of
     objects with ``name``, ``template``, ``objective``, ``instructions``,
@@ -2419,7 +2419,7 @@ def _reject_enrollment_self_loop(
 ) -> None:
     """Reject enrollment when contact.email matches workflow's account email.
 
-    Per SPEC §V.56 -- semantic self-loop (agent notionally emails itself).
+    Per SPEC §V.33 -- semantic self-loop (agent notionally emails itself).
     Compare case-insensitively (Gmail addresses are case-insensitive). When
     ``account`` is ``None`` (defensive: FK-orphaned workflow), no rejection.
     """
@@ -2438,11 +2438,11 @@ def _maybe_schedule_first_touch(
     scheduled_iso: str | None,
     changed: list[str],
 ) -> None:
-    """Insert a pending first-touch task per §V.55 unless one already exists.
+    """Insert a pending first-touch task per §V.32 unless one already exists.
 
     Idempotent: if ``find_pending_first_touch_task`` returns a row, no task
     is created and ``changed`` is left alone. On insert, ``changed`` gains
-    ``"scheduled_first_send"`` so §V.47 operator events carry an accurate
+    ``"scheduled_first_send"`` so §V.54 operator events carry an accurate
     diff list.
     """
     if scheduled_iso is None:
@@ -2475,7 +2475,7 @@ def _maybe_schedule_first_touch(
     default=None,
     help=(
         "ISO 8601 timestamp for scheduled first reach-out (outbound workflows "
-        "only). Inserts a pending task drained by the run loop per SPEC §V.55."
+        "only). Inserts a pending task drained by the run loop per SPEC §V.32."
     ),
 )
 def enrollment_add(workflow_id: str, contact_id: str, scheduled_at: str | None) -> None:
@@ -2616,7 +2616,7 @@ def enrollment_run(workflow_id: str, contact_id: str) -> None:
             "contact_id": contact.id,
         }
         try:
-            # §V.36: prompt framing comes from `trigger`, not a synthesised
+            # §V.30: prompt framing comes from `trigger`, not a synthesised
             # task_description. enrollment_run is an initial reach-out, not
             # resumed deferred work.
             result = invoke_workflow_agent(

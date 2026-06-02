@@ -43,7 +43,7 @@ def operator_event(event_name: str, /, **fields: Any) -> None:
 
 @contextmanager
 def cli_mutation(noun: str, verb: str, /, **attrs: Any) -> Generator[None]:
-    """Wrap an operator-initiated CRM-config CLI mutation per SPEC §V.47.
+    """Wrap an operator-initiated CRM-config CLI mutation per SPEC §V.54.
 
     Enters ``logfire.span("<noun>.<verb>", **attrs)``. On uncaught
     ``Exception`` (e.g. ``psycopg.OperationalError``), emits

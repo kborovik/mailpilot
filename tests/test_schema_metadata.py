@@ -1,6 +1,6 @@
 """Tests for schema_metadata write, drift detection, and status envelope.
 
-Covers §V.58 (drift warn + status envelope) and §V.59 (normalized hash).
+Covers §V.18 (drift warn + status envelope) and §V.19 (normalized hash).
 """
 
 import hashlib
@@ -24,7 +24,7 @@ from mailpilot.database import (
 )
 from mailpilot.models import SchemaMetadata
 
-# -- _compute_schema_hash (§V.59) ---------------------------------------------
+# -- _compute_schema_hash (§V.19) ---------------------------------------------
 
 
 def test_compute_schema_hash_ignores_added_comments():
@@ -79,7 +79,7 @@ def test_initialize_writes_metadata_row_on_fresh_db():
     assert inserts[0].args[1] == (_MAILPILOT_VERSION, current_hash)
 
 
-# -- initialize_database drift branches (§V.58) -------------------------------
+# -- initialize_database drift branches (§V.18) -------------------------------
 
 
 def _existing_db_mock(
@@ -196,7 +196,7 @@ def test_initialize_legacy_db_drift_via_missing_table(
     assert "recorded_hash=None" in err
 
 
-# -- get_status_payload schema block (§V.58/§V.60 envelope) -------------------
+# -- get_status_payload schema block (§V.18/§V.11 envelope) -------------------
 
 
 def test_status_envelope_no_drift_schema_block_shape(

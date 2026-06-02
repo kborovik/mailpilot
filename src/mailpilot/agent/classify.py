@@ -57,13 +57,13 @@ _AGENT: Agent[None, ClassificationResult] = Agent(
 def _get_model(api_key: str, model_name: str) -> AnthropicModel:
     """Cache the AnthropicModel/AnthropicProvider pair by (api_key, model_name).
 
-    §V.37: cache_control breakpoints on the system prompt and tool
+    §V.47: cache_control breakpoints on the system prompt and tool
     definitions let repeated classifier calls re-bill the stable prefix as
     ``cache_read_input_tokens``.
 
-    §V.43: 240s read-timeout on the HTTP client (4x the httpx default of
+    §V.48: 240s read-timeout on the HTTP client (4x the httpx default of
     60s) so long-context classifier calls do not surface ``TimeoutError``.
-    See SPEC.md §V.43, §B.16.
+    See SPEC.md §V.48, §B.16.
     """
     return AnthropicModel(
         model_name,
@@ -87,7 +87,7 @@ def classify_email(
 ) -> str | None:
     """Classify an inbound email to a workflow.
 
-    Lightweight LLM call using Pydantic AI structured output (see §V.12):
+    Lightweight LLM call using Pydantic AI structured output (see §V.27):
     - Input: email subject, body, sender + list of active workflows
       (name, objective)
     - Output: workflow_id or None (unrouted)

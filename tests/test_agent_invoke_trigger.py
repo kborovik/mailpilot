@@ -1,6 +1,6 @@
 """Span-contract tests for the ``agent.invoke`` ``trigger`` attribute.
 
-SPEC §V.11 requires the ``trigger`` attribute on the ``agent.invoke`` span
+SPEC §V.26 requires the ``trigger`` attribute on the ``agent.invoke`` span
 to reflect the caller path explicitly: ``enrollment_run`` for CLI manual
 runs, ``task`` for background drains, ``email`` for email-driven calls,
 ``manual`` for direct programmatic calls. Tests assert the value flows
@@ -126,7 +126,7 @@ def test_trigger_enrollment_schedule(
     capfire: CaptureLogfire,
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.55: scheduled first-touch drain surfaces as a distinct trigger
+    """§V.32: scheduled first-touch drain surfaces as a distinct trigger
     label so Logfire separates CLI-scheduled sends from operator-immediate
     ``enrollment_run`` and from generic ``task`` drains."""
     _run(database_connection, trigger="enrollment_schedule")

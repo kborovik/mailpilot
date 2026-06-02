@@ -196,7 +196,7 @@ def start_sync_loop(  # noqa: PLR0915
         str(settings.database_url), wakeup_event, shutdown_event
     )
 
-    # Long-lived task worker pool (§V.62 bounded concurrency, §V.64 main
+    # Long-lived task worker pool (§V.23 bounded concurrency, §V.24 main
     # loop never blocks on completion). ``in_flight`` maps each submitted
     # future to its monotonic-clock submit time so ``_reap_completed_tasks``
     # can emit ``task.drain`` with accurate ``duration_ms`` for finished
@@ -343,7 +343,7 @@ def _run_periodic_iteration(  # noqa: PLR0913
     The caller (``start_sync_loop``) sets it to True at most once per
     ``run_interval`` so event-burst wakes do only the queue drain.
 
-    Per §V.64: reap completed task futures before doing per-tick work so
+    Per §V.24: reap completed task futures before doing per-tick work so
     finished agent.invoke runs surface promptly while the main loop
     continues on Pub/Sub notify -- the loop never blocks on drain.
     """
@@ -452,12 +452,12 @@ def _drain_pending_tasks(
 ) -> None:
     """Dispatch all pending tasks that are due to the shared worker pool.
 
-    Per §V.62: bounded concurrency under ``settings.max_concurrent_tasks``;
+    Per §V.23: bounded concurrency under ``settings.max_concurrent_tasks``;
     each worker opens its own ``psycopg.Connection`` so transaction state
-    is not shared across threads. Per-task retry classification (§V.44)
+    is not shared across threads. Per-task retry classification (§V.49)
     stays inside ``execute_task``.
 
-    Per §V.64: submit-and-return -- the main run loop MUST NOT block on
+    Per §V.24: submit-and-return -- the main run loop MUST NOT block on
     in-flight ``agent.invoke`` futures so Pub/Sub-driven sync can continue
     while workers run. Completion is observed lazily by
     ``_reap_completed_tasks`` on subsequent ticks; ``task.drain`` operator
@@ -477,7 +477,7 @@ def _reap_completed_tasks(
 ) -> None:
     """Remove finished futures from ``in_flight`` and emit ``task.drain``.
 
-    Per §V.64: non-blocking by design -- only futures whose ``done()`` is
+    Per §V.24: non-blocking by design -- only futures whose ``done()`` is
     True at call time are reaped. Called between sync ticks so the main
     loop never waits on a slow worker. ``duration_ms`` measures from the
     earliest submit time of the reaped batch so operator timing stays
@@ -485,7 +485,7 @@ def _reap_completed_tasks(
 
     Per-worker exception surfacing: ``_execute_task_in_worker`` already
     catches and logs via paired ``logfire.exception`` / ``operator_event``
-    (§V.19). Re-raised escapes get the same treatment here so a future
+    (§V.51). Re-raised escapes get the same treatment here so a future
     cancelled by SIGTERM does not silently disappear.
     """
     if not in_flight:
@@ -508,11 +508,11 @@ def _reap_completed_tasks(
 def _execute_task_in_worker(settings: Settings, task: Any) -> None:
     """Open a worker-local connection and execute one task.
 
-    Per §V.62: each worker owns its connection lifecycle so concurrent
+    Per §V.23: each worker owns its connection lifecycle so concurrent
     drains do not race on a shared cursor / transaction. Exceptions are
     caught at this layer (after ``execute_task`` has had its chance to
-    classify per §V.44) so one bad task does not poison the pool;
-    paired logfire/operator events per §V.19 keep the operator stream
+    classify per §V.49) so one bad task does not poison the pool;
+    paired logfire/operator events per §V.51 keep the operator stream
     complete.
     """
     from mailpilot.run import execute_task

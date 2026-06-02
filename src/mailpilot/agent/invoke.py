@@ -6,9 +6,9 @@ campaigns culminate here.
 
 Advisory locking: a PostgreSQL advisory lock prevents concurrent
 invocations from racing on the same unit of work. When a ``task_id``
-is supplied (drain path, §V.65), the lock is keyed on the task so
+is supplied (drain path, §V.25), the lock is keyed on the task so
 distinct tasks for the same ``(workflow_id, contact_id)`` pair can run
-concurrently via the §V.62 worker pool. CLI paths
+concurrently via the §V.23 worker pool. CLI paths
 (``enrollment_run``/``manual``) omit ``task_id`` and fall back to the
 coarse ``(workflow_id, contact_id)`` key, which preserves the original
 "prevent operator-initiated double-run on same enrollment" guarantee.
@@ -83,7 +83,7 @@ def _advisory_lock_keys(workflow_id: str, contact_id: str) -> tuple[int, int]:
 
 
 def _advisory_lock_keys_for_task(task_id: str) -> tuple[int, int]:
-    """Compute two int32 advisory-lock keys from a task ID (§V.65).
+    """Compute two int32 advisory-lock keys from a task ID (§V.25).
 
     Splits the task ID at its midpoint and CRC-32s each half so the full
     UUID participates in both keys. Matches the 64-bit collision space of
@@ -108,7 +108,7 @@ def _try_acquire_advisory_lock(
     When ``task_id`` is supplied, the lock is keyed on the task so concurrent
     drain workers handling distinct tasks for the same
     ``(workflow_id, contact_id)`` pair do not serialize on each other
-    (§V.62 + §V.65). Otherwise the lock falls back to the coarse
+    (§V.23 + §V.25). Otherwise the lock falls back to the coarse
     ``(workflow_id, contact_id)`` key used by synchronous CLI paths.
 
     Returns True if lock was acquired, False if already held elsewhere.
@@ -363,10 +363,10 @@ def _wrap_noop(
 def _build_agent(workflow: Workflow, trigger: str = "manual") -> Agent[AgentDeps, str]:
     """Build a Pydantic AI agent for a workflow.
 
-    The workflow's template (§V.32, §V.33) owns both the bound tool set and
+    The workflow's template (§V.44, §V.45) owns both the bound tool set and
     the system-prompt protocol. Workflow-specific instructions are appended
     to the template protocol. The deferred-task fragment branches on
-    ``trigger`` per §V.49: ``trigger='task'`` uses the terminal-outcome
+    ``trigger`` per §V.31: ``trigger='task'`` uses the terminal-outcome
     instruction; other triggers use the initial-send-only instruction
     (prevents premature ``record_enrollment_outcome`` on first reach-out).
     """
@@ -382,7 +382,7 @@ def _build_agent(workflow: Workflow, trigger: str = "manual") -> Agent[AgentDeps
 
 
 def _build_anthropic_model(settings: Settings) -> AnthropicModel:
-    """Construct the AnthropicModel with §V.37 cache_control + §V.43 read-timeout.
+    """Construct the AnthropicModel with §V.47 cache_control + §V.48 read-timeout.
 
     Cache breakpoints on the system prompt and tool definitions let
     multi-turn invocations re-bill the stable prefix as
@@ -392,7 +392,7 @@ def _build_anthropic_model(settings: Settings) -> AnthropicModel:
     60s) so long-context Anthropic calls do not surface ``TimeoutError``
     mid-conversation, which would bubble to ``run.task.agent_failed``
     with no retry (idempotency: tool-call mid-turn cannot be safely
-    re-driven). See SPEC.md §V.43, §B.16.
+    re-driven). See SPEC.md §V.48, §B.16.
     """
     if not settings.anthropic_api_key:
         raise ValueError(
@@ -440,10 +440,10 @@ def _format_trigger(
 ) -> str:
     """Format the trigger context section of the prompt.
 
-    §V.36: framing matches the ``agent.invoke`` span ``trigger`` attribute
-    (§V.11). ``enrollment_run`` and ``enrollment_schedule`` both render the
+    §V.30: framing matches the ``agent.invoke`` span ``trigger`` attribute
+    (§V.26). ``enrollment_run`` and ``enrollment_schedule`` both render the
     first-reach-out block (identical framing -- both signify "first
-    outbound message; no prior context"; §V.55 distinguishes them only at
+    outbound message; no prior context"; §V.32 distinguishes them only at
     the observability layer). ``Deferred task:`` is reserved for
     ``trigger="task"``.
     """
@@ -488,7 +488,7 @@ def _build_user_prompt(  # noqa: PLR0913
         name = f"{contact.first_name or ''} {contact.last_name or ''}".strip()
         sections.append(f"Name: {name}")
 
-    # §V.35: trigger email body is inlined under "New inbound email:" by
+    # §V.29: trigger email body is inlined under "New inbound email:" by
     # _format_trigger; exclude it from email_history so the body never appears
     # twice in a single prompt.
     prior_history = (
@@ -563,15 +563,15 @@ def invoke_workflow_agent(  # noqa: PLR0913
         trigger: Caller path label for the ``agent.invoke`` span. One of
             ``enrollment_run`` (CLI manual via ``mailpilot enrollment run``),
             ``enrollment_schedule`` (CLI-scheduled first-touch drained from
-            the task queue per §V.55; framing identical to
+            the task queue per §V.32; framing identical to
             ``enrollment_run``, observability distinct), ``task``
             (background drain via ``run.execute_task``), ``email``
             (email-driven), or ``manual`` (default for direct programmatic
-            calls). See SPEC §V.11.
-        task_id: When the invocation is a drained task (§V.62 worker pool),
+            calls). See SPEC §V.26.
+        task_id: When the invocation is a drained task (§V.23 worker pool),
             the task's ID. Used as the advisory-lock key so concurrent
             workers handling distinct tasks for the same contact do not
-            serialize on each other (§V.65). CLI paths omit this.
+            serialize on each other (§V.25). CLI paths omit this.
 
     Returns:
         Dict with invocation result, or None if skipped (lock held).
@@ -579,7 +579,7 @@ def invoke_workflow_agent(  # noqa: PLR0913
     Raises:
         AgentDidNotUseToolsError: If the agent completed without calling any tools.
     """
-    # §V.65 / §B.42: acquire the advisory lock BEFORE opening the
+    # §V.25 / §B.42: acquire the advisory lock BEFORE opening the
     # ``agent.invoke`` span so loser-of-race calls do not emit a billable
     # parent span. The per-trigger ``agent.invoke`` count then reflects
     # real invocations, not noop attempts that bounce off the lock.
@@ -601,7 +601,7 @@ def invoke_workflow_agent(  # noqa: PLR0913
         workflow_type=workflow.type,
         trigger=trigger,
     ) as span:
-        # §V.11: surface the triggering email_id on the rollup span when the
+        # §V.26: surface the triggering email_id on the rollup span when the
         # invocation is email-driven. ``trigger='email'`` is the direct path;
         # ``trigger='task'`` flows through here when ``task.email_id`` is set
         # (caller in ``run.py`` loads the email and passes it via ``email=``).
@@ -691,7 +691,7 @@ def invoke_workflow_agent(  # noqa: PLR0913
             span.set_attribute("output_tokens", usage.output_tokens)
             span.set_attribute("total_tokens", usage.input_tokens + usage.output_tokens)
             span.set_attribute("llm_requests", usage.requests)
-            # §V.37: bubble Anthropic prompt-cache token counts to the rollup
+            # §V.47: bubble Anthropic prompt-cache token counts to the rollup
             # span. Pydantic AI's RunUsage already sums these across child
             # chat turns, so no per-turn span walk is needed.
             span.set_attribute("cache_read_input_tokens", usage.cache_read_tokens)

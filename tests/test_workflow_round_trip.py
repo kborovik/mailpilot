@@ -1,4 +1,4 @@
-"""§V.39 round-trip integration tests for ``workflow export`` / ``workflow import``.
+"""§V.63 round-trip integration tests for ``workflow export`` / ``workflow import``.
 
 Uses the real ``database_connection`` fixture and the Click ``CliRunner`` to
 exercise the end-to-end declarative flow against a Postgres instance. The
@@ -116,7 +116,7 @@ def test_workflow_export_import_round_trip_and_idempotence(
     database_connection: psycopg.Connection[dict[str, Any]],
     tmp_path: pathlib.Path,
 ) -> None:
-    """§V.39: declarative round-trip preserves payload and second import is a no-op.
+    """§V.63: declarative round-trip preserves payload and second import is a no-op.
 
     1. seed three workflows (mixed templates / themes / statuses)
     2. ``workflow export`` -> capture payload
@@ -182,7 +182,7 @@ def test_workflow_export_payload_excludes_account_email(
     runner: CliRunner,
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.39 round-trip purity: ``account_email`` (§V.6 parent-NI clause) is a
+    """§V.63 round-trip purity: ``account_email`` (§V.5 parent-NI clause) is a
     read-only denormalization for view/list rendering. ``workflow export`` payload
     must remain keyed on ``(account_id, name)`` and exclude denormalized fields,
     else a fresh import would attempt to write a non-existent column.
