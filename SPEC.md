@@ -100,6 +100,7 @@ V63: `workflow export` / `workflow import` = declarative round-trip on (`account
 V64: ∀ new agent tool → unit tests cover {hit, no-hit, error}. ∀ new CLI cmd → tests patch `get_*` FK validators.
 V65: `make check` ! green (ruff & basedpyright strict & pytest).
 V66: ∀ §-cite in repo prose (code comments, docstrings, SPEC.md body, CLAUDE.md, `.claude/skills/**/*.md`, `tests/`) ! dotted form `§[VTB]\.[0-9]+`. Dotless `§V<n>` / `§T<n>` / `§B<n>` ⊥ allowed. Bare-form `V<n>` / `T<n>` / `B<n>` (no `§` prefix) as spec citation in prose ⊥ allowed even though bare-form ∉ auditor grep scope (collision risk per `V32` as CSS class ∨ version label) — prose-intent = §-cite ∴ ! carry `§` prefix. Why: `/sdd:check` cite-resolution regex grep ≡ `§[VTB]\.[0-9]+` (explicit dot ∧ § prefix) ∴ dotless ∨ bare evades auditor; §B.22 (skills) + §B.24 (code-dotless) + §B.30 (code-bare) ≡ same sub-class (cite-shape malformation) recurring 3×. Bare-form ∧ wrong-section prose drift (§B.22 sub-class a) ⊥ regex-catchable — operator review only.
+V67: ∀ outbound email persisted via `sync.py` send path → DB row's `in_reply_to` ∧ `references_header` ! match values passed to `gmail_client.send_message(in_reply_to=..., references=...)` for same message. `_resolve_threading_headers(...)` return locals (`resolved_in_reply_to`, `resolved_references`) ! flow into `create_email(...)` kwargs (`in_reply_to=resolved_in_reply_to`, `references_header=resolved_references`). Why: both fns accept threading-header kwargs by name ∴ Python ⊥ enforce that what you pass to one you pass to the other → outbound write path can drop the locals silently after `send_message` → DB-row threading metadata NULL while wire-state correct (§B.44). Inbound path (`sync.py:889-890`) already passes received headers ∴ rule restores wire/DB parity symmetry across directions. Recurrence class binds outbound-write column completeness for RFC 2822 wire-mirroring columns (`in_reply_to`, `references_header`); future RFC-header persistence additions inherit obligation. Test: outbound classifier-driven reply DB row's `in_reply_to`/`references_header` ≡ resolved values; `mailpilot email view <id>` returns non-NULL on mid-thread outbound.
 
 ## §T TASKS
 
@@ -130,6 +131,7 @@ T69|x|impl §V.41(+) — _DRIVE_GROUNDING 2-consecutive-miss fallback to list_dr
 T70|x|impl §I(+) — persist route_method on email; project on Email ∧ EmailSummary|V64,V7
 T71|x|impl §V.20 — email.route_method enum CHECK + is_routed coupling CHECK in schema.sql|V64,V20
 T72|x|impl §V.18(+) — extend make clean to drop ∧ recreate mailpilot_test alongside mailpilot|V18,V64,V65
+T73|.|impl §V.67 — outbound create_email ! pass in_reply_to=resolved_in_reply_to, references_header=resolved_references|V64,V67
 
 ## §B BUGS
 
@@ -150,3 +152,4 @@ B40|2026-05-28|two KB files describe same model w/ divergent specs — single so
 B41|2026-05-28|main loop blocked on _drain_pending_tasks ∴ pubsub.notify for 2nd msg stalled 31s|V24
 B42|2026-05-28|agent advisory lock keyed on (workflow_id, contact_id) ∴ §V.23 concurrent dispatch undone|V25
 B43|2026-06-02|make clean dropped only dev DB ∴ schema.sql shrink (commit 93cbf66) left mailpilot_test w/ stale contact.domain NOT-NULL col — pytest hit psycopg.errors.NotNullViolation|V18
+B44|2026-06-03|outbound send (sync.py:1223-1240) ⊥ pass resolved_in_reply_to/resolved_references to create_email; DB row's in_reply_to/references_header NULL on classifier-driven mid-thread replies despite wire-correct threading|V67
