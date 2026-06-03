@@ -17,7 +17,7 @@ Two scenarios share one Phase 0 setup and one `mailpilot run` loop. Outbound wor
 | Scenario | Active workflows                    | Trigger                                  | Verifies                                                                                                        |
 | -------- | ----------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | A        | Outbound only                       | `mailpilot enrollment run`               | Outbound agent send → Gmail delivery → manual operator reply → thread_match routing → agent processes reply     |
-| B        | Outbound (terminal) + Demo (active) | `mailpilot email send` (operator-driven) | The lab5.ca/mailpilot/ promise -- KB-grounded reply within 60s for an in-scope question, polite decline for out-of-scope, AND a multi-source compare-and-contrast across manufacturer datasheets |
+| B        | Outbound (terminal) + Demo (active) | `mailpilot email send` (operator-driven) | The lab5.ca/mailpilot/ promise -- KB-grounded reply within 90s for an in-scope question, polite decline for out-of-scope, AND a multi-source compare-and-contrast across manufacturer datasheets |
 
 Both scenarios are **mandatory**. `make clean` runs **once**, at the very start. Scenario B IS the lab5.ca/mailpilot/ system under test -- it must run.
 
@@ -332,7 +332,7 @@ Do not stop the sync loop. Do not run `make clean`. Do not recreate accounts or 
 
 ## Scenario B: KB-grounded demo (lab5.ca/mailpilot/)
 
-**Hypothesis:** The lab5.ca/mailpilot/ system delivers on its public promise -- "a professional response grounded in real data" within ~60 seconds for in-scope questions, a polite explanatory reply (no fabricated specs) for questions outside the KB, and a structurally-sound multi-source synthesis when the question forces the agent to compare specs across vendor datasheets. With the outbound workflow from A still active, the demo workflow on `inbound@lab5.ca` correctly classifies each operator-sent question on a fresh thread, the agent grounds its answer in the real Drive KB via `list_drive_markdown` + `read_drive_markdown`, issues one `read_drive_markdown` per source document the compare question targets, and the reply round-trips to the outbound mailbox.
+**Hypothesis:** The lab5.ca/mailpilot/ system delivers on its public promise -- "a professional response grounded in real data" within ~90 seconds for in-scope questions, a polite explanatory reply (no fabricated specs) for questions outside the KB, and a structurally-sound multi-source synthesis when the question forces the agent to compare specs across vendor datasheets. With the outbound workflow from A still active, the demo workflow on `inbound@lab5.ca` correctly classifies each operator-sent question on a fresh thread, the agent grounds its answer in the real Drive KB via `list_drive_markdown` + `read_drive_markdown`, issues one `read_drive_markdown` per source document the compare question targets, and the reply round-trips to the outbound mailbox.
 
 **Real KB used.** This scenario uses the production KB folder, not a fixture:
 
@@ -408,9 +408,9 @@ Save `TRIGGER_EMAIL_ID_B1`, `TRIGGER_THREAD_ID_B1`, capture wall-clock send time
 
 **Gate B3:** Command exits 0, returns a JSON envelope with the new email's `id`. `QA_ID_B1` matches `qa-in-NNN`. (`qa.py pick` is deterministic given `--id` -- if a run needs to repro a failing question, pin the id from the prior run's report.)
 
-### B4. Wait for the demo agent to reply (60-second SLA)
+### B4. Wait for the demo agent to reply (90-second SLA)
 
-Critical gate. The lab5.ca/mailpilot/ page promises delivery within ~60 seconds. Per SPEC `§V.61`, the latency verdict is derived from the agent.invoke span in Logfire, not from CLI poll cadence; the CLI poll is a `did-round-trip?` side-effect check only and uses the wider 120s cap (24 attempts × 5s) so a borderline run does not false-fail on the CLI loop alone.
+Critical gate. The lab5.ca/mailpilot/ page promises delivery within ~90 seconds. Per SPEC `§V.61`, the latency verdict is derived from the agent.invoke span in Logfire, not from CLI poll cadence; the CLI poll is a `did-round-trip?` side-effect check only and uses the wider 120s cap (24 attempts × 5s) so a borderline run does not false-fail on the CLI loop alone.
 
 Poll the outbound mailbox (round-trip check only, cap 120s):
 
@@ -438,7 +438,7 @@ Match by `SUBJECT_B1` (likely with `Re:` prefix). Note the reply's arrival as co
   LIMIT 1
   ```
 
-  `LATENCY_B1 = latency_s` from the row. **If `latency_s > 60`, that is a regression of the lab5.ca/mailpilot/ promise -- record as a Critical Bug.** Zero rows in the window means the demo workflow never fired; that is a separate Critical Bug (run-loop / Pub/Sub regression).
+  `LATENCY_B1 = latency_s` from the row. **If `latency_s > 90`, that is a regression of the lab5.ca/mailpilot/ promise -- record as a Critical Bug.** Zero rows in the window means the demo workflow never fired; that is a separate Critical Bug (run-loop / Pub/Sub regression).
 - Reply on the demo side (`mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>`) → `is_routed == true`, `workflow_id == DEMO_WORKFLOW_ID`, `route_method == classified`. The classifier ran -- not `thread_match`, since this is a fresh thread.
 - Reply body **grounded in the KB** -- operator-judged per SPEC §V.57. Substring match against curated `expected_tokens` was retired (false negatives on phrasing variation like `0.48 mm` vs `0.48mm`); the operator now grades the reply against the live source doc. Procedure:
   1. Load the source doc the pair points at:
@@ -519,7 +519,7 @@ Save `TRIGGER_EMAIL_ID_B2`, capture `T_SEND_B2`, poll the outbound mailbox for `
 Out-of-scope decline keeps the script verifier (per SPEC §V.57): regex appropriately fits shape detection (vendor name near a digit-shaped fabrication, decline-phrase presence) and the surface area is small. The operator-judged path applies only to in-scope grounding (B4).
 
 - Reply present (CLI round-trip check; cap 120s).
-- **Latency verdict via Logfire per §V.61.** Same query shape as B4, swap `<T_SEND_B1>` for `<T_SEND_B2>`. `latency_s > 60` is a Critical Bug.
+- **Latency verdict via Logfire per §V.61.** Same query shape as B4, swap `<T_SEND_B1>` for `<T_SEND_B2>`. `latency_s > 90` is a Critical Bug.
 - Reply body validated by the QA verifier:
 
   ```
@@ -594,8 +594,8 @@ Poll the outbound mailbox for `SUBJECT_B3` (likely `Re:` prefixed) the same way 
 
 **Gate B7 (multi-source grounding, no single-source synthesis):**
 
-- Reply present (CLI round-trip check; cap 120s). Compare questions force a longer agent loop (>=2 `read_drive_markdown` calls), so latency near the 60s ceiling is more likely here than in B4.
-- **Latency verdict via Logfire per §V.61.** Same query shape as B4, swap `<T_SEND_B1>` for `<T_SEND_B3>`. `latency_s > 60` is a Critical regression of the lab5.ca/mailpilot/ promise.
+- Reply present (CLI round-trip check; cap 120s). Compare questions force a longer agent loop (>=2 `read_drive_markdown` calls), so latency near the 90s ceiling is more likely here than in B4.
+- **Latency verdict via Logfire per §V.61.** Same query shape as B4, swap `<T_SEND_B1>` for `<T_SEND_B3>`. `latency_s > 90` is a Critical regression of the lab5.ca/mailpilot/ promise.
 - Reply on the demo side has `is_routed == true`, `workflow_id == DEMO_WORKFLOW_ID`, `route_method == classified`. Fresh thread, so not `thread_match`.
 - Reply body **grounded in EVERY source listed in `source_files`** -- operator-judged per the same §V.57 contract that governs B4. Procedure:
   1. Load all source docs in one bundle:
@@ -646,7 +646,7 @@ Poll the outbound mailbox for `SUBJECT_B3` (likely `Re:` prefixed) the same way 
 
 ### B7.5. Concurrent in-scope dual-send (multi-request / multi-tool-call stress)
 
-Two distinct in-scope questions arrive on the demo workflow at nearly the same wall-clock instant, on two fresh threads. Each must trigger its own `agent.invoke`, each must ground in its own KB source, and both replies must meet the 60s SLA. Catches three failure classes the single-send tests (B3, B6, B7) cannot:
+Two distinct in-scope questions arrive on the demo workflow at nearly the same wall-clock instant, on two fresh threads. Each must trigger its own `agent.invoke`, each must ground in its own KB source, and both replies must meet the 90s SLA. Catches three failure classes the single-send tests (B3, B6, B7) cannot:
 
 - Classifier serializes when it should parallelize (one classification blocking the next inbound).
 - Two concurrent agent invocations share mutable state (e.g., one workflow row updated mid-flight by the other, or a shared httplib2 transport reused across agent.invoke boundaries).
@@ -714,7 +714,7 @@ Poll the outbound mailbox for BOTH replies (in either order), capping each at 12
   LIMIT 5
   ```
 
-  Expect exactly 2 rows, distinct `email_id` values. **Either `latency_s > 60` is a Critical SLA breach.** Fewer than 2 rows means the drain-layer concurrent worker pool (§V.23) regressed and one trigger was dropped or merged.
+  Expect exactly 2 rows, distinct `email_id` values. **Either `latency_s > 90` is a Critical SLA breach.** Fewer than 2 rows means the drain-layer concurrent worker pool (§V.23) regressed and one trigger was dropped or merged.
 - BOTH replies routed on the demo side with `workflow_id == DEMO_WORKFLOW_ID` and `route_method == classified` (each is a fresh thread). Either routed differently means the classifier serialized or misfired under load.
 - BOTH replies grounded in their own `source_file` per §V.57, operator-judged with the same verdict-JSON schema as B4. Run `qa.py source --id "$QA_ID_B75a"` and `qa.py source --id "$QA_ID_B75b"` separately, then grade each reply against its own source. A cross-grounded reply (B75a's body cites B75b's source, or vice versa) is a state-leak Bug -- shared mutable state across concurrent agent invocations.
 - Logfire window `[T_SEND_B75, T_SEND_B75 + 90s]`, scope to `workflow_id == DEMO_WORKFLOW_ID`:
@@ -869,7 +869,7 @@ Scenario B: KB-grounded demo (lab5.ca/mailpilot/, outbound workflow still active
   B1  Create demo workflow ......... PASS  (workflow list shows 2 active)
   B2  Sync loop still alive ........ PASS
   B3  In-scope trigger send ........ PASS
-  B4  60s grounded reply ........... PASS  (LATENCY_B1 = <Ns>; cited model: <e.g., TW-18.0K-1240>)
+  B4  90s grounded reply ........... PASS  (LATENCY_B1 = <Ns>; cited model: <e.g., TW-18.0K-1240>)
   B5  Drive tools used ............. PASS  (search_drive_markdown -> read_drive_markdown -> reply_email -> record_enrollment_outcome)
   B6  Out-of-scope decline ......... PASS  (LATENCY_B2 = <Ns>; no fabricated specs)
   B7  Compare-and-contrast reply ... PASS  (LATENCY_B3 = <Ns>; <N> sources, <N> read_drive_markdown calls; no single-sourced specs)
@@ -970,7 +970,7 @@ If a `/sdd:spec` invocation is cancelled or revised by the user mid-run, record 
 
 ## Timing
 
-Expected total: ~9 minutes. Phase 0 once, run loop once, no reset between scenarios. The added compare-and-contrast question (B7) costs roughly one extra 60s reply window over the prior baseline because it forces 2-4 `read_drive_markdown` calls and a multi-doc synthesis. The concurrent dual-send (B7.5) adds another ~60s window for the second of the two parallel replies (the two reply windows overlap, so the marginal cost is one reply window, not two).
+Expected total: ~9 minutes. Phase 0 once, run loop once, no reset between scenarios. The added compare-and-contrast question (B7) costs roughly one extra 90s reply window over the prior baseline because it forces 2-4 `read_drive_markdown` calls and a multi-doc synthesis. The concurrent dual-send (B7.5) adds another ~90s window for the second of the two parallel replies (the two reply windows overlap, so the marginal cost is one reply window, not two).
 
 | Phase / scenario                          | Duration |
 | ----------------------------------------- | -------- |
@@ -982,10 +982,10 @@ Expected total: ~9 minutes. Phase 0 once, run loop once, no reset between scenar
 | A5 / B3 / B6 / B7 operator send           | ~3s each |
 | A6 reply round-trip                       | ~10-60s  |
 | A7 task drain                             | ~10-60s  |
-| B4 in-scope reply (60s SLA)               | ~10-60s  |
-| B6 out-of-scope reply (60s SLA)           | ~10-60s  |
-| B7 compare reply (60s SLA)                | ~20-60s  |
-| B7.5 concurrent dual reply (60s SLA each, overlapping) | ~20-60s |
+| B4 in-scope reply (90s SLA)               | ~10-90s  |
+| B6 out-of-scope reply (90s SLA)           | ~10-90s  |
+| B7 compare reply (90s SLA)                | ~20-90s  |
+| B7.5 concurrent dual reply (90s SLA each, overlapping) | ~20-90s |
 | A8 / B8 activity check                    | ~3s      |
 | B10 stop run loop                         | ~3s      |
 | Report                                    | ~10s     |

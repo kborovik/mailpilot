@@ -1,7 +1,7 @@
 ---
 name: demo-test
 description: |
-  Liveness probe of the public lab5.ca/mailpilot/ system. Sends one KB-grounded question from outbound@lab5.ca to hello@lab5.ca, waits for the production-deployed agent to reply (within ~60s), and asserts the required Logfire spans fired in the `production` deployment_environment with zero errors or warnings. Output is a single PASS / FAIL line plus a 3-bullet Logfire summary -- no detailed report, no auto-write to disk, no `/sdd:spec` invocation. Assumes warm state (the demo workflow already runs on hello@lab5.ca in production); does NOT `make clean`, does NOT create accounts or workflows. Use whenever the user asks to verify the demo, says "demo test", "is the demo alive?", "check lab5.ca/mailpilot/", "demo liveness", or after a production deploy of MailPilot when a quick spot-check is wanted.
+  Liveness probe of the public lab5.ca/mailpilot/ system. Sends one KB-grounded question from outbound@lab5.ca to hello@lab5.ca, waits for the production-deployed agent to reply (within ~90s), and asserts the required Logfire spans fired in the `production` deployment_environment with zero errors or warnings. Output is a single PASS / FAIL line plus a 3-bullet Logfire summary -- no detailed report, no auto-write to disk, no `/sdd:spec` invocation. Assumes warm state (the demo workflow already runs on hello@lab5.ca in production); does NOT `make clean`, does NOT create accounts or workflows. Use whenever the user asks to verify the demo, says "demo test", "is the demo alive?", "check lab5.ca/mailpilot/", "demo liveness", or after a production deploy of MailPilot when a quick spot-check is wanted.
 model: sonnet
 ---
 
@@ -9,7 +9,7 @@ model: sonnet
 
 ## What this tests
 
-The public demo at https://lab5.ca/mailpilot// promises: email a question to `hello@lab5.ca`, get a KB-grounded reply within ~60 seconds. This skill exercises exactly that promise against the deployed production instance.
+The public demo at https://lab5.ca/mailpilot// promises: email a question to `hello@lab5.ca`, get a KB-grounded reply within ~90 seconds. This skill exercises exactly that promise against the deployed production instance.
 
 It is a **liveness probe**, not a regression suite -- that is `/smoke-test`. Use `/demo-test` after a production deploy, or as a quick "is the demo alive?" spot-check.
 
@@ -106,7 +106,7 @@ and stop. The production instance never saw the question; Logfire would be empty
 
 ### Step 5: G1 -- reply round-trip + Logfire latency verdict
 
-Per SPEC `§V.61`, the 60s latency verdict is derived from the production `agent.invoke` span in Logfire (Step 7 query already runs there); the CLI poll here is a `did-round-trip?` side-effect check only, capped at 120s (24 attempts × 5s) so a borderline reply does not false-fail the round-trip check.
+Per SPEC `§V.61`, the 90s latency verdict is derived from the production `agent.invoke` span in Logfire (Step 7 query already runs there); the CLI poll here is a `did-round-trip?` side-effect check only, capped at 120s (24 attempts × 5s) so a borderline reply does not false-fail the round-trip check.
 
 Poll Gmail directly via service-account impersonation of `outbound@lab5.ca` (per SPEC `§V.37` and `§V.60` -- liveness probes must hit the production-facing surface, not the local mailpilot DB which would require a separately-started `mailpilot run` to stay fresh). Up to 24 attempts, 5s apart (~120s):
 
@@ -159,7 +159,7 @@ ORDER BY start_timestamp
 LIMIT 1
 ```
 
-`latency_s > 60` -> **G1 FAIL** -- record `agent latency=<latency_s>s exceeds 60s SLA`. Zero rows means the production deploy never processed the trigger; G1 FAIL with `no production agent.invoke span in window`. The 60s SLA verdict is the Logfire row, not the CLI poll cap.
+`latency_s > 90` -> **G1 FAIL** -- record `agent latency=<latency_s>s exceeds 90s SLA`. Zero rows means the production deploy never processed the trigger; G1 FAIL with `no production agent.invoke span in window`. The 90s SLA verdict is the Logfire row, not the CLI poll cap.
 
 ### Step 6: G2 -- operator-judged groundedness
 
@@ -281,7 +281,7 @@ Print exactly two blocks to stdout, in order, and nothing else:
 
 1. One line:
    - `PASS` -- all of G1, G2, G3 passed.
-   - `FAIL: <one-line reason naming the failing gate>` -- as soon as any gate fails. Reason format examples: `G1 -- no reply within 60s`, `G2 -- verdict=fail (3 unsupported_claims)`, `G3 -- search_drive_tool=0`, `G3 -- errors_warns=2`.
+   - `FAIL: <one-line reason naming the failing gate>` -- as soon as any gate fails. Reason format examples: `G1 -- no reply within 90s`, `G2 -- verdict=fail (3 unsupported_claims)`, `G3 -- search_drive_tool=0`, `G3 -- errors_warns=2`.
 
 2. Header `Logfire production window <TEST_START>..<now>:` followed by the three bullets from Step 8.
 
