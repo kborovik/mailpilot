@@ -54,6 +54,54 @@ from mailpilot.settings import Settings
 _SPEC_ROW_RE = re.compile(r"^[^|]{1,80}\s+\S.*$")
 _PIPE_SEPARATOR_RE = re.compile(r"\|\s*-{3,}\s*\|")
 
+# Per §V.68 (root cause §B.46): numeric-spec value tokens cited in an outbound
+# body must each appear verbatim in the union of same-invocation
+# ``read_drive_markdown`` returns. Candidate tokens = integers >=2 digits and
+# decimals (``\b\d+(?:\.\d+)?\b`` filtered to len>=2). The 2-char floor preserves
+# prose immunity (single digits embedded in sentences like "I'll get back in a
+# day or two" do not trip the lint) while catching the B.46 fabrications
+# (``65``, ``120``, ``35``) and decimal specs (``0.48 mm``).
+_NUMERIC_TOKEN_RE = re.compile(r"\b\d+(?:\.\d+)?\b")
+
+
+def _fact_check_body(
+    body: str, read_ledger: dict[str, str] | None
+) -> dict[str, Any] | None:
+    """Reject outbound bodies citing numeric tokens absent from the KB ledger.
+
+    §V.68: when one or more ``read_drive_markdown`` calls succeeded in the
+    current ``agent.invoke``, every candidate numeric-spec value-token in the
+    proposed outbound body must appear verbatim in the union of those reads.
+    Zero-ledger invocations (no successful ``read_drive_markdown``) skip the
+    check so out-of-scope declines and non-KB-grounded workflows stay
+    unaffected. Returns the error dict on mismatch so the agent re-drafts via
+    the §V.39 tool-error path; returns ``None`` to let the send proceed.
+    """
+    if not read_ledger:
+        return None
+    union = "\n".join(read_ledger.values())
+    unsupported: list[str] = []
+    seen: set[str] = set()
+    for token in _NUMERIC_TOKEN_RE.findall(body):
+        if len(token) < 2:
+            continue
+        if token in union:
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        unsupported.append(token)
+    if not unsupported:
+        return None
+    return {
+        "error": "fact_check_mismatch",
+        "message": (
+            "numeric tokens in body not found in same-invocation "
+            "read_drive_markdown content: " + ", ".join(unsupported)
+        ),
+        "unsupported": unsupported,
+    }
+
 
 def _check_spec_table(body: str) -> dict[str, str] | None:
     """Lint email body for spec rows missing a pipe-table separator (§V.42).
@@ -100,6 +148,7 @@ def send_email(  # noqa: PLR0913
     body: str,
     cc: str | None = None,
     bcc: str | None = None,
+    read_ledger: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Agent tool: send a new outbound email via Gmail.
 
@@ -109,6 +158,9 @@ def send_email(  # noqa: PLR0913
     format_error = _check_spec_table(body)
     if format_error is not None:
         return format_error
+    fact_check_error = _fact_check_body(body, read_ledger)
+    if fact_check_error is not None:
+        return fact_check_error
     try:
         email = email_ops.send_email(
             connection,
@@ -142,6 +194,7 @@ def reply_email(  # noqa: PLR0913
     body: str,
     cc: str | None = None,
     bcc: str | None = None,
+    read_ledger: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Agent tool: reply in-thread. Wraps :func:`email_ops.reply_email`.
 
@@ -150,6 +203,9 @@ def reply_email(  # noqa: PLR0913
     format_error = _check_spec_table(body)
     if format_error is not None:
         return format_error
+    fact_check_error = _fact_check_body(body, read_ledger)
+    if fact_check_error is not None:
+        return fact_check_error
     try:
         email = email_ops.reply_email(
             connection,
@@ -512,12 +568,17 @@ def search_drive_markdown(
 def read_drive_markdown(
     drive_client: DriveClient,
     file_id: str,
+    read_ledger: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Read a Markdown file from Drive.
 
     Args:
         drive_client: Drive client scoped to the current account.
         file_id: Drive file ID, typically returned by ``list_drive_markdown``.
+        read_ledger: Per-invocation ``{file_id: content}`` map populated on
+            successful reads per §V.68. ``reply_email`` and ``send_email``
+            consult the same map at pre-send time to reject bodies citing
+            numeric tokens absent from the union of reads.
 
     Returns:
         ``{"name": ..., "content": ..., "web_view_link": ...}`` on success,
@@ -526,7 +587,7 @@ def read_drive_markdown(
     from googleapiclient.errors import HttpError
 
     try:
-        return drive_client.read_markdown(file_id)
+        result = drive_client.read_markdown(file_id)
     except HttpError as exc:
         if exc.resp.status == 404:
             return {
@@ -546,6 +607,9 @@ def read_drive_markdown(
             "error": "drive_unavailable",
             "message": str(exc),
         }
+    if read_ledger is not None:
+        read_ledger[file_id] = result.get("content", "")
+    return result
 
 
 def noop(reason: str) -> dict[str, Any]:

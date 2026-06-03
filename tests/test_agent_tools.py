@@ -1381,6 +1381,231 @@ def test_read_drive_markdown_transport_fault_returns_drive_unavailable(
     assert result["error"] == "drive_unavailable"
 
 
+# -- §V.68 pre-send fact-check (B.46 WS36-600-2 fabrication regression) --------
+
+
+def test_read_drive_markdown_populates_ledger_on_success() -> None:
+    drive_client = MagicMock()
+    drive_client.read_markdown.return_value = {
+        "name": "industrial-water-softener.md",
+        "content": "WS36-600-2: 110 GPM continuous, 125 GPM peak, 30 GPM backwash.",
+        "web_view_link": "https://x/y",
+    }
+    ledger: dict[str, str] = {}
+
+    result = read_drive_markdown(
+        drive_client=drive_client, file_id="FID", read_ledger=ledger
+    )
+
+    assert "content" in result
+    assert ledger["FID"] == (
+        "WS36-600-2: 110 GPM continuous, 125 GPM peak, 30 GPM backwash."
+    )
+
+
+def test_read_drive_markdown_error_leaves_ledger_untouched() -> None:
+    drive_client = MagicMock()
+    drive_client.read_markdown.side_effect = _http_error(404)
+    ledger: dict[str, str] = {}
+
+    result = read_drive_markdown(
+        drive_client=drive_client, file_id="MISSING", read_ledger=ledger
+    )
+
+    assert result["error"] == "not_found"
+    assert ledger == {}
+
+
+def test_reply_email_zero_ledger_skips_fact_check(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.68 no-op when no read_drive_markdown calls succeeded.
+
+    Out-of-scope declines and non-KB-grounded workflows must not be subject
+    to the fact-check (zero-ledger = pre-send hook returns None).
+    """
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection, email="sender@example.com")
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Question",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        gmail_message_id="inbound-1",
+        gmail_thread_id="thread-1",
+    )
+    assert inbound is not None
+    gmail_client = _make_gmail_client(account)
+
+    # Body cites numeric tokens, but ledger is empty -> fact-check skipped.
+    result = reply_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        email_id=inbound.id,
+        body="Our 30-day trial covers 1500 contacts.",
+        read_ledger={},
+    )
+
+    assert "error" not in result
+    gmail_client.send_message.assert_called_once()
+
+
+def test_reply_email_supported_tokens_pass(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection, email="sender@example.com")
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="WS36-600-2 specs",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        gmail_message_id="inbound-2",
+        gmail_thread_id="thread-2",
+    )
+    assert inbound is not None
+    gmail_client = _make_gmail_client(account)
+
+    ledger = {
+        "softener.md": (
+            "WS36-600-2: 110 GPM continuous, 125 GPM peak, 30 GPM backwash."
+        )
+    }
+
+    result = reply_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        email_id=inbound.id,
+        body=(
+            "The WS36-600-2 runs 110 GPM continuous, 125 GPM peak, "
+            "and 30 GPM backwash per the datasheet."
+        ),
+        read_ledger=ledger,
+    )
+
+    assert "error" not in result
+    gmail_client.send_message.assert_called_once()
+
+
+def test_reply_email_fabricated_tokens_return_fact_check_mismatch(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§B.46 regression: WS36-600-2 = 65/120/35 fabrication blocked pre-send.
+
+    Source doc carries 110/125/30; body cites 65/120/35; wrapper must refuse
+    so the agent re-drafts via the §V.39 tool-error path.
+    """
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection, email="sender@example.com")
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="WS36-600-2 flow rates",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        gmail_message_id="inbound-3",
+        gmail_thread_id="thread-3",
+    )
+    assert inbound is not None
+    gmail_client = _make_gmail_client(account)
+
+    ledger = {
+        "softener.md": (
+            "WS36-600-2: 110 GPM continuous, 125 GPM peak, 30 GPM backwash."
+        ),
+        "sf-100s.md": (
+            "SF-100S series: same WS36-600-2 family rates 110 / 125 / 30 GPM."
+        ),
+    }
+
+    result = reply_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        email_id=inbound.id,
+        body=(
+            "The WS36-600-2 runs 65 GPM continuous, 120 GPM peak, and 35 GPM backwash."
+        ),
+        read_ledger=ledger,
+    )
+
+    assert result["error"] == "fact_check_mismatch"
+    assert set(result["unsupported"]) == {"65", "120", "35"}
+    gmail_client.send_message.assert_not_called()
+
+
+def test_send_email_zero_ledger_skips_fact_check(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    make_test_contact(database_connection, email="recipient@example.com")
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    gmail_client = _make_gmail_client(account)
+
+    result = send_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        to="recipient@example.com",
+        subject="Hello",
+        body="Reaching out in 2026; ping me back.",
+        read_ledger={},
+    )
+
+    assert "error" not in result
+    gmail_client.send_message.assert_called_once()
+
+
+def test_send_email_fabricated_tokens_return_fact_check_mismatch(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    account = make_test_account(database_connection)
+    make_test_contact(database_connection, email="recipient@example.com")
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    gmail_client = _make_gmail_client(account)
+
+    ledger = {"pricing.md": "Enterprise plan: 99 seats, 12 month term."}
+
+    result = send_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        to="recipient@example.com",
+        subject="Pricing",
+        body="The plan covers 250 seats over 24 months.",
+        read_ledger=ledger,
+    )
+
+    assert result["error"] == "fact_check_mismatch"
+    assert set(result["unsupported"]) == {"250", "24"}
+    gmail_client.send_message.assert_not_called()
+
+
 # -- noop ----------------------------------------------------------------------
 
 

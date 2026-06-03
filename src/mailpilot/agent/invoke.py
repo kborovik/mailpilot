@@ -24,7 +24,7 @@ zero tool calls raises ``AgentDidNotUseToolsError``.
 from __future__ import annotations
 
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -48,7 +48,12 @@ from mailpilot.settings import Settings
 
 @dataclass
 class AgentDeps:
-    """Dependencies injected into every agent tool via RunContext."""
+    """Dependencies injected into every agent tool via RunContext.
+
+    ``read_ledger`` is a fresh per-invocation ``{file_id: content}`` map
+    populated by successful ``read_drive_markdown`` calls and consulted by
+    ``reply_email`` / ``send_email`` at pre-send time (§V.68 / §B.46).
+    """
 
     connection: psycopg.Connection[dict[str, Any]]
     account: Account
@@ -57,6 +62,7 @@ class AgentDeps:
     settings: Settings
     workflow_id: str
     contact_id: str
+    read_ledger: dict[str, str] = field(default_factory=dict)
 
 
 # -- Advisory lock -------------------------------------------------------------
@@ -166,6 +172,7 @@ def _wrap_send_email(  # noqa: PLR0913
         body=body,
         cc=cc,
         bcc=bcc,
+        read_ledger=ctx.deps.read_ledger,
     )
 
 
@@ -187,6 +194,7 @@ def _wrap_reply_email(
         body=body,
         cc=cc,
         bcc=bcc,
+        read_ledger=ctx.deps.read_ledger,
     )
 
 
@@ -328,6 +336,7 @@ def _wrap_read_drive_markdown(
     return agent_tools.read_drive_markdown(
         drive_client=ctx.deps.drive_client,
         file_id=file_id,
+        read_ledger=ctx.deps.read_ledger,
     )
 
 
