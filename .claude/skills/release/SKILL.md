@@ -1,8 +1,10 @@
 ---
 name: release
-description: Cut a SemVer release for `mailpilot`, build the `.whl` artifact, push tag and main, and publish a GitHub release with the wheel attached as a downloadable asset. Local-then-remote workflow — extends `/gh:release` semantics with `uv build` + `gh release create`. Triggers when the user says "release", "ship", "publish", "cut a version", "build the wheel", "deploy".
+description: |
+  Cut a SemVer release for `mailpilot`, build the `.whl` artifact, push tag and main, and publish a GitHub release with the wheel attached as a downloadable asset. Local-then-remote workflow — extends `/gh:release` semantics with `uv build` + `gh release create`. Triggers when the user says "release", "ship", "publish", "cut a version", "build the wheel", "deploy".
 argument-hint: [patch|minor|major|x.y.z|retag-baseline]
 allowed-tools: Bash(git *), Bash(uv build), Bash(uv lock), Bash(gh release *), Bash(ls dist/*), Read, Edit
+model: sonnet
 ---
 
 Cut a SemVer release for `mailpilot`, build the `.whl` artifact, push, and publish a GitHub release with the wheel attached.

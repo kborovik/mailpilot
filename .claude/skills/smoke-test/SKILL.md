@@ -1,6 +1,8 @@
 ---
 name: smoke-test
-description: End-to-end MailPilot smoke test against real Gmail across outbound@lab5.ca and inbound@lab5.ca. One Phase 0 setup → 2 scenarios run sequentially without state reset. Scenario A = outbound workflow + manual operator reply. Scenario B = live KB-grounded inbound auto-reply demo at https://lab5.ca/mailpilot// (real Drive folder, in-scope single-source grounded reply + out-of-scope polite decline + multi-source compare-and-contrast across manufacturers e.g. Dow FilmTec vs Hydranautics vs LG Chem vs Toray RO membranes). Outbound workflow stays active across B → verifies concurrent multi-account, multi-workflow operation. Both scenarios mandatory. Use whenever user says "smoke test", "run end-to-end", "verify the system works", or after non-trivial changes to sync, routing, agent execution, KB grounding, or Pub/Sub code -- even without explicit invocation.
+description: |
+  End-to-end MailPilot smoke test against real Gmail across outbound@lab5.ca and inbound@lab5.ca. One Phase 0 setup → 2 scenarios run sequentially without state reset. Scenario A = outbound workflow + manual operator reply. Scenario B = live KB-grounded inbound auto-reply demo at https://lab5.ca/mailpilot// (real Drive folder, in-scope single-source grounded reply + out-of-scope polite decline + multi-source compare-and-contrast across manufacturers e.g. Dow FilmTec vs Hydranautics vs LG Chem vs Toray RO membranes). Outbound workflow stays active across B → verifies concurrent multi-account, multi-workflow operation. Both scenarios mandatory. Use whenever user says "smoke test", "run end-to-end", "verify the system works", or after non-trivial changes to sync, routing, agent execution, KB grounding, or Pub/Sub code -- even without explicit invocation.
+model: sonnet
 ---
 
 # Smoke Test
