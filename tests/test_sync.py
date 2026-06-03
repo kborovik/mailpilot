@@ -1559,6 +1559,97 @@ def test_send_email_persists_rfc2822_message_id_after_send(
     assert stored.rfc2822_message_id == sent_mid
 
 
+def test_send_email_persists_resolved_threading_headers_to_db(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Outbound row's in_reply_to/references_header must mirror the values
+    that went on the wire (§V.67, §B.44). When send_email resolves threading
+    headers from a thread_id (classifier-driven reply path), both the MIME
+    message and the persisted DB row carry those same headers."""
+    account = make_test_account(database_connection, email="parity@example.com")
+    first_mid = "<first-parity@mail.gmail.com>"
+    second_mid = "<second-parity@mail.gmail.com>"
+    first = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        gmail_message_id="parity-1",
+        gmail_thread_id="parity-thread",
+        rfc2822_message_id=first_mid,
+        status="sent",
+    )
+    second = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="parity-2",
+        gmail_thread_id="parity-thread",
+        rfc2822_message_id=second_mid,
+    )
+    assert first is not None
+    assert second is not None
+
+    client, _service = _make_send_client(
+        account.email,
+        send_result={
+            "id": "parity-3",
+            "threadId": "parity-thread",
+            "labelIds": ["SENT"],
+        },
+    )
+
+    email = send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Re: Re: parity",
+        body="Body",
+        thread_id="parity-thread",
+    )
+
+    stored = get_email(database_connection, email.id)
+    assert stored is not None
+    assert stored.in_reply_to == second_mid
+    assert stored.references_header == f"{first_mid} {second_mid}"
+
+
+def test_send_email_persists_explicit_in_reply_to_to_db(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """When the agent supplies in_reply_to explicitly (reply_email path),
+    the persisted DB row carries that Message-ID and a NULL References
+    header, matching the wire state per §V.67."""
+    account = make_test_account(database_connection, email="explicit@example.com")
+    original_mid = "<orig-explicit@mail.gmail.com>"
+    client, _service = _make_send_client(
+        account.email,
+        send_result={
+            "id": "explicit-reply",
+            "threadId": "explicit-thread",
+            "labelIds": ["SENT"],
+        },
+    )
+
+    email = send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Re: Hello",
+        body="Reply body",
+        thread_id="explicit-thread",
+        in_reply_to=original_mid,
+    )
+
+    stored = get_email(database_connection, email.id)
+    assert stored is not None
+    assert stored.in_reply_to == original_mid
+    assert stored.references_header is None
+
+
 def test_send_email_parts_use_utf8_charset(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):

@@ -131,7 +131,7 @@ T69|x|impl §V.41(+) — _DRIVE_GROUNDING 2-consecutive-miss fallback to list_dr
 T70|x|impl §I(+) — persist route_method on email; project on Email ∧ EmailSummary|V64,V7
 T71|x|impl §V.20 — email.route_method enum CHECK + is_routed coupling CHECK in schema.sql|V64,V20
 T72|x|impl §V.18(+) — extend make clean to drop ∧ recreate mailpilot_test alongside mailpilot|V18,V64,V65
-T73|.|impl §V.67 — outbound create_email ! pass in_reply_to=resolved_in_reply_to, references_header=resolved_references|V64,V67
+T73|x|impl §V.67 — outbound create_email ! pass in_reply_to=resolved_in_reply_to, references_header=resolved_references|V64,V67
 
 ## §B BUGS
 

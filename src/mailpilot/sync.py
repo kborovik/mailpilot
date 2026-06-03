@@ -1235,6 +1235,8 @@ def send_email(  # noqa: PLR0913
             sent_at=datetime.now(UTC),
             labels=labels,
             rfc2822_message_id=sent_rfc2822_message_id,
+            in_reply_to=resolved_in_reply_to,
+            references_header=resolved_references,
             sender=account.email.lower(),
             recipients=outbound_recipients,
         )
