@@ -1381,7 +1381,7 @@ def test_read_drive_markdown_transport_fault_returns_drive_unavailable(
     assert result["error"] == "drive_unavailable"
 
 
-# -- §V.68 pre-send fact-check (B.46 WS36-600-2 fabrication regression) --------
+# -- §V.68 pre-send fact-check (§B.46 WS36-600-2 fabrication regression) --------
 
 
 def test_read_drive_markdown_populates_ledger_on_success() -> None:
