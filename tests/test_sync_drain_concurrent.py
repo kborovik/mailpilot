@@ -31,7 +31,8 @@ def _make_fake_task(task_id: str) -> MagicMock:
 
 
 def _wait_for_in_flight(
-    in_flight: dict[concurrent.futures.Future[None], float], timeout: float = 5.0
+    in_flight: dict[concurrent.futures.Future[None], tuple[str, float]],
+    timeout: float = 5.0,
 ) -> None:
     """Block test thread until every queued future has completed."""
     deadline = time.monotonic() + timeout
@@ -68,7 +69,7 @@ def test_drain_runs_tasks_concurrently_when_pool_has_room(
     monkeypatch.setattr(run_module, "execute_task", _slow_execute)
 
     fake_conn = MagicMock()
-    in_flight: dict[concurrent.futures.Future[None], float] = {}
+    in_flight: dict[concurrent.futures.Future[None], tuple[str, float]] = {}
     with (
         concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool,
         patch("mailpilot.sync.psycopg.connect", return_value=fake_conn),
@@ -112,7 +113,7 @@ def test_drain_serializes_when_pool_size_is_one(
     monkeypatch.setattr(run_module, "execute_task", _slow_execute)
 
     fake_conn = MagicMock()
-    in_flight: dict[concurrent.futures.Future[None], float] = {}
+    in_flight: dict[concurrent.futures.Future[None], tuple[str, float]] = {}
     with (
         concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool,
         patch("mailpilot.sync.psycopg.connect", return_value=fake_conn),
@@ -163,7 +164,7 @@ def test_drain_dispatcher_returns_without_blocking(
     monkeypatch.setattr(run_module, "execute_task", _long_execute)
 
     fake_conn = MagicMock()
-    in_flight: dict[concurrent.futures.Future[None], float] = {}
+    in_flight: dict[concurrent.futures.Future[None], tuple[str, float]] = {}
     with (
         concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool,
         patch("mailpilot.sync.psycopg.connect", return_value=fake_conn),
@@ -213,7 +214,7 @@ def test_reap_emits_task_drain_after_futures_complete(
     monkeypatch.setattr(run_module, "execute_task", lambda *_a, **_k: None)
 
     fake_conn = MagicMock()
-    in_flight: dict[concurrent.futures.Future[None], float] = {}
+    in_flight: dict[concurrent.futures.Future[None], tuple[str, float]] = {}
     with (
         concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool,
         patch("mailpilot.sync.psycopg.connect", return_value=fake_conn),
@@ -246,7 +247,7 @@ def test_reap_is_noop_when_no_futures_in_flight(
         _reap_completed_tasks,  # pyright: ignore[reportPrivateUsage]
     )
 
-    in_flight: dict[concurrent.futures.Future[None], float] = {}
+    in_flight: dict[concurrent.futures.Future[None], tuple[str, float]] = {}
     _reap_completed_tasks(in_flight)
 
     out = capsys.readouterr().err
@@ -266,10 +267,10 @@ def test_reap_skips_futures_still_running(
     def _block_until_released() -> None:
         release.wait()
 
-    in_flight: dict[concurrent.futures.Future[None], float] = {}
+    in_flight: dict[concurrent.futures.Future[None], tuple[str, float]] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         future = pool.submit(_block_until_released)
-        in_flight[future] = time.monotonic()
+        in_flight[future] = ("blocker", time.monotonic())
         _reap_completed_tasks(in_flight)
         # Future still running -- reaper left it in place, no event emitted.
         assert future in in_flight
@@ -306,7 +307,7 @@ def test_each_worker_opens_its_own_connection(
     monkeypatch.setattr(run_module, "execute_task", _record_conn)
 
     fake_conns = [MagicMock(name=f"conn-{i}") for i in range(3)]
-    in_flight: dict[concurrent.futures.Future[None], float] = {}
+    in_flight: dict[concurrent.futures.Future[None], tuple[str, float]] = {}
     with (
         concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool,
         patch("mailpilot.sync.psycopg.connect", side_effect=fake_conns) as mock_connect,
@@ -362,7 +363,7 @@ def test_drain_continues_when_one_worker_raises(
     monkeypatch.setattr(run_module, "execute_task", _maybe_explode)
 
     fake_conn = MagicMock()
-    in_flight: dict[concurrent.futures.Future[None], float] = {}
+    in_flight: dict[concurrent.futures.Future[None], tuple[str, float]] = {}
     with (
         concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool,
         patch("mailpilot.sync.psycopg.connect", return_value=fake_conn),
@@ -382,3 +383,95 @@ def test_drain_continues_when_one_worker_raises(
     assert "source=sync.drain.task_failed" in err
     assert "event=task.drain" in err
     assert "drained=3" in err
+
+
+def test_drain_skips_task_already_in_flight_until_reaped(
+    database_connection: psycopg.Connection[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Per §V.23 atomic-claim clause: re-tick on same pending row ⊥ re-dispatch.
+
+    Regression for §B.50: ``list_pending_tasks`` keeps returning the row
+    while the worker is mid-``agent.invoke``; without an in-process claim
+    set the dispatcher resubmits, producing one ``run.execute_task`` span
+    per tick on a single task. The fix excludes any task whose id is
+    already present in ``in_flight`` from the next dispatch and only
+    re-admits it after ``_reap_completed_tasks`` clears the entry.
+    """
+    from mailpilot.sync import (
+        _drain_pending_tasks,  # pyright: ignore[reportPrivateUsage]
+        _reap_completed_tasks,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    # Single pending row; ``list_pending_tasks`` keeps returning it across
+    # ticks until the worker writes a terminal status.
+    only_pending = [_make_fake_task("solo")]
+    monkeypatch.setattr(
+        "mailpilot.sync.list_pending_tasks", lambda *_a, **_k: only_pending
+    )
+
+    release = threading.Event()
+    invocations: list[str] = []
+    invocations_lock = threading.Lock()
+
+    def _block_until_released(
+        _conn: object, _settings: object, task: MagicMock
+    ) -> None:
+        with invocations_lock:
+            invocations.append(task.id)
+        release.wait(timeout=5.0)
+
+    import mailpilot.run as run_module
+
+    monkeypatch.setattr(run_module, "execute_task", _block_until_released)
+
+    fake_conn = MagicMock()
+    in_flight: dict[concurrent.futures.Future[None], tuple[str, float]] = {}
+    settings = make_test_settings(max_concurrent_tasks=4)
+    try:
+        with (
+            concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool,
+            patch("mailpilot.sync.psycopg.connect", return_value=fake_conn),
+        ):
+            # Tick 1: row is unclaimed; dispatcher submits exactly one future.
+            _drain_pending_tasks(database_connection, settings, pool, in_flight)
+            assert len(in_flight) == 1
+            (claimed_task_id, _submit_time) = next(iter(in_flight.values()))
+            assert claimed_task_id == "solo"
+
+            # Wait until the worker is actually running so the next tick's
+            # SELECT-equivalent reflects an in-progress worker.
+            deadline = time.monotonic() + 2.0
+            while not invocations and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert invocations == ["solo"], "worker must be in flight before tick 2"
+
+            # Tick 2: same row still pending, claim set excludes it -- the
+            # dispatcher MUST NOT submit a second future, and reap MUST NOT
+            # surface ``task.drain`` because nothing finished.
+            _reap_completed_tasks(in_flight)
+            _drain_pending_tasks(database_connection, settings, pool, in_flight)
+            assert len(in_flight) == 1, (
+                "atomic claim must prevent re-dispatch while worker is in flight"
+            )
+            assert invocations == ["solo"], (
+                "worker count must stay at 1 across the re-tick"
+            )
+
+            # Release the worker, wait for completion, reap clears the claim.
+            release.set()
+            _wait_for_in_flight(in_flight)
+            _reap_completed_tasks(in_flight)
+            assert not in_flight
+
+            # Tick 3: row is unclaimed again; manual_retry-style re-runs land.
+            _drain_pending_tasks(database_connection, settings, pool, in_flight)
+            assert len(in_flight) == 1, (
+                "post-reap dispatch must be allowed (e.g. retry reschedule)"
+            )
+
+            release.set()  # idempotent; worker already returned for the re-dispatch
+            _wait_for_in_flight(in_flight)
+    finally:
+        # Defensive release in case any assertion failure left workers blocked.
+        release.set()

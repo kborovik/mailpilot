@@ -29,7 +29,7 @@ def _reset_counter() -> None:  # pyright: ignore[reportUnusedFunction]
 
 def _empty_pool_and_inflight() -> tuple[
     concurrent.futures.ThreadPoolExecutor,
-    dict[concurrent.futures.Future[None], float],
+    dict[concurrent.futures.Future[None], tuple[str, float]],
 ]:
     """Return a fresh pool and empty in_flight dict for iteration tests.
 
@@ -196,7 +196,7 @@ def test_drain_pending_tasks_emits_task_drain_when_tasks_executed(
 
     monkeypatch.setattr(run_module, "execute_task", lambda *_a, **_k: None)
 
-    in_flight: dict[concurrent.futures.Future[None], float] = {}
+    in_flight: dict[concurrent.futures.Future[None], tuple[str, float]] = {}
     fake_conn = MagicMock()
     with (
         concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool,
@@ -259,7 +259,7 @@ def test_drain_pending_tasks_skips_event_when_no_tasks(
 
     monkeypatch.setattr("mailpilot.sync.list_pending_tasks", lambda *_a, **_k: [])
 
-    in_flight: dict[concurrent.futures.Future[None], float] = {}
+    in_flight: dict[concurrent.futures.Future[None], tuple[str, float]] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         _drain_pending_tasks(database_connection, make_test_settings(), pool, in_flight)
         _reap_completed_tasks(in_flight)

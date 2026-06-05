@@ -203,7 +203,7 @@ def start_sync_loop(  # noqa: PLR0915
     # batches.
     max_workers = max(1, settings.max_concurrent_tasks)
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
-    in_flight: dict[concurrent.futures.Future[None], float] = {}
+    in_flight: dict[concurrent.futures.Future[None], tuple[str, float]] = {}
 
     # Main loop.
     last_watch_renewal = last_full_sync = 0.0
@@ -335,7 +335,7 @@ def _run_periodic_iteration(  # noqa: PLR0913
     *,
     do_full_sweep: bool,
     pool: concurrent.futures.ThreadPoolExecutor,
-    in_flight: dict[concurrent.futures.Future[None], float],
+    in_flight: dict[concurrent.futures.Future[None], tuple[str, float]],
 ) -> None:
     """Run one iteration of the periodic sync + task drain cycle.
 
@@ -448,7 +448,7 @@ def _drain_pending_tasks(
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
     pool: concurrent.futures.ThreadPoolExecutor,
-    in_flight: dict[concurrent.futures.Future[None], float],
+    in_flight: dict[concurrent.futures.Future[None], tuple[str, float]],
 ) -> None:
     """Dispatch all pending tasks that are due to the shared worker pool.
 
@@ -456,6 +456,16 @@ def _drain_pending_tasks(
     each worker opens its own ``psycopg.Connection`` so transaction state
     is not shared across threads. Per-task retry classification (§V.49)
     stays inside ``execute_task``.
+
+    Per §V.23 atomic-claim clause: tasks already in flight in this process
+    are excluded from re-dispatch via an in-memory claim set derived from
+    ``in_flight``. Without this gate, the worker holds the row in
+    ``status='pending'`` for the agent.invoke wall-clock duration (~25-40s);
+    a subsequent tick would re-SELECT and re-submit the same row, causing
+    sequential re-runs of the same task -- §B.50 observed 12 sequential
+    spans per task and ~4x reply amplification. The claim set entry is
+    removed by ``_reap_completed_tasks`` once the future finishes (success
+    or exception), so a genuinely-retryable row reschedules normally.
 
     Per §V.24: submit-and-return -- the main run loop MUST NOT block on
     in-flight ``agent.invoke`` futures so Pub/Sub-driven sync can continue
@@ -466,14 +476,18 @@ def _drain_pending_tasks(
     pending = list_pending_tasks(connection)
     if not pending:
         return
+    claimed: set[str] = {task_id for task_id, _ in in_flight.values()}
     submit_time = time.monotonic()
     for task in pending:
+        if task.id in claimed:
+            continue
         future = pool.submit(_execute_task_in_worker, settings, task)
-        in_flight[future] = submit_time
+        in_flight[future] = (task.id, submit_time)
+        claimed.add(task.id)
 
 
 def _reap_completed_tasks(
-    in_flight: dict[concurrent.futures.Future[None], float],
+    in_flight: dict[concurrent.futures.Future[None], tuple[str, float]],
 ) -> None:
     """Remove finished futures from ``in_flight`` and emit ``task.drain``.
 
@@ -482,6 +496,11 @@ def _reap_completed_tasks(
     loop never waits on a slow worker. ``duration_ms`` measures from the
     earliest submit time of the reaped batch so operator timing stays
     comparable to the prior synchronous implementation.
+
+    Per §V.23 atomic-claim clause: removing the future from ``in_flight``
+    also drops its task id from the dispatcher's derived claim set --
+    success and exception paths both fall through ``del in_flight[future]``
+    so a worker raising mid-run cannot strand the task id under claim.
 
     Per-worker exception surfacing: ``_execute_task_in_worker`` already
     catches and logs via paired ``logfire.exception`` / ``operator_event``
@@ -493,7 +512,7 @@ def _reap_completed_tasks(
     completed = [future for future in in_flight if future.done()]
     if not completed:
         return
-    earliest_start = min(in_flight[future] for future in completed)
+    earliest_start = min(in_flight[future][1] for future in completed)
     for future in completed:
         del in_flight[future]
         try:

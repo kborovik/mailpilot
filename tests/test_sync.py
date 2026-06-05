@@ -294,7 +294,7 @@ def _iteration_spans(capfire: CaptureLogfire) -> list[dict[str, Any]]:
 
 def _empty_pool_and_inflight() -> tuple[
     concurrent.futures.ThreadPoolExecutor,
-    dict[concurrent.futures.Future[None], float],
+    dict[concurrent.futures.Future[None], tuple[str, float]],
 ]:
     """Return a fresh pool and empty in_flight dict for _run_periodic_iteration tests.
 
