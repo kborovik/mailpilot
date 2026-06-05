@@ -150,11 +150,20 @@ class Enrollment(BaseModel):
     contact when the workflow runs) or ``paused`` (operator/agent has
     suspended). Outcomes (completed/failed) live in the activity timeline,
     not in this row.
+
+    ``workflow_name``, ``contact_email``, ``contact_name`` are
+    denormalised parent identifiers loaded via JOIN at fetch (§V.5 parent-NI
+    rule, ``Workflow.account_email`` precedent). They keep every CLI surface
+    (``enrollment add/view/list/update/remove/run``) symmetric on parent
+    context.
     """
 
     id: str
     workflow_id: str
+    workflow_name: str
     contact_id: str
+    contact_email: str
+    contact_name: str
     status: EnrollmentStatus = "active"
     reason: str = ""
     created_at: datetime
@@ -162,10 +171,11 @@ class Enrollment(BaseModel):
 
 
 class EnrollmentSummary(BaseModel):
-    """List-view projection of `Enrollment` joined with contact identity."""
+    """List-view projection of `Enrollment` joined with workflow and contact."""
 
     id: str
     workflow_id: str
+    workflow_name: str
     contact_id: str
     contact_email: str
     contact_name: str

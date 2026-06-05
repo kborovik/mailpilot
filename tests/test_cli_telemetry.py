@@ -98,7 +98,10 @@ def _make_enrollment(**overrides: Any) -> Enrollment:
     defaults: dict[str, Any] = {
         "id": _ENROLLMENT_ID,
         "workflow_id": _WORKFLOW_ID,
+        "workflow_name": "Outbound Campaign",
         "contact_id": _CONTACT_ID,
+        "contact_email": "alice@example.com",
+        "contact_name": "Alice Smith",
         "status": "active",
         "reason": "",
         "created_at": _NOW,

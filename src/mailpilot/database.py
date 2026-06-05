@@ -1398,10 +1398,24 @@ def create_enrollment(
     """
     row = connection.execute(
         """\
-        INSERT INTO enrollment (id, workflow_id, contact_id)
-        VALUES (%(id)s, %(workflow_id)s, %(contact_id)s)
-        ON CONFLICT (workflow_id, contact_id) DO NOTHING
-        RETURNING *
+        WITH inserted AS (
+            INSERT INTO enrollment (id, workflow_id, contact_id)
+            VALUES (%(id)s, %(workflow_id)s, %(contact_id)s)
+            ON CONFLICT (workflow_id, contact_id) DO NOTHING
+            RETURNING *
+        )
+        SELECT
+            inserted.*,
+            workflow.name AS workflow_name,
+            contact.email AS contact_email,
+            TRIM(
+                COALESCE(contact.first_name, '')
+                || ' '
+                || COALESCE(contact.last_name, '')
+            ) AS contact_name
+        FROM inserted
+        JOIN workflow ON workflow.id = inserted.workflow_id
+        JOIN contact ON contact.id = inserted.contact_id
         """,
         {"id": _new_id(), "workflow_id": workflow_id, "contact_id": contact_id},
     ).fetchone()
@@ -1437,7 +1451,7 @@ def update_enrollment(
     connection.commit()
     if row is None:
         return None
-    return Enrollment.model_validate(row)
+    return get_enrollment_by_id(connection, enrollment_id)
 
 
 def get_enrollment(
@@ -1461,8 +1475,20 @@ def get_enrollment(
     """
     row = connection.execute(
         """\
-        SELECT * FROM enrollment
-        WHERE workflow_id = %(workflow_id)s AND contact_id = %(contact_id)s
+        SELECT
+            enrollment.*,
+            workflow.name AS workflow_name,
+            contact.email AS contact_email,
+            TRIM(
+                COALESCE(contact.first_name, '')
+                || ' '
+                || COALESCE(contact.last_name, '')
+            ) AS contact_name
+        FROM enrollment
+        JOIN workflow ON workflow.id = enrollment.workflow_id
+        JOIN contact ON contact.id = enrollment.contact_id
+        WHERE enrollment.workflow_id = %(workflow_id)s
+          AND enrollment.contact_id = %(contact_id)s
         """,
         {"workflow_id": workflow_id, "contact_id": contact_id},
     ).fetchone()
@@ -1485,7 +1511,21 @@ def get_enrollment_by_id(
         Enrollment if found, None otherwise.
     """
     row = connection.execute(
-        "SELECT * FROM enrollment WHERE id = %(id)s",
+        """\
+        SELECT
+            enrollment.*,
+            workflow.name AS workflow_name,
+            contact.email AS contact_email,
+            TRIM(
+                COALESCE(contact.first_name, '')
+                || ' '
+                || COALESCE(contact.last_name, '')
+            ) AS contact_name
+        FROM enrollment
+        JOIN workflow ON workflow.id = enrollment.workflow_id
+        JOIN contact ON contact.id = enrollment.contact_id
+        WHERE enrollment.id = %(id)s
+        """,
         {"id": enrollment_id},
     ).fetchone()
     if row is None:
@@ -1511,12 +1551,19 @@ def list_enrollments(
     params: dict[str, object] = {"workflow_id": workflow_id}
     status_filter = SQL("")
     if status is not None:
-        status_filter = SQL("AND status = %(status)s")
+        status_filter = SQL("AND enrollment.status = %(status)s")
         params["status"] = status
     query = SQL(
-        "SELECT * FROM enrollment "
-        "WHERE workflow_id = %(workflow_id)s {} "
-        "ORDER BY created_at"
+        "SELECT enrollment.*, "
+        "workflow.name AS workflow_name, "
+        "contact.email AS contact_email, "
+        "TRIM(COALESCE(contact.first_name, '') || ' ' "
+        "|| COALESCE(contact.last_name, '')) AS contact_name "
+        "FROM enrollment "
+        "JOIN workflow ON workflow.id = enrollment.workflow_id "
+        "JOIN contact ON contact.id = enrollment.contact_id "
+        "WHERE enrollment.workflow_id = %(workflow_id)s {} "
+        "ORDER BY enrollment.created_at"
     ).format(status_filter)
     rows = connection.execute(query, params).fetchall()
     return [Enrollment.model_validate(row) for row in rows]
@@ -1591,9 +1638,23 @@ def delete_enrollment(
     """
     row = connection.execute(
         """\
-        DELETE FROM enrollment
-        WHERE id = %(id)s
-        RETURNING *
+        WITH deleted AS (
+            DELETE FROM enrollment
+            WHERE id = %(id)s
+            RETURNING *
+        )
+        SELECT
+            deleted.*,
+            workflow.name AS workflow_name,
+            contact.email AS contact_email,
+            TRIM(
+                COALESCE(contact.first_name, '')
+                || ' '
+                || COALESCE(contact.last_name, '')
+            ) AS contact_name
+        FROM deleted
+        JOIN workflow ON workflow.id = deleted.workflow_id
+        JOIN contact ON contact.id = deleted.contact_id
         """,
         {"id": enrollment_id},
     ).fetchone()
@@ -1647,11 +1708,13 @@ def list_enrollments_detailed(
         SQL("WHERE ") + SQL(" AND ").join(where_parts) if where_parts else SQL("")
     )
     query = SQL(
-        "SELECT e.id, e.workflow_id, e.contact_id, e.status, e.updated_at, "
+        "SELECT e.id, e.workflow_id, w.name AS workflow_name, "
+        "e.contact_id, e.status, e.updated_at, "
         "c.email AS contact_email, "
         "TRIM(COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '')) "
         "AS contact_name "
         "FROM enrollment e "
+        "JOIN workflow w ON w.id = e.workflow_id "
         "JOIN contact c ON c.id = e.contact_id "
         "{} "
         "ORDER BY e.updated_at "

@@ -5142,7 +5142,10 @@ def _make_enrollment(**overrides: Any) -> Enrollment:
     defaults: dict[str, Any] = {
         "id": _ENROLLMENT_ID,
         "workflow_id": _WORKFLOW_ID,
+        "workflow_name": "Outbound Campaign",
         "contact_id": _CONTACT_ID,
+        "contact_email": "alice@example.com",
+        "contact_name": "Alice Smith",
         "status": "active",
         "reason": "",
         "created_at": _NOW,
@@ -5155,6 +5158,7 @@ def _make_enrollment_summary(**overrides: Any) -> EnrollmentSummary:
     defaults: dict[str, Any] = {
         "id": _ENROLLMENT_ID,
         "workflow_id": _WORKFLOW_ID,
+        "workflow_name": "Outbound Campaign",
         "contact_id": _CONTACT_ID,
         "contact_email": "alice@example.com",
         "contact_name": "Alice Smith",
@@ -5629,6 +5633,52 @@ def test_enrollment_view_not_found(
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["error"] == "not_found"
+
+
+def test_enrollment_view_parent_denorm_matches_list(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.5: ``enrollment view`` envelope inner-dict ⊇ ``enrollment list`` row
+    on parent-denorm set {workflow_id, workflow_name, contact_id,
+    contact_email, contact_name}.
+
+    Regression test for §B.49 — view returned bare Enrollment (raw FKs only)
+    while list returned summary w/ denorm, inverting the usual drill-down
+    direction (operator scans list, sees parent context, runs view to dig
+    deeper, loses context).
+    """
+    enrollment = _make_enrollment()
+    summary = _make_enrollment_summary()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=_make_workflow()),
+        patch("mailpilot.database.list_enrollments_detailed", return_value=[summary]),
+        patch("mailpilot.database.get_enrollment_by_id", return_value=enrollment),
+    ):
+        list_result = runner.invoke(
+            main,
+            ["enrollment", "list", "--workflow-id", _WORKFLOW_ID],
+        )
+        view_result = runner.invoke(main, ["enrollment", "view", _ENROLLMENT_ID])
+
+    assert list_result.exit_code == 0
+    assert view_result.exit_code == 0
+    list_row = json.loads(list_result.output)["enrollments"][0]
+    view_row = json.loads(view_result.output)["enrollment"]
+    parent_denorm_fields = {
+        "workflow_id",
+        "workflow_name",
+        "contact_id",
+        "contact_email",
+        "contact_name",
+    }
+    for field in parent_denorm_fields:
+        assert field in list_row, f"list row missing parent-denorm field {field!r}"
+        assert field in view_row, f"view row missing parent-denorm field {field!r}"
+        assert list_row[field] == view_row[field], (
+            f"parent-denorm field {field!r} differs between list and view"
+        )
 
 
 # -- enrollment list -----------------------------------------------------------

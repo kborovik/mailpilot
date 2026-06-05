@@ -49,7 +49,10 @@ def _enrollment() -> Enrollment:
     return Enrollment(
         id=_ENROLLMENT_ID,
         workflow_id=_WORKFLOW_ID,
+        workflow_name="Outbound Campaign",
         contact_id=_CONTACT_ID,
+        contact_email="x@example.com",
+        contact_name="",
         status="active",
         reason="",
         created_at=_NOW,

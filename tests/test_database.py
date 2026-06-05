@@ -2393,7 +2393,9 @@ def test_list_enrollments_detailed(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     account = make_test_account(database_connection)
-    workflow = make_test_workflow(database_connection, account_id=account.id)
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="Outbound Campaign"
+    )
     contact = make_test_contact(database_connection, email="alice@example.com")
     update_contact(
         database_connection, contact.id, first_name="Alice", last_name="Smith"
@@ -2407,6 +2409,7 @@ def test_list_enrollments_detailed(
     assert detail.contact_name == "Alice Smith"
     assert detail.status == "active"
     assert detail.workflow_id == workflow.id
+    assert detail.workflow_name == "Outbound Campaign"
     assert detail.contact_id == contact.id
 
 
@@ -2442,6 +2445,73 @@ def test_create_enrollment_defaults_to_active(
     )
     assert enrollment is not None
     assert enrollment.status == "active"
+
+
+def test_enrollment_row_carries_parent_denorm_fields(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.5: Enrollment row gains workflow_name, contact_email, contact_name via JOIN.
+
+    Asserts every getter (create, get_by_id, get composite, list, update,
+    delete) returns the denormalised parent identifiers so all CLI surfaces
+    inherit them symmetrically (mirrors ``Workflow.account_email``).
+    """
+    from mailpilot.database import (
+        get_enrollment,
+        get_enrollment_by_id,
+        list_enrollments,
+        update_enrollment,
+    )
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="Outbound Campaign"
+    )
+    contact = make_test_contact(database_connection, email="alice@example.com")
+    update_contact(
+        database_connection, contact.id, first_name="Alice", last_name="Smith"
+    )
+
+    created = create_enrollment(
+        database_connection, workflow_id=workflow.id, contact_id=contact.id
+    )
+    assert created is not None
+    assert created.workflow_name == "Outbound Campaign"
+    assert created.contact_email == "alice@example.com"
+    assert created.contact_name == "Alice Smith"
+
+    by_id = get_enrollment_by_id(database_connection, created.id)
+    assert by_id is not None
+    assert by_id.workflow_name == "Outbound Campaign"
+    assert by_id.contact_email == "alice@example.com"
+    assert by_id.contact_name == "Alice Smith"
+
+    by_composite = get_enrollment(database_connection, workflow.id, contact.id)
+    assert by_composite is not None
+    assert by_composite.workflow_name == "Outbound Campaign"
+    assert by_composite.contact_email == "alice@example.com"
+    assert by_composite.contact_name == "Alice Smith"
+
+    listed = list_enrollments(database_connection, workflow_id=workflow.id)
+    assert len(listed) == 1
+    assert listed[0].workflow_name == "Outbound Campaign"
+    assert listed[0].contact_email == "alice@example.com"
+    assert listed[0].contact_name == "Alice Smith"
+
+    updated = update_enrollment(
+        database_connection, created.id, status="paused", reason="hold"
+    )
+    assert updated is not None
+    assert updated.status == "paused"
+    assert updated.workflow_name == "Outbound Campaign"
+    assert updated.contact_email == "alice@example.com"
+    assert updated.contact_name == "Alice Smith"
+
+    deleted = delete_enrollment(database_connection, created.id)
+    assert deleted is not None
+    assert deleted.workflow_name == "Outbound Campaign"
+    assert deleted.contact_email == "alice@example.com"
+    assert deleted.contact_name == "Alice Smith"
 
 
 def test_update_enrollment_rejects_legacy_statuses(

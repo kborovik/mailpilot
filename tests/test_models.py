@@ -83,7 +83,10 @@ def test_enrollment_defaults():
     enrollment = Enrollment(
         id="e1",
         workflow_id="w1",
+        workflow_name="Outbound Campaign",
         contact_id="c1",
+        contact_email="c1@example.com",
+        contact_name="C One",
         created_at=NOW,
         updated_at=NOW,
     )
