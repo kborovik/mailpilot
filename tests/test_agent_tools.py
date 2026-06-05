@@ -425,6 +425,55 @@ def test_reply_email_decline_body_passes(
     gmail_client.send_message.assert_called_once()
 
 
+def test_reply_email_spec_shape_no_table_rejects(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§B.48 / §V.42: an inbound-reply body with >=3 consecutive spec-row
+    lines and no pipe-table separator must trip the lint on the reply path
+    just as it does on the send path. Smoke run 2026-06-05 observed
+    ``_check_spec_table`` firing on one ``reply_email`` attempt but not on
+    four sibling attempts whose stored ``body_text`` would have tripped the
+    lint on replay. Locks the contract at the wrapper layer for both arms."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection, email="sender@example.com")
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="WS36-600-2 flow rates?",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        gmail_message_id="inbound-spec-q",
+        gmail_thread_id="thread-spec-q",
+    )
+    assert inbound is not None
+
+    gmail_client = _make_gmail_client(account)
+
+    body = (
+        "Here are the WS36-600-2 specs you asked about:\n\n"
+        "Continuous Flow Rate  110 GPM\n"
+        "Peak Flow Rate  165 GPM\n"
+        "Resin Volume  36 cu ft\n"
+    )
+
+    result = reply_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        email_id=inbound.id,
+        body=body,
+    )
+
+    assert result["error"] == "format"
+    assert "|---|" in result["message"]
+    gmail_client.send_message.assert_not_called()
+
+
 def test_send_email_non_numeric_specs_rejects(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
