@@ -14,6 +14,7 @@ from conftest import (
     make_test_account,
     make_test_company,
     make_test_contact,
+    make_test_enrollment,
     make_test_settings,
     make_test_workflow,
 )
@@ -619,9 +620,11 @@ def test_create_task_success(
     account = make_test_account(database_connection)
     contact = make_test_contact(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
 
     result = create_task(
         connection=database_connection,
+        enrollment_id=enrollment.id,
         workflow_id=workflow.id,
         contact_id=contact.id,
         description="Follow up in 3 days",
@@ -641,6 +644,7 @@ def test_create_task_with_context_and_email(
     account = make_test_account(database_connection)
     contact = make_test_contact(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
     email = create_email(
         database_connection,
         account_id=account.id,
@@ -651,6 +655,7 @@ def test_create_task_with_context_and_email(
 
     result = create_task(
         connection=database_connection,
+        enrollment_id=enrollment.id,
         workflow_id=workflow.id,
         contact_id=contact.id,
         description="Reply to question",
@@ -674,8 +679,10 @@ def test_cancel_task_success(
     account = make_test_account(database_connection)
     contact = make_test_contact(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
     task = db_create_task(
         database_connection,
+        enrollment_id=enrollment.id,
         workflow_id=workflow.id,
         contact_id=contact.id,
         description="Follow up",
@@ -707,20 +714,19 @@ def test_record_enrollment_outcome_completed_writes_activity_only(
     account = make_test_account(database_connection)
     contact = make_test_contact(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
-    create_enrollment(database_connection, workflow.id, contact.id)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
 
     result = record_enrollment_outcome(
         connection=database_connection,
-        workflow_id=workflow.id,
-        contact_id=contact.id,
+        enrollment_id=enrollment.id,
         outcome="completed",
         reason="meeting booked",
     )
     assert result == {"outcome": "completed", "reason": "meeting booked"}
 
-    enrollment = get_enrollment(database_connection, workflow.id, contact.id)
-    assert enrollment is not None
-    assert enrollment.status == "active"  # unchanged
+    refreshed = get_enrollment(database_connection, workflow.id, contact.id)
+    assert refreshed is not None
+    assert refreshed.status == "active"  # unchanged
 
     activities = list_activities(database_connection, contact_id=contact.id)
     types = [a.type for a in activities]
@@ -736,12 +742,11 @@ def test_record_enrollment_outcome_failed(
     account = make_test_account(database_connection)
     contact = make_test_contact(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
-    create_enrollment(database_connection, workflow.id, contact.id)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
 
     record_enrollment_outcome(
         connection=database_connection,
-        workflow_id=workflow.id,
-        contact_id=contact.id,
+        enrollment_id=enrollment.id,
         outcome="failed",
         reason="no response",
     )
@@ -756,8 +761,7 @@ def test_record_enrollment_outcome_rejects_invalid_outcome(
 ):
     result = record_enrollment_outcome(
         connection=database_connection,
-        workflow_id="wf1",
-        contact_id="c1",
+        enrollment_id="nonexistent",
         outcome="cancelled",
         reason="x",
     )
@@ -769,8 +773,7 @@ def test_record_enrollment_outcome_missing_enrollment(
 ):
     result = record_enrollment_outcome(
         connection=database_connection,
-        workflow_id="wf-nonexistent",
-        contact_id="c-nonexistent",
+        enrollment_id="nonexistent",
         outcome="completed",
         reason="x",
     )
@@ -871,21 +874,23 @@ def test_list_enrollments_includes_latest_outcome(
     completed_contact = make_test_contact(database_connection, email="done@example.com")
     failed_contact = make_test_contact(database_connection, email="failed@example.com")
     pending_contact = make_test_contact(database_connection, email="open@example.com")
-    create_enrollment(database_connection, workflow.id, completed_contact.id)
-    create_enrollment(database_connection, workflow.id, failed_contact.id)
-    create_enrollment(database_connection, workflow.id, pending_contact.id)
+    completed_enrollment = make_test_enrollment(
+        database_connection, workflow.id, completed_contact.id
+    )
+    failed_enrollment = make_test_enrollment(
+        database_connection, workflow.id, failed_contact.id
+    )
+    make_test_enrollment(database_connection, workflow.id, pending_contact.id)
 
     record_enrollment_outcome(
         connection=database_connection,
-        workflow_id=workflow.id,
-        contact_id=completed_contact.id,
+        enrollment_id=completed_enrollment.id,
         outcome="completed",
         reason="meeting booked",
     )
     record_enrollment_outcome(
         connection=database_connection,
-        workflow_id=workflow.id,
-        contact_id=failed_contact.id,
+        enrollment_id=failed_enrollment.id,
         outcome="failed",
         reason="hard bounce",
     )
@@ -918,19 +923,17 @@ def test_list_enrollments_uses_most_recent_outcome(
     _activate(database_connection, workflow.id)
 
     contact = make_test_contact(database_connection, email="flip@example.com")
-    create_enrollment(database_connection, workflow.id, contact.id)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
 
     record_enrollment_outcome(
         connection=database_connection,
-        workflow_id=workflow.id,
-        contact_id=contact.id,
+        enrollment_id=enrollment.id,
         outcome="failed",
         reason="initial soft fail",
     )
     record_enrollment_outcome(
         connection=database_connection,
-        workflow_id=workflow.id,
-        contact_id=contact.id,
+        enrollment_id=enrollment.id,
         outcome="completed",
         reason="recovered after re-engagement",
     )

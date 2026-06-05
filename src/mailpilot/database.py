@@ -1385,7 +1385,8 @@ def create_enrollment(
 
     Uses ON CONFLICT DO NOTHING so callers can safely re-invoke without
     catching unique-constraint errors. Returns None when the row already
-    exists (same pattern as ``create_email``).
+    exists (same pattern as ``create_email``). ``id`` is minted client-side
+    per §V.12 (UUIDv7).
 
     Args:
         connection: Open database connection.
@@ -1397,12 +1398,12 @@ def create_enrollment(
     """
     row = connection.execute(
         """\
-        INSERT INTO enrollment (workflow_id, contact_id)
-        VALUES (%(workflow_id)s, %(contact_id)s)
+        INSERT INTO enrollment (id, workflow_id, contact_id)
+        VALUES (%(id)s, %(workflow_id)s, %(contact_id)s)
         ON CONFLICT (workflow_id, contact_id) DO NOTHING
         RETURNING *
         """,
-        {"workflow_id": workflow_id, "contact_id": contact_id},
+        {"id": _new_id(), "workflow_id": workflow_id, "contact_id": contact_id},
     ).fetchone()
     connection.commit()
     if row is None:
@@ -1412,16 +1413,14 @@ def create_enrollment(
 
 def update_enrollment(
     connection: psycopg.Connection[dict[str, Any]],
-    workflow_id: str,
-    contact_id: str,
+    enrollment_id: str,
     **fields: object,
 ) -> Enrollment | None:
-    """Update an enrollment.
+    """Update an enrollment by scalar id.
 
     Args:
         connection: Open database connection.
-        workflow_id: Workflow FK.
-        contact_id: Contact FK.
+        enrollment_id: Enrollment ID.
         **fields: Fields to update (status, reason).
 
     Returns:
@@ -1430,10 +1429,9 @@ def update_enrollment(
     allowed = {"status", "reason"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
-        return get_enrollment(connection, workflow_id, contact_id)
-    updates["workflow_id"] = workflow_id
-    updates["contact_id"] = contact_id
-    where = SQL("workflow_id = %(workflow_id)s AND contact_id = %(contact_id)s")
+        return get_enrollment_by_id(connection, enrollment_id)
+    updates["id"] = enrollment_id
+    where = SQL("id = %(id)s")
     query = _build_update("enrollment", updates, where)
     row = connection.execute(query, updates).fetchone()
     connection.commit()
@@ -1447,7 +1445,11 @@ def get_enrollment(
     workflow_id: str,
     contact_id: str,
 ) -> Enrollment | None:
-    """Get an enrollment by composite key.
+    """Get an enrollment by composite ``(workflow_id, contact_id)`` key.
+
+    The ``(workflow_id, contact_id)`` pair remains a UNIQUE constraint
+    post-migration to scalar ``id`` so composite-key lookups stay valid for
+    the inbound routing and run-loop call sites that already carry the pair.
 
     Args:
         connection: Open database connection.
@@ -1463,6 +1465,28 @@ def get_enrollment(
         WHERE workflow_id = %(workflow_id)s AND contact_id = %(contact_id)s
         """,
         {"workflow_id": workflow_id, "contact_id": contact_id},
+    ).fetchone()
+    if row is None:
+        return None
+    return Enrollment.model_validate(row)
+
+
+def get_enrollment_by_id(
+    connection: psycopg.Connection[dict[str, Any]],
+    enrollment_id: str,
+) -> Enrollment | None:
+    """Get an enrollment by scalar id (§V.12).
+
+    Args:
+        connection: Open database connection.
+        enrollment_id: Enrollment ID.
+
+    Returns:
+        Enrollment if found, None otherwise.
+    """
+    row = connection.execute(
+        "SELECT * FROM enrollment WHERE id = %(id)s",
+        {"id": enrollment_id},
     ).fetchone()
     if row is None:
         return None
@@ -1520,6 +1544,7 @@ def list_enrollments_with_outcomes(
     rows = connection.execute(
         """\
         SELECT
+            e.id,
             e.workflow_id,
             e.contact_id,
             e.status,
@@ -1552,15 +1577,13 @@ def list_enrollments_with_outcomes(
 
 def delete_enrollment(
     connection: psycopg.Connection[dict[str, Any]],
-    workflow_id: str,
-    contact_id: str,
+    enrollment_id: str,
 ) -> Enrollment | None:
-    """Remove an enrollment and return the deleted row.
+    """Remove an enrollment by scalar id and return the deleted row.
 
     Args:
         connection: Open database connection.
-        workflow_id: Workflow FK.
-        contact_id: Contact FK.
+        enrollment_id: Enrollment ID.
 
     Returns:
         The deleted ``Enrollment`` (carries ``status`` at time of removal),
@@ -1569,10 +1592,10 @@ def delete_enrollment(
     row = connection.execute(
         """\
         DELETE FROM enrollment
-        WHERE workflow_id = %(workflow_id)s AND contact_id = %(contact_id)s
+        WHERE id = %(id)s
         RETURNING *
         """,
-        {"workflow_id": workflow_id, "contact_id": contact_id},
+        {"id": enrollment_id},
     ).fetchone()
     connection.commit()
     if row is None:
@@ -1624,7 +1647,7 @@ def list_enrollments_detailed(
         SQL("WHERE ") + SQL(" AND ").join(where_parts) if where_parts else SQL("")
     )
     query = SQL(
-        "SELECT e.workflow_id, e.contact_id, e.status, e.updated_at, "
+        "SELECT e.id, e.workflow_id, e.contact_id, e.status, e.updated_at, "
         "c.email AS contact_email, "
         "TRIM(COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '')) "
         "AS contact_name "
@@ -2118,6 +2141,7 @@ def update_email(
 
 def create_task(
     connection: psycopg.Connection[dict[str, Any]],
+    enrollment_id: str,
     workflow_id: str,
     contact_id: str,
     description: str,
@@ -2127,10 +2151,17 @@ def create_task(
 ) -> Task:
     """Create a deferred task.
 
+    Per §V.28: every task row belongs to an enrollment. ``enrollment_id``
+    is NOT NULL at the schema level; callers resolve it from the
+    ``(workflow_id, contact_id)`` UNIQUE pair before invoking this fn.
+    The denormalised ``workflow_id`` + ``contact_id`` columns stay for
+    filter-path and dashboard compat.
+
     Args:
         connection: Open database connection.
-        workflow_id: Workflow FK.
-        contact_id: Contact FK (every task targets a contact).
+        enrollment_id: Enrollment FK (NOT NULL per schema).
+        workflow_id: Workflow FK (denormalised from enrollment row).
+        contact_id: Contact FK (denormalised from enrollment row).
         description: What the agent should do.
         scheduled_at: When to execute (ISO timestamp).
         context: Arbitrary JSON context for the agent.
@@ -2141,14 +2172,15 @@ def create_task(
     """
     row = connection.execute(
         """\
-        INSERT INTO task (id, workflow_id, contact_id, email_id,
+        INSERT INTO task (id, enrollment_id, workflow_id, contact_id, email_id,
             description, context, scheduled_at)
-        VALUES (%(id)s, %(workflow_id)s, %(contact_id)s, %(email_id)s,
-                %(description)s, %(context)s, %(scheduled_at)s)
+        VALUES (%(id)s, %(enrollment_id)s, %(workflow_id)s, %(contact_id)s,
+                %(email_id)s, %(description)s, %(context)s, %(scheduled_at)s)
         RETURNING *
         """,
         {
             "id": _new_id(),
+            "enrollment_id": enrollment_id,
             "workflow_id": workflow_id,
             "contact_id": contact_id,
             "email_id": email_id,
@@ -2206,29 +2238,27 @@ def list_pending_tasks(
 
 def find_pending_first_touch_task(
     connection: psycopg.Connection[dict[str, Any]],
-    workflow_id: str,
-    contact_id: str,
+    enrollment_id: str,
 ) -> Task | None:
-    """Return a pending first-touch task for ``(workflow_id, contact_id)`` if any.
+    """Return a pending first-touch task for ``enrollment_id`` if any.
 
     A first-touch task is the CLI-scheduled initial outbound send per §V.32:
     ``email_id IS NULL`` (not tied to a triggering inbound email) and
     ``status='pending'`` (not yet drained, not cancelled, not failed). Used
     by ``mailpilot enrollment add --scheduled-at ...`` to skip a duplicate
     insert when the operator re-runs against an enrollment that already has
-    one queued.
+    one queued. Keyed on scalar ``enrollment_id`` per §V.32 post-migration.
     """
     row = connection.execute(
         """\
         SELECT * FROM task
-        WHERE workflow_id = %(workflow_id)s
-          AND contact_id = %(contact_id)s
+        WHERE enrollment_id = %(enrollment_id)s
           AND email_id IS NULL
           AND status = 'pending'
         ORDER BY scheduled_at
         LIMIT 1
         """,
-        {"workflow_id": workflow_id, "contact_id": contact_id},
+        {"enrollment_id": enrollment_id},
     ).fetchone()
     if row is None:
         return None
@@ -2340,8 +2370,8 @@ def list_tasks(
         params["since"] = since
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
-        "SELECT id, workflow_id, contact_id, email_id, description, "
-        "scheduled_at, status, attempt_count "
+        "SELECT id, enrollment_id, workflow_id, contact_id, email_id, "
+        "description, scheduled_at, status, attempt_count "
         "FROM task {} ORDER BY scheduled_at DESC LIMIT %(limit)s"
     ).format(where)
     rows = connection.execute(query, params).fetchall()
@@ -2522,7 +2552,10 @@ def create_tasks_for_routed_emails(
     """Create immediate tasks for routed inbound emails without tasks.
 
     Finds inbound emails with workflow_id set but no corresponding task
-    row, and creates a task with scheduled_at=now() for each.
+    row, and creates a task with scheduled_at=now() for each. Joins
+    ``enrollment`` so ``task.enrollment_id`` is populated per §V.28 --
+    the enrollment row is guaranteed present because
+    ``routing._ensure_enrollment`` runs earlier in the inbound pipeline.
 
     Uses ``e.created_at`` (DB insert time) rather than ``e.received_at``
     (Gmail timestamp) to filter historical emails. An email can be received
@@ -2537,8 +2570,11 @@ def create_tasks_for_routed_emails(
     """
     unmatched = connection.execute(
         """\
-        SELECT e.id, e.workflow_id, e.contact_id FROM email e
+        SELECT e.id, e.workflow_id, e.contact_id, en.id AS enrollment_id
+        FROM email e
         JOIN workflow w ON w.id = e.workflow_id
+        JOIN enrollment en
+          ON en.workflow_id = e.workflow_id AND en.contact_id = e.contact_id
         WHERE e.direction = 'inbound'
           AND e.contact_id IS NOT NULL
           AND e.created_at >= w.created_at
@@ -2551,6 +2587,7 @@ def create_tasks_for_routed_emails(
         now = datetime.now(UTC).isoformat()
         t = create_task(
             connection,
+            enrollment_id=email_row["enrollment_id"],
             workflow_id=email_row["workflow_id"],
             contact_id=email_row["contact_id"],
             description="handle inbound email",
@@ -2574,13 +2611,17 @@ def create_activity(
     email_id: str | None = None,
     workflow_id: str | None = None,
     task_id: str | None = None,
+    enrollment_id: str | None = None,
 ) -> Activity:
     """Create an activity event.
 
     At least one of ``contact_id`` or ``company_id`` must be set.
-    Structured FK columns (``email_id``, ``workflow_id``, ``task_id``)
-    let reports join activity to source records without parsing
-    ``detail`` JSON.
+    Structured FK columns (``email_id``, ``workflow_id``, ``task_id``,
+    ``enrollment_id``) let reports join activity to source records without
+    parsing ``detail`` JSON. ``enrollment_id`` is nullable -- non-enrollment
+    activity types (``email_sent``, ``note_added``, etc.) leave it null;
+    enrollment-lifecycle types (``enrollment_added`` / ``enrollment_completed``
+    / etc.) populate it.
 
     Raises:
         ValueError: If neither contact_id nor company_id is provided.
@@ -2591,11 +2632,11 @@ def create_activity(
         """\
         INSERT INTO activity (
             id, contact_id, company_id, email_id, workflow_id, task_id,
-            type, summary, detail
+            enrollment_id, type, summary, detail
         )
         VALUES (
             %(id)s, %(contact_id)s, %(company_id)s, %(email_id)s,
-            %(workflow_id)s, %(task_id)s,
+            %(workflow_id)s, %(task_id)s, %(enrollment_id)s,
             %(type)s, %(summary)s, %(detail)s
         )
         RETURNING *
@@ -2607,6 +2648,7 @@ def create_activity(
             "email_id": email_id,
             "workflow_id": workflow_id,
             "task_id": task_id,
+            "enrollment_id": enrollment_id,
             "type": activity_type,
             "summary": summary,
             "detail": Json(detail or {}),
@@ -2661,7 +2703,7 @@ def list_activities(
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
         "SELECT id, contact_id, company_id, email_id, workflow_id, task_id, "
-        "type, summary, created_at "
+        "enrollment_id, type, summary, created_at "
         "FROM activity {} ORDER BY created_at DESC LIMIT %(limit)s"
     ).format(where)
     rows = connection.execute(query, params).fetchall()

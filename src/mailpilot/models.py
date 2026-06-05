@@ -152,6 +152,7 @@ class Enrollment(BaseModel):
     not in this row.
     """
 
+    id: str
     workflow_id: str
     contact_id: str
     status: EnrollmentStatus = "active"
@@ -163,6 +164,7 @@ class Enrollment(BaseModel):
 class EnrollmentSummary(BaseModel):
     """List-view projection of `Enrollment` joined with contact identity."""
 
+    id: str
     workflow_id: str
     contact_id: str
     contact_email: str
@@ -183,6 +185,7 @@ class EnrollmentWithOutcome(BaseModel):
     coordinate across contacts in a single read.
     """
 
+    id: str
     workflow_id: str
     contact_id: str
     status: EnrollmentStatus
@@ -248,6 +251,7 @@ class Task(BaseModel):
     """Deferred agent work with scheduled execution."""
 
     id: str
+    enrollment_id: str
     workflow_id: str
     contact_id: str
     email_id: str | None = None
@@ -265,6 +269,7 @@ class TaskSummary(BaseModel):
     """List-view projection of `Task`."""
 
     id: str
+    enrollment_id: str
     workflow_id: str
     contact_id: str
     email_id: str | None
@@ -294,9 +299,9 @@ class Activity(BaseModel):
 
     Either ``contact_id`` or ``company_id`` must be set (or both, for
     contact events that should also surface in the company timeline).
-    Structured FK columns (``email_id``, ``workflow_id``, ``task_id``)
-    let reports join activity to source records without parsing
-    ``detail`` JSON.
+    Structured FK columns (``email_id``, ``workflow_id``, ``task_id``,
+    ``enrollment_id``) let reports join activity to source records without
+    parsing ``detail`` JSON.
     """
 
     id: str
@@ -305,6 +310,7 @@ class Activity(BaseModel):
     email_id: str | None = None
     workflow_id: str | None = None
     task_id: str | None = None
+    enrollment_id: str | None = None
     type: ActivityType
     summary: str = ""
     detail: dict[str, object] = {}
@@ -320,6 +326,7 @@ class ActivitySummary(BaseModel):
     email_id: str | None
     workflow_id: str | None
     task_id: str | None
+    enrollment_id: str | None
     type: ActivityType
     summary: str
     created_at: datetime

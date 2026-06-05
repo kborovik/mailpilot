@@ -22,6 +22,7 @@ _WORKFLOW_ID = "01234567-0000-7000-0000-000000000002"
 _CONTACT_ID = "01234567-0000-7000-0000-000000000003"
 _TASK_ID = "01234567-0000-7000-0000-000000000004"
 _EMAIL_ID = "01234567-0000-7000-0000-000000000005"
+_ENROLLMENT_ID = "01234567-0000-7000-0000-000000000006"
 
 
 def _make_workflow(**overrides: Any) -> Workflow:
@@ -54,6 +55,7 @@ def _make_contact(**overrides: Any) -> Contact:
 def _make_task(**overrides: Any) -> Task:
     defaults: dict[str, Any] = {
         "id": _TASK_ID,
+        "enrollment_id": _ENROLLMENT_ID,
         "workflow_id": _WORKFLOW_ID,
         "contact_id": _CONTACT_ID,
         "email_id": None,
@@ -70,6 +72,7 @@ def _make_task(**overrides: Any) -> Task:
 
 def _make_enrollment(**overrides: Any) -> Enrollment:
     defaults: dict[str, Any] = {
+        "id": _ENROLLMENT_ID,
         "workflow_id": _WORKFLOW_ID,
         "contact_id": _CONTACT_ID,
         "status": "active",

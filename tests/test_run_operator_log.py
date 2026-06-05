@@ -17,6 +17,7 @@ _ACCOUNT_ID = "01234567-0000-7000-0000-000000000001"
 _WORKFLOW_ID = "01234567-0000-7000-0000-000000000002"
 _CONTACT_ID = "01234567-0000-7000-0000-000000000003"
 _TASK_ID = "01234567-0000-7000-0000-000000000004"
+_ENROLLMENT_ID = "01234567-0000-7000-0000-000000000005"
 
 
 def _wf() -> Workflow:
@@ -46,6 +47,7 @@ def _contact() -> Contact:
 
 def _enrollment() -> Enrollment:
     return Enrollment(
+        id=_ENROLLMENT_ID,
         workflow_id=_WORKFLOW_ID,
         contact_id=_CONTACT_ID,
         status="active",
@@ -58,6 +60,7 @@ def _enrollment() -> Enrollment:
 def _task(attempt_count: int = 0) -> Task:
     return Task(
         id=_TASK_ID,
+        enrollment_id=_ENROLLMENT_ID,
         workflow_id=_WORKFLOW_ID,
         contact_id=_CONTACT_ID,
         email_id=None,

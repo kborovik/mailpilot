@@ -2433,6 +2433,7 @@ def _reject_enrollment_self_loop(
 
 def _maybe_schedule_first_touch(
     connection: Any,
+    enrollment_id: str,
     workflow_id: str,
     contact_id: str,
     scheduled_iso: str | None,
@@ -2440,10 +2441,10 @@ def _maybe_schedule_first_touch(
 ) -> None:
     """Insert a pending first-touch task per §V.32 unless one already exists.
 
-    Idempotent: if ``find_pending_first_touch_task`` returns a row, no task
-    is created and ``changed`` is left alone. On insert, ``changed`` gains
-    ``"scheduled_first_send"`` so §V.54 operator events carry an accurate
-    diff list.
+    Idempotent: if ``find_pending_first_touch_task`` returns a row for the
+    enrollment, no task is created and ``changed`` is left alone. On insert,
+    ``changed`` gains ``"scheduled_first_send"`` so §V.54 operator events
+    carry an accurate diff list.
     """
     if scheduled_iso is None:
         return
@@ -2452,10 +2453,11 @@ def _maybe_schedule_first_touch(
         find_pending_first_touch_task,
     )
 
-    if find_pending_first_touch_task(connection, workflow_id, contact_id) is not None:
+    if find_pending_first_touch_task(connection, enrollment_id) is not None:
         return
     create_task(
         connection,
+        enrollment_id=enrollment_id,
         workflow_id=workflow_id,
         contact_id=contact_id,
         description="scheduled first reach-out",
@@ -2530,7 +2532,6 @@ def enrollment_add(workflow_id: str, contact_id: str, scheduled_at: str | None) 
             mutation_attrs["scheduled_at"] = scheduled_iso
         with cli_mutation("enrollment", "add", **mutation_attrs):
             created = create_enrollment(connection, workflow_id, contact_id)
-            target = created
             if created is not None:
                 create_activity(
                     connection,
@@ -2540,17 +2541,26 @@ def enrollment_add(workflow_id: str, contact_id: str, scheduled_at: str | None) 
                     detail={"workflow_name": workflow.name},
                     company_id=contact.company_id,
                     workflow_id=workflow_id,
+                    enrollment_id=created.id,
                 )
+                target = created
                 changed = ["status"]
             else:
-                target = get_enrollment(connection, workflow_id, contact_id)
-                if target is None:
+                existing = get_enrollment(connection, workflow_id, contact_id)
+                if existing is None:
                     return
+                target = existing
                 changed = []
             _maybe_schedule_first_touch(
-                connection, workflow_id, contact_id, scheduled_iso, changed
+                connection,
+                target.id,
+                workflow_id,
+                contact_id,
+                scheduled_iso,
+                changed,
             )
             event_fields: dict[str, Any] = {
+                "enrollment_id": target.id,
                 "workflow_id": workflow_id,
                 "contact_id": contact_id,
             }
@@ -2564,9 +2574,8 @@ def enrollment_add(workflow_id: str, contact_id: str, scheduled_at: str | None) 
 
 
 @enrollment.command("run")
-@click.option("--workflow-id", required=True, help="Workflow ID.")
-@click.option("--contact-id", required=True, help="Contact ID.")
-def enrollment_run(workflow_id: str, contact_id: str) -> None:
+@click.argument("enrollment_id")
+def enrollment_run(enrollment_id: str) -> None:
     """Invoke the workflow agent for an enrollment synchronously.
 
     Manual runs invoke the agent directly. Going through ``create_task``
@@ -2577,7 +2586,7 @@ def enrollment_run(workflow_id: str, contact_id: str) -> None:
     from mailpilot.agent import invoke_workflow_agent
     from mailpilot.database import (
         get_contact,
-        get_enrollment,
+        get_enrollment_by_id,
         get_unprocessed_inbound_email,
         get_workflow,
         initialize_database,
@@ -2587,31 +2596,29 @@ def enrollment_run(workflow_id: str, contact_id: str) -> None:
     settings = get_settings()
     connection = initialize_database(_database_url())
     try:
-        wf = get_workflow(connection, workflow_id)
+        record = get_enrollment_by_id(connection, enrollment_id)
+        if record is None:
+            output_error(f"enrollment not found: {enrollment_id}", "not_found")
+        wf = get_workflow(connection, record.workflow_id)
         if wf is None:
-            output_error(f"workflow not found: {workflow_id}", "not_found")
+            output_error(f"workflow not found: {record.workflow_id}", "not_found")
         if wf.status != "active":
             output_error(
                 f"workflow is not active (status={wf.status})", "invalid_state"
             )
-        contact = get_contact(connection, contact_id)
+        contact = get_contact(connection, record.contact_id)
         if contact is None:
-            output_error(f"contact not found: {contact_id}", "not_found")
-        enrollment = get_enrollment(connection, workflow_id, contact.id)
-        if enrollment is None:
+            output_error(f"contact not found: {record.contact_id}", "not_found")
+        if record.status != "active":
             output_error(
-                f"contact {contact_id} is not enrolled in workflow {workflow_id}",
-                "not_found",
-            )
-        if enrollment.status != "active":
-            output_error(
-                f"enrollment is not active (status={enrollment.status})",
+                f"enrollment is not active (status={record.status})",
                 "invalid_state",
             )
         email = None
         if wf.type == "inbound":
             email = get_unprocessed_inbound_email(connection, wf.id, contact.id)
         envelope: dict[str, object] = {
+            "enrollment_id": record.id,
             "workflow_id": wf.id,
             "contact_id": contact.id,
         }
@@ -2648,49 +2655,37 @@ def enrollment_run(workflow_id: str, contact_id: str) -> None:
 
 
 @enrollment.command("remove")
-@click.option("--workflow-id", required=True, help="Workflow ID.")
-@click.option("--contact-id", required=True, help="Contact ID.")
-def enrollment_remove(workflow_id: str, contact_id: str) -> None:
+@click.argument("enrollment_id")
+def enrollment_remove(enrollment_id: str) -> None:
     """Remove an enrollment."""
     from mailpilot.database import delete_enrollment, initialize_database
     from mailpilot.operator_log import cli_mutation, operator_event
 
     connection = initialize_database(_database_url())
     try:
-        with cli_mutation(
-            "enrollment", "remove", workflow_id=workflow_id, contact_id=contact_id
-        ):
-            deleted = delete_enrollment(connection, workflow_id, contact_id)
+        with cli_mutation("enrollment", "remove", entity_id=enrollment_id):
+            deleted = delete_enrollment(connection, enrollment_id)
             if deleted is None:
                 output_error("enrollment not found", "not_found")
             operator_event(
                 "enrollment.remove",
-                workflow_id=workflow_id,
-                contact_id=contact_id,
-                changed=["workflow_id", "contact_id"],
+                entity_id=enrollment_id,
+                changed=["id"],
             )
-            output(
-                {
-                    "enrollment": {
-                        "workflow_id": workflow_id,
-                        "contact_id": contact_id,
-                    }
-                }
-            )
+            output({"enrollment": {"id": enrollment_id}})
     finally:
         connection.close()
 
 
 @enrollment.command("view")
-@click.option("--workflow-id", required=True, help="Workflow ID.")
-@click.option("--contact-id", required=True, help="Contact ID.")
-def enrollment_view(workflow_id: str, contact_id: str) -> None:
-    """View an enrollment by composite key."""
-    from mailpilot.database import get_enrollment, initialize_database
+@click.argument("enrollment_id")
+def enrollment_view(enrollment_id: str) -> None:
+    """View an enrollment by id."""
+    from mailpilot.database import get_enrollment_by_id, initialize_database
 
     connection = initialize_database(_database_url())
     try:
-        record = get_enrollment(connection, workflow_id, contact_id)
+        record = get_enrollment_by_id(connection, enrollment_id)
         if record is None:
             output_error("enrollment not found", "not_found")
         output_entity("enrollment", record)
@@ -2744,8 +2739,7 @@ def enrollment_list(
 
 
 @enrollment.command("update")
-@click.option("--workflow-id", required=True, help="Workflow ID.")
-@click.option("--contact-id", required=True, help="Contact ID.")
+@click.argument("enrollment_id")
 @click.option(
     "--status",
     required=True,
@@ -2753,9 +2747,7 @@ def enrollment_list(
     help="New enrollment status (active or paused).",
 )
 @click.option("--reason", default=None, help="Status reason.")
-def enrollment_update(
-    workflow_id: str, contact_id: str, status: str, reason: str | None
-) -> None:
+def enrollment_update(enrollment_id: str, status: str, reason: str | None) -> None:
     """Update enrollment operational status (active or paused).
 
     Outcomes (completed, failed) are recorded as activity by the agent
@@ -2764,7 +2756,7 @@ def enrollment_update(
     from mailpilot.database import (
         create_activity,
         get_contact,
-        get_enrollment,
+        get_enrollment_by_id,
         initialize_database,
         update_enrollment,
     )
@@ -2772,31 +2764,30 @@ def enrollment_update(
 
     connection = initialize_database(_database_url())
     try:
-        before = get_enrollment(connection, workflow_id, contact_id)
+        before = get_enrollment_by_id(connection, enrollment_id)
         if before is None:
             output_error("enrollment not found", "not_found")
         fields: dict[str, object] = {"status": status}
         if reason is not None:
             fields["reason"] = reason
-        with cli_mutation(
-            "enrollment", "update", workflow_id=workflow_id, contact_id=contact_id
-        ):
-            updated = update_enrollment(connection, workflow_id, contact_id, **fields)
+        with cli_mutation("enrollment", "update", entity_id=enrollment_id):
+            updated = update_enrollment(connection, enrollment_id, **fields)
             if updated is None:
                 output_error("enrollment not found", "not_found")
             if before.status != status:
-                contact = get_contact(connection, contact_id)
+                contact = get_contact(connection, before.contact_id)
                 activity_type = (
                     "enrollment_paused" if status == "paused" else "enrollment_resumed"
                 )
                 create_activity(
                     connection,
-                    contact_id=contact_id,
+                    contact_id=before.contact_id,
                     activity_type=activity_type,
                     summary=reason or f"Enrollment {status}",
                     detail={"reason": reason or ""},
                     company_id=contact.company_id if contact is not None else None,
-                    workflow_id=workflow_id,
+                    workflow_id=before.workflow_id,
+                    enrollment_id=before.id,
                 )
             changed = [
                 field
@@ -2805,8 +2796,7 @@ def enrollment_update(
             ]
             operator_event(
                 "enrollment.update",
-                workflow_id=workflow_id,
-                contact_id=contact_id,
+                entity_id=enrollment_id,
                 changed=changed,
             )
             output_entity("enrollment", updated)

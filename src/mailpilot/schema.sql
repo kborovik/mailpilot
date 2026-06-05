@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS workflow (
 CREATE INDEX IF NOT EXISTS idx_workflow_account_id ON workflow(account_id);
 
 CREATE TABLE IF NOT EXISTS enrollment (
+    id            TEXT PRIMARY KEY,
     workflow_id   TEXT NOT NULL REFERENCES workflow(id),
     contact_id    TEXT NOT NULL REFERENCES contact(id),
     status        TEXT NOT NULL DEFAULT 'active'
@@ -65,7 +66,7 @@ CREATE TABLE IF NOT EXISTS enrollment (
     reason        TEXT NOT NULL DEFAULT '',
     created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (workflow_id, contact_id)
+    UNIQUE (workflow_id, contact_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_enrollment_contact_id ON enrollment(contact_id);
@@ -113,6 +114,7 @@ CREATE INDEX IF NOT EXISTS idx_email_rfc2822_message_id ON email(rfc2822_message
 
 CREATE TABLE IF NOT EXISTS task (
     id             TEXT PRIMARY KEY,
+    enrollment_id  TEXT NOT NULL REFERENCES enrollment(id),
     workflow_id    TEXT NOT NULL REFERENCES workflow(id),
     contact_id     TEXT NOT NULL REFERENCES contact(id),
     email_id       TEXT REFERENCES email(id),
@@ -155,6 +157,7 @@ CREATE TABLE IF NOT EXISTS activity (
     email_id        TEXT REFERENCES email(id),
     workflow_id     TEXT REFERENCES workflow(id),
     task_id         TEXT REFERENCES task(id),
+    enrollment_id   TEXT REFERENCES enrollment(id),
     type            TEXT NOT NULL
                     CHECK (type IN (
                         'email_sent', 'email_received',

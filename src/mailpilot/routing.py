@@ -359,4 +359,5 @@ def _ensure_enrollment(
         detail={"workflow_name": workflow_name},
         company_id=contact.company_id if contact is not None else None,
         workflow_id=workflow_id,
+        enrollment_id=enrollment.id,
     )

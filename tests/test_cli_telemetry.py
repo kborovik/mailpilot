@@ -38,6 +38,7 @@ _ACCOUNT_ID = "01234567-0000-7000-0000-0000000000aa"
 _COMPANY_ID = "01234567-0000-7000-0000-0000000000bb"
 _CONTACT_ID = "01234567-0000-7000-0000-0000000000cc"
 _WORKFLOW_ID = "01234567-0000-7000-0000-0000000000dd"
+_ENROLLMENT_ID = "01234567-0000-7000-0000-0000000000ee"
 _TAG_ID = "01234567-0000-7000-0000-0000000000ee"
 _NOTE_ID = "01234567-0000-7000-0000-0000000000ff"
 
@@ -95,6 +96,7 @@ def _make_workflow(**overrides: Any) -> Workflow:
 
 def _make_enrollment(**overrides: Any) -> Enrollment:
     defaults: dict[str, Any] = {
+        "id": _ENROLLMENT_ID,
         "workflow_id": _WORKFLOW_ID,
         "contact_id": _CONTACT_ID,
         "status": "active",
@@ -832,17 +834,7 @@ def test_enrollment_remove_emits_span_and_event(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.delete_enrollment", return_value=deleted),
     ):
-        result = runner.invoke(
-            main,
-            [
-                "enrollment",
-                "remove",
-                "--workflow-id",
-                _WORKFLOW_ID,
-                "--contact-id",
-                _CONTACT_ID,
-            ],
-        )
+        result = runner.invoke(main, ["enrollment", "remove", _ENROLLMENT_ID])
 
     assert result.exit_code == 0, result.output
     assert _spans_named(capfire, "enrollment.remove")
@@ -861,23 +853,14 @@ def test_enrollment_update_changed_diff(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_enrollment", return_value=before),
+        patch("mailpilot.database.get_enrollment_by_id", return_value=before),
         patch("mailpilot.database.update_enrollment", return_value=after),
         patch("mailpilot.database.get_contact", return_value=contact),
         patch("mailpilot.database.create_activity"),
     ):
         result = runner.invoke(
             main,
-            [
-                "enrollment",
-                "update",
-                "--workflow-id",
-                _WORKFLOW_ID,
-                "--contact-id",
-                _CONTACT_ID,
-                "--status",
-                "paused",
-            ],
+            ["enrollment", "update", _ENROLLMENT_ID, "--status", "paused"],
         )
 
     assert result.exit_code == 0, result.output

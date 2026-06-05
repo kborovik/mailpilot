@@ -230,6 +230,7 @@ def reply_email(  # noqa: PLR0913
 
 def create_task(  # noqa: PLR0913
     connection: psycopg.Connection[dict[str, Any]],
+    enrollment_id: str,
     workflow_id: str,
     contact_id: str,
     description: str,
@@ -241,8 +242,9 @@ def create_task(  # noqa: PLR0913
 
     Args:
         connection: Open database connection.
-        workflow_id: Current workflow FK.
-        contact_id: Contact this task targets (required).
+        enrollment_id: Current enrollment FK (NOT NULL per §V.28).
+        workflow_id: Current workflow FK (denormalised from enrollment).
+        contact_id: Contact this task targets (denormalised from enrollment).
         description: What the agent should do when the task runs.
         scheduled_at: When to execute (ISO 8601 timestamp).
         context: Arbitrary JSON context for the agent on re-invocation.
@@ -253,6 +255,7 @@ def create_task(  # noqa: PLR0913
     """
     task = database.create_task(
         connection,
+        enrollment_id=enrollment_id,
         workflow_id=workflow_id,
         contact_id=contact_id,
         description=description,
@@ -290,8 +293,7 @@ def cancel_task(
 
 def record_enrollment_outcome(
     connection: psycopg.Connection[dict[str, Any]],
-    workflow_id: str,
-    contact_id: str,
+    enrollment_id: str,
     outcome: str,
     reason: str,
 ) -> dict[str, str]:
@@ -304,8 +306,7 @@ def record_enrollment_outcome(
 
     Args:
         connection: Open database connection.
-        workflow_id: Current workflow FK.
-        contact_id: Contact ID.
+        enrollment_id: Enrollment ID (scalar per §V.12).
         outcome: "completed" or "failed".
         reason: Agent's explanation (e.g., "meeting booked", "no response").
 
@@ -319,21 +320,22 @@ def record_enrollment_outcome(
             "error": "invalid_outcome",
             "message": f"outcome must be one of {valid_outcomes}, got: {outcome}",
         }
-    enrollment = database.get_enrollment(connection, workflow_id, contact_id)
+    enrollment = database.get_enrollment_by_id(connection, enrollment_id)
     if enrollment is None:
         return {
             "error": "not_found",
-            "message": f"enrollment not found: {workflow_id}/{contact_id}",
+            "message": f"enrollment not found: {enrollment_id}",
         }
-    contact = database.get_contact(connection, contact_id)
+    contact = database.get_contact(connection, enrollment.contact_id)
     database.create_activity(
         connection,
-        contact_id=contact_id,
+        contact_id=enrollment.contact_id,
         activity_type=f"enrollment_{outcome}",
         summary=reason or f"Enrollment {outcome}",
         detail={"reason": reason},
         company_id=contact.company_id if contact is not None else None,
-        workflow_id=workflow_id,
+        workflow_id=enrollment.workflow_id,
+        enrollment_id=enrollment.id,
     )
     return {"outcome": outcome, "reason": reason}
 

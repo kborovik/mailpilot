@@ -2441,6 +2441,7 @@ def test_email_reply_with_workflow_id(
 _WORKFLOW_ID = "01234567-0000-7000-0000-000000000005"
 _ACCOUNT_ID = "01234567-0000-7000-0000-000000000001"
 _CONTACT_ID = "01234567-0000-7000-0000-000000000006"
+_ENROLLMENT_ID = "01234567-0000-7000-0000-000000000007"
 
 
 def _make_workflow(**overrides: Any) -> Workflow:
@@ -3837,18 +3838,13 @@ def test_enrollment_run(runner: CliRunner, mock_connection: MagicMock) -> None:
         created_at=_NOW,
         updated_at=_NOW,
     )
-    wc = Enrollment(
-        workflow_id=_WORKFLOW_ID,
-        contact_id=_CONTACT_ID,
-        created_at=_NOW,
-        updated_at=_NOW,
-    )
+    wc = _make_enrollment()
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=workflow),
         patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.get_enrollment", return_value=wc),
+        patch("mailpilot.database.get_enrollment_by_id", return_value=wc),
         patch("mailpilot.database.create_task") as mock_create_task,
         patch(
             "mailpilot.agent.invoke_workflow_agent",
@@ -3863,14 +3859,7 @@ def test_enrollment_run(runner: CliRunner, mock_connection: MagicMock) -> None:
     ):
         result = runner.invoke(
             main,
-            [
-                "enrollment",
-                "run",
-                "--workflow-id",
-                _WORKFLOW_ID,
-                "--contact-id",
-                _CONTACT_ID,
-            ],
+            ["enrollment", "run", _ENROLLMENT_ID],
         )
 
     assert result.exit_code == 0, result.output
@@ -3883,25 +3872,15 @@ def test_enrollment_run(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert data["result"]["tool_calls"] == 2
 
 
-def test_enrollment_run_workflow_not_found(
+def test_enrollment_run_enrollment_not_found(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_workflow", return_value=None),
+        patch("mailpilot.database.get_enrollment_by_id", return_value=None),
     ):
-        result = runner.invoke(
-            main,
-            [
-                "enrollment",
-                "run",
-                "--workflow-id",
-                "nope",
-                "--contact-id",
-                _CONTACT_ID,
-            ],
-        )
+        result = runner.invoke(main, ["enrollment", "run", "nope"])
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["error"] == "not_found"
@@ -3911,29 +3890,14 @@ def test_enrollment_run_requires_active(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     workflow = _make_workflow(status="draft")
-    contact = Contact(
-        id=_CONTACT_ID,
-        email="lead@acme.com",
-        created_at=_NOW,
-        updated_at=_NOW,
-    )
+    wc = _make_enrollment()
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_enrollment_by_id", return_value=wc),
         patch("mailpilot.database.get_workflow", return_value=workflow),
-        patch("mailpilot.database.get_contact", return_value=contact),
     ):
-        result = runner.invoke(
-            main,
-            [
-                "enrollment",
-                "run",
-                "--workflow-id",
-                _WORKFLOW_ID,
-                "--contact-id",
-                _CONTACT_ID,
-            ],
-        )
+        result = runner.invoke(main, ["enrollment", "run", _ENROLLMENT_ID])
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["error"] == "invalid_state"
@@ -3950,12 +3914,7 @@ def test_enrollment_run_inbound_with_email(
         created_at=_NOW,
         updated_at=_NOW,
     )
-    wc = Enrollment(
-        workflow_id=_WORKFLOW_ID,
-        contact_id=_CONTACT_ID,
-        created_at=_NOW,
-        updated_at=_NOW,
-    )
+    wc = _make_enrollment()
     inbound_email = _make_email(
         contact_id=_CONTACT_ID,
         workflow_id=_WORKFLOW_ID,
@@ -3966,7 +3925,7 @@ def test_enrollment_run_inbound_with_email(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=workflow),
         patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.get_enrollment", return_value=wc),
+        patch("mailpilot.database.get_enrollment_by_id", return_value=wc),
         patch(
             "mailpilot.database.get_unprocessed_inbound_email",
             return_value=inbound_email,
@@ -3982,21 +3941,10 @@ def test_enrollment_run_inbound_with_email(
             },
         ) as mock_invoke,
     ):
-        result = runner.invoke(
-            main,
-            [
-                "enrollment",
-                "run",
-                "--workflow-id",
-                _WORKFLOW_ID,
-                "--contact-id",
-                _CONTACT_ID,
-            ],
-        )
+        result = runner.invoke(main, ["enrollment", "run", _ENROLLMENT_ID])
 
     assert result.exit_code == 0, result.output
     mock_invoke.assert_called_once()
-    # Agent invoked with the unprocessed email attached.
     # §V.30: the enrollment_run path passes trigger="enrollment_run" and
     # MUST NOT synthesize a task_description -- prompt framing is owned
     # by the trigger branch in _format_trigger.
@@ -4020,18 +3968,13 @@ def test_enrollment_run_inbound_no_email(
         created_at=_NOW,
         updated_at=_NOW,
     )
-    wc = Enrollment(
-        workflow_id=_WORKFLOW_ID,
-        contact_id=_CONTACT_ID,
-        created_at=_NOW,
-        updated_at=_NOW,
-    )
+    wc = _make_enrollment()
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=workflow),
         patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.get_enrollment", return_value=wc),
+        patch("mailpilot.database.get_enrollment_by_id", return_value=wc),
         patch("mailpilot.database.get_unprocessed_inbound_email", return_value=None),
         patch(
             "mailpilot.agent.invoke_workflow_agent",
@@ -4044,17 +3987,7 @@ def test_enrollment_run_inbound_no_email(
             },
         ) as mock_invoke,
     ):
-        result = runner.invoke(
-            main,
-            [
-                "enrollment",
-                "run",
-                "--workflow-id",
-                _WORKFLOW_ID,
-                "--contact-id",
-                _CONTACT_ID,
-            ],
-        )
+        result = runner.invoke(main, ["enrollment", "run", _ENROLLMENT_ID])
 
     assert result.exit_code == 0, result.output
     mock_invoke.assert_called_once()
@@ -4073,60 +4006,18 @@ def test_enrollment_run_contact_not_found(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     workflow = _make_workflow(status="active")
+    wc = _make_enrollment()
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_enrollment_by_id", return_value=wc),
         patch("mailpilot.database.get_workflow", return_value=workflow),
         patch("mailpilot.database.get_contact", return_value=None),
     ):
-        result = runner.invoke(
-            main,
-            [
-                "enrollment",
-                "run",
-                "--workflow-id",
-                _WORKFLOW_ID,
-                "--contact-id",
-                "nope",
-            ],
-        )
+        result = runner.invoke(main, ["enrollment", "run", _ENROLLMENT_ID])
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["error"] == "not_found"
-
-
-def test_enrollment_run_contact_not_enrolled(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
-    workflow = _make_workflow(status="active")
-    contact = Contact(
-        id=_CONTACT_ID,
-        email="lead@acme.com",
-        created_at=_NOW,
-        updated_at=_NOW,
-    )
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_workflow", return_value=workflow),
-        patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.get_enrollment", return_value=None),
-    ):
-        result = runner.invoke(
-            main,
-            [
-                "enrollment",
-                "run",
-                "--workflow-id",
-                _WORKFLOW_ID,
-                "--contact-id",
-                _CONTACT_ID,
-            ],
-        )
-    assert result.exit_code == 1
-    data = json.loads(result.output)
-    assert data["error"] == "not_found"
-    assert "not enrolled" in data["message"]
 
 
 def test_enrollment_run_paused_enrollment(
@@ -4140,33 +4031,16 @@ def test_enrollment_run_paused_enrollment(
         created_at=_NOW,
         updated_at=_NOW,
     )
-    paused = Enrollment(
-        workflow_id=_WORKFLOW_ID,
-        contact_id=_CONTACT_ID,
-        status="paused",
-        reason="operator hold",
-        created_at=_NOW,
-        updated_at=_NOW,
-    )
+    paused = _make_enrollment(status="paused", reason="operator hold")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=workflow),
         patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.get_enrollment", return_value=paused),
+        patch("mailpilot.database.get_enrollment_by_id", return_value=paused),
         patch("mailpilot.agent.invoke_workflow_agent") as mock_invoke,
     ):
-        result = runner.invoke(
-            main,
-            [
-                "enrollment",
-                "run",
-                "--workflow-id",
-                _WORKFLOW_ID,
-                "--contact-id",
-                _CONTACT_ID,
-            ],
-        )
+        result = runner.invoke(main, ["enrollment", "run", _ENROLLMENT_ID])
     assert result.exit_code == 1, result.output
     mock_invoke.assert_not_called()
     data = json.loads(result.output)
@@ -4185,34 +4059,19 @@ def test_enrollment_run_agent_failed(
         created_at=_NOW,
         updated_at=_NOW,
     )
-    wc = Enrollment(
-        workflow_id=_WORKFLOW_ID,
-        contact_id=_CONTACT_ID,
-        created_at=_NOW,
-        updated_at=_NOW,
-    )
+    wc = _make_enrollment()
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=workflow),
         patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.get_enrollment", return_value=wc),
+        patch("mailpilot.database.get_enrollment_by_id", return_value=wc),
         patch(
             "mailpilot.agent.invoke_workflow_agent",
             side_effect=RuntimeError("agent error"),
         ),
     ):
-        result = runner.invoke(
-            main,
-            [
-                "enrollment",
-                "run",
-                "--workflow-id",
-                _WORKFLOW_ID,
-                "--contact-id",
-                _CONTACT_ID,
-            ],
-        )
+        result = runner.invoke(main, ["enrollment", "run", _ENROLLMENT_ID])
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
     assert data["status"] == "failed"
@@ -5281,6 +5140,7 @@ def test_note_list_company_not_found(
 
 def _make_enrollment(**overrides: Any) -> Enrollment:
     defaults: dict[str, Any] = {
+        "id": _ENROLLMENT_ID,
         "workflow_id": _WORKFLOW_ID,
         "contact_id": _CONTACT_ID,
         "status": "active",
@@ -5293,6 +5153,7 @@ def _make_enrollment(**overrides: Any) -> Enrollment:
 
 def _make_enrollment_summary(**overrides: Any) -> EnrollmentSummary:
     defaults: dict[str, Any] = {
+        "id": _ENROLLMENT_ID,
         "workflow_id": _WORKFLOW_ID,
         "contact_id": _CONTACT_ID,
         "contact_email": "alice@example.com",
@@ -5412,8 +5273,9 @@ def test_enrollment_add_with_scheduled_at_outbound_creates_task(
         )
 
     assert result.exit_code == 0, result.output
-    mock_find.assert_called_once_with(mock_connection, _WORKFLOW_ID, _CONTACT_ID)
+    mock_find.assert_called_once_with(mock_connection, _ENROLLMENT_ID)
     create_kwargs = mock_create_task.call_args.kwargs
+    assert create_kwargs["enrollment_id"] == _ENROLLMENT_ID
     assert create_kwargs["workflow_id"] == _WORKFLOW_ID
     assert create_kwargs["contact_id"] == _CONTACT_ID
     assert create_kwargs["description"] == "scheduled first reach-out"
@@ -5432,6 +5294,7 @@ def test_enrollment_add_with_scheduled_at_idempotent(
     existing_enrollment = _make_enrollment()
     existing_task = Task(
         id="01234567-0000-7000-0000-aaaaaaaaaaaa",
+        enrollment_id=_ENROLLMENT_ID,
         workflow_id=_WORKFLOW_ID,
         contact_id=_CONTACT_ID,
         email_id=None,
@@ -5679,7 +5542,7 @@ def test_enrollment_add_self_loop_case_insensitive(
 
 
 def test_enrollment_remove(runner: CliRunner, mock_connection: MagicMock) -> None:
-    """§V.4 hard-DELETE branch: payload ≡ composite-key projection only.
+    """§V.4 hard-DELETE branch: payload ≡ scalar-id projection only.
 
     §V.54: `remove` operator-event `changed` ≡ relational key set.
     Regression guard against §B.33 (pre-delete `status` leaked into response).
@@ -5693,26 +5556,13 @@ def test_enrollment_remove(runner: CliRunner, mock_connection: MagicMock) -> Non
         ) as mock_delete,
         patch("mailpilot.operator_log.operator_event") as mock_event,
     ):
-        result = runner.invoke(
-            main,
-            [
-                "enrollment",
-                "remove",
-                "--workflow-id",
-                _WORKFLOW_ID,
-                "--contact-id",
-                _CONTACT_ID,
-            ],
-        )
+        result = runner.invoke(main, ["enrollment", "remove", _ENROLLMENT_ID])
 
     assert result.exit_code == 0
-    mock_delete.assert_called_once_with(mock_connection, _WORKFLOW_ID, _CONTACT_ID)
+    mock_delete.assert_called_once_with(mock_connection, _ENROLLMENT_ID)
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["enrollment"] == {
-        "workflow_id": _WORKFLOW_ID,
-        "contact_id": _CONTACT_ID,
-    }
+    assert data["enrollment"] == {"id": _ENROLLMENT_ID}
     remove_events = [
         call
         for call in mock_event.call_args_list
@@ -5720,9 +5570,8 @@ def test_enrollment_remove(runner: CliRunner, mock_connection: MagicMock) -> Non
     ]
     assert len(remove_events) == 1
     assert remove_events[0].kwargs == {
-        "workflow_id": _WORKFLOW_ID,
-        "contact_id": _CONTACT_ID,
-        "changed": ["workflow_id", "contact_id"],
+        "entity_id": _ENROLLMENT_ID,
+        "changed": ["id"],
     }
 
 
@@ -5734,17 +5583,7 @@ def test_enrollment_remove_not_found(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.delete_enrollment", return_value=None),
     ):
-        result = runner.invoke(
-            main,
-            [
-                "enrollment",
-                "remove",
-                "--workflow-id",
-                _WORKFLOW_ID,
-                "--contact-id",
-                _CONTACT_ID,
-            ],
-        )
+        result = runner.invoke(main, ["enrollment", "remove", _ENROLLMENT_ID])
 
     assert result.exit_code == 1
     data = json.loads(result.output)
@@ -5762,24 +5601,17 @@ def test_enrollment_view_returns_record(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_enrollment", return_value=enrollment) as mock_get,
+        patch(
+            "mailpilot.database.get_enrollment_by_id", return_value=enrollment
+        ) as mock_get,
     ):
-        result = runner.invoke(
-            main,
-            [
-                "enrollment",
-                "view",
-                "--workflow-id",
-                _WORKFLOW_ID,
-                "--contact-id",
-                _CONTACT_ID,
-            ],
-        )
+        result = runner.invoke(main, ["enrollment", "view", _ENROLLMENT_ID])
 
     assert result.exit_code == 0
-    mock_get.assert_called_once_with(mock_connection, _WORKFLOW_ID, _CONTACT_ID)
+    mock_get.assert_called_once_with(mock_connection, _ENROLLMENT_ID)
     data = json.loads(result.output)
     assert data["ok"] is True
+    assert data["enrollment"]["id"] == _ENROLLMENT_ID
     assert data["enrollment"]["workflow_id"] == _WORKFLOW_ID
     assert data["enrollment"]["contact_id"] == _CONTACT_ID
 
@@ -5790,19 +5622,9 @@ def test_enrollment_view_not_found(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_enrollment", return_value=None),
+        patch("mailpilot.database.get_enrollment_by_id", return_value=None),
     ):
-        result = runner.invoke(
-            main,
-            [
-                "enrollment",
-                "view",
-                "--workflow-id",
-                _WORKFLOW_ID,
-                "--contact-id",
-                _CONTACT_ID,
-            ],
-        )
+        result = runner.invoke(main, ["enrollment", "view", _ENROLLMENT_ID])
 
     assert result.exit_code == 1
     data = json.loads(result.output)
@@ -5969,7 +5791,7 @@ def test_enrollment_update_paused_emits_activity(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_enrollment", return_value=before),
+        patch("mailpilot.database.get_enrollment_by_id", return_value=before),
         patch(
             "mailpilot.database.update_enrollment", return_value=updated
         ) as mock_update,
@@ -5981,10 +5803,7 @@ def test_enrollment_update_paused_emits_activity(
             [
                 "enrollment",
                 "update",
-                "--workflow-id",
-                _WORKFLOW_ID,
-                "--contact-id",
-                _CONTACT_ID,
+                _ENROLLMENT_ID,
                 "--status",
                 "paused",
                 "--reason",
@@ -5995,8 +5814,7 @@ def test_enrollment_update_paused_emits_activity(
     assert result.exit_code == 0
     mock_update.assert_called_once_with(
         mock_connection,
-        _WORKFLOW_ID,
-        _CONTACT_ID,
+        _ENROLLMENT_ID,
         status="paused",
         reason="vacation",
     )
@@ -6004,6 +5822,7 @@ def test_enrollment_update_paused_emits_activity(
     assert activity_kwargs["activity_type"] == "enrollment_paused"
     assert activity_kwargs["summary"] == "vacation"
     assert activity_kwargs["workflow_id"] == _WORKFLOW_ID
+    assert activity_kwargs["enrollment_id"] == _ENROLLMENT_ID
 
 
 def test_enrollment_update_active_emits_resumed_activity(
@@ -6015,23 +5834,14 @@ def test_enrollment_update_active_emits_resumed_activity(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_enrollment", return_value=before),
+        patch("mailpilot.database.get_enrollment_by_id", return_value=before),
         patch("mailpilot.database.update_enrollment", return_value=updated),
         patch("mailpilot.database.get_contact", return_value=_make_contact()),
         patch("mailpilot.database.create_activity") as mock_activity,
     ):
         result = runner.invoke(
             main,
-            [
-                "enrollment",
-                "update",
-                "--workflow-id",
-                _WORKFLOW_ID,
-                "--contact-id",
-                _CONTACT_ID,
-                "--status",
-                "active",
-            ],
+            ["enrollment", "update", _ENROLLMENT_ID, "--status", "active"],
         )
 
     assert result.exit_code == 0
@@ -6047,22 +5857,13 @@ def test_enrollment_update_unchanged_status_does_not_emit_activity(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_enrollment", return_value=before),
+        patch("mailpilot.database.get_enrollment_by_id", return_value=before),
         patch("mailpilot.database.update_enrollment", return_value=updated),
         patch("mailpilot.database.create_activity") as mock_activity,
     ):
         result = runner.invoke(
             main,
-            [
-                "enrollment",
-                "update",
-                "--workflow-id",
-                _WORKFLOW_ID,
-                "--contact-id",
-                _CONTACT_ID,
-                "--status",
-                "active",
-            ],
+            ["enrollment", "update", _ENROLLMENT_ID, "--status", "active"],
         )
 
     assert result.exit_code == 0
@@ -6079,16 +5880,7 @@ def test_enrollment_update_rejects_legacy_status(
     ):
         result = runner.invoke(
             main,
-            [
-                "enrollment",
-                "update",
-                "--workflow-id",
-                _WORKFLOW_ID,
-                "--contact-id",
-                _CONTACT_ID,
-                "--status",
-                "completed",
-            ],
+            ["enrollment", "update", _ENROLLMENT_ID, "--status", "completed"],
         )
 
     assert result.exit_code != 0
@@ -6100,20 +5892,11 @@ def test_enrollment_update_not_found(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_enrollment", return_value=None),
+        patch("mailpilot.database.get_enrollment_by_id", return_value=None),
     ):
         result = runner.invoke(
             main,
-            [
-                "enrollment",
-                "update",
-                "--workflow-id",
-                _WORKFLOW_ID,
-                "--contact-id",
-                _CONTACT_ID,
-                "--status",
-                "active",
-            ],
+            ["enrollment", "update", _ENROLLMENT_ID, "--status", "active"],
         )
 
     assert result.exit_code == 1
@@ -6129,6 +5912,7 @@ _TASK_ID = "01234567-0000-7000-0000-a00000000001"
 def _make_task(**overrides: Any) -> Task:
     defaults: dict[str, Any] = {
         "id": _TASK_ID,
+        "enrollment_id": _ENROLLMENT_ID,
         "workflow_id": _WORKFLOW_ID,
         "contact_id": _CONTACT_ID,
         "email_id": None,

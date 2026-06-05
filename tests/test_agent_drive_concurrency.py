@@ -180,6 +180,7 @@ def _make_deps(connection: Any, service: _RaceDetectingService) -> AgentDeps:
         settings=MagicMock(),
         workflow_id="wf-1",
         contact_id="contact-1",
+        enrollment_id="enroll-1",
     )
 
 

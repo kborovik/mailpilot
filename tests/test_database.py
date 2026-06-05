@@ -14,6 +14,7 @@ from conftest import (
     make_test_activity,
     make_test_company,
     make_test_contact,
+    make_test_enrollment,
     make_test_note,
     make_test_tag,
     make_test_workflow,
@@ -149,6 +150,7 @@ def test_task_insert_emits_notify(
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
 
     listen_conn = cast(
         psycopg.Connection[dict[str, Any]],
@@ -158,6 +160,7 @@ def test_task_insert_emits_notify(
         listen_conn.execute("LISTEN task_pending")
         create_task(
             database_connection,
+            enrollment_id=enrollment.id,
             workflow_id=workflow.id,
             contact_id=contact.id,
             description="test task",
@@ -2369,9 +2372,10 @@ def test_delete_enrollment(
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
-    create_enrollment(database_connection, workflow.id, contact.id)
-    deleted = delete_enrollment(database_connection, workflow.id, contact.id)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    deleted = delete_enrollment(database_connection, enrollment.id)
     assert deleted is not None
+    assert deleted.id == enrollment.id
     assert deleted.workflow_id == workflow.id
     assert deleted.contact_id == contact.id
     assert deleted.status == "active"
@@ -2381,7 +2385,7 @@ def test_delete_enrollment(
 def test_delete_enrollment_not_found(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    deleted = delete_enrollment(database_connection, "nonexistent", "nonexistent")
+    deleted = delete_enrollment(database_connection, "nonexistent")
     assert deleted is None
 
 
@@ -2394,10 +2398,11 @@ def test_list_enrollments_detailed(
     update_contact(
         database_connection, contact.id, first_name="Alice", last_name="Smith"
     )
-    create_enrollment(database_connection, workflow.id, contact.id)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
     results = list_enrollments_detailed(database_connection, workflow_id=workflow.id)
     assert len(results) == 1
     detail = results[0]
+    assert detail.id == enrollment.id
     assert detail.contact_email == "alice@example.com"
     assert detail.contact_name == "Alice Smith"
     assert detail.status == "active"
@@ -2414,9 +2419,9 @@ def test_list_enrollments_detailed_status_filter(
     workflow = make_test_workflow(database_connection, account_id=account.id)
     c1 = make_test_contact(database_connection, email="a@example.com")
     c2 = make_test_contact(database_connection, email="b@example.com")
-    create_enrollment(database_connection, workflow.id, c1.id)
-    create_enrollment(database_connection, workflow.id, c2.id)
-    update_enrollment(database_connection, workflow.id, c1.id, status="paused")
+    e1 = make_test_enrollment(database_connection, workflow.id, c1.id)
+    make_test_enrollment(database_connection, workflow.id, c2.id)
+    update_enrollment(database_connection, e1.id, status="paused")
     results = list_enrollments_detailed(
         database_connection, workflow_id=workflow.id, status="paused"
     )
@@ -2448,15 +2453,12 @@ def test_update_enrollment_rejects_legacy_statuses(
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
-    create_enrollment(
-        database_connection, workflow_id=workflow.id, contact_id=contact.id
-    )
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
     for bad in ("pending", "completed", "failed"):
         with pytest.raises((psycopg.errors.CheckViolation, ValueError)):
             update_enrollment(
                 database_connection,
-                workflow.id,
-                contact.id,
+                enrollment.id,
                 status=bad,
             )
         database_connection.rollback()
@@ -2469,8 +2471,8 @@ def test_list_enrollments_detailed_limit(
     workflow = make_test_workflow(database_connection, account_id=account.id)
     c1 = make_test_contact(database_connection, email="a@example.com")
     c2 = make_test_contact(database_connection, email="b@example.com")
-    create_enrollment(database_connection, workflow.id, c1.id)
-    create_enrollment(database_connection, workflow.id, c2.id)
+    make_test_enrollment(database_connection, workflow.id, c1.id)
+    make_test_enrollment(database_connection, workflow.id, c2.id)
     results = list_enrollments_detailed(
         database_connection, workflow_id=workflow.id, limit=1
     )
@@ -2493,8 +2495,8 @@ def test_list_enrollments_detailed_filter_by_contact(
     wf_a = make_test_workflow(database_connection, account_id=account.id, name="wf-a")
     wf_b = make_test_workflow(database_connection, account_id=account.id, name="wf-b")
     contact = make_test_contact(database_connection, email="alice@example.com")
-    create_enrollment(database_connection, wf_a.id, contact.id)
-    create_enrollment(database_connection, wf_b.id, contact.id)
+    make_test_enrollment(database_connection, wf_a.id, contact.id)
+    make_test_enrollment(database_connection, wf_b.id, contact.id)
     results = list_enrollments_detailed(database_connection, contact_id=contact.id)
     assert len(results) == 2
     assert {r.workflow_id for r in results} == {wf_a.id, wf_b.id}
@@ -2507,8 +2509,8 @@ def test_list_enrollments_detailed_filter_by_workflow_and_contact(
     wf_a = make_test_workflow(database_connection, account_id=account.id, name="wf-a")
     wf_b = make_test_workflow(database_connection, account_id=account.id, name="wf-b")
     contact = make_test_contact(database_connection, email="alice@example.com")
-    create_enrollment(database_connection, wf_a.id, contact.id)
-    create_enrollment(database_connection, wf_b.id, contact.id)
+    make_test_enrollment(database_connection, wf_a.id, contact.id)
+    make_test_enrollment(database_connection, wf_b.id, contact.id)
     results = list_enrollments_detailed(
         database_connection, workflow_id=wf_a.id, contact_id=contact.id
     )
@@ -2525,8 +2527,10 @@ def test_list_tasks(
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
     create_task(
         database_connection,
+        enrollment_id=enrollment.id,
         workflow_id=workflow.id,
         contact_id=contact.id,
         description="follow up",
@@ -2534,6 +2538,7 @@ def test_list_tasks(
     )
     create_task(
         database_connection,
+        enrollment_id=enrollment.id,
         workflow_id=workflow.id,
         contact_id=contact.id,
         description="check reply",
@@ -2550,8 +2555,11 @@ def test_list_tasks_with_filters(
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact_a = make_test_contact(database_connection, email="a@test.com")
     contact_b = make_test_contact(database_connection, email="b@test.com")
+    enroll_a = make_test_enrollment(database_connection, workflow.id, contact_a.id)
+    enroll_b = make_test_enrollment(database_connection, workflow.id, contact_b.id)
     create_task(
         database_connection,
+        enrollment_id=enroll_a.id,
         workflow_id=workflow.id,
         contact_id=contact_a.id,
         description="task for A",
@@ -2559,6 +2567,7 @@ def test_list_tasks_with_filters(
     )
     task_b = create_task(
         database_connection,
+        enrollment_id=enroll_b.id,
         workflow_id=workflow.id,
         contact_id=contact_b.id,
         description="task for B",
@@ -2586,21 +2595,21 @@ def test_find_pending_first_touch_task_none(
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
-    assert (
-        find_pending_first_touch_task(database_connection, workflow.id, contact.id)
-        is None
-    )
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    assert find_pending_first_touch_task(database_connection, enrollment.id) is None
 
 
 def test_find_pending_first_touch_task_match(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.32: returns the pending email-less task for the given pair."""
+    """§V.32: returns the pending email-less task for the given enrollment."""
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
     created = create_task(
         database_connection,
+        enrollment_id=enrollment.id,
         workflow_id=workflow.id,
         contact_id=contact.id,
         description="scheduled first reach-out",
@@ -2608,7 +2617,7 @@ def test_find_pending_first_touch_task_match(
         context={"trigger": "enrollment_schedule"},
     )
 
-    found = find_pending_first_touch_task(database_connection, workflow.id, contact.id)
+    found = find_pending_first_touch_task(database_connection, enrollment.id)
     assert found is not None
     assert found.id == created.id
     assert found.email_id is None
@@ -2624,6 +2633,7 @@ def test_find_pending_first_touch_task_ignores_email_bound_tasks(
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
     email = create_email(
         database_connection,
         gmail_message_id="msg-fp",
@@ -2640,16 +2650,14 @@ def test_find_pending_first_touch_task_ignores_email_bound_tasks(
     assert email is not None
     create_task(
         database_connection,
+        enrollment_id=enrollment.id,
         workflow_id=workflow.id,
         contact_id=contact.id,
         description="handle inbound email",
         scheduled_at="2026-04-22T12:00:00Z",
         email_id=email.id,
     )
-    assert (
-        find_pending_first_touch_task(database_connection, workflow.id, contact.id)
-        is None
-    )
+    assert find_pending_first_touch_task(database_connection, enrollment.id) is None
 
 
 def test_find_pending_first_touch_task_ignores_terminal_status(
@@ -2659,8 +2667,10 @@ def test_find_pending_first_touch_task_ignores_terminal_status(
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
     task = create_task(
         database_connection,
+        enrollment_id=enrollment.id,
         workflow_id=workflow.id,
         contact_id=contact.id,
         description="scheduled first reach-out",
@@ -2668,36 +2678,30 @@ def test_find_pending_first_touch_task_ignores_terminal_status(
         context={"trigger": "enrollment_schedule"},
     )
     cancel_task(database_connection, task.id)
-    assert (
-        find_pending_first_touch_task(database_connection, workflow.id, contact.id)
-        is None
-    )
+    assert find_pending_first_touch_task(database_connection, enrollment.id) is None
 
 
-def test_find_pending_first_touch_task_scoped_to_pair(
+def test_find_pending_first_touch_task_scoped_to_enrollment(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.32: lookup honours (workflow_id, contact_id) -- other pairs invisible."""
+    """§V.32: lookup honours enrollment_id -- sibling enrollments invisible."""
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact_a = make_test_contact(database_connection, email="a@test.com")
     contact_b = make_test_contact(database_connection, email="b@test.com")
+    enroll_a = make_test_enrollment(database_connection, workflow.id, contact_a.id)
+    enroll_b = make_test_enrollment(database_connection, workflow.id, contact_b.id)
     create_task(
         database_connection,
+        enrollment_id=enroll_a.id,
         workflow_id=workflow.id,
         contact_id=contact_a.id,
         description="scheduled first reach-out",
         scheduled_at="2026-04-22T12:00:00Z",
         context={"trigger": "enrollment_schedule"},
     )
-    assert (
-        find_pending_first_touch_task(database_connection, workflow.id, contact_b.id)
-        is None
-    )
-    assert (
-        find_pending_first_touch_task(database_connection, workflow.id, contact_a.id)
-        is not None
-    )
+    assert find_pending_first_touch_task(database_connection, enroll_b.id) is None
+    assert find_pending_first_touch_task(database_connection, enroll_a.id) is not None
 
 
 def test_create_tasks_for_routed_emails(
@@ -2708,6 +2712,7 @@ def test_create_tasks_for_routed_emails(
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
 
     email = create_email(
         database_connection,
@@ -2727,6 +2732,7 @@ def test_create_tasks_for_routed_emails(
     created = create_tasks_for_routed_emails(database_connection)
     assert len(created) == 1
     assert created[0].email_id == email.id
+    assert created[0].enrollment_id == enrollment.id
     assert created[0].workflow_id == workflow.id
     assert created[0].contact_id == contact.id
     assert created[0].description == "handle inbound email"
@@ -2744,6 +2750,7 @@ def test_create_tasks_for_routed_emails_skips_outbound(
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
+    make_test_enrollment(database_connection, workflow.id, contact.id)
 
     create_email(
         database_connection,
@@ -2789,6 +2796,7 @@ def test_create_tasks_for_routed_emails_skips_historical(
 
     # Create workflow AFTER the email was stored.
     workflow = make_test_workflow(database_connection, account_id=account.id)
+    make_test_enrollment(database_connection, workflow.id, contact.id)
 
     # Simulate routing: set workflow_id on the pre-existing email.
     database_connection.execute(
@@ -2833,6 +2841,7 @@ def test_create_tasks_for_routed_emails_bridges_email_synced_after_workflow(
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
+    make_test_enrollment(database_connection, workflow.id, contact.id)
 
     # Email received by Gmail BEFORE workflow, but synced/stored AFTER.
     # created_at is auto-set to now() which is after workflow.created_at.
@@ -2864,6 +2873,7 @@ def test_get_unprocessed_inbound_email(
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
 
     # No emails yet -- returns None.
     result = get_unprocessed_inbound_email(database_connection, workflow.id, contact.id)
@@ -2893,6 +2903,7 @@ def test_get_unprocessed_inbound_email(
     # Create a task for that email -- it becomes "processed".
     create_task(
         database_connection,
+        enrollment_id=enrollment.id,
         workflow_id=workflow.id,
         contact_id=contact.id,
         description="handle inbound email",
@@ -2954,8 +2965,10 @@ def test_complete_task_stores_result(
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
     task = create_task(
         database_connection,
+        enrollment_id=enrollment.id,
         workflow_id=workflow.id,
         contact_id=contact.id,
         description="follow up",
@@ -2983,8 +2996,10 @@ def test_reschedule_task_for_retry_bumps_attempt_and_advances_scheduled_at(
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
     task = create_task(
         database_connection,
+        enrollment_id=enrollment.id,
         workflow_id=workflow.id,
         contact_id=contact.id,
         description="follow up",
@@ -3037,8 +3052,10 @@ def test_manual_retry_task_resets_failed_row(
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
     task = create_task(
         database_connection,
+        enrollment_id=enrollment.id,
         workflow_id=workflow.id,
         contact_id=contact.id,
         description="follow up",
@@ -3065,8 +3082,10 @@ def test_manual_retry_task_resets_cancelled_row(
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
     task = create_task(
         database_connection,
+        enrollment_id=enrollment.id,
         workflow_id=workflow.id,
         contact_id=contact.id,
         description="follow up",
@@ -3088,8 +3107,10 @@ def test_manual_retry_task_refuses_completed_row(
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
     task = create_task(
         database_connection,
+        enrollment_id=enrollment.id,
         workflow_id=workflow.id,
         contact_id=contact.id,
         description="follow up",
@@ -3107,8 +3128,10 @@ def test_manual_retry_task_refuses_pending_row(
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
     task = create_task(
         database_connection,
+        enrollment_id=enrollment.id,
         workflow_id=workflow.id,
         contact_id=contact.id,
         description="follow up",
@@ -3302,8 +3325,10 @@ def test_task_list_summary(
     account = make_test_account(database_connection)
     contact = make_test_contact(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
     create_task(
         database_connection,
+        enrollment_id=enrollment.id,
         workflow_id=workflow.id,
         contact_id=contact.id,
         description="follow up",
@@ -3352,8 +3377,10 @@ def test_activity_list_summary_includes_fk_columns(
         gmail_message_id="msg_fk_summary",
     )
     assert email is not None
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
     task = create_task(
         database_connection,
+        enrollment_id=enrollment.id,
         workflow_id=workflow.id,
         contact_id=contact.id,
         description="follow up",
@@ -3455,8 +3482,10 @@ def test_list_tasks_since(
     workflow = make_test_workflow(
         database_connection, account_id=make_test_account(database_connection).id
     )
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
     create_task(
         database_connection,
+        enrollment_id=enrollment.id,
         workflow_id=workflow.id,
         contact_id=contact.id,
         description="x",

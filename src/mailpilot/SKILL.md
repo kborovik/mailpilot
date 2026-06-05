@@ -154,15 +154,16 @@ when the value differs and continues with the rest of the batch.
 
 ### Enroll a contact
 
-Enrollment is keyed on the `(workflow_id, contact_id)` composite primary
-key; every verb takes both flags rather than a single scalar id.
+`enrollment add` constructs the binding from `--workflow-id` + `--contact-id`
+and returns the freshly-minted scalar `id`; every other verb takes that id
+as a single positional argument.
 
 ```
 mailpilot enrollment add --workflow-id <WID> --contact-id <CID>
-mailpilot enrollment run --workflow-id <WID> --contact-id <CID>      # manual kick
-mailpilot enrollment view --workflow-id <WID> --contact-id <CID>
-mailpilot enrollment update --workflow-id <WID> --contact-id <CID> --status paused
-mailpilot enrollment remove --workflow-id <WID> --contact-id <CID>
+mailpilot enrollment run <ENROLLMENT_ID>                            # manual kick
+mailpilot enrollment view <ENROLLMENT_ID>
+mailpilot enrollment update <ENROLLMENT_ID> --status paused
+mailpilot enrollment remove <ENROLLMENT_ID>
 ```
 
 Pass `--scheduled-at <ISO>` on `enrollment add` against an outbound workflow

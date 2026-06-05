@@ -114,13 +114,15 @@ def _make_pending_task(
     scheduled_at: datetime,
 ) -> str:
     """Insert a pending task and return its id. Account/workflow/contact wired."""
-    from conftest import make_test_workflow
+    from conftest import make_test_enrollment, make_test_workflow
 
     account = make_test_account(connection, email="acct@example.com")
     contact = make_test_contact(connection, email="contact@example.com")
     workflow = make_test_workflow(connection, account_id=account.id)
+    enrollment = make_test_enrollment(connection, workflow.id, contact.id)
     task = create_task(
         connection,
+        enrollment_id=enrollment.id,
         workflow_id=workflow.id,
         contact_id=contact.id,
         description="t",

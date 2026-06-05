@@ -62,6 +62,7 @@ class AgentDeps:
     settings: Settings
     workflow_id: str
     contact_id: str
+    enrollment_id: str
     read_ledger: dict[str, str] = field(default_factory=dict)
 
 
@@ -208,6 +209,7 @@ def _wrap_create_task(
     """Schedule deferred work for the current contact."""
     return agent_tools.create_task(
         connection=ctx.deps.connection,
+        enrollment_id=ctx.deps.enrollment_id,
         workflow_id=ctx.deps.workflow_id,
         contact_id=ctx.deps.contact_id,
         description=description,
@@ -236,8 +238,7 @@ def _wrap_record_enrollment_outcome(
     """Record an enrollment outcome (completed or failed) on the timeline."""
     return agent_tools.record_enrollment_outcome(
         connection=ctx.deps.connection,
-        workflow_id=ctx.deps.workflow_id,
-        contact_id=ctx.deps.contact_id,
+        enrollment_id=ctx.deps.enrollment_id,
         outcome=outcome,
         reason=reason,
     )
@@ -543,7 +544,7 @@ def _extract_tool_errors(result: Any) -> list[dict[str, str]]:
 # -- Main entry point ----------------------------------------------------------
 
 
-def invoke_workflow_agent(  # noqa: PLR0913
+def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
     workflow: Workflow,
@@ -627,6 +628,19 @@ def invoke_workflow_agent(  # noqa: PLR0913
                     f"account not found for workflow: {workflow.account_id}"
                 )
 
+            # Resolve enrollment id from the (workflow_id, contact_id) UNIQUE
+            # pair so tool wrappers can pass it through to ``create_task`` /
+            # ``record_enrollment_outcome`` without asking the LLM for it.
+            # The enrollment row is guaranteed present at this point: outbound
+            # invocations create the enrollment in ``enrollment add``; inbound
+            # invocations create it in ``routing._ensure_enrollment``.
+            enrollment = database.get_enrollment(connection, workflow.id, contact.id)
+            if enrollment is None:
+                raise ValueError(
+                    f"enrollment not found for workflow={workflow.id} "
+                    f"contact={contact.id}"
+                )
+
             # Load email history scoped to this workflow + contact. The
             # agent prompt needs ``body_text`` (not in EmailSummary), so
             # hydrate each summary via ``get_email``.
@@ -661,6 +675,7 @@ def invoke_workflow_agent(  # noqa: PLR0913
                 settings=settings,
                 workflow_id=workflow.id,
                 contact_id=contact.id,
+                enrollment_id=enrollment.id,
             )
 
             # Assemble prompt and run.

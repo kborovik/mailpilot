@@ -16,12 +16,22 @@ from mailpilot.database import (
     create_activity,
     create_company,
     create_contact,
+    create_enrollment,
     create_note,
     create_tag,
     create_workflow,
     initialize_database,
 )
-from mailpilot.models import Account, Activity, Company, Contact, Note, Tag, Workflow
+from mailpilot.models import (
+    Account,
+    Activity,
+    Company,
+    Contact,
+    Enrollment,
+    Note,
+    Tag,
+    Workflow,
+)
 from mailpilot.settings import Settings
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -133,6 +143,24 @@ def make_test_workflow(
         template=template,
         account_id=account_id,
     )
+
+
+def make_test_enrollment(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+    contact_id: str,
+) -> Enrollment:
+    """Create a test enrollment in the database.
+
+    Asserts the row was inserted (i.e. ``(workflow_id, contact_id)`` did not
+    already exist). Tests that intentionally probe the ON CONFLICT branch
+    should call ``create_enrollment`` directly.
+    """
+    enrollment = create_enrollment(connection, workflow_id, contact_id)
+    assert enrollment is not None, (
+        f"enrollment already exists for ({workflow_id}, {contact_id})"
+    )
+    return enrollment
 
 
 def make_test_activity(
