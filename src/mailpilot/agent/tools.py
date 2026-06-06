@@ -30,7 +30,7 @@ import contextvars
 import re
 from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, Literal
 
 import logfire
 import psycopg
@@ -40,70 +40,77 @@ from mailpilot.drive import DriveClient
 from mailpilot.models import Account
 from mailpilot.settings import Settings
 
-# §V.71: per-agent-invocation format-lint rejection counter (root cause §B.57).
-# ``run.execute_task`` enters ``format_lint_scope`` to install a fresh counter
-# for each task; ``reply_email`` and ``send_email`` increment the counter on
-# every ``_check_spec_table`` hit and bypass the lint once the counter reaches
-# ``_FORMAT_LINT_CAP``. Bounds worst-case latency under prompt-fidelity loops
-# (B7 17 calls / 195s, C burst 35 calls / 495s observed in §B.57). Outside a
-# scope (legacy / CLI paths without a task row) the counter stays ``None`` and
-# the lint behaves as before.
+# §V.71: per-agent-invocation reply-rejection counter (root cause §B.57, §B.59).
+# ``run.execute_task`` enters ``reply_rejection_scope`` to install a fresh
+# counter for each task; ``reply_email`` and ``send_email`` increment the
+# counter on every ``_check_spec_table`` (format) hit AND every
+# ``_fact_check_body`` (fact_check) hit, and bypass BOTH checks once the
+# counter reaches ``_REPLY_REJECTION_CAP``. Bounds worst-case latency under
+# prompt-fidelity loops (B7 17 calls / 195s, C burst 35 calls / 495s observed
+# in §B.57; B7 9 fact-check rejections / 265s in §B.59). Outside a scope
+# (legacy / CLI paths without a task row) the counter stays ``None`` and both
+# checks behave as before.
 
 
-class _FormatLintCounter:
+class _ReplyRejectionCounter:
     __slots__ = ("count",)
 
     def __init__(self) -> None:
         self.count: int = 0
 
 
-_FORMAT_LINT_REJECTIONS: contextvars.ContextVar[_FormatLintCounter | None] = (
-    contextvars.ContextVar("mailpilot.format_lint_rejections", default=None)
+_REPLY_REJECTIONS: contextvars.ContextVar[_ReplyRejectionCounter | None] = (
+    contextvars.ContextVar("mailpilot.reply_rejections", default=None)
 )
-_FORMAT_LINT_CAP = 3
+_REPLY_REJECTION_CAP = 3
 
 
 @contextmanager
-def format_lint_scope() -> Generator[None]:
-    """Install a fresh per-invocation format-lint rejection counter (§V.71).
+def reply_rejection_scope() -> Generator[None]:
+    """Install a fresh per-invocation reply-rejection counter (§V.71).
 
     Wrap each task-drained ``agent.invoke`` so successive ``reply_email`` /
     ``send_email`` calls from the same task share a counter. The cap kicks in
-    after ``_FORMAT_LINT_CAP`` consecutive lint rejections; further calls
-    bypass the lint and emit a ``logfire.warn`` so the regression is
-    observable instead of silently looping.
+    after ``_REPLY_REJECTION_CAP`` consecutive rejections (format-lint or
+    fact-check, in any mix); further calls bypass both checks and emit a
+    ``logfire.warn`` so the regression is observable instead of silently
+    looping.
     """
-    token = _FORMAT_LINT_REJECTIONS.set(_FormatLintCounter())
+    token = _REPLY_REJECTIONS.set(_ReplyRejectionCounter())
     try:
         yield
     finally:
-        _FORMAT_LINT_REJECTIONS.reset(token)
+        _REPLY_REJECTIONS.reset(token)
 
 
-def _consume_format_lint_rejection(
+def _consume_reply_rejection(
     *,
     tool: str,
+    rejection_type: Literal["format", "fact_check"],
     workflow_id: str,
     email_id: str | None,
 ) -> bool:
-    """Record a lint hit; return ``True`` when the caller MUST bypass the lint.
+    """Record a rejection; return ``True`` when the caller MUST bypass the check.
 
-    Returns ``False`` outside a ``format_lint_scope`` (legacy path) so the
-    caller surfaces the format error to the agent as before. Inside a scope,
+    Returns ``False`` outside a ``reply_rejection_scope`` (legacy path) so the
+    caller surfaces the error to the agent as before. Inside a scope,
     increments the counter and returns ``True`` once it reaches the cap,
-    emitting the ``cap_reached`` warn span on the transition.
+    emitting the ``cap_reached`` warn span on the transition with the
+    rejection type that triggered the bypass.
     """
-    counter = _FORMAT_LINT_REJECTIONS.get()
+    counter = _REPLY_REJECTIONS.get()
     if counter is None:
         return False
     counter.count += 1
-    if counter.count < _FORMAT_LINT_CAP:
+    if counter.count < _REPLY_REJECTION_CAP:
         return False
-    # Per §V.71: a stable span name keeps Logfire alerts grep-able across tools;
-    # ``tool`` rides as an attribute so the bypass site stays identifiable.
+    # Per §V.71: a stable span name keeps Logfire alerts grep-able across tools
+    # and rejection types; ``tool`` and ``rejection_type`` ride as attributes
+    # so the bypass site and trigger class stay identifiable.
     logfire.warn(
-        "reply_email.format_lint.cap_reached",
+        "reply_email.reply_rejection.cap_reached",
         tool=tool,
+        rejection_type=rejection_type,
         attempt=counter.count,
         workflow_id=workflow_id,
         email_id=email_id,
@@ -250,14 +257,24 @@ def send_email(  # noqa: PLR0913
     """
     format_error = _check_spec_table(body)
     if format_error is not None:
-        bypass = _consume_format_lint_rejection(
-            tool="send_email", workflow_id=workflow_id, email_id=None
+        bypass = _consume_reply_rejection(
+            tool="send_email",
+            rejection_type="format",
+            workflow_id=workflow_id,
+            email_id=None,
         )
         if not bypass:
             return format_error
     fact_check_error = _fact_check_body(body, read_ledger)
     if fact_check_error is not None:
-        return fact_check_error
+        bypass = _consume_reply_rejection(
+            tool="send_email",
+            rejection_type="fact_check",
+            workflow_id=workflow_id,
+            email_id=None,
+        )
+        if not bypass:
+            return fact_check_error
     try:
         email = email_ops.send_email(
             connection,
@@ -299,14 +316,24 @@ def reply_email(  # noqa: PLR0913
     """
     format_error = _check_spec_table(body)
     if format_error is not None:
-        bypass = _consume_format_lint_rejection(
-            tool="reply_email", workflow_id=workflow_id, email_id=email_id
+        bypass = _consume_reply_rejection(
+            tool="reply_email",
+            rejection_type="format",
+            workflow_id=workflow_id,
+            email_id=email_id,
         )
         if not bypass:
             return format_error
     fact_check_error = _fact_check_body(body, read_ledger)
     if fact_check_error is not None:
-        return fact_check_error
+        bypass = _consume_reply_rejection(
+            tool="reply_email",
+            rejection_type="fact_check",
+            workflow_id=workflow_id,
+            email_id=email_id,
+        )
+        if not bypass:
+            return fact_check_error
     try:
         email = email_ops.reply_email(
             connection,

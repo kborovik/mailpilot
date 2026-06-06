@@ -15,7 +15,7 @@ import psycopg
 
 from mailpilot.agent import invoke_workflow_agent
 from mailpilot.agent.retry import BACKOFF_SECONDS, MAX_ATTEMPTS, is_transient
-from mailpilot.agent.tools import format_lint_scope
+from mailpilot.agent.tools import reply_rejection_scope
 from mailpilot.database import (
     complete_task,
     get_contact,
@@ -52,11 +52,13 @@ def execute_task(
             workflow_id=task.workflow_id,
             contact_id=task.contact_id,
         ),
-        # §V.71: install a per-task format-lint rejection counter so
+        # §V.71: install a per-task reply-rejection counter so
         # ``reply_email`` / ``send_email`` calls share the cap across one
-        # ``agent.invoke``. Outside this scope (CLI ``enrollment run``, etc.)
-        # the counter is absent and the lint behaves as before.
-        format_lint_scope(),
+        # ``agent.invoke``. Counter covers both format-lint and fact-check
+        # rejections so neither rejection class can loop unbounded. Outside
+        # this scope (CLI ``enrollment run``, etc.) the counter is absent and
+        # both checks behave as before.
+        reply_rejection_scope(),
     ):
         workflow = get_workflow(connection, task.workflow_id)
         if workflow is None or workflow.status != "active":

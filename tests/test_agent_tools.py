@@ -22,7 +22,6 @@ from mailpilot.agent.tools import (
     cancel_task,
     create_task,
     disable_contact,
-    format_lint_scope,
     list_drive_markdown,
     list_enrollments,
     noop,
@@ -32,6 +31,7 @@ from mailpilot.agent.tools import (
     read_email,
     record_enrollment_outcome,
     reply_email,
+    reply_rejection_scope,
     search_drive_markdown,
     search_emails,
     send_email,
@@ -430,12 +430,13 @@ def test_reply_email_format_lint_cap_reached_bypasses(
     capfire: CaptureLogfire,
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """§V.71 / §T.86 / §B.57: inside ``format_lint_scope`` (the per-task scope
-    installed by ``run.execute_task``), three consecutive ``reply_email``
+    """§V.71 / §T.86 / §B.57: inside ``reply_rejection_scope`` (the per-task
+    scope installed by ``run.execute_task``), three consecutive ``reply_email``
     calls with a body that trips ``_check_spec_table`` must reject the first
-    two and accept the third, emitting a ``reply_email.format_lint.cap_reached``
-    warn span on the bypass. Bounds the runaway prompt-fidelity loops seen in
-    the 2026-06-06 smoke run (17 calls for B7 compare, 35 calls in C burst).
+    two and accept the third, emitting a
+    ``reply_email.reply_rejection.cap_reached`` warn span on the bypass.
+    Bounds the runaway prompt-fidelity loops seen in the 2026-06-06 smoke run
+    (17 calls for B7 compare, 35 calls in C burst).
     """
     account = make_test_account(database_connection)
     contact = make_test_contact(database_connection, email="sender@example.com")
@@ -462,7 +463,7 @@ def test_reply_email_format_lint_cap_reached_bypasses(
     )
 
     settings = make_test_settings()
-    with format_lint_scope():
+    with reply_rejection_scope():
         first = reply_email(
             connection=database_connection,
             account=account,
@@ -496,17 +497,203 @@ def test_reply_email_format_lint_cap_reached_bypasses(
     assert "error" not in third
     gmail_client.send_message.assert_called_once()
 
-    span_names = [s["name"] for s in capfire.exporter.exported_spans_as_dict()]
-    assert "reply_email.format_lint.cap_reached" in span_names
+    cap_span = next(
+        (
+            s
+            for s in capfire.exporter.exported_spans_as_dict()
+            if s["name"] == "reply_email.reply_rejection.cap_reached"
+        ),
+        None,
+    )
+    assert cap_span is not None
+    assert cap_span["attributes"]["rejection_type"] == "format"
+
+
+def test_reply_email_fact_check_cap_reached_bypasses(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.71(+) / §T.89 / §B.59: ``_fact_check_body`` rejections must count
+    toward the same per-invocation cap as ``_check_spec_table`` rejections.
+
+    Three consecutive ``reply_email`` calls citing a numeric token absent from
+    the pipe-row of the (only) ledger doc must reject the first two and accept
+    the third, emitting a ``reply_email.reply_rejection.cap_reached`` warn
+    span with ``rejection_type="fact_check"``. Pre-fix the fact-check returned
+    its error dict directly and bypassed the counter (B7: 9 rejections / 265s
+    sla_agent; C burst: max=531s).
+    """
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection, email="sender@example.com")
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="WS36-600-2 flow rates",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        gmail_message_id="inbound-fact-cap",
+        gmail_thread_id="thread-fact-cap",
+    )
+    assert inbound is not None
+
+    gmail_client = _make_gmail_client(account)
+    # "110" lives only in the prose ``35-110 degrees F`` line of the
+    # ``_WS_LEDGER_PIPE_ROW`` fixture, never in the pipe-row -- mimics the
+    # §B.56 column-context-blindness shape so the body trips the fact-check.
+    body = "The WS36-600-2 runs 110 GPM continuous per the datasheet."
+
+    settings = make_test_settings()
+    with reply_rejection_scope():
+        first = reply_email(
+            connection=database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=settings,
+            workflow_id=workflow.id,
+            email_id=inbound.id,
+            body=body,
+            read_ledger=dict(_WS_LEDGER_PIPE_ROW),
+        )
+        second = reply_email(
+            connection=database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=settings,
+            workflow_id=workflow.id,
+            email_id=inbound.id,
+            body=body,
+            read_ledger=dict(_WS_LEDGER_PIPE_ROW),
+        )
+        third = reply_email(
+            connection=database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=settings,
+            workflow_id=workflow.id,
+            email_id=inbound.id,
+            body=body,
+            read_ledger=dict(_WS_LEDGER_PIPE_ROW),
+        )
+
+    assert first["error"] == "fact_check_mismatch"
+    assert second["error"] == "fact_check_mismatch"
+    assert "error" not in third
+    gmail_client.send_message.assert_called_once()
+
+    cap_span = next(
+        (
+            s
+            for s in capfire.exporter.exported_spans_as_dict()
+            if s["name"] == "reply_email.reply_rejection.cap_reached"
+        ),
+        None,
+    )
+    assert cap_span is not None
+    assert cap_span["attributes"]["rejection_type"] == "fact_check"
+
+
+def test_reply_email_mixed_rejection_cap_reached_bypasses(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.71(+) / §T.89: the cap counts ANY rejection -- mixed format / fact-check
+    sequences hit it after three total hits regardless of class.
+
+    Sequence: format hit (1), fact-check hit (2), fact-check hit (3 -> bypass).
+    The warn span's ``rejection_type`` MUST reflect the class of the rejection
+    that hit the cap (third hit -> ``fact_check`` here).
+    """
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection, email="sender@example.com")
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Mixed sequence",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        gmail_message_id="inbound-mixed-cap",
+        gmail_thread_id="thread-mixed-cap",
+    )
+    assert inbound is not None
+
+    gmail_client = _make_gmail_client(account)
+    # Body 1 trips ``_check_spec_table`` (3 consecutive key-value lines,
+    # no pipe-table separator) and skips fact-check (numeric tokens 110/165/36
+    # would also miss the pipe-row, but format short-circuits first).
+    format_body = (
+        "Here are the specs:\n\n"
+        "Continuous Flow Rate  cat\n"
+        "Peak Flow Rate  dog\n"
+        "Resin Volume  bird\n"
+    )
+    # Body 2 + Body 3 skip the format check (prose only, no spec-row cluster)
+    # and trip the fact-check (110 appears only in prose, never in the pipe-row).
+    fact_body = "The WS36-600-2 runs 110 GPM continuous per the datasheet."
+
+    settings = make_test_settings()
+    with reply_rejection_scope():
+        first = reply_email(
+            connection=database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=settings,
+            workflow_id=workflow.id,
+            email_id=inbound.id,
+            body=format_body,
+            read_ledger=dict(_WS_LEDGER_PIPE_ROW),
+        )
+        second = reply_email(
+            connection=database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=settings,
+            workflow_id=workflow.id,
+            email_id=inbound.id,
+            body=fact_body,
+            read_ledger=dict(_WS_LEDGER_PIPE_ROW),
+        )
+        third = reply_email(
+            connection=database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=settings,
+            workflow_id=workflow.id,
+            email_id=inbound.id,
+            body=fact_body,
+            read_ledger=dict(_WS_LEDGER_PIPE_ROW),
+        )
+
+    assert first["error"] == "format"
+    assert second["error"] == "fact_check_mismatch"
+    assert "error" not in third
+    gmail_client.send_message.assert_called_once()
+
+    cap_span = next(
+        (
+            s
+            for s in capfire.exporter.exported_spans_as_dict()
+            if s["name"] == "reply_email.reply_rejection.cap_reached"
+        ),
+        None,
+    )
+    assert cap_span is not None
+    assert cap_span["attributes"]["rejection_type"] == "fact_check"
 
 
 def test_send_email_format_lint_cap_outside_scope_unchanged(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """§V.71: outside ``format_lint_scope`` (CLI ``enrollment run`` paths and
-    legacy direct calls), repeated lint hits keep returning the format error
-    -- the bypass MUST only kick in when ``run.execute_task`` installed the
-    counter. Asserts the wrapper preserves prior behaviour outside the scope.
+    """§V.71: outside ``reply_rejection_scope`` (CLI ``enrollment run`` paths
+    and legacy direct calls), repeated lint hits keep returning the format
+    error -- the bypass MUST only kick in when ``run.execute_task`` installed
+    the counter. Asserts the wrapper preserves prior behaviour outside the
+    scope.
     """
     account = make_test_account(database_connection)
     make_test_contact(database_connection, email="recipient@example.com")
