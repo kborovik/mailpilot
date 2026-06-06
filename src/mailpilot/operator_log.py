@@ -41,6 +41,14 @@ def operator_event(event_name: str, /, **fields: Any) -> None:
     sys.stderr.flush()
 
 
+_PSYCOPG_ERROR_CODES: tuple[tuple[str, str], ...] = (
+    ("UniqueViolation", "duplicate_key"),
+    ("ForeignKeyViolation", "foreign_key_violation"),
+    ("NotNullViolation", "not_null_violation"),
+    ("CheckViolation", "check_violation"),
+)
+
+
 @contextmanager
 def cli_mutation(noun: str, verb: str, /, **attrs: Any) -> Generator[None]:
     """Wrap an operator-initiated CRM-config CLI mutation per SPEC §V.54.
@@ -49,6 +57,12 @@ def cli_mutation(noun: str, verb: str, /, **attrs: Any) -> Generator[None]:
     ``Exception`` (e.g. ``psycopg.OperationalError``), emits
     ``logfire.exception`` and a paired ``operator_event("error",
     source="<noun>.<verb>", message=str(exc))`` before re-raising.
+
+    On ``psycopg.Error``, after the observability pair, translates the
+    constraint-class to a structured ``output_error(str(exc), code)``
+    envelope (per §V.54 envelope-translation clause). Click's default
+    handler never sees the ``psycopg.Error`` so stderr stays clean of
+    raw ``Traceback`` dumps; stdout stays strict-JSON-empty per §V.3.
 
     Caller is responsible for emitting the success-path
     ``operator_event("<noun>.<verb>", ...)`` with the verb-appropriate
@@ -64,4 +78,16 @@ def cli_mutation(noun: str, verb: str, /, **attrs: Any) -> Generator[None]:
         except Exception as exc:
             logfire.exception(failure_name, **attrs)
             operator_event("error", source=span_name, message=str(exc))
+            import psycopg
+
+            from mailpilot.cli import output_error
+
+            if isinstance(exc, psycopg.Error):
+                code = "database_error"
+                for class_name, mapped in _PSYCOPG_ERROR_CODES:
+                    subclass = getattr(psycopg.errors, class_name, None)
+                    if subclass is not None and isinstance(exc, subclass):
+                        code = mapped
+                        break
+                output_error(str(exc), code)
             raise
