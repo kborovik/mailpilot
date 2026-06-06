@@ -1,7 +1,7 @@
 ---
 name: smoke-test
 description: |
-  End-to-end MailPilot smoke test against real Gmail across outbound@lab5.ca and inbound@lab5.ca. One Phase 0 setup → 2 scenarios run sequentially without state reset. Scenario A = outbound workflow + manual operator reply. Scenario B = live KB-grounded inbound auto-reply demo at https://lab5.ca/mailpilot// (real Drive folder, in-scope single-source grounded reply + out-of-scope polite decline + multi-source compare-and-contrast across manufacturers e.g. Dow FilmTec vs Hydranautics vs LG Chem vs Toray RO membranes). Outbound workflow stays active across B → verifies concurrent multi-account, multi-workflow operation. Both scenarios mandatory. Use whenever user says "smoke test", "run end-to-end", "verify the system works", or after non-trivial changes to sync, routing, agent execution, KB grounding, or Pub/Sub code -- even without explicit invocation.
+  End-to-end MailPilot smoke test against real Gmail across outbound@lab5.ca and inbound@lab5.ca. One Phase 0 setup → 3 scenarios run sequentially without state reset. Scenario A = outbound workflow + manual operator reply. Scenario B = live KB-grounded inbound auto-reply demo at https://lab5.ca/mailpilot// (real Drive folder, in-scope single-source grounded reply + out-of-scope polite decline + multi-source compare-and-contrast across manufacturers e.g. Dow FilmTec vs Hydranautics vs LG Chem vs Toray RO membranes). Scenario C = burst-load oracle (25 emails fired at P=8 concurrency, mix 15 in-scope / 5 out-of-scope / 5 compare; aggregate Logfire + CLI verdicts only -- no per-message grading). Outbound workflow stays active across B and C → verifies concurrent multi-account, multi-workflow operation under sustained load. All three scenarios mandatory. Use whenever user says "smoke test", "run end-to-end", "verify the system works", or after non-trivial changes to sync, routing, agent execution, KB grounding, or Pub/Sub code -- even without explicit invocation.
 model: sonnet
 ---
 
@@ -18,8 +18,9 @@ Two scenarios share one Phase 0 setup and one `mailpilot run` loop. Outbound wor
 | -------- | ----------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | A        | Outbound only                       | `mailpilot enrollment run`               | Outbound agent send → Gmail delivery → manual operator reply → thread_match routing → agent processes reply     |
 | B        | Outbound (terminal) + Demo (active) | `mailpilot email send` (operator-driven) | The lab5.ca/mailpilot/ promise -- KB-grounded reply within 90s for an in-scope question, polite decline for out-of-scope, AND a multi-source compare-and-contrast across manufacturer datasheets |
+| C        | Outbound (terminal) + Demo (active) | `mailpilot email send` x25 @ P=8         | Burst-load oracle -- 25 emails (15 in-scope / 5 out-of-scope / 5 compare) fired at P=8 concurrency; aggregate Logfire SLA + CLI state verdicts; no per-message grading |
 
-Both scenarios are **mandatory**. `make clean` runs **once**, at the very start. Scenario B IS the lab5.ca/mailpilot/ system under test -- it must run.
+All three scenarios are **mandatory**. `make clean` runs **once**, at the very start. Scenario B IS the lab5.ca/mailpilot/ system under test -- it must run. Scenario C is the load oracle for that same system under sustained burst.
 
 ## Conventions
 
@@ -31,7 +32,7 @@ Both scenarios are **mandatory**. `make clean` runs **once**, at the very start.
   SUBJECT_A="[ST-$(date +%H%M%S)] ${TOPIC_A}"
   ```
 
-  Scenario B sends five trigger emails. Generate `SUBJECT_B1` (in-scope), `SUBJECT_B2` (out-of-scope), `SUBJECT_B3` (compare-and-contrast), `SUBJECT_B75a` and `SUBJECT_B75b` (concurrent in-scope pair, gate B7.5) independently the same way. Verify all six (`SUBJECT_A`, `SUBJECT_B1`, `SUBJECT_B2`, `SUBJECT_B3`, `SUBJECT_B75a`, `SUBJECT_B75b`) are distinct before continuing. If `/usr/share/dict/words` is unavailable, fall back to `head -c 12 /dev/urandom | base32 | tr -d '=' | head -c 10`.
+  Scenario B sends five trigger emails. Generate `SUBJECT_B1` (in-scope), `SUBJECT_B2` (out-of-scope), `SUBJECT_B3` (compare-and-contrast), `SUBJECT_B75a` and `SUBJECT_B75b` (concurrent in-scope pair, gate B7.5) independently the same way. Verify all six (`SUBJECT_A`, `SUBJECT_B1`, `SUBJECT_B2`, `SUBJECT_B3`, `SUBJECT_B75a`, `SUBJECT_B75b`) are distinct before continuing. Scenario C generates 25 subjects in bulk inside C1 using the format `[ST-<HHMMSS>-<i>] <topic>` -- the `-<i>` index suffix means C subjects cannot collide with A/B subjects (which use `[ST-<HHMMSS>]` without the suffix); see C1. If `/usr/share/dict/words` is unavailable, fall back to `head -c 12 /dev/urandom | base32 | tr -d '=' | head -c 10`.
 
 - **Test start ISO timestamp.** Capture before each scenario; reuse for `--since` filters and Logfire windows.
 - **Polling.** When waiting for sync, routing, or agent results: poll up to 12 attempts, 5s apart (~60s total). Do not call `mailpilot account sync` directly -- the background `mailpilot run` loop owns sync.
@@ -172,7 +173,7 @@ Save `OUTBOUND_WORKFLOW_ID`.
 
 ### A2. Start the sync loop
 
-Start `mailpilot run` in the background via `Bash` with `run_in_background: true`. Capture the bash_id so you can read its output later. The loop runs **once for the whole test** -- it stays up through B and is only stopped at the very end (B9).
+Start `mailpilot run` in the background via `Bash` with `run_in_background: true`. Capture the bash_id so you can read its output later. The loop runs **once for the whole test** -- it stays up through B and C and is only stopped at the very end (C7).
 
 The loop emits curated `event=...` lifecycle lines on stderr regardless of `--debug` (`loop.tick`, `sync.account`, `route.match`, `agent.run`, `task.drain`, `error`). The `Bash` background capture merges stdout and stderr, so the captured output you read still contains them. Use `--debug` only when you also need Logfire's full span output for deep diagnosis.
 
@@ -760,10 +761,6 @@ mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound --s
 
 Expect exactly 5 rows (the B3, B6, B7, B75a, and B75b triggers), each with `workflow_id == null`. Any deviation is a separate signal -- either an unexpected outbound send (record as a Bug) or a missing trigger (re-run the missing step).
 
-### B10. Stop the sync loop
-
-Send SIGTERM to the background `mailpilot run` (e.g. `kill <pid>`). Wait for `Sync loop stopped` in the captured output. Confirm the `sync_status` table is empty. If the process does not exit within 10s, send SIGKILL and record this in the report.
-
 ### Logfire review for Scenario B
 
 Window `[TEST_START_B, now]`. Spans to verify:
@@ -779,6 +776,218 @@ Window `[TEST_START_B, now]`. Spans to verify:
   - At least one KB-consulting tool call (`search_drive_markdown` or `list_drive_markdown`) is mandatory in all five. With ≥30 docs in the folder, `list_drive_markdown` instead of `search_drive_markdown` on B4 / B7 / B75a / B75b is a regression. On B6 (decline), `list_drive_markdown` is acceptable.
 - `agent.invoke` (B7) `input_tokens` -- should be noticeably higher than B4 because the compare invocation pulls 2-4 full datasheets into the agent's context. A B7 token count at or below B4's signals the agent skipped one or more reads -- cross-check against the read-count gate.
 - Any `is_exception=true` or `level=warn` spans -- record. Drive 4xx/5xx surfacing as `drive_unavailable` from the tool is acceptable in the agent's tool-return ledger but should not be `is_exception=true` on the span.
+
+---
+
+## Transition to Scenario C
+
+Do not stop the sync loop. Do not run `make clean`. Do not recreate accounts, contacts, or workflows. Scenario C reuses the same demo workflow (`DEMO_WORKFLOW_ID`) and outbound contact (`OUTBOUND_CONTACT_ID`) from B; the outbound workflow from A remains active and must stay quiet through C as well. Scenario C is the load oracle for the lab5.ca/mailpilot/ system that B verified at single-send fidelity -- B trusts content quality, C trusts sustained-burst structural health.
+
+---
+
+## Scenario C: Burst-load oracle
+
+**Hypothesis:** The demo workflow handles a sustained burst (25 emails fired at P=8 concurrency, mixing the same three classifier branches Scenario B exercises one-at-a-time) without dropping triggers, serializing classification, leaking state across invocations, or breaching the lab5.ca/mailpilot/ promise on the bulk of replies. This is the **load oracle**; B3-B7.5 remain the **correctness oracle** -- per-message groundedness is graded there, and C trusts those gates for content quality. C's verdicts are aggregate Logfire + CLI state only; there is no per-message body inspection.
+
+**Concurrency.** P=8 -- high enough to interleave classification + `agent.invoke` under real concurrency, low enough that Gmail per-user send rate stays comfortably under quota. Do **not** raise P without first confirming Gmail rate limits for the impersonated user; tripping a Gmail-side 429 invalidates the run, not the system under test.
+
+**Burst-tolerant SLA.** Single-send replies (B4 / B6 / B7) hold the strict 90s SLA per §V.61. Under burst, the per-reply max relaxes to 110s -- the tail under sustained load may drift above the public promise -- but p95 MUST still meet the public 90s SLA, i.e., 95% of burst replies still keep the promise.
+
+Capture `TEST_START_C` (ISO, must be later than B's last activity).
+
+### C1. Generate burst payload (subjects + Q/A pair ids + questions)
+
+Pre-generate the entire burst inputs before any send: arrays of 25 subjects + 25 Q/A pair ids + 25 questions, mixed deterministically 15 in-scope / 5 out-of-scope / 5 compare. The out-of-scope pool is exactly 5 pairs (this consumes all of them, sampled with replacement -- duplicates are acceptable since C does not grade per-message); in-scope and compare pools are large enough that replacement is unlikely to collide.
+
+```bash
+TEST_START_C=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+SUBJECTS_BURST=()
+for i in $(seq 1 25); do
+  TOPIC=$(sort -R /usr/share/dict/words 2>/dev/null \
+    | grep -E '^[A-Za-z]{4,9}$' | head -2 | tr '\n' ' ' | sed 's/ *$//')
+  SUBJECTS_BURST+=("[ST-$(date +%H%M%S)-${i}] ${TOPIC}")
+done
+[ "$(printf '%s\n' "${SUBJECTS_BURST[@]}" | sort -u | wc -l)" -eq 25 ] \
+  || { echo "FAIL: subject collision in burst"; exit 1; }
+
+QA_IDS_BURST=()
+for i in $(seq 1 15); do
+  QA_IDS_BURST+=("$(python3 .claude/skills/smoke-test/scripts/qa.py pick --type inscope \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')")
+done
+for i in $(seq 1 5); do
+  QA_IDS_BURST+=("$(python3 .claude/skills/smoke-test/scripts/qa.py pick --type outscope \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')")
+done
+for i in $(seq 1 5); do
+  QA_IDS_BURST+=("$(python3 .claude/skills/smoke-test/scripts/qa.py pick --type compare \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')")
+done
+
+QUESTIONS_BURST=()
+for qa_id in "${QA_IDS_BURST[@]}"; do
+  QUESTIONS_BURST+=("$(python3 .claude/skills/smoke-test/scripts/qa.py pick --id "$qa_id" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["question"])')")
+done
+```
+
+**Gate C1:**
+
+- `SUBJECTS_BURST` has 25 distinct entries (the explicit `sort -u | wc -l` check above must pass).
+- `QA_IDS_BURST` has 25 entries: exactly 15 starting `qa-in-`, 5 starting `qa-out-`, 5 starting `qa-cmp-`. A different split means `qa.py pick --type <T>` returned the wrong type -- record as a Bug and stop (the mix is what makes C's classifier-under-load verdict meaningful).
+- `QUESTIONS_BURST` has 25 entries, none empty.
+- The `[ST-<HHMMSS>-<i>] <topic>` subject format trivially excludes collisions with A/B subjects (which use `[ST-<HHMMSS>]` without the `-<i>` suffix).
+
+### C2. Fire 25 sends at P=8
+
+Bounded-concurrency loop using bash job control. Capture `T_SEND_C` as a single wall-clock anchor immediately before the loop -- all 25 sends complete within ~15-30s, so a single anchor is precise enough for the per-span latency derivation in C4.
+
+```bash
+T_SEND_C=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+for i in $(seq 0 24); do
+  while [ "$(jobs -r | wc -l)" -ge 8 ]; do sleep 0.1; done
+  mailpilot email send \
+    --account-id <OUTBOUND_ACCOUNT_ID> \
+    --to inbound@lab5.ca \
+    --subject "${SUBJECTS_BURST[$i]}" \
+    --body "${QUESTIONS_BURST[$i]}" >/dev/null &
+done
+wait
+```
+
+**Gate C2:**
+
+- `wait` returns 0 (all 25 background sends exited cleanly). A non-zero return means one or more Gmail-side or CLI-side failures occurred during the burst -- record which subject(s) failed and stop; the run is invalidated by the failed send(s), not by the system under test.
+- `mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound --since $TEST_START_C` returns 25 rows, each with `workflow_id == null` (these are operator-driven outbound, analogous to B3/B6/B7/B75a/B75b). Any deviation here -- extra rows, missing rows, or non-null `workflow_id` -- is a separate Bug.
+
+### C3. Poll for 25 replies (cap 240s)
+
+The lab5.ca/mailpilot/ public SLA is 90s for a single reply; under sustained P=8 burst, the wall-clock cap to receive all 25 may run longer due to task-drain ordering. 240s = 90s × ~2.7 -- generous enough on total wall-clock that the CLI poll does not false-fail, while C4 still enforces the strict per-span verdict per reply.
+
+```bash
+mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction inbound --since "$TEST_START_C"
+```
+
+Match each row's `subject` against `Re: <one of SUBJECTS_BURST>` (Gmail typically preserves with `Re:` prefix; match on the bracket-and-topic substring). Capture the 25 reply ids as `REPLY_IDS_BURST`.
+
+**Gate C3 (wire counts):**
+
+- 25 replies present in the outbound mailbox, each matching a unique entry in `SUBJECTS_BURST` (no duplicates, no missing pairings). Fewer than 25 within 240s is a Critical regression -- the system dropped or queued a trigger.
+- `mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction inbound --since $TEST_START_C` returns 25 rows, all `is_routed == true`, all `workflow_id == DEMO_WORKFLOW_ID`, all `route_method == classified`. Any `route_method == thread_match` is a Bug -- fresh threads must classify, not match. Any `is_routed == false` row is a Critical routing regression under load.
+- `mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound --since $TEST_START_C` returns 25 rows (the agent replies).
+- `mailpilot task list --workflow-id <DEMO_WORKFLOW_ID>` filtered to the burst window returns 25 tasks, all `status == "completed"`. Any `failed` row -- record with `mailpilot task view <id>` reason and treat as a Bug.
+
+### C4. Logfire aggregate gates
+
+Single window `[T_SEND_C, T_SEND_C + 300s]`, scope to `workflow_id == DEMO_WORKFLOW_ID` and `trigger == 'task'`.
+
+**Gate C4.a -- per-span SLA + token economics:**
+
+```sql
+WITH burst AS (
+  SELECT
+    attributes->>'email_id' AS email_id,
+    start_timestamp,
+    end_timestamp,
+    EXTRACT(EPOCH FROM (end_timestamp - start_timestamp)) AS dur_s,
+    EXTRACT(EPOCH FROM (end_timestamp - TIMESTAMPTZ '<T_SEND_C>')) AS latency_s,
+    is_exception,
+    level,
+    (attributes->>'input_tokens')::int AS in_tok,
+    (attributes->>'output_tokens')::int AS out_tok,
+    (attributes->>'cache_read_input_tokens')::int AS cache_read
+  FROM records
+  WHERE deployment_environment = 'development'
+    AND span_name = 'agent.invoke'
+    AND start_timestamp >= '<T_SEND_C>'
+    AND start_timestamp <= '<T_SEND_C>'::timestamptz + INTERVAL '300 seconds'
+    AND attributes->>'workflow_id' = '<DEMO_WORKFLOW_ID>'
+    AND attributes->>'trigger' = 'task'
+)
+SELECT
+  COUNT(*) AS n_invokes,
+  COUNT(DISTINCT email_id) AS n_distinct_email_ids,
+  MAX(latency_s) AS max_latency_s,
+  approx_percentile_cont(latency_s, 0.95) AS p95_latency_s,
+  SUM(CASE WHEN is_exception THEN 1 ELSE 0 END) AS n_exceptions,
+  SUM(CASE WHEN level = 'warn' THEN 1 ELSE 0 END) AS n_warns,
+  AVG(cache_read::float / NULLIF(in_tok::float, 0)) AS avg_cache_hit_ratio,
+  SUM(in_tok) AS total_in_tok,
+  SUM(out_tok) AS total_out_tok
+FROM burst;
+```
+
+Assertions:
+
+- `n_invokes == 25` AND `n_distinct_email_ids == 25` -- no merged or dropped triggers (§V.26 / §T.63 contract: one span per inbound email).
+- `max_latency_s <= 110` -- burst-tolerant per-reply ceiling. A run above 110s is a Critical regression of the public promise under load.
+- `p95_latency_s <= 90` -- 95% of burst replies still meet the public lab5.ca/mailpilot/ 90s SLA. A breach here means the promise degrades under burst even for the typical reply, not just the tail.
+- `n_exceptions == 0` AND `n_warns == 0`.
+- `avg_cache_hit_ratio >= 0.5` -- prompt cache stays warm across the burst (catches cache-key churn regressions where each agent invocation re-pays the full system-prompt token cost; the dominant cost driver at this scale).
+
+**Gate C4.b -- concurrency proof (no serialization regression):**
+
+```sql
+WITH burst AS ( /* same CTE as C4.a */ )
+SELECT COUNT(*) AS overlap_pairs
+FROM burst a, burst b
+WHERE a.email_id < b.email_id
+  AND a.start_timestamp < b.end_timestamp
+  AND b.start_timestamp < a.end_timestamp;
+```
+
+Assert `overlap_pairs >= 20`. With P=8 sends and ~10-40s per `agent.invoke`, expected overlap pairs are much higher than 20; this floor is generous enough that only strict serialization (drain-layer pool regression, §V.23 / §V.23(+)) can fail it. A failure here means the dispatcher serialized invocations -- record as a Critical Bug, since it defeats the burst-load oracle entirely.
+
+**Gate C4.c -- Drive race signatures absent (§B.34):**
+
+```sql
+SELECT MAX(EXTRACT(EPOCH FROM (end_timestamp - start_timestamp))) AS max_dur_s,
+       SUM(CASE WHEN is_exception THEN 1 ELSE 0 END) AS n_exc
+FROM records
+WHERE deployment_environment = 'development'
+  AND attributes->>'gen_ai.tool.name' = 'read_drive_markdown'
+  AND start_timestamp >= '<T_SEND_C>'
+  AND start_timestamp <= '<T_SEND_C>'::timestamptz + INTERVAL '300 seconds';
+```
+
+Assert:
+
+- `max_dur_s < 60` -- §B.34 60s socket-timeout signature absent across the burst's Drive tool calls.
+- `n_exc == 0` -- no unhandled exceptions escape the Drive tool wrappers.
+
+A 60s+ `read_drive_markdown` span under burst is a stronger signal than the same span in B6.5 (B7's single-invocation pair): it means the structural `sequential=True` registration (§V.38) regressed across concurrent agent invocations, not just within one. Record as a Critical Bug.
+
+### C5. Activity timeline check (incremental)
+
+```
+mailpilot activity list --contact-id <OUTBOUND_CONTACT_ID> --since <TEST_START_C>
+```
+
+**Gate C5 (incremental from `TEST_START_C`, not cumulative):**
+
+- 25 `email_received` activities (one per burst trigger landing in the demo mailbox).
+- 25 `email_sent` activities (one per agent reply).
+- 25 `enrollment_completed` activities (one per `record_enrollment_outcome`).
+- 0 `enrollment_failed` -- any failed enrollment in the burst window is a Bug (the agent should reach `completed` even on out-of-scope replies, which terminate via decline).
+
+### C6. Concurrent-workflow quiet check (Scenario A outbound still silent)
+
+The Scenario A outbound workflow remained active through B and continues through C. It must not have reacted to C's burst traffic.
+
+```
+mailpilot email list \
+  --account-id <OUTBOUND_ACCOUNT_ID> \
+  --direction outbound \
+  --workflow-id <OUTBOUND_WORKFLOW_ID> \
+  --since <TEST_START_C>
+```
+
+**Gate C6:** Zero rows. Any non-zero count means the outbound workflow reacted to C's traffic -- record as a Critical Bug. Cross-workflow leak under burst is a substantially worse signal than the same leak under single-send, because it implies the leak scales with traffic.
+
+### C7. Stop the sync loop
+
+End of test. Send SIGTERM to the background `mailpilot run` (e.g. `kill <pid>`). Wait for `Sync loop stopped` in the captured output. Confirm the `sync_status` table is empty. If the process does not exit within 10s, send SIGKILL and record this in the report.
 
 ---
 
@@ -876,7 +1085,15 @@ Scenario B: KB-grounded demo (lab5.ca/mailpilot/, outbound workflow still active
   B7.5 Concurrent dual in-scope ..... PASS  (LATENCY_B75a = <Ns>, LATENCY_B75b = <Ns>; 2 overlapping agent.invoke spans; both grounded in own source)
   B8  Activity timeline ............ PASS  (5 received / 5 sent / 5 enrollment_completed)
   B9  Outbound stayed quiet ........ PASS  (0 new outbound sends during B)
-  B10 Stop sync loop ............... PASS
+
+Scenario C: Burst-load oracle (25 emails @ P=8, outbound workflow still active)
+  C1  Burst payload generated ...... PASS  (25 distinct subjects; mix 15 qa-in / 5 qa-out / 5 qa-cmp)
+  C2  25 sends @ P=8 ............... PASS  (wait exit 0; 25 outbound rows with workflow_id=null)
+  C3  25 replies received .......... PASS  (wall-clock <Ns>; all classified to demo workflow)
+  C4  Logfire aggregate gates ...... PASS  (max=<Ns> <=110, p95=<Ns> <=90, 0 exc, 0 warn, cache>=0.5, overlap_pairs=<N> >=20, drive max_dur<60s)
+  C5  Activity timeline (delta) .... PASS  (+25 received / +25 sent / +25 enrollment_completed)
+  C6  Outbound stayed quiet ........ PASS  (0 new outbound-workflow sends during C)
+  C7  Stop sync loop ............... PASS
 
 Entity IDs:
   Outbound account: <id>   Inbound account: <id>   Company: <id>
@@ -970,13 +1187,13 @@ If a `/sdd:spec` invocation is cancelled or revised by the user mid-run, record 
 
 ## Timing
 
-Expected total: ~9 minutes. Phase 0 once, run loop once, no reset between scenarios. The added compare-and-contrast question (B7) costs roughly one extra 90s reply window over the prior baseline because it forces 2-4 `read_drive_markdown` calls and a multi-doc synthesis. The concurrent dual-send (B7.5) adds another ~90s window for the second of the two parallel replies (the two reply windows overlap, so the marginal cost is one reply window, not two).
+Expected total: ~12-13 minutes. Phase 0 once, run loop once, no reset between scenarios. The added compare-and-contrast question (B7) costs roughly one extra 90s reply window over the prior baseline because it forces 2-4 `read_drive_markdown` calls and a multi-doc synthesis. The concurrent dual-send (B7.5) adds another ~90s window for the second of the two parallel replies (the two reply windows overlap, so the marginal cost is one reply window, not two). Scenario C (burst-load oracle) adds ~2-4 minutes for the 25-send burst plus aggregate verification; per-reply latency softens to a 110s ceiling under burst (vs 90s for single-send) while p95 must still meet the public 90s promise.
 
 | Phase / scenario                          | Duration |
 | ----------------------------------------- | -------- |
 | Phase 0 (once, 2 accounts)                | ~15s     |
 | A1 / B1 workflow setup                    | ~5s      |
-| A2 start run loop                         | ~5s     |
+| A2 start run loop                         | ~5s      |
 | A3 outbound agent                         | ~10s     |
 | A4 sync + route                           | ~10-60s  |
 | A5 / B3 / B6 / B7 operator send           | ~3s each |
@@ -987,5 +1204,10 @@ Expected total: ~9 minutes. Phase 0 once, run loop once, no reset between scenar
 | B7 compare reply (90s SLA)                | ~20-90s  |
 | B7.5 concurrent dual reply (90s SLA each, overlapping) | ~20-90s |
 | A8 / B8 activity check                    | ~3s      |
-| B10 stop run loop                         | ~3s      |
+| C1 burst payload generation               | ~3s      |
+| C2 25 sends @ P=8                         | ~15-30s  |
+| C3 poll for 25 replies (110s ceiling)     | ~60-180s |
+| C4 Logfire aggregate gates (4 queries)    | ~10s     |
+| C5 / C6 activity + quiet check            | ~5s      |
+| C7 stop run loop                          | ~3s      |
 | Report                                    | ~10s     |
