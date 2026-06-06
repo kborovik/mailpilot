@@ -131,7 +131,12 @@ _DRIVE_GROUNDING = (
     "ranking order alone. Cite the source file in the reply. If two "
     "consecutive search_drive_markdown calls return too few hits to ground "
     "the reply, stop searching and call list_drive_markdown once instead -- "
-    "do not retry search_drive_markdown a third time.\n"
+    "do not retry search_drive_markdown a third time. When the reply "
+    "addresses two or more distinct product targets (a compare-and-contrast "
+    "reply), the search-budget rule applies per target: issue at least one "
+    "target-specific search_drive_markdown query for each distinct target "
+    "before list_drive_markdown is acceptable as grounding for that target, "
+    "even when other targets are already grounded by earlier searches.\n"
 )
 
 

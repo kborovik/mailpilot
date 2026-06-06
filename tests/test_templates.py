@@ -125,6 +125,24 @@ def test_inbound_google_drive_protocol_carries_search_budget_fallback() -> None:
     assert "top >=3 results" in protocol
 
 
+def test_inbound_google_drive_protocol_carries_per_target_compare_rule() -> None:
+    """§V.41(+): compare-and-contrast replies (>=2 distinct product targets)
+    must issue >=1 target-specific search_drive_markdown per distinct target
+    before list_drive_markdown is acceptable as grounding for that target,
+    even when other targets are already grounded by earlier searches.
+
+    §V.45: the rule lives in the _DRIVE_GROUNDING overlay bound only to
+    inbound-google-drive -- non-Drive templates physically cannot trigger
+    the compare path."""
+    protocol = TEMPLATES["inbound-google-drive"].protocol
+    assert "compare-and-contrast" in protocol
+    assert "per target" in protocol
+    assert "each distinct target" in protocol
+    # Non-Drive templates must not pick up the per-target rule.
+    for name in ("outbound-general", "inbound-general"):
+        assert "compare-and-contrast" not in TEMPLATES[name].protocol
+
+
 def test_inbound_google_drive_drive_tools_marked_sequential() -> None:
     """§V.38 + §B.34: every Drive Tool binding must carry ``sequential=True``.
 
