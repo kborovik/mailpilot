@@ -15,6 +15,7 @@ import psycopg
 
 from mailpilot.agent import invoke_workflow_agent
 from mailpilot.agent.retry import BACKOFF_SECONDS, MAX_ATTEMPTS, is_transient
+from mailpilot.agent.tools import format_lint_scope
 from mailpilot.database import (
     complete_task,
     get_contact,
@@ -44,11 +45,18 @@ def execute_task(
         settings: Application settings.
         task: Pending task to execute.
     """
-    with logfire.span(
-        "run.execute_task",
-        task_id=task.id,
-        workflow_id=task.workflow_id,
-        contact_id=task.contact_id,
+    with (
+        logfire.span(
+            "run.execute_task",
+            task_id=task.id,
+            workflow_id=task.workflow_id,
+            contact_id=task.contact_id,
+        ),
+        # §V.71: install a per-task format-lint rejection counter so
+        # ``reply_email`` / ``send_email`` calls share the cap across one
+        # ``agent.invoke``. Outside this scope (CLI ``enrollment run``, etc.)
+        # the counter is absent and the lint behaves as before.
+        format_lint_scope(),
     ):
         workflow = get_workflow(connection, task.workflow_id)
         if workflow is None or workflow.status != "active":

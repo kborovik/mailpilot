@@ -22,6 +22,7 @@ from mailpilot.agent.tools import (
     cancel_task,
     create_task,
     disable_contact,
+    format_lint_scope,
     list_drive_markdown,
     list_enrollments,
     noop,
@@ -423,6 +424,118 @@ def test_reply_email_decline_body_passes(
 
     assert "error" not in result
     gmail_client.send_message.assert_called_once()
+
+
+def test_reply_email_format_lint_cap_reached_bypasses(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.71 / §T.86 / §B.57: inside ``format_lint_scope`` (the per-task scope
+    installed by ``run.execute_task``), three consecutive ``reply_email``
+    calls with a body that trips ``_check_spec_table`` must reject the first
+    two and accept the third, emitting a ``reply_email.format_lint.cap_reached``
+    warn span on the bypass. Bounds the runaway prompt-fidelity loops seen in
+    the 2026-06-06 smoke run (17 calls for B7 compare, 35 calls in C burst).
+    """
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection, email="sender@example.com")
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="WS36-600-2 specs?",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        gmail_message_id="inbound-cap",
+        gmail_thread_id="thread-cap",
+    )
+    assert inbound is not None
+
+    gmail_client = _make_gmail_client(account)
+    body = (
+        "Here are the WS36-600-2 specs you asked about:\n\n"
+        "Continuous Flow Rate  110 GPM\n"
+        "Peak Flow Rate  165 GPM\n"
+        "Resin Volume  36 cu ft\n"
+    )
+
+    settings = make_test_settings()
+    with format_lint_scope():
+        first = reply_email(
+            connection=database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=settings,
+            workflow_id=workflow.id,
+            email_id=inbound.id,
+            body=body,
+        )
+        second = reply_email(
+            connection=database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=settings,
+            workflow_id=workflow.id,
+            email_id=inbound.id,
+            body=body,
+        )
+        third = reply_email(
+            connection=database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=settings,
+            workflow_id=workflow.id,
+            email_id=inbound.id,
+            body=body,
+        )
+
+    assert first["error"] == "format"
+    assert second["error"] == "format"
+    assert "error" not in third
+    gmail_client.send_message.assert_called_once()
+
+    span_names = [s["name"] for s in capfire.exporter.exported_spans_as_dict()]
+    assert "reply_email.format_lint.cap_reached" in span_names
+
+
+def test_send_email_format_lint_cap_outside_scope_unchanged(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.71: outside ``format_lint_scope`` (CLI ``enrollment run`` paths and
+    legacy direct calls), repeated lint hits keep returning the format error
+    -- the bypass MUST only kick in when ``run.execute_task`` installed the
+    counter. Asserts the wrapper preserves prior behaviour outside the scope.
+    """
+    account = make_test_account(database_connection)
+    make_test_contact(database_connection, email="recipient@example.com")
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    gmail_client = _make_gmail_client(account)
+
+    body = (
+        "Here are the specs:\n\n"
+        "Continuous Flow Rate  110 GPM\n"
+        "Peak Flow Rate  165 GPM\n"
+        "Resin Volume  36 cu ft\n"
+    )
+
+    settings = make_test_settings()
+    for _ in range(5):
+        result = send_email(
+            connection=database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=settings,
+            workflow_id=workflow.id,
+            to="recipient@example.com",
+            subject="Specs",
+            body=body,
+        )
+        assert result["error"] == "format"
+
+    gmail_client.send_message.assert_not_called()
 
 
 def test_reply_email_spec_shape_no_table_rejects(

@@ -26,15 +26,90 @@ Tools (see §I agent tools):
 
 from __future__ import annotations
 
+import contextvars
 import re
+from collections.abc import Generator
+from contextlib import contextmanager
 from typing import Any
 
+import logfire
 import psycopg
 
 from mailpilot import database, email_ops
 from mailpilot.drive import DriveClient
 from mailpilot.models import Account
 from mailpilot.settings import Settings
+
+# §V.71: per-agent-invocation format-lint rejection counter (root cause §B.57).
+# ``run.execute_task`` enters ``format_lint_scope`` to install a fresh counter
+# for each task; ``reply_email`` and ``send_email`` increment the counter on
+# every ``_check_spec_table`` hit and bypass the lint once the counter reaches
+# ``_FORMAT_LINT_CAP``. Bounds worst-case latency under prompt-fidelity loops
+# (B7 17 calls / 195s, C burst 35 calls / 495s observed in §B.57). Outside a
+# scope (legacy / CLI paths without a task row) the counter stays ``None`` and
+# the lint behaves as before.
+
+
+class _FormatLintCounter:
+    __slots__ = ("count",)
+
+    def __init__(self) -> None:
+        self.count: int = 0
+
+
+_FORMAT_LINT_REJECTIONS: contextvars.ContextVar[_FormatLintCounter | None] = (
+    contextvars.ContextVar("mailpilot.format_lint_rejections", default=None)
+)
+_FORMAT_LINT_CAP = 3
+
+
+@contextmanager
+def format_lint_scope() -> Generator[None]:
+    """Install a fresh per-invocation format-lint rejection counter (§V.71).
+
+    Wrap each task-drained ``agent.invoke`` so successive ``reply_email`` /
+    ``send_email`` calls from the same task share a counter. The cap kicks in
+    after ``_FORMAT_LINT_CAP`` consecutive lint rejections; further calls
+    bypass the lint and emit a ``logfire.warn`` so the regression is
+    observable instead of silently looping.
+    """
+    token = _FORMAT_LINT_REJECTIONS.set(_FormatLintCounter())
+    try:
+        yield
+    finally:
+        _FORMAT_LINT_REJECTIONS.reset(token)
+
+
+def _consume_format_lint_rejection(
+    *,
+    tool: str,
+    workflow_id: str,
+    email_id: str | None,
+) -> bool:
+    """Record a lint hit; return ``True`` when the caller MUST bypass the lint.
+
+    Returns ``False`` outside a ``format_lint_scope`` (legacy path) so the
+    caller surfaces the format error to the agent as before. Inside a scope,
+    increments the counter and returns ``True`` once it reaches the cap,
+    emitting the ``cap_reached`` warn span on the transition.
+    """
+    counter = _FORMAT_LINT_REJECTIONS.get()
+    if counter is None:
+        return False
+    counter.count += 1
+    if counter.count < _FORMAT_LINT_CAP:
+        return False
+    # Per §V.71: a stable span name keeps Logfire alerts grep-able across tools;
+    # ``tool`` rides as an attribute so the bypass site stays identifiable.
+    logfire.warn(
+        "reply_email.format_lint.cap_reached",
+        tool=tool,
+        attempt=counter.count,
+        workflow_id=workflow_id,
+        email_id=email_id,
+    )
+    return True
+
 
 # Per §V.42: detect spec-shape rows (label + any whitespace + non-whitespace
 # value, length capped at 80 chars) on lines that do not use Markdown
@@ -165,7 +240,11 @@ def send_email(  # noqa: PLR0913
     """
     format_error = _check_spec_table(body)
     if format_error is not None:
-        return format_error
+        bypass = _consume_format_lint_rejection(
+            tool="send_email", workflow_id=workflow_id, email_id=None
+        )
+        if not bypass:
+            return format_error
     fact_check_error = _fact_check_body(body, read_ledger)
     if fact_check_error is not None:
         return fact_check_error
@@ -210,7 +289,11 @@ def reply_email(  # noqa: PLR0913
     """
     format_error = _check_spec_table(body)
     if format_error is not None:
-        return format_error
+        bypass = _consume_format_lint_rejection(
+            tool="reply_email", workflow_id=workflow_id, email_id=email_id
+        )
+        if not bypass:
+            return format_error
     fact_check_error = _fact_check_body(body, read_ledger)
     if fact_check_error is not None:
         return fact_check_error
