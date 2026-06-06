@@ -6,6 +6,7 @@ import concurrent.futures
 import itertools
 import os
 import queue
+import threading
 import time
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -52,7 +53,7 @@ def test_run_periodic_iteration_emits_loop_tick(
     monkeypatch.setattr("mailpilot.sync._drain_sync_queue", lambda *_a, **_k: None)
     monkeypatch.setattr("mailpilot.sync._sync_all_accounts", lambda *_a, **_k: None)
     monkeypatch.setattr(
-        "mailpilot.sync.create_tasks_for_routed_emails", lambda *_a, **_k: 0
+        "mailpilot.sync.create_tasks_for_routed_emails", lambda *_a, **_k: []
     )
     monkeypatch.setattr("mailpilot.sync._drain_pending_tasks", lambda *_a, **_k: None)
 
@@ -66,6 +67,7 @@ def test_run_periodic_iteration_emits_loop_tick(
             do_full_sweep=True,
             pool=pool,
             in_flight=in_flight,
+            wakeup_event=threading.Event(),
         )
     finally:
         pool.shutdown(wait=True)
@@ -89,7 +91,7 @@ def test_run_periodic_iteration_increments_iteration_counter(
     monkeypatch.setattr("mailpilot.sync._drain_sync_queue", lambda *_a, **_k: None)
     monkeypatch.setattr("mailpilot.sync._sync_all_accounts", lambda *_a, **_k: None)
     monkeypatch.setattr(
-        "mailpilot.sync.create_tasks_for_routed_emails", lambda *_a, **_k: 0
+        "mailpilot.sync.create_tasks_for_routed_emails", lambda *_a, **_k: []
     )
     monkeypatch.setattr("mailpilot.sync._drain_pending_tasks", lambda *_a, **_k: None)
 
@@ -103,6 +105,7 @@ def test_run_periodic_iteration_increments_iteration_counter(
             do_full_sweep=False,
             pool=pool,
             in_flight=in_flight,
+            wakeup_event=threading.Event(),
         )
         _run_periodic_iteration(
             database_connection,
@@ -112,6 +115,7 @@ def test_run_periodic_iteration_increments_iteration_counter(
             do_full_sweep=False,
             pool=pool,
             in_flight=in_flight,
+            wakeup_event=threading.Event(),
         )
     finally:
         pool.shutdown(wait=True)

@@ -311,6 +311,7 @@ def test_run_periodic_iteration_tags_event_wakeup_source(
 ) -> None:
     """sync.loop.iteration span carries wakeup_source='event' when triggered by an event."""
     import queue as _queue  # local to avoid polluting module imports
+    import threading
 
     from mailpilot.sync import (
         _run_periodic_iteration,  # pyright: ignore[reportPrivateUsage]
@@ -329,6 +330,7 @@ def test_run_periodic_iteration_tags_event_wakeup_source(
             do_full_sweep=True,
             pool=pool,
             in_flight=in_flight,
+            wakeup_event=threading.Event(),
         )
     finally:
         pool.shutdown(wait=True)
@@ -344,6 +346,7 @@ def test_run_periodic_iteration_tags_timer_wakeup_source(
 ) -> None:
     """sync.loop.iteration span carries wakeup_source='timer' on periodic-timer wake."""
     import queue as _queue
+    import threading
 
     from mailpilot.sync import (
         _run_periodic_iteration,  # pyright: ignore[reportPrivateUsage]
@@ -362,6 +365,7 @@ def test_run_periodic_iteration_tags_timer_wakeup_source(
             do_full_sweep=True,
             pool=pool,
             in_flight=in_flight,
+            wakeup_event=threading.Event(),
         )
     finally:
         pool.shutdown(wait=True)
@@ -377,6 +381,7 @@ def test_run_periodic_iteration_runs_sync_all_when_do_full_sweep_true(
 ) -> None:
     """do_full_sweep=True -> _sync_all_accounts runs and span did_full_sweep is True."""
     import queue as _queue
+    import threading
 
     from mailpilot.sync import (
         _run_periodic_iteration,  # pyright: ignore[reportPrivateUsage]
@@ -396,6 +401,7 @@ def test_run_periodic_iteration_runs_sync_all_when_do_full_sweep_true(
                 do_full_sweep=True,
                 pool=pool,
                 in_flight=in_flight,
+                wakeup_event=threading.Event(),
             )
     finally:
         pool.shutdown(wait=True)
@@ -412,6 +418,7 @@ def test_run_periodic_iteration_skips_sync_all_when_do_full_sweep_false(
 ) -> None:
     """do_full_sweep=False -> _sync_all_accounts is skipped and span did_full_sweep is False."""
     import queue as _queue
+    import threading
 
     from mailpilot.sync import (
         _run_periodic_iteration,  # pyright: ignore[reportPrivateUsage]
@@ -431,6 +438,7 @@ def test_run_periodic_iteration_skips_sync_all_when_do_full_sweep_false(
                 do_full_sweep=False,
                 pool=pool,
                 in_flight=in_flight,
+                wakeup_event=threading.Event(),
             )
     finally:
         pool.shutdown(wait=True)
@@ -448,6 +456,7 @@ def test_run_periodic_iteration_full_sweep_skips_already_synced(
     full sweep in the same iteration.
     """
     import queue as _queue
+    import threading
 
     from mailpilot.sync import (
         _run_periodic_iteration,  # pyright: ignore[reportPrivateUsage]
@@ -478,6 +487,7 @@ def test_run_periodic_iteration_full_sweep_skips_already_synced(
                 do_full_sweep=True,
                 pool=pool,
                 in_flight=in_flight,
+                wakeup_event=threading.Event(),
             )
     finally:
         pool.shutdown(wait=True)
@@ -504,7 +514,12 @@ def test_start_sync_loop_time_gates_full_sweep(
         patch("mailpilot.sync._start_pubsub_logging_errors", return_value=None),
         patch("mailpilot.sync._drain_sync_queue"),
         patch("mailpilot.sync._sync_all_accounts") as mock_sync_all,
-        patch("mailpilot.sync.create_tasks_for_routed_emails"),
+        # Empty list keeps the §V.69 burst-wakeup carry-over off so the
+        # time-gate behaviour stays isolated from the burst pathway.
+        patch(
+            "mailpilot.sync.create_tasks_for_routed_emails",
+            return_value=[],
+        ),
         patch("mailpilot.sync._drain_pending_tasks"),
         patch("mailpilot.sync._renew_watches_logging_errors"),
         patch("mailpilot.sync.signal.signal"),

@@ -207,6 +207,10 @@ def start_sync_loop(  # noqa: PLR0915
 
     # Main loop.
     last_watch_renewal = last_full_sync = 0.0
+    # Per §V.69: when the previous tick classified one or more new inbound
+    # emails, the next tick MUST do a full sweep so the routing pipeline picks
+    # up any siblings Gmail's Pub/Sub batching delivered just behind the wave.
+    force_full_sweep_next = False
     try:
         while not shutdown_event.is_set():
             event_set = wakeup_event.wait(timeout=settings.run_interval)
@@ -224,8 +228,10 @@ def start_sync_loop(  # noqa: PLR0915
             # the full sweep; the worst-case latency for a missed
             # notification stays bounded by ``run_interval``.
             now = time.monotonic()
-            do_full_sweep = now - last_full_sync >= settings.run_interval
-            _run_periodic_iteration(
+            do_full_sweep = force_full_sweep_next or (
+                now - last_full_sync >= settings.run_interval
+            )
+            force_full_sweep_next = _run_periodic_iteration(
                 connection,
                 settings,
                 sync_queue,
@@ -233,6 +239,7 @@ def start_sync_loop(  # noqa: PLR0915
                 do_full_sweep=do_full_sweep,
                 pool=pool,
                 in_flight=in_flight,
+                wakeup_event=wakeup_event,
             )
             if do_full_sweep:
                 last_full_sync = now
@@ -336,7 +343,8 @@ def _run_periodic_iteration(  # noqa: PLR0913
     do_full_sweep: bool,
     pool: concurrent.futures.ThreadPoolExecutor,
     in_flight: dict[concurrent.futures.Future[None], tuple[str, float]],
-) -> None:
+    wakeup_event: threading.Event,
+) -> bool:
     """Run one iteration of the periodic sync + task drain cycle.
 
     ``do_full_sweep`` gates the safety-net ``_sync_all_accounts`` call.
@@ -346,6 +354,12 @@ def _run_periodic_iteration(  # noqa: PLR0913
     Per §V.24: reap completed task futures before doing per-tick work so
     finished agent.invoke runs surface promptly while the main loop
     continues on Pub/Sub notify -- the loop never blocks on drain.
+
+    Per §V.69: when ``create_tasks_for_routed_emails`` inserts one or more
+    new inbound-email tasks this iteration, set ``wakeup_event`` and return
+    True so the caller forces a full sweep on the next tick. This collapses
+    the inter-wave gap that Gmail Pub/Sub batching otherwise stretches into
+    the burst SLA budget. Returns False on a quiet tick.
     """
     iteration = _next_iteration_count()
     operator_event(
@@ -376,8 +390,18 @@ def _run_periodic_iteration(  # noqa: PLR0913
             _sync_all_accounts(connection, settings, synced)
 
         # Bridge routed emails to tasks and dispatch the queue.
-        create_tasks_for_routed_emails(connection)
+        new_tasks = create_tasks_for_routed_emails(connection)
         _drain_pending_tasks(connection, settings, pool, in_flight)
+
+    if new_tasks:
+        operator_event(
+            "loop.burst_wakeup",
+            iteration=iteration,
+            new_tasks=len(new_tasks),
+        )
+        wakeup_event.set()
+        return True
+    return False
 
 
 def _drain_sync_queue(
