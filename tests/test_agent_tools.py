@@ -1824,6 +1824,221 @@ def test_send_email_fabricated_tokens_return_fact_check_mismatch(
     gmail_client.send_message.assert_not_called()
 
 
+# §T.88 / §V.68(+) per-document scoping (root cause §B.58).
+# Prose-only KB docs (e.g. ``kdf-process-filtration-media.md``) carry no
+# pipe-table rows; under uniform pipe-row scoping the union collapsed to "" and
+# every genuine numeric citation was flagged unsupported. Per-document scoping
+# admits whole content for docs lacking ``|`` lines while keeping pipe-row-only
+# scoping on table-bearing docs.
+_KDF_PROSE_LEDGER = {
+    "kdf-process-filtration-media.md": (
+        "KDF 55 medium can remove over 99% of free chlorine from water.\n"
+        "Up to 98% of water-soluble cations are also removed.\n"
+        "Typical bed depth is 85 cm.\n"
+    )
+}
+
+
+def test_reply_email_prose_only_doc_admits_full_content(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§T.88 case (a): prose-only KB doc contributes full content to the union.
+
+    The KDF media datasheet carries no pipe-table rows; under pre-§T.88 uniform
+    pipe-row scoping the union was empty and genuine source-echoing citations
+    (``55``, ``99``, ``98``, ``85``) flagged as unsupported. Per-document
+    scoping admits the prose verbatim so the reply proceeds.
+    """
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection, email="sender@example.com")
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="KDF media",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        gmail_message_id="inbound-kdf",
+        gmail_thread_id="thread-kdf",
+    )
+    assert inbound is not None
+    gmail_client = _make_gmail_client(account)
+
+    result = reply_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        email_id=inbound.id,
+        body=(
+            "KDF 55 medium removes over 99% of free chlorine and up to "
+            "98% of water-soluble cations; typical bed depth is 85 cm."
+        ),
+        read_ledger=dict(_KDF_PROSE_LEDGER),
+    )
+
+    assert "error" not in result
+    gmail_client.send_message.assert_called_once()
+
+
+def test_reply_email_mixed_ledger_scopes_per_document(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§T.88 case (b): mixed-ledger applies scoping per document.
+
+    Table-bearing doc stays pipe-row-scoped (WS36-600-2 65 cont passes,
+    110 cont blocked); prose-only doc contributes full content so KDF prose
+    citations pass alongside.
+    """
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection, email="sender@example.com")
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="WS36-600-2 and KDF",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        gmail_message_id="inbound-mixed",
+        gmail_thread_id="thread-mixed",
+    )
+    assert inbound is not None
+    gmail_client = _make_gmail_client(account)
+
+    mixed_ledger = {**_WS_LEDGER_PIPE_ROW, **_KDF_PROSE_LEDGER}
+
+    # Pipe-row tokens (65 cont, 120 peak) from table doc + prose tokens
+    # (55, 99, 85) from prose doc all pass.
+    result_supported = reply_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        email_id=inbound.id,
+        body=(
+            "WS36-600-2 runs 65 GPM continuous, 120 GPM peak. "
+            "KDF 55 removes 99% of free chlorine at 85 cm bed depth."
+        ),
+        read_ledger=dict(mixed_ledger),
+    )
+
+    assert "error" not in result_supported
+    gmail_client.send_message.assert_called_once()
+
+    # The table doc stays pipe-row-scoped: "110" appears only in the prose of
+    # softener.md and must NOT be credited even though the KDF doc admits prose.
+    gmail_client.send_message.reset_mock()
+    result_blocked = reply_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        email_id=inbound.id,
+        body="The WS36-600-2 runs 110 GPM continuous.",
+        read_ledger=dict(mixed_ledger),
+    )
+
+    assert result_blocked["error"] == "fact_check_mismatch"
+    assert "110" in result_blocked["unsupported"]
+    gmail_client.send_message.assert_not_called()
+
+
+def test_reply_email_single_doc_collision_still_rejects(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§T.88 case (c) / §B.56 single-doc collision class preserved.
+
+    Same doc carries ``"110"`` in both prose (``35-110 degrees F``) AND a
+    pipe-row line (CVP duplex softener). Body claims ``110 GPM continuous`` for
+    WS36-600-2 — under per-document scoping the table-bearing doc remains
+    pipe-row-scoped so the prose match still does not satisfy grounding, but
+    the wrong-product-family pipe-row collision admits the token. This test
+    pins the latter behaviour so the §B.56 column-context-blindness fix
+    (pipe-row scoping) is not silently widened: the lint detects fabrication
+    only when the token is absent from every pipe-row line, and a
+    cross-product-family token collision is a known limitation of the
+    token-level check.
+    """
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection, email="sender@example.com")
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="WS36-600-2 cross-family collision",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        gmail_message_id="inbound-collision",
+        gmail_thread_id="thread-collision",
+    )
+    assert inbound is not None
+    gmail_client = _make_gmail_client(account)
+
+    # Single table-bearing doc: WS36-600-2 row carries 65/120/30; CVP row
+    # carries 110/130 (different product family); prose mentions
+    # ``35-110 degrees F`` so "110" appears in both prose AND a pipe-row, but
+    # only in the wrong-product-family row. Per-doc scoping uses pipe-row
+    # lines for this doc (table-bearing) ∴ the prose hit drops out and the
+    # cross-family pipe-row hit admits the token. Verifying the doc is
+    # treated as table-bearing (prose stripped) is the load-bearing assertion.
+    single_doc_ledger = {
+        "softener-multi.md": (
+            "WS36-600-2 specifications:\n"
+            "\n"
+            "| Model | Continuous | Peak | Backwash |\n"
+            "|-------|-----------|------|----------|\n"
+            "| WS36-600-2 | 65 | 120 | 30 |\n"
+            "| CVP duplex | 110 | 130 | 45 |\n"
+            "\n"
+            "Temperature: 35-110 degrees F\n"
+        )
+    }
+
+    # Body cites the WS36-600-2 row peak (120) -- supported via pipe-row.
+    result_supported = reply_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        email_id=inbound.id,
+        body="The WS36-600-2 peaks at 120 GPM under load.",
+        read_ledger=dict(single_doc_ledger),
+    )
+
+    assert "error" not in result_supported
+    gmail_client.send_message.assert_called_once()
+
+    # Body cites a token absent from every pipe-row line ("160") -- must
+    # refuse even though the prose-doc admit path would have accepted it
+    # under naive uniform-full-content scoping. Confirms table-bearing docs
+    # stay pipe-row-scoped under per-document logic.
+    gmail_client.send_message.reset_mock()
+    result_blocked = reply_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        email_id=inbound.id,
+        body="The WS36-600-2 reaches 160 GPM peak per the datasheet.",
+        read_ledger=dict(single_doc_ledger),
+    )
+
+    assert result_blocked["error"] == "fact_check_mismatch"
+    assert "160" in result_blocked["unsupported"]
+    gmail_client.send_message.assert_not_called()
+
+
 # -- noop ----------------------------------------------------------------------
 
 
