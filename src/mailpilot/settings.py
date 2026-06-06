@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     google_pubsub_subscription: str = "mailpilot-sub-dev"
     google_application_credentials: str = ""
     run_interval: int = 60
-    max_concurrent_tasks: int = 4
+    max_concurrent_tasks: int = 10
 
     @classmethod
     def settings_customise_sources(

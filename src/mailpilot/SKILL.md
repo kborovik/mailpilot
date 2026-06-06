@@ -88,7 +88,7 @@ Keys:
 - `run_interval` -- fallback poll interval for the sync loop, in seconds.
   Default `60`.
 - `max_concurrent_tasks` -- bound on the worker pool that drains the task
-  queue. Default `4`.
+  queue. Default `10`.
 
 ## Recipes
 
