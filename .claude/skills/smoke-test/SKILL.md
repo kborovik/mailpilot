@@ -424,11 +424,13 @@ Match by `SUBJECT_B1` (likely with `Re:` prefix). Note the reply's arrival as co
 **Gate B4 (the demo promise):**
 
 - Reply present, threaded under `SUBJECT_B1` (CLI round-trip check; cap 120s).
-- **Latency verdict via Logfire per §V.61.** Window `[T_SEND_B1, now]`, scope to the demo workflow:
+- **Latency verdict via Logfire per §V.61(+) (two-budget split).** Window `[T_SEND_B1, now]`, scope to the demo workflow:
 
   ```sql
   SELECT end_timestamp,
-         EXTRACT(EPOCH FROM (end_timestamp - TIMESTAMPTZ '<T_SEND_B1>')) AS latency_s
+         EXTRACT(EPOCH FROM (end_timestamp - start_timestamp)) AS sla_agent_seconds,
+         EXTRACT(EPOCH FROM (start_timestamp - TIMESTAMPTZ '<T_SEND_B1>')) AS sla_delivery_seconds,
+         EXTRACT(EPOCH FROM (end_timestamp - TIMESTAMPTZ '<T_SEND_B1>')) AS total_latency_s
   FROM records
   WHERE deployment_environment = 'development'
     AND span_name = 'agent.invoke'
@@ -439,7 +441,11 @@ Match by `SUBJECT_B1` (likely with `Re:` prefix). Note the reply's arrival as co
   LIMIT 1
   ```
 
-  `LATENCY_B1 = latency_s` from the row. **If `latency_s > 90`, that is a regression of the lab5.ca/mailpilot/ promise -- record as a Critical Bug.** Zero rows in the window means the demo workflow never fired; that is a separate Critical Bug (run-loop / Pub/Sub regression).
+  Capture `LATENCY_B1 = total_latency_s`, `SLA_AGENT_B1 = sla_agent_seconds`, `SLA_DELIVERY_B1 = sla_delivery_seconds` for the §1 report.
+
+  **Steady-state primary verdict (§V.61(+)):** `sla_agent_seconds > 50` is an our-side regression of agent execution -- record as a Critical Bug. `sla_delivery_seconds` is advisory: Gmail-side delivery lag is jointly uncontrolled, so a single-send breach is reportable but not gating.
+
+  Zero rows in the window means the demo workflow never fired -- separate Critical Bug (run-loop / Pub/Sub regression).
 - Reply on the demo side (`mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>`) → `is_routed == true`, `workflow_id == DEMO_WORKFLOW_ID`, `route_method == classified`. The classifier ran -- not `thread_match`, since this is a fresh thread.
 - Reply body **grounded in the KB** -- operator-judged per SPEC §V.57. Substring match against curated `expected_tokens` was retired (false negatives on phrasing variation like `0.48 mm` vs `0.48mm`); the operator now grades the reply against the live source doc. Procedure:
   1. Load the source doc the pair points at:
@@ -520,7 +526,7 @@ Save `TRIGGER_EMAIL_ID_B2`, capture `T_SEND_B2`, poll the outbound mailbox for `
 Out-of-scope decline keeps the script verifier (per SPEC §V.57): regex appropriately fits shape detection (vendor name near a digit-shaped fabrication, decline-phrase presence) and the surface area is small. The operator-judged path applies only to in-scope grounding (B4).
 
 - Reply present (CLI round-trip check; cap 120s).
-- **Latency verdict via Logfire per §V.61.** Same query shape as B4, swap `<T_SEND_B1>` for `<T_SEND_B2>`. `latency_s > 90` is a Critical Bug.
+- **Latency verdict via Logfire per §V.61(+).** Same query shape as B4, swap `<T_SEND_B1>` for `<T_SEND_B2>`. Capture `LATENCY_B2`, `SLA_AGENT_B2`, `SLA_DELIVERY_B2`. `sla_agent_seconds > 50` is a Critical Bug; `sla_delivery_seconds` is advisory.
 - Reply body validated by the QA verifier:
 
   ```
@@ -595,8 +601,8 @@ Poll the outbound mailbox for `SUBJECT_B3` (likely `Re:` prefixed) the same way 
 
 **Gate B7 (multi-source grounding, no single-source synthesis):**
 
-- Reply present (CLI round-trip check; cap 120s). Compare questions force a longer agent loop (>=2 `read_drive_markdown` calls), so latency near the 90s ceiling is more likely here than in B4.
-- **Latency verdict via Logfire per §V.61.** Same query shape as B4, swap `<T_SEND_B1>` for `<T_SEND_B3>`. `latency_s > 90` is a Critical regression of the lab5.ca/mailpilot/ promise.
+- Reply present (CLI round-trip check; cap 120s). Compare questions force a longer agent loop (>=2 `read_drive_markdown` calls), so `sla_agent_seconds` near the 50s ceiling is more likely here than in B4.
+- **Latency verdict via Logfire per §V.61(+).** Same query shape as B4, swap `<T_SEND_B1>` for `<T_SEND_B3>`. Capture `LATENCY_B3`, `SLA_AGENT_B3`, `SLA_DELIVERY_B3`. `sla_agent_seconds > 50` is a Critical regression of agent execution; `sla_delivery_seconds` is advisory.
 - Reply on the demo side has `is_routed == true`, `workflow_id == DEMO_WORKFLOW_ID`, `route_method == classified`. Fresh thread, so not `thread_match`.
 - Reply body **grounded in EVERY source listed in `source_files`** -- operator-judged per the same §V.57 contract that governs B4. Procedure:
   1. Load all source docs in one bundle:
@@ -647,7 +653,7 @@ Poll the outbound mailbox for `SUBJECT_B3` (likely `Re:` prefixed) the same way 
 
 ### B7.5. Concurrent in-scope dual-send (multi-request / multi-tool-call stress)
 
-Two distinct in-scope questions arrive on the demo workflow at nearly the same wall-clock instant, on two fresh threads. Each must trigger its own `agent.invoke`, each must ground in its own KB source, and both replies must meet the 90s SLA. Catches three failure classes the single-send tests (B3, B6, B7) cannot:
+Two distinct in-scope questions arrive on the demo workflow at nearly the same wall-clock instant, on two fresh threads. Each must trigger its own `agent.invoke`, each must ground in its own KB source, and both replies must meet the steady-state `sla_agent_seconds <= 50` budget per §V.61(+). Catches three failure classes the single-send tests (B3, B6, B7) cannot:
 
 - Classifier serializes when it should parallelize (one classification blocking the next inbound).
 - Two concurrent agent invocations share mutable state (e.g., one workflow row updated mid-flight by the other, or a shared httplib2 transport reused across agent.invoke boundaries).
@@ -704,7 +710,9 @@ Poll the outbound mailbox for BOTH replies (in either order), capping each at 12
   ```sql
   SELECT attributes->>'email_id' AS email_id,
          end_timestamp,
-         EXTRACT(EPOCH FROM (end_timestamp - TIMESTAMPTZ '<T_SEND_B75>')) AS latency_s
+         EXTRACT(EPOCH FROM (end_timestamp - start_timestamp)) AS sla_agent_seconds,
+         EXTRACT(EPOCH FROM (start_timestamp - TIMESTAMPTZ '<T_SEND_B75>')) AS sla_delivery_seconds,
+         EXTRACT(EPOCH FROM (end_timestamp - TIMESTAMPTZ '<T_SEND_B75>')) AS total_latency_s
   FROM records
   WHERE deployment_environment = 'development'
     AND span_name = 'agent.invoke'
@@ -715,7 +723,7 @@ Poll the outbound mailbox for BOTH replies (in either order), capping each at 12
   LIMIT 5
   ```
 
-  Expect exactly 2 rows, distinct `email_id` values. **Either `latency_s > 90` is a Critical SLA breach.** Fewer than 2 rows means the drain-layer concurrent worker pool (§V.23) regressed and one trigger was dropped or merged.
+  Expect exactly 2 rows, distinct `email_id` values. Capture `LATENCY_B75a` / `LATENCY_B75b` (= `total_latency_s`) plus `SLA_AGENT_B75a` / `SLA_AGENT_B75b` and the matching `sla_delivery_seconds` values. **Either `sla_agent_seconds > 50` is a Critical SLA breach per §V.61(+) steady-state.** `sla_delivery_seconds` is advisory. Fewer than 2 rows means the drain-layer concurrent worker pool (§V.23) regressed and one trigger was dropped or merged.
 - BOTH replies routed on the demo side with `workflow_id == DEMO_WORKFLOW_ID` and `route_method == classified` (each is a fresh thread). Either routed differently means the classifier serialized or misfired under load.
 - BOTH replies grounded in their own `source_file` per §V.57, operator-judged with the same verdict-JSON schema as B4. Run `qa.py source --id "$QA_ID_B75a"` and `qa.py source --id "$QA_ID_B75b"` separately, then grade each reply against its own source. A cross-grounded reply (B75a's body cites B75b's source, or vice versa) is a state-leak Bug -- shared mutable state across concurrent agent invocations.
 - Logfire window `[T_SEND_B75, T_SEND_B75 + 90s]`, scope to `workflow_id == DEMO_WORKFLOW_ID`:
@@ -791,7 +799,7 @@ Do not stop the sync loop. Do not run `make clean`. Do not recreate accounts, co
 
 **Concurrency.** P=8 -- high enough to interleave classification + `agent.invoke` under real concurrency, low enough that Gmail per-user send rate stays comfortably under quota. Do **not** raise P without first confirming Gmail rate limits for the impersonated user; tripping a Gmail-side 429 invalidates the run, not the system under test.
 
-**Burst-tolerant SLA.** Single-send replies (B4 / B6 / B7) hold the strict 90s SLA per §V.61. Under burst, the per-reply max relaxes to 110s -- the tail under sustained load may drift above the public promise -- but p95 MUST still meet the public 90s SLA, i.e., 95% of burst replies still keep the promise.
+**Two-budget SLA per §V.61(+).** Primary verdict is `sla_agent_seconds` (our-side agent execution); `sla_delivery_seconds` (Gmail Pub/Sub notify dwell + classification-pipeline lag) is advisory because it is jointly uncontrolled by Gmail-side batching. Steady-state single-sends (B4 / B6 / B7 / B7.5) gate `sla_agent_seconds <= 50s`. Burst C gates `p95(sla_agent_seconds) <= 75s`. The public lab5.ca/mailpilot/ 90s promise remains the demo-test end-to-end gate (`/demo-test` G1), not a smoke-test gate.
 
 Capture `TEST_START_C` (ISO, must be later than B's last activity).
 
@@ -882,7 +890,7 @@ Match each row's `subject` against `Re: <one of SUBJECTS_BURST>` (Gmail typicall
 
 Single window `[T_SEND_C, T_SEND_C + 300s]`, scope to `workflow_id == DEMO_WORKFLOW_ID` and `trigger == 'task'`.
 
-**Gate C4.a -- per-span SLA + token economics:**
+**Gate C4.a -- per-span SLA + token economics (two-budget split per §V.59(+) / §V.61(+)):**
 
 ```sql
 WITH burst AS (
@@ -890,8 +898,9 @@ WITH burst AS (
     attributes->>'email_id' AS email_id,
     start_timestamp,
     end_timestamp,
-    EXTRACT(EPOCH FROM (end_timestamp - start_timestamp)) AS dur_s,
-    EXTRACT(EPOCH FROM (end_timestamp - TIMESTAMPTZ '<T_SEND_C>')) AS latency_s,
+    EXTRACT(EPOCH FROM (end_timestamp - start_timestamp)) AS sla_agent_seconds,
+    EXTRACT(EPOCH FROM (start_timestamp - TIMESTAMPTZ '<T_SEND_C>')) AS sla_delivery_seconds,
+    EXTRACT(EPOCH FROM (end_timestamp - TIMESTAMPTZ '<T_SEND_C>')) AS total_latency_s,
     is_exception,
     level,
     (attributes->>'input_tokens')::int AS in_tok,
@@ -908,8 +917,13 @@ WITH burst AS (
 SELECT
   COUNT(*) AS n_invokes,
   COUNT(DISTINCT email_id) AS n_distinct_email_ids,
-  MAX(latency_s) AS max_latency_s,
-  approx_percentile_cont(latency_s, 0.95) AS p95_latency_s,
+  MAX(sla_agent_seconds) AS max_sla_agent_s,
+  approx_percentile_cont(sla_agent_seconds, 0.95) AS p95_sla_agent_s,
+  MAX(sla_delivery_seconds) AS max_sla_delivery_s,
+  approx_percentile_cont(sla_delivery_seconds, 0.95) AS p95_sla_delivery_s,
+  approx_percentile_cont(sla_delivery_seconds, 0.50) AS p50_sla_delivery_s,
+  MAX(total_latency_s) AS max_total_s,
+  approx_percentile_cont(total_latency_s, 0.95) AS p95_total_s,
   SUM(CASE WHEN is_exception THEN 1 ELSE 0 END) AS n_exceptions,
   SUM(CASE WHEN level = 'warn' THEN 1 ELSE 0 END) AS n_warns,
   AVG(cache_read::float / NULLIF(in_tok::float, 0)) AS avg_cache_hit_ratio,
@@ -918,13 +932,17 @@ SELECT
 FROM burst;
 ```
 
-Assertions:
+Assertions (primary verdict = `sla_agent_seconds` per §V.61(+); `sla_delivery_seconds` is advisory only because Gmail-side Pub/Sub batching is jointly uncontrolled):
 
 - `n_invokes == 25` AND `n_distinct_email_ids == 25` -- no merged or dropped triggers (§V.26 / §T.63 contract: one span per inbound email).
-- `max_latency_s <= 110` -- burst-tolerant per-reply ceiling. A run above 110s is a Critical regression of the public promise under load.
-- `p95_latency_s <= 90` -- 95% of burst replies still meet the public lab5.ca/mailpilot/ 90s SLA. A breach here means the promise degrades under burst even for the typical reply, not just the tail.
+- `p95_sla_agent_s <= 75` -- burst gate per §V.61(+). Matches the §V.23 burst-load formula `ceil(N * avg_invoke_s / sla_s)`. A breach here is an our-side regression of agent execution under load.
 - `n_exceptions == 0` AND `n_warns == 0`.
 - `avg_cache_hit_ratio >= 0.5` -- prompt cache stays warm across the burst (catches cache-key churn regressions where each agent invocation re-pays the full system-prompt token cost; the dominant cost driver at this scale).
+
+Report (NOT gated):
+
+- `max_sla_delivery_s`, `p95_sla_delivery_s`, `p50_sla_delivery_s` -- Gmail Pub/Sub notify dwell + classification-pipeline lag. Inter-batch wave gaps dominate at N>=25 (§B.53 / §B.54). Trend-escalate on run-over-run drift but do NOT fail the run on a single breach: our side cannot accelerate Gmail-side notify emission.
+- `max_total_s`, `p95_total_s` -- end-to-end (delivery + agent), retained for run-over-run trend continuity with the pre-amend bundled metric.
 
 **Gate C4.b -- concurrency proof (no serialization regression):**
 
@@ -1078,11 +1096,11 @@ Scenario B: KB-grounded demo (lab5.ca/mailpilot/, outbound workflow still active
   B1  Create demo workflow ......... PASS  (workflow list shows 2 active)
   B2  Sync loop still alive ........ PASS
   B3  In-scope trigger send ........ PASS
-  B4  90s grounded reply ........... PASS  (LATENCY_B1 = <Ns>; cited model: <e.g., TW-18.0K-1240>)
+  B4  Grounded reply (sla_agent<=50) PASS  (SLA_AGENT_B1=<Ns> / SLA_DELIVERY_B1=<Ns> / total=<Ns>; cited model: <e.g., TW-18.0K-1240>)
   B5  Drive tools used ............. PASS  (search_drive_markdown -> read_drive_markdown -> reply_email -> record_enrollment_outcome)
-  B6  Out-of-scope decline ......... PASS  (LATENCY_B2 = <Ns>; no fabricated specs)
-  B7  Compare-and-contrast reply ... PASS  (LATENCY_B3 = <Ns>; <N> sources, <N> read_drive_markdown calls; no single-sourced specs)
-  B7.5 Concurrent dual in-scope ..... PASS  (LATENCY_B75a = <Ns>, LATENCY_B75b = <Ns>; 2 overlapping agent.invoke spans; both grounded in own source)
+  B6  Out-of-scope decline ......... PASS  (SLA_AGENT_B2=<Ns> / SLA_DELIVERY_B2=<Ns> / total=<Ns>; no fabricated specs)
+  B7  Compare-and-contrast reply ... PASS  (SLA_AGENT_B3=<Ns> / SLA_DELIVERY_B3=<Ns> / total=<Ns>; <N> sources, <N> read_drive_markdown calls; no single-sourced specs)
+  B7.5 Concurrent dual in-scope ..... PASS  (SLA_AGENT_B75a=<Ns>/SLA_DELIVERY_B75a=<Ns>, SLA_AGENT_B75b=<Ns>/SLA_DELIVERY_B75b=<Ns>; 2 overlapping agent.invoke spans; both grounded in own source)
   B8  Activity timeline ............ PASS  (5 received / 5 sent / 5 enrollment_completed)
   B9  Outbound stayed quiet ........ PASS  (0 new outbound sends during B)
 
@@ -1090,7 +1108,7 @@ Scenario C: Burst-load oracle (25 emails @ P=8, outbound workflow still active)
   C1  Burst payload generated ...... PASS  (25 distinct subjects; mix 15 qa-in / 5 qa-out / 5 qa-cmp)
   C2  25 sends @ P=8 ............... PASS  (wait exit 0; 25 outbound rows with workflow_id=null)
   C3  25 replies received .......... PASS  (wall-clock <Ns>; all classified to demo workflow)
-  C4  Logfire aggregate gates ...... PASS  (max=<Ns> <=110, p95=<Ns> <=90, 0 exc, 0 warn, cache>=0.5, overlap_pairs=<N> >=20, drive max_dur<60s)
+  C4  Logfire aggregate gates ...... PASS  (p95_sla_agent=<Ns> <=75, 0 exc, 0 warn, cache>=0.5, overlap_pairs=<N> >=20, drive max_dur<60s; advisory: p50/p95/max_sla_delivery=<Ns>/<Ns>/<Ns>, p95_total=<Ns>)
   C5  Activity timeline (delta) .... PASS  (+25 received / +25 sent / +25 enrollment_completed)
   C6  Outbound stayed quiet ........ PASS  (0 new outbound-workflow sends during C)
   C7  Stop sync loop ............... PASS
@@ -1187,7 +1205,7 @@ If a `/sdd:spec` invocation is cancelled or revised by the user mid-run, record 
 
 ## Timing
 
-Expected total: ~12-13 minutes. Phase 0 once, run loop once, no reset between scenarios. The added compare-and-contrast question (B7) costs roughly one extra 90s reply window over the prior baseline because it forces 2-4 `read_drive_markdown` calls and a multi-doc synthesis. The concurrent dual-send (B7.5) adds another ~90s window for the second of the two parallel replies (the two reply windows overlap, so the marginal cost is one reply window, not two). Scenario C (burst-load oracle) adds ~2-4 minutes for the 25-send burst plus aggregate verification; per-reply latency softens to a 110s ceiling under burst (vs 90s for single-send) while p95 must still meet the public 90s promise.
+Expected total: ~12-13 minutes. Phase 0 once, run loop once, no reset between scenarios. The added compare-and-contrast question (B7) costs roughly one extra 50s `sla_agent` window over the prior baseline because it forces 2-4 `read_drive_markdown` calls and a multi-doc synthesis. The concurrent dual-send (B7.5) adds another ~50s window for the second of the two parallel replies (the two windows overlap, so the marginal cost is one reply window, not two). Scenario C (burst-load oracle) adds ~2-4 minutes for the 25-send burst plus aggregate verification; per-span `sla_agent` p95 must stay <=75s under burst (§V.61(+)), while `sla_delivery` is advisory because Gmail-side Pub/Sub batching dominates the tail.
 
 | Phase / scenario                          | Duration |
 | ----------------------------------------- | -------- |
@@ -1199,14 +1217,14 @@ Expected total: ~12-13 minutes. Phase 0 once, run loop once, no reset between sc
 | A5 / B3 / B6 / B7 operator send           | ~3s each |
 | A6 reply round-trip                       | ~10-60s  |
 | A7 task drain                             | ~10-60s  |
-| B4 in-scope reply (90s SLA)               | ~10-90s  |
-| B6 out-of-scope reply (90s SLA)           | ~10-90s  |
-| B7 compare reply (90s SLA)                | ~20-90s  |
-| B7.5 concurrent dual reply (90s SLA each, overlapping) | ~20-90s |
+| B4 in-scope reply (sla_agent<=50s)        | ~10-50s  |
+| B6 out-of-scope reply (sla_agent<=50s)    | ~10-50s  |
+| B7 compare reply (sla_agent<=50s)         | ~20-50s  |
+| B7.5 concurrent dual reply (sla_agent<=50s each, overlapping) | ~20-50s |
 | A8 / B8 activity check                    | ~3s      |
 | C1 burst payload generation               | ~3s      |
 | C2 25 sends @ P=8                         | ~15-30s  |
-| C3 poll for 25 replies (110s ceiling)     | ~60-180s |
+| C3 poll for 25 replies (240s CLI cap)     | ~60-180s |
 | C4 Logfire aggregate gates (4 queries)    | ~10s     |
 | C5 / C6 activity + quiet check            | ~5s      |
 | C7 stop run loop                          | ~3s      |

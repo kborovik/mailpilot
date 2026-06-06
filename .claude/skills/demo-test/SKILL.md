@@ -146,10 +146,12 @@ done
 
 If `REPLY_ID` is empty after ~120s: this is a **G1 FAIL** -- record `no reply round-trip within 120s`, but still run Step 7 (Logfire) so the summary has signal.
 
-Otherwise, query Logfire for the production agent.invoke span's `end_timestamp` and compute latency from `T_SEND` (the wall-clock instant captured pre-`email send` in Step 3, equivalent to `TEST_START` here):
+Otherwise, query Logfire for the production agent.invoke span and project the two-budget decomposition per SPEC `§V.59(+)` / `§V.61(+)`. G1 still gates the end-to-end public promise (`total_latency_s <= 90`); `sla_agent_seconds` and `sla_delivery_seconds` are surfaced on FAIL so the operator can attribute a breach to our side (agent execution) or to Gmail-side delivery without a second query:
 
 ```sql
-SELECT EXTRACT(EPOCH FROM (end_timestamp - TIMESTAMPTZ '$TEST_START')) AS latency_s
+SELECT EXTRACT(EPOCH FROM (end_timestamp - start_timestamp)) AS sla_agent_seconds,
+       EXTRACT(EPOCH FROM (start_timestamp - TIMESTAMPTZ '$TEST_START')) AS sla_delivery_seconds,
+       EXTRACT(EPOCH FROM (end_timestamp - TIMESTAMPTZ '$TEST_START')) AS total_latency_s
 FROM records
 WHERE deployment_environment = 'production'
   AND span_name = 'agent.invoke'
@@ -159,7 +161,7 @@ ORDER BY start_timestamp
 LIMIT 1
 ```
 
-`latency_s > 90` -> **G1 FAIL** -- record `agent latency=<latency_s>s exceeds 90s SLA`. Zero rows means the production deploy never processed the trigger; G1 FAIL with `no production agent.invoke span in window`. The 90s SLA verdict is the Logfire row, not the CLI poll cap.
+Capture `SLA_AGENT`, `SLA_DELIVERY`, `TOTAL_LATENCY` (= `total_latency_s`) from the row. `total_latency_s > 90` -> **G1 FAIL** -- record `total latency=<TOTAL_LATENCY>s exceeds 90s SLA (sla_agent=<SLA_AGENT>s, sla_delivery=<SLA_DELIVERY>s)`. Zero rows means the production deploy never processed the trigger; G1 FAIL with `no production agent.invoke span in window`. The 90s SLA verdict is the Logfire row, not the CLI poll cap.
 
 ### Step 6: G2 -- operator-judged groundedness
 
@@ -271,7 +273,7 @@ WHERE deployment_environment = 'production'
 
 Format the three bullets as:
 
-- `top span: <span_name> (n=<count>)`
+- On G1 PASS: `top span: <span_name> (n=<count>)`. On G1 FAIL: replace this bullet with the §V.59(+) / §V.61(+) two-budget decomposition `latency decomposition: sla_agent=<SLA_AGENT>s / sla_delivery=<SLA_DELIVERY>s / total=<TOTAL_LATENCY>s` so the operator can attribute the breach without a second query (our-side agent regression vs Gmail-side Pub/Sub delivery wave). If G1 failed because there were zero `agent.invoke` spans in the window (`no production agent.invoke span`), emit `latency decomposition: unavailable (no agent.invoke span)`.
 - `errors/warns in window: <count>`
 - `cache_read / (cache_read + input): <read>/<read+input> (<ratio>%)` -- or `cache attrs missing` if all three sums are NULL (production deploy predates §V.47 wiring).
 
@@ -281,7 +283,7 @@ Print exactly two blocks to stdout, in order, and nothing else:
 
 1. One line:
    - `PASS` -- all of G1, G2, G3 passed.
-   - `FAIL: <one-line reason naming the failing gate>` -- as soon as any gate fails. Reason format examples: `G1 -- no reply within 90s`, `G2 -- verdict=fail (3 unsupported_claims)`, `G3 -- search_drive_tool=0`, `G3 -- errors_warns=2`.
+   - `FAIL: <one-line reason naming the failing gate>` -- as soon as any gate fails. Reason format examples: `G1 -- no reply within 90s`, `G1 -- total=104s exceeds 90s SLA (sla_agent=58s, sla_delivery=46s)` (decomposition surfaced inline per §V.59(+)), `G2 -- verdict=fail (3 unsupported_claims)`, `G3 -- search_drive_tool=0`, `G3 -- errors_warns=2`.
 
 2. Header `Logfire production window <TEST_START>..<now>:` followed by the three bullets from Step 8.
 
@@ -304,7 +306,7 @@ This skill does not retry, does not amend the spec, and does not auto-file an is
 
 ## Spec references
 
-- SPEC `§V.59` -- this skill's contract.
+- SPEC `§V.59` / `§V.59(+)` -- this skill's contract; G1 still gates end-to-end <=90s, FAIL summary surfaces two-budget decomposition.
 - SPEC `§V.60` -- liveness probes must hit the production-facing surface (G1 queries Gmail directly, not the local mailpilot DB).
 - SPEC `§V.37` -- Gmail credential construction via `GmailClient("outbound@lab5.ca")` (delegated impersonation; supports both file-creds and ADC).
 - SPEC `§V.57` -- in-scope grounding gate (G2 inherits the operator-judged JSON verdict structure).
@@ -313,4 +315,4 @@ This skill does not retry, does not amend the spec, and does not auto-file an is
 - SPEC `§V.53` -- `gen_ai.tool.name` attribute (G3 span match).
 - SPEC `§V.47` -- cache_control attrs (Logfire summary bullet).
 - SPEC `§V.58` -- smoke-test report shape (explicitly NOT applied here).
-- SPEC `§V.61` -- gate-verdict source rule: latency verdict from `agent.invoke` span (G1), not CLI poll cadence.
+- SPEC `§V.61` / `§V.61(+)` -- gate-verdict source rule; G1 projects `sla_agent_seconds` + `sla_delivery_seconds` server-computed over the `agent.invoke` span (operator paths use end-start as `sla_agent`; delivery uses start - `T_SEND`).
