@@ -1509,9 +1509,28 @@ def test_reply_email_zero_ledger_skips_fact_check(
     gmail_client.send_message.assert_called_once()
 
 
+# §T.85 / §V.68 pipe-table-row scoping fixture (root cause §B.56).
+# Pipe-row carries the canonical WS36-600-2 spec (65 / 120 / 30); the prose lines
+# below it intentionally collide on tokens "110" and "125" so the regression
+# tests can prove the union now excludes prose-line context.
+_WS_LEDGER_PIPE_ROW = {
+    "softener.md": (
+        "WS36-600-2 specifications:\n"
+        "\n"
+        "| Model | Continuous | Peak | Backwash |\n"
+        "|-------|-----------|------|----------|\n"
+        "| WS36-600-2 | 65 | 120 | 30 |\n"
+        "\n"
+        "Temperature: 35-110 degrees F\n"
+        "Operating pressure: 25 - 125 psi\n"
+    )
+}
+
+
 def test_reply_email_supported_tokens_pass(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
+    """§T.85 case (c): body citing 65 GPM continuous lands in pipe-row → passes."""
     account = make_test_account(database_connection)
     contact = make_test_contact(database_connection, email="sender@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
@@ -1529,12 +1548,6 @@ def test_reply_email_supported_tokens_pass(
     assert inbound is not None
     gmail_client = _make_gmail_client(account)
 
-    ledger = {
-        "softener.md": (
-            "WS36-600-2: 110 GPM continuous, 125 GPM peak, 30 GPM backwash."
-        )
-    }
-
     result = reply_email(
         connection=database_connection,
         account=account,
@@ -1543,10 +1556,10 @@ def test_reply_email_supported_tokens_pass(
         workflow_id=workflow.id,
         email_id=inbound.id,
         body=(
-            "The WS36-600-2 runs 110 GPM continuous, 125 GPM peak, "
+            "The WS36-600-2 runs 65 GPM continuous, 120 GPM peak, "
             "and 30 GPM backwash per the datasheet."
         ),
-        read_ledger=ledger,
+        read_ledger=dict(_WS_LEDGER_PIPE_ROW),
     )
 
     assert "error" not in result
@@ -1556,10 +1569,12 @@ def test_reply_email_supported_tokens_pass(
 def test_reply_email_fabricated_tokens_return_fact_check_mismatch(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """§B.46 regression: WS36-600-2 = 65/120/35 fabrication blocked pre-send.
+    """§T.85 case (b) / §B.56 regression: prose-line collision blocked.
 
-    Source doc carries 110/125/30; body cites 65/120/35; wrapper must refuse
-    so the agent re-drafts via the §V.39 tool-error path.
+    Pipe-row carries 65 cont / 120 peak / 30 backwash; "110" appears only in
+    the prose ``Temperature: 35-110 degrees F`` line. Body citing
+    ``110 GPM continuous`` (the §B.56 fabrication shape) must refuse — under
+    pipe-table-row scoping the prose match is no longer credited as KB grounding.
     """
     account = make_test_account(database_connection)
     contact = make_test_contact(database_connection, email="sender@example.com")
@@ -1578,14 +1593,47 @@ def test_reply_email_fabricated_tokens_return_fact_check_mismatch(
     assert inbound is not None
     gmail_client = _make_gmail_client(account)
 
-    ledger = {
-        "softener.md": (
-            "WS36-600-2: 110 GPM continuous, 125 GPM peak, 30 GPM backwash."
-        ),
-        "sf-100s.md": (
-            "SF-100S series: same WS36-600-2 family rates 110 / 125 / 30 GPM."
-        ),
-    }
+    result = reply_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        email_id=inbound.id,
+        body="The WS36-600-2 runs 110 GPM continuous per the datasheet.",
+        read_ledger=dict(_WS_LEDGER_PIPE_ROW),
+    )
+
+    assert result["error"] == "fact_check_mismatch"
+    assert "110" in result["unsupported"]
+    gmail_client.send_message.assert_not_called()
+
+
+def test_reply_email_prose_line_collision_returns_fact_check_mismatch(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§T.85 case (d) / §B.56 column-context-blindness regression.
+
+    Pipe-row peak = 120; "125" appears only in the prose
+    ``Operating pressure: 25 - 125 psi`` line. Body citing ``125 GPM peak``
+    must refuse — prose-line carry does not satisfy §V.68 scoping.
+    """
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection, email="sender@example.com")
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="WS36-600-2 peak",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        gmail_message_id="inbound-4",
+        gmail_thread_id="thread-4",
+    )
+    assert inbound is not None
+    gmail_client = _make_gmail_client(account)
 
     result = reply_email(
         connection=database_connection,
@@ -1594,14 +1642,12 @@ def test_reply_email_fabricated_tokens_return_fact_check_mismatch(
         settings=make_test_settings(),
         workflow_id=workflow.id,
         email_id=inbound.id,
-        body=(
-            "The WS36-600-2 runs 65 GPM continuous, 120 GPM peak, and 35 GPM backwash."
-        ),
-        read_ledger=ledger,
+        body="The WS36-600-2 peaks at 125 GPM under load.",
+        read_ledger=dict(_WS_LEDGER_PIPE_ROW),
     )
 
     assert result["error"] == "fact_check_mismatch"
-    assert set(result["unsupported"]) == {"65", "120", "35"}
+    assert "125" in result["unsupported"]
     gmail_client.send_message.assert_not_called()
 
 
@@ -1633,13 +1679,20 @@ def test_send_email_zero_ledger_skips_fact_check(
 def test_send_email_fabricated_tokens_return_fact_check_mismatch(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
+    """§T.85: send_email enforces pipe-table-row scoping on fact-check union."""
     account = make_test_account(database_connection)
     make_test_contact(database_connection, email="recipient@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)
     gmail_client = _make_gmail_client(account)
 
-    ledger = {"pricing.md": "Enterprise plan: 99 seats, 12 month term."}
+    ledger = {
+        "pricing.md": (
+            "| Plan | Seats | Term |\n"
+            "|------|-------|------|\n"
+            "| Enterprise | 99 | 12 |\n"
+        )
+    }
 
     result = send_email(
         connection=database_connection,

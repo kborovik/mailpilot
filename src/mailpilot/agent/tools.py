@@ -71,15 +71,23 @@ def _fact_check_body(
 
     §V.68: when one or more ``read_drive_markdown`` calls succeeded in the
     current ``agent.invoke``, every candidate numeric-spec value-token in the
-    proposed outbound body must appear verbatim in the union of those reads.
-    Zero-ledger invocations (no successful ``read_drive_markdown``) skip the
+    proposed outbound body must appear verbatim in a pipe-table-row line of
+    at-least-one ledgered read. Pipe-table-row scoping (§V.68(+), §B.56) kills
+    prose-line collisions where a fabricated spec token coincidentally appears
+    in a sentence such as ``"35-110 degrees F"`` while the canonical spec
+    pipe-row carries a different value. Zero-ledger invocations skip the
     check so out-of-scope declines and non-KB-grounded workflows stay
     unaffected. Returns the error dict on mismatch so the agent re-drafts via
     the §V.39 tool-error path; returns ``None`` to let the send proceed.
     """
     if not read_ledger:
         return None
-    union = "\n".join(read_ledger.values())
+    union = "\n".join(
+        line
+        for content in read_ledger.values()
+        for line in content.splitlines()
+        if "|" in line
+    )
     unsupported: list[str] = []
     seen: set[str] = set()
     for token in _NUMERIC_TOKEN_RE.findall(body):
