@@ -53,7 +53,7 @@ Apply `/sdd:glyph` encoding to SPEC.md ∧ spec-adjacent writes (this file, plan
 Concrete shape lives in code; spec invariants govern behaviour. Quick map:
 
 - **Gmail** — `gmail.modify` only, service account + DWD, per-account `with_subject(email)`. Custom `X-MailPilot-Version` ∧ `X-MailPilot-Account-Id` headers on sent. ThreadPoolExecutor per account. Pub/Sub streaming pull. History API + 404 → full re-sync. Body = plain text only.
-- **Drive KB** — `drive.readonly` only. Folder ID lives in `workflow.instructions`. Shared-Drive flags per §V.34, §V.36. Permission model = isolation per §V.35.
+- **Drive KB** — `drive.readonly` only. Folder ID lives in `workflow.instructions`. Shared-Drive flags per §V.34. Permission model = isolation per §V.35.
 - **Workflows** — agent shape owned by template registry (`src/mailpilot/agent/templates.py`). See §V.44-§V.46. ⊥ per-workflow tool ∨ protocol overrides.
 - **Email rendering** — `email_renderer.py` — Markdown → HTML, inline styles. `THEME_NAMES` ∈ {blue, green, orange, purple, red, slate}.
 - **CLI** — thin dispatcher, JSON-only stdout. See §V.1 (settings-first), §V.2 (lazy imports), §V.3-§V.5 (envelope ∧ summary contract). Full surface in SPEC §I.
