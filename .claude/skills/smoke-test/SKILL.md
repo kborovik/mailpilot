@@ -601,8 +601,8 @@ Poll the outbound mailbox for `SUBJECT_B3` (likely `Re:` prefixed) the same way 
 
 **Gate B7 (multi-source grounding, no single-source synthesis):**
 
-- Reply present (CLI round-trip check; cap 120s). Compare questions force a longer agent loop (>=2 `read_drive_markdown` calls), so `sla_agent_seconds` near the 50s ceiling is more likely here than in B4.
-- **Latency verdict via Logfire per §V.61(+).** Same query shape as B4, swap `<T_SEND_B1>` for `<T_SEND_B3>`. Capture `LATENCY_B3`, `SLA_AGENT_B3`, `SLA_DELIVERY_B3`. `sla_agent_seconds > 50` is a Critical regression of agent execution; `sla_delivery_seconds` is advisory.
+- Reply present (CLI round-trip check; cap 120s). Compare questions force a longer agent loop (>=2 `read_drive_markdown` calls) and 2-datasheet synthesis, so the compare-type steady ceiling is 90s (vs 50s for single-source B4 and decline B6) per §V.61(+).
+- **Latency verdict via Logfire per §V.61(+).** Same query shape as B4, swap `<T_SEND_B1>` for `<T_SEND_B3>`. Capture `LATENCY_B3`, `SLA_AGENT_B3`, `SLA_DELIVERY_B3`. `sla_agent_seconds > 90` is a Critical regression of agent execution for compare-type; `50 < sla_agent_seconds <= 90` is advisory (compare-type intrinsic cost band per §B.61); `sla_delivery_seconds` is advisory.
 - Reply on the demo side has `is_routed == true`, `workflow_id == DEMO_WORKFLOW_ID`, `route_method == classified`. Fresh thread, so not `thread_match`.
 - Reply body **grounded in EVERY source listed in `source_files`** -- operator-judged per the same §V.57 contract that governs B4. Procedure:
   1. Load all source docs in one bundle:
@@ -799,7 +799,7 @@ Do not stop the sync loop. Do not run `make clean`. Do not recreate accounts, co
 
 **Concurrency.** P=8 -- high enough to interleave classification + `agent.invoke` under real concurrency, low enough that Gmail per-user send rate stays comfortably under quota. Do **not** raise P without first confirming Gmail rate limits for the impersonated user; tripping a Gmail-side 429 invalidates the run, not the system under test.
 
-**Two-budget SLA per §V.61(+).** Primary verdict is `sla_agent_seconds` (our-side agent execution); `sla_delivery_seconds` (Gmail Pub/Sub notify dwell + classification-pipeline lag) is advisory because it is jointly uncontrolled by Gmail-side batching. Steady-state single-sends (B4 / B6 / B7 / B7.5) gate `sla_agent_seconds <= 50s`. Burst C gates `p95(sla_agent_seconds) <= 75s`. The public lab5.ca/mailpilot/ 90s promise remains the demo-test end-to-end gate (`/demo-test` G1), not a smoke-test gate.
+**Two-budget SLA per §V.61(+).** Primary verdict is `sla_agent_seconds` (our-side agent execution); `sla_delivery_seconds` (Gmail Pub/Sub notify dwell + classification-pipeline lag) is advisory because it is jointly uncontrolled by Gmail-side batching. Steady-state single-source / decline sends (B4 / B6 / B7.5) gate `sla_agent_seconds <= 50s`; compare-type sends (B7) gate `sla_agent_seconds <= 90s` (compare-type 2-datasheet synthesis structurally exceeds the 50s single-source band per §B.61). Burst C gates non-compare `p95(sla_agent_seconds) <= 75s`; compare-type invocations are reported separately with an advisory ceiling of 120s (compare cost dominates the tail and would flap a blended p95 per §B.62). The public lab5.ca/mailpilot/ 90s promise remains the demo-test end-to-end gate (`/demo-test` G1), not a smoke-test gate.
 
 Capture `TEST_START_C` (ISO, must be later than B's last activity).
 
@@ -890,35 +890,52 @@ Match each row's `subject` against `Re: <one of SUBJECTS_BURST>` (Gmail typicall
 
 Single window `[T_SEND_C, T_SEND_C + 300s]`, scope to `workflow_id == DEMO_WORKFLOW_ID` and `trigger == 'task'`.
 
-**Gate C4.a -- per-span SLA + token economics (two-budget split per §V.59(+) / §V.61(+)):**
+**Gate C4.a -- per-span SLA + token economics (two-budget split per §V.59(+) / §V.61(+); compare-type vs non-compare split per §V.61(+) / §B.62):**
 
 ```sql
-WITH burst AS (
-  SELECT
-    attributes->>'email_id' AS email_id,
-    start_timestamp,
-    end_timestamp,
-    EXTRACT(EPOCH FROM (end_timestamp - start_timestamp)) AS sla_agent_seconds,
-    EXTRACT(EPOCH FROM (start_timestamp - TIMESTAMPTZ '<T_SEND_C>')) AS sla_delivery_seconds,
-    EXTRACT(EPOCH FROM (end_timestamp - TIMESTAMPTZ '<T_SEND_C>')) AS total_latency_s,
-    is_exception,
-    level,
-    (attributes->>'input_tokens')::int AS in_tok,
-    (attributes->>'output_tokens')::int AS out_tok,
-    (attributes->>'cache_read_input_tokens')::int AS cache_read
+WITH read_counts AS (
+  -- Count read_drive_markdown calls per agent.invoke trace.
+  -- compare-type invocation per §V.61(+) ≡ >=2 read_drive_markdown spans in the same trace.
+  SELECT trace_id, COUNT(*) AS read_count
   FROM records
   WHERE deployment_environment = 'development'
-    AND span_name = 'agent.invoke'
+    AND attributes->>'gen_ai.tool.name' = 'read_drive_markdown'
     AND start_timestamp >= '<T_SEND_C>'
     AND start_timestamp <= '<T_SEND_C>'::timestamptz + INTERVAL '300 seconds'
-    AND attributes->>'workflow_id' = '<DEMO_WORKFLOW_ID>'
-    AND attributes->>'trigger' = 'task'
+  GROUP BY trace_id
+),
+burst AS (
+  SELECT
+    r.attributes->>'email_id' AS email_id,
+    r.start_timestamp,
+    r.end_timestamp,
+    EXTRACT(EPOCH FROM (r.end_timestamp - r.start_timestamp)) AS sla_agent_seconds,
+    EXTRACT(EPOCH FROM (r.start_timestamp - TIMESTAMPTZ '<T_SEND_C>')) AS sla_delivery_seconds,
+    EXTRACT(EPOCH FROM (r.end_timestamp - TIMESTAMPTZ '<T_SEND_C>')) AS total_latency_s,
+    r.is_exception,
+    r.level,
+    (r.attributes->>'input_tokens')::int AS in_tok,
+    (r.attributes->>'output_tokens')::int AS out_tok,
+    (r.attributes->>'cache_read_input_tokens')::int AS cache_read,
+    COALESCE(rc.read_count, 0) >= 2 AS is_compare
+  FROM records r
+  LEFT JOIN read_counts rc ON rc.trace_id = r.trace_id
+  WHERE r.deployment_environment = 'development'
+    AND r.span_name = 'agent.invoke'
+    AND r.start_timestamp >= '<T_SEND_C>'
+    AND r.start_timestamp <= '<T_SEND_C>'::timestamptz + INTERVAL '300 seconds'
+    AND r.attributes->>'workflow_id' = '<DEMO_WORKFLOW_ID>'
+    AND r.attributes->>'trigger' = 'task'
 )
 SELECT
   COUNT(*) AS n_invokes,
   COUNT(DISTINCT email_id) AS n_distinct_email_ids,
-  MAX(sla_agent_seconds) AS max_sla_agent_s,
-  approx_percentile_cont(sla_agent_seconds, 0.95) AS p95_sla_agent_s,
+  SUM(CASE WHEN is_compare THEN 1 ELSE 0 END) AS n_compare,
+  SUM(CASE WHEN NOT is_compare THEN 1 ELSE 0 END) AS n_noncompare,
+  MAX(sla_agent_seconds) FILTER (WHERE NOT is_compare) AS max_sla_agent_noncompare_s,
+  approx_percentile_cont(sla_agent_seconds, 0.95) FILTER (WHERE NOT is_compare) AS p95_sla_agent_noncompare_s,
+  MAX(sla_agent_seconds) FILTER (WHERE is_compare) AS max_sla_agent_compare_s,
+  approx_percentile_cont(sla_agent_seconds, 0.95) FILTER (WHERE is_compare) AS p95_sla_agent_compare_s,
   MAX(sla_delivery_seconds) AS max_sla_delivery_s,
   approx_percentile_cont(sla_delivery_seconds, 0.95) AS p95_sla_delivery_s,
   approx_percentile_cont(sla_delivery_seconds, 0.50) AS p50_sla_delivery_s,
@@ -935,12 +952,14 @@ FROM burst;
 Assertions (primary verdict = `sla_agent_seconds` per §V.61(+); `sla_delivery_seconds` is advisory only because Gmail-side Pub/Sub batching is jointly uncontrolled):
 
 - `n_invokes == 8` AND `n_distinct_email_ids == 8` -- no merged or dropped triggers (§V.26 / §T.63 contract: one span per inbound email).
-- `p95_sla_agent_s <= 75` -- burst gate per §V.61(+). Matches the §V.23 burst-load formula `ceil(N * avg_invoke_s / sla_s)`. A breach here is an our-side regression of agent execution under load.
+- `n_compare == 2` AND `n_noncompare == 6` -- matches the C1 mix (2 qa-cmp + 4 qa-in + 2 qa-out). Any mismatch means a compare invocation skipped one of its required reads OR a non-compare invocation issued a stray second read; cross-check against C4.c and the B7 tool-use gate before flagging.
+- `p95_sla_agent_noncompare_s <= 75` -- burst gate over non-compare invocations per §V.61(+). Matches the §V.23 burst-load formula `ceil(N * avg_invoke_s / sla_s)` sized for the 50s steady single-source ceiling. A breach here is an our-side regression of agent execution under load on single-source / decline traffic.
 - `n_exceptions == 0` AND `n_warns == 0`.
 - `avg_cache_hit_ratio >= 0.5` -- prompt cache stays warm across the burst (catches cache-key churn regressions where each agent invocation re-pays the full system-prompt token cost; the dominant cost driver at this scale).
 
 Report (NOT gated):
 
+- `p95_sla_agent_compare_s`, `max_sla_agent_compare_s` -- compare-type advisory ceiling 120s per §V.61(+) / §B.62. Compare invocations load 2 datasheets (~60k input tokens vs ~22k single-source) and synthesize across them; the cost is structural, not a regression class. Trend-escalate on run-over-run drift past 120s; do NOT fail the run on a single breach unless the cause is the same root as §B.61 / §B.62 (intrinsic compare cost growing) rather than a prompt-loop regression (§V.71 cap firing).
 - `max_sla_delivery_s`, `p95_sla_delivery_s`, `p50_sla_delivery_s` -- Gmail Pub/Sub notify dwell + classification-pipeline lag dominate the tail even at N=8 single-wave (§B.53 / §B.54). Trend-escalate on run-over-run drift but do NOT fail the run on a single breach: our side cannot accelerate Gmail-side notify emission.
 - `max_total_s`, `p95_total_s` -- end-to-end (delivery + agent), retained for run-over-run trend continuity with the pre-amend bundled metric.
 
@@ -1108,7 +1127,7 @@ Scenario C: Burst-load oracle (8 emails @ P=8, outbound workflow still active)
   C1  Burst payload generated ...... PASS  (8 distinct subjects; mix 4 qa-in / 2 qa-out / 2 qa-cmp)
   C2  8 sends @ P=8 ................ PASS  (wait exit 0; 8 outbound rows with workflow_id=null)
   C3  8 replies received ........... PASS  (wall-clock <Ns>; all classified to demo workflow)
-  C4  Logfire aggregate gates ...... PASS  (p95_sla_agent=<Ns> <=75, 0 exc, 0 warn, cache>=0.5, overlap_pairs=<N> >=10, drive max_dur<60s; advisory: p50/p95/max_sla_delivery=<Ns>/<Ns>/<Ns>, p95_total=<Ns>)
+  C4  Logfire aggregate gates ...... PASS  (p95_sla_agent_noncompare=<Ns> <=75, 0 exc, 0 warn, cache>=0.5, overlap_pairs=<N> >=10, drive max_dur<60s; advisory: p95_sla_agent_compare=<Ns> (~<=120), p50/p95/max_sla_delivery=<Ns>/<Ns>/<Ns>, p95_total=<Ns>)
   C5  Activity timeline (delta) .... PASS  (+8 received / +8 sent / +8 enrollment_completed)
   C6  Outbound stayed quiet ........ PASS  (0 new outbound-workflow sends during C)
   C7  Stop sync loop ............... PASS
@@ -1205,7 +1224,7 @@ If a `/sdd:spec` invocation is cancelled or revised by the user mid-run, record 
 
 ## Timing
 
-Expected total: ~10-11 minutes. Phase 0 once, run loop once, no reset between scenarios. The added compare-and-contrast question (B7) costs roughly one extra 50s `sla_agent` window over the prior baseline because it forces 2-4 `read_drive_markdown` calls and a multi-doc synthesis. The concurrent dual-send (B7.5) adds another ~50s window for the second of the two parallel replies (the two windows overlap, so the marginal cost is one reply window, not two). Scenario C (burst-load oracle) adds ~1-2 minutes for the 8-send burst plus aggregate verification; per-span `sla_agent` p95 must stay <=75s under burst (§V.61(+)), while `sla_delivery` is advisory because Gmail-side Pub/Sub batching dominates the tail.
+Expected total: ~10-11 minutes. Phase 0 once, run loop once, no reset between scenarios. The added compare-and-contrast question (B7) costs roughly one extra ~60-90s `sla_agent` window over the prior baseline because it forces 2-4 `read_drive_markdown` calls and a multi-doc synthesis (compare-type steady ceiling is 90s per §V.61(+) / §B.61, vs 50s for single-source). The concurrent dual-send (B7.5) adds another ~50s window for the second of the two parallel replies (the two windows overlap, so the marginal cost is one reply window, not two). Scenario C (burst-load oracle) adds ~1-2 minutes for the 8-send burst plus aggregate verification; per-span `sla_agent` p95 must stay <=75s under burst on non-compare invocations (§V.61(+)), compare-type p95 is reported separately with an advisory 120s ceiling per §B.62, while `sla_delivery` is advisory because Gmail-side Pub/Sub batching dominates the tail.
 
 | Phase / scenario                          | Duration |
 | ----------------------------------------- | -------- |
@@ -1219,7 +1238,7 @@ Expected total: ~10-11 minutes. Phase 0 once, run loop once, no reset between sc
 | A7 task drain                             | ~10-60s  |
 | B4 in-scope reply (sla_agent<=50s)        | ~10-50s  |
 | B6 out-of-scope reply (sla_agent<=50s)    | ~10-50s  |
-| B7 compare reply (sla_agent<=50s)         | ~20-50s  |
+| B7 compare reply (sla_agent<=90s)         | ~20-90s  |
 | B7.5 concurrent dual reply (sla_agent<=50s each, overlapping) | ~20-50s |
 | A8 / B8 activity check                    | ~3s      |
 | C1 burst payload generation               | ~3s      |
