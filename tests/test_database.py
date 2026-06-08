@@ -31,8 +31,8 @@ from mailpilot.database import (
     create_tag,
     create_task,
     create_tasks_for_routed_emails,
-    delete_enrollment,
     delete_tag,
+    disable_enrollment,
     find_pending_first_touch_task,
     get_account,
     get_account_by_email,
@@ -2366,27 +2366,92 @@ def test_status_payload_counts_block_includes_notes(
 # -- Enrollment ---------------------------------------------------------------
 
 
-def test_delete_enrollment(
+def test_disable_enrollment(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
+    """§V.10(+) enrollment coverage: UPDATE to status='disabled' + activity row."""
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
     enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
-    deleted = delete_enrollment(database_connection, enrollment.id)
-    assert deleted is not None
-    assert deleted.id == enrollment.id
-    assert deleted.workflow_id == workflow.id
-    assert deleted.contact_id == contact.id
-    assert deleted.status == "active"
-    assert get_enrollment(database_connection, workflow.id, contact.id) is None
+    updated = disable_enrollment(database_connection, enrollment.id, "left company")
+    assert updated is not None
+    assert updated.id == enrollment.id
+    assert updated.status == "disabled"
+    assert updated.disabled_reason == "left company"
+    # Row retained (soft-disable, §V.10): both lookups still resolve.
+    same = get_enrollment(database_connection, workflow.id, contact.id)
+    assert same is not None
+    assert same.status == "disabled"
+    # §V.10 enrollment coverage: enrollment_disabled activity row emitted.
+    activities = list_activities(database_connection, contact_id=contact.id)
+    disabled_rows = [a for a in activities if a.type == "enrollment_disabled"]
+    assert len(disabled_rows) == 1
+    assert disabled_rows[0].summary == "left company"
+    assert disabled_rows[0].enrollment_id == enrollment.id
+    assert disabled_rows[0].workflow_id == workflow.id
 
 
-def test_delete_enrollment_not_found(
+def test_disable_enrollment_not_found(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    deleted = delete_enrollment(database_connection, "nonexistent")
-    assert deleted is None
+    updated = disable_enrollment(database_connection, "nonexistent", "reason")
+    assert updated is None
+
+
+def test_disable_enrollment_idempotent_re_disable(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Re-disabling overwrites reason; emits a second activity row.
+
+    §V.10 enrollment coverage: ``changed`` semantics computed CLI-side via
+    pre/post diff. At the DB layer, re-disable is a fresh UPDATE + activity
+    INSERT (§V.14 append-only).
+    """
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    first = disable_enrollment(database_connection, enrollment.id, "left company")
+    assert first is not None
+    second = disable_enrollment(database_connection, enrollment.id, "left company")
+    assert second is not None
+    assert second.status == "disabled"
+    assert second.disabled_reason == "left company"
+    activities = list_activities(database_connection, contact_id=contact.id)
+    disabled_rows = [a for a in activities if a.type == "enrollment_disabled"]
+    assert len(disabled_rows) == 2
+
+
+def test_disable_enrollment_rejects_empty_reason(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Schema CHECK rejects disabled rows with empty reason (§V.15(+) coupling)."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    with pytest.raises(psycopg.errors.CheckViolation):
+        disable_enrollment(database_connection, enrollment.id, "")
+
+
+def test_list_enrollments_admits_disabled_status(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.15(+): disabled is a valid status enum value the filter passes through."""
+    from mailpilot.database import list_enrollments
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact_a = make_test_contact(database_connection, email="a@example.com")
+    contact_b = make_test_contact(database_connection, email="b@example.com")
+    e_a = make_test_enrollment(database_connection, workflow.id, contact_a.id)
+    make_test_enrollment(database_connection, workflow.id, contact_b.id)
+    disable_enrollment(database_connection, e_a.id, "left company")
+    active = list_enrollments(database_connection, workflow.id, status="active")
+    disabled = list_enrollments(database_connection, workflow.id, status="disabled")
+    assert {e.contact_id for e in active} == {contact_b.id}
+    assert {e.contact_id for e in disabled} == {contact_a.id}
 
 
 def test_list_enrollments_detailed(
@@ -2507,11 +2572,11 @@ def test_enrollment_row_carries_parent_denorm_fields(
     assert updated.contact_email == "alice@example.com"
     assert updated.contact_name == "Alice Smith"
 
-    deleted = delete_enrollment(database_connection, created.id)
-    assert deleted is not None
-    assert deleted.workflow_name == "Outbound Campaign"
-    assert deleted.contact_email == "alice@example.com"
-    assert deleted.contact_name == "Alice Smith"
+    disabled = disable_enrollment(database_connection, created.id, "wrap-up")
+    assert disabled is not None
+    assert disabled.workflow_name == "Outbound Campaign"
+    assert disabled.contact_email == "alice@example.com"
+    assert disabled.contact_name == "Alice Smith"
 
 
 def test_update_enrollment_rejects_legacy_statuses(

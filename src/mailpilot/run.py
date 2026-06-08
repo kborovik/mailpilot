@@ -107,7 +107,7 @@ def execute_task(
             return
         if enrollment.status != "active":
             logfire.info(
-                "run.task.skip_paused_enrollment",
+                "run.task.skip_inactive_enrollment",
                 task_id=task.id,
                 workflow_id=task.workflow_id,
                 contact_id=task.contact_id,
@@ -117,7 +117,7 @@ def execute_task(
                 connection,
                 task.id,
                 status="cancelled",
-                result={"reason": "enrollment paused"},
+                result={"reason": f"enrollment {enrollment.status}"},
             )
             return
 

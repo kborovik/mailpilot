@@ -163,16 +163,19 @@ mailpilot enrollment add --workflow-id <WID> --contact-id <CID>
 mailpilot enrollment run <ENROLLMENT_ID>                            # manual kick
 mailpilot enrollment view <ENROLLMENT_ID>
 mailpilot enrollment update <ENROLLMENT_ID> --status paused
-mailpilot enrollment remove <ENROLLMENT_ID>
+mailpilot enrollment disable <ENROLLMENT_ID> --reason "left company"
 ```
 
 Pass `--scheduled-at <ISO>` on `enrollment add` against an outbound workflow
 to queue a first-touch send for that time; the run loop dispatches it when
 due.
 
-Enrollment status is `active` or `paused`. Terminal outcomes
-(`completed`, `failed`) are recorded as activity-log entries by the agent,
-not as enrollment status changes.
+Enrollment status is `active`, `paused`, or `disabled`. `disabled` is the
+terminal operator-killed exit (set via `enrollment disable`); the agent
+treats it the same as `paused` and never resumes it. Re-enrolling means a
+fresh `enrollment add`. Terminal outcomes (`completed`, `failed`) are
+recorded as activity-log entries by the agent, not as enrollment status
+changes.
 
 ### Send and reply by hand
 

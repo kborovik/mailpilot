@@ -2654,25 +2654,50 @@ def enrollment_run(enrollment_id: str) -> None:
         connection.close()
 
 
-@enrollment.command("remove")
+@enrollment.command("disable")
 @click.argument("enrollment_id")
-def enrollment_remove(enrollment_id: str) -> None:
-    """Remove an enrollment."""
-    from mailpilot.database import delete_enrollment, initialize_database
+@click.option(
+    "--reason",
+    required=True,
+    help="Explanation written to disabled_reason and the enrollment_disabled activity.",
+)
+def enrollment_disable(enrollment_id: str, reason: str) -> None:
+    """Soft-disable an enrollment via terminal lifecycle exit (§V.10, §V.15).
+
+    Flips ``status='disabled'``, writes ``disabled_reason``, and appends an
+    ``enrollment_disabled`` activity carrying the reason. Disabled is
+    terminal -- re-enrolling means creating a fresh enrollment via
+    ``enrollment add``.
+    """
+    from mailpilot.database import (
+        disable_enrollment,
+        get_enrollment_by_id,
+        initialize_database,
+    )
     from mailpilot.operator_log import cli_mutation, operator_event
 
+    if reason.strip() == "":
+        output_error("reason cannot be empty", "validation_error")
     connection = initialize_database(_database_url())
     try:
-        with cli_mutation("enrollment", "remove", entity_id=enrollment_id):
-            deleted = delete_enrollment(connection, enrollment_id)
-            if deleted is None:
-                output_error("enrollment not found", "not_found")
+        before = get_enrollment_by_id(connection, enrollment_id)
+        if before is None:
+            output_error(f"enrollment not found: {enrollment_id}", "not_found")
+        with cli_mutation("enrollment", "disable", entity_id=enrollment_id):
+            updated = disable_enrollment(connection, enrollment_id, reason)
+            if updated is None:
+                output_error(f"enrollment not found: {enrollment_id}", "not_found")
+            changed = [
+                field
+                for field in ("status", "disabled_reason")
+                if getattr(before, field) != getattr(updated, field)
+            ]
             operator_event(
-                "enrollment.remove",
+                "enrollment.disable",
                 entity_id=enrollment_id,
-                changed=["id"],
+                changed=changed,
             )
-            output({"enrollment": {"id": enrollment_id}})
+            output_entity("enrollment", updated)
     finally:
         connection.close()
 
@@ -2699,7 +2724,7 @@ def enrollment_view(enrollment_id: str) -> None:
 @click.option(
     "--status",
     default=None,
-    type=click.Choice(["active", "paused"]),
+    type=click.Choice(["active", "paused", "disabled"]),
     help="Filter by enrollment status.",
 )
 @click.option("--limit", default=100, help="Maximum results.")

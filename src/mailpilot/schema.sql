@@ -58,15 +58,17 @@ CREATE TABLE IF NOT EXISTS workflow (
 CREATE INDEX IF NOT EXISTS idx_workflow_account_id ON workflow(account_id);
 
 CREATE TABLE IF NOT EXISTS enrollment (
-    id            TEXT PRIMARY KEY,
-    workflow_id   TEXT NOT NULL REFERENCES workflow(id),
-    contact_id    TEXT NOT NULL REFERENCES contact(id),
-    status        TEXT NOT NULL DEFAULT 'active'
-                  CHECK (status IN ('active', 'paused')),
-    reason        TEXT NOT NULL DEFAULT '',
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (workflow_id, contact_id)
+    id              TEXT PRIMARY KEY,
+    workflow_id     TEXT NOT NULL REFERENCES workflow(id),
+    contact_id      TEXT NOT NULL REFERENCES contact(id),
+    status          TEXT NOT NULL DEFAULT 'active'
+                    CHECK (status IN ('active', 'paused', 'disabled')),
+    reason          TEXT NOT NULL DEFAULT '',
+    disabled_reason TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (workflow_id, contact_id),
+    CHECK ((status = 'disabled') = (disabled_reason IS NOT NULL AND TRIM(disabled_reason) <> ''))
 );
 
 CREATE INDEX IF NOT EXISTS idx_enrollment_contact_id ON enrollment(contact_id);
@@ -165,7 +167,8 @@ CREATE TABLE IF NOT EXISTS activity (
                         'status_changed',
                         'enrollment_added',
                         'enrollment_completed', 'enrollment_failed',
-                        'enrollment_paused', 'enrollment_resumed'
+                        'enrollment_paused', 'enrollment_resumed',
+                        'enrollment_disabled'
                     )),
     summary         TEXT NOT NULL DEFAULT '',
     detail          JSONB NOT NULL DEFAULT '{}',

@@ -5542,52 +5542,124 @@ def test_enrollment_add_self_loop_case_insensitive(
     assert data["error"] == "self_loop"
 
 
-# -- enrollment remove ---------------------------------------------------------
+# -- enrollment disable --------------------------------------------------------
 
 
-def test_enrollment_remove(runner: CliRunner, mock_connection: MagicMock) -> None:
-    """§V.4 hard-DELETE branch: payload ≡ scalar-id projection only.
+def test_enrollment_disable(runner: CliRunner, mock_connection: MagicMock) -> None:
+    """§V.10(+) enrollment coverage: soft-disable returns full updated row.
 
-    §V.54: `remove` operator-event `changed` ≡ relational key set.
-    Regression guard against §B.33 (pre-delete `status` leaked into response).
+    §V.4: row retained ∴ full Enrollment model in singular envelope (⊥ hard-
+    DELETE composite-key projection). §V.54: `changed` = ['status',
+    'disabled_reason'] on first disable.
     """
-    removed = _make_enrollment(status="paused")
+    before = _make_enrollment(status="active", disabled_reason=None)
+    after = _make_enrollment(status="disabled", disabled_reason="left company")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_enrollment_by_id", return_value=before),
         patch(
-            "mailpilot.database.delete_enrollment", return_value=removed
-        ) as mock_delete,
+            "mailpilot.database.disable_enrollment", return_value=after
+        ) as mock_disable,
         patch("mailpilot.operator_log.operator_event") as mock_event,
     ):
-        result = runner.invoke(main, ["enrollment", "remove", _ENROLLMENT_ID])
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "disable",
+                _ENROLLMENT_ID,
+                "--reason",
+                "left company",
+            ],
+        )
 
-    assert result.exit_code == 0
-    mock_delete.assert_called_once_with(mock_connection, _ENROLLMENT_ID)
+    assert result.exit_code == 0, result.output
+    mock_disable.assert_called_once_with(
+        mock_connection, _ENROLLMENT_ID, "left company"
+    )
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["enrollment"] == {"id": _ENROLLMENT_ID}
-    remove_events = [
+    assert data["enrollment"]["id"] == _ENROLLMENT_ID
+    assert data["enrollment"]["status"] == "disabled"
+    assert data["enrollment"]["disabled_reason"] == "left company"
+    disable_events = [
         call
         for call in mock_event.call_args_list
-        if call.args[:1] == ("enrollment.remove",)
+        if call.args[:1] == ("enrollment.disable",)
     ]
-    assert len(remove_events) == 1
-    assert remove_events[0].kwargs == {
+    assert len(disable_events) == 1
+    assert disable_events[0].kwargs == {
         "entity_id": _ENROLLMENT_ID,
-        "changed": ["id"],
+        "changed": ["status", "disabled_reason"],
     }
 
 
-def test_enrollment_remove_not_found(
+def test_enrollment_disable_idempotent_re_invoke(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """Re-disabling with the same reason yields empty `changed` list."""
+    before = _make_enrollment(status="disabled", disabled_reason="left company")
+    after = _make_enrollment(status="disabled", disabled_reason="left company")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_enrollment_by_id", return_value=before),
+        patch("mailpilot.database.disable_enrollment", return_value=after),
+        patch("mailpilot.operator_log.operator_event") as mock_event,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "disable",
+                _ENROLLMENT_ID,
+                "--reason",
+                "left company",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    disable_events = [
+        call
+        for call in mock_event.call_args_list
+        if call.args[:1] == ("enrollment.disable",)
+    ]
+    assert len(disable_events) == 1
+    assert disable_events[0].kwargs == {
+        "entity_id": _ENROLLMENT_ID,
+        "changed": [],
+    }
+
+
+def test_enrollment_disable_rejects_empty_reason(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.delete_enrollment", return_value=None),
     ):
-        result = runner.invoke(main, ["enrollment", "remove", _ENROLLMENT_ID])
+        result = runner.invoke(
+            main, ["enrollment", "disable", _ENROLLMENT_ID, "--reason", "   "]
+        )
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "reason" in data["message"]
+
+
+def test_enrollment_disable_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_enrollment_by_id", return_value=None),
+    ):
+        result = runner.invoke(
+            main,
+            ["enrollment", "disable", _ENROLLMENT_ID, "--reason", "left company"],
+        )
 
     assert result.exit_code == 1
     data = json.loads(result.output)

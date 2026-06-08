@@ -1622,45 +1622,84 @@ def list_enrollments_with_outcomes(
     return [EnrollmentWithOutcome.model_validate(row) for row in rows]
 
 
-def delete_enrollment(
+def disable_enrollment(
     connection: psycopg.Connection[dict[str, Any]],
     enrollment_id: str,
+    reason: str,
 ) -> Enrollment | None:
-    """Remove an enrollment by scalar id and return the deleted row.
+    """Soft-disable an enrollment via terminal lifecycle exit (§V.10, §V.15).
+
+    Single transaction: flips ``status='disabled'`` + writes ``disabled_reason``,
+    then appends an ``enrollment_disabled`` activity carrying the reason. The
+    coupling CHECK on ``enrollment`` rejects empty reasons at the schema level;
+    callers MUST validate ``reason.strip() != ""`` upstream for a friendlier
+    error envelope.
+
+    Returns the updated row with denormalised parent identifiers (workflow
+    name, contact email/name) so the CLI envelope can ship the full
+    Enrollment model unchanged. Returns ``None`` when no row matches the id.
 
     Args:
         connection: Open database connection.
         enrollment_id: Enrollment ID.
+        reason: Operator-supplied explanation written to ``disabled_reason``
+            and inlined into the ``enrollment_disabled`` activity row.
 
     Returns:
-        The deleted ``Enrollment`` (carries ``status`` at time of removal),
-        or ``None`` if no matching row existed.
+        Updated ``Enrollment`` (status='disabled'), or ``None`` if not found.
     """
     row = connection.execute(
         """\
-        WITH deleted AS (
-            DELETE FROM enrollment
+        WITH updated AS (
+            UPDATE enrollment
+            SET status = 'disabled',
+                disabled_reason = %(reason)s,
+                updated_at = CURRENT_TIMESTAMP
             WHERE id = %(id)s
             RETURNING *
         )
         SELECT
-            deleted.*,
+            updated.*,
             workflow.name AS workflow_name,
             contact.email AS contact_email,
+            contact.company_id AS contact_company_id,
             TRIM(
                 COALESCE(contact.first_name, '')
                 || ' '
                 || COALESCE(contact.last_name, '')
             ) AS contact_name
-        FROM deleted
-        JOIN workflow ON workflow.id = deleted.workflow_id
-        JOIN contact ON contact.id = deleted.contact_id
+        FROM updated
+        JOIN workflow ON workflow.id = updated.workflow_id
+        JOIN contact ON contact.id = updated.contact_id
         """,
-        {"id": enrollment_id},
+        {"id": enrollment_id, "reason": reason},
     ).fetchone()
-    connection.commit()
     if row is None:
+        connection.commit()
         return None
+    connection.execute(
+        """\
+        INSERT INTO activity (
+            id, contact_id, company_id, workflow_id, enrollment_id,
+            type, summary, detail
+        )
+        VALUES (
+            %(id)s, %(contact_id)s, %(company_id)s, %(workflow_id)s,
+            %(enrollment_id)s, 'enrollment_disabled', %(summary)s, %(detail)s
+        )
+        """,
+        {
+            "id": _new_id(),
+            "contact_id": row["contact_id"],
+            "company_id": row["contact_company_id"],
+            "workflow_id": row["workflow_id"],
+            "enrollment_id": row["id"],
+            "summary": reason,
+            "detail": Json({"reason": reason}),
+        },
+    )
+    connection.commit()
+    row.pop("contact_company_id", None)
     return Enrollment.model_validate(row)
 
 

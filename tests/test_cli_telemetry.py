@@ -825,24 +825,31 @@ def test_enrollment_add_scheduled_at_event_carries_field(
     assert "'scheduled_first_send'" in err
 
 
-def test_enrollment_remove_emits_span_and_event(
+def test_enrollment_disable_emits_span_and_event(
     runner: CliRunner,
     mock_connection: MagicMock,
     capfire: CaptureLogfire,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    deleted = _make_enrollment(status="paused")
+    before = _make_enrollment(status="active", disabled_reason=None)
+    after = _make_enrollment(status="disabled", disabled_reason="left company")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.delete_enrollment", return_value=deleted),
+        patch("mailpilot.database.get_enrollment_by_id", return_value=before),
+        patch("mailpilot.database.disable_enrollment", return_value=after),
     ):
-        result = runner.invoke(main, ["enrollment", "remove", _ENROLLMENT_ID])
+        result = runner.invoke(
+            main,
+            ["enrollment", "disable", _ENROLLMENT_ID, "--reason", "left company"],
+        )
 
     assert result.exit_code == 0, result.output
-    assert _spans_named(capfire, "enrollment.remove")
+    assert _spans_named(capfire, "enrollment.disable")
     err = result.stderr
-    assert "event=enrollment.remove" in err
+    assert "event=enrollment.disable" in err
+    assert "'status'" in err
+    assert "'disabled_reason'" in err
 
 
 def test_enrollment_update_changed_diff(
