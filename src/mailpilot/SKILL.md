@@ -188,7 +188,8 @@ mailpilot email reply --account-id <ID> --email-id <EMAIL_ID> --body "..."
 ### Tag, note, and audit
 
 ```
-mailpilot tag add --contact-id <CID> --name vip
+mailpilot tag add --contact-id <CID> vip
+mailpilot tag disable --contact-id <CID> vip --reason "<text>"
 mailpilot note add --contact-id <CID> --body "Met at conf 2026."
 mailpilot activity list --contact-id <CID>
 ```

@@ -115,6 +115,7 @@ def test_activity_type_literal_uses_enrollment_vocabulary() -> None:
         "note_added",
         "tag_added",
         "tag_removed",
+        "tag_disabled",
         "status_changed",
         "enrollment_added",
         "enrollment_completed",

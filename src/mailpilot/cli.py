@@ -24,12 +24,14 @@ _ACTIVITY_TYPES = [
     "note_added",
     "tag_added",
     "tag_removed",
+    "tag_disabled",
     "status_changed",
     "enrollment_added",
     "enrollment_completed",
     "enrollment_failed",
     "enrollment_paused",
     "enrollment_resumed",
+    "enrollment_disabled",
 ]
 
 
@@ -1484,22 +1486,36 @@ def tag_add(contact_id: str | None, company_id: str | None, name: str) -> None:
         connection.close()
 
 
-@tag.command("remove")
+@tag.command("disable")
 @click.option("--contact-id", default=None, help="Contact ID.")
 @click.option("--company-id", default=None, help="Company ID.")
 @click.argument("name")
-def tag_remove(contact_id: str | None, company_id: str | None, name: str) -> None:
-    """Remove a tag from a contact or company."""
+@click.option(
+    "--reason",
+    required=True,
+    help="Explanation written to disabled_reason and the tag_disabled activity.",
+)
+def tag_disable(
+    contact_id: str | None, company_id: str | None, name: str, reason: str
+) -> None:
+    """Soft-disable a tag on a contact or company (§V.10 tag coverage).
+
+    Flips ``disabled_reason`` on the active tag row and appends a
+    ``tag_disabled`` activity carrying the reason. Disabled is terminal --
+    re-adding the same name means creating a fresh row via ``tag add``.
+    """
     from mailpilot.database import (
         _normalize_tag_name,  # pyright: ignore[reportPrivateUsage]
+        disable_company_tag,
+        disable_contact_tag,
         get_company,
         get_contact,
         initialize_database,
-        remove_company_tag,
-        remove_contact_tag,
     )
     from mailpilot.operator_log import cli_mutation, operator_event
 
+    if reason.strip() == "":
+        output_error("reason cannot be empty", "validation_error")
     if (contact_id is None) == (company_id is None):
         output_error(
             "exactly one of --contact-id or --company-id is required",
@@ -1517,45 +1533,43 @@ def tag_remove(contact_id: str | None, company_id: str | None, name: str) -> Non
                 output_error(f"company {company_id} not found", "not_found")
             owner = ("company", company_id)
         with cli_mutation(
-            "tag", "remove", name=name, owner_type=owner[0], owner_id=owner[1]
+            "tag", "disable", entity_id=name, owner_type=owner[0], owner_id=owner[1]
         ):
             if contact_id is not None:
                 try:
-                    deleted = remove_contact_tag(
-                        connection, contact_id=contact_id, name=name
+                    updated = disable_contact_tag(
+                        connection,
+                        contact_id=contact_id,
+                        name=name,
+                        reason=reason,
                     )
                 except ValueError as exc:
                     output_error(str(exc), "validation_error")
             else:
                 assert company_id is not None
                 try:
-                    deleted = remove_company_tag(
-                        connection, company_id=company_id, name=name
+                    updated = disable_company_tag(
+                        connection,
+                        company_id=company_id,
+                        name=name,
+                        reason=reason,
                     )
                 except ValueError as exc:
                     output_error(str(exc), "validation_error")
-            if deleted is None:
+            if updated is None:
                 normalized = _normalize_tag_name(name)
                 output_error(
                     f"tag '{normalized}' not found on {owner[0]} {owner[1]}",
                     "not_found",
                 )
             operator_event(
-                "tag.remove",
-                name=deleted.name,
+                "tag.disable",
+                entity_id=updated.name,
                 owner_type=owner[0],
                 owner_id=owner[1],
-                changed=[f"{owner[0]}_id", "name"],
+                changed=["disabled_reason"],
             )
-            output(
-                {
-                    "tag": {
-                        "name": deleted.name,
-                        "owner_type": owner[0],
-                        "owner_id": owner[1],
-                    }
-                }
-            )
+            output_entity("tag", updated)
     finally:
         connection.close()
 
@@ -1565,11 +1579,18 @@ def tag_remove(contact_id: str | None, company_id: str | None, name: str) -> Non
 @click.option("--company-id", default=None, help="Company ID.")
 @click.option("--limit", default=100, help="Maximum results.")
 @click.option("--since", default=None, help="ISO datetime lower bound on created_at.")
+@click.option(
+    "--include-disabled",
+    is_flag=True,
+    default=False,
+    help="Include rows whose disabled_reason is set (default: active only).",
+)
 def tag_list(
     contact_id: str | None,
     company_id: str | None,
     limit: int,
     since: str | None,
+    include_disabled: bool,
 ) -> None:
     """List tags on a contact or company."""
     from mailpilot.database import (
@@ -1590,14 +1611,22 @@ def tag_list(
             if get_contact(connection, contact_id) is None:
                 output_error(f"contact {contact_id} not found", "not_found")
             tags = list_tags(
-                connection, contact_id=contact_id, limit=limit, since=since
+                connection,
+                contact_id=contact_id,
+                limit=limit,
+                since=since,
+                include_disabled=include_disabled,
             )
         else:
             assert company_id is not None
             if get_company(connection, company_id) is None:
                 output_error(f"company {company_id} not found", "not_found")
             tags = list_tags(
-                connection, company_id=company_id, limit=limit, since=since
+                connection,
+                company_id=company_id,
+                limit=limit,
+                since=since,
+                include_disabled=include_disabled,
             )
         output({"tags": [t.model_dump(mode="json") for t in tags]})
     finally:
@@ -1614,13 +1643,27 @@ def tag_list(
     help="Filter by owner type.",
 )
 @click.option("--limit", default=100, help="Maximum results.")
-def tag_search(name: str, owner: str | None, limit: int) -> None:
+@click.option(
+    "--include-disabled",
+    is_flag=True,
+    default=False,
+    help="Include rows whose disabled_reason is set (default: active only).",
+)
+def tag_search(
+    name: str, owner: str | None, limit: int, include_disabled: bool
+) -> None:
     """Search tags by name."""
     from mailpilot.database import initialize_database, search_tags
 
     connection = initialize_database(_database_url())
     try:
-        tags = search_tags(connection, name=name, owner=owner, limit=limit)
+        tags = search_tags(
+            connection,
+            name=name,
+            owner=owner,
+            limit=limit,
+            include_disabled=include_disabled,
+        )
         output({"tags": [t.model_dump(mode="json") for t in tags]})
     finally:
         connection.close()

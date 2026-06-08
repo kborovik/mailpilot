@@ -164,6 +164,7 @@ CREATE TABLE IF NOT EXISTS activity (
                     CHECK (type IN (
                         'email_sent', 'email_received',
                         'note_added', 'tag_added', 'tag_removed',
+                        'tag_disabled',
                         'status_changed',
                         'enrollment_added',
                         'enrollment_completed', 'enrollment_failed',
@@ -187,18 +188,22 @@ CREATE TABLE IF NOT EXISTS tag (
     contact_id      TEXT REFERENCES contact(id),
     company_id      TEXT REFERENCES company(id),
     name            TEXT NOT NULL,
+    disabled_reason TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (
         (contact_id IS NOT NULL AND company_id IS NULL)
         OR
         (contact_id IS NULL AND company_id IS NOT NULL)
-    )
+    ),
+    CHECK (disabled_reason IS NULL OR TRIM(disabled_reason) <> '')
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tag_contact_unique
-    ON tag(contact_id, name) WHERE contact_id IS NOT NULL;
+    ON tag(contact_id, name)
+    WHERE contact_id IS NOT NULL AND disabled_reason IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tag_company_unique
-    ON tag(company_id, name) WHERE company_id IS NOT NULL;
+    ON tag(company_id, name)
+    WHERE company_id IS NOT NULL AND disabled_reason IS NULL;
 CREATE INDEX IF NOT EXISTS idx_tag_name ON tag(name);
 
 CREATE TABLE IF NOT EXISTS note (

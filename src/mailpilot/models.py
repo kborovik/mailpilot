@@ -301,6 +301,7 @@ ActivityType = Literal[
     "note_added",
     "tag_added",
     "tag_removed",
+    "tag_disabled",
     "status_changed",
     "enrollment_added",
     "enrollment_completed",
@@ -353,13 +354,15 @@ class Tag(BaseModel):
     """Flexible label on a contact or company for segmentation.
 
     Exactly one of ``contact_id`` or ``company_id`` is set (XOR enforced
-    at the schema level).
+    at the schema level). ``disabled_reason`` non-null marks a terminal
+    soft-disabled row (operator-killed lifecycle exit per V.10 / V.13).
     """
 
     id: str
     contact_id: str | None = None
     company_id: str | None = None
     name: str
+    disabled_reason: str | None = None
     created_at: datetime
 
 

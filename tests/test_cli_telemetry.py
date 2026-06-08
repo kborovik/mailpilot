@@ -908,28 +908,38 @@ def test_tag_add_emits_span_and_event(
     assert f"owner_id={contact.id}" in err
 
 
-def test_tag_remove_emits_span_and_event(
+def test_tag_disable_emits_span_and_event(
     runner: CliRunner,
     mock_connection: MagicMock,
     capfire: CaptureLogfire,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    tag = _make_tag()
+    """§V.10 + §V.54: tag.disable mutation emits span + operator event."""
+    tag = _make_tag(disabled_reason="stale")
     contact = _make_contact()
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.remove_contact_tag", return_value=tag),
+        patch("mailpilot.database.disable_contact_tag", return_value=tag),
     ):
         result = runner.invoke(
-            main, ["tag", "remove", "--contact-id", contact.id, "prospect"]
+            main,
+            [
+                "tag",
+                "disable",
+                "--contact-id",
+                contact.id,
+                "prospect",
+                "--reason",
+                "stale",
+            ],
         )
 
     assert result.exit_code == 0, result.output
-    assert _spans_named(capfire, "tag.remove")
+    assert _spans_named(capfire, "tag.disable")
     err = result.stderr
-    assert "event=tag.remove" in err
+    assert "event=tag.disable" in err
 
 
 # -- note.add ------------------------------------------------------------------

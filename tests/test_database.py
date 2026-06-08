@@ -31,7 +31,6 @@ from mailpilot.database import (
     create_tag,
     create_task,
     create_tasks_for_routed_emails,
-    delete_tag,
     disable_enrollment,
     find_pending_first_touch_task,
     get_account,
@@ -2024,15 +2023,6 @@ def test_create_tag_idempotent_on_duplicate(
     assert second is None
 
 
-def test_delete_tag_by_contact(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    contact = make_test_contact(database_connection)
-    create_tag(database_connection, contact_id=contact.id, name="cold")
-    assert delete_tag(database_connection, contact_id=contact.id, name="cold") is True
-    assert delete_tag(database_connection, contact_id=contact.id, name="cold") is False
-
-
 def test_list_tags_by_contact(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
@@ -2153,36 +2143,106 @@ def test_add_contact_tag_returns_none_on_duplicate_no_activity(
     assert len(activities) == 1
 
 
-def test_remove_contact_tag_emits_activity_atomically(
+def test_disable_contact_tag_emits_activity_atomically(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    from mailpilot.database import add_contact_tag, remove_contact_tag
+    """§V.10 tag-coverage: disable_contact_tag flips disabled_reason +
+    appends a `tag_disabled` activity in one transaction.
+    """
+    from mailpilot.database import add_contact_tag, disable_contact_tag
 
     contact = make_test_contact(database_connection)
     add_contact_tag(database_connection, contact_id=contact.id, name="cold")
-    removed = remove_contact_tag(
-        database_connection, contact_id=contact.id, name="cold"
+    disabled = disable_contact_tag(
+        database_connection,
+        contact_id=contact.id,
+        name="cold",
+        reason="stale lead",
     )
-    assert removed is not None
-    assert removed.name == "cold"
-    assert removed.contact_id == contact.id
-    assert removed.company_id is None
-    types = [
-        a.type for a in list_activities(database_connection, contact_id=contact.id)
-    ]
-    assert "tag_removed" in types
+    assert disabled is not None
+    assert disabled.name == "cold"
+    assert disabled.contact_id == contact.id
+    assert disabled.company_id is None
+    assert disabled.disabled_reason == "stale lead"
+    activities = list_activities(database_connection, contact_id=contact.id)
+    types = [a.type for a in activities]
+    assert "tag_disabled" in types
+    disable_event = next(a for a in activities if a.type == "tag_disabled")
+    assert disable_event.summary == "Disabled tag cold"
 
 
-def test_remove_contact_tag_not_found_returns_none(
+def test_disable_contact_tag_not_found_returns_none(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    from mailpilot.database import remove_contact_tag
+    """§V.10 tag-coverage: absent tag yields None, no activity emit."""
+    from mailpilot.database import disable_contact_tag
 
     contact = make_test_contact(database_connection)
     assert (
-        remove_contact_tag(database_connection, contact_id=contact.id, name="ghost")
+        disable_contact_tag(
+            database_connection,
+            contact_id=contact.id,
+            name="ghost",
+            reason="missing",
+        )
         is None
     )
+    activities = list_activities(database_connection, contact_id=contact.id)
+    assert [a.type for a in activities] == []
+
+
+def test_disable_contact_tag_idempotent_returns_none(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.10 tag-coverage: re-disabling an already-disabled row returns
+    None (filtered by `disabled_reason IS NULL`) and emits no second
+    activity row.
+    """
+    from mailpilot.database import add_contact_tag, disable_contact_tag
+
+    contact = make_test_contact(database_connection)
+    add_contact_tag(database_connection, contact_id=contact.id, name="cold")
+    first = disable_contact_tag(
+        database_connection,
+        contact_id=contact.id,
+        name="cold",
+        reason="stale",
+    )
+    second = disable_contact_tag(
+        database_connection,
+        contact_id=contact.id,
+        name="cold",
+        reason="stale again",
+    )
+    assert first is not None
+    assert second is None
+    disable_events = [
+        a
+        for a in list_activities(database_connection, contact_id=contact.id)
+        if a.type == "tag_disabled"
+    ]
+    assert len(disable_events) == 1
+
+
+def test_disable_contact_tag_admits_readd_with_partial_index(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.10 tag-coverage: partial unique index scoped to
+    `disabled_reason IS NULL` admits a fresh ``tag add`` of the same name.
+    """
+    from mailpilot.database import add_contact_tag, disable_contact_tag
+
+    contact = make_test_contact(database_connection)
+    add_contact_tag(database_connection, contact_id=contact.id, name="cold")
+    disable_contact_tag(
+        database_connection,
+        contact_id=contact.id,
+        name="cold",
+        reason="stale",
+    )
+    readded = add_contact_tag(database_connection, contact_id=contact.id, name="cold")
+    assert readded is not None
+    assert readded.disabled_reason is None
 
 
 def test_add_company_tag_emits_company_activity(
@@ -2199,24 +2259,123 @@ def test_add_company_tag_emits_company_activity(
     assert activities[0].contact_id is None
 
 
-def test_remove_company_tag_emits_activity_atomically(
+def test_disable_company_tag_emits_activity_atomically(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    from mailpilot.database import add_company_tag, remove_company_tag
+    """§V.10 tag-coverage: disable_company_tag mirrors contact path."""
+    from mailpilot.database import add_company_tag, disable_company_tag
 
     company = make_test_company(database_connection)
     add_company_tag(database_connection, company_id=company.id, name="enterprise")
-    removed = remove_company_tag(
-        database_connection, company_id=company.id, name="enterprise"
+    disabled = disable_company_tag(
+        database_connection,
+        company_id=company.id,
+        name="enterprise",
+        reason="dissolved",
     )
-    assert removed is not None
-    assert removed.name == "enterprise"
-    assert removed.company_id == company.id
-    assert removed.contact_id is None
-    types = [
-        a.type for a in list_activities(database_connection, company_id=company.id)
-    ]
-    assert "tag_removed" in types
+    assert disabled is not None
+    assert disabled.name == "enterprise"
+    assert disabled.company_id == company.id
+    assert disabled.contact_id is None
+    assert disabled.disabled_reason == "dissolved"
+    activities = list_activities(database_connection, company_id=company.id)
+    types = [a.type for a in activities]
+    assert "tag_disabled" in types
+
+
+def test_list_tags_excludes_disabled_by_default(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.10 tag-coverage: list_tags filters disabled rows by default."""
+    from mailpilot.database import add_contact_tag, disable_contact_tag
+
+    contact = make_test_contact(database_connection)
+    add_contact_tag(database_connection, contact_id=contact.id, name="hot")
+    add_contact_tag(database_connection, contact_id=contact.id, name="cold")
+    disable_contact_tag(
+        database_connection,
+        contact_id=contact.id,
+        name="cold",
+        reason="stale",
+    )
+    active = list_tags(database_connection, contact_id=contact.id)
+    assert {t.name for t in active} == {"hot"}
+    all_tags = list_tags(
+        database_connection, contact_id=contact.id, include_disabled=True
+    )
+    assert {t.name for t in all_tags} == {"hot", "cold"}
+
+
+def test_list_contacts_by_tag_excludes_disabled(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.10 tag-coverage: list_contacts_by_tag excludes disabled rows."""
+    from mailpilot.database import (
+        add_contact_tag,
+        disable_contact_tag,
+        list_contacts_by_tag,
+    )
+
+    a = make_test_contact(database_connection, email="x1@acme.test")
+    b = make_test_contact(database_connection, email="x2@acme.test")
+    add_contact_tag(database_connection, contact_id=a.id, name="hot")
+    add_contact_tag(database_connection, contact_id=b.id, name="hot")
+    disable_contact_tag(
+        database_connection, contact_id=b.id, name="hot", reason="stale"
+    )
+    assert list_contacts_by_tag(database_connection, name="hot") == [a.id]
+    assert set(
+        list_contacts_by_tag(database_connection, name="hot", include_disabled=True)
+    ) == {a.id, b.id}
+
+
+def test_list_companies_by_tag_excludes_disabled(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.10 tag-coverage: list_companies_by_tag excludes disabled rows."""
+    from mailpilot.database import (
+        add_company_tag,
+        disable_company_tag,
+        list_companies_by_tag,
+    )
+
+    a = make_test_company(database_connection, name="A", domain="a.test")
+    b = make_test_company(database_connection, name="B", domain="b.test")
+    add_company_tag(database_connection, company_id=a.id, name="enterprise")
+    add_company_tag(database_connection, company_id=b.id, name="enterprise")
+    disable_company_tag(
+        database_connection,
+        company_id=b.id,
+        name="enterprise",
+        reason="dissolved",
+    )
+    assert list_companies_by_tag(database_connection, name="enterprise") == [a.id]
+    assert set(
+        list_companies_by_tag(
+            database_connection, name="enterprise", include_disabled=True
+        )
+    ) == {a.id, b.id}
+
+
+def test_search_tags_excludes_disabled(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.10 tag-coverage: search_tags excludes disabled rows by default."""
+    from mailpilot.database import add_contact_tag, disable_contact_tag
+
+    contact = make_test_contact(database_connection)
+    add_contact_tag(database_connection, contact_id=contact.id, name="prospect")
+    add_contact_tag(database_connection, contact_id=contact.id, name="cold")
+    disable_contact_tag(
+        database_connection,
+        contact_id=contact.id,
+        name="cold",
+        reason="stale",
+    )
+    active = search_tags(database_connection, name="co")
+    assert [t.name for t in active] == []
+    all_results = search_tags(database_connection, name="co", include_disabled=True)
+    assert [t.name for t in all_results] == ["cold"]
 
 
 def test_add_contact_note_emits_activity_atomically(

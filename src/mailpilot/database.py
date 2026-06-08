@@ -2876,45 +2876,20 @@ def create_tag(
     return Tag.model_validate(row)
 
 
-def delete_tag(
-    connection: psycopg.Connection[dict[str, Any]],
-    name: str,
-    contact_id: str | None = None,
-    company_id: str | None = None,
-) -> bool:
-    """Remove a tag from a contact or company.
-
-    Raises:
-        ValueError: If neither or both of contact_id/company_id are set.
-    """
-    if (contact_id is None) == (company_id is None):
-        raise ValueError("exactly one of contact_id or company_id is required")
-    normalized = _normalize_tag_name(name)
-    if contact_id is not None:
-        cursor = connection.execute(
-            "DELETE FROM tag WHERE contact_id = %(contact_id)s AND name = %(name)s",
-            {"contact_id": contact_id, "name": normalized},
-        )
-    else:
-        cursor = connection.execute(
-            "DELETE FROM tag WHERE company_id = %(company_id)s AND name = %(name)s",
-            {"company_id": company_id, "name": normalized},
-        )
-    connection.commit()
-    return cursor.rowcount > 0
-
-
 def list_tags(
     connection: psycopg.Connection[dict[str, Any]],
     contact_id: str | None = None,
     company_id: str | None = None,
     limit: int = 100,
     since: str | None = None,
+    include_disabled: bool = False,
 ) -> list[Tag]:
     """List tags on a contact or company.
 
     Tag has no Summary projection -- the full row already matches the
-    summary contract.
+    summary contract. Disabled rows (``disabled_reason IS NOT NULL``) are
+    excluded by default; pass ``include_disabled=True`` to include them
+    (§V.10 tag-coverage clause).
 
     Raises:
         ValueError: If neither or both of contact_id/company_id are set.
@@ -2932,6 +2907,8 @@ def list_tags(
     if since is not None:
         where_parts.append(SQL("created_at >= %(since)s"))
         params["since"] = since
+    if not include_disabled:
+        where_parts.append(SQL("disabled_reason IS NULL"))
     where = SQL("WHERE ") + SQL(" AND ").join(where_parts)
     query = SQL("SELECT * FROM tag {} ORDER BY name LIMIT %(limit)s").format(where)
     rows = connection.execute(query, params).fetchall()
@@ -2942,18 +2919,26 @@ def list_contacts_by_tag(
     connection: psycopg.Connection[dict[str, Any]],
     name: str,
     limit: int = 100,
+    include_disabled: bool = False,
 ) -> list[str]:
-    """Return contact IDs with the given tag (normalized)."""
+    """Return contact IDs with the given tag (normalized).
+
+    Excludes disabled tag rows by default (§V.10 tag-coverage clause).
+    """
     normalized = _normalize_tag_name(name)
-    rows = connection.execute(
+    params: dict[str, object] = {"name": normalized, "limit": limit}
+    disabled_filter = (
+        SQL("") if include_disabled else SQL("AND disabled_reason IS NULL")
+    )
+    query = SQL(
         """\
         SELECT contact_id FROM tag
-        WHERE contact_id IS NOT NULL AND name = %(name)s
+        WHERE contact_id IS NOT NULL AND name = %(name)s {}
         ORDER BY created_at
         LIMIT %(limit)s
-        """,
-        {"name": normalized, "limit": limit},
-    ).fetchall()
+        """
+    ).format(disabled_filter)
+    rows = connection.execute(query, params).fetchall()
     return [row["contact_id"] for row in rows]
 
 
@@ -2961,18 +2946,26 @@ def list_companies_by_tag(
     connection: psycopg.Connection[dict[str, Any]],
     name: str,
     limit: int = 100,
+    include_disabled: bool = False,
 ) -> list[str]:
-    """Return company IDs with the given tag (normalized)."""
+    """Return company IDs with the given tag (normalized).
+
+    Excludes disabled tag rows by default (§V.10 tag-coverage clause).
+    """
     normalized = _normalize_tag_name(name)
-    rows = connection.execute(
+    params: dict[str, object] = {"name": normalized, "limit": limit}
+    disabled_filter = (
+        SQL("") if include_disabled else SQL("AND disabled_reason IS NULL")
+    )
+    query = SQL(
         """\
         SELECT company_id FROM tag
-        WHERE company_id IS NOT NULL AND name = %(name)s
+        WHERE company_id IS NOT NULL AND name = %(name)s {}
         ORDER BY created_at
         LIMIT %(limit)s
-        """,
-        {"name": normalized, "limit": limit},
-    ).fetchall()
+        """
+    ).format(disabled_filter)
+    rows = connection.execute(query, params).fetchall()
     return [row["company_id"] for row in rows]
 
 
@@ -2981,8 +2974,11 @@ def search_tags(
     name: str,
     owner: str | None = None,
     limit: int = 100,
+    include_disabled: bool = False,
 ) -> list[Tag]:
     """Search tags by name pattern with optional owner filter.
+
+    Excludes disabled tag rows by default (§V.10 tag-coverage clause).
 
     Args:
         connection: Open database connection.
@@ -2990,19 +2986,23 @@ def search_tags(
         owner: ``"contact"`` to limit to contact tags, ``"company"`` to
             limit to company tags, ``None`` for both.
         limit: Maximum number of results.
+        include_disabled: When ``True`` include disabled rows.
     """
     if owner not in (None, "contact", "company"):
         raise ValueError("owner must be 'contact', 'company', or None")
     pattern = f"%{name.strip().lower()}%"
     params: dict[str, object] = {"pattern": pattern, "limit": limit}
-    owner_filter = SQL("")
+    extra_filters: list[SQL] = []
     if owner == "contact":
-        owner_filter = SQL("AND contact_id IS NOT NULL")
+        extra_filters.append(SQL("AND contact_id IS NOT NULL"))
     elif owner == "company":
-        owner_filter = SQL("AND company_id IS NOT NULL")
+        extra_filters.append(SQL("AND company_id IS NOT NULL"))
+    if not include_disabled:
+        extra_filters.append(SQL("AND disabled_reason IS NULL"))
+    extra = SQL(" ").join(extra_filters) if extra_filters else SQL("")
     query = SQL(
         "SELECT * FROM tag WHERE name LIKE %(pattern)s {} ORDER BY name LIMIT %(limit)s"
-    ).format(owner_filter)
+    ).format(extra)
     rows = connection.execute(query, params).fetchall()
     return [Tag.model_validate(row) for row in rows]
 
@@ -3104,15 +3104,23 @@ def add_company_tag(
     return Tag.model_validate(tag_row)
 
 
-def remove_contact_tag(
+def disable_contact_tag(
     connection: psycopg.Connection[dict[str, Any]],
     contact_id: str,
     name: str,
+    reason: str,
 ) -> Tag | None:
-    """Remove a tag from a contact and emit a `tag_removed` activity atomically.
+    """Soft-disable a contact-tag and emit a `tag_disabled` activity (§V.10).
 
-    Returns the deleted ``Tag`` row, or ``None`` if no tag with the given
-    name existed on the contact.
+    Single transaction: flips ``disabled_reason`` on the matching active tag
+    row (``disabled_reason IS NULL`` gate ensures already-disabled rows are
+    not double-disabled), then appends a ``tag_disabled`` activity carrying
+    the reason. Returns the updated ``Tag`` row, or ``None`` when no active
+    tag with the given name exists on the contact.
+
+    Raises:
+        ValueError: If the contact does not exist or the name fails
+            normalization.
     """
     normalized = _normalize_tag_name(name)
     contact_row = connection.execute(
@@ -3120,11 +3128,18 @@ def remove_contact_tag(
     ).fetchone()
     if contact_row is None:
         raise ValueError(f"contact not found: {contact_id}")
-    deleted_row = connection.execute(
-        "DELETE FROM tag WHERE contact_id = %s AND name = %s RETURNING *",
-        (contact_id, normalized),
+    updated_row = connection.execute(
+        """\
+        UPDATE tag
+        SET disabled_reason = %(reason)s
+        WHERE contact_id = %(contact_id)s
+          AND name = %(name)s
+          AND disabled_reason IS NULL
+        RETURNING *
+        """,
+        {"contact_id": contact_id, "name": normalized, "reason": reason},
     ).fetchone()
-    if deleted_row is None:
+    if updated_row is None:
         connection.commit()
         return None
     connection.execute(
@@ -3134,37 +3149,46 @@ def remove_contact_tag(
         )
         VALUES (
             %(id)s, %(contact_id)s, %(company_id)s,
-            'tag_removed', %(summary)s, %(detail)s
+            'tag_disabled', %(summary)s, %(detail)s
         )
         """,
         {
             "id": _new_id(),
             "contact_id": contact_id,
             "company_id": contact_row["company_id"],
-            "summary": f"Removed tag {normalized}",
-            "detail": Json({"tag": normalized}),
+            "summary": f"Disabled tag {normalized}",
+            "detail": Json({"tag": normalized, "reason": reason}),
         },
     )
     connection.commit()
-    return Tag.model_validate(deleted_row)
+    return Tag.model_validate(updated_row)
 
 
-def remove_company_tag(
+def disable_company_tag(
     connection: psycopg.Connection[dict[str, Any]],
     company_id: str,
     name: str,
+    reason: str,
 ) -> Tag | None:
-    """Remove a tag from a company and emit a `tag_removed` activity atomically.
+    """Soft-disable a company-tag and emit a `tag_disabled` activity (§V.10).
 
-    Returns the deleted ``Tag`` row, or ``None`` if no tag with the given
-    name existed on the company.
+    Mirrors ``disable_contact_tag`` shape. Returns the updated ``Tag`` row,
+    or ``None`` when no active tag with the given name exists on the
+    company.
     """
     normalized = _normalize_tag_name(name)
-    deleted_row = connection.execute(
-        "DELETE FROM tag WHERE company_id = %s AND name = %s RETURNING *",
-        (company_id, normalized),
+    updated_row = connection.execute(
+        """\
+        UPDATE tag
+        SET disabled_reason = %(reason)s
+        WHERE company_id = %(company_id)s
+          AND name = %(name)s
+          AND disabled_reason IS NULL
+        RETURNING *
+        """,
+        {"company_id": company_id, "name": normalized, "reason": reason},
     ).fetchone()
-    if deleted_row is None:
+    if updated_row is None:
         connection.commit()
         return None
     connection.execute(
@@ -3174,18 +3198,18 @@ def remove_company_tag(
         )
         VALUES (
             %(id)s, NULL, %(company_id)s,
-            'tag_removed', %(summary)s, %(detail)s
+            'tag_disabled', %(summary)s, %(detail)s
         )
         """,
         {
             "id": _new_id(),
             "company_id": company_id,
-            "summary": f"Removed tag {normalized}",
-            "detail": Json({"tag": normalized}),
+            "summary": f"Disabled tag {normalized}",
+            "detail": Json({"tag": normalized, "reason": reason}),
         },
     )
     connection.commit()
-    return Tag.model_validate(deleted_row)
+    return Tag.model_validate(updated_row)
 
 
 # -- Note ----------------------------------------------------------------------
