@@ -23,7 +23,10 @@ from mailpilot.database import (
     activate_workflow,
     cancel_task,
     complete_task,
+    create_account,
     create_activity,
+    create_company,
+    create_contact,
     create_contacts_bulk,
     create_email,
     create_enrollment,
@@ -31,6 +34,7 @@ from mailpilot.database import (
     create_tag,
     create_task,
     create_tasks_for_routed_emails,
+    create_workflow,
     disable_enrollment,
     find_pending_first_touch_task,
     get_account,
@@ -3992,3 +3996,103 @@ def test_base_fragment_mentions_notes_directive() -> None:
     needle = "treat them as context for personalizing your response"
     assert needle in _BASE
     assert _BASE.count(needle) == 1
+
+
+# -- §V.16(+) ON CONFLICT race-safety on create_<noun> ------------------------
+
+
+def test_create_account_returns_none_on_duplicate_email(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.16(+): re-create against existing email returns None, does not raise."""
+    first = create_account(database_connection, email="dup@example.com")
+    assert first is not None
+    second = create_account(database_connection, email="dup@example.com")
+    assert second is None
+
+
+def test_create_company_returns_none_on_duplicate_domain(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.16(+): re-create against existing domain returns None, does not raise."""
+    first = create_company(database_connection, name="Acme", domain="dup.com")
+    assert first is not None
+    second = create_company(database_connection, name="Acme 2", domain="dup.com")
+    assert second is None
+
+
+def test_create_contact_returns_none_on_duplicate_email(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.16(+): re-create against existing email returns None, does not raise."""
+    first = create_contact(database_connection, email="dup@example.com")
+    assert first is not None
+    second = create_contact(database_connection, email="dup@example.com")
+    assert second is None
+
+
+def test_create_workflow_returns_none_on_duplicate_account_id_name(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.16(+): re-create against existing (account_id, name) returns None."""
+    account = make_test_account(database_connection)
+    first = create_workflow(
+        database_connection,
+        name="Dup Workflow",
+        template="outbound-general",
+        account_id=account.id,
+    )
+    assert first is not None
+    second = create_workflow(
+        database_connection,
+        name="Dup Workflow",
+        template="outbound-general",
+        account_id=account.id,
+    )
+    assert second is None
+
+
+def test_create_or_get_contact_by_email_concurrent_is_safe(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.16(+) TOCTOU: two threads racing on a novel email both get the same row."""
+    email = "racer@example.com"
+    thread_count = 2
+    barrier = threading.Barrier(thread_count)
+    results: list[str] = []
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+
+    def worker() -> None:
+        conn = cast(
+            psycopg.Connection[dict[str, Any]],
+            psycopg.connect(TEST_DATABASE_URL, row_factory=dict_row),  # type: ignore[arg-type]
+        )
+        try:
+            barrier.wait(timeout=5)
+            row = create_or_get_contact_by_email(conn, email=email)
+            with lock:
+                results.append(row.id)
+        except BaseException as exc:
+            with lock:
+                errors.append(exc)
+        finally:
+            conn.close()
+
+    threads = [threading.Thread(target=worker) for _ in range(thread_count)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert errors == [], errors
+    assert len(results) == thread_count
+    # Both workers must converge on the same row id.
+    assert len(set(results)) == 1
+    # Exactly one DB row landed.
+    row = database_connection.execute(
+        "SELECT COUNT(*) AS n FROM contact WHERE email = %(email)s",
+        {"email": email},
+    ).fetchone()
+    assert row is not None
+    assert row["n"] == 1

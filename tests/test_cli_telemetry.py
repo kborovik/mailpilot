@@ -969,3 +969,161 @@ def test_note_add_emits_span_and_event(
     assert "event=note.add" in err
     assert f"owner_id={contact.id}" in err
     assert "changed=['body']" in err
+
+
+# -- §V.16(+) duplicate-key envelope at source --------------------------------
+#
+# Re-create cmd against existing natural key must exit 1 with the structured
+# ``duplicate_key`` envelope, emit ``operator_event(... changed=[])``, and
+# leave the cli_mutation span outcome=ok (no ``.failed`` suffix) so the
+# operator-retry path does not pollute failed-span dashboards (§B.64).
+
+
+def _envelope_from_stderr(stderr: str) -> dict[str, Any]:
+    """Extract the JSON envelope ``output_error`` writes to stderr.
+
+    ``output_error`` (``src/mailpilot/cli.py:111``) emits a JSON envelope to
+    stderr; the stream also carries one or more newline-delimited
+    ``operator_event`` lines. Walk the stream and return the first complete
+    JSON object (the envelope).
+    """
+    decoder = json.JSONDecoder()
+    needle = stderr.find("{")
+    while needle != -1:
+        try:
+            obj, _ = decoder.raw_decode(stderr[needle:])
+        except json.JSONDecodeError:
+            needle = stderr.find("{", needle + 1)
+            continue
+        assert isinstance(obj, dict)
+        return obj
+    raise AssertionError(f"no JSON envelope in stderr: {stderr!r}")
+
+
+def test_account_create_duplicate_emits_duplicate_key_envelope(
+    runner: CliRunner,
+    mock_connection: MagicMock,
+    capfire: CaptureLogfire,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_account", return_value=None),
+    ):
+        result = runner.invoke(
+            main, ["account", "create", "--email", "dup@example.com"]
+        )
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    err = result.stderr
+    envelope = _envelope_from_stderr(err)
+    assert envelope["error"] == "duplicate_key"
+    assert envelope["message"] == "account with email='dup@example.com' already exists"
+    assert envelope["ok"] is False
+    assert _spans_named(capfire, "account.create")
+    assert not _spans_named(capfire, "account.create.failed")
+    assert "event=account.create" in err
+    assert "changed=[]" in err
+    assert "Traceback" not in err
+
+
+def test_company_create_duplicate_emits_duplicate_key_envelope(
+    runner: CliRunner,
+    mock_connection: MagicMock,
+    capfire: CaptureLogfire,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_company", return_value=None),
+    ):
+        result = runner.invoke(
+            main, ["company", "create", "--domain", "lab5.ca", "--name", "Lab 5"]
+        )
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    err = result.stderr
+    envelope = _envelope_from_stderr(err)
+    assert envelope["error"] == "duplicate_key"
+    assert envelope["message"] == "company with domain='lab5.ca' already exists"
+    assert envelope["ok"] is False
+    assert _spans_named(capfire, "company.create")
+    assert not _spans_named(capfire, "company.create.failed")
+    assert "event=company.create" in err
+    assert "changed=[]" in err
+    assert "Traceback" not in err
+
+
+def test_contact_create_duplicate_emits_duplicate_key_envelope(
+    runner: CliRunner,
+    mock_connection: MagicMock,
+    capfire: CaptureLogfire,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_contact", return_value=None),
+    ):
+        result = runner.invoke(main, ["contact", "create", "--email", "lead@acme.test"])
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    err = result.stderr
+    envelope = _envelope_from_stderr(err)
+    assert envelope["error"] == "duplicate_key"
+    assert envelope["message"] == "contact with email='lead@acme.test' already exists"
+    assert envelope["ok"] is False
+    assert _spans_named(capfire, "contact.create")
+    assert not _spans_named(capfire, "contact.create.failed")
+    assert "event=contact.create" in err
+    assert "changed=[]" in err
+    assert "Traceback" not in err
+
+
+def test_workflow_create_duplicate_emits_duplicate_key_envelope(
+    runner: CliRunner,
+    mock_connection: MagicMock,
+    capfire: CaptureLogfire,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    account = _make_account()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.database.create_workflow", return_value=None),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "create",
+                "--name",
+                "Dup",
+                "--template",
+                "outbound-general",
+                "--account-id",
+                account.id,
+                "--draft",
+            ],
+        )
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    err = result.stderr
+    envelope = _envelope_from_stderr(err)
+    assert envelope["error"] == "duplicate_key"
+    assert envelope["message"] == (
+        f"workflow 'Dup' already exists for account {account.id}"
+    )
+    assert envelope["ok"] is False
+    assert _spans_named(capfire, "workflow.create")
+    assert not _spans_named(capfire, "workflow.create.failed")
+    assert "event=workflow.create" in err
+    assert "changed=[]" in err
+    assert "Traceback" not in err

@@ -421,8 +421,12 @@ def create_account(
     connection: psycopg.Connection[dict[str, Any]],
     email: str,
     display_name: str = "",
-) -> Account:
+) -> Account | None:
     """Create a new account.
+
+    Uses ``ON CONFLICT (email) DO NOTHING`` per §V.16(+) so callers can
+    safely re-invoke without catching ``UniqueViolation``. Returns ``None``
+    when the row already exists.
 
     Args:
         connection: Open database connection.
@@ -430,17 +434,21 @@ def create_account(
         display_name: Display name for the account.
 
     Returns:
-        Created account.
+        Created account, or ``None`` if an account with this email already
+        existed (concurrent worker won or operator re-create).
     """
     row = connection.execute(
         """\
         INSERT INTO account (id, email, display_name)
         VALUES (%(id)s, %(email)s, %(display_name)s)
+        ON CONFLICT (email) DO NOTHING
         RETURNING *
         """,
         {"id": _new_id(), "email": email, "display_name": display_name},
     ).fetchone()
     connection.commit()
+    if row is None:
+        return None
     return Account.model_validate(row)
 
 
@@ -555,8 +563,12 @@ def create_company(
     connection: psycopg.Connection[dict[str, Any]],
     name: str,
     domain: str,
-) -> Company:
+) -> Company | None:
     """Create a new company.
+
+    Uses ``ON CONFLICT (domain) DO NOTHING`` per §V.16(+) so callers can
+    safely re-invoke without catching ``UniqueViolation``. Returns ``None``
+    when the row already exists.
 
     Args:
         connection: Open database connection.
@@ -564,17 +576,21 @@ def create_company(
         domain: Primary domain.
 
     Returns:
-        Created company.
+        Created company, or ``None`` if a company with this domain already
+        existed.
     """
     row = connection.execute(
         """\
         INSERT INTO company (id, name, domain)
         VALUES (%(id)s, %(name)s, %(domain)s)
+        ON CONFLICT (domain) DO NOTHING
         RETURNING *
         """,
         {"id": _new_id(), "name": name, "domain": domain},
     ).fetchone()
     connection.commit()
+    if row is None:
+        return None
     return Company.model_validate(row)
 
 
@@ -718,8 +734,13 @@ def create_contact(
     company_id: str | None = None,
     first_name: str | None = None,
     last_name: str | None = None,
-) -> Contact:
+) -> Contact | None:
     """Create a new contact.
+
+    Uses ``ON CONFLICT (email) DO NOTHING`` per §V.16(+) so callers can
+    safely re-invoke without catching ``UniqueViolation``. Returns ``None``
+    when the row already exists (sync-path callers re-fetch via
+    ``get_contact_by_email``).
 
     Args:
         connection: Open database connection.
@@ -729,13 +750,15 @@ def create_contact(
         last_name: Optional last name.
 
     Returns:
-        Created contact.
+        Created contact, or ``None`` if a contact with this email already
+        existed.
     """
     row = connection.execute(
         """\
         INSERT INTO contact (id, email, company_id, first_name, last_name)
         VALUES (%(id)s, %(email)s, %(company_id)s,
                 %(first_name)s, %(last_name)s)
+        ON CONFLICT (email) DO NOTHING
         RETURNING *
         """,
         {
@@ -747,6 +770,8 @@ def create_contact(
         },
     ).fetchone()
     connection.commit()
+    if row is None:
+        return None
     return Contact.model_validate(row)
 
 
@@ -829,12 +854,20 @@ def create_or_get_contact_by_email(
             return existing
         updated = update_contact(connection, existing.id, **backfill)
         return updated if updated is not None else existing
-    return create_contact(
+    created = create_contact(
         connection,
         email=email,
         first_name=first_name,
         last_name=last_name,
     )
+    if created is not None:
+        return created
+    # Concurrent worker won the race per §V.16(+); re-fetch the existing row.
+    racer = get_contact_by_email(connection, email)
+    assert racer is not None, (
+        f"create_contact returned None for {email!r} but no row was found on re-fetch"
+    )
+    return racer
 
 
 def get_contacts_by_emails(
@@ -1057,11 +1090,16 @@ def create_workflow(
     template: str,
     account_id: str,
     theme: str = "blue",
-) -> Workflow:
+) -> Workflow | None:
     """Create a new workflow.
 
     The workflow's ``type`` (``inbound`` / ``outbound``) is derived from
     the template's declared direction -- callers do not pass ``type``.
+
+    Uses ``ON CONFLICT (account_id, name) DO NOTHING`` per §V.16(+) so
+    callers can safely re-invoke without catching ``UniqueViolation``.
+    Returns ``None`` when a workflow already exists for ``(account_id,
+    name)``.
 
     Args:
         connection: Open database connection.
@@ -1072,7 +1110,8 @@ def create_workflow(
         theme: Email color theme (default "blue").
 
     Returns:
-        Created workflow.
+        Created workflow, or ``None`` if a workflow with this
+        ``(account_id, name)`` pair already existed.
     """
     from mailpilot.agent.templates import TEMPLATES
 
@@ -1088,6 +1127,7 @@ def create_workflow(
             VALUES (
                 %(id)s, %(name)s, %(template)s, %(type)s, %(account_id)s, %(theme)s
             )
+            ON CONFLICT (account_id, name) DO NOTHING
             RETURNING *
         )
         SELECT inserted.*, account.email AS account_email
@@ -1103,6 +1143,8 @@ def create_workflow(
         },
     ).fetchone()
     connection.commit()
+    if row is None:
+        return None
     return Workflow.model_validate(row)
 
 

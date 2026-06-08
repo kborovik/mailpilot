@@ -98,8 +98,15 @@ def make_test_account(
     email: str = "test@example.com",
     display_name: str = "Test Account",
 ) -> Account:
-    """Create a test account in the database."""
-    return create_account(connection, email=email, display_name=display_name)
+    """Create a test account in the database.
+
+    Asserts the row was inserted (i.e. ``email`` did not already exist).
+    Tests that intentionally probe the ON CONFLICT branch per §V.16(+)
+    should call ``create_account`` directly.
+    """
+    account = create_account(connection, email=email, display_name=display_name)
+    assert account is not None, f"account with email={email!r} already exists"
+    return account
 
 
 def make_test_company(
@@ -107,8 +114,15 @@ def make_test_company(
     name: str = "Test Corp",
     domain: str = "testcorp.com",
 ) -> Company:
-    """Create a test company in the database."""
-    return create_company(connection, name=name, domain=domain)
+    """Create a test company in the database.
+
+    Asserts the row was inserted (i.e. ``domain`` did not already exist).
+    Tests that intentionally probe the ON CONFLICT branch per §V.16(+)
+    should call ``create_company`` directly.
+    """
+    company = create_company(connection, name=name, domain=domain)
+    assert company is not None, f"company with domain={domain!r} already exists"
+    return company
 
 
 def make_test_contact(
@@ -116,8 +130,15 @@ def make_test_contact(
     email: str = "contact@testcorp.com",
     company_id: str | None = None,
 ) -> Contact:
-    """Create a test contact in the database."""
-    return create_contact(connection, email=email, company_id=company_id)
+    """Create a test contact in the database.
+
+    Asserts the row was inserted (i.e. ``email`` did not already exist).
+    Tests that intentionally probe the ON CONFLICT branch per §V.16(+)
+    should call ``create_contact`` directly.
+    """
+    contact = create_contact(connection, email=email, company_id=company_id)
+    assert contact is not None, f"contact with email={email!r} already exists"
+    return contact
 
 
 def make_test_workflow(
@@ -131,18 +152,24 @@ def make_test_workflow(
 
     Tests may pass ``template`` directly. Legacy callers pass ``workflow_type``
     (``inbound`` / ``outbound``) which maps to the corresponding ``-general``
-    template.
+    template. Asserts the row was inserted; tests that intentionally probe
+    the ON CONFLICT branch per §V.16(+) should call ``create_workflow``
+    directly.
     """
     if template is None:
         template = (
             "inbound-general" if workflow_type == "inbound" else "outbound-general"
         )
-    return create_workflow(
+    workflow = create_workflow(
         connection,
         name=name,
         template=template,
         account_id=account_id,
     )
+    assert workflow is not None, (
+        f"workflow with (account_id={account_id!r}, name={name!r}) already exists"
+    )
+    return workflow
 
 
 def make_test_enrollment(

@@ -304,6 +304,16 @@ def account_create(email: str, display_name: str) -> None:
     try:
         with cli_mutation("account", "create", email=email):
             created = create_account(connection, email=email, display_name=display_name)
+            if created is None:
+                operator_event(
+                    "account.create",
+                    email=email,
+                    changed=[],
+                )
+                output_error(
+                    f"account with email={email!r} already exists",
+                    "duplicate_key",
+                )
             operator_event(
                 "account.create",
                 entity_id=created.id,
@@ -479,6 +489,16 @@ def company_create(domain: str, name: str, note: str | None) -> None:
     try:
         with cli_mutation("company", "create", domain=domain):
             created = create_company(connection, name=name, domain=domain)
+            if created is None:
+                operator_event(
+                    "company.create",
+                    domain=domain,
+                    changed=[],
+                )
+                output_error(
+                    f"company with domain={domain!r} already exists",
+                    "duplicate_key",
+                )
             changed = ["name", "domain"]
             if note:
                 add_company_note(connection, created.id, note)
@@ -678,7 +698,21 @@ def company_import(file: str | None) -> None:
                     )
                     operator_event("company.import", name=name, changed=[])
                     continue
-                create_company(connection, name=name, domain=domain)
+                created = create_company(connection, name=name, domain=domain)
+                if created is None:
+                    # Pre-fetch ``existing`` set is an optimization, not
+                    # source-of-truth per §V.16(+); race lost -> duplicate row.
+                    results.append(
+                        {
+                            "name": name,
+                            "error": "duplicate",
+                            "message": (
+                                f"company with domain {domain!r} already exists"
+                            ),
+                        }
+                    )
+                    operator_event("company.import", name=name, changed=[])
+                    continue
                 existing.add(domain)
                 results.append({"name": name, "action": "created"})
                 operator_event(
@@ -738,6 +772,17 @@ def contact_create(
                 last_name=last_name,
                 company_id=company_id,
             )
+            if created is None:
+                operator_event(
+                    "contact.create",
+                    email=email,
+                    company_id=company_id,
+                    changed=[],
+                )
+                output_error(
+                    f"contact with email={email!r} already exists",
+                    "duplicate_key",
+                )
             changed = ["email", "first_name", "last_name", "company_id"]
             if note:
                 add_contact_note(connection, created.id, note)
@@ -1009,13 +1054,25 @@ def contact_import(file: str | None) -> None:
                     )
                     operator_event("contact.import", email=email, changed=[])
                     continue
-                create_contact(
+                created = create_contact(
                     connection,
                     email=email,
                     first_name=entry.get("first_name"),
                     last_name=entry.get("last_name"),
                     company_id=entry.get("company_id"),
                 )
+                if created is None:
+                    # Pre-fetch ``existing`` set is an optimization, not
+                    # source-of-truth per §V.16(+); race lost -> duplicate row.
+                    results.append(
+                        {
+                            "email": email,
+                            "error": "duplicate",
+                            "message": (f"contact with email {email!r} already exists"),
+                        }
+                    )
+                    operator_event("contact.import", email=email, changed=[])
+                    continue
                 existing.add(email)
                 results.append({"email": email, "action": "created"})
                 operator_event(
@@ -1826,10 +1883,12 @@ def _create_and_populate_workflow(
     objective: str | None,
     resolved_instructions: str | None,
     activate: bool,
-) -> tuple[Any, list[str]]:
+) -> tuple[Any, list[str]] | None:
     """Run the §V.54 mutation sequence: create -> update extras -> optional activate.
 
-    Returns the populated workflow row and the list of fields written.
+    Returns the populated workflow row and the list of fields written, or
+    ``None`` when ``create_workflow`` collided on the ``(account_id, name)``
+    unique constraint per §V.16(+).
     """
     from mailpilot.database import activate_workflow, create_workflow, update_workflow
 
@@ -1840,6 +1899,8 @@ def _create_and_populate_workflow(
         account_id=account_id,
         theme=theme or "blue",
     )
+    if created is None:
+        return None
     extras: dict[str, object] = {}
     if objective is not None:
         extras["objective"] = objective
@@ -1937,7 +1998,7 @@ def workflow_create(
             account_id=account_id,
             template=template,
         ):
-            created, changed = _create_and_populate_workflow(
+            result = _create_and_populate_workflow(
                 connection,
                 name=name,
                 template=template,
@@ -1947,6 +2008,18 @@ def workflow_create(
                 resolved_instructions=resolved,
                 activate=activate,
             )
+            if result is None:
+                operator_event(
+                    "workflow.create",
+                    account_id=account_id,
+                    template=template,
+                    changed=[],
+                )
+                output_error(
+                    f"workflow {name!r} already exists for account {account_id}",
+                    "duplicate_key",
+                )
+            created, changed = result
             operator_event(
                 "workflow.create",
                 entity_id=created.id,
@@ -2220,6 +2293,20 @@ def _import_workflow_create(
         account_id=account_id,
         theme=theme,
     )
+    if created is None:
+        # Concurrent worker won the race per §V.16(+). Emit the same per-row
+        # ``duplicate`` shape used elsewhere in this importer.
+        operator_event(
+            "workflow.import",
+            account_id=account_id,
+            name=name,
+            changed=[],
+        )
+        return {
+            "name": name,
+            "error": "duplicate",
+            "message": (f"workflow {name!r} already exists for account {account_id}"),
+        }
     extras: dict[str, object] = {}
     objective = entry.get("objective")
     instructions = entry.get("instructions")
