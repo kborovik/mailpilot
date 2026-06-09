@@ -355,7 +355,7 @@ class Tag(BaseModel):
 
     Exactly one of ``contact_id`` or ``company_id`` is set (XOR enforced
     at the schema level). ``disabled_reason`` non-null marks a terminal
-    soft-disabled row (operator-killed lifecycle exit per V.10 / V.13).
+    soft-disabled row (operator-killed lifecycle exit per §V.10 / §V.13).
     """
 
     id: str
