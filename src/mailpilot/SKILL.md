@@ -17,7 +17,7 @@ Nouns: `account`, `company`, `contact`, `workflow`, `enrollment`, `task`,
 `email`, `activity`, `tag`, `note`, `template`.
 
 Verbs: `list`, `search`, `view`, `create`, `update`, `disable`, `add`,
-`remove`, `reply`, `send`, `start`, `stop`, `cancel`, `retry`, `run`, `sync`,
+`reply`, `send`, `start`, `stop`, `cancel`, `retry`, `run`, `sync`,
 `export`, `import`. Not every verb applies to every noun -- use
 `mailpilot <noun> --help` to enumerate. `config` exposes the `get` and `set`
 subverbs for reading and writing persistent configuration.
@@ -29,7 +29,7 @@ diagnostics go to stderr and never to stdout.
 
 - `list`, `search`, `sync`, `export`, `import`:
   `{"<plural>": [...], "ok": true}`
-- `view`, `create`, `update`, `disable`, `add`, `remove`, `reply`, `send`,
+- `view`, `create`, `update`, `disable`, `add`, `reply`, `send`,
   `start`, `stop`, `cancel`, `retry`: `{"<singular>": {...}, "ok": true}`
 - error: `{"error": "<code>", "message": "<text>", "ok": false}`
 
@@ -37,10 +37,9 @@ Plural keys mirror the noun (`accounts`, `companies`, `contacts`,
 `workflows`, `enrollments`, `tasks`, `emails`, `activities`, `tags`, `notes`,
 `templates`). Singular keys are the noun itself (`account`, `company`, ...).
 
-`remove` returns the removed entity's composite-key fields (or natural
-identifier) under the singular envelope -- mirror of `add`. Soft-disable
-verbs such as `contact disable` return the full updated entity since the
-row is retained.
+Soft-disable verbs such as `contact disable`, `enrollment disable`, and
+`tag disable` return the full updated entity under the singular envelope
+since the row is retained.
 
 ## Exit codes
 
