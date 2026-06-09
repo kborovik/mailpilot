@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS company (
     id                    TEXT PRIMARY KEY,
     name                  TEXT NOT NULL,
     domain                TEXT UNIQUE NOT NULL,
+    profile               JSONB,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

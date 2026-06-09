@@ -221,6 +221,29 @@ def test_update_company_not_found(
     assert update_company(database_connection, "nonexistent", name="X") is None
 
 
+def test_company_profile_column_present_and_default_null(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.72: ``company.profile`` exists as nullable JSONB and defaults to NULL."""
+    row = database_connection.execute(
+        "SELECT data_type, is_nullable, column_default "
+        "FROM information_schema.columns "
+        "WHERE table_name = 'company' AND column_name = 'profile'"
+    ).fetchone()
+    assert row is not None
+    assert row["data_type"] == "jsonb"
+    assert row["is_nullable"] == "YES"
+    assert row["column_default"] is None
+
+    company = make_test_company(database_connection)
+    profile_row = database_connection.execute(
+        "SELECT profile FROM company WHERE id = %s",
+        (company.id,),
+    ).fetchone()
+    assert profile_row is not None
+    assert profile_row["profile"] is None
+
+
 # -- Contact -------------------------------------------------------------------
 
 
