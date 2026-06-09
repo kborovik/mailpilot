@@ -917,6 +917,7 @@ burst AS (
     (r.attributes->>'input_tokens')::int AS in_tok,
     (r.attributes->>'output_tokens')::int AS out_tok,
     (r.attributes->>'cache_read_input_tokens')::int AS cache_read,
+    COALESCE((r.attributes->>'tool_error_count')::int, 0) AS tool_error_count,
     COALESCE(rc.read_count, 0) >= 2 AS is_compare
   FROM records r
   LEFT JOIN read_counts rc ON rc.trace_id = r.trace_id
@@ -943,6 +944,8 @@ SELECT
   approx_percentile_cont(total_latency_s, 0.95) AS p95_total_s,
   SUM(CASE WHEN is_exception THEN 1 ELSE 0 END) AS n_exceptions,
   SUM(CASE WHEN level = 'warn' THEN 1 ELSE 0 END) AS n_warns,
+  SUM(tool_error_count) AS n_tool_errors,
+  SUM(tool_error_count)::float / NULLIF(COUNT(*)::float, 0) AS retry_rate,
   AVG(cache_read::float / NULLIF(in_tok::float, 0)) AS avg_cache_hit_ratio,
   SUM(in_tok) AS total_in_tok,
   SUM(out_tok) AS total_out_tok
@@ -955,6 +958,7 @@ Assertions (primary verdict = `sla_agent_seconds` per §V.61(+); `sla_delivery_s
 - `n_compare == 2` AND `n_noncompare == 6` -- matches the C1 mix (2 qa-cmp + 4 qa-in + 2 qa-out). Any mismatch means a compare invocation skipped one of its required reads OR a non-compare invocation issued a stray second read; cross-check against C4.c and the B7 tool-use gate before flagging.
 - `p95_sla_agent_noncompare_s <= 75` -- burst gate over non-compare invocations per §V.61(+). Matches the §V.23 burst-load formula `ceil(N * avg_invoke_s / sla_s)` sized for the 50s steady single-source ceiling. A breach here is an our-side regression of agent execution under load on single-source / decline traffic.
 - `n_exceptions == 0` AND `n_warns == 0`.
+- `retry_rate <= 0.05` -- §V.70 burst retry-rate ceiling (≤5%, ≤1-of-25 at N=25; for N=8 any non-zero `n_tool_errors` already exceeds the ceiling). Sums the rollup-span `tool_error_count` attr (set in `src/mailpilot/agent/invoke.py:709` per `agent.invoke`) divided by `n_invokes`. Breach ⊢ prompt-fidelity regression under load -- investigate §V.41 (search-first ordering), §V.57 (KB coverage), §V.42 (format-lint sensitivity). Distinct from `n_warns`: warn spans count `agent.tool_errors` rollup-warn events (one per invocation that hit any error) ∴ underestimate per-invocation retry depth; `n_tool_errors` sums actual tool-error count across all invocations.
 - `avg_cache_hit_ratio >= 0.5` -- prompt cache stays warm across the burst (catches cache-key churn regressions where each agent invocation re-pays the full system-prompt token cost; the dominant cost driver at this scale).
 
 Report (NOT gated):
