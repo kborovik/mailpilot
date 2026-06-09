@@ -145,11 +145,18 @@ _PIPE_SEPARATOR_RE = re.compile(r"\|\s*-{3,}\s*\|")
 # (``65``, ``120``, ``35``) and decimal specs (``0.48 mm``).
 _NUMERIC_TOKEN_RE = re.compile(r"\b\d+(?:\.\d+)?\b")
 
+# §V.68(+) per §B.60: bullet-list spec lines (``"- Key: Value"``) under
+# Physical Properties / operation-constraint headers carry valid citable
+# numeric tokens. ``_fact_check_body`` admits these alongside pipe-row lines
+# on table-bearing docs; the explicit ``Key:`` label anchors context so the
+# §B.56 prose-coincidence collision class stays closed.
+_LIST_ITEM_RE = re.compile(r"^\s*[-*]\s")
+
 
 def _fact_check_body(
     body: str, read_ledger: dict[str, str] | None
 ) -> dict[str, Any] | None:
-    """Reject outbound bodies citing numeric tokens absent from the KB ledger.
+    r"""Reject outbound bodies citing numeric tokens absent from the KB ledger.
 
     §V.68: when one or more ``read_drive_markdown`` calls succeeded in the
     current ``agent.invoke``, every candidate numeric-spec value-token in the
@@ -164,10 +171,15 @@ def _fact_check_body(
     anti-collision intent on table-bearing docs and restores grounding on
     prose-only KB docs (e.g. ``kdf-process-filtration-media.md`` whose source
     phrases like ``"KDF 55 medium can remove over 99%"`` are the canonical
-    citation surface). Zero-ledger invocations skip the check so out-of-scope
-    declines and non-KB-grounded workflows stay unaffected. Returns the error
-    dict on mismatch so the agent re-drafts via the §V.39 tool-error path;
-    returns ``None`` to let the send proceed.
+    citation surface). Table-bearing docs further admit bullet-list lines
+    matching ``r"^\s*[-*]\s"`` alongside pipe-rows (§V.68(+), §B.60) so
+    Physical Properties / operation-constraint bullets like
+    ``"- Specific Gravity: 2.0"`` ground citable numeric tokens; the explicit
+    ``Key:`` label anchors context so the §B.56 cross-product prose-line
+    collision class stays closed. Zero-ledger invocations skip the check so
+    out-of-scope declines and non-KB-grounded workflows stay unaffected.
+    Returns the error dict on mismatch so the agent re-drafts via the §V.39
+    tool-error path; returns ``None`` to let the send proceed.
     """
     if not read_ledger:
         return None
@@ -176,7 +188,12 @@ def _fact_check_body(
         lines = content.splitlines()
         pipe_lines = [line for line in lines if "|" in line]
         if pipe_lines:
+            # §V.68(+) / §B.60: table-bearing doc admit set = pipe-row lines
+            # union bullet-list lines (``"- Key: Value"`` / ``"* Key: Value"``).
+            # Bullets carry explicit ``Key:`` labels so they are context-anchored
+            # and do not re-open the §B.56 prose-coincidence collision class.
             union_parts.extend(pipe_lines)
+            union_parts.extend(line for line in lines if _LIST_ITEM_RE.match(line))
         else:
             union_parts.append(content)
     union = "\n".join(union_parts)

@@ -2226,6 +2226,89 @@ def test_reply_email_single_doc_collision_still_rejects(
     gmail_client.send_message.assert_not_called()
 
 
+def test_reply_email_bullet_list_doc_admits_list_item_tokens(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§T.94 / §V.68(+) / §B.60: table-bearing docs admit bullet-list lines.
+
+    Birm/Pyrolox-shaped doc carries an Order Information pipe-table plus
+    Physical Properties bullet-list lines (``"- Specific Gravity: 2.0"``,
+    ``"- Bed Depth: Suggested depth 18 inches"``). Pre-fix uniform pipe-row-only
+    scoping rejected those bullet tokens (2.0, 18) → 5 compare invocations hit
+    the §V.71 retry cap, sla_agent breached the §V.61(+) compare ceiling.
+    Per §V.68(+) the table-bearing-doc admit set unions pipe-rows with
+    list-item lines so bullet-anchored numeric tokens ground citations.
+    Cross-product prose-line collisions (§B.56) stay rejected because plain
+    prose lines (no leading ``-``/``*``) remain excluded.
+    """
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection, email="sender@example.com")
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Birm physical properties",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        gmail_message_id="inbound-bullet",
+        gmail_thread_id="thread-bullet",
+    )
+    assert inbound is not None
+    gmail_client = _make_gmail_client(account)
+
+    bullet_ledger = {
+        "birm.md": (
+            "Order Information:\n"
+            "\n"
+            "| Part | Volume |\n"
+            "|------|--------|\n"
+            "| BIRM-1 | 1 cubic foot |\n"
+            "\n"
+            "Physical Properties:\n"
+            "\n"
+            "- Specific Gravity: 2.0 gm/cc\n"
+            "- Bed Depth: Suggested depth 18 inches\n"
+            "\n"
+            "Operating range note: 35-110 degrees F.\n"
+        )
+    }
+
+    result_supported = reply_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        email_id=inbound.id,
+        body="Birm has a specific gravity of 2.0 gm/cc with a suggested bed depth of 18 inches.",
+        read_ledger=dict(bullet_ledger),
+    )
+
+    assert "error" not in result_supported
+    gmail_client.send_message.assert_called_once()
+
+    # Plain prose collision still rejected -- ``35`` lives only in the
+    # ``Operating range note: 35-110 degrees F`` prose line (no leading bullet)
+    # so per §B.56 the cross-context match must not credit the fabricated token.
+    gmail_client.send_message.reset_mock()
+    result_blocked = reply_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        workflow_id=workflow.id,
+        email_id=inbound.id,
+        body="Birm filters at 35 gpm continuous per the datasheet.",
+        read_ledger=dict(bullet_ledger),
+    )
+
+    assert result_blocked["error"] == "fact_check_mismatch"
+    assert "35" in result_blocked["unsupported"]
+    gmail_client.send_message.assert_not_called()
+
+
 # -- noop ----------------------------------------------------------------------
 
 
