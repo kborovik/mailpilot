@@ -165,6 +165,7 @@ def test_burst_10_emails_meets_t_delivery_ceiling(
         try:
             for idx in items:
                 contact = create_contact(connection, email=f"sender-{idx}@example.com")
+                assert contact is not None
                 enrollment = create_enrollment(connection, workflow.id, contact.id)
                 assert enrollment is not None
                 _create_email(

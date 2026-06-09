@@ -18,6 +18,7 @@ def test_create_workflow_default_theme(
         template="outbound-general",
         account_id=account.id,
     )
+    assert workflow is not None
     assert workflow.theme == "blue"
 
 
@@ -32,6 +33,7 @@ def test_create_workflow_custom_theme(
         account_id=account.id,
         theme="green",
     )
+    assert workflow is not None
     assert workflow.theme == "green"
 
 
@@ -45,6 +47,7 @@ def test_update_workflow_theme(
         template="outbound-general",
         account_id=account.id,
     )
+    assert workflow is not None
     updated = update_workflow(database_connection, workflow.id, theme="orange")
     assert updated is not None
     assert updated.theme == "orange"
@@ -61,6 +64,7 @@ def test_get_workflow_includes_theme(
         account_id=account.id,
         theme="purple",
     )
+    assert created is not None
     fetched = get_workflow(database_connection, created.id)
     assert fetched is not None
     assert fetched.theme == "purple"

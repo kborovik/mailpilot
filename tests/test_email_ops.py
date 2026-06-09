@@ -449,6 +449,7 @@ def test_send_email_emits_email_sent_activity(
     company = create_company(
         database_connection, name="Recipient Co", domain="example.com"
     )
+    assert company is not None
     contact = make_test_contact(
         database_connection,
         email="recipient@example.com",

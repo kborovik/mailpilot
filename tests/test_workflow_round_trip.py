@@ -45,6 +45,7 @@ def _seed_workflows(
         account_id=account_id,
         theme="green",
     )
+    assert alpha is not None
     update_workflow(
         connection,
         alpha.id,
@@ -68,6 +69,7 @@ def _seed_workflows(
         account_id=account_id,
         theme="purple",
     )
+    assert charlie is not None
     update_workflow(
         connection,
         charlie.id,

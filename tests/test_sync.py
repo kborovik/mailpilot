@@ -1907,6 +1907,7 @@ def test_sync_inbound_emits_email_received_activity(
 
     account = make_test_account(database_connection, email="inbox@lab5.ca")
     company = create_company(database_connection, name="Example", domain="example.com")
+    assert company is not None
     contact = make_test_contact(
         database_connection,
         email="alice@example.com",
