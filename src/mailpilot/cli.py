@@ -522,9 +522,7 @@ def company_create(domain: str, name: str, note: str | None) -> None:
     default=None,
     help="JSON object validated against CompanyProfile (§V.72).",
 )
-def company_update(
-    company_id: str, name: str | None, profile_json: str | None
-) -> None:
+def company_update(company_id: str, name: str | None, profile_json: str | None) -> None:
     """Update a company."""
     import json
 
@@ -581,13 +579,40 @@ def company_search(query: str, limit: int) -> None:
 @company.command("list")
 @click.option("--limit", default=100, help="Maximum results.")
 @click.option("--since", default=None, help="ISO datetime lower bound on created_at.")
-def company_list(limit: int, since: str | None) -> None:
+@click.option(
+    "--has-profile",
+    is_flag=True,
+    default=False,
+    help="Return only companies with a non-NULL profile (§V.72).",
+)
+@click.option(
+    "--no-profile",
+    is_flag=True,
+    default=False,
+    help="Return only companies with a NULL profile (§V.72).",
+)
+def company_list(
+    limit: int, since: str | None, has_profile: bool, no_profile: bool
+) -> None:
     """List companies as summaries."""
     from mailpilot.database import initialize_database, list_companies
 
+    if has_profile and no_profile:
+        output_error(
+            "--has-profile and --no-profile are mutually exclusive",
+            "validation_error",
+        )
+    profile_filter: bool | None = None
+    if has_profile:
+        profile_filter = True
+    elif no_profile:
+        profile_filter = False
+
     connection = initialize_database(_database_url())
     try:
-        companies = list_companies(connection, limit=limit, since=since)
+        companies = list_companies(
+            connection, limit=limit, since=since, has_profile=profile_filter
+        )
         output({"companies": [c.model_dump(mode="json") for c in companies]})
     finally:
         connection.close()

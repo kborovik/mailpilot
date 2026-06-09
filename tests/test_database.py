@@ -197,6 +197,75 @@ def test_list_companies(database_connection: psycopg.Connection[dict[str, Any]])
     companies = list_companies(database_connection)
     assert len(companies) == 2
     assert companies[0].name == "Alpha"
+    assert companies[0].has_profile is False
+    assert companies[1].has_profile is False
+
+
+def _seed_profile_fixture(
+    connection: psycopg.Connection[dict[str, Any]],
+) -> tuple[str, str, str]:
+    """Seed 3 companies: NULL profile, full profile, partial profile.
+
+    Returns the (null_id, full_id, partial_id) tuple. Full and partial profiles
+    are both valid per §V.72 (timezone is the only optional field).
+    """
+    null_co = make_test_company(connection, name="Null", domain="null.com")
+    full_co = make_test_company(connection, name="Full", domain="full.com")
+    partial_co = make_test_company(connection, name="Partial", domain="partial.com")
+    update_company(
+        connection,
+        full_co.id,
+        profile={
+            "summary": "Full Co builds widgets.",
+            "products": ["Widget A", "Widget B"],
+            "target_customers": "Mid-market manufacturers.",
+            "timezone": "America/Toronto",
+            "sources": ["https://full.com/"],
+        },
+    )
+    update_company(
+        connection,
+        partial_co.id,
+        profile={
+            "summary": "Partial Co builds gizmos.",
+            "products": ["Gizmo"],
+            "target_customers": "SMB.",
+            "sources": ["https://partial.com/"],
+        },
+    )
+    return null_co.id, full_co.id, partial_co.id
+
+
+def test_list_companies_has_profile_projection(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    null_id, full_id, partial_id = _seed_profile_fixture(database_connection)
+    companies = list_companies(database_connection)
+    by_id = {c.id: c for c in companies}
+    assert by_id[null_id].has_profile is False
+    assert by_id[full_id].has_profile is True
+    assert by_id[partial_id].has_profile is True
+
+
+def test_list_companies_filter_has_profile_true(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    null_id, full_id, partial_id = _seed_profile_fixture(database_connection)
+    companies = list_companies(database_connection, has_profile=True)
+    ids = {c.id for c in companies}
+    assert ids == {full_id, partial_id}
+    assert null_id not in ids
+
+
+def test_list_companies_filter_has_profile_false(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    null_id, full_id, partial_id = _seed_profile_fixture(database_connection)
+    companies = list_companies(database_connection, has_profile=False)
+    ids = {c.id for c in companies}
+    assert ids == {null_id}
+    assert full_id not in ids
+    assert partial_id not in ids
 
 
 def test_search_companies(database_connection: psycopg.Connection[dict[str, Any]]):
@@ -205,6 +274,28 @@ def test_search_companies(database_connection: psycopg.Connection[dict[str, Any]
     results = search_companies(database_connection, "acme")
     assert len(results) == 1
     assert results[0].name == "Acme Inc"
+    assert results[0].has_profile is False
+
+
+def test_search_companies_projects_has_profile(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    company = make_test_company(
+        database_connection, name="Profiled", domain="profiled.com"
+    )
+    update_company(
+        database_connection,
+        company.id,
+        profile={
+            "summary": "Profiled Co.",
+            "products": ["P1"],
+            "target_customers": "Enterprise.",
+            "sources": ["https://profiled.com/"],
+        },
+    )
+    results = search_companies(database_connection, "profiled")
+    assert len(results) == 1
+    assert results[0].has_profile is True
 
 
 def test_update_company(database_connection: psycopg.Connection[dict[str, Any]]):

@@ -621,6 +621,7 @@ def list_companies(
     connection: psycopg.Connection[dict[str, Any]],
     limit: int = 100,
     since: str | None = None,
+    has_profile: bool | None = None,
 ) -> list[CompanySummary]:
     """List companies as summaries.
 
@@ -628,6 +629,9 @@ def list_companies(
         connection: Open database connection.
         limit: Maximum results.
         since: ISO datetime lower bound on ``created_at``.
+        has_profile: ``True`` returns only rows where ``profile IS NOT NULL``;
+            ``False`` returns only rows where ``profile IS NULL``; ``None``
+            (default) returns all rows. Per §V.72 operator filter surface.
 
     Returns:
         List of company summaries ordered by name.
@@ -637,9 +641,13 @@ def list_companies(
     if since is not None:
         conditions.append(SQL("created_at >= %(since)s"))
         params["since"] = since
+    if has_profile is True:
+        conditions.append(SQL("profile IS NOT NULL"))
+    elif has_profile is False:
+        conditions.append(SQL("profile IS NULL"))
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
-        "SELECT id, name, domain, created_at "
+        "SELECT id, name, domain, (profile IS NOT NULL) AS has_profile, created_at "
         "FROM company {where} ORDER BY LOWER(name) LIMIT %(limit)s"
     ).format(where=where)
     rows = connection.execute(query, params).fetchall()
@@ -664,7 +672,7 @@ def search_companies(
     pattern = f"%{query}%"
     rows = connection.execute(
         """\
-        SELECT id, name, domain, created_at
+        SELECT id, name, domain, (profile IS NOT NULL) AS has_profile, created_at
         FROM company
         WHERE LOWER(name) LIKE LOWER(%(pattern)s)
            OR LOWER(domain) LIKE LOWER(%(pattern)s)

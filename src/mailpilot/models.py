@@ -66,6 +66,7 @@ class CompanySummary(BaseModel):
     id: str
     name: str
     domain: str
+    has_profile: bool
     created_at: datetime
 
 
