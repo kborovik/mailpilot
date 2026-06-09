@@ -244,6 +244,79 @@ def test_company_profile_column_present_and_default_null(
     assert profile_row["profile"] is None
 
 
+def _full_profile() -> dict[str, Any]:
+    return {
+        "summary": "Acme makes industrial widgets for the aerospace sector.",
+        "products": ["Widget X", "Widget Y"],
+        "target_customers": "Aerospace OEMs and tier-1 suppliers.",
+        "timezone": "America/Toronto",
+        "sources": ["https://acme.com/", "https://acme.com/about"],
+    }
+
+
+def test_update_company_profile_full_valid(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.72: full valid profile validates and persists via JSONB column."""
+    company = make_test_company(database_connection)
+    profile = _full_profile()
+    updated = update_company(database_connection, company.id, profile=profile)
+    assert updated is not None
+    assert updated.profile == profile
+
+
+def test_update_company_profile_partial_no_timezone(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.72: ``timezone`` is optional; valid when omitted."""
+    company = make_test_company(database_connection)
+    profile = _full_profile()
+    del profile["timezone"]
+    updated = update_company(database_connection, company.id, profile=profile)
+    assert updated is not None
+    assert updated.profile is not None
+    assert "timezone" not in updated.profile
+
+
+def test_update_company_profile_invalid_missing_summary(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.72: missing required ``summary`` raises ValidationError."""
+    from pydantic import ValidationError
+
+    company = make_test_company(database_connection)
+    profile = _full_profile()
+    del profile["summary"]
+    with pytest.raises(ValidationError):
+        update_company(database_connection, company.id, profile=profile)
+
+
+def test_update_company_profile_invalid_non_list_products(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.72: ``products`` must be a list."""
+    from pydantic import ValidationError
+
+    company = make_test_company(database_connection)
+    profile = _full_profile()
+    profile["products"] = "Widget X"
+    with pytest.raises(ValidationError):
+        update_company(database_connection, company.id, profile=profile)
+
+
+def test_update_company_profile_invalid_missing_sources(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.72: ``sources`` is required."""
+    from pydantic import ValidationError
+
+    company = make_test_company(database_connection)
+    profile = _full_profile()
+    del profile["sources"]
+    with pytest.raises(ValidationError):
+        update_company(database_connection, company.id, profile=profile)
+
+
 # -- Contact -------------------------------------------------------------------
 
 

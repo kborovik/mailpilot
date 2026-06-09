@@ -64,6 +64,10 @@ def cli_mutation(noun: str, verb: str, /, **attrs: Any) -> Generator[None]:
     handler never sees the ``psycopg.Error`` so stderr stays clean of
     raw ``Traceback`` dumps; stdout stays strict-JSON-empty per §V.3.
 
+    ``pydantic.ValidationError`` (e.g. ``CompanyProfile`` validation per
+    §V.72) is translated to ``validation_error`` via the same path so
+    invalid JSON payloads surface as a structured envelope.
+
     Caller is responsible for emitting the success-path
     ``operator_event("<noun>.<verb>", ...)`` with the verb-appropriate
     ``changed=[...]`` field after the mutation lands.
@@ -79,9 +83,12 @@ def cli_mutation(noun: str, verb: str, /, **attrs: Any) -> Generator[None]:
             logfire.exception(failure_name, **attrs)
             operator_event("error", source=span_name, message=str(exc))
             import psycopg
+            from pydantic import ValidationError
 
             from mailpilot.cli import output_error
 
+            if isinstance(exc, ValidationError):
+                output_error(str(exc), "validation_error")
             if isinstance(exc, psycopg.Error):
                 code = "database_error"
                 for class_name, mapped in _PSYCOPG_ERROR_CODES:

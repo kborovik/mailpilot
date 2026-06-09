@@ -759,6 +759,107 @@ def test_company_update_not_found(
     assert data["error"] == "not_found"
 
 
+def test_company_update_profile_json_valid(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.72: ``--profile-json`` forwards parsed dict to ``update_company``."""
+    before = _make_company()
+    profile = {
+        "summary": "Acme makes widgets.",
+        "products": ["Widget X"],
+        "target_customers": "Aerospace OEMs.",
+        "timezone": "America/Toronto",
+        "sources": ["https://acme.com/"],
+    }
+    after = _make_company()
+    after = after.model_copy(update={"profile": profile})
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=before),
+        patch("mailpilot.database.update_company", return_value=after) as mock_update,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "update",
+                before.id,
+                "--profile-json",
+                json.dumps(profile),
+            ],
+        )
+
+    assert result.exit_code == 0
+    mock_update.assert_called_once_with(mock_connection, before.id, profile=profile)
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["company"]["profile"] == profile
+
+
+def test_company_update_profile_json_invalid_text(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.72: malformed JSON text emits ``validation_error`` envelope."""
+    company = _make_company()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=company),
+    ):
+        result = runner.invoke(
+            main,
+            ["company", "update", company.id, "--profile-json", "{not json"],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "validation_error"
+    assert "invalid JSON" in data["message"]
+
+
+def test_company_update_profile_validation_error_envelope(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.72/§V.54: ``ValidationError`` is translated to ``validation_error``."""
+    from pydantic import ValidationError
+
+    from mailpilot.models import CompanyProfile
+
+    company = _make_company()
+    try:
+        CompanyProfile.model_validate({"products": ["x"]})
+    except ValidationError as exc:
+        validation_error = exc
+    else:  # pragma: no cover - sanity guard
+        raise AssertionError("CompanyProfile should reject empty payload")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=company),
+        patch("mailpilot.cli.configure_logging", lambda debug=False: None),
+        patch(
+            "mailpilot.database.update_company", side_effect=validation_error
+        ) as mock_update,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "update",
+                company.id,
+                "--profile-json",
+                json.dumps({"products": ["x"]}),
+            ],
+        )
+
+    mock_update.assert_called_once()
+    assert result.exit_code == 1
+    assert '"error": "validation_error"' in result.output
+    assert '"ok": false' in result.output
+
+
 # -- company export ------------------------------------------------------------
 
 

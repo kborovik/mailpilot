@@ -32,6 +32,7 @@ from mailpilot.models import (
     Activity,
     ActivitySummary,
     Company,
+    CompanyProfile,
     CompanySummary,
     CompanyView,
     Contact,
@@ -704,6 +705,11 @@ def update_company(
 ) -> Company | None:
     """Update a company by ID.
 
+    ``profile`` (if present and non-None) is validated via
+    ``CompanyProfile.model_validate`` per §V.72 and persisted as JSONB; an
+    invalid payload raises ``pydantic.ValidationError`` which the
+    ``cli_mutation`` boundary translates to a ``validation_error`` envelope.
+
     Args:
         connection: Open database connection.
         company_id: Company ID.
@@ -714,6 +720,9 @@ def update_company(
     """
     allowed = set(Company.model_fields) - {"id", "created_at"}
     updates = {k: v for k, v in fields.items() if k in allowed}
+    if "profile" in updates and updates["profile"] is not None:
+        validated = CompanyProfile.model_validate(updates["profile"])
+        updates["profile"] = Json(validated.model_dump(exclude_unset=True))
     if not updates:
         return get_company(connection, company_id)
     updates["id"] = company_id

@@ -517,8 +517,17 @@ def company_create(domain: str, name: str, note: str | None) -> None:
 @company.command("update")
 @click.argument("company_id")
 @click.option("--name", default=None, help="Company name.")
-def company_update(company_id: str, name: str | None) -> None:
+@click.option(
+    "--profile-json",
+    default=None,
+    help="JSON object validated against CompanyProfile (§V.72).",
+)
+def company_update(
+    company_id: str, name: str | None, profile_json: str | None
+) -> None:
     """Update a company."""
+    import json
+
     from mailpilot.database import get_company, initialize_database, update_company
     from mailpilot.operator_log import cli_mutation, operator_event
 
@@ -530,13 +539,18 @@ def company_update(company_id: str, name: str | None) -> None:
         fields: dict[str, object] = {}
         if name is not None:
             fields["name"] = name
+        if profile_json is not None:
+            try:
+                fields["profile"] = json.loads(profile_json)
+            except json.JSONDecodeError as exc:
+                output_error(f"invalid JSON: {exc}", "validation_error")
         with cli_mutation("company", "update", entity_id=company_id):
             updated = update_company(connection, company_id, **fields)
             if updated is None:
                 output_error(f"company not found: {company_id}", "not_found")
             changed = [
                 field
-                for field in ("name",)
+                for field in ("name", "profile")
                 if getattr(before, field) != getattr(updated, field)
             ]
             operator_event(

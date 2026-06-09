@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -32,12 +32,30 @@ class AccountSummary(BaseModel):
     created_at: datetime
 
 
+class CompanyProfile(BaseModel):
+    """Cold-email-grade lead profile distilled from web sources per §V.72.
+
+    Validated by ``database.update_company`` before persistence to the
+    ``company.profile JSONB`` column. Required fields {summary, products,
+    target_customers, sources} must be non-empty for a profile to be
+    considered "full"; optional ``timezone`` is null on multi-zone or
+    unclear cases.
+    """
+
+    summary: str
+    products: list[str]
+    target_customers: str
+    timezone: str | None = None
+    sources: list[str]
+
+
 class Company(BaseModel):
     """Target company for outbound campaigns."""
 
     id: str
     name: str
     domain: str
+    profile: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -426,6 +444,7 @@ class CompanyView(BaseModel):
     id: str
     name: str
     domain: str
+    profile: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
     notes: list[Note] = []
