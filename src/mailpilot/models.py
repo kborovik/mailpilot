@@ -426,12 +426,12 @@ class ContactView(BaseModel):
     first_name: str | None = None
     last_name: str | None = None
     disabled_reason: str | None = None
-    created_at: datetime
-    updated_at: datetime
     notes: list[Note] = []
     notes_total: int = 0
     company_notes: list[Note] = []
     company_notes_total: int = 0
+    created_at: datetime
+    updated_at: datetime
 
 
 class CompanyView(BaseModel):
@@ -446,10 +446,10 @@ class CompanyView(BaseModel):
     name: str
     domain: str
     profile: dict[str, Any] | None = None
-    created_at: datetime
-    updated_at: datetime
     notes: list[Note] = []
     notes_total: int = 0
+    created_at: datetime
+    updated_at: datetime
 
 
 class SyncStatus(BaseModel):
