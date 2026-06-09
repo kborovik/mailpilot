@@ -111,6 +111,7 @@ V71: per-invocation reply-rejection ceiling. `reply_email` ∧ `send_email` tool
 ## archived: §T.1..§T.93 → SPEC.archive.md (93 rows)
 
 id|status|task|cites
+T94|.|impl §V.68(+) list-item corpus-build per §B.60 — `_fact_check_body` (`src/mailpilot/agent/tools.py:149`) table-bearing-doc branch (`:177` `pipe_lines = [line for line in lines if "|" in line]`) extends admit set: union pipe-row lines w/ list-item lines matching `re.match(r"^\s*[-*]\s", line)`. Scope = grep `rg -n '"\|" in line' src/mailpilot/agent/tools.py` → 1 hit @ `:177` (fact-check branch); `:222` ∈ `_check_spec_table` excluded (different concern per §V.42). Prose-only-doc branch unchanged (full content already admitted per §T.88). §B.56 anti-collision preserved — bullet `Key:` labels context-anchor, ⊥ cross-product prose-line leakage class. Test sweep: scope = grep `rg -n 'test_fact_check\|_fact_check_body' tests/` → extend existing fact-check tests w/ table-bearing-doc fixture carrying `"- Specific Gravity: 2.0"` bullet line — assert numeric token `2.0` ∈ corpus union, body containing `2.0` ⊥ rejected by `_fact_check_body`. Detected by /sdd:check 2026-06-09 (V68 VIOLATE).|V68,V64
 
 ## §B BUGS
 
