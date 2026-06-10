@@ -1,0 +1,352 @@
+#!/usr/bin/env python3
+"""Consolidated ingest + seed for the lead-encreach skill.
+
+Collapses the skill's per-row Bash loop -- format detect, CSV/text parse,
+apex redirect resolution, and `mailpilot company create` per domain -- into a
+single tool call, then captures the post-seed stale-row set so the enrich
+Workflow can be dispatched without a second `company list` round trip.
+
+Faithful to the spec recipes this skill is built on:
+  - SPEC.md V.72: external sources contribute the apex domain + an optional CSV
+    display-name placeholder ONLY. No profile-body field is pre-populated here;
+    every seeded row lands `profile IS NULL` for downstream agent enrichment.
+  - SPEC.md V.74: CSV ingestion uses an RFC-4180 parser (csv.DictReader), never
+    physical-line iteration; redirect resolution uses the hop-agnostic,
+    CR-free `curl -sL -o /dev/null -w '%{url_effective}'`, never a HEAD grep.
+
+Usage:
+    seed_companies.py [--dry-run] [--column NAME] <file-or-domain> [more...]
+
+Args may mix existing file paths (CSV or plain-text domain lists) and bare
+domain / URL tokens. Files are ingested first, then inline domains; a single
+combined seed pass follows. UUID-shaped args are not seedable (enrich-only) and
+are reported under `skipped`.
+
+Emits ONE JSON object on stdout (stderr carries progress only):
+
+    {
+      "created":   ["<uuid>", ...],         # rows created this run
+      "existing":  ["<apex>", ...],          # already owned (duplicate_key)
+      "skipped":   [{"input","resolved","reason"}, ...],
+      "collapsed": [{"inputs":[...], "resolved":"<apex>"}, ...],
+      "stale":     [{"id","domain","name"}, ...],  # profile IS NULL, for enrich
+      "dry_run":   false,
+      "ok": true
+    }
+
+The `stale` array is the exact projection the lead-encreach-enrich Workflow
+consumes as `args`. On a dry run no rows are created, so `stale` reflects the
+pre-existing stale set only and `created` is replaced by `would_create`.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import re
+import subprocess
+import sys
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urlsplit
+
+DOMAIN_COLUMN_CANDIDATES = ["domain", "website", "company_url", "url"]
+NAME_COLUMN_CANDIDATES = ["company_name", "name", "company"]
+CSV_HEADER_TOKENS = DOMAIN_COLUMN_CANDIDATES
+UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+RESOLVE_WORKERS = 8
+
+
+def extract_apex(value: str) -> str:
+    """Lowercase host, strip a leading ``www.``; preserve other subdomains."""
+    value = value.strip()
+    if not value:
+        return ""
+    candidate = value if "//" in value else "https://" + value
+    host = urlsplit(candidate).netloc.lower()
+    if not host:
+        return ""
+    # Drop any userinfo / port that slipped through.
+    host = host.split("@")[-1].split(":")[0]
+    return host[4:] if host.startswith("www.") else host
+
+
+def resolve_apex(apex: str) -> str:
+    """Follow the full redirect chain via curl's ``%{url_effective}``.
+
+    Hop-agnostic and CR-free per SPEC.md V.74. ``url_effective`` is always set,
+    so a no-redirect host resolves back to ``apex``.
+    """
+    if not apex:
+        return apex
+    try:
+        result = subprocess.run(
+            [
+                "curl",
+                "-sL",
+                "-o",
+                "/dev/null",
+                "--max-time",
+                "12",
+                "-w",
+                "%{url_effective}",
+                "-A",
+                "Mozilla/5.0",
+                f"https://{apex}/",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return apex
+    final_url = result.stdout.strip()
+    resolved = extract_apex(final_url) if final_url else apex
+    return resolved or apex
+
+
+def detect_format(path: str) -> str:
+    """Return ``"csv"`` or ``"text"`` from the first non-empty raw line.
+
+    Peeks at raw bytes (not the Read tool's line-numbered output): a line with a
+    comma and at least one known header token is CSV, else plain text.
+    """
+    with open(path, encoding="utf-8-sig") as handle:
+        for raw in handle:
+            line = raw.strip()
+            if not line:
+                continue
+            lowered = line.lower()
+            if "," in line and any(tok in lowered for tok in CSV_HEADER_TOKENS):
+                return "csv"
+            return "text"
+    return "text"
+
+
+def parse_csv(path: str, override_column: str | None) -> list[tuple[str, str]]:
+    """Parse CSV via csv.DictReader (RFC-4180, SPEC.md V.74).
+
+    Returns ``(domain, display_name)`` pairs; display_name may be empty.
+    """
+    pairs: list[tuple[str, str]] = []
+    with open(path, newline="", encoding="utf-8-sig") as handle:
+        reader = csv.DictReader(handle)
+        columns = reader.fieldnames or []
+        column = override_column or next(
+            (c for c in DOMAIN_COLUMN_CANDIDATES if c in columns), None
+        )
+        if column is None:
+            sys.exit(f"no domain column found in {path}; name the column with --column")
+        name_column = next((c for c in NAME_COLUMN_CANDIDATES if c in columns), None)
+        for row in reader:
+            value = (row.get(column) or "").strip()
+            if not value:
+                continue
+            name = (row.get(name_column) or "").strip() if name_column else ""
+            pairs.append((value, name))
+    return pairs
+
+
+def parse_text(path: str) -> list[tuple[str, str]]:
+    """Parse a plain-text domain list -- one domain/URL per non-comment line.
+
+    Line iteration is admitted here per SPEC.md V.74 (non-CSV). Plain-text rows
+    carry no display name.
+    """
+    pairs: list[tuple[str, str]] = []
+    with open(path, encoding="utf-8-sig") as handle:
+        for raw in handle:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            pairs.append((line, ""))
+    return pairs
+
+
+def create_company(
+    domain: str, name: str, dry_run: bool
+) -> tuple[str, dict[str, object]]:
+    """Run ``mailpilot company create``; classify the JSON envelope.
+
+    Returns one of ``("created", {...})``, ``("existing", {...})``,
+    ``("would_create", {...})`` (dry run), or ``("error", {...})``.
+    stdout carries the JSON envelope (race-safe duplicate -> exit 1 with
+    ``{"error":"duplicate_key",...}``); the always-on operator-log line is on
+    stderr and is discarded so it cannot corrupt the parse.
+    """
+    if dry_run:
+        return "would_create", {"domain": domain, "name": name}
+    proc = subprocess.run(
+        [
+            "uv",
+            "run",
+            "mailpilot",
+            "company",
+            "create",
+            "--domain",
+            domain,
+            "--name",
+            name,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    raw = proc.stdout.strip()
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return "error", {"domain": domain, "reason": raw[:200] or "no output"}
+    if payload.get("ok") and isinstance(payload.get("company"), dict):
+        return "created", payload["company"]
+    if payload.get("error") == "duplicate_key":
+        return "existing", {"domain": domain}
+    return "error", {"domain": domain, "reason": payload.get("error", "unknown")}
+
+
+def query_stale() -> list[dict[str, str]]:
+    """Capture rows with ``profile IS NULL`` projected for the enrich Workflow."""
+    proc = subprocess.run(
+        ["uv", "run", "mailpilot", "company", "list", "--no-profile"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    try:
+        companies = json.loads(proc.stdout)["companies"]
+    except json.JSONDecodeError, KeyError:
+        return []
+    return [
+        {"id": c["id"], "domain": c["domain"], "name": c["name"]} for c in companies
+    ]
+
+
+def collect_inputs(
+    args: list[str], override_column: str | None
+) -> tuple[list[tuple[str, str]], list[dict[str, object]]]:
+    """Resolve args into ``(domain, name)`` pairs; report unseedable args.
+
+    Files (CSV/text) are ingested first, then inline domain tokens. UUID-shaped
+    args are enrich-only and returned under ``skipped``.
+    """
+    file_args = [a for a in args if os.path.isfile(a)]
+    other_args = [a for a in args if not os.path.isfile(a)]
+    pairs: list[tuple[str, str]] = []
+    skipped: list[dict[str, object]] = []
+    for path in file_args:
+        if detect_format(path) == "csv":
+            pairs.extend(parse_csv(path, override_column))
+        else:
+            pairs.extend(parse_text(path))
+    for token in other_args:
+        if UUID_RE.match(token):
+            skipped.append(
+                {"input": token, "resolved": None, "reason": "uuid_not_seedable"}
+            )
+            continue
+        pairs.append((token, ""))
+    return pairs, skipped
+
+
+def seed(pairs: list[tuple[str, str]], dry_run: bool) -> dict[str, list[object]]:
+    """Resolve apexes (concurrently, each unique apex once), then create rows."""
+    apexes = [extract_apex(domain) for domain, _ in pairs]
+    unique_apexes = sorted({a for a in apexes if a})
+    with ThreadPoolExecutor(max_workers=RESOLVE_WORKERS) as pool:
+        resolved_map = dict(
+            zip(unique_apexes, pool.map(resolve_apex, unique_apexes), strict=True)
+        )
+    resolved_list = [resolved_map.get(a, a) for a in apexes]
+
+    created: list[str] = []
+    would_create: list[dict[str, object]] = []
+    existing: list[str] = []
+    skipped: list[dict[str, object]] = []
+    resolved_to_inputs: dict[str, list[str]] = defaultdict(list)
+    seen_resolved: set[str] = set()
+
+    for (domain, display_name), apex, resolved in zip(
+        pairs, apexes, resolved_list, strict=True
+    ):
+        if not apex:
+            skipped.append({"input": domain, "resolved": None, "reason": "unparseable"})
+            continue
+        resolved_to_inputs[resolved].append(apex)
+        if resolved in seen_resolved:
+            # Collapsed onto an apex already handled this run.
+            existing.append(resolved)
+            continue
+        seen_resolved.add(resolved)
+        name = display_name if display_name else resolved
+        status, payload = create_company(resolved, name, dry_run)
+        if status == "created":
+            created.append(str(payload["id"]))
+        elif status == "would_create":
+            would_create.append(payload)
+        elif status == "existing":
+            existing.append(resolved)
+        else:
+            skipped.append(
+                {
+                    "input": domain,
+                    "resolved": resolved,
+                    "reason": str(payload.get("reason", "create_failed")),
+                }
+            )
+
+    collapsed = [
+        {"inputs": sorted(set(inputs)), "resolved": apex}
+        for apex, inputs in resolved_to_inputs.items()
+        if len(set(inputs)) > 1
+    ]
+    return {
+        "created": created,
+        "would_create": would_create,
+        "existing": existing,
+        "skipped": skipped,
+        "collapsed": collapsed,
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("inputs", nargs="+", help="file path(s) and/or domain token(s)")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="resolve + report without creating rows",
+    )
+    parser.add_argument(
+        "--column",
+        default=None,
+        help="override the CSV domain column auto-detect",
+    )
+    parsed = parser.parse_args()
+
+    pairs, arg_skipped = collect_inputs(parsed.inputs, parsed.column)
+    print(f"parsed {len(pairs)} seedable row(s)", file=sys.stderr)
+
+    result = seed(pairs, parsed.dry_run)
+    result["skipped"] = arg_skipped + result["skipped"]
+    result["stale"] = query_stale()
+    result["dry_run"] = parsed.dry_run
+    result["ok"] = True
+
+    if parsed.dry_run:
+        # No rows created; surface the would-be creates, drop the empty key.
+        result.pop("created", None)
+    else:
+        result.pop("would_create", None)
+
+    print(json.dumps(result))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -11,7 +11,7 @@ description: |
   placeholder -- all profile fields are agent-discovered from the website.
   Triggers on "/lead-encreach", "enrich companies", "create companies from domains".
 argument-hint: [<domain>... | <file-path>] [--limit N]
-allowed-tools: Bash(mailpilot company *), Bash(curl *), Bash(lynx *), Read, Task, AskUserQuestion
+allowed-tools: Bash(mailpilot company *), Bash(curl *), Bash(lynx *), Bash(python3 *), Read, Task, Workflow, AskUserQuestion
 model: opus
 ---
 
@@ -41,6 +41,22 @@ Classification rules:
 - `--limit N` pre-answers the batch gate (⊥ AskUserQuestion fires).
 
 Semantics: domain arg ≡ idempotent "ensure exists ∧ enriched". Seeding a duplicate is a no-op; an already-enriched row (`profile` ⊥ NULL) → skip, report `already_enriched`. ∴ ⊥ seed/enrich verb distinction — re-running the same invocation converges.
+
+## Fast path (consolidated execution)
+
+Minimize tool calls — run the two stages each as ONE tool call:
+
+- **Ingest + seed + stale** → ONE Bash call to `scripts/seed_companies.py` (this skill's dir), ⊥ a per-row `curl` + `company create` loop. The script implements the §V.74 recipes verbatim (csv.DictReader RFC-4180 parse; `curl -w '%{url_effective}'` redirect resolve) ∧ §V.72 (apex + optional CSV name placeholder only, ⊥ profile-body prepopulation). The per-stage recipe blocks below stay the canonical spec-of-record the script mirrors.
+
+  ```
+  python3 .claude/skills/lead-encreach/scripts/seed_companies.py [--dry-run] [--column NAME] <file-or-domain>...
+  ```
+
+  Emits ONE JSON object: `{created|would_create, existing, skipped, collapsed, stale, dry_run, ok}`. The `stale` field is the exact `[{id, domain, name}]` projection the enrich Workflow consumes ∴ ⊥ a second `company list --no-profile` round trip. `--dry-run` resolves + reports w/o DB writes (preview). Mixed file + inline-domain args admitted; UUID args land in `skipped` (enrich-only, ⊥ seedable).
+
+- **Enrich (≥2 stale rows)** → ONE Workflow call BY NAME: `Workflow({name: 'lead-encreach-enrich', args: <stale array from the seed script>})`, ⊥ pasting the inline snippet. Single stale row → direct `Task(subagent_type="company-profiler", ...)` per §Stage: enrich.
+
+∴ full file-arg pipeline = 1 Bash (seed script) + 1 Workflow (enrich) + the batch-gate `AskUserQuestion` when >10 stale ∧ ⊥ `--limit` — replacing the ~2N+3 per-row Bash calls. The per-stage sections below document the canonical behavior; reach for them only when debugging a row the script reported in `skipped`.
 
 ## Scope
 
@@ -152,7 +168,9 @@ uv run mailpilot company list --no-profile 2>/dev/null \
   | python3 -c 'import sys, json; rows = json.load(sys.stdin)["companies"]; print(json.dumps([{"id": c["id"], "domain": c["domain"], "name": c["name"]} for c in rows]))'
 ```
 
-Pass that JSON array as the Workflow `args` value directly — an actual JSON value, ⊥ a file path ∨ a re-stringified blob. The snippet's `typeof args === 'string'` guard covers the runtime-stringifies case either way. The snippet below is self-contained and runnable as authored (per §V.73):
+Pass that JSON array as the Workflow `args` value directly — an actual JSON value, ⊥ a file path ∨ a re-stringified blob. The snippet's `typeof args === 'string'` guard covers the runtime-stringifies case either way.
+
+The enrich logic is saved at `.claude/workflows/lead-encreach-enrich.js` ∴ INVOKE BY NAME — `Workflow({name: 'lead-encreach-enrich', args: <array>})` — ⊥ re-paste the body. The block below is the §V.73 spec-of-record mirror of that saved file (self-contained, runnable as authored); the body below `meta` ! stay byte-identical to the saved file (the saved `meta` adds registry-only fields — `whenToUse`, a fuller `description`):
 
 ```js
 export const meta = {
@@ -161,11 +179,11 @@ export const meta = {
   phases: [{title: 'Enrich', detail: 'enricher agents, 3 in flight'}],
 }
 
-// `stale` source: the `companies[]` captured from the stale-query stage,
-// handed in via Workflow `args`. The runtime delivers `args` as a JSON
-// string, so parse it (guard the already-parsed case). To paste rows
-// directly instead, replace this line with an inline literal:
-// const stale = [{...}, ...].
+// `stale` source: the `companies[]` captured from the seed script's `stale`
+// field (or `mailpilot company list --no-profile`), handed in via Workflow
+// `args`. The runtime delivers `args` as a JSON string, so parse it (guard the
+// already-parsed case). To paste rows directly instead, replace this line with
+// an inline literal: const stale = [{...}, ...].
 const stale = typeof args === 'string' ? JSON.parse(args) : args
 
 const ENRICH_RESULT_SCHEMA = {
@@ -193,9 +211,9 @@ function buildPrompt(c) {
 phase('Enrich')
 
 // Chunk into batches of 3 so at most 3 enricher agents run at once -- this
-// (not the runtime cap) is what honors the concurrency-3 budget (V.72). A
-// bare parallel(stale.map(...)) would submit all stale.length at once,
-// bounded only by the runtime cap min(16, cores-2).
+// (not the runtime cap) is what honors the concurrency-3 budget (V.72/V.73). A
+// bare parallel(stale.map(...)) would submit all stale.length at once, bounded
+// only by the runtime cap min(16, cores-2).
 const results = []
 for (let i = 0; i < stale.length; i += 3) {
   const batch = stale.slice(i, i + 3)
