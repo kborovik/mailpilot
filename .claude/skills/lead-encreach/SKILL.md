@@ -48,7 +48,7 @@ External data sources contribute the apex domain only. All profile fields are ag
 ∀ arg:
 
 1. `apex = extract_apex(domain)` — lowercase, strip leading `www.`, parse via `urllib.parse.urlsplit` if URL-shaped.
-2. `resolved = resolve_apex(apex)` — `curl -sLI --max-time 10 -A "Mozilla/5.0" "https://<apex>/"`; tail `^location:` header; re-extract apex from final URL if redirect chain ended elsewhere; else `resolved = apex`.
+2. `resolved = resolve_apex(apex)` — follow the full redirect chain via `curl -sL -o /dev/null --max-time 12 -w '%{url_effective}' -A "Mozilla/5.0" "https://<apex>/"` (hop-agnostic, CR-free per §V.74); re-extract apex from the final effective URL if the chain ended elsewhere; else `resolved = apex`.
 3. `uv run mailpilot company create --domain <resolved> --name <resolved>` — race-safe per §V.16 (duplicate → envelope `{"error":"duplicate_key", ...}` w/ exit 1).
 4. Aggregate per-arg outcome → JSON `{"created": [<id>...], "existing": [<domain>...], "skipped": [{"input": ..., "resolved": ..., "reason": ...}], "ok": true}`.
 
@@ -58,15 +58,32 @@ Collision-on-resolved-apex (resolved-apex already owned by another company row):
 
 Source- ∧ format-agnostic ingestion. Apex-domain-only extraction.
 
-1. Read `<path>` via `Read` tool.
-2. Format detection from first non-empty line:
+1. Detect format from the file's first non-empty line (peek at raw bytes, ⊥ the `Read` tool's line-numbered output):
    - Contains `,` ∧ ≥1 known header token (`domain`, `website`, `company_url`, `url`) → **CSV mode**.
    - Else → **plain-text mode**.
-3. **CSV mode**: identify domain column — explicit `--column NAME` → use it; else auto-detect first match in `[domain, website, company_url, url]`. ∀ row: extract apex from that column's value.
-4. **Plain-text mode**: ∀ non-empty non-comment line (skip lines starting w/ `#`): extract apex from the line (raw domain ∨ full URL admitted).
-5. ∀ extracted value: same per-row pipeline as `seed` (lowercase, strip `www.`, resolve redirects, `mailpilot company create`).
-6. ⊥ pre-populate profile from CSV columns ∨ text-line annotations. All non-domain content discarded — every seeded row lands stale ∴ agent enrichment downstream.
-7. Output: aggregate JSON `{"created": N, "existing": N, "skipped": [{"row": N, "input": ..., "resolved": ..., "reason": ...}], "ok": true}`.
+2. **CSV mode** — ! parse with an RFC-4180 parser (`csv.DictReader`), ⊥ physical-line iteration of `Read`-tool output ∨ split-on-`\n` / split-on-`,` (per §V.74). Quoted fields carry embedded newlines ∧ commas (lead-export `company_description` columns) ∴ one logical row spans many physical lines; line iteration mis-seeds prose fragments as phantom rows. `--column NAME` overrides; else auto-detect first match in `[domain, website, company_url, url]`. Extraction recipe — one printed line per logical row:
+   ```
+   python3 - "$CSV_PATH" "${COLUMN:-}" <<'PY'
+   import csv, sys
+   path, override = sys.argv[1], (sys.argv[2] or None)
+   candidates = ["domain", "website", "company_url", "url"]
+   with open(path, newline="", encoding="utf-8-sig") as handle:
+       reader = csv.DictReader(handle)
+       columns = reader.fieldnames or []
+       column = override or next((c for c in candidates if c in columns), None)
+       if column is None:
+           sys.exit("no domain column found; pass --column NAME")
+       for row in reader:
+           value = (row.get(column) or "").strip()
+           if value:
+               print(value)
+   PY
+   ```
+   `newline=""` keeps the parser in charge of embedded newlines; `encoding="utf-8-sig"` strips a leading BOM.
+3. **Plain-text mode**: ∀ non-empty non-comment line (skip lines starting w/ `#`): extract apex from the line (raw domain ∨ full URL admitted). Line iteration admitted here per §V.74 — non-CSV, one domain/URL per physical line.
+4. ∀ extracted value: same per-row pipeline as `seed` (lowercase, strip `www.`, resolve redirects, `mailpilot company create`).
+5. ⊥ pre-populate profile from CSV columns ∨ text-line annotations. All non-domain content discarded — every seeded row lands stale ∴ agent enrichment downstream.
+6. Output: aggregate JSON `{"created": N, "existing": N, "skipped": [{"row": N, "input": ..., "resolved": ..., "reason": ...}], "ok": true}`.
 
 ### `list-stale [--limit N]`
 
@@ -172,10 +189,14 @@ extract_apex(url_or_domain):
     4. return host (no further subdomain stripping)
 
 resolve_apex(initial):
-    final_url = curl -sLI --max-time 10 -A "Mozilla/5.0" "https://<initial>/" \
-                | grep -i "^location:" | tail -1 | awk '{print $2}'
-    if final_url: return extract_apex(final_url)
-    else: return initial
+    # -w '%{url_effective}' prints the final URL after the full redirect chain,
+    # CR-free (per spec V.74). It is always set, so when there is no redirect
+    # the final apex equals `initial`. A HEAD-based location-header grep is
+    # brittle: 403 bot-blocking origins answer HEAD differently, and awk
+    # retains the header's trailing CR -> corrupts a bare-host redirect target.
+    final_url = curl -sL -o /dev/null --max-time 12 -w '%{url_effective}' \
+                -A "Mozilla/5.0" "https://<initial>/"
+    return extract_apex(final_url) if final_url else initial
 ```
 
 Subdomain preservation: `shop.acme.com` ⊥ collapsed to `acme.com` — preserves distinct entity identity if shop is a separate company row.

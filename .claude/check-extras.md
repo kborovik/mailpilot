@@ -33,3 +33,17 @@ Mechanical greps (manual judgment on hits):
 - `rg -n '```js' .claude/skills/` — enumerate blocks.
 - `rg -nE '\bargs\.(map|filter|slice|length|forEach)\b' .claude/skills/` not preceded by `JSON.parse(args)` ∨ `typeof args` → (b) fail.
 - prose `rg -niE 'concurrency [0-9]|[0-9] concurrent|default [0-9]' .claude/skills/` near a block with bare `parallel(` and no batch loop (`for .* += N` / `.slice(`) → (c) fail.
+
+## §V.74 — RFC-4180 CSV-ingestion parser mandate
+
+Mechanical audit; trigger when `.claude/skills/**/*.md` ∨ `src/**` changed. Scope = CSV-ingestion sites (handle a `.csv` path, a "CSV mode", or a comma-delimited lead export).
+
+Checks:
+(i) CSV ingestion ! use an RFC-4180 parser (`csv.DictReader` / `csv.reader` / the `csv` module). Fail mode: physical-line iteration, `.splitlines()`, `.split("\n")`, ∨ `.split(",")` over CSV content — quoted fields carry embedded newlines ∧ commas ∴ one logical row spans many physical lines (§B.69: theirstack.csv 25 logical rows over 217 physical lines).
+(ii) Redirect resolution ! use `curl -sL -o /dev/null -w '%{url_effective}'` (full chain, CR-free). Fail mode: HEAD `curl -sLI | grep '^location:' | awk` — 403 bot-blocking origins answer HEAD differently; awk retains the header trailing CR ∴ corrupts a bare-host redirect target (§B.69).
+
+Mechanical greps (manual judgment on hits — flag only in CSV context):
+- `rg -n 'splitlines|\.split\(' .claude/skills/ src/` near `csv` / `CSV` / `.csv` context → (i) fail. Non-CSV `splitlines` (email-body normalization, markdown line scan) ⊥ flagged.
+- `rg -n 'curl -sLI' .claude/skills/ src/` → (ii) fail (HEAD-grep redirect resolution).
+
+Plain-text (non-CSV) line iteration is admitted (per-line domain/URL, `#`-comment skip) — ⊥ flag.
