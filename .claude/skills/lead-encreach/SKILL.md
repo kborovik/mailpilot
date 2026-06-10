@@ -102,39 +102,65 @@ Envelope unwrap → JSON `{"companies": [<CompanySummary w/ has_profile=false>..
      - `"First 10 (Recommended)"` — cap to first 10
      - `"First 25"` — cap to first 25
      - `"All <N>"` — every stale row
-4. Dispatch via `Workflow` tool, concurrency = 3:
+4. Hand the capped `companies[]` (from step 1, after any batch-gate trim) to the `Workflow` tool as `args`. The snippet below is self-contained and runnable as authored (per §V.73):
    ```js
    export const meta = {
      name: 'lead-encreach-enrich-all',
      description: 'Concurrently enrich stale company profiles',
-     phases: [{title: 'Enrich', detail: '3 concurrent enricher agents'}],
+     phases: [{title: 'Enrich', detail: 'enricher agents, 3 in flight'}],
    }
+
+   // `stale` source: the `companies[]` captured from `list-stale`, handed in
+   // via Workflow `args`. The runtime delivers `args` as a JSON string, so
+   // parse it (guard the already-parsed case). To paste rows directly instead,
+   // replace this line with an inline literal: const stale = [{...}, ...].
+   const stale = typeof args === 'string' ? JSON.parse(args) : args
+
+   const ENRICH_RESULT_SCHEMA = {
+     type: 'object',
+     required: ['company_id', 'domain', 'status'],
+     properties: {
+       company_id: {type: 'string'},
+       domain: {type: 'string'},
+       status: {enum: ['enriched', 'skipped', 'failed']},
+       reason: {type: 'string'},
+     },
+   }
+
+   function buildPrompt(c) {
+     return [
+       'Enrich the company profile for:',
+       `  company_id: ${c.id}`,
+       `  domain: ${c.domain}`,
+       `  placeholder_name: ${c.name}`,
+       '',
+       'Follow your system prompt procedure. Return the JSON verdict per spec.',
+     ].join('\n')
+   }
+
    phase('Enrich')
-   const results = await parallel(stale.map(c => () =>
-     agent(buildPrompt(c), {
-       label: `enrich:${c.domain}`,
-       agentType: 'company-profiler',
-       schema: ENRICH_RESULT_SCHEMA,
-     })
-   ))
-   return results.filter(Boolean)
-   ```
-   `ENRICH_RESULT_SCHEMA`:
-   ```json
-   {
-     "type": "object",
-     "required": ["company_id", "domain", "status"],
-     "properties": {
-       "company_id": {"type": "string"},
-       "domain": {"type": "string"},
-       "status": {"enum": ["enriched", "skipped", "failed"]},
-       "reason": {"type": "string"}
-     }
+
+   // Chunk into batches of 3 so at most 3 enricher agents run at once -- this
+   // (not the runtime cap) is what honors the concurrency-3 budget (V.72). A
+   // bare parallel(stale.map(...)) would submit all stale.length at once,
+   // bounded only by the runtime cap min(16, cores-2).
+   const results = []
+   for (let i = 0; i < stale.length; i += 3) {
+     const batch = stale.slice(i, i + 3)
+     const batchResults = await parallel(batch.map(c => () =>
+       agent(buildPrompt(c), {
+         label: `enrich:${c.domain}`,
+         agentType: 'company-profiler',
+         schema: ENRICH_RESULT_SCHEMA,
+       })
+     ))
+     results.push(...batchResults)
    }
+   return results.filter(Boolean)
    ```
 5. Aggregate → JSON `{"enriched": N, "skipped": N, "failed": N, "results": [...], "ok": true}`.
 
-Workflow per-call concurrency cap = `min(16, cores-2)` ∴ 3 sits well under. Default 3.
+The batch loop caps in-flight enrichers at 3 per `parallel()` call — the chunking, ⊥ any runtime setting, enforces the concurrency-3 budget per §V.73. The Workflow runtime's own per-call cap = `min(16, cores-2)` is a separate, higher ceiling.
 
 ## Domain extraction & redirect resolution
 

@@ -19,3 +19,17 @@ Per-document scoping (see `src/mailpilot/agent/tools.py:_fact_check_body`):
 - prose-only doc (no `|` lines): contribute full content
 
 Zero-ledger (no `read_drive_markdown` calls this invocation) → hook no-op.
+
+## §V.73 — Skill-body Workflow snippet executability
+
+Mechanical audit; trigger when `.claude/skills/**/*.md` changed. Scope = every fenced ```js block that calls `parallel(`, `pipeline(`, or `agent(`.
+
+Per ```js block:
+(a) Free-symbol scan — every identifier used as a value ! resolve to an in-block definition (`const` / `let` / `function` / param) OR a runtime global. Runtime globals (do ⊥ flag): `meta`, `agent`, `parallel`, `pipeline`, `phase`, `log`, `args`, `budget`, `workflow`, plus JS built-ins (`JSON`, `Math`, `Array`, `Object`, `Promise`, `console`, ...). Any other bare identifier (e.g. `stale`, `buildPrompt`, `ENRICH_RESULT_SCHEMA`) ! be defined in the block — fail mode: free var crashes `ReferenceError` on paste (§B.68: bare `stale`).
+(b) `args`-as-collection guard — if the block calls `args.map` / `args.filter` / `args.slice` / `args.length` / `args.forEach` or spreads `args`, it ! first `JSON.parse(args)` (∨ guard `typeof args === 'string'`). Why: runtime delivers `args` as a JSON STRING ∴ `args.map` throws `is not a function` (§B.68).
+(c) Prose-vs-`parallel` divergence — if surrounding prose claims "concurrency N" / "N concurrent" / "Default N", the block ! chunk to N (batch loop of size N around `parallel(batch.map(...))`). A bare `parallel(xs.map(...))` dispatches all `xs.length`, bounded only by runtime cap `min(16, cores-2)` — ⊥ N. Fail mode: prose promises 3, snippet runs all (§B.68 secondary).
+
+Mechanical greps (manual judgment on hits):
+- `rg -n '```js' .claude/skills/` — enumerate blocks.
+- `rg -nE '\bargs\.(map|filter|slice|length|forEach)\b' .claude/skills/` not preceded by `JSON.parse(args)` ∨ `typeof args` → (b) fail.
+- prose `rg -niE 'concurrency [0-9]|[0-9] concurrent|default [0-9]' .claude/skills/` near a block with bare `parallel(` and no batch loop (`for .* += N` / `.slice(`) → (c) fail.
