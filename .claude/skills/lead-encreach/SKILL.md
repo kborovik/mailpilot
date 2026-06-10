@@ -4,11 +4,11 @@ description: |
   Create company records from domain names or CSV exports (TheirStack and
   similar), query companies missing profile enrichment, and dispatch
   concurrent Sonnet enricher agents that fetch the company website
-  (curl + lynx, Firecrawl fallback) and distill a cold-email-grade JSON
+  (curl + lynx, Tavily fallback) and distill a cold-email-grade JSON
   profile into company.profile. Single free-form invocation -- no
   sub-commands; the skill classifies the input itself. External data
-  sources contribute the apex domain only -- all profile fields are
-  agent-discovered.
+  sources contribute the apex domain plus an optional CSV display-name
+  placeholder -- all profile fields are agent-discovered from the website.
   Triggers on "/lead-encreach", "enrich companies", "create companies from domains".
 argument-hint: [<domain>... | <file-path>] [--limit N]
 allowed-tools: Bash(mailpilot company *), Bash(curl *), Bash(lynx *), Read, Task, AskUserQuestion
@@ -44,12 +44,12 @@ Semantics: domain arg ≡ idempotent "ensure exists ∧ enriched". Seeding a dup
 
 ## Scope
 
-- Ingest: file → apex domains → `mailpilot company create` (placeholder name = apex domain).
+- Ingest: file → apex domains (+ optional CSV display name) → `mailpilot company create` (placeholder name = CSV name when present, else apex domain).
 - Seed: domain → same per-domain create pipeline.
 - Stale: rows w/ `profile IS NULL` — internal query step, ⊥ operator verb.
 - Enrich: dispatch `company-profiler` sub-agent (`.claude/agents/company-profiler.md`, `model: sonnet`) which fetches the site, distills a `CompanyProfile`, persists via `mailpilot company update --profile-json`.
 
-External data sources contribute the apex domain only. All profile fields are agent-discovered. ⊥ pre-populate from CSV columns ∨ text-line annotations.
+External data sources contribute the apex domain + an optional `company.name` display placeholder (CSV mode only). The profile JSONB body {summary, products, target_customers, timezone, sources} is 100% agent-discovered from the website — ⊥ pre-populate any profile field from CSV columns ∨ text-line annotations (§V.72). The name placeholder is a transient pre-enrichment label; the enricher overwrites it w/ the site-discovered canonical name.
 
 ## Conventions
 
@@ -57,54 +57,59 @@ External data sources contribute the apex domain only. All profile fields are ag
 - All `mailpilot` commands run via `uv run mailpilot`.
 - Envelope shape per §V.4: `list|search|...` → `{"<plural>": [...], "ok": true}`; `view|create|update|...` → `{"<singular>": {...}, "ok": true}`. Extract through the wrap.
 - Parse JSON via `python3 -c '...'`; use `printf '%s' "$VAR"` over `echo "$VAR"` when piping captured JSON (`echo` mangles `\n` inside string fields).
+- Capture stdout only (`2>/dev/null`) before any JSON parse. Every `uv run mailpilot` command writes an always-on operator-log line to stderr (`HH:MM:SS event=... k=v`); the JSON envelope — including the `{"error":"duplicate_key", ...}` failure case from `company create` — is on stdout. ⊥ `2>&1` into a JSON parser: the leading stderr line corrupts the parse (`Extra data: line 1 column 3`) while the command actually succeeded.
 
 ## Prerequisites
 
 - `mailpilot` installed locally w/ a working DB (`mailpilot config get database_url`).
 - `curl` ∧ `lynx` on PATH.
-- `mcp__claude_ai_FireCrawl__firecrawl_scrape` reachable (fallback).
+- `mcp__claude_ai_Tavily__tavily_extract` reachable — the enricher's sole fetch fallback (curl + lynx → Tavily). Matches `company-profiler` agent tool surface; ⊥ FireCrawl (token historically dead, agent ⊥ granted the tool).
 - Anthropic credentials reachable (Sonnet enrichers).
 
 ## Stage: ingest (file args)
 
-Source- ∧ format-agnostic ingestion. Apex-domain-only extraction.
+Source- ∧ format-agnostic ingestion. Extracts the apex domain (+ optional CSV display name per §V.72 carve-out); ⊥ profile-body content.
 
 1. Detect format from the file's first non-empty line (peek at raw bytes, ⊥ the `Read` tool's line-numbered output):
    - Contains `,` ∧ ≥1 known header token (`domain`, `website`, `company_url`, `url`) → **CSV mode**.
    - Else → **plain-text mode**.
-2. **CSV mode** — ! parse with an RFC-4180 parser (`csv.DictReader`), ⊥ physical-line iteration of `Read`-tool output ∨ split-on-`\n` / split-on-`,` (per §V.74). Quoted fields carry embedded newlines ∧ commas (lead-export `company_description` columns) ∴ one logical row spans many physical lines; line iteration mis-seeds prose fragments as phantom rows. Column auto-detect = first match in `[domain, website, company_url, url]`; operator MAY name a column in the invocation prose to override. Extraction recipe — one printed line per logical row:
+2. **CSV mode** — ! parse with an RFC-4180 parser (`csv.DictReader`), ⊥ physical-line iteration of `Read`-tool output ∨ split-on-`\n` / split-on-`,` (per §V.74). Quoted fields carry embedded newlines ∧ commas (lead-export `company_description` columns) ∴ one logical row spans many physical lines; line iteration mis-seeds prose fragments as phantom rows. Domain column auto-detect = first match in `[domain, website, company_url, url]`; operator MAY name a column in the invocation prose to override. Name column auto-detect = first match in `[company_name, name, company]` — seeds the `company.name` placeholder per §V.72 carve-out (display label only, ⊥ a profile field; enricher overwrites w/ site-canonical name). Extraction recipe — one printed line per logical row, TAB-separated `<domain>\t<display-name>` (name blank when no name-ish column):
    ```
    python3 - "$CSV_PATH" "${COLUMN:-}" <<'PY'
    import csv, sys
    path, override = sys.argv[1], (sys.argv[2] or None)
-   candidates = ["domain", "website", "company_url", "url"]
+   domain_candidates = ["domain", "website", "company_url", "url"]
+   name_candidates = ["company_name", "name", "company"]
    with open(path, newline="", encoding="utf-8-sig") as handle:
        reader = csv.DictReader(handle)
        columns = reader.fieldnames or []
-       column = override or next((c for c in candidates if c in columns), None)
+       column = override or next((c for c in domain_candidates if c in columns), None)
        if column is None:
            sys.exit("no domain column found; name the column in the invocation")
+       name_col = next((c for c in name_candidates if c in columns), None)
        for row in reader:
            value = (row.get(column) or "").strip()
-           if value:
-               print(value)
+           if not value:
+               continue
+           name = (row.get(name_col) or "").strip() if name_col else ""
+           print(value + "\t" + name)  # <domain> TAB <display-name>; name MAY be empty
    PY
    ```
-   `newline=""` keeps the parser in charge of embedded newlines; `encoding="utf-8-sig"` strips a leading BOM.
+   `newline=""` keeps the parser in charge of embedded newlines; `encoding="utf-8-sig"` strips a leading BOM. Split each printed line on the first TAB → `(domain, display_name)`; an empty `display_name` → seed stage falls back to the resolved apex.
 3. **Plain-text mode**: ∀ non-empty non-comment line (skip lines starting w/ `#`): extract apex from the line (raw domain ∨ full URL admitted). Line iteration admitted here per §V.74 — non-CSV, one domain/URL per physical line.
-4. ∀ extracted value: hand to the seed stage below.
-5. ⊥ pre-populate profile from CSV columns ∨ text-line annotations. All non-domain content discarded — every seeded row lands stale ∴ agent enrichment downstream.
+4. ∀ extracted `(domain, display_name)` pair: hand to the seed stage below (plain-text mode yields `display_name = ""`).
+5. ⊥ pre-populate the profile JSONB body from CSV columns ∨ text-line annotations — every seeded row lands `profile IS NULL` ∴ agent enrichment downstream (§V.72). The CSV `company.name` placeholder (step 2) is the ONLY non-domain datum carried; all other columns (descriptions, industry, revenue, LinkedIn) discarded.
 
 ## Stage: seed (domain values)
 
-∀ value (inline arg ∨ ingest output):
+∀ value — `(domain, display_name)` from CSV ingest, or a bare domain from an inline/plain-text arg (`display_name = ""`):
 
 1. `apex = extract_apex(domain)` — lowercase, strip leading `www.`, parse via `urllib.parse.urlsplit` if URL-shaped.
-2. `resolved = resolve_apex(apex)` — follow the full redirect chain via `curl -sL -o /dev/null --max-time 12 -w '%{url_effective}' -A "Mozilla/5.0" "https://<apex>/"` (hop-agnostic, CR-free per §V.74); re-extract apex from the final effective URL if the chain ended elsewhere; else `resolved = apex`.
-3. `uv run mailpilot company create --domain <resolved> --name <resolved>` — race-safe per §V.16 (duplicate → envelope `{"error":"duplicate_key", ...}` w/ exit 1 → treat as existing, continue).
+2. `resolved = resolve_apex(apex)` — follow the full redirect chain via `curl -sL -o /dev/null --max-time 12 -w '%{url_effective}' -A "Mozilla/5.0" "https://<apex>/"` (hop-agnostic, CR-free per §V.74); re-extract apex from the final effective URL if the chain ended elsewhere; else `resolved = apex`. The `display_name` travels with the row unchanged (a redirect to a sister domain ⊥ alters the company's display label).
+3. `name = display_name if display_name else resolved` (§V.72 carve-out: CSV display name when present, else the apex placeholder). `uv run mailpilot company create --domain <resolved> --name <name>` — race-safe per §V.16 (duplicate → envelope `{"error":"duplicate_key", ...}` w/ exit 1 → treat as existing, continue). Name ≡ placeholder; the enricher overwrites it w/ the site-canonical name.
 4. Track per-value outcome for the run summary: `{"created": [<id>...], "existing": [<domain>...], "skipped": [{"input": ..., "resolved": ..., "reason": ...}]}`.
 
-Collision-on-resolved-apex (resolved-apex already owned by another company row): skip + log per §V.72 design — operator dedups manually.
+Collision-on-resolved-apex (resolved-apex already owned by another company row): skip + log per §V.72 design — operator dedups manually. Record each collision in a `collapsed: [{"inputs": [...], "resolved": <apex>}]` accumulator for the run summary — distinct source rows redirecting onto one apex (e.g. two differently-named CSV rows sharing a resolved domain) silently become one company; the `collapsed` detail is the only operator-visible signal of the merge.
 
 ## Stage: stale query
 
@@ -140,7 +145,14 @@ Enrich the company profile for:
 Follow your system prompt procedure. Return the JSON verdict per spec.
 ```
 
-≥2 stale rows → hand the capped `companies[]` to the `Workflow` tool as `args`. The snippet below is self-contained and runnable as authored (per §V.73):
+≥2 stale rows → hand the capped `companies[]` to the `Workflow` tool as `args`. Capture the array from the stale query first (stdout only — see §Conventions), projecting just the fields the snippet reads:
+
+```
+uv run mailpilot company list --no-profile 2>/dev/null \
+  | python3 -c 'import sys, json; rows = json.load(sys.stdin)["companies"]; print(json.dumps([{"id": c["id"], "domain": c["domain"], "name": c["name"]} for c in rows]))'
+```
+
+Pass that JSON array as the Workflow `args` value directly — an actual JSON value, ⊥ a file path ∨ a re-stringified blob. The snippet's `typeof args === 'string'` guard covers the runtime-stringifies case either way. The snippet below is self-contained and runnable as authored (per §V.73):
 
 ```js
 export const meta = {
@@ -203,7 +215,7 @@ The batch loop caps in-flight enrichers at 3 per `parallel()` call — the chunk
 
 ## Run summary
 
-After all stages, emit one aggregate JSON: `{"created": N, "existing": N, "enriched": N, "skipped": N, "failed": N, "results": [...], "ok": true}` — omit seed fields on bare invocations, omit enrich fields when 0 stale rows.
+After all stages, emit one aggregate JSON: `{"created": N, "existing": N, "enriched": N, "skipped": N, "failed": N, "results": [...], "ok": true}` — omit seed fields on bare invocations, omit enrich fields when 0 stale rows. When ≥1 collision-on-resolved-apex fired (per §Stage: seed), append `"collapsed": [{"inputs": [...], "resolved": <apex>}]` so the operator sees which distinct source rows merged onto one company — a bare `existing: N` count hides the merge.
 
 ## Domain extraction & redirect resolution
 
