@@ -3503,14 +3503,7 @@ def load_contact_view(
         company_notes = []
         company_notes_total = 0
     return ContactView(
-        id=contact.id,
-        email=contact.email,
-        company_id=contact.company_id,
-        first_name=contact.first_name,
-        last_name=contact.last_name,
-        disabled_reason=contact.disabled_reason,
-        created_at=contact.created_at,
-        updated_at=contact.updated_at,
+        **contact.model_dump(),
         notes=notes,
         notes_total=notes_total,
         company_notes=company_notes,
@@ -3533,11 +3526,7 @@ def load_company_view(
         return None
     notes, notes_total = _load_notes_for_owner(connection, "company_id", company_id)
     return CompanyView(
-        id=company.id,
-        name=company.name,
-        domain=company.domain,
-        created_at=company.created_at,
-        updated_at=company.updated_at,
+        **company.model_dump(),
         notes=notes,
         notes_total=notes_total,
     )

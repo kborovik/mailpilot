@@ -4171,6 +4171,30 @@ def test_load_company_view_caps_notes_at_ten(
     assert view.notes_total == _INLINE_NOTES_CAP + 3
 
 
+def test_load_company_view_surfaces_profile_field(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """View ⊇ Company shape per §V.8 — profile column forwarded (§B.67 guard)."""
+    from mailpilot.database import load_company_view, update_company
+
+    company = make_test_company(database_connection, name="Acme", domain="acme.com")
+    profile = {
+        "summary": "Acme makes widgets for industrial customers.",
+        "products": ["Widget A", "Widget B"],
+        "target_customers": "Mid-market manufacturers.",
+        "timezone": "America/Toronto",
+        "sources": ["https://acme.com"],
+    }
+    updated = update_company(database_connection, company.id, profile=profile)
+    assert updated is not None
+    assert updated.profile == profile
+
+    view = load_company_view(database_connection, company.id)
+
+    assert view is not None
+    assert view.profile == profile
+
+
 # -- _BASE template fragment carries §V.8 directive --------------------------
 
 
