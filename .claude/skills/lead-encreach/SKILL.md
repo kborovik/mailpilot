@@ -5,10 +5,12 @@ description: |
   similar), query companies missing profile enrichment, and dispatch
   concurrent Sonnet enricher agents that fetch the company website
   (curl + lynx, Firecrawl fallback) and distill a cold-email-grade JSON
-  profile into company.profile. External data sources contribute the
-  apex domain only -- all profile fields are agent-discovered.
+  profile into company.profile. Single free-form invocation -- no
+  sub-commands; the skill classifies the input itself. External data
+  sources contribute the apex domain only -- all profile fields are
+  agent-discovered.
   Triggers on "/lead-encreach", "enrich companies", "create companies from domains".
-argument-hint: [seed <domain>... | seed-file <path> [--column NAME] | list-stale [--limit N] | enrich <id|domain> | enrich-all [--limit N]]
+argument-hint: [<domain>... | <file-path>] [--limit N]
 allowed-tools: Bash(mailpilot company *), Bash(curl *), Bash(lynx *), Read, Task, AskUserQuestion
 model: opus
 ---
@@ -19,10 +21,32 @@ Bootstrap company records from external lead dumps (TheirStack CSV, plain-text d
 
 Spec: §V.72 (`company.profile` JSONB column ∧ `CompanyProfile` Pydantic model ∧ `company list --no-profile|--has-profile` filter).
 
+## Pipeline
+
+One implicit pipeline — ⊥ sub-command dispatch. Classify free-form args, run every applicable stage in order:
+
+| Args look like | Stages |
+|---|---|
+| file path(s) (existing file on disk) | ingest → seed → stale → gate → enrich |
+| domain/URL token(s) | seed → stale (scoped to those rows) → enrich |
+| UUID token(s) | stale (scoped to those rows) → enrich |
+| bare invocation | stale → gate → enrich |
+
+Classification rules:
+
+- Arg resolves to an existing file on disk → file path.
+- Arg matches UUID shape → company id.
+- Else → domain/URL token.
+- Mixed args admitted — ingest files first, then seed inline domains, single combined stale pass.
+- `--limit N` pre-answers the batch gate (⊥ AskUserQuestion fires).
+
+Semantics: domain arg ≡ idempotent "ensure exists ∧ enriched". Seeding a duplicate is a no-op; an already-enriched row (`profile` ⊥ NULL) → skip, report `already_enriched`. ∴ ⊥ seed/enrich verb distinction — re-running the same invocation converges.
+
 ## Scope
 
-- Seed: domain → `mailpilot company create` (placeholder name = apex domain).
-- List stale: rows w/ `profile IS NULL`.
+- Ingest: file → apex domains → `mailpilot company create` (placeholder name = apex domain).
+- Seed: domain → same per-domain create pipeline.
+- Stale: rows w/ `profile IS NULL` — internal query step, ⊥ operator verb.
 - Enrich: dispatch `company-profiler` sub-agent (`.claude/agents/company-profiler.md`, `model: sonnet`) which fetches the site, distills a `CompanyProfile`, persists via `mailpilot company update --profile-json`.
 
 External data sources contribute the apex domain only. All profile fields are agent-discovered. ⊥ pre-populate from CSV columns ∨ text-line annotations.
@@ -41,27 +65,14 @@ External data sources contribute the apex domain only. All profile fields are ag
 - `mcp__claude_ai_FireCrawl__firecrawl_scrape` reachable (fallback).
 - Anthropic credentials reachable (Sonnet enrichers).
 
-## Sub-commands
-
-### `seed <domain> [<domain>...]`
-
-∀ arg:
-
-1. `apex = extract_apex(domain)` — lowercase, strip leading `www.`, parse via `urllib.parse.urlsplit` if URL-shaped.
-2. `resolved = resolve_apex(apex)` — follow the full redirect chain via `curl -sL -o /dev/null --max-time 12 -w '%{url_effective}' -A "Mozilla/5.0" "https://<apex>/"` (hop-agnostic, CR-free per §V.74); re-extract apex from the final effective URL if the chain ended elsewhere; else `resolved = apex`.
-3. `uv run mailpilot company create --domain <resolved> --name <resolved>` — race-safe per §V.16 (duplicate → envelope `{"error":"duplicate_key", ...}` w/ exit 1).
-4. Aggregate per-arg outcome → JSON `{"created": [<id>...], "existing": [<domain>...], "skipped": [{"input": ..., "resolved": ..., "reason": ...}], "ok": true}`.
-
-Collision-on-resolved-apex (resolved-apex already owned by another company row): skip + log per §V.72 design — operator dedups manually.
-
-### `seed-file <path> [--column NAME]`
+## Stage: ingest (file args)
 
 Source- ∧ format-agnostic ingestion. Apex-domain-only extraction.
 
 1. Detect format from the file's first non-empty line (peek at raw bytes, ⊥ the `Read` tool's line-numbered output):
    - Contains `,` ∧ ≥1 known header token (`domain`, `website`, `company_url`, `url`) → **CSV mode**.
    - Else → **plain-text mode**.
-2. **CSV mode** — ! parse with an RFC-4180 parser (`csv.DictReader`), ⊥ physical-line iteration of `Read`-tool output ∨ split-on-`\n` / split-on-`,` (per §V.74). Quoted fields carry embedded newlines ∧ commas (lead-export `company_description` columns) ∴ one logical row spans many physical lines; line iteration mis-seeds prose fragments as phantom rows. `--column NAME` overrides; else auto-detect first match in `[domain, website, company_url, url]`. Extraction recipe — one printed line per logical row:
+2. **CSV mode** — ! parse with an RFC-4180 parser (`csv.DictReader`), ⊥ physical-line iteration of `Read`-tool output ∨ split-on-`\n` / split-on-`,` (per §V.74). Quoted fields carry embedded newlines ∧ commas (lead-export `company_description` columns) ∴ one logical row spans many physical lines; line iteration mis-seeds prose fragments as phantom rows. Column auto-detect = first match in `[domain, website, company_url, url]`; operator MAY name a column in the invocation prose to override. Extraction recipe — one printed line per logical row:
    ```
    python3 - "$CSV_PATH" "${COLUMN:-}" <<'PY'
    import csv, sys
@@ -72,7 +83,7 @@ Source- ∧ format-agnostic ingestion. Apex-domain-only extraction.
        columns = reader.fieldnames or []
        column = override or next((c for c in candidates if c in columns), None)
        if column is None:
-           sys.exit("no domain column found; pass --column NAME")
+           sys.exit("no domain column found; name the column in the invocation")
        for row in reader:
            value = (row.get(column) or "").strip()
            if value:
@@ -81,103 +92,118 @@ Source- ∧ format-agnostic ingestion. Apex-domain-only extraction.
    ```
    `newline=""` keeps the parser in charge of embedded newlines; `encoding="utf-8-sig"` strips a leading BOM.
 3. **Plain-text mode**: ∀ non-empty non-comment line (skip lines starting w/ `#`): extract apex from the line (raw domain ∨ full URL admitted). Line iteration admitted here per §V.74 — non-CSV, one domain/URL per physical line.
-4. ∀ extracted value: same per-row pipeline as `seed` (lowercase, strip `www.`, resolve redirects, `mailpilot company create`).
+4. ∀ extracted value: hand to the seed stage below.
 5. ⊥ pre-populate profile from CSV columns ∨ text-line annotations. All non-domain content discarded — every seeded row lands stale ∴ agent enrichment downstream.
-6. Output: aggregate JSON `{"created": N, "existing": N, "skipped": [{"row": N, "input": ..., "resolved": ..., "reason": ...}], "ok": true}`.
 
-### `list-stale [--limit N]`
+## Stage: seed (domain values)
+
+∀ value (inline arg ∨ ingest output):
+
+1. `apex = extract_apex(domain)` — lowercase, strip leading `www.`, parse via `urllib.parse.urlsplit` if URL-shaped.
+2. `resolved = resolve_apex(apex)` — follow the full redirect chain via `curl -sL -o /dev/null --max-time 12 -w '%{url_effective}' -A "Mozilla/5.0" "https://<apex>/"` (hop-agnostic, CR-free per §V.74); re-extract apex from the final effective URL if the chain ended elsewhere; else `resolved = apex`.
+3. `uv run mailpilot company create --domain <resolved> --name <resolved>` — race-safe per §V.16 (duplicate → envelope `{"error":"duplicate_key", ...}` w/ exit 1 → treat as existing, continue).
+4. Track per-value outcome for the run summary: `{"created": [<id>...], "existing": [<domain>...], "skipped": [{"input": ..., "resolved": ..., "reason": ...}]}`.
+
+Collision-on-resolved-apex (resolved-apex already owned by another company row): skip + log per §V.72 design — operator dedups manually.
+
+## Stage: stale query
 
 ```
 uv run mailpilot company list --no-profile [--limit N]
 ```
 
-Envelope unwrap → JSON `{"companies": [<CompanySummary w/ has_profile=false>...], "ok": true}`.
+Envelope unwrap → `companies[]` (`CompanySummary` w/ `has_profile=false`). Domain/UUID-scoped runs: resolve each arg to its row (`uv run mailpilot company search "<arg>" --limit 1` for domains, `uv run mailpilot company view <ID>` for UUIDs; ⊥ match → record `{"error": "not_found", "input": <arg>}` in the run summary) ∧ enrich only those still stale — already-enriched rows report `already_enriched`.
 
-### `enrich <id|domain>`
+## Stage: batch gate
 
-1. If arg looks like a UUID: use directly as `<ID>`. Else: `uv run mailpilot company search "<arg>" --limit 1` → unwrap `.companies[0].id` → `<ID>`. ⊥ match → emit `{"error": "not_found", "input": <arg>, "ok": false}` exit 1.
-2. Capture company row: `uv run mailpilot company view <ID>` → `.company`.
-3. Dispatch enricher sub-agent: `Task(subagent_type="company-profiler", prompt=<built prompt>)`. Built prompt template:
-   ```
-   Enrich the company profile for:
-     company_id: <ID>
-     domain: <company.domain>
-     placeholder_name: <company.name>
+- `len(companies) == 0` → emit `{"enriched": 0, "skipped": 0, "failed": 0, "results": [], "ok": true}` ∧ stop.
+- `--limit N` given → cap to first N, ⊥ question.
+- `len(companies) > 10` ∧ no `--limit` → invoke `AskUserQuestion` (sole interaction gate):
+  - **question**: `"<N> companies need enrichment. How many should the enricher process this run?"`
+  - **header**: `"Enrich batch"`
+  - **options**:
+    - `"First 10 (Recommended)"` — cap to first 10
+    - `"First 25"` — cap to first 25
+    - `"All <N>"` — every stale row
+- Else (1-10 rows) → proceed w/ all, ⊥ question.
 
-   Follow your system prompt procedure. Return the JSON verdict per spec.
-   ```
-4. Return agent's JSON verdict verbatim (envelope inherited from sub-agent).
+## Stage: enrich
 
-### `enrich-all [--limit N]`
+Single stale row → direct dispatch, ⊥ Workflow overhead: `Task(subagent_type="company-profiler", prompt=<built prompt>)`. Built prompt template:
 
-1. Run `list-stale [--limit N]` → capture `companies[]`.
-2. `len(companies) == 0` → emit `{"enriched": 0, "skipped": 0, "failed": 0, "results": [], "ok": true}` ∧ exit.
-3. `len(companies) > 10` → invoke `AskUserQuestion`:
-   - **question**: `"<N> companies need enrichment. How many should the enricher process this run?"`
-   - **header**: `"Enrich batch"`
-   - **options**:
-     - `"First 10 (Recommended)"` — cap to first 10
-     - `"First 25"` — cap to first 25
-     - `"All <N>"` — every stale row
-4. Hand the capped `companies[]` (from step 1, after any batch-gate trim) to the `Workflow` tool as `args`. The snippet below is self-contained and runnable as authored (per §V.73):
-   ```js
-   export const meta = {
-     name: 'lead-encreach-enrich-all',
-     description: 'Concurrently enrich stale company profiles',
-     phases: [{title: 'Enrich', detail: 'enricher agents, 3 in flight'}],
-   }
+```
+Enrich the company profile for:
+  company_id: <ID>
+  domain: <company.domain>
+  placeholder_name: <company.name>
 
-   // `stale` source: the `companies[]` captured from `list-stale`, handed in
-   // via Workflow `args`. The runtime delivers `args` as a JSON string, so
-   // parse it (guard the already-parsed case). To paste rows directly instead,
-   // replace this line with an inline literal: const stale = [{...}, ...].
-   const stale = typeof args === 'string' ? JSON.parse(args) : args
+Follow your system prompt procedure. Return the JSON verdict per spec.
+```
 
-   const ENRICH_RESULT_SCHEMA = {
-     type: 'object',
-     required: ['company_id', 'domain', 'status'],
-     properties: {
-       company_id: {type: 'string'},
-       domain: {type: 'string'},
-       status: {enum: ['enriched', 'skipped', 'failed']},
-       reason: {type: 'string'},
-     },
-   }
+≥2 stale rows → hand the capped `companies[]` to the `Workflow` tool as `args`. The snippet below is self-contained and runnable as authored (per §V.73):
 
-   function buildPrompt(c) {
-     return [
-       'Enrich the company profile for:',
-       `  company_id: ${c.id}`,
-       `  domain: ${c.domain}`,
-       `  placeholder_name: ${c.name}`,
-       '',
-       'Follow your system prompt procedure. Return the JSON verdict per spec.',
-     ].join('\n')
-   }
+```js
+export const meta = {
+  name: 'lead-encreach-enrich',
+  description: 'Concurrently enrich stale company profiles',
+  phases: [{title: 'Enrich', detail: 'enricher agents, 3 in flight'}],
+}
 
-   phase('Enrich')
+// `stale` source: the `companies[]` captured from the stale-query stage,
+// handed in via Workflow `args`. The runtime delivers `args` as a JSON
+// string, so parse it (guard the already-parsed case). To paste rows
+// directly instead, replace this line with an inline literal:
+// const stale = [{...}, ...].
+const stale = typeof args === 'string' ? JSON.parse(args) : args
 
-   // Chunk into batches of 3 so at most 3 enricher agents run at once -- this
-   // (not the runtime cap) is what honors the concurrency-3 budget (V.72). A
-   // bare parallel(stale.map(...)) would submit all stale.length at once,
-   // bounded only by the runtime cap min(16, cores-2).
-   const results = []
-   for (let i = 0; i < stale.length; i += 3) {
-     const batch = stale.slice(i, i + 3)
-     const batchResults = await parallel(batch.map(c => () =>
-       agent(buildPrompt(c), {
-         label: `enrich:${c.domain}`,
-         agentType: 'company-profiler',
-         schema: ENRICH_RESULT_SCHEMA,
-       })
-     ))
-     results.push(...batchResults)
-   }
-   return results.filter(Boolean)
-   ```
-5. Aggregate → JSON `{"enriched": N, "skipped": N, "failed": N, "results": [...], "ok": true}`.
+const ENRICH_RESULT_SCHEMA = {
+  type: 'object',
+  required: ['company_id', 'domain', 'status'],
+  properties: {
+    company_id: {type: 'string'},
+    domain: {type: 'string'},
+    status: {enum: ['enriched', 'skipped', 'failed']},
+    reason: {type: 'string'},
+  },
+}
+
+function buildPrompt(c) {
+  return [
+    'Enrich the company profile for:',
+    `  company_id: ${c.id}`,
+    `  domain: ${c.domain}`,
+    `  placeholder_name: ${c.name}`,
+    '',
+    'Follow your system prompt procedure. Return the JSON verdict per spec.',
+  ].join('\n')
+}
+
+phase('Enrich')
+
+// Chunk into batches of 3 so at most 3 enricher agents run at once -- this
+// (not the runtime cap) is what honors the concurrency-3 budget (V.72). A
+// bare parallel(stale.map(...)) would submit all stale.length at once,
+// bounded only by the runtime cap min(16, cores-2).
+const results = []
+for (let i = 0; i < stale.length; i += 3) {
+  const batch = stale.slice(i, i + 3)
+  const batchResults = await parallel(batch.map(c => () =>
+    agent(buildPrompt(c), {
+      label: `enrich:${c.domain}`,
+      agentType: 'company-profiler',
+      schema: ENRICH_RESULT_SCHEMA,
+    })
+  ))
+  results.push(...batchResults)
+}
+return results.filter(Boolean)
+```
 
 The batch loop caps in-flight enrichers at 3 per `parallel()` call — the chunking, ⊥ any runtime setting, enforces the concurrency-3 budget per §V.73. The Workflow runtime's own per-call cap = `min(16, cores-2)` is a separate, higher ceiling.
+
+## Run summary
+
+After all stages, emit one aggregate JSON: `{"created": N, "existing": N, "enriched": N, "skipped": N, "failed": N, "results": [...], "ok": true}` — omit seed fields on bare invocations, omit enrich fields when 0 stale rows.
 
 ## Domain extraction & redirect resolution
 
@@ -223,24 +249,24 @@ Required ≡ {summary, products, target_customers, sources}. Optional ≡ {timez
 
 Heading `## Next`; 1-5 atomic items (one sentence each, no `Reply` prefix); positional dispatch.
 
-Canonical examples per sub-command:
+Canonical examples — after a seeding run:
 
 ```
 ## Next
 
-1. /lead-encreach list-stale -- inspect newly seeded rows
-2. /lead-encreach enrich-all -- dispatch enrichers for stale rows
-3. /lead-encreach enrich <id> -- enrich one row before batch
+1. /lead-encreach -- enrich the newly seeded stale rows
+2. mailpilot company list --no-profile -- inspect stale rows first
+3. /lead-encreach <domain> -- enrich one row before the batch
 ```
 
-After `enrich-all`:
+After an enrichment run:
 
 ```
 ## Next
 
-1. /lead-encreach list-stale -- confirm zero rows remain
+1. mailpilot company list --no-profile -- confirm zero stale rows remain
 2. mailpilot company list --has-profile --limit 5 -- spot-check enrichment quality
-3. /lead-encreach enrich <id> -- re-run a failed row
+3. /lead-encreach <domain> -- re-run a failed row
 ```
 
 ## Why this skill exists
