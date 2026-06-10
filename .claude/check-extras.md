@@ -22,21 +22,34 @@ Zero-ledger (no `read_drive_markdown` calls this invocation) → hook no-op.
 
 ## §V.73 — Skill-body Workflow snippet executability
 
-Mechanical audit; trigger when `.claude/skills/**/*.md` changed. Scope = every fenced ```js block that calls `parallel(`, `pipeline(`, or `agent(`.
+Mechanical audit; trigger when `.claude/skills/**/*.md` ∨ `.claude/workflows/*.js` changed. Scope = every fenced ```js block that calls `parallel(`, `pipeline(`, or `agent(`, plus the saved-workflow byte-identity check (d).
 
 Per ```js block:
 (a) Free-symbol scan — every identifier used as a value ! resolve to an in-block definition (`const` / `let` / `function` / param) OR a runtime global. Runtime globals (do ⊥ flag): `meta`, `agent`, `parallel`, `pipeline`, `phase`, `log`, `args`, `budget`, `workflow`, plus JS built-ins (`JSON`, `Math`, `Array`, `Object`, `Promise`, `console`, ...). Any other bare identifier (e.g. `stale`, `buildPrompt`, `ENRICH_RESULT_SCHEMA`) ! be defined in the block — fail mode: free var crashes `ReferenceError` on paste (§B.68: bare `stale`).
 (b) `args`-as-collection guard — if the block calls `args.map` / `args.filter` / `args.slice` / `args.length` / `args.forEach` or spreads `args`, it ! first `JSON.parse(args)` (∨ guard `typeof args === 'string'`). Why: runtime delivers `args` as a JSON STRING ∴ `args.map` throws `is not a function` (§B.68).
 (c) Prose-vs-`parallel` divergence — if surrounding prose claims "concurrency N" / "N concurrent" / "Default N", the block ! chunk to N (batch loop of size N around `parallel(batch.map(...))`). A bare `parallel(xs.map(...))` dispatches all `xs.length`, bounded only by runtime cap `min(16, cores-2)` — ⊥ N. Fail mode: prose promises 3, snippet runs all (§B.68 secondary).
+(d) Saved-workflow byte-identity — the embedded enrich snippet's post-`meta` body (`.claude/skills/lead-encreach/SKILL.md` js-fenced block, sliced @ first `\n}\n` after `export const meta`) ! be byte-identical to `.claude/workflows/lead-encreach-enrich.js`'s post-`meta` body (same slice). Why: the skill-body embedded snippet ≡ spec-of-record; the saved file is invoked by name @ runtime ∴ silent divergence ships an unaudited workflow ((a)-(c) cover the saved file only transitively, when bodies match). Saved `meta` MAY add registry-only fields (`whenToUse`, fuller `description`) ∴ compare the post-`meta` slice only, ⊥ the whole file. Fail mode: divergence → saved-file unaudited drift.
 
 Mechanical greps (manual judgment on hits):
 - `rg -n '```js' .claude/skills/` — enumerate blocks.
 - `rg -nE '\bargs\.(map|filter|slice|length|forEach)\b' .claude/skills/` not preceded by `JSON.parse(args)` ∨ `typeof args` → (b) fail.
 - prose `rg -niE 'concurrency [0-9]|[0-9] concurrent|default [0-9]' .claude/skills/` near a block with bare `parallel(` and no batch loop (`for .* += N` / `.slice(`) → (c) fail.
+- (d) byte-identity — extract both post-`meta` bodies (slice each @ first `\n}\n` after `export const meta`, `.strip()`), compare equal:
+  ```
+  python3 - <<'PY'
+  import re
+  skill = open('.claude/skills/lead-encreach/SKILL.md').read()
+  emb = re.search(r'```js\n(.*?)```', skill, re.DOTALL).group(1)
+  saved = open('.claude/workflows/lead-encreach-enrich.js').read()
+  body = lambda s: s[s.find('\n}\n') + 3:].strip()
+  print('IDENTICAL' if body(emb) == body(saved) else 'DIVERGENT')
+  PY
+  ```
+  `DIVERGENT` → (d) fail (saved-file unaudited drift).
 
 ## §V.74 — RFC-4180 CSV-ingestion parser mandate
 
-Mechanical audit; trigger when `.claude/skills/**/*.md` ∨ `src/**` changed. Scope = CSV-ingestion sites (handle a `.csv` path, a "CSV mode", or a comma-delimited lead export).
+Mechanical audit; trigger when `.claude/skills/**/*.md`, `.claude/skills/**/scripts/*.py`, ∨ `src/**` changed. Scope = CSV-ingestion sites (handle a `.csv` path, a "CSV mode", or a comma-delimited lead export). The grep scope `.claude/skills/ src/` already recurses into `scripts/` ∴ a `.py`-under-`scripts/` change is covered once the trigger-glob (previously `.md`-only) names it.
 
 Checks:
 (i) CSV ingestion ! use an RFC-4180 parser (`csv.DictReader` / `csv.reader` / the `csv` module). Fail mode: physical-line iteration, `.splitlines()`, `.split("\n")`, ∨ `.split(",")` over CSV content — quoted fields carry embedded newlines ∧ commas ∴ one logical row spans many physical lines (§B.69: theirstack.csv 25 logical rows over 217 physical lines).
