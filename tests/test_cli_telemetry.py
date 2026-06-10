@@ -974,9 +974,10 @@ def test_note_add_emits_span_and_event(
 # -- §V.16(+) duplicate-key envelope at source --------------------------------
 #
 # Re-create cmd against existing natural key must exit 1 with the structured
-# ``duplicate_key`` envelope, emit ``operator_event(... changed=[])``, and
-# leave the cli_mutation span outcome=ok (no ``.failed`` suffix) so the
-# operator-retry path does not pollute failed-span dashboards (§B.64).
+# ``duplicate_key`` envelope, emit NO ``operator_event("<noun>.create", ...)``
+# line (success-named event reserved for an actual insert per §V.16(+) /
+# §B.70), and leave the cli_mutation span outcome=ok (no ``.failed`` suffix)
+# so the operator-retry path does not pollute failed-span dashboards (§B.64).
 
 
 def _envelope_from_stderr(stderr: str) -> dict[str, Any]:
@@ -1024,8 +1025,7 @@ def test_account_create_duplicate_emits_duplicate_key_envelope(
     assert envelope["ok"] is False
     assert _spans_named(capfire, "account.create")
     assert not _spans_named(capfire, "account.create.failed")
-    assert "event=account.create" in err
-    assert "changed=[]" in err
+    assert "event=account.create" not in err
     assert "Traceback" not in err
 
 
@@ -1053,8 +1053,7 @@ def test_company_create_duplicate_emits_duplicate_key_envelope(
     assert envelope["ok"] is False
     assert _spans_named(capfire, "company.create")
     assert not _spans_named(capfire, "company.create.failed")
-    assert "event=company.create" in err
-    assert "changed=[]" in err
+    assert "event=company.create" not in err
     assert "Traceback" not in err
 
 
@@ -1080,8 +1079,7 @@ def test_contact_create_duplicate_emits_duplicate_key_envelope(
     assert envelope["ok"] is False
     assert _spans_named(capfire, "contact.create")
     assert not _spans_named(capfire, "contact.create.failed")
-    assert "event=contact.create" in err
-    assert "changed=[]" in err
+    assert "event=contact.create" not in err
     assert "Traceback" not in err
 
 
@@ -1124,6 +1122,5 @@ def test_workflow_create_duplicate_emits_duplicate_key_envelope(
     assert envelope["ok"] is False
     assert _spans_named(capfire, "workflow.create")
     assert not _spans_named(capfire, "workflow.create.failed")
-    assert "event=workflow.create" in err
-    assert "changed=[]" in err
+    assert "event=workflow.create" not in err
     assert "Traceback" not in err

@@ -305,11 +305,6 @@ def account_create(email: str, display_name: str) -> None:
         with cli_mutation("account", "create", email=email):
             created = create_account(connection, email=email, display_name=display_name)
             if created is None:
-                operator_event(
-                    "account.create",
-                    email=email,
-                    changed=[],
-                )
                 output_error(
                     f"account with email={email!r} already exists",
                     "duplicate_key",
@@ -490,11 +485,6 @@ def company_create(domain: str, name: str, note: str | None) -> None:
         with cli_mutation("company", "create", domain=domain):
             created = create_company(connection, name=name, domain=domain)
             if created is None:
-                operator_event(
-                    "company.create",
-                    domain=domain,
-                    changed=[],
-                )
                 output_error(
                     f"company with domain={domain!r} already exists",
                     "duplicate_key",
@@ -812,12 +802,6 @@ def contact_create(
                 company_id=company_id,
             )
             if created is None:
-                operator_event(
-                    "contact.create",
-                    email=email,
-                    company_id=company_id,
-                    changed=[],
-                )
                 output_error(
                     f"contact with email={email!r} already exists",
                     "duplicate_key",
@@ -2048,12 +2032,6 @@ def workflow_create(
                 activate=activate,
             )
             if result is None:
-                operator_event(
-                    "workflow.create",
-                    account_id=account_id,
-                    template=template,
-                    changed=[],
-                )
                 output_error(
                     f"workflow {name!r} already exists for account {account_id}",
                     "duplicate_key",
