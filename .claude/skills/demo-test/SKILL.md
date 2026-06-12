@@ -106,7 +106,7 @@ and stop. The production instance never saw the question; Logfire would be empty
 
 ### Step 5: G1 -- reply round-trip + Logfire latency verdict
 
-Per SPEC `§V.61`, the 90s latency verdict is derived from the production `agent.invoke` span in Logfire (Step 7 query already runs there); the CLI poll here is a `did-round-trip?` side-effect check only, capped at 120s (24 attempts × 5s) so a borderline reply does not false-fail the round-trip check.
+Per SPEC `§V.61`, the 90s latency verdict is derived from the production `agent.invoke` span in Logfire (Step 7 query already runs there); the CLI poll here is a `did-round-trip?` side-effect check only, capped at 120s (24 attempts x 5s) so a borderline reply does not false-fail the round-trip check.
 
 Poll Gmail directly via service-account impersonation of `outbound@lab5.ca` (per SPEC `§V.37` and `§V.60` -- liveness probes must hit the production-facing surface, not the local mailpilot DB which would require a separately-started `mailpilot run` to stay fresh). Up to 24 attempts, 5s apart (~120s):
 

@@ -1,7 +1,7 @@
 ---
 name: smoke-test
 description: |
-  End-to-end MailPilot smoke test against real Gmail across outbound@lab5.ca and inbound@lab5.ca. One Phase 0 setup → 3 scenarios run sequentially without state reset. Scenario A = outbound workflow + manual operator reply. Scenario B = live KB-grounded inbound auto-reply demo at https://lab5.ca/mailpilot// (real Drive folder, in-scope single-source grounded reply + out-of-scope polite decline + multi-source compare-and-contrast across manufacturers e.g. Dow FilmTec vs Hydranautics vs LG Chem vs Toray RO membranes). Scenario C = burst-load oracle (8 emails fired at P=8 concurrency, mix 4 in-scope / 2 out-of-scope / 2 compare; aggregate Logfire + CLI verdicts only -- no per-message grading). Outbound workflow stays active across B and C → verifies concurrent multi-account, multi-workflow operation under sustained load. All three scenarios mandatory. Use whenever user says "smoke test", "run end-to-end", "verify the system works", or after non-trivial changes to sync, routing, agent execution, KB grounding, or Pub/Sub code -- even without explicit invocation.
+  End-to-end MailPilot smoke test against real Gmail across outbound@lab5.ca and inbound@lab5.ca. One Phase 0 setup -> 3 scenarios run sequentially without state reset. Scenario A = outbound workflow + manual operator reply. Scenario B = live KB-grounded inbound auto-reply demo at https://lab5.ca/mailpilot// (real Drive folder, in-scope single-source grounded reply + out-of-scope polite decline + multi-source compare-and-contrast across manufacturers e.g. Dow FilmTec vs Hydranautics vs LG Chem vs Toray RO membranes). Scenario C = burst-load oracle (8 emails fired at P=8 concurrency, mix 4 in-scope / 2 out-of-scope / 2 compare; aggregate Logfire + CLI verdicts only -- no per-message grading). Outbound workflow stays active across B and C -> verifies concurrent multi-account, multi-workflow operation under sustained load. All three scenarios mandatory. Use whenever user says "smoke test", "run end-to-end", "verify the system works", or after non-trivial changes to sync, routing, agent execution, KB grounding, or Pub/Sub code -- even without explicit invocation.
 model: sonnet
 ---
 
@@ -9,14 +9,14 @@ model: sonnet
 
 ## What this tests
 
-Two scenarios share one Phase 0 setup and one `mailpilot run` loop. Outbound workflow from A stays active through B → exercises real concurrent multi-workflow, multi-account operation. Agent-to-agent reply loop is prevented by two structural properties, not by isolation:
+Two scenarios share one Phase 0 setup and one `mailpilot run` loop. Outbound workflow from A stays active through B -> exercises real concurrent multi-workflow, multi-account operation. Agent-to-agent reply loop is prevented by two structural properties, not by isolation:
 
-- Distinct subjects per scenario, so each Gmail thread is owned by exactly one workflow type. A's thread → `thread_match` → outbound workflow. B's fresh threads → classification → demo's inbound workflow.
+- Distinct subjects per scenario, so each Gmail thread is owned by exactly one workflow type. A's thread -> `thread_match` -> outbound workflow. B's fresh threads -> classification -> demo's inbound workflow.
 - Enrollments terminate with `record_enrollment_outcome`, so the agent stops replying once a scenario reaches its outcome.
 
 | Scenario | Active workflows                    | Trigger                                  | Verifies                                                                                                        |
 | -------- | ----------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| A        | Outbound only                       | `mailpilot enrollment run`               | Outbound agent send → Gmail delivery → manual operator reply → thread_match routing → agent processes reply     |
+| A        | Outbound only                       | `mailpilot enrollment run`               | Outbound agent send -> Gmail delivery -> manual operator reply -> thread_match routing -> agent processes reply     |
 | B        | Outbound (terminal) + Demo (active) | `mailpilot email send` (operator-driven) | The lab5.ca/mailpilot/ promise -- KB-grounded reply within 90s for an in-scope question, polite decline for out-of-scope, AND a multi-source compare-and-contrast across manufacturer datasheets |
 | C        | Outbound (terminal) + Demo (active) | `mailpilot email send` x8 @ P=8          | Burst-load oracle -- 8 emails (4 in-scope / 2 out-of-scope / 2 compare) fired at P=8 concurrency; aggregate Logfire SLA + CLI state verdicts; no per-message grading |
 
@@ -122,7 +122,7 @@ Capture `TEST_START_A` (ISO) and `SUBJECT_A` (`[ST-<HHMMSS>] <topic>`) before A1
 
 ### A1a. Seed contact + company notes for personalization
 
-Tests two things: (1) the agent uses its context window -- reading both `read_contact` AND `read_company` before composing; and (2) the agent personalizes by echoing note content. The signal is a deterministic nonce: each note carries a `Reference: <token>` line that the workflow prompt requires the agent to copy verbatim into the email body. Token in body → agent read the note. Both tokens in body → agent read both entities.
+Tests two things: (1) the agent uses its context window -- reading both `read_contact` AND `read_company` before composing; and (2) the agent personalizes by echoing note content. The signal is a deterministic nonce: each note carries a `Reference: <token>` line that the workflow prompt requires the agent to copy verbatim into the email body. Token in body -> agent read the note. Both tokens in body -> agent read both entities.
 
 Generate two distinct hex nonces per run (do not reuse, do not invent in your head):
 
@@ -151,7 +151,7 @@ mailpilot note add --company-id <COMPANY_ID> \
 
 **Carries forward to:** A3 (body must contain both tokens; tool sequence must include both reads), A8 (note_added activity expectations).
 
-**Prerequisite (separate code change).** This step assumes the agent tools `read_contact` and `read_company` inline recent notes in their return shape (operator choice 2026-05-15 -- "Inline notes in read_contact/read_company"). That tool-surface change is a §V invariant edit and must land via `/sdd:spec` → `/sdd:build` before A3's personalization gate can pass; until it does, the agent has no way to see the tokens and A3's body-token assertion will fail. If the agent surface has not yet shipped, run A1a anyway (it exercises the CLI + activity wiring), and expect the A3 body-token gate to fail -- record as a Critical Bug for tracking, not a regression.
+**Prerequisite (separate code change).** This step assumes the agent tools `read_contact` and `read_company` inline recent notes in their return shape (operator choice 2026-05-15 -- "Inline notes in read_contact/read_company"). That tool-surface change is a §V invariant edit and must land via `/sdd:spec` -> `/sdd:build` before A3's personalization gate can pass; until it does, the agent has no way to see the tokens and A3's body-token assertion will fail. If the agent surface has not yet shipped, run A1a anyway (it exercises the CLI + activity wiring), and expect the A3 body-token gate to fail -- record as a Critical Bug for tracking, not a regression.
 
 ### A1. Import the outbound workflow
 
@@ -203,7 +203,7 @@ mailpilot enrollment run --workflow-id <OUTBOUND_WORKFLOW_ID> --contact-id <INBO
 - `enrollment run` output: `"status": "completed"` and `"tool_calls" >= 3` (`read_contact` + `read_company` + `send_email` at minimum).
 - `mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound` shows the outbound email with `subject == SUBJECT_A`.
 - The email's `body_text` contains `|` (table) and either `**` or `#` (Markdown).
-- **Personalization gate (A1a payoff).** The email's `body_text` contains BOTH `$CONTACT_NOTE_TOKEN` AND `$COMPANY_NOTE_TOKEN` verbatim. Either missing → either the agent skipped a `read_*` call or it ignored the note content; treat as a Bug (missing tool call = prompt-fidelity regression; tool call made but token missing = personalization regression). If A1a's prerequisite tool-surface change has NOT shipped (notes not inlined in `read_contact` / `read_company` returns), this gate WILL fail -- record as a Critical Bug to drive the fix, do not skip.
+- **Personalization gate (A1a payoff).** The email's `body_text` contains BOTH `$CONTACT_NOTE_TOKEN` AND `$COMPANY_NOTE_TOKEN` verbatim. Either missing -> either the agent skipped a `read_*` call or it ignored the note content; treat as a Bug (missing tool call = prompt-fidelity regression; tool call made but token missing = personalization regression). If A1a's prerequisite tool-surface change has NOT shipped (notes not inlined in `read_contact` / `read_company` returns), this gate WILL fail -- record as a Critical Bug to drive the fix, do not skip.
 - `mailpilot enrollment list --workflow-id <OUTBOUND_WORKFLOW_ID>` shows enrollment status `active`. Per SPEC §V.15, `enrollment.status` is operational only (`active` or `paused`); the agent never mutates it directly. The send-completion outcome lives in the activity timeline (verified in A8), not on the enrollment row.
 
 Save `OUTBOUND_EMAIL_ID`.
@@ -280,7 +280,7 @@ Wait for a task with `email_id` set to the routed reply and `status == "complete
 - `mailpilot enrollment list --workflow-id <OUTBOUND_WORKFLOW_ID>` still shows status `active` -- by design (SPEC §V.15, `enrollment.status` is operational only). The terminal outcome is recorded as an `enrollment_completed` or `enrollment_failed` activity row, verified in A8.
 - **No additional outbound emails were sent.** Re-run `mailpilot email list --account-id <OUTBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_A>` and confirm only the original outbound from A3 is present. If the count > 1, the agent kept replying despite the decline signal -- record as a Bug.
 
-**On failure:** Task never created → check that A6's email has `workflow_id` set and the run loop is alive. Task `failed` → `mailpilot task view <TASK_ID>` for the reason.
+**On failure:** Task never created -> check that A6's email has `workflow_id` set and the run loop is alive. Task `failed` -> `mailpilot task view <TASK_ID>` for the reason.
 
 ### A8. Verify the CRM activity timeline
 
@@ -314,12 +314,12 @@ If any expected type is missing, the runtime activity wiring regressed for that 
 Do this review now, before B, so the window cleanly bounds A's spans. Use `/logfire:debug` with project=`mailpilot` and window `[TEST_START_A, now]`. Spans to verify:
 
 - `agent.invoke` -- count by `trigger` attribute, not by total. Per SPEC §V.27 / §T.18, the span carries an explicit `trigger` label set by the caller path:
-  - `trigger="task"` -- expect exactly **1** (A7 reply handling, drained by background `mailpilot run`). More than 1 → agent kept replying (loop regression). This is the regression signal for Scenario A.
+  - `trigger="task"` -- expect exactly **1** (A7 reply handling, drained by background `mailpilot run`). More than 1 -> agent kept replying (loop regression). This is the regression signal for Scenario A.
   - `trigger="enrollment_run"` -- expect at least **1** (A3 send via foreground `enrollment run`). Tolerated regardless of count: an operator double-fire produces extra `enrollment_run` spans that correctly noop, so they cost an LLM round-trip but do not signal regression. §T.19 / §B.2 prefer single-invocation discipline (see A3) but the trace contract here permits more.
   - `trigger="email"` / `trigger="manual"` -- not expected in Scenario A; flag if present.
 - `running tool` -- A3: expect `read_contact`, `read_company`, and `send_email` (both reads MUST appear per the A1a personalization contract; order may be interleaved). `record_enrollment_outcome` is **not** expected here (it fires after a reply, not on initial send). A7: expect `record_enrollment_outcome` and **no** `send_email` or `reply_email`.
 - `agent.invoke` (A3) `input_tokens` -- should noticeably exceed the no-notes baseline (~+200-400 tokens) because both note bodies are inlined into the `read_contact` / `read_company` tool returns. A baseline-equivalent count signals either the tool-surface change hasn't shipped (notes not inlined) or the agent skipped the reads.
-- `routing.route_email` -- the reply (A6) → `route_method=thread_match` and `workflow_id == OUTBOUND_WORKFLOW_ID`. The inbound-side email from A4 → `route_method=skipped_no_workflows` (no inbound workflow at the time).
+- `routing.route_email` -- the reply (A6) -> `route_method=thread_match` and `workflow_id == OUTBOUND_WORKFLOW_ID`. The inbound-side email from A4 -> `route_method=skipped_no_workflows` (no inbound workflow at the time).
 - `gmail.send_message` -- 2 calls total (A3 by agent + A5 by operator).
 - Any `is_exception=true` or `level=warn` spans -- record them.
 
@@ -340,7 +340,7 @@ Do not stop the sync loop. Do not run `make clean`. Do not recreate accounts or 
 - Shared Drive: `MailPilot` (ID `0AJIvyECg210LUk9PVA`). Members: `kb@lab5.ca` Manager, `inbound@lab5.ca` Reader.
 - Folder name: `MailPilot Demo`
 - Folder ID: `1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat`
-- Markdown files (as of writing -- the Phase 0 KB visibility gate enumerates them and asserts the ≥30 floor; re-confirm via that gate before each run). In-scope single-source seeds:
+- Markdown files (as of writing -- the Phase 0 KB visibility gate enumerates them and asserts the >=30 floor; re-confirm via that gate before each run). In-scope single-source seeds:
   - `pure-aqua-commercial-ro-systems.md` -- TW-series RO systems (e.g., TW-18.0K-1240).
   - `pure-aqua-industrial-water-softener.md` -- SF-series softeners (e.g., SF-100S).
   - `watts-uv-com-disinfection.md` -- UV-COM disinfection units.
@@ -411,7 +411,7 @@ Save `TRIGGER_EMAIL_ID_B1`, `TRIGGER_THREAD_ID_B1`, capture wall-clock send time
 
 ### B4. Wait for the demo agent to reply (90-second SLA)
 
-Critical gate. The lab5.ca/mailpilot/ page promises delivery within ~90 seconds. Per SPEC `§V.61`, the latency verdict is derived from the agent.invoke span in Logfire, not from CLI poll cadence; the CLI poll is a `did-round-trip?` side-effect check only and uses the wider 120s cap (24 attempts × 5s) so a borderline run does not false-fail on the CLI loop alone.
+Critical gate. The lab5.ca/mailpilot/ page promises delivery within ~90 seconds. Per SPEC `§V.61`, the latency verdict is derived from the agent.invoke span in Logfire, not from CLI poll cadence; the CLI poll is a `did-round-trip?` side-effect check only and uses the wider 120s cap (24 attempts x 5s) so a borderline run does not false-fail on the CLI loop alone.
 
 Poll the outbound mailbox (round-trip check only, cap 120s):
 
@@ -446,7 +446,7 @@ Match by `SUBJECT_B1` (likely with `Re:` prefix). Note the reply's arrival as co
   **Steady-state primary verdict (§V.61(+)):** `sla_agent_seconds > 50` is an our-side regression of agent execution -- record as a Critical Bug. `sla_delivery_seconds` is advisory: Gmail-side delivery lag is jointly uncontrolled, so a single-send breach is reportable but not gating.
 
   Zero rows in the window means the demo workflow never fired -- separate Critical Bug (run-loop / Pub/Sub regression).
-- Reply on the demo side (`mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>`) → `is_routed == true`, `workflow_id == DEMO_WORKFLOW_ID`, `route_method == classified`. The classifier ran -- not `thread_match`, since this is a fresh thread.
+- Reply on the demo side (`mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction outbound --since <TEST_START_B>`) -> `is_routed == true`, `workflow_id == DEMO_WORKFLOW_ID`, `route_method == classified`. The classifier ran -- not `thread_match`, since this is a fresh thread.
 - Reply body **grounded in the KB** -- operator-judged per SPEC §V.57. Substring match against curated `expected_tokens` was retired (false negatives on phrasing variation like `0.48 mm` vs `0.48mm`); the operator now grades the reply against the live source doc. Procedure:
   1. Load the source doc the pair points at:
 
@@ -478,7 +478,7 @@ Match by `SUBJECT_B1` (likely with `Re:` prefix). Note the reply's arrival as co
      }
      ```
 
-     Each unsupported factual claim in the reply MUST appear verbatim in `unsupported_claims` (structural defence against LLM-judge sycophancy -- the field forces the grader to enumerate concrete misses rather than hand-wave a passing rating). `source_file_alts` is the verbatim list from the pair (default `[]`); per amended §V.57, `cites_source_file == true` iff the agent's citation is in `{source_file} ∪ source_file_alts` (set union -- admits cross-source identifier collisions like model `WS36-600-2` appearing in two divergent datasheets per §B.40). `verdict` MUST be `"pass"` if and only if all three booleans are true AND `unsupported_claims` is empty; otherwise `"fail"`.
+     Each unsupported factual claim in the reply MUST appear verbatim in `unsupported_claims` (structural defence against LLM-judge sycophancy -- the field forces the grader to enumerate concrete misses rather than hand-wave a passing rating). `source_file_alts` is the verbatim list from the pair (default `[]`); per amended §V.57, `cites_source_file == true` iff the agent's citation is in `{source_file} + source_file_alts` (set union -- admits cross-source identifier collisions like model `WS36-600-2` appearing in two divergent datasheets per §B.40). `verdict` MUST be `"pass"` if and only if all three booleans are true AND `unsupported_claims` is empty; otherwise `"fail"`.
 
   Anything other than `verdict == "pass"` is a grounding regression -- record the verdict JSON in §2 Bugs. `qa_pairs.json.expected_tokens` is retained for historical-run repro only and is no longer consumed by any gate.
 
@@ -496,7 +496,7 @@ Run a Logfire query for the `agent.invoke` span produced by B4's reply. Within t
 - All four tool calls present in this order.
 - `search_drive_markdown` returned a non-error list (no `error` key in the tool return) and the list is non-empty.
 - `read_drive_markdown` returned a dict with non-empty `content`.
-- An agent that uses `list_drive_markdown` instead of `search_drive_markdown` for the in-scope question is a regression: with ≥10 docs in the folder, full enumeration is the failure mode the new tool exists to prevent. Record as a Bug even if the reply is otherwise correct. Inventing a `file_id` without searching first is also a prompt-fidelity regression.
+- An agent that uses `list_drive_markdown` instead of `search_drive_markdown` for the in-scope question is a regression: with >=10 docs in the folder, full enumeration is the failure mode the new tool exists to prevent. Record as a Bug even if the reply is otherwise correct. Inventing a `file_id` without searching first is also a prompt-fidelity regression.
 - The `reply_email` span returned no `error` key. A return with `error == "format"` means the spec-table lint (§V.42) rejected the body -- the agent rendered specs as space-aligned text instead of a Markdown pipe-table. Record as a prompt-fidelity Bug for B4.
 
 ### B6. Send the out-of-scope question
@@ -773,15 +773,15 @@ Expect exactly 5 rows (the B3, B6, B7, B75a, and B75b triggers), each with `work
 
 Window `[TEST_START_B, now]`. Spans to verify:
 
-- `agent.invoke` -- exactly **5** invocations (B4 in-scope, B6 out-of-scope, B7 compare, B75a, B75b). More than 5 → demo agent re-fired or outbound workflow reacted to B's traffic. The B75a / B75b spans MUST have overlapping wall-clock intervals (concurrent execution) -- strict serialization at the agent layer fails gate B7.5.
-- `routing.route_email` -- all five demo-side trigger emails → `route_method=classified`. Outbound-side replies → `route_method=skipped_no_inbound_workflows`.
+- `agent.invoke` -- exactly **5** invocations (B4 in-scope, B6 out-of-scope, B7 compare, B75a, B75b). More than 5 -> demo agent re-fired or outbound workflow reacted to B's traffic. The B75a / B75b spans MUST have overlapping wall-clock intervals (concurrent execution) -- strict serialization at the agent layer fails gate B7.5.
+- `routing.route_email` -- all five demo-side trigger emails -> `route_method=classified`. Outbound-side replies -> `route_method=skipped_no_inbound_workflows`.
 - `agent.classify_email` -- 5 invocations. All five `result` values match `DEMO_WORKFLOW_ID`.
 - `running tool` per invocation:
   - B4 (in-scope): `search_drive_markdown` + `read_drive_markdown` + `reply_email` + `record_enrollment_outcome`.
   - B6 (out-of-scope decline): `search_drive_markdown` (returning `[]`) + `reply_email` + `record_enrollment_outcome` (`read_drive_markdown` not required since no document matches).
   - B7 (compare-and-contrast): `search_drive_markdown` >=1 + `read_drive_markdown` exactly `EXPECTED_READ_COUNT` times (one per file in the pair's `source_files`) + `reply_email` + `record_enrollment_outcome`. Fewer reads than `EXPECTED_READ_COUNT` is the headline regression: agent guessed a doc instead of reading it. The set of `file_id` arguments to `read_drive_markdown` must equal the set Drive returned for the `source_files` names -- mismatch means the agent read the wrong doc.
   - B75a / B75b (concurrent in-scope): each carries `search_drive_markdown` + `read_drive_markdown` + `reply_email` + `record_enrollment_outcome`. The two `read_drive_markdown` spans (one per invocation) MAY overlap (different threads against different `DriveClient` instances). Any single Drive span at the 60s ceiling is the §B.34 race signature.
-  - At least one KB-consulting tool call (`search_drive_markdown` or `list_drive_markdown`) is mandatory in all five. With ≥30 docs in the folder, `list_drive_markdown` instead of `search_drive_markdown` on B4 / B7 / B75a / B75b is a regression. On B6 (decline), `list_drive_markdown` is acceptable.
+  - At least one KB-consulting tool call (`search_drive_markdown` or `list_drive_markdown`) is mandatory in all five. With >=30 docs in the folder, `list_drive_markdown` instead of `search_drive_markdown` on B4 / B7 / B75a / B75b is a regression. On B6 (decline), `list_drive_markdown` is acceptable.
 - `agent.invoke` (B7) `input_tokens` -- should be noticeably higher than B4 because the compare invocation pulls 2-4 full datasheets into the agent's context. A B7 token count at or below B4's signals the agent skipped one or more reads -- cross-check against the read-count gate.
 - Any `is_exception=true` or `level=warn` spans -- record. Drive 4xx/5xx surfacing as `drive_unavailable` from the tool is acceptable in the agent's tool-return ledger but should not be `is_exception=true` on the span.
 
@@ -895,7 +895,7 @@ Single window `[T_SEND_C, T_SEND_C + 300s]`, scope to `workflow_id == DEMO_WORKF
 ```sql
 WITH read_counts AS (
   -- Count read_drive_markdown calls per agent.invoke trace.
-  -- compare-type invocation per §V.61(+) ≡ >=2 read_drive_markdown spans in the same trace.
+  -- compare-type invocation per §V.61(+) means >=2 read_drive_markdown spans in the same trace.
   SELECT trace_id, COUNT(*) AS read_count
   FROM records
   WHERE deployment_environment = 'development'
@@ -958,7 +958,7 @@ Assertions (primary verdict = `sla_agent_seconds` per §V.61(+); `sla_delivery_s
 - `n_compare == 2` AND `n_noncompare == 6` -- matches the C1 mix (2 qa-cmp + 4 qa-in + 2 qa-out). Any mismatch means a compare invocation skipped one of its required reads OR a non-compare invocation issued a stray second read; cross-check against C4.c and the B7 tool-use gate before flagging.
 - `p95_sla_agent_noncompare_s <= 75` -- burst gate over non-compare invocations per §V.61(+). Matches the §V.23 burst-load formula `ceil(N * avg_invoke_s / sla_s)` sized for the 50s steady single-source ceiling. A breach here is an our-side regression of agent execution under load on single-source / decline traffic.
 - `n_exceptions == 0` AND `n_warns == 0`.
-- `retry_rate <= 0.05` -- §V.70 burst retry-rate ceiling (≤5%, ≤1-of-25 at N=25; for N=8 any non-zero `n_tool_errors` already exceeds the ceiling). Sums the rollup-span `tool_error_count` attr (set in `src/mailpilot/agent/invoke.py:709` per `agent.invoke`) divided by `n_invokes`. Breach ⊢ prompt-fidelity regression under load -- investigate §V.41 (search-first ordering), §V.57 (KB coverage), §V.42 (format-lint sensitivity). Distinct from `n_warns`: warn spans count `agent.tool_errors` rollup-warn events (one per invocation that hit any error) ∴ underestimate per-invocation retry depth; `n_tool_errors` sums actual tool-error count across all invocations.
+- `retry_rate <= 0.05` -- §V.70 burst retry-rate ceiling (<=5%, <=1-of-25 at N=25; for N=8 any non-zero `n_tool_errors` already exceeds the ceiling). Sums the rollup-span `tool_error_count` attr (set in `src/mailpilot/agent/invoke.py:709` per `agent.invoke`) divided by `n_invokes`. Breach signals prompt-fidelity regression under load -- investigate §V.41 (search-first ordering), §V.57 (KB coverage), §V.42 (format-lint sensitivity). Distinct from `n_warns`: warn spans count `agent.tool_errors` rollup-warn events (one per invocation that hit any error) so underestimate per-invocation retry depth; `n_tool_errors` sums actual tool-error count across all invocations.
 - `avg_cache_hit_ratio >= 0.5` -- prompt cache stays warm across the burst (catches cache-key churn regressions where each agent invocation re-pays the full system-prompt token cost; the dominant cost driver at this scale).
 
 Report (NOT gated):
