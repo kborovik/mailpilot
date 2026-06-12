@@ -78,7 +78,7 @@ V46: template name = <direction>-<data-system>; prefix == direction field
 V47: Anthropic calls set anthropic_cache_instructions=True + anthropic_cache_tool_definitions=True (classifier + workflow agent); agent.invoke span carries cache_read_input_tokens + cache_creation_input_tokens
 V48: Anthropic HTTP timeout = 240s (4x httpx default); APITimeoutError + httpx.ReadTimeout classified terminal not transient — mid-turn tool side-effects make retry unsafe
 V49: bounded auto-retry — 4 attempts total, backoff [30, 120, 300]s; transient allow-list = Google 429/5xx, Anthropic 502/503/529, socket/TimeoutError; classified per-task inside execute_task; Drive socket timeout 60s feeds classifier; manual retry only failed/cancelled (completed + pending refused); retry UPDATE fires task_pending_trigger
-V51: every logfire.exception site reachable from `mailpilot run` ! paired operator_event("error", source=..., message=...)
+V51: every logfire.exception site reachable from `mailpilot run` ! paired operator_event("error", source=..., message=...); contract test sweeps run-reachable modules for logfire.exception sites — each ! operator_event("error") in same except block
 V52: logfire.configure(environment=settings.logfire_environment) → spans carry deployment_environment; cloud queries filter by env
 V53: agent tool spans come from logfire.instrument_pydantic_ai() (gen_ai.tool.name attr); no logfire.span inside agent tools; agents carry explicit names mailpilot.classifier + mailpilot.workflow
 V54: every CLI mutation = logfire.span("<noun>.<verb>") + paired operator_event w/ changed-field list; psycopg constraint → envelope code {UniqueViolation: duplicate_key, ForeignKeyViolation: foreign_key_violation, NotNullViolation: not_null_violation, CheckViolation: check_violation}; other psycopg.Error → database_error; pydantic ValidationError → validation_error; logfire.exception + operator_event("error") fire before envelope; non-psycopg exceptions re-raise w/o envelope
@@ -116,6 +116,12 @@ V94: CLI FK validation precedes mutation — referenced entity missing → error
 
 ## archived: §T.1..§T.108 → SPEC.archive.md (108 rows)
 
+id|status|task|cites
+T109|.|impl §V.51(+) per §B.71 — pair `database.py:151` connect-fail `logfire.exception` w/ `operator_event("error", source="database.connect", message=str(exc))`; add V51 sweep contract test enumerating run-reachable `logfire.exception` sites. Scope = grep `rg -n 'logfire\.exception' src/mailpilot/` → each hit ! paired `operator_event("error")` in same except block (test asserts pairing). Failing test first per TDD.|V51,B71
+
 ## §B BUGS
 
 ## archived: §B.1..§B.70 → SPEC.archive.md (64 rows)
+
+id|date|cause|fix
+B71|2026-06-12|`initialize_database` connect-fail path (`database.py:151`): logfire.exception w/o paired operator_event("error"), reachable from `mailpilot run` startup — operator stderr silent on DB-connect failure. Recurrence-class: per-site behavioral tests (run.py paths only), no whole-surface sweep ∴ new exception site ships unpaired. Fix: §V.51(+) + §T.109.|V51
