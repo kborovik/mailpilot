@@ -34,7 +34,83 @@ Agent-operated CRM. Gmail = comms layer. Claude Code = strategist; internal Pyda
 
 ## §V INVARIANTS
 
-rebuild in progress -> re-derive from code per SPEC-REBUILD-PLAN.md. Old §V: `git show 98e1576:SPEC.md`.
+V1: every CLI cmd loads settings first; DB + network init after (settings-first)
+V2: cli.py module-level imports = click only; heavy deps lazy-import inside cmd fns
+V3: stdout = strict JSON only; operator lifecycle + errors → stderr
+V4: every cmd output ! match §I.cli envelope; error path → {"error","message","ok":false} + exit 1
+V5: list/view rows carry parent denorm joined @ fetch — workflow rows + account_email; enrollment rows + workflow_name + contact_email + contact_name
+V7: EmailSummary projection ! include gmail_thread_id, is_routed, route_method — operator audits routing from CLI w/o Logfire
+V8: contact/company views inline ≤ 10 latest notes (_INLINE_NOTES_CAP, 2 queries, no JOIN) + total count; agent read_contact/read_company route through load_contact_view/load_company_view → agent + CLI context byte-identical; _BASE protocol carries personalize-via-notes directive
+V10: tag disable = soft — disabled_reason set marks terminal row; disabled_reason IS NULL gate blocks double-disable; emits tag_disabled activity; list hides disabled unless --include-disabled
+V11: status payload = fixed envelope {version, schema, sync_loop, accounts, tasks, config, counts}; tasks block carries pending, failed_24h, scheduled_future, oldest_pending_age_seconds, max_attempt_count_pending
+V12: IDs minted client-side via _new_id() → UUIDv7; enrollment addressed by scalar id, composite (workflow_id, contact_id) retired from signatures
+V13: tag + note target = XOR — exactly one of {contact_id, company_id} set (schema CHECK)
+V14: activity + note append-only — INSERT only, no update/delete fns
+V15: enrollment.status in {active, paused, disabled}; disabled = terminal operator exit, requires non-empty disabled_reason (CHECK) + enrollment_disabled activity; outcomes live on activity timeline via record_enrollment_outcome (accepts only completed|failed), enrollment row untouched
+V16: race-safe create — UNIQUE-bearing create_X uses ON CONFLICT DO NOTHING → None to race loser, exactly 1 row persists; bulk variants converge to shared ids; CLI surfaces duplicate_key envelope
+V17: activity targets ≥ 1 of {contact_id, company_id}, both allowed (multi-target); list_activities enforces same
+V18: schema drift — metadata row/table missing or hash mismatch → status schema.drift=true + warn, never silent
+V19: schema hash = sha256 over normalized schema.sql (strip -- comments, collapse whitespace)
+V20: email.route_method NULL or in 7-value enum (schema CHECK, set per §I.cli); non-NULL → is_routed=TRUE; NULL + is_routed=TRUE = pipeline ran, no match ("unrouted" = span-only label)
+V21: background loops wake on events not timers — wakeup_event set by Pub/Sub notify + pg NOTIFY task_pending (INSERT + retry-UPDATE triggers); run_interval tick = fallback only
+V23: task drain = bounded pool ≤ max_concurrent_tasks; each worker owns its psycopg.Connection; atomic claim blocks re-dispatch of in-flight tasks
+V24: main loop never blocks on task futures — reaper collects on later ticks + emits task.drain
+V25: advisory locks 2-tier — coarse (workflow_id, contact_id) + task-scoped (task_id split-half CRC32 pair); lock acquired before agent.invoke span opens (loser → None, no span); contention → reschedule w/o attempt_count bump, scheduled_at push fires task_pending_trigger
+V26: agent.invoke span trigger attr in {enrollment_run, enrollment_schedule, task, email, manual} = caller path
+V27: routing pipeline order: thread match → RFC message-id match → LLM classify, all account-scoped; classifier = single-turn, no tools, body truncated @ 16384 chars, hallucinated workflow_id coerced to None, zero active inbound workflows → no LLM call; every outcome marks is_routed=TRUE w/ distinct route_method
+V28: task.enrollment_id NOT NULL; workflow_id + contact_id denorm retained for filters; enrollment guaranteed @ route time via _ensure_enrollment — ON CONFLICT once, enrollment_added activity on first insert only
+V29: trigger email body inlined once under "New inbound email:"; excluded from email_history — no prompt duplicate
+V30: prompt framing follows trigger — first-reach-out (enrollment_run + enrollment_schedule byte-identical) vs deferred-task vs inbound; inbound email present → email framing wins; no synthesized task_description
+V31: protocol branches on trigger — trigger='task' → terminal-outcome instruction (record_enrollment_outcome); other triggers → initial-send-only
+V32: enrollment_schedule = distinct trigger label (observability split from enrollment_run); --scheduled-at → pending first-touch task (email_id NULL), idempotent, rejected for inbound workflows
+V33: enrollment self-loop rejected — contact.email == workflow account email, case-insensitive
+V34: every Drive call carries Shared-Drive flags — corpora="allDrives", supportsAllDrives=True, includeItemsFromAllDrives=True
+V35: Drive KB isolation = per-account impersonation (DWD with_subject); account reads only files its identity can read; list/search filter mimeType text/markdown + trashed=false; content decoded UTF-8 errors=replace
+V37: auth = service account + domain-wide delegation; file creds → with_subject(email); ADC → iam.Signer credentials w/ subject=email; no OAuth user login
+V38: Drive tools registered sequential=True — serializes parallel dispatch (shared httplib2.Http thread-unsafe, max concurrent transport = 1); transport faults (HttpError, TimeoutError, OSError) → structured drive_unavailable dict, never bare raise
+V39: agent tool failure → error dict {error, message}, never exception to agent; agent re-drafts via tool-error path
+V40: protocol fragment naming tools ! name ≥ 2 distinct tools, never exactly 1
+V41: KB grounding rules (search-first, 2-search budget then single list, read top ≥ 3 hits, per-target search budget on compare) live only in inbound-google-drive protocol fragment _DRIVE_GROUNDING
+V42: outbound body format lint — ≥ 3 consecutive spec-shape lines (short label + whitespace + value) w/o |---| separator → format_check rejection; ASCII rule-lines (---, ===, ___) not separators
+V44: agent shape owned by code-defined template registry — TEMPLATES keys == WorkflowTemplateName members; WorkflowTemplate frozen; every template carries non-empty protocol + tools + description; workflow.template + type immutable post-create (update raises ValueError), type derived from template
+V45: protocol composed in canonical fragment order _BASE → trigger branch → overlay? → _DECLINE → _NO_FABRICATION; template owns tool set + protocol, no per-workflow overrides
+V46: template name = <direction>-<data-system>; prefix == direction field
+V47: Anthropic calls set anthropic_cache_instructions=True + anthropic_cache_tool_definitions=True (classifier + workflow agent); agent.invoke span carries cache_read_input_tokens + cache_creation_input_tokens
+V48: Anthropic HTTP timeout = 240s (4x httpx default); APITimeoutError + httpx.ReadTimeout classified terminal not transient — mid-turn tool side-effects make retry unsafe
+V49: bounded auto-retry — 4 attempts total, backoff [30, 120, 300]s; transient allow-list = Google 429/5xx, Anthropic 502/503/529, socket/TimeoutError; classified per-task inside execute_task; Drive socket timeout 60s feeds classifier; manual retry only failed/cancelled (completed + pending refused); retry UPDATE fires task_pending_trigger
+V51: every logfire.exception site reachable from `mailpilot run` ! paired operator_event("error", source=..., message=...)
+V52: logfire.configure(environment=settings.logfire_environment) → spans carry deployment_environment; cloud queries filter by env
+V53: agent tool spans come from logfire.instrument_pydantic_ai() (gen_ai.tool.name attr); no logfire.span inside agent tools; agents carry explicit names mailpilot.classifier + mailpilot.workflow
+V54: every CLI mutation = logfire.span("<noun>.<verb>") + paired operator_event w/ changed-field list; psycopg constraint → envelope code {UniqueViolation: duplicate_key, ForeignKeyViolation: foreign_key_violation, NotNullViolation: not_null_violation, CheckViolation: check_violation}; other psycopg.Error → database_error; pydantic ValidationError → validation_error; logfire.exception + operator_event("error") fire before envelope; non-psycopg exceptions re-raise w/o envelope
+V55: tool_response span attr exempt from Logfire scrubbing; all other attrs scrubbed
+V57: smoke QA grading — out-of-scope decline validated mechanically vs forbidden_token_pairs + decline_signals; in-scope + compare graded vs live Drive source (source_file + source_file_alts)
+V61: reply-latency verdict derived from agent.invoke span in Logfire, CLI poll = round-trip check only; two-budget split: sla_agent_seconds gating (> 50s steady-state critical; compare-type > 90s critical, 50-90s advisory band), sla_delivery_seconds advisory (Gmail-side uncontrolled)
+V63: declarative export/import — per-row errors continue batch w/ per-row error entries; upsert keyed on natural unique fields; round-trip idempotent; export order deterministic (workflows by name); import w/o --file on TTY stdin → validation_error
+V67: persisted outbound in_reply_to + references_header mirror wire MIME headers exactly
+V68: pre-send fact-check — numeric tokens (≥ 2 digits or decimal) in body ! appear in union of same-invocation read_drive_markdown ledger; prose-only docs admit full content; table-bearing docs admit pipe-rows + bullet-list lines only; empty ledger skips check; ledger written on successful read only; mismatch → fact_check_mismatch w/ unsupported tokens
+V69: tick classifying ≥ 1 inbound → next tick forces full sweep + wakeup_event set; 10-email burst T_delivery ≤ 75s
+V71: per-task reply-rejection counter (reply_rejection_scope) — format_check + fact_check rejections share cap 3; past cap both checks bypass; outside scope checks always enforce
+V72: company.profile JSONB validated vs CompanyProfile — required {summary, products, target_customers, sources} non-empty; timezone optional, null on multi-zone; malformed → validation_error
+V75: sync incremental via History API from gmail_history_id checkpoint; history 404 → full INBOX re-sync; checkpoint snapshot pre-fetch, last_synced_at post-store; message 404 mid-batch → skip (deleted)
+V76: routing eligibility window — received_at older than 7 days, zero active workflows, or predates earliest active workflow → is_routed=TRUE w/ matching skipped_* route_method, no LLM call
+V77: outbound email row persists only after Gmail accepts send — Gmail failure → no orphan row
+V78: outbound MIME stamped X-MailPilot-Version always + X-MailPilot-Account-Id when account-bound; replies set In-Reply-To + References, References defaults to in_reply_to
+V79: send/reply guards — disabled contact blocks send + reply; cold-send cooldown 30 days per (account, contact, workflow); reply requires original gmail_thread_id + contact_id (typed errors); reply subject gets "Re: " prefix unless already prefixed, case-insensitive
+V80: bounce handling — sender local-part in {mailer-daemon, postmaster} (case-insensitive) or label contains "BOUNCE" → most recent outbound in same thread + account marked bounced + contact disabled w/ "bounced:" reason prefix; unsubscribe path uses "unsubscribed:" prefix
+V81: agent run ! call ≥ 1 tool; noop(reason) = explicit no-op escape; zero tool calls → AgentDidNotUseToolsError
+V82: agent email history scoped to (account_id, contact_id, workflow_id) — other workflows' mail excluded
+V83: execute_task pre-flight cancels task when workflow inactive/missing, contact disabled/missing, enrollment missing or status != active
+V84: pubsub notification callback acks unconditionally (decode error + missing emailAddress included); sets wakeup_event when supplied
+V85: settings precedence kwargs > MAILPILOT_* env > ~/.mailpilot/config.json > defaults; config file auto-created on first load
+V86: secret settings (anthropic_api_key, logfire_token, database_url) redacted as '***' in telemetry; config.set event logs key + changed flag
+V87: cross-account isolation — thread + RFC message-id lookups scoped to account_id; agent read_email cross-account → None (prompt-injection guard)
+V88: entity enums enforced by schema CHECK — workflow.template/type/status, enrollment.status, email.direction/status/route_method, task.status, activity.type; value sets authoritative in schema.sql
+V89: singleton rows — schema_metadata id=1, sync_status id='singleton'
+V90: natural-key UNIQUE — account.email, company.domain, contact.email, workflow(account_id, name), enrollment(workflow_id, contact_id), email.gmail_message_id nullable-unique; tag names unique per owner among active rows (partial index excludes disabled)
+V91: tag/note mutation + its activity row commit in one transaction — both or neither
+V92: email render = Markdown → HTML inline styles only, no stylesheet; THEMES = {blue, green, orange, purple, red, slate}; None/unknown theme → blue fallback
+V93: operator_event → stderr single line "HH:MM:SS event=NAME k=v ..."; newlines collapsed to space; whitespace values double-quoted, inner quotes escaped
+V94: CLI FK validation precedes mutation — referenced entity missing → error envelope, no partial write
 
 ## §T TASKS
 
