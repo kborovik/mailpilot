@@ -3939,7 +3939,7 @@ def test_workflow_import_account_not_found(
     assert "account" in data["message"]
 
 
-# -- §V.8 stdin TTY guard -----------------------------------------------------
+# -- §V.63 stdin TTY guard ----------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -3954,7 +3954,7 @@ def test_workflow_import_account_not_found(
 def test_import_tty_stdin_errors_without_read(
     runner: CliRunner, command: tuple[str, ...]
 ) -> None:
-    """§V.8: TTY stdin (no --file, no pipe) -> validation_error, no read()."""
+    """§V.63: TTY stdin (no --file, no pipe) -> validation_error, no read()."""
     from click.testing import _NamedTextIOWrapper  # pyright: ignore[reportPrivateUsage]
 
     read_mock = MagicMock(
