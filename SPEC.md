@@ -117,7 +117,7 @@ V94: CLI FK validation precedes mutation — referenced entity missing → error
 ## archived: §T.1..§T.108 → SPEC.archive.md (108 rows)
 
 id|status|task|cites
-T109|.|impl §V.51(+) per §B.71 — pair `database.py:151` connect-fail `logfire.exception` w/ `operator_event("error", source="database.connect", message=str(exc))`; add V51 sweep contract test enumerating run-reachable `logfire.exception` sites. Scope = grep `rg -n 'logfire\.exception' src/mailpilot/` → each hit ! paired `operator_event("error")` in same except block (test asserts pairing). Failing test first per TDD.|V51,B71
+T109|x|impl §V.51(+) per §B.71 — pair `database.py:151` connect-fail `logfire.exception` w/ `operator_event("error", source="database.connect", message=str(exc))`; add V51 sweep contract test enumerating run-reachable `logfire.exception` sites. Scope = grep `rg -n 'logfire\.exception' src/mailpilot/` → each hit ! paired `operator_event("error")` in same except block (test asserts pairing). Failing test first per TDD.|V51,B71
 
 ## §B BUGS
 

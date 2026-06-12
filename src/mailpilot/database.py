@@ -149,6 +149,7 @@ def initialize_database(database_url: str) -> psycopg.Connection[dict[str, Any]]
         else:
             hint = "check your database_url setting"
         logfire.exception("database connection failed", database=db_name, hint=hint)
+        operator_event("error", source="database.connect", message=str(exc))
         raise SystemExit(f"database connection failed: {hint}") from None
     # Skip the schema apply when the database is already initialized.
     # schema.sql contains DROP TRIGGER + CREATE TRIGGER on the task table

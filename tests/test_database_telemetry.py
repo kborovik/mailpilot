@@ -39,6 +39,21 @@ def test_initialize_database_error_emits_error_span(capfire: CaptureLogfire):
     assert attrs["logfire.span_type"] == "log"
 
 
+def test_initialize_database_error_emits_operator_error_event(
+    capfire: CaptureLogfire,
+    capsys: pytest.CaptureFixture[str],
+):
+    """§V.51/§B.71: connect-fail pairs ``logfire.exception`` with
+    ``operator_event("error", source="database.connect", ...)`` on the operator
+    stderr console -- not silent on DB-connect failure from ``mailpilot run``."""
+    with pytest.raises(SystemExit):
+        initialize_database("postgresql://localhost/mailpilot_does_not_exist_xyz")
+
+    err = capsys.readouterr().err
+    assert "event=error" in err
+    assert "source=database.connect" in err
+
+
 def test_initialize_database_skips_schema_when_account_table_exists():
     """Reapplying schema.sql while the sync loop is running deadlocks.
 
