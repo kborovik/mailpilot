@@ -1116,6 +1116,8 @@ def test_contact_create(runner: CliRunner, mock_connection: MagicMock) -> None:
         first_name="Alice",
         last_name="Smith",
         company_id=None,
+        title=None,
+        email_confidence=None,
     )
     data = json.loads(result.output)
     assert data["ok"] is True
@@ -1143,7 +1145,48 @@ def test_contact_create_email_only(
         first_name=None,
         last_name=None,
         company_id=None,
+        title=None,
+        email_confidence=None,
     )
+
+
+def test_contact_create_with_lead_metadata(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.95/§V.54: --title + --email-confidence wire to create + changed list."""
+    contact = _make_contact(title="VP Sales", email_confidence=88)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_contact", return_value=contact) as mock_create,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "contact",
+                "create",
+                "--email",
+                "alice@example.com",
+                "--title",
+                "VP Sales",
+                "--email-confidence",
+                "88",
+            ],
+        )
+
+    assert result.exit_code == 0
+    mock_create.assert_called_once_with(
+        mock_connection,
+        email="alice@example.com",
+        first_name=None,
+        last_name=None,
+        company_id=None,
+        title="VP Sales",
+        email_confidence=88,
+    )
+    data = json.loads(result.output)
+    assert data["contact"]["title"] == "VP Sales"
+    assert data["contact"]["email_confidence"] == 88
 
 
 def test_contact_create_company_not_found(
@@ -1244,6 +1287,40 @@ def test_contact_update_first_name(
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["contact"]["first_name"] == "Alicia"
+
+
+def test_contact_update_lead_metadata(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.95: --title + --email-confidence flow through update_contact."""
+    before = _make_contact()
+    updated = _make_contact(title="Founder", email_confidence=55)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_contact", return_value=before),
+        patch("mailpilot.database.update_contact", return_value=updated) as mock_update,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "contact",
+                "update",
+                updated.id,
+                "--title",
+                "Founder",
+                "--email-confidence",
+                "55",
+            ],
+        )
+
+    assert result.exit_code == 0
+    mock_update.assert_called_once_with(
+        mock_connection, updated.id, title="Founder", email_confidence=55
+    )
+    data = json.loads(result.output)
+    assert data["contact"]["title"] == "Founder"
+    assert data["contact"]["email_confidence"] == 55
 
 
 def test_contact_update_no_fields(
@@ -1461,6 +1538,7 @@ def test_contact_list_with_filters(
         company_id="cid-1",
         since=None,
         include_disabled=False,
+        max_email_confidence=None,
     )
 
 
@@ -1481,6 +1559,31 @@ def test_contact_list_include_disabled(
         company_id=None,
         since=None,
         include_disabled=True,
+        max_email_confidence=None,
+    )
+
+
+def test_contact_list_max_email_confidence(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.95: --max-email-confidence N flows to list_contacts as the filter."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_contacts", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(
+            main, ["contact", "list", "--max-email-confidence", "40"]
+        )
+
+    assert result.exit_code == 0
+    mock_list.assert_called_once_with(
+        mock_connection,
+        limit=100,
+        company_id=None,
+        since=None,
+        include_disabled=False,
+        max_email_confidence=40,
     )
 
 
@@ -1501,6 +1604,7 @@ def test_contact_list_with_since(runner: CliRunner, mock_connection: MagicMock) 
         company_id=None,
         since="2024-01-01T00:00:00",
         include_disabled=False,
+        max_email_confidence=None,
     )
 
 

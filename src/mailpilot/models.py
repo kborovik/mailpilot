@@ -77,6 +77,10 @@ class Contact(BaseModel):
     active, any non-NULL string means the contact is globally blocked and
     carries the human-readable reason (e.g. ``"bounced: hard bounce"``,
     ``"unsubscribed: replied 2026-05-14"``).
+
+    ``title`` (role label) and ``email_confidence`` are flat lead-metadata
+    columns per §V.95; ``email_confidence`` is the sole email-risk score
+    (0-100, low = high risk), ``None`` when Bouncer has no signal.
     """
 
     id: str
@@ -84,19 +88,26 @@ class Contact(BaseModel):
     company_id: str | None = None
     first_name: str | None = None
     last_name: str | None = None
+    title: str | None = None
+    email_confidence: int | None = None
     disabled_reason: str | None = None
     created_at: datetime
     updated_at: datetime
 
 
 class ContactSummary(BaseModel):
-    """List-view projection of `Contact`."""
+    """List-view projection of `Contact`.
+
+    Carries ``email_confidence`` so ``contact list --max-email-confidence``
+    surfaces the deliverability score alongside the row it filters on (§V.95).
+    """
 
     id: str
     email: str
     first_name: str | None
     last_name: str | None
     company_id: str | None
+    email_confidence: int | None
     disabled_reason: str | None
     created_at: datetime
 

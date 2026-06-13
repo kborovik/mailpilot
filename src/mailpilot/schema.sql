@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS contact (
     company_id            TEXT REFERENCES company(id),
     first_name            TEXT,
     last_name             TEXT,
+    title                 TEXT,
+    email_confidence      INT CHECK (email_confidence BETWEEN 0 AND 100),
     disabled_reason       TEXT,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP

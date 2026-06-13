@@ -117,7 +117,7 @@ Pub/Sub deltas.
 
 ```
 mailpilot company create --domain example.com --name "Example Co"
-mailpilot contact create --account-id <ID> --email lead@example.com \
+mailpilot contact create --email lead@example.com \
     --first-name "Ada" --last-name "Lovelace" --company-id <COMPANY_ID>
 ```
 

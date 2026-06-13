@@ -752,6 +752,8 @@ def create_contact(
     company_id: str | None = None,
     first_name: str | None = None,
     last_name: str | None = None,
+    title: str | None = None,
+    email_confidence: int | None = None,
 ) -> Contact | None:
     """Create a new contact.
 
@@ -766,6 +768,9 @@ def create_contact(
         company_id: Optional company FK.
         first_name: Optional first name.
         last_name: Optional last name.
+        title: Optional role label (lead-metadata, §V.95).
+        email_confidence: Optional deliverability score 0-100; ``None`` =
+            Bouncer-unknown (§V.95). Schema CHECK enforces the range.
 
     Returns:
         Created contact, or ``None`` if a contact with this email already
@@ -773,9 +778,11 @@ def create_contact(
     """
     row = connection.execute(
         """\
-        INSERT INTO contact (id, email, company_id, first_name, last_name)
+        INSERT INTO contact (id, email, company_id, first_name, last_name,
+                             title, email_confidence)
         VALUES (%(id)s, %(email)s, %(company_id)s,
-                %(first_name)s, %(last_name)s)
+                %(first_name)s, %(last_name)s,
+                %(title)s, %(email_confidence)s)
         ON CONFLICT (email) DO NOTHING
         RETURNING *
         """,
@@ -785,6 +792,8 @@ def create_contact(
             "company_id": company_id,
             "first_name": first_name,
             "last_name": last_name,
+            "title": title,
+            "email_confidence": email_confidence,
         },
     ).fetchone()
     connection.commit()
@@ -968,6 +977,7 @@ def list_contacts(
     company_id: str | None = None,
     since: str | None = None,
     include_disabled: bool = False,
+    max_email_confidence: int | None = None,
 ) -> list[ContactSummary]:
     """List contacts as summaries with optional filters.
 
@@ -978,6 +988,10 @@ def list_contacts(
         since: ISO datetime lower bound on ``created_at``.
         include_disabled: When False (default), only contacts with
             ``disabled_reason IS NULL`` are returned.
+        max_email_confidence: When set, surfaces only rows with
+            ``email_confidence <= N`` for cross-run operator review of
+            low-score (high-risk) leads (§V.95); NULL-score rows are
+            excluded (no signal to review).
 
     Returns:
         List of contact summaries ordered by email.
@@ -992,10 +1006,13 @@ def list_contacts(
         params["since"] = since
     if not include_disabled:
         conditions.append(SQL("disabled_reason IS NULL"))
+    if max_email_confidence is not None:
+        conditions.append(SQL("email_confidence <= %(max_email_confidence)s"))
+        params["max_email_confidence"] = max_email_confidence
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
         "SELECT id, email, first_name, last_name, company_id, "
-        "disabled_reason, created_at "
+        "email_confidence, disabled_reason, created_at "
         "FROM contact {} ORDER BY email LIMIT %(limit)s"
     ).format(where)
     rows = connection.execute(query, params).fetchall()
@@ -1021,7 +1038,7 @@ def search_contacts(
     rows = connection.execute(
         """\
         SELECT id, email, first_name, last_name, company_id,
-               disabled_reason, created_at
+               email_confidence, disabled_reason, created_at
         FROM contact
         WHERE LOWER(email) LIKE LOWER(%(pattern)s)
            OR LOWER(COALESCE(first_name, '')) LIKE LOWER(%(pattern)s)

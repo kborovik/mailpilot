@@ -768,6 +768,13 @@ def contact() -> None:
 @click.option("--first-name", default=None, help="First name.")
 @click.option("--last-name", default=None, help="Last name.")
 @click.option("--company-id", default=None, help="Company ID.")
+@click.option("--title", default=None, help="Role label (lead-metadata).")
+@click.option(
+    "--email-confidence",
+    type=int,
+    default=None,
+    help="Deliverability score 0-100; low = high risk (lead-metadata).",
+)
 @click.option(
     "--note",
     default=None,
@@ -778,6 +785,8 @@ def contact_create(
     first_name: str | None,
     last_name: str | None,
     company_id: str | None,
+    title: str | None,
+    email_confidence: int | None,
     note: str | None,
 ) -> None:
     """Create a new contact."""
@@ -800,6 +809,8 @@ def contact_create(
                 first_name=first_name,
                 last_name=last_name,
                 company_id=company_id,
+                title=title,
+                email_confidence=email_confidence,
             )
             if created is None:
                 output_error(
@@ -807,6 +818,10 @@ def contact_create(
                     "duplicate_key",
                 )
             changed = ["email", "first_name", "last_name", "company_id"]
+            if title is not None:
+                changed.append("title")
+            if email_confidence is not None:
+                changed.append("email_confidence")
             if note:
                 add_contact_note(connection, created.id, note)
                 changed.append("note")
@@ -828,12 +843,21 @@ def contact_create(
 @click.option("--first-name", default=None, help="First name.")
 @click.option("--last-name", default=None, help="Last name.")
 @click.option("--company-id", default=None, help="Company ID.")
+@click.option("--title", default=None, help="Role label (lead-metadata).")
+@click.option(
+    "--email-confidence",
+    type=int,
+    default=None,
+    help="Deliverability score 0-100; low = high risk (lead-metadata).",
+)
 def contact_update(
     contact_id: str,
     email: str | None,
     first_name: str | None,
     last_name: str | None,
     company_id: str | None,
+    title: str | None,
+    email_confidence: int | None,
 ) -> None:
     """Update a contact."""
     from mailpilot.database import get_contact, initialize_database, update_contact
@@ -853,6 +877,10 @@ def contact_update(
             fields["last_name"] = last_name
         if company_id is not None:
             fields["company_id"] = company_id
+        if title is not None:
+            fields["title"] = title
+        if email_confidence is not None:
+            fields["email_confidence"] = email_confidence
         with cli_mutation("contact", "update", entity_id=contact_id):
             updated = update_contact(connection, contact_id, **fields)
             if updated is None:
@@ -864,6 +892,8 @@ def contact_update(
                     "first_name",
                     "last_name",
                     "company_id",
+                    "title",
+                    "email_confidence",
                 )
                 if getattr(before, field) != getattr(updated, field)
             ]
@@ -940,11 +970,18 @@ def contact_search(query: str, limit: int) -> None:
     default=False,
     help="Also list contacts with a non-null disabled_reason (default: hide).",
 )
+@click.option(
+    "--max-email-confidence",
+    type=int,
+    default=None,
+    help="Surface only rows with email_confidence <= N (low-score lead review).",
+)
 def contact_list(
     limit: int,
     company_id: str | None,
     since: str | None,
     include_disabled: bool,
+    max_email_confidence: int | None,
 ) -> None:
     """List contacts as summaries."""
     from mailpilot.database import get_company, initialize_database, list_contacts
@@ -959,6 +996,7 @@ def contact_list(
             company_id=company_id,
             since=since,
             include_disabled=include_disabled,
+            max_email_confidence=max_email_confidence,
         )
         output({"contacts": [c.model_dump(mode="json") for c in contacts]})
     finally:

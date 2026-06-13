@@ -469,6 +469,105 @@ def test_update_contact(database_connection: psycopg.Connection[dict[str, Any]])
     assert updated.first_name == "Jane"
 
 
+def test_create_contact_with_lead_metadata(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.95: title + email_confidence are flat columns that round-trip."""
+    created = create_contact(
+        database_connection,
+        email="lead@example.com",
+        title="VP Engineering",
+        email_confidence=87,
+    )
+    assert created is not None
+    assert created.title == "VP Engineering"
+    assert created.email_confidence == 87
+
+    fetched = get_contact(database_connection, created.id)
+    assert fetched is not None
+    assert fetched.title == "VP Engineering"
+    assert fetched.email_confidence == 87
+
+
+def test_create_contact_lead_metadata_defaults_null(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.95: omitted lead-metadata is NULL (Bouncer-unknown, no signal)."""
+    created = create_contact(database_connection, email="plain@example.com")
+    assert created is not None
+    assert created.title is None
+    assert created.email_confidence is None
+
+
+def test_update_contact_lead_metadata(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.95: update_contact flows title + email_confidence (model_fields gate)."""
+    contact = make_test_contact(database_connection)
+    updated = update_contact(
+        database_connection, contact.id, title="Founder", email_confidence=42
+    )
+    assert updated is not None
+    assert updated.title == "Founder"
+    assert updated.email_confidence == 42
+
+
+def test_email_confidence_check_rejects_out_of_range(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.95: schema CHECK email_confidence BETWEEN 0 AND 100."""
+    with pytest.raises(psycopg.errors.CheckViolation):
+        create_contact(
+            database_connection,
+            email="bad@example.com",
+            email_confidence=101,
+        )
+
+
+def test_email_confidence_check_admits_boundaries(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.95: 0 and 100 are inclusive boundaries the CHECK admits."""
+    low = create_contact(
+        database_connection, email="low@example.com", email_confidence=0
+    )
+    high = create_contact(
+        database_connection, email="high@example.com", email_confidence=100
+    )
+    assert low is not None
+    assert low.email_confidence == 0
+    assert high is not None
+    assert high.email_confidence == 100
+
+
+def test_list_contacts_max_email_confidence_filter(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.95: --max-email-confidence surfaces low-score rows; NULL excluded."""
+    risky = create_contact(
+        database_connection, email="risky@example.com", email_confidence=20
+    )
+    safe = create_contact(
+        database_connection, email="safe@example.com", email_confidence=95
+    )
+    unknown = create_contact(database_connection, email="unknown@example.com")
+    assert risky is not None
+    assert safe is not None
+    assert unknown is not None
+
+    surfaced = list_contacts(database_connection, max_email_confidence=50)
+    assert {c.id for c in surfaced} == {risky.id}
+
+
+def test_list_contacts_summary_carries_email_confidence(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """ContactSummary projects email_confidence so the filtered row is reviewable."""
+    create_contact(database_connection, email="scored@example.com", email_confidence=33)
+    summaries = list_contacts(database_connection)
+    assert summaries[0].email_confidence == 33
+
+
 def test_get_contact_by_email(database_connection: psycopg.Connection[dict[str, Any]]):
     contact = make_test_contact(database_connection, email="alice@test.com")
     found = get_contact_by_email(database_connection, "alice@test.com")
