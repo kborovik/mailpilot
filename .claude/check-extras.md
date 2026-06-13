@@ -28,7 +28,7 @@ Per ```js block:
 (a) Free-symbol scan — every identifier used as a value ! resolve to an in-block definition (`const` / `let` / `function` / param) OR a runtime global. Runtime globals (do not flag): `meta`, `agent`, `parallel`, `pipeline`, `phase`, `log`, `args`, `budget`, `workflow`, plus JS built-ins (`JSON`, `Math`, `Array`, `Object`, `Promise`, `console`, ...). Any other bare identifier (e.g. `stale`, `buildPrompt`, `ENRICH_RESULT_SCHEMA`) ! be defined in the block — fail mode: free var crashes `ReferenceError` on paste (§B.68: bare `stale`).
 (b) `args`-as-collection guard — if the block calls `args.map` / `args.filter` / `args.slice` / `args.length` / `args.forEach` or spreads `args`, it ! first `JSON.parse(args)` (or guard `typeof args === 'string'`). Why: runtime delivers `args` as a JSON STRING so `args.map` throws `is not a function` (§B.68).
 (c) Prose-vs-`parallel` divergence — if surrounding prose claims "concurrency N" / "N concurrent" / "Default N", the block ! chunk to N (batch loop of size N around `parallel(batch.map(...))`). A bare `parallel(xs.map(...))` dispatches all `xs.length`, bounded only by runtime cap `min(16, cores-2)` — not N. Fail mode: prose promises 3, snippet runs all (§B.68 secondary).
-(d) Saved-workflow byte-identity — the embedded enrich snippet's post-`meta` body (`.claude/skills/lead-encreach/SKILL.md` js-fenced block, sliced @ first `\n}\n` after `export const meta`) ! be byte-identical to `.claude/workflows/lead-encreach-enrich.js`'s post-`meta` body (same slice). Why: the skill-body embedded snippet is the spec-of-record; the saved file is invoked by name @ runtime so silent divergence ships an unaudited workflow ((a)-(c) cover the saved file only transitively, when bodies match). Saved `meta` MAY add registry-only fields (`whenToUse`, fuller `description`) so compare the post-`meta` slice only, not the whole file. Fail mode: divergence -> saved-file unaudited drift.
+(d) Saved-workflow byte-identity — the embedded enrich snippet's post-`meta` body (`.claude/skills/lead-companies/SKILL.md` js-fenced block, sliced @ first `\n}\n` after `export const meta`) ! be byte-identical to `.claude/workflows/lead-companies-enrich.js`'s post-`meta` body (same slice). Why: the skill-body embedded snippet is the spec-of-record; the saved file is invoked by name @ runtime so silent divergence ships an unaudited workflow ((a)-(c) cover the saved file only transitively, when bodies match). Saved `meta` MAY add registry-only fields (`whenToUse`, fuller `description`) so compare the post-`meta` slice only, not the whole file. Fail mode: divergence -> saved-file unaudited drift.
 
 Mechanical greps (manual judgment on hits):
 - `rg -n '```js' .claude/skills/` — enumerate blocks.
@@ -38,9 +38,9 @@ Mechanical greps (manual judgment on hits):
   ```
   python3 - <<'PY'
   import re
-  skill = open('.claude/skills/lead-encreach/SKILL.md').read()
+  skill = open('.claude/skills/lead-companies/SKILL.md').read()
   emb = re.search(r'```js\n(.*?)```', skill, re.DOTALL).group(1)
-  saved = open('.claude/workflows/lead-encreach-enrich.js').read()
+  saved = open('.claude/workflows/lead-companies-enrich.js').read()
   body = lambda s: s[s.find('\n}\n') + 3:].strip()
   print('IDENTICAL' if body(emb) == body(saved) else 'DIVERGENT')
   PY

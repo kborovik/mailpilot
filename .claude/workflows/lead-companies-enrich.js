@@ -1,7 +1,7 @@
 export const meta = {
-  name: 'lead-encreach-enrich',
+  name: 'lead-companies-enrich',
   description: 'Concurrently enrich stale company profiles via company-profiler agents',
-  whenToUse: 'After lead-encreach seeds company rows: enrich every profile-NULL row to a cold-email-grade CompanyProfile. Invoked by the lead-encreach skill; args = the stale-row array {id, domain, name}.',
+  whenToUse: 'After lead-companies seeds company rows: enrich every profile-NULL row to a cold-email-grade CompanyProfile. Invoked by the lead-companies skill; args = the stale-row array {id, domain, name}.',
   phases: [{title: 'Enrich', detail: 'company-profiler agents, 3 in flight'}],
 }
 

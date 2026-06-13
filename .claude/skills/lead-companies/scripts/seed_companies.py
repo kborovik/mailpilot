@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Consolidated ingest + seed for the lead-encreach skill.
+"""Consolidated ingest + seed for the lead-companies skill.
 
 Collapses the skill's per-row Bash loop -- format detect, CSV/text parse,
 apex redirect resolution, and `mailpilot company create` per domain -- into a
@@ -34,7 +34,7 @@ Emits ONE JSON object on stdout (stderr carries progress only):
       "ok": true
     }
 
-The `stale` array is the exact projection the lead-encreach-enrich Workflow
+The `stale` array is the exact projection the lead-companies-enrich Workflow
 consumes as `args`. On a dry run no rows are created, so `stale` reflects the
 pre-existing stale set only and `created` is replaced by `would_create`.
 """

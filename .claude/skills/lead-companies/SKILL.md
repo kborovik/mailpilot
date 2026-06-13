@@ -1,5 +1,5 @@
 ---
-name: lead-encreach
+name: lead-companies
 description: |
   Create company records from domain names or CSV exports (TheirStack and
   similar), query companies missing profile enrichment, and dispatch
@@ -9,13 +9,13 @@ description: |
   sub-commands; the skill classifies the input itself. External data
   sources contribute the apex domain plus an optional CSV display-name
   placeholder -- all profile fields are agent-discovered from the website.
-  Triggers on "/lead-encreach", "enrich companies", "create companies from domains".
+  Triggers on "/lead-companies", "enrich companies", "create companies from domains".
 argument-hint: [<domain>... | <file-path>] [--limit N]
 allowed-tools: Bash(mailpilot company *), Bash(curl *), Bash(lynx *), Bash(python3 *), Read, Task, Workflow, AskUserQuestion
 model: opus
 ---
 
-# lead-encreach
+# lead-companies
 
 Bootstrap company records from external lead dumps (TheirStack CSV, plain-text domain lists), then enrich each row w/ a cold-email-grade `CompanyProfile` JSON via concurrent Sonnet enricher agents.
 
@@ -49,12 +49,12 @@ Minimize tool calls — run the two stages each as ONE tool call:
 - **Ingest + seed + stale** -> ONE Bash call to `scripts/seed_companies.py` (this skill's dir), not a per-row `curl` + `company create` loop. The script implements the §V.74 recipes verbatim (csv.DictReader RFC-4180 parse; `curl -w '%{url_effective}'` redirect resolve) and §V.72 (apex + optional CSV name placeholder only, not profile-body prepopulation). The per-stage recipe blocks below stay the canonical spec-of-record the script mirrors.
 
   ```
-  python3 .claude/skills/lead-encreach/scripts/seed_companies.py [--dry-run] [--column NAME] <file-or-domain>...
+  python3 .claude/skills/lead-companies/scripts/seed_companies.py [--dry-run] [--column NAME] <file-or-domain>...
   ```
 
   Emits ONE JSON object: `{created|would_create, existing, skipped, collapsed, stale, dry_run, ok}`. The `stale` field is the exact `[{id, domain, name}]` projection the enrich Workflow consumes so not a second `company list --no-profile` round trip. `--dry-run` resolves + reports w/o DB writes (preview). Mixed file + inline-domain args admitted; UUID args land in `skipped` (enrich-only, not seedable).
 
-- **Enrich (>=2 stale rows)** -> ONE Workflow call BY NAME: `Workflow({name: 'lead-encreach-enrich', args: <stale array from the seed script>})`, not pasting the inline snippet. Single stale row -> direct `Task(subagent_type="company-profiler", ...)` per §Stage: enrich.
+- **Enrich (>=2 stale rows)** -> ONE Workflow call BY NAME: `Workflow({name: 'lead-companies-enrich', args: <stale array from the seed script>})`, not pasting the inline snippet. Single stale row -> direct `Task(subagent_type="company-profiler", ...)` per §Stage: enrich.
 
 So full file-arg pipeline = 1 Bash (seed script) + 1 Workflow (enrich) + the batch-gate `AskUserQuestion` when >10 stale and not `--limit` — replacing the ~2N+3 per-row Bash calls. The per-stage sections below document the canonical behavior; reach for them only when debugging a row the script reported in `skipped`.
 
@@ -170,11 +170,11 @@ uv run mailpilot company list --no-profile 2>/dev/null \
 
 Pass that JSON array as the Workflow `args` value directly — an actual JSON value, not a file path or a re-stringified blob. The snippet's `typeof args === 'string'` guard covers the runtime-stringifies case either way.
 
-The enrich logic is saved at `.claude/workflows/lead-encreach-enrich.js` so INVOKE BY NAME — `Workflow({name: 'lead-encreach-enrich', args: <array>})` — do not re-paste the body. The block below is the §V.73 spec-of-record mirror of that saved file (self-contained, runnable as authored); the body below `meta` ! stay byte-identical to the saved file (the saved `meta` adds registry-only fields — `whenToUse`, a fuller `description`):
+The enrich logic is saved at `.claude/workflows/lead-companies-enrich.js` so INVOKE BY NAME — `Workflow({name: 'lead-companies-enrich', args: <array>})` — do not re-paste the body. The block below is the §V.73 spec-of-record mirror of that saved file (self-contained, runnable as authored); the body below `meta` ! stay byte-identical to the saved file (the saved `meta` adds registry-only fields — `whenToUse`, a fuller `description`):
 
 ```js
 export const meta = {
-  name: 'lead-encreach-enrich',
+  name: 'lead-companies-enrich',
   description: 'Concurrently enrich stale company profiles',
   phases: [{title: 'Enrich', detail: 'enricher agents, 3 in flight'}],
 }
@@ -284,9 +284,9 @@ Canonical examples — after a seeding run:
 ```
 ## Next
 
-1. /lead-encreach -- enrich the newly seeded stale rows
+1. /lead-companies -- enrich the newly seeded stale rows
 2. mailpilot company list --no-profile -- inspect stale rows first
-3. /lead-encreach <domain> -- enrich one row before the batch
+3. /lead-companies <domain> -- enrich one row before the batch
 ```
 
 After an enrichment run:
@@ -296,7 +296,7 @@ After an enrichment run:
 
 1. mailpilot company list --no-profile -- confirm zero stale rows remain
 2. mailpilot company list --has-profile --limit 5 -- spot-check enrichment quality
-3. /lead-encreach <domain> -- re-run a failed row
+3. /lead-companies <domain> -- re-run a failed row
 ```
 
 ## Why this skill exists
