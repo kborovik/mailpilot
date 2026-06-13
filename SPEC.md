@@ -117,6 +117,8 @@ V91: tag/note mutation + its activity row commit in one transaction — both or 
 V92: email render = Markdown → HTML inline styles only, no stylesheet; THEMES = {blue, green, orange, purple, red, slate}; None/unknown theme → blue fallback
 V93: operator_event → stderr single line "HH:MM:SS event=NAME k=v ..."; newlines collapsed to space; whitespace values double-quoted, inner quotes escaped
 V94: CLI FK validation precedes mutation — referenced entity missing → error envelope, no partial write
+V95: contact lead-metadata = flat columns not JSONB — contact.title TEXT NULL (role label); contact.email_confidence INT NULL, schema CHECK email_confidence BETWEEN 0 AND 100; NULL = Bouncer unknown (unbilled, no signal); email_confidence = sole email-risk score (low = high risk); no ContactProfile model
+V96: lead-contacts discovery — discover set = company.profile IS NOT NULL ∧ contact-count < 5; ≤ 5 contacts/company/run; admit-all — every discovered+verified email → contact row, low/NULL email_confidence flags risk in run summary never gates admission; persistence memoizes via contact.email UNIQUE §V.90 → idempotent re-run skips existing, ⊥ re-discovery of known-bad addresses
 
 ## §T TASKS
 
@@ -124,6 +126,9 @@ V94: CLI FK validation precedes mutation — referenced entity missing → error
 
 id|status|task|cites
 T109|x|impl §V.51(+) per §B.71 — pair `database.py:151` connect-fail `logfire.exception` w/ `operator_event("error", source="database.connect", message=str(exc))`; add V51 sweep contract test enumerating run-reachable `logfire.exception` sites. Scope = grep `rg -n 'logfire\.exception' src/mailpilot/` → each hit ! paired `operator_event("error")` in same except block (test asserts pairing). Failing test first per TDD.|V51,B71
+T110|.|prerequisite (src/mailpilot): add contact.title TEXT NULL + contact.email_confidence INT NULL columns (schema.sql) w/ CHECK email_confidence BETWEEN 0 AND 100; Contact model (models.py) gains both fields; CLI contact create/update accept --title + --email-confidence; contact list --max-email-confidence N surfaces low-score rows for cross-run operator review; range CHECK + TDD per CLAUDE.md|V95
+T111|.|family rename lead-encreach -> lead-companies — skill dir + frontmatter name + trigger phrases; lead-encreach-enrich.js -> lead-companies-enrich.js (meta.name in saved file ∧ skill-body mirror byte-identical per §V.73); ∀ intra-skill lead-encreach ref; company-profiler agent unchanged; post-rename cite-DAG sweep over `rg -n 'lead-encreach' .claude/` per §B.72 lesson|V73,B72
+T112|.|new lead-contacts skill + lead-contacts-find.js workflow + contact-finder agent (sonnet) — per-company pipeline discover (Hunter Domain Search) -> org-chart (TheOrg) -> pick ≤ 5 decision-makers -> gap-fill (Hunter Email Finder) -> verify (Bouncer batch/sync 1 call) -> seed (mailpilot contact create); vendor keys env-only HUNTER_API_KEY/THEORG_API_KEY/BOUNCER_API_KEY (⊥ settings.py, ⊥ telemetry); skill thin: stale-query -> batch gate -> Workflow fan-out 3 contact-finder in flight, single company -> direct Task; new workflow body byte-identical to skill-mirror per §V.73|V96,V73
 
 ## §B BUGS
 
