@@ -1,119 +1,116 @@
 # CLAUDE Instructions
 
-## Goal
+Onboarding, style, and ops for this repo. **SPEC.md is authoritative** for goal
+(§G), constraints (§C), interfaces (§I), invariants (§V), tasks (§T), and bugs
+(§B). Do not duplicate spec content here — cite `§V.N` instead.
 
-Agent-operated CRM. Gmail = comms layer. Claude Code = strategist; internal Pydantic AI agent = tactical executor (routing, auto-reply, follow-up).
+## What this is
 
-Spec is authoritative → **SPEC.md** (§G goal, §C constraints, §I interfaces, §V invariants, §T tasks, §B bugs). This file = onboarding, style, ops. ⊥ duplicate spec content here; cite `§V.N` instead.
+Agent-operated CRM. Gmail is the comms layer. Two layers of intelligence:
 
-## Two-layer intelligence
-
-1. **Claude Code** — strategic orchestrator. Workflows, assignments, reviews, reports. Operates via CLI. Long-running ∧ analytical work.
-2. **Pydantic AI agent** — subordinate tactical executor. Inbound classification, auto-reply, follow-up. Stateless, tool-based, workflow-scoped. Time-sensitive work only.
-
-## Always-on skills
-
-- `/sdd:spec` — sole mutator of SPEC.md.
-- `/sdd:check` — drift detector, read-only.
-- `/sdd:build` — plan-then-execute against SPEC.md.
-- `/sdd:backprop` — bug → spec protocol.
-- `/sdd:explain` — math-glyph → prose.
-- `/sdd:glyph` — encoding rules for SPEC.md ∧ spec-adjacent writes (CLAUDE.md, plans, design docs).
-- `/smoke-test` — end-to-end Gmail smoke (`outbound@lab5.ca` ↔ `inbound@lab5.ca`, `hello@lab5.ca` KB).
-- `/demo-test` — liveness probe of public lab5.ca/mailpilot/ (`outbound@lab5.ca` → `hello@lab5.ca`, prod-env Logfire check, PASS/FAIL only).
-- `/gh:*` — GitHub ops (issue / pr-create / merge / release / commit / design). ⊥ drive `gh` ∨ `git push`-to-PR by hand.
-- `/logfire:*` — instrument, dev-session, debug.
-
-Default to `/sdd:*` for any spec touch — ⊥ hand-edit SPEC.md.
-
-## Style for this file & project docs
-
-Apply `/sdd:glyph` encoding to SPEC.md ∧ spec-adjacent writes (this file, plans, design docs). ⊥ apply to code, error strings, commit messages, PR descriptions, agent-generated email body.
-
-- Drop articles, filler, aux verbs where fragments work.
-- ⊥ hedging.
-- Bullets > prose when listing >2 items.
-- `→` = leads to / becomes (ASCII `->` also fine).
-- `MUST` / `MUST NOT` / `MAY` over softer forms.
-- One rule per line. `Why:` suffix only when non-obvious.
-- Preserve verbatim: code, paths, identifiers, env vars, SQL, numbers, URLs.
-- ASCII-only for project artifacts. Agent email body exempt.
+- **Claude Code** — strategic orchestrator. Workflows, assignments, reviews,
+  reports. Runs via CLI. Long-running, analytical work.
+- **Pydantic AI agent** — subordinate tactical executor. Inbound classification,
+  auto-reply, follow-up. Stateless, tool-based, workflow-scoped, time-sensitive
+  only.
 
 ## Principles
 
-- Technical accuracy > politeness.
-- Simplicity above all. YAGNI = law.
-- Agent-driven, ⊥ system-driven. System provides tools ∧ scheduling; LLM agents make all business decisions.
-- Type-safety non-negotiable. basedpyright strict.
-- TDD ∀ changes.
-- Background loops wake on events ⊥ timers. Canonical: `start_sync_loop` in `src/mailpilot/sync.py`. See §V.21.
+- Technical accuracy over politeness.
+- Simplicity above all. YAGNI is law.
+- Agent-driven, not system-driven. The system provides tools and scheduling;
+  LLM agents make all business decisions.
+- Type-safety is non-negotiable. basedpyright strict.
+- TDD for all changes.
+- Background loops wake on events, not timers. Canonical: `start_sync_loop` in
+  `src/mailpilot/sync.py` (§V.21).
 
-## Architecture pointers
+## Code style
 
-Concrete shape lives in code; spec invariants govern behaviour. Quick map:
-
-- **Gmail** — `gmail.modify` only, service account + DWD, per-account `with_subject(email)`. Custom `X-MailPilot-Version` ∧ `X-MailPilot-Account-Id` headers on sent. ThreadPoolExecutor per account. Pub/Sub streaming pull. History API + 404 → full re-sync. Body = plain text only.
-- **Drive KB** — `drive.readonly` only. Folder ID lives in `workflow.instructions`. Shared-Drive flags per §V.34. Permission model = isolation per §V.35.
-- **Workflows** — agent shape owned by template registry (`src/mailpilot/agent/templates.py`). See §V.44-§V.46. ⊥ per-workflow tool ∨ protocol overrides.
-- **Email rendering** — `email_renderer.py` — Markdown → HTML, inline styles. `THEME_NAMES` ∈ {blue, green, orange, purple, red, slate}.
-- **CLI** — thin dispatcher, JSON-only stdout. See §V.1 (settings-first), §V.2 (lazy imports), §V.3-§V.5 (envelope ∧ summary contract). Full surface in SPEC §I.
-- **Schema** — `src/mailpilot/schema.sql`. PostgreSQL 18. Connection: `database_url`. Auto-applied on first connection. Tables: `account`, `company`, `contact`, `workflow`, `enrollment`, `email`, `task`, `sync_status`, `activity`, `tag`, `note`.
-- **Database layer** — flat `database.py` w/ `# -- Entity ---` headers. ⊥ per-entity modules. Conventions: `create_X` / `get_X` / `list_X` / `update_X` / `search_X`. ∀ fn takes `psycopg.Connection`, returns model from `models.py` via `Model.model_validate(row)`. Dynamic SQL via `psycopg.sql` (⊥ f-strings). UUIDv7 IDs (§V.12). Race-safe inserts (§V.16). Bulk via `WHERE col = ANY(%s)` ∧ `INSERT ... SELECT FROM unnest(%s::type[])`.
-- **CRM** — Contact, Company, Tag, Note, Activity, Enrollment, Workflow. XOR rules §V.13 (tag, note), append-only §V.14 (activity, note), enrollment status §V.15, activity multi-target §V.17.
-- **Reporting** — Claude Code composes from CLI primitives. ⊥ built-in engine.
-- **Settings** — `~/.mailpilot/config.json` via `mailpilot config set KEY VALUE`. Keys per SPEC §I.
-- **Test accounts** — `outbound@lab5.ca`, `inbound@lab5.ca`, `hello@lab5.ca`. Service-account delegated. Re-create after `make clean` w/ `mailpilot account create --email ... --display-name ...`.
-
-## LLM-First code style
-
-- Explicit, fully descriptive names. ⊥ abbreviations.
+- Explicit, fully descriptive names. No abbreviations.
 - Flat, linear structure.
-- Type hints on all fns / params / returns.
-- Docstrings on public fns (Google convention).
+- Type hints on all functions, params, and returns.
+- Docstrings on public functions (Google convention).
 - Import order: stdlib, third-party, local.
-- Python 3.14 unparenthesized `except E1, E2:` intentional. `requires-python = ">=3.14"`, ruff `target-version = "py314"`. ⊥ rewrite to tuple form.
+- Python 3.14 unparenthesized `except E1, E2:` is intentional
+  (`requires-python = ">=3.14"`, ruff `target-version = "py314"`). Do not
+  rewrite to tuple form.
+
+## Architecture map
+
+Concrete shape lives in code; spec invariants govern behaviour.
+
+- **Gmail** (`gmail.py`, `GmailClient`) — `gmail.modify` scope only, service
+  account + DWD, per-account `with_subject(email)`. Plain-text bodies. Pub/Sub
+  streaming pull, History API.
+- **Drive KB** (`drive.py`, `DriveClient`) — `drive.readonly` only. Folder ID in
+  `workflow.instructions`. Isolation per §V.34-35.
+- **Workflows** — agent shape owned by template registry (`agent/templates.py`),
+  §V.44-46.
+- **Email rendering** (`email_renderer.py`) — Markdown to HTML, inline styles.
+  Themes per §V.92.
+- **CLI** (`cli.py`) — thin dispatcher, JSON-only stdout. §V.1-5; full surface
+  in §I.
+- **Schema** (`schema.sql`) — PostgreSQL 18, auto-applied on first connection.
+  Connection via `database_url`.
+- **Database** (`database.py`) — flat module with `# -- Entity ---` headers.
+  Conventions: `create_X` / `get_X` / `list_X` / `update_X` / `search_X`. Every
+  fn takes `psycopg.Connection` and returns a `models.py` model. Dynamic SQL via
+  `psycopg.sql`, never f-strings.
+- **Settings** (`settings.py`) — `~/.mailpilot/config.json` via
+  `mailpilot config set KEY VALUE`. Keys in §I.
+- **Test accounts** — `outbound@lab5.ca`, `inbound@lab5.ca`, `hello@lab5.ca`.
+  Re-create after `make clean`.
 
 ## Commands
 
 ```bash
-make check              # lint + tests
-make lint               # py-format + py-lint + py-types
-make py-test            # pytest -x
-make py-format          # ruff format
-make py-lint            # ruff check --fix
-make py-types           # basedpyright
-make clean              # export, drop, re-apply schema
-make py-update          # uv sync --upgrade
-make py-reset           # rebuild venv
+make check       # lint + tests
+make lint        # py-format + py-lint + py-types
+make py-test     # pytest -x
+make py-format   # ruff format
+make py-lint     # ruff check --fix
+make py-types    # basedpyright
+make clean       # export, drop, re-apply schema
+make py-update   # uv sync --upgrade
+make py-reset    # rebuild venv
 ```
 
-## Shell tools
+Use `rg` (ripgrep) over `awk` or `grep` for code search.
 
-`rg` (ripgrep) > `awk` ∨ `grep` for code search. Why: macOS ships BSD awk; syntax diverges from GNU awk → portability hazard. ASCII-friendly, recursive by default, gitignore-aware.
-
-## TDD process
+## TDD
 
 1. Failing test first.
 2. Minimal impl to pass.
-3. `uv run ruff check --fix` then `uv run basedpyright`.
+3. `uv run ruff check --fix`, then `uv run basedpyright`.
 
-Tests use `postgresql://localhost/mailpilot_test` (override w/ `DATABASE_URL`). `database_connection` fixture truncates tables before each test. `make_test_settings()` ∧ `load_fixture()` in `conftest.py`. HTTP mocks via `pytest-httpx`. Span-contract tests use `capfire: CaptureLogfire` from `logfire.testing` (see `tests/test_database_telemetry.py`). Live-Gmail coverage → `/smoke-test`.
+Tests use `postgresql://localhost/mailpilot_test` (override with `DATABASE_URL`).
+The `database_connection` fixture truncates tables before each test. Helpers
+`make_test_settings()` and `load_fixture()` live in `conftest.py`. HTTP mocks via
+`pytest-httpx`. Span-contract tests use `capfire` from `logfire.testing`.
+Live-Gmail coverage goes through `/smoke-test`.
 
-**Patching gotcha.** CLI cmd calling `get_contact()` / `get_company()` / `get_account()` for FK validation → ∀ test for that cmd ! patch `get_*` w/ valid return. Adding FK validation to existing cmd breaks tests until patches added.
+**Patching gotcha.** A CLI command that calls `get_contact()` / `get_company()`
+/ `get_account()` for FK validation requires every test for that command to
+patch `get_*` with a valid return. Adding FK validation to an existing command
+breaks its tests until the patches are added.
 
 ## Observability
 
-Pydantic Logfire (OTel-based). `import logfire` directly — ⊥ per-module logger var. Invariants in SPEC §V.51, §V.52, §V.53.
+Pydantic Logfire (OTel). `import logfire` directly — no per-module logger var.
+Invariants in §V.51-55.
 
-- `logfire.debug(msg, **k)` / `logfire.warn(msg, **k)` — logging.
-- `logfire.span(name)` — sync stage tracing. ⊥ in agent tools — `instrument_pydantic_ai()` handles tool spans (§V.53 → `gen_ai.tool.name`).
-- `configure_logging()` in `cli.py` — console output only w/ `--debug`.
-- Token: `mailpilot config set logfire_token <T>` ∨ `LOGFIRE_TOKEN` env.
-- Cloud send: `send_to_logfire='if-token-present'`.
-
-**Operator log.** `src/mailpilot/operator_log.py` → `operator_event(name, **fields)` → stderr line `HH:MM:SS event=NAME k1=v1 ...`. Always on. Curated events: `loop.start`, `loop.tick`, `loop.stop`, `pubsub.notify`, `sync.account`, `route.match`, `route.no_match`, `agent.run`, `task.drain`, `schema.drift`, `error`. ∀ new `logfire.exception` site reachable from `mailpilot run` ! paired `operator_event("error", source=<event>, message=str(exc))` per §V.51. Newlines in field values → spaces (one-line-per-event contract).
-
-**Cloud project.** `mailpilot` (token-scoped). MCP queries ! `project='mailpilot'`, filter `WHERE deployment_environment = '<env>'` (§V.52).
+- `logfire.debug` / `logfire.warn` for logging. `logfire.span(name)` for sync
+  stage tracing; never inside agent tools (`instrument_pydantic_ai()` handles
+  tool spans).
+- `configure_logging()` in `cli.py` — console output only with `--debug`.
+- Token via `mailpilot config set logfire_token <T>` or `LOGFIRE_TOKEN`. Cloud
+  send: `send_to_logfire='if-token-present'`.
+- **Operator log** (`operator_log.py`) — `operator_event(name, **fields)` writes
+  one stderr line, always on. Every `logfire.exception` site reachable from
+  `mailpilot run` needs a paired `operator_event("error", ...)` (§V.51).
+- **Cloud project** — `mailpilot` (token-scoped). MCP queries set
+  `project='mailpilot'` and filter by `deployment_environment` (§V.52).
 
 ## Help
 
