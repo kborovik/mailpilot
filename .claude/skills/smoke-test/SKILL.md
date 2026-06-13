@@ -196,7 +196,7 @@ mailpilot enrollment add --workflow-id <OUTBOUND_WORKFLOW_ID> --contact-id <INBO
 mailpilot enrollment run --workflow-id <OUTBOUND_WORKFLOW_ID> --contact-id <INBOUND_CONTACT_ID>
 ```
 
-`mailpilot enrollment run` MUST be invoked exactly once per `(workflow_id, contact_id)`. If the outbound email is not visible in the next gate's `email list` poll, keep polling — do NOT re-invoke `enrollment run`. A second invocation against the same enrollment produces a redundant `agent.invoke` (the agent searches for the prior send and noops correctly, but burns an LLM round-trip and inflates the trace). See SPEC §V.27 / §T.18 / §B.2.
+`mailpilot enrollment run` MUST be invoked exactly once per `(workflow_id, contact_id)`. If the outbound email is not visible in the next gate's `email list` poll, keep polling — do NOT re-invoke `enrollment run`. A second invocation against the same enrollment produces a redundant `agent.invoke` (the agent searches for the prior send and noops correctly, but burns an LLM round-trip and inflates the trace). See SPEC §V.27 / `§T.18` / `§B.2`.
 
 **Gate A3:**
 
@@ -218,7 +218,7 @@ Poll the inbound account:
 mailpilot email list --account-id <INBOUND_ACCOUNT_ID> --direction inbound --since <TEST_START_A>
 ```
 
-Match by `SUBJECT_A`. The `email list` row already projects `gmail_thread_id` (§V.7(+) / §T.65), so the thread-presence check below reads from the list directly -- no per-row `email view` round-trip needed.
+Match by `SUBJECT_A`. The `email list` row already projects `gmail_thread_id` (§V.7(+) / `§T.65`), so the thread-presence check below reads from the list directly -- no per-row `email view` round-trip needed.
 
 **Gate A4:**
 
@@ -313,9 +313,9 @@ If any expected type is missing, the runtime activity wiring regressed for that 
 
 Do this review now, before B, so the window cleanly bounds A's spans. Use `/logfire:debug` with project=`mailpilot` and window `[TEST_START_A, now]`. Spans to verify:
 
-- `agent.invoke` -- count by `trigger` attribute, not by total. Per SPEC §V.27 / §T.18, the span carries an explicit `trigger` label set by the caller path:
+- `agent.invoke` -- count by `trigger` attribute, not by total. Per SPEC §V.27 / `§T.18`, the span carries an explicit `trigger` label set by the caller path:
   - `trigger="task"` -- expect exactly **1** (A7 reply handling, drained by background `mailpilot run`). More than 1 -> agent kept replying (loop regression). This is the regression signal for Scenario A.
-  - `trigger="enrollment_run"` -- expect at least **1** (A3 send via foreground `enrollment run`). Tolerated regardless of count: an operator double-fire produces extra `enrollment_run` spans that correctly noop, so they cost an LLM round-trip but do not signal regression. §T.19 / §B.2 prefer single-invocation discipline (see A3) but the trace contract here permits more.
+  - `trigger="enrollment_run"` -- expect at least **1** (A3 send via foreground `enrollment run`). Tolerated regardless of count: an operator double-fire produces extra `enrollment_run` spans that correctly noop, so they cost an LLM round-trip but do not signal regression. `§T.19` / `§B.2` prefer single-invocation discipline (see A3) but the trace contract here permits more.
   - `trigger="email"` / `trigger="manual"` -- not expected in Scenario A; flag if present.
 - `running tool` -- A3: expect `read_contact`, `read_company`, and `send_email` (both reads MUST appear per the A1a personalization contract; order may be interleaved). `record_enrollment_outcome` is **not** expected here (it fires after a reply, not on initial send). A7: expect `record_enrollment_outcome` and **no** `send_email` or `reply_email`.
 - `agent.invoke` (A3) `input_tokens` -- should noticeably exceed the no-notes baseline (~+200-400 tokens) because both note bodies are inlined into the `read_contact` / `read_company` tool returns. A baseline-equivalent count signals either the tool-surface change hasn't shipped (notes not inlined) or the agent skipped the reads.
@@ -478,7 +478,7 @@ Match by `SUBJECT_B1` (likely with `Re:` prefix). Note the reply's arrival as co
      }
      ```
 
-     Each unsupported factual claim in the reply MUST appear verbatim in `unsupported_claims` (structural defence against LLM-judge sycophancy -- the field forces the grader to enumerate concrete misses rather than hand-wave a passing rating). `source_file_alts` is the verbatim list from the pair (default `[]`); per amended §V.57, `cites_source_file == true` iff the agent's citation is in `{source_file} + source_file_alts` (set union -- admits cross-source identifier collisions like model `WS36-600-2` appearing in two divergent datasheets per §B.40). `verdict` MUST be `"pass"` if and only if all three booleans are true AND `unsupported_claims` is empty; otherwise `"fail"`.
+     Each unsupported factual claim in the reply MUST appear verbatim in `unsupported_claims` (structural defence against LLM-judge sycophancy -- the field forces the grader to enumerate concrete misses rather than hand-wave a passing rating). `source_file_alts` is the verbatim list from the pair (default `[]`); per amended §V.57, `cites_source_file == true` iff the agent's citation is in `{source_file} + source_file_alts` (set union -- admits cross-source identifier collisions like model `WS36-600-2` appearing in two divergent datasheets per `§B.40`). `verdict` MUST be `"pass"` if and only if all three booleans are true AND `unsupported_claims` is empty; otherwise `"fail"`.
 
   Anything other than `verdict == "pass"` is a grounding regression -- record the verdict JSON in §2 Bugs. `qa_pairs.json.expected_tokens` is retained for historical-run repro only and is no longer consumed by any gate.
 
@@ -541,7 +541,7 @@ Out-of-scope decline keeps the script verifier (per SPEC §V.57): regex appropri
 
 ### B6.5. Concurrent-fanout race regression check
 
-This is a Logfire-only gate that piggybacks on B7's compare invocation (the only Scenario B turn that emits multiple `read_drive_markdown` calls). It exists to catch §B.34 -- the `httplib2.Http` thread-safety race where one parallel `read_drive_markdown` returned in ~1s while its sibling hung 60.83s at the socket timeout, killing the agent run. The structural fix is `sequential=True` on every Drive `Tool(...)` registration in `src/mailpilot/agent/templates.py` (§V.38); this gate verifies the dispatcher actually serializes parallel emissions in production.
+This is a Logfire-only gate that piggybacks on B7's compare invocation (the only Scenario B turn that emits multiple `read_drive_markdown` calls). It exists to catch `§B.34` -- the `httplib2.Http` thread-safety race where one parallel `read_drive_markdown` returned in ~1s while its sibling hung 60.83s at the socket timeout, killing the agent run. The structural fix is `sequential=True` on every Drive `Tool(...)` registration in `src/mailpilot/agent/templates.py` (§V.38); this gate verifies the dispatcher actually serializes parallel emissions in production.
 
 Run **after** B7's tool-use gate (the assertion needs B7's `agent.invoke` to be in Logfire). Window `[T_SEND_B3, T_REPLY_B3 + 10s]`, scope to B7's invocation:
 
@@ -569,7 +569,7 @@ LIMIT 20;
 **Gate B6.5 (race signature absent):**
 
 - At least 2 `read_drive_markdown` spans inside the B7 `agent.invoke` (the compare-and-contrast question forces multi-doc fanout; fewer is a separate regression already caught by B7's `EXPECTED_READ_COUNT` check).
-- **No span duration >=60s.** A `read_drive_markdown` span at or past the 60s `_DRIVE_HTTP_TIMEOUT_SECONDS` cap is the §B.34 hang signature; it means a sibling read raced the shared `httplib2.Http` and stalled at the socket timeout. Record as a Critical Bug -- the race fix has regressed and the next failure will burn the §V.49 retry budget.
+- **No span duration >=60s.** A `read_drive_markdown` span at or past the 60s `_DRIVE_HTTP_TIMEOUT_SECONDS` cap is the `§B.34` hang signature; it means a sibling read raced the shared `httplib2.Http` and stalled at the socket timeout. Record as a Critical Bug -- the race fix has regressed and the next failure will burn the §V.49 retry budget.
 - **No `is_exception=true` and no `level=warn` on any of these spans.** A bare `TimeoutError` / `socket.timeout` / `OSError` that escapes the tool wrapper means the broadened catch envelope in `src/mailpilot/agent/tools.py` was reverted; the structured `drive_unavailable` tool return (which lets the surviving sibling carry the agent run) is gone.
 - Sibling spans must not overlap. `sequential=True` in the dispatcher serializes parallel emissions, so for any two `read_drive_markdown` spans, the later one's `start_timestamp` >= the earlier one's `end_timestamp`. An overlap means a future Pydantic AI bump dropped the `sequential` honor on parallel tool dispatch; record as a Bug and pin the working pydantic-ai version while investigating.
 
@@ -602,7 +602,7 @@ Poll the outbound mailbox for `SUBJECT_B3` (likely `Re:` prefixed) the same way 
 **Gate B7 (multi-source grounding, no single-source synthesis):**
 
 - Reply present (CLI round-trip check; cap 120s). Compare questions force a longer agent loop (>=2 `read_drive_markdown` calls) and 2-datasheet synthesis, so the compare-type steady ceiling is 90s (vs 50s for single-source B4 and decline B6) per §V.61(+).
-- **Latency verdict via Logfire per §V.61(+).** Same query shape as B4, swap `<T_SEND_B1>` for `<T_SEND_B3>`. Capture `LATENCY_B3`, `SLA_AGENT_B3`, `SLA_DELIVERY_B3`. `sla_agent_seconds > 90` is a Critical regression of agent execution for compare-type; `50 < sla_agent_seconds <= 90` is advisory (compare-type intrinsic cost band per §B.61); `sla_delivery_seconds` is advisory.
+- **Latency verdict via Logfire per §V.61(+).** Same query shape as B4, swap `<T_SEND_B1>` for `<T_SEND_B3>`. Capture `LATENCY_B3`, `SLA_AGENT_B3`, `SLA_DELIVERY_B3`. `sla_agent_seconds > 90` is a Critical regression of agent execution for compare-type; `50 < sla_agent_seconds <= 90` is advisory (compare-type intrinsic cost band per `§B.61`); `sla_delivery_seconds` is advisory.
 - Reply on the demo side has `is_routed == true`, `workflow_id == DEMO_WORKFLOW_ID`, `route_method == classified`. Fresh thread, so not `thread_match`.
 - Reply body **grounded in EVERY source listed in `source_files`** -- operator-judged per the same §V.57 contract that governs B4. Procedure:
   1. Load all source docs in one bundle:
@@ -705,7 +705,7 @@ Poll the outbound mailbox for BOTH replies (in either order), capping each at 12
 **Gate B7.5 (multi-request, multi-tool concurrency):**
 
 - BOTH replies present (CLI round-trip check; cap 120s each). Either missing means the system stalled one trigger while serving the other -- record as a Critical Bug (regression of the lab5.ca/mailpilot/ SLA under concurrent load).
-- **Per-span latency verdict via Logfire per §V.61.** Query the two agent.invoke spans by `email_id` (post §T.63; each span carries its own inbound trigger's id). Window `[T_SEND_B75, now]`, scope to the demo workflow:
+- **Per-span latency verdict via Logfire per §V.61.** Query the two agent.invoke spans by `email_id` (post `§T.63`; each span carries its own inbound trigger's id). Window `[T_SEND_B75, now]`, scope to the demo workflow:
 
   ```sql
   SELECT attributes->>'email_id' AS email_id,
@@ -727,10 +727,10 @@ Poll the outbound mailbox for BOTH replies (in either order), capping each at 12
 - BOTH replies routed on the demo side with `workflow_id == DEMO_WORKFLOW_ID` and `route_method == classified` (each is a fresh thread). Either routed differently means the classifier serialized or misfired under load.
 - BOTH replies grounded in their own `source_file` per §V.57, operator-judged with the same verdict-JSON schema as B4. Run `qa.py source --id "$QA_ID_B75a"` and `qa.py source --id "$QA_ID_B75b"` separately, then grade each reply against its own source. A cross-grounded reply (B75a's body cites B75b's source, or vice versa) is a state-leak Bug -- shared mutable state across concurrent agent invocations.
 - Logfire window `[T_SEND_B75, T_SEND_B75 + 90s]`, scope to `workflow_id == DEMO_WORKFLOW_ID`:
-  - Exactly **2** `agent.invoke` spans, each with `workflow_id` matching `DEMO_WORKFLOW_ID`, `trigger='task'`, and a populated `email_id` attribute (per §V.26(+) / §T.63). Attribute B75a vs B75b by the inbound-side `email_id` recorded on each span — distinct values disambiguate the pair without `agent_reasoning` substring inspection.
+  - Exactly **2** `agent.invoke` spans, each with `workflow_id` matching `DEMO_WORKFLOW_ID`, `trigger='task'`, and a populated `email_id` attribute (per §V.26(+) / `§T.63`). Attribute B75a vs B75b by the inbound-side `email_id` recorded on each span — distinct values disambiguate the pair without `agent_reasoning` substring inspection.
   - The two `agent.invoke` spans' wall-clock intervals MUST overlap (`start(later) < end(earlier)`). Strictly sequential execution defeats the stress test -- record as a Bug ("agent invocations serialized; expected concurrent") and investigate the run-loop / task-drain path. If a recent pydantic-ai or sync-loop change serialized at this layer, pin the working version while investigating.
-  - Each `agent.invoke` carries its own `search_drive_markdown` + `read_drive_markdown` + `reply_email` + `record_enrollment_outcome` chain. Tool spans across the two invocations MAY overlap (different threads, different `DriveClient` instances per `read_drive_markdown` call); a 60s+ Drive tool span anywhere in the window is the §B.34 race signature.
-  - Zero `is_exception=true` and zero `level=warn` spans on either invocation. A `drive_unavailable` tool return surfaced in the tool's structured response is acceptable (the broadened catch envelope from §T.60 step (b)); an unhandled exception escaping the tool wrapper is not.
+  - Each `agent.invoke` carries its own `search_drive_markdown` + `read_drive_markdown` + `reply_email` + `record_enrollment_outcome` chain. Tool spans across the two invocations MAY overlap (different threads, different `DriveClient` instances per `read_drive_markdown` call); a 60s+ Drive tool span anywhere in the window is the `§B.34` race signature.
+  - Zero `is_exception=true` and zero `level=warn` spans on either invocation. A `drive_unavailable` tool return surfaced in the tool's structured response is acceptable (the broadened catch envelope from `§T.60` step (b)); an unhandled exception escaping the tool wrapper is not.
 
 ### B8. Verify the CRM activity timeline
 
@@ -780,7 +780,7 @@ Window `[TEST_START_B, now]`. Spans to verify:
   - B4 (in-scope): `search_drive_markdown` + `read_drive_markdown` + `reply_email` + `record_enrollment_outcome`.
   - B6 (out-of-scope decline): `search_drive_markdown` (returning `[]`) + `reply_email` + `record_enrollment_outcome` (`read_drive_markdown` not required since no document matches).
   - B7 (compare-and-contrast): `search_drive_markdown` >=1 + `read_drive_markdown` exactly `EXPECTED_READ_COUNT` times (one per file in the pair's `source_files`) + `reply_email` + `record_enrollment_outcome`. Fewer reads than `EXPECTED_READ_COUNT` is the headline regression: agent guessed a doc instead of reading it. The set of `file_id` arguments to `read_drive_markdown` must equal the set Drive returned for the `source_files` names -- mismatch means the agent read the wrong doc.
-  - B75a / B75b (concurrent in-scope): each carries `search_drive_markdown` + `read_drive_markdown` + `reply_email` + `record_enrollment_outcome`. The two `read_drive_markdown` spans (one per invocation) MAY overlap (different threads against different `DriveClient` instances). Any single Drive span at the 60s ceiling is the §B.34 race signature.
+  - B75a / B75b (concurrent in-scope): each carries `search_drive_markdown` + `read_drive_markdown` + `reply_email` + `record_enrollment_outcome`. The two `read_drive_markdown` spans (one per invocation) MAY overlap (different threads against different `DriveClient` instances). Any single Drive span at the 60s ceiling is the `§B.34` race signature.
   - At least one KB-consulting tool call (`search_drive_markdown` or `list_drive_markdown`) is mandatory in all five. With >=30 docs in the folder, `list_drive_markdown` instead of `search_drive_markdown` on B4 / B7 / B75a / B75b is a regression. On B6 (decline), `list_drive_markdown` is acceptable.
 - `agent.invoke` (B7) `input_tokens` -- should be noticeably higher than B4 because the compare invocation pulls 2-4 full datasheets into the agent's context. A B7 token count at or below B4's signals the agent skipped one or more reads -- cross-check against the read-count gate.
 - Any `is_exception=true` or `level=warn` spans -- record. Drive 4xx/5xx surfacing as `drive_unavailable` from the tool is acceptable in the agent's tool-return ledger but should not be `is_exception=true` on the span.
@@ -799,7 +799,7 @@ Do not stop the sync loop. Do not run `make clean`. Do not recreate accounts, co
 
 **Concurrency.** P=8 -- high enough to interleave classification + `agent.invoke` under real concurrency, low enough that Gmail per-user send rate stays comfortably under quota. Do **not** raise P without first confirming Gmail rate limits for the impersonated user; tripping a Gmail-side 429 invalidates the run, not the system under test.
 
-**Two-budget SLA per §V.61(+).** Primary verdict is `sla_agent_seconds` (our-side agent execution); `sla_delivery_seconds` (Gmail Pub/Sub notify dwell + classification-pipeline lag) is advisory because it is jointly uncontrolled by Gmail-side batching. Steady-state single-source / decline sends (B4 / B6 / B7.5) gate `sla_agent_seconds <= 50s`; compare-type sends (B7) gate `sla_agent_seconds <= 90s` (compare-type 2-datasheet synthesis structurally exceeds the 50s single-source band per §B.61). Burst C gates non-compare `p95(sla_agent_seconds) <= 75s`; compare-type invocations are reported separately with an advisory ceiling of 120s (compare cost dominates the tail and would flap a blended p95 per §B.62). The public lab5.ca/mailpilot/ 90s promise remains the demo-test end-to-end gate (`/demo-test` G1), not a smoke-test gate.
+**Two-budget SLA per §V.61(+).** Primary verdict is `sla_agent_seconds` (our-side agent execution); `sla_delivery_seconds` (Gmail Pub/Sub notify dwell + classification-pipeline lag) is advisory because it is jointly uncontrolled by Gmail-side batching. Steady-state single-source / decline sends (B4 / B6 / B7.5) gate `sla_agent_seconds <= 50s`; compare-type sends (B7) gate `sla_agent_seconds <= 90s` (compare-type 2-datasheet synthesis structurally exceeds the 50s single-source band per `§B.61`). Burst C gates non-compare `p95(sla_agent_seconds) <= 75s`; compare-type invocations are reported separately with an advisory ceiling of 120s (compare cost dominates the tail and would flap a blended p95 per `§B.62`). The public lab5.ca/mailpilot/ 90s promise remains the demo-test end-to-end gate (`/demo-test` G1), not a smoke-test gate.
 
 Capture `TEST_START_C` (ISO, must be later than B's last activity).
 
@@ -890,7 +890,7 @@ Match each row's `subject` against `Re: <one of SUBJECTS_BURST>` (Gmail typicall
 
 Single window `[T_SEND_C, T_SEND_C + 300s]`, scope to `workflow_id == DEMO_WORKFLOW_ID` and `trigger == 'task'`.
 
-**Gate C4.a -- per-span SLA + token economics (two-budget split per §V.59(+) / §V.61(+); compare-type vs non-compare split per §V.61(+) / §B.62):**
+**Gate C4.a -- per-span SLA + token economics (two-budget split per §V.59(+) / §V.61(+); compare-type vs non-compare split per §V.61(+) / `§B.62`):**
 
 ```sql
 WITH read_counts AS (
@@ -954,7 +954,7 @@ FROM burst;
 
 Assertions (primary verdict = `sla_agent_seconds` per §V.61(+); `sla_delivery_seconds` is advisory only because Gmail-side Pub/Sub batching is jointly uncontrolled):
 
-- `n_invokes == 8` AND `n_distinct_email_ids == 8` -- no merged or dropped triggers (§V.26 / §T.63 contract: one span per inbound email).
+- `n_invokes == 8` AND `n_distinct_email_ids == 8` -- no merged or dropped triggers (§V.26 / `§T.63` contract: one span per inbound email).
 - `n_compare == 2` AND `n_noncompare == 6` -- matches the C1 mix (2 qa-cmp + 4 qa-in + 2 qa-out). Any mismatch means a compare invocation skipped one of its required reads OR a non-compare invocation issued a stray second read; cross-check against C4.c and the B7 tool-use gate before flagging.
 - `p95_sla_agent_noncompare_s <= 75` -- burst gate over non-compare invocations per §V.61(+). Matches the §V.23 burst-load formula `ceil(N * avg_invoke_s / sla_s)` sized for the 50s steady single-source ceiling. A breach here is an our-side regression of agent execution under load on single-source / decline traffic.
 - `n_exceptions == 0` AND `n_warns == 0`.
@@ -963,8 +963,8 @@ Assertions (primary verdict = `sla_agent_seconds` per §V.61(+); `sla_delivery_s
 
 Report (NOT gated):
 
-- `p95_sla_agent_compare_s`, `max_sla_agent_compare_s` -- compare-type advisory ceiling 120s per §V.61(+) / §B.62. Compare invocations load 2 datasheets (~60k input tokens vs ~22k single-source) and synthesize across them; the cost is structural, not a regression class. Trend-escalate on run-over-run drift past 120s; do NOT fail the run on a single breach unless the cause is the same root as §B.61 / §B.62 (intrinsic compare cost growing) rather than a prompt-loop regression (§V.71 cap firing).
-- `max_sla_delivery_s`, `p95_sla_delivery_s`, `p50_sla_delivery_s` -- Gmail Pub/Sub notify dwell + classification-pipeline lag dominate the tail even at N=8 single-wave (§B.53 / §B.54). Trend-escalate on run-over-run drift but do NOT fail the run on a single breach: our side cannot accelerate Gmail-side notify emission.
+- `p95_sla_agent_compare_s`, `max_sla_agent_compare_s` -- compare-type advisory ceiling 120s per §V.61(+) / `§B.62`. Compare invocations load 2 datasheets (~60k input tokens vs ~22k single-source) and synthesize across them; the cost is structural, not a regression class. Trend-escalate on run-over-run drift past 120s; do NOT fail the run on a single breach unless the cause is the same root as `§B.61` / `§B.62` (intrinsic compare cost growing) rather than a prompt-loop regression (§V.71 cap firing).
+- `max_sla_delivery_s`, `p95_sla_delivery_s`, `p50_sla_delivery_s` -- Gmail Pub/Sub notify dwell + classification-pipeline lag dominate the tail even at N=8 single-wave (`§B.53` / `§B.54`). Trend-escalate on run-over-run drift but do NOT fail the run on a single breach: our side cannot accelerate Gmail-side notify emission.
 - `max_total_s`, `p95_total_s` -- end-to-end (delivery + agent), retained for run-over-run trend continuity with the pre-amend bundled metric.
 
 **Gate C4.b -- concurrency proof (no serialization regression):**
@@ -980,7 +980,7 @@ WHERE a.email_id < b.email_id
 
 Assert `overlap_pairs >= 10`. With N=8 sends fired in a single P=8 wave and ~10-40s per `agent.invoke`, max possible overlap pairs is C(8,2)=28 and expected is close to that; this floor is generous enough that only strict serialization (drain-layer pool regression, §V.23 / §V.23(+)) can fail it. A failure here means the dispatcher serialized invocations -- record as a Critical Bug, since it defeats the burst-load oracle entirely.
 
-**Gate C4.c -- Drive race signatures absent (§B.34):**
+**Gate C4.c -- Drive race signatures absent (`§B.34`):**
 
 ```sql
 SELECT MAX(EXTRACT(EPOCH FROM (end_timestamp - start_timestamp))) AS max_dur_s,
@@ -994,7 +994,7 @@ WHERE deployment_environment = 'development'
 
 Assert:
 
-- `max_dur_s < 60` -- §B.34 60s socket-timeout signature absent across the burst's Drive tool calls.
+- `max_dur_s < 60` -- `§B.34` 60s socket-timeout signature absent across the burst's Drive tool calls.
 - `n_exc == 0` -- no unhandled exceptions escape the Drive tool wrappers.
 
 A 60s+ `read_drive_markdown` span under burst is a stronger signal than the same span in B6.5 (B7's single-invocation pair): it means the structural `sequential=True` registration (§V.38) regressed across concurrent agent invocations, not just within one. Record as a Critical Bug.
@@ -1211,7 +1211,7 @@ After §3, after auto-invocations have run, print:
 Spec hand-off
 =============
 Auto-filed (Critical/High Bugs):
-  - Bug <N> -- <title>: <result, e.g., "filed as §B.7 with §V.22", "cancelled by operator">
+  - Bug <N> -- <title>: <result, e.g., "filed as `§B.7` with §V.22", "cancelled by operator">
   - ...
 
 Operator review (print-only Bugs + all Invariants):
@@ -1228,7 +1228,7 @@ If a `/sdd:spec` invocation is cancelled or revised by the user mid-run, record 
 
 ## Timing
 
-Expected total: ~10-11 minutes. Phase 0 once, run loop once, no reset between scenarios. The added compare-and-contrast question (B7) costs roughly one extra ~60-90s `sla_agent` window over the prior baseline because it forces 2-4 `read_drive_markdown` calls and a multi-doc synthesis (compare-type steady ceiling is 90s per §V.61(+) / §B.61, vs 50s for single-source). The concurrent dual-send (B7.5) adds another ~50s window for the second of the two parallel replies (the two windows overlap, so the marginal cost is one reply window, not two). Scenario C (burst-load oracle) adds ~1-2 minutes for the 8-send burst plus aggregate verification; per-span `sla_agent` p95 must stay <=75s under burst on non-compare invocations (§V.61(+)), compare-type p95 is reported separately with an advisory 120s ceiling per §B.62, while `sla_delivery` is advisory because Gmail-side Pub/Sub batching dominates the tail.
+Expected total: ~10-11 minutes. Phase 0 once, run loop once, no reset between scenarios. The added compare-and-contrast question (B7) costs roughly one extra ~60-90s `sla_agent` window over the prior baseline because it forces 2-4 `read_drive_markdown` calls and a multi-doc synthesis (compare-type steady ceiling is 90s per §V.61(+) / `§B.61`, vs 50s for single-source). The concurrent dual-send (B7.5) adds another ~50s window for the second of the two parallel replies (the two windows overlap, so the marginal cost is one reply window, not two). Scenario C (burst-load oracle) adds ~1-2 minutes for the 8-send burst plus aggregate verification; per-span `sla_agent` p95 must stay <=75s under burst on non-compare invocations (§V.61(+)), compare-type p95 is reported separately with an advisory 120s ceiling per `§B.62`, while `sla_delivery` is advisory because Gmail-side Pub/Sub batching dominates the tail.
 
 | Phase / scenario                          | Duration |
 | ----------------------------------------- | -------- |
