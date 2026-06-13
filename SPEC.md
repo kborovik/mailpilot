@@ -122,8 +122,6 @@ V96: lead-contacts discovery — discover set = company.profile IS NOT NULL and 
 
 ## §T TASKS
 
-## archived: §T.1..§T.108 -> SPEC.archive.md (108 rows)
-
 id|status|task|cites
 T109|x|impl §V.51(+) per §B.71 — pair `database.py:151` connect-fail `logfire.exception` w/ `operator_event("error", source="database.connect", message=str(exc))`; add V51 sweep contract test enumerating run-reachable `logfire.exception` sites. Scope = grep `rg -n 'logfire\.exception' src/mailpilot/` -> each hit ! paired `operator_event("error")` in same except block (test asserts pairing). Failing test first per TDD.|V51,B71
 T110|x|prerequisite (src/mailpilot): add contact.title TEXT NULL + contact.email_confidence INT NULL columns (schema.sql) w/ CHECK email_confidence BETWEEN 0 AND 100; Contact model (models.py) gains both fields; CLI contact create/update accept --title + --email-confidence; contact list --max-email-confidence N surfaces low-score rows for cross-run operator review; range CHECK + TDD per CLAUDE.md|V95
@@ -132,8 +130,6 @@ T112|x|new lead-contacts skill + lead-contacts-find.js workflow + contact-finder
 T113|.|impl §V.3(+) per §B.73 — Logfire console exporter ! write stdout: configure_logging (cli.py:66) set ConsoleOptions(output=sys.stderr) so warn/debug console lines land stderr (all flags incl --debug); stdout stays JSON-only. Recurrence-guard test: warn-emitting CLI cmd (schema-drift path) -> assert stdout parses JSON and warn text in stderr not in stdout (capsys). Scope = grep `rg -n 'ConsoleOptions' src/mailpilot/` -> all hit carries output=sys.stderr. Failing test first per TDD.|V3,B73
 
 ## §B BUGS
-
-## archived: §B.1..§B.70 -> SPEC.archive.md (64 rows)
 
 id|date|cause|fix
 B71|2026-06-12|`initialize_database` connect-fail path (`database.py:151`): logfire.exception w/o paired operator_event("error"), reachable from `mailpilot run` startup — operator stderr silent on DB-connect failure. Recurrence-class: per-site behavioral tests (run.py paths only), no whole-surface sweep so new exception site ships unpaired. Fix: §V.51(+) + §T.109.|V51
