@@ -978,8 +978,15 @@ def list_contacts(
     since: str | None = None,
     include_disabled: bool = False,
     max_email_confidence: int | None = None,
+    min_email_confidence: int | None = None,
+    company_domain: str | None = None,
+    title: str | None = None,
 ) -> list[ContactSummary]:
     """List contacts as summaries with optional filters.
+
+    Joins ``company`` once (LEFT JOIN) so each summary carries
+    ``company_domain`` without an N+1 lookup per §V.5; ``company_domain``
+    is NULL when ``company_id`` is NULL.
 
     Args:
         connection: Open database connection.
@@ -992,6 +999,13 @@ def list_contacts(
             ``email_confidence <= N`` for cross-run operator review of
             low-score (high-risk) leads (§V.95); NULL-score rows are
             excluded (no signal to review).
+        min_email_confidence: When set, surfaces only rows with
+            ``email_confidence >= N``; composes with
+            ``max_email_confidence`` into a closed range. NULL-score rows
+            are excluded by the lower bound (§V.95).
+        company_domain: When set, matches the joined ``company.domain``.
+        title: When set, a case-insensitive substring (ILIKE) match on
+            ``contact.title``.
 
     Returns:
         List of contact summaries ordered by email.
@@ -999,21 +1013,32 @@ def list_contacts(
     conditions: list[SQL] = []
     params: dict[str, object] = {"limit": limit}
     if company_id is not None:
-        conditions.append(SQL("company_id = %(company_id)s"))
+        conditions.append(SQL("c.company_id = %(company_id)s"))
         params["company_id"] = company_id
     if since is not None:
-        conditions.append(SQL("created_at >= %(since)s"))
+        conditions.append(SQL("c.created_at >= %(since)s"))
         params["since"] = since
     if not include_disabled:
-        conditions.append(SQL("disabled_reason IS NULL"))
+        conditions.append(SQL("c.disabled_reason IS NULL"))
     if max_email_confidence is not None:
-        conditions.append(SQL("email_confidence <= %(max_email_confidence)s"))
+        conditions.append(SQL("c.email_confidence <= %(max_email_confidence)s"))
         params["max_email_confidence"] = max_email_confidence
+    if min_email_confidence is not None:
+        conditions.append(SQL("c.email_confidence >= %(min_email_confidence)s"))
+        params["min_email_confidence"] = min_email_confidence
+    if company_domain is not None:
+        conditions.append(SQL("co.domain = %(company_domain)s"))
+        params["company_domain"] = company_domain
+    if title is not None:
+        conditions.append(SQL("c.title ILIKE %(title)s"))
+        params["title"] = f"%{title}%"
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
-        "SELECT id, email, first_name, last_name, company_id, "
-        "email_confidence, disabled_reason, created_at "
-        "FROM contact {} ORDER BY email LIMIT %(limit)s"
+        "SELECT c.id, c.email, c.first_name, c.last_name, c.title, "
+        "c.company_id, co.domain AS company_domain, "
+        "c.email_confidence, c.disabled_reason, c.created_at "
+        "FROM contact c LEFT JOIN company co ON c.company_id = co.id "
+        "{} ORDER BY c.email LIMIT %(limit)s"
     ).format(where)
     rows = connection.execute(query, params).fetchall()
     return [ContactSummary.model_validate(row) for row in rows]
@@ -1032,18 +1057,22 @@ def search_contacts(
         limit: Maximum number of results.
 
     Returns:
-        Matching contact summaries ordered by email.
+        Matching contact summaries ordered by email. Each carries
+        ``title`` + ``company_domain`` (LEFT JOIN company per §V.5),
+        mirroring ``list_contacts``.
     """
     pattern = f"%{query}%"
     rows = connection.execute(
         """\
-        SELECT id, email, first_name, last_name, company_id,
-               email_confidence, disabled_reason, created_at
-        FROM contact
-        WHERE LOWER(email) LIKE LOWER(%(pattern)s)
-           OR LOWER(COALESCE(first_name, '')) LIKE LOWER(%(pattern)s)
-           OR LOWER(COALESCE(last_name, '')) LIKE LOWER(%(pattern)s)
-        ORDER BY email
+        SELECT c.id, c.email, c.first_name, c.last_name, c.title,
+               c.company_id, co.domain AS company_domain,
+               c.email_confidence, c.disabled_reason, c.created_at
+        FROM contact c
+        LEFT JOIN company co ON c.company_id = co.id
+        WHERE LOWER(c.email) LIKE LOWER(%(pattern)s)
+           OR LOWER(COALESCE(c.first_name, '')) LIKE LOWER(%(pattern)s)
+           OR LOWER(COALESCE(c.last_name, '')) LIKE LOWER(%(pattern)s)
+        ORDER BY c.email
         LIMIT %(limit)s
         """,
         {"pattern": pattern, "limit": limit},

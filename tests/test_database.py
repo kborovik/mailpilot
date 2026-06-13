@@ -568,6 +568,118 @@ def test_list_contacts_summary_carries_email_confidence(
     assert summaries[0].email_confidence == 33
 
 
+def test_list_contacts_summary_carries_title_and_company_domain(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.5: ContactSummary carries title + company_domain via LEFT JOIN company."""
+    company = make_test_company(database_connection, name="Acme", domain="acme.com")
+    create_contact(
+        database_connection,
+        email="vp@acme.com",
+        company_id=company.id,
+        title="VP Sales",
+    )
+    create_contact(database_connection, email="solo@nowhere.com")
+
+    summaries = {c.email: c for c in list_contacts(database_connection)}
+    joined = summaries["vp@acme.com"]
+    assert joined.title == "VP Sales"
+    assert joined.company_domain == "acme.com"
+    orphan = summaries["solo@nowhere.com"]
+    assert orphan.title is None
+    assert orphan.company_domain is None
+
+
+def test_search_contacts_summary_carries_title_and_company_domain(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.5: search_contacts mirrors the title + company_domain projection."""
+    company = make_test_company(database_connection, name="Acme", domain="acme.com")
+    create_contact(
+        database_connection,
+        email="lead@acme.com",
+        company_id=company.id,
+        title="Head of Ops",
+    )
+
+    results = search_contacts(database_connection, "lead@acme.com")
+    assert len(results) == 1
+    assert results[0].title == "Head of Ops"
+    assert results[0].company_domain == "acme.com"
+
+
+def test_list_contacts_min_email_confidence_filter(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.95: --min-email-confidence surfaces high-score rows; NULL excluded."""
+    low = create_contact(
+        database_connection, email="low@example.com", email_confidence=20
+    )
+    high = create_contact(
+        database_connection, email="high@example.com", email_confidence=95
+    )
+    create_contact(database_connection, email="unknown@example.com")
+    assert low is not None
+    assert high is not None
+
+    surfaced = list_contacts(database_connection, min_email_confidence=50)
+    assert {c.id for c in surfaced} == {high.id}
+
+
+def test_list_contacts_min_max_email_confidence_compose(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.95: min + max compose into a closed range; NULL excluded by both bounds."""
+    in_band = create_contact(
+        database_connection, email="band@example.com", email_confidence=60
+    )
+    too_low = create_contact(
+        database_connection, email="toolow@example.com", email_confidence=30
+    )
+    too_high = create_contact(
+        database_connection, email="toohigh@example.com", email_confidence=90
+    )
+    create_contact(database_connection, email="null@example.com")
+    assert in_band is not None
+    assert too_low is not None
+    assert too_high is not None
+
+    surfaced = list_contacts(
+        database_connection, min_email_confidence=50, max_email_confidence=70
+    )
+    assert {c.id for c in surfaced} == {in_band.id}
+
+
+def test_list_contacts_company_domain_filter(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.5: --company-domain matches the joined company.domain."""
+    acme = make_test_company(database_connection, name="Acme", domain="acme.com")
+    globex = make_test_company(database_connection, name="Globex", domain="globex.com")
+    keep = create_contact(database_connection, email="a@acme.com", company_id=acme.id)
+    create_contact(database_connection, email="g@globex.com", company_id=globex.id)
+    create_contact(database_connection, email="orphan@nowhere.com")
+    assert keep is not None
+
+    surfaced = list_contacts(database_connection, company_domain="acme.com")
+    assert {c.id for c in surfaced} == {keep.id}
+
+
+def test_list_contacts_title_filter(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.5: --title is a case-insensitive substring (ILIKE) match."""
+    vp = create_contact(
+        database_connection, email="vp@example.com", title="VP Engineering"
+    )
+    create_contact(database_connection, email="rep@example.com", title="Sales Rep")
+    create_contact(database_connection, email="blank@example.com")
+    assert vp is not None
+
+    surfaced = list_contacts(database_connection, title="engineer")
+    assert {c.id for c in surfaced} == {vp.id}
+
+
 def test_get_contact_by_email(database_connection: psycopg.Connection[dict[str, Any]]):
     contact = make_test_contact(database_connection, email="alice@test.com")
     found = get_contact_by_email(database_connection, "alice@test.com")

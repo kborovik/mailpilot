@@ -100,13 +100,18 @@ class ContactSummary(BaseModel):
 
     Carries ``email_confidence`` so ``contact list --max-email-confidence``
     surfaces the deliverability score alongside the row it filters on (§V.95).
+    Carries ``title`` + ``company_domain`` (joined via LEFT JOIN company per
+    §V.5) so the operator reads role + org from the CLI without a separate
+    company lookup; ``company_domain`` is NULL when ``company_id`` is NULL.
     """
 
     id: str
     email: str
     first_name: str | None
     last_name: str | None
+    title: str | None
     company_id: str | None
+    company_domain: str | None
     email_confidence: int | None
     disabled_reason: str | None
     created_at: datetime

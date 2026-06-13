@@ -982,12 +982,31 @@ def contact_search(query: str, limit: int) -> None:
     default=None,
     help="Surface only rows with email_confidence <= N (low-score lead review).",
 )
+@click.option(
+    "--min-email-confidence",
+    type=int,
+    default=None,
+    help="Surface only rows with email_confidence >= N (composes with --max).",
+)
+@click.option(
+    "--company-domain",
+    default=None,
+    help="Filter by the joined company domain (exact match).",
+)
+@click.option(
+    "--title",
+    default=None,
+    help="Filter by title (case-insensitive substring match).",
+)
 def contact_list(
     limit: int,
     company_id: str | None,
     since: str | None,
     include_disabled: bool,
     max_email_confidence: int | None,
+    min_email_confidence: int | None,
+    company_domain: str | None,
+    title: str | None,
 ) -> None:
     """List contacts as summaries."""
     from mailpilot.database import get_company, initialize_database, list_contacts
@@ -1003,6 +1022,9 @@ def contact_list(
             since=since,
             include_disabled=include_disabled,
             max_email_confidence=max_email_confidence,
+            min_email_confidence=min_email_confidence,
+            company_domain=company_domain,
+            title=title,
         )
         output({"contacts": [c.model_dump(mode="json") for c in contacts]})
     finally:

@@ -1539,6 +1539,9 @@ def test_contact_list_with_filters(
         since=None,
         include_disabled=False,
         max_email_confidence=None,
+        min_email_confidence=None,
+        company_domain=None,
+        title=None,
     )
 
 
@@ -1560,6 +1563,9 @@ def test_contact_list_include_disabled(
         since=None,
         include_disabled=True,
         max_email_confidence=None,
+        min_email_confidence=None,
+        company_domain=None,
+        title=None,
     )
 
 
@@ -1584,6 +1590,86 @@ def test_contact_list_max_email_confidence(
         since=None,
         include_disabled=False,
         max_email_confidence=40,
+        min_email_confidence=None,
+        company_domain=None,
+        title=None,
+    )
+
+
+def test_contact_list_min_email_confidence(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.95: --min-email-confidence N flows to list_contacts as the lower bound."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_contacts", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(
+            main, ["contact", "list", "--min-email-confidence", "60"]
+        )
+
+    assert result.exit_code == 0
+    mock_list.assert_called_once_with(
+        mock_connection,
+        limit=100,
+        company_id=None,
+        since=None,
+        include_disabled=False,
+        max_email_confidence=None,
+        min_email_confidence=60,
+        company_domain=None,
+        title=None,
+    )
+
+
+def test_contact_list_company_domain(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.5: --company-domain flows to list_contacts (joined company.domain match)."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_contacts", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(
+            main, ["contact", "list", "--company-domain", "acme.com"]
+        )
+
+    assert result.exit_code == 0
+    mock_list.assert_called_once_with(
+        mock_connection,
+        limit=100,
+        company_id=None,
+        since=None,
+        include_disabled=False,
+        max_email_confidence=None,
+        min_email_confidence=None,
+        company_domain="acme.com",
+        title=None,
+    )
+
+
+def test_contact_list_title(runner: CliRunner, mock_connection: MagicMock) -> None:
+    """§V.5: --title flows to list_contacts as a substring filter."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_contacts", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(main, ["contact", "list", "--title", "VP"])
+
+    assert result.exit_code == 0
+    mock_list.assert_called_once_with(
+        mock_connection,
+        limit=100,
+        company_id=None,
+        since=None,
+        include_disabled=False,
+        max_email_confidence=None,
+        min_email_confidence=None,
+        company_domain=None,
+        title="VP",
     )
 
 
@@ -1605,6 +1691,9 @@ def test_contact_list_with_since(runner: CliRunner, mock_connection: MagicMock) 
         since="2024-01-01T00:00:00",
         include_disabled=False,
         max_email_confidence=None,
+        min_email_confidence=None,
+        company_domain=None,
+        title=None,
     )
 
 
@@ -1686,7 +1775,8 @@ def test_contact_export_envelope_and_file(
     contact_a = _make_contact(id="id-1", email="alice@acme.com")
     contact_b = _make_contact(id="id-2", email="bob@beta.com")
     summaries = [
-        ContactSummary.model_validate(c.model_dump()) for c in (contact_a, contact_b)
+        ContactSummary.model_validate({**c.model_dump(), "company_domain": None})
+        for c in (contact_a, contact_b)
     ]
     export_file = str(tmp_path / "contacts.json")
     with (
@@ -1713,7 +1803,9 @@ def test_contact_export_stdout_only(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     contact = _make_contact(id="id-1", email="alice@acme.com")
-    summaries = [ContactSummary.model_validate(contact.model_dump())]
+    summaries = [
+        ContactSummary.model_validate({**contact.model_dump(), "company_domain": None})
+    ]
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
@@ -1802,7 +1894,8 @@ def test_contact_import_per_row_error_continues_batch(
     """Duplicate email on row 1 must not block create on row 2 (§V.63)."""
     existing = [_make_contact(id="id-existing", email="alice@acme.com")]
     existing_summaries = [
-        ContactSummary.model_validate(c.model_dump()) for c in existing
+        ContactSummary.model_validate({**c.model_dump(), "company_domain": None})
+        for c in existing
     ]
     entries = [
         {"email": "alice@acme.com"},
