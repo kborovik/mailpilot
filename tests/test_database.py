@@ -543,7 +543,13 @@ def test_email_confidence_check_admits_boundaries(
 def test_list_contacts_max_email_confidence_filter(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """§V.95: --max-email-confidence surfaces low-score rows; NULL excluded."""
+    """§V.95: --max-email-confidence surfaces low-score AND NULL rows.
+
+    NULL email_confidence = Bouncer-unknown = high risk: the operator review
+    filter surfaces it, never drops it (per §B.76). Recurrence guard for the
+    SQL three-valued-logic trap where ``email_confidence <= N`` alone excludes
+    NULL.
+    """
     risky = create_contact(
         database_connection, email="risky@example.com", email_confidence=20
     )
@@ -555,8 +561,8 @@ def test_list_contacts_max_email_confidence_filter(
     assert safe is not None
     assert unknown is not None
 
-    surfaced = list_contacts(database_connection, max_email_confidence=50)
-    assert {c.id for c in surfaced} == {risky.id}
+    surfaced = list_contacts(database_connection, max_email_confidence=70)
+    assert {c.id for c in surfaced} == {risky.id, unknown.id}
 
 
 def test_list_contacts_summary_carries_email_confidence(

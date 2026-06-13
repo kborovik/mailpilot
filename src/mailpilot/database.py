@@ -995,10 +995,12 @@ def list_contacts(
         since: ISO datetime lower bound on ``created_at``.
         include_disabled: When False (default), only contacts with
             ``disabled_reason IS NULL`` are returned.
-        max_email_confidence: When set, surfaces only rows with
-            ``email_confidence <= N`` for cross-run operator review of
-            low-score (high-risk) leads (§V.95); NULL-score rows are
-            excluded (no signal to review).
+        max_email_confidence: When set, surfaces rows with
+            ``email_confidence <= N OR email_confidence IS NULL`` for
+            cross-run operator review of low-score (high-risk) leads
+            (§V.95). NULL = Bouncer-unknown = unverified = high risk, so
+            it is surfaced for review, never skipped; admit-all (§V.96)
+            must not drop unknowns (§B.76).
         min_email_confidence: When set, surfaces only rows with
             ``email_confidence >= N``; composes with
             ``max_email_confidence`` into a closed range. NULL-score rows
@@ -1021,7 +1023,12 @@ def list_contacts(
     if not include_disabled:
         conditions.append(SQL("c.disabled_reason IS NULL"))
     if max_email_confidence is not None:
-        conditions.append(SQL("c.email_confidence <= %(max_email_confidence)s"))
+        conditions.append(
+            SQL(
+                "(c.email_confidence <= %(max_email_confidence)s "
+                "OR c.email_confidence IS NULL)"
+            )
+        )
         params["max_email_confidence"] = max_email_confidence
     if min_email_confidence is not None:
         conditions.append(SQL("c.email_confidence >= %(min_email_confidence)s"))
