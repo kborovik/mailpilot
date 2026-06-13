@@ -233,7 +233,7 @@ The batch loop caps in-flight enrichers at 3 per `parallel()` call — the chunk
 
 ## Run summary
 
-After all stages, emit one aggregate JSON: `{"created": N, "existing": N, "enriched": N, "skipped": N, "failed": N, "results": [...], "ok": true}` — omit seed fields on bare invocations, omit enrich fields when 0 stale rows. When >=1 collision-on-resolved-apex fired (per §Stage: seed), append `"collapsed": [{"inputs": [...], "resolved": <apex>}]` so the operator sees which distinct source rows merged onto one company — a bare `existing: N` count hides the merge.
+After all stages, emit one aggregate JSON: `{"created": N, "existing": N, "enriched": N, "skipped": N, "failed": N, "results": [...], "ok": true}` — omit seed fields on bare invocations, omit enrich fields when 0 stale rows. When the batch gate (per §Stage: batch gate) caps below the stale-count — operator picks `First 10`/`First 25` over a larger N, or `--limit N` < stale-count — append `"deferred": <stale-count - dispatched>` (the stale rows the stale query found minus the capped count actually dispatched to enrich) so the operator sees how many rows were left `profile IS NULL` for a follow-up run per §V.97; all stale dispatched -> `deferred: 0` or omit the field. A bare `created`/`enriched` count is never the sole remainder signal. When >=1 collision-on-resolved-apex fired (per §Stage: seed), append `"collapsed": [{"inputs": [...], "resolved": <apex>}]` so the operator sees which distinct source rows merged onto one company — a bare `existing: N` count hides the merge.
 
 ## Domain extraction & redirect resolution
 
