@@ -26,9 +26,10 @@ Emits ONE JSON object on stdout (stderr carries progress only):
 
     {
       "created":   ["<uuid>", ...],         # rows created this run
-      "existing":  ["<apex>", ...],          # already owned (duplicate_key)
+      "existing":  ["<apex>", ...],          # same-name re-seed (duplicate_key)
       "skipped":   [{"input","resolved","reason"}, ...],
-      "collapsed": [{"inputs":[...], "resolved":"<apex>"}, ...],
+      "collapsed": [{"resolved":"<apex>","owner_name":"<owner>",
+                     "incoming_names":[...]}, ...],  # name-divergent merges
       "stale":     [{"id","domain","name"}, ...],  # profile IS NULL, for enrich
       "dry_run":   false,
       "ok": true
@@ -210,6 +211,47 @@ def create_company(
     return "error", {"domain": domain, "reason": payload.get("error", "unknown")}
 
 
+def names_diverge(incoming_name: str, owner_name: str) -> bool:
+    """Whether an incoming CSV display name signals an entity merge (V.98).
+
+    A non-empty incoming display name that differs (case- and
+    whitespace-insensitive) from the apex owner's name flags a hidden
+    distinct-entity merge -> record under ``collapsed``. An empty incoming name
+    (plain-text / inline domain) carries no merge signal, and a same-name
+    re-seed stays a silent ``existing``.
+    """
+    incoming = re.sub(r"\s+", " ", incoming_name).strip().casefold()
+    if not incoming:
+        return False
+    owner = re.sub(r"\s+", " ", owner_name).strip().casefold()
+    return incoming != owner
+
+
+def fetch_owner_name(domain: str) -> str:
+    """Return the existing company row's name for ``domain`` (SPEC.md V.98).
+
+    On a create ``duplicate_key`` the resolved apex is already owned; comparing
+    the owner's name to the incoming CSV display name distinguishes a silent
+    re-seed (same name) from a hidden entity merge (divergent name). ``company
+    search`` matches name OR domain via LIKE, so filter for the exact-domain
+    row. Empty string if the row cannot be read.
+    """
+    proc = subprocess.run(
+        ["uv", "run", "mailpilot", "company", "search", domain],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    try:
+        companies = json.loads(proc.stdout)["companies"]
+    except json.JSONDecodeError, KeyError:
+        return ""
+    for company in companies:
+        if str(company.get("domain", "")).lower() == domain.lower():
+            return str(company.get("name") or "")
+    return ""
+
+
 def query_stale() -> list[dict[str, str]]:
     """Capture rows with ``profile IS NULL`` projected for the enrich Workflow."""
     proc = subprocess.run(
@@ -268,8 +310,20 @@ def seed(pairs: list[tuple[str, str]], dry_run: bool) -> dict[str, list[object]]
     would_create: list[dict[str, object]] = []
     existing: list[str] = []
     skipped: list[dict[str, object]] = []
-    resolved_to_inputs: dict[str, list[str]] = defaultdict(list)
+    owner_name_by_apex: dict[str, str] = {}
+    divergent_names_by_apex: dict[str, list[str]] = defaultdict(list)
     seen_resolved: set[str] = set()
+
+    def record_collision(resolved: str, display_name: str) -> None:
+        """Route a resolved-apex collision to collapsed vs silent existing (V.98)."""
+        owner_name = owner_name_by_apex.get(resolved, "")
+        if names_diverge(display_name, owner_name):
+            names = divergent_names_by_apex[resolved]
+            incoming = display_name.strip()
+            if incoming not in names:
+                names.append(incoming)
+        else:
+            existing.append(resolved)
 
     for (domain, display_name), apex, resolved in zip(
         pairs, apexes, resolved_list, strict=True
@@ -277,20 +331,23 @@ def seed(pairs: list[tuple[str, str]], dry_run: bool) -> dict[str, list[object]]
         if not apex:
             skipped.append({"input": domain, "resolved": None, "reason": "unparseable"})
             continue
-        resolved_to_inputs[resolved].append(apex)
         if resolved in seen_resolved:
-            # Collapsed onto an apex already handled this run.
-            existing.append(resolved)
+            # Collapsed onto an apex already handled this run (intra-batch).
+            record_collision(resolved, display_name)
             continue
         seen_resolved.add(resolved)
         name = display_name if display_name else resolved
         status, payload = create_company(resolved, name, dry_run)
         if status == "created":
             created.append(str(payload["id"]))
+            owner_name_by_apex[resolved] = name
         elif status == "would_create":
             would_create.append(payload)
+            owner_name_by_apex[resolved] = name
         elif status == "existing":
-            existing.append(resolved)
+            # Previously-seeded apex: the owner's name decides merge vs re-seed.
+            owner_name_by_apex[resolved] = fetch_owner_name(resolved)
+            record_collision(resolved, display_name)
         else:
             skipped.append(
                 {
@@ -301,9 +358,12 @@ def seed(pairs: list[tuple[str, str]], dry_run: bool) -> dict[str, list[object]]
             )
 
     collapsed = [
-        {"inputs": sorted(set(inputs)), "resolved": apex}
-        for apex, inputs in resolved_to_inputs.items()
-        if len(set(inputs)) > 1
+        {
+            "resolved": resolved,
+            "owner_name": owner_name_by_apex.get(resolved, ""),
+            "incoming_names": sorted(names),
+        }
+        for resolved, names in divergent_names_by_apex.items()
     ]
     return {
         "created": created,
