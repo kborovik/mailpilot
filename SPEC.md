@@ -36,7 +36,7 @@ Agent-operated CRM. Gmail = comms layer. Claude Code = strategist; internal Pyda
 
 V1: every CLI cmd loads settings first; DB + network init after (settings-first)
 V2: cli.py module-level imports = click only; heavy deps lazy-import inside cmd fns
-V3: stdout = strict JSON only; operator lifecycle + errors → stderr
+V3: stdout = strict JSON only (∀ flags, incl --debug); operator lifecycle + errors → stderr; Logfire console exporter ! target stderr (ConsoleOptions output=sys.stderr), never stdout — output unset defaults stdout ∴ console lines corrupt JSON envelope
 V4: every cmd output ! match §I.cli envelope; error path → {"error","message","ok":false} + exit 1
 V5: list/view rows carry parent denorm joined @ fetch — workflow rows + account_email; enrollment rows + workflow_name + contact_email + contact_name
 V7: EmailSummary projection ! include gmail_thread_id, is_routed, route_method — operator audits routing from CLI w/o Logfire
@@ -129,6 +129,7 @@ T109|x|impl §V.51(+) per §B.71 — pair `database.py:151` connect-fail `logfir
 T110|x|prerequisite (src/mailpilot): add contact.title TEXT NULL + contact.email_confidence INT NULL columns (schema.sql) w/ CHECK email_confidence BETWEEN 0 AND 100; Contact model (models.py) gains both fields; CLI contact create/update accept --title + --email-confidence; contact list --max-email-confidence N surfaces low-score rows for cross-run operator review; range CHECK + TDD per CLAUDE.md|V95
 T111|x|family rename lead-encreach -> lead-companies — skill dir + frontmatter name + trigger phrases; lead-encreach-enrich.js -> lead-companies-enrich.js (meta.name in saved file ∧ skill-body mirror byte-identical per §V.73); ∀ intra-skill lead-encreach ref; company-profiler agent unchanged; post-rename cite-DAG sweep over `rg -n 'lead-encreach' .claude/` per §B.72 lesson|V73,B72
 T112|x|new lead-contacts skill + lead-contacts-find.js workflow + contact-finder agent (sonnet) — per-company pipeline discover (Hunter Domain Search) -> org-chart (TheOrg) -> pick ≤ 5 decision-makers -> gap-fill (Hunter Email Finder) -> verify (Bouncer batch/sync 1 call) -> seed (mailpilot contact create); vendor keys env-only HUNTER_API_KEY/THEORG_API_KEY/BOUNCER_API_KEY (⊥ settings.py, ⊥ telemetry); skill thin: stale-query -> batch gate -> Workflow fan-out 3 contact-finder in flight, single company -> direct Task; new workflow body byte-identical to skill-mirror per §V.73|V96,V73
+T113|.|impl §V.3(+) per §B.73 — Logfire console exporter ! write stdout: configure_logging (cli.py:66) set ConsoleOptions(output=sys.stderr) so warn/debug console lines land stderr (∀ flags incl --debug); stdout stays JSON-only. Recurrence-guard test: warn-emitting CLI cmd (schema-drift path) → assert stdout parses JSON ∧ warn text ∈ stderr ∉ stdout (capsys). Scope = grep `rg -n 'ConsoleOptions' src/mailpilot/` → ∀ hit carries output=sys.stderr. Failing test first per TDD.|V3,B73
 
 ## §B BUGS
 
@@ -137,3 +138,4 @@ T112|x|new lead-contacts skill + lead-contacts-find.js workflow + contact-finder
 id|date|cause|fix
 B71|2026-06-12|`initialize_database` connect-fail path (`database.py:151`): logfire.exception w/o paired operator_event("error"), reachable from `mailpilot run` startup — operator stderr silent on DB-connect failure. Recurrence-class: per-site behavioral tests (run.py paths only), no whole-surface sweep ∴ new exception site ships unpaired. Fix: §V.51(+) + §T.109.|V51
 B72|2026-06-12|SPEC rebuild Phase 1 derivation sources + Phase 2 sweep (src, tests, CLAUDE.md only) excluded `.claude/skills/**` citers — 6 operative §V rows dropped, 13 cites dangled; surfaced by /sdd:check cite-DAG whole-repo scan. Fix: restore V22, V59, V62, V70, V73, V74 w/ original ids per numbering-anchor rule.|V22,V59,V62,V70,V73,V74
+B73|2026-06-13|configure_logging (cli.py:66) installs Logfire console exporter w/ ConsoleOptions output unset → defaults stdout; min_log_level="warn" (non-debug) ∴ logfire.warn lines (e.g. database.py:175 "schema drift detected") print stdout ahead of JSON envelope, violating V3 — json.load over `mailpilot company list` stdout fails "Extra data: line 1 column 2". Recurrence-class: any logfire console-exporter / diagnostic-lib write defaulting stdout; `2>/dev/null` convention blind (pollution on stdout not stderr). Fix: §V.3(+) + §T.113.|V3
