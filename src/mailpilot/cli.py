@@ -58,6 +58,8 @@ def scrub_tool_response_callback(match: ScrubMatch) -> Any:
 
 def configure_logging(debug: bool = False) -> None:
     """Configure Logfire from settings."""
+    import sys
+
     import logfire
 
     from mailpilot.settings import get_settings
@@ -70,6 +72,10 @@ def configure_logging(debug: bool = False) -> None:
         console=logfire.ConsoleOptions(
             min_log_level="debug" if debug else "warn",
             show_project_link=False,
+            # §V.3: console exporter ! target stderr. Default output=None
+            # routes to stdout, where warn/debug lines corrupt the JSON
+            # envelope ahead of `output()` (see §B.73).
+            output=sys.stderr,
         ),
         send_to_logfire="if-token-present",
         inspect_arguments=False,
