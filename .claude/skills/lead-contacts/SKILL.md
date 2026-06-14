@@ -3,13 +3,7 @@ name: lead-contacts
 description: |
   Discover decision-maker contacts for already-enriched companies and seed
   verified contact rows. For every company with a profile and fewer than 5
-  contacts, dispatch concurrent Sonnet contact-finder agents that run a
-  per-company pipeline -- Hunter Domain Search for observed emails, TheOrg
-  for org-chart role precision, an agent pick of <=5 decision-makers, Hunter
-  Email Finder gap-fill, a single Bouncer batch verification, then seed each
-  verified email via `mailpilot contact create` with a Bouncer-scored
-  email_confidence. Admit-all: every discovered + verified email becomes a
-  contact; low/unknown scores flag risk in the run summary, never drop a row.
+  contacts, find up to 5 decision-makers and seed each as a verified contact.
   Single free-form invocation -- no sub-commands. Triggers on "/lead-contacts",
   "find contacts", "discover decision-makers for enriched companies".
 argument-hint: [<company-id>... | <domain>...] [--limit N]

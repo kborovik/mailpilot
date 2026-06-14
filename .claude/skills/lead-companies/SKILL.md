@@ -1,15 +1,10 @@
 ---
 name: lead-companies
 description: |
-  Create company records from domain names or CSV exports (TheirStack and
-  similar), query companies missing profile enrichment, and dispatch
-  concurrent Sonnet enricher agents that fetch the company website
-  (curl + lynx, Tavily fallback) and distill a cold-email-grade JSON
-  profile into company.profile. Single free-form invocation -- no
-  sub-commands; the skill classifies the input itself. External data
-  sources contribute the apex domain plus an optional CSV display-name
-  placeholder -- all profile fields are agent-discovered from the website.
-  Triggers on "/lead-companies", "enrich companies", "create companies from domains".
+  Create company records from domain names or CSV lead exports, then enrich
+  each into a cold-email-grade profile. Single free-form invocation -- no
+  sub-commands; the skill classifies the input itself. Triggers on
+  "/lead-companies", "enrich companies", "create companies from domains".
 argument-hint: [<domain>... | <file-path>] [--limit N]
 allowed-tools: Bash(mailpilot company *), Bash(curl *), Bash(lynx *), Bash(python3 *), Read, Task, Workflow, AskUserQuestion
 model: opus
