@@ -32,6 +32,7 @@ It is a **liveness probe**, not a regression suite -- that is `/smoke-test`. Use
 
 ## Prerequisites
 
+- **Cross-skill dependency:** this skill ships no scripts of its own -- Steps 2 and 6 reuse the smoke-test-owned QA helper `.claude/skills/smoke-test/scripts/qa.py` (and its `qa_pairs.json`). Keep the two skills co-located; if smoke-test is moved or packaged separately that cited path goes stale and `/demo-test` breaks (SPEC `§V.99`).
 - `mailpilot` installed locally with config pointing at a local database (any -- the local CLI only persists the outbound send; no demo-workflow state is needed locally).
 - `mailpilot config get google_application_credentials` returns a valid path, or ADC reachable per SPEC `§V.37`.
 - Network access to Gmail API, Drive API (for `qa.py source`), and the Logfire backend.
