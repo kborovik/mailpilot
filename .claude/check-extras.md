@@ -101,9 +101,9 @@ C4 gated assertions (PASS = all hold, per variant; compare = read_drive_markdown
 - n_tool_errors_noncompare == 0 AND n_tool_errors_compare <= 2 (§V.70 per-branch; flat retry_rate <= 0.05 void at N=4, governs larger N only). Compare exhausting §V.71 cap-3 -> cap_reached warn -> already fails n_warns == 0.
 - avg_cache_hit_ratio >= 0.5 (§V.47 cache warmth).
 - overlap_pairs >= 2 (concurrency proof §V.23; max C(4,2)=6).
-- read_drive_markdown max_dur_s < 60 AND n_exc == 0 (§B.34 race signature absent, §V.38).
+- read_drive_markdown max_dur_s < 60 AND n_exc == 0 (httplib2-race signature absent, §V.38).
 
-Report (NOT gated): max_sla_agent_compare_s (advisory ceiling 120s per §B.62), max_sla_delivery_s, max_total_s, token totals.
+Report (NOT gated): max_sla_agent_compare_s (compare-type advisory ceiling 120s per §V.61), max_sla_delivery_s, max_total_s, token totals.
 
 Output: per-variant PASS|FAIL line + 4-bullet C4 metrics block + final OVERALL line; chat-only (no report file); no /sdd:spec auto-invoke.
 
