@@ -126,6 +126,13 @@ _NO_FABRICATION = (
     "than guess.\n"
 )
 
+# Per §V.41 (KB grounding: search-first, 2-search budget, read top >=3,
+# per-target search on compare) and §V.68 (pre-send fact-check: numeric tokens
+# must appear verbatim in a read doc). The verbatim-citation / no-unit-conversion
+# clause closes the compare-branch fact-check breach class (cross-datasheet unit
+# conversion fabricates tokens -> re-draft -> §V.70 retry-rate inflation). Per
+# §V.45 the prompt string itself carries no §-cite -- the governing invariants
+# are named here, not in the model-visible text.
 _DRIVE_GROUNDING = (
     "Workflow instructions reference a Google Drive folder of Markdown "
     "notes. Ground every reply in that folder. Prefer "
@@ -144,6 +151,16 @@ _DRIVE_GROUNDING = (
     "target-specific search_drive_markdown query for each distinct target "
     "before list_drive_markdown is acceptable as grounding for that target, "
     "even when other targets are already grounded by earlier searches.\n"
+    "Cite every numeric specification value -- capacities, flow rates, "
+    "pressures, dimensions -- verbatim as published in a read document's "
+    "table rows. Do not convert units (for example gph to gpd, gpd to gph, "
+    "or psi to bar), and do not compute, interpolate, or round any figure: a "
+    "number that does not appear verbatim in a read document is rejected by "
+    "the pre-send fact-check, forcing a re-draft. If the figure is "
+    "not published in the unit the sender asked for, quote it in its "
+    "published unit rather than converting. This applies with particular "
+    "force to compare-and-contrast replies, where cross-datasheet unit "
+    "conversion is the most common source of fabricated numeric tokens.\n"
 )
 
 

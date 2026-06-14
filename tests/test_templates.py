@@ -164,6 +164,26 @@ def test_inbound_google_drive_protocol_carries_per_target_compare_rule() -> None
         assert "compare-and-contrast" not in TEMPLATES[name].protocol
 
 
+def test_inbound_google_drive_protocol_forbids_numeric_derivation() -> None:
+    """§V.68(+)/§V.41: Drive-grounded replies must cite numeric spec values
+    verbatim from the source and must never unit-convert or compute derived
+    figures. This closes the compare-branch fact-check breach class observed
+    under burst (e.g. 5 gph -> 120 gpd, 100 gpd -> 4.17 gph, prose-buried
+    values quoted as if table-citable) where every derived/converted token is
+    rejected by the §V.68 pre-send fact-check, forcing self-correcting
+    re-drafts that inflate the §V.70 burst retry-rate.
+
+    §V.45: the rule lives in the _DRIVE_GROUNDING overlay bound only to
+    inbound-google-drive -- non-Drive templates do not read KB docs and so
+    must not carry the verbatim-citation ban."""
+    protocol = TEMPLATES["inbound-google-drive"].protocol
+    assert "verbatim as published" in protocol
+    assert "Do not convert units" in protocol
+    # Non-Drive templates must not pick up the verbatim-citation ban.
+    for name in ("outbound-general", "inbound-general"):
+        assert "verbatim as published" not in TEMPLATES[name].protocol
+
+
 def test_inbound_google_drive_drive_tools_marked_sequential() -> None:
     """§V.38 + §B.34: every Drive Tool binding must carry ``sequential=True``.
 
