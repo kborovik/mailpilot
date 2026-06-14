@@ -399,7 +399,7 @@ Assert:
 
 ## Output contract
 
-For **each** variant run, print one PASS/FAIL line followed by a short aggregate-metrics block, then a final overall line. Nothing else.
+For **each** variant run, print one PASS/FAIL line, a short aggregate-metrics block, then the **post-mortem / performance report** (next section). After all variants, print a final overall line. Nothing else.
 
 Per-variant line:
 
@@ -422,6 +422,20 @@ Do NOT:
 - Render a phase matrix, §1/§2/§3 sections, or read/grade any reply body. Structural health is the C4 aggregate, not message content.
 - Derive latency from the round-trip poll (SPEC `§V.61`).
 
+## Post-mortem / performance report
+
+Emitted **every run** (PASS or FAIL), **per variant**, immediately after that variant's C4 metrics block. It is **advisory only** -- it never alters the PASS/FAIL verdict, which the C4 gates alone decide (SPEC `§V.59`) -- and **chat-only**: no `.md` artifact, and it reports structural/timing aggregates only, never any reply body, so the aggregate-only contract stays intact (SPEC `§V.57`). Load the report-format template and the trend/timeline SQL from `.claude/check-extras.md` `§V.59` ("post-mortem report") at this step; they are kept there, not inlined here, per progressive-disclosure (SPEC `§V.100`).
+
+Three labelled parts, in order (a few lines each -- not a phase matrix, not §1/§2/§3 sections):
+
+(a) **Breach attribution.** For each C4 gate that FAILED this variant, name the failing span(s) by `email_id` / `trace_id` and the owning invariant: `sla_delivery` -> `§V.69`, `tool_error` (non-compare, or compare over the cap-2) -> `§V.70` branch, `overlap_pairs` -> `§V.23`, `read_drive_markdown` `max_dur` -> `§V.38` (the full gate->§V map is in check-extras). For a `sla_delivery` breach, check whether the breaching subject was resent in the B2 self-heal pass: if so, flag it a **self-heal-timing artifact** -- the resend re-anchored that subject's delivery clock after `T_SEND_C`, so it is advisory, not a `§V.69` regression; otherwise call it a **real regression**. On PASS, state "no gate breached".
+
+(b) **Run-over-run trend.** Run the widened-window trend query (check-extras `§V.59`) over prior runs in the **same** `deployment_environment` and compare this run's `sla_agent` p95, `sla_delivery` p95, `retry_rate`, and token totals against the recent trend. Call out any metric drifting toward its gate ceiling even while still passing.
+
+(c) **Per-invoke tool-call timeline.** Run the timeline query (check-extras `§V.59`) to emit, per invoke (`email_id`), the ordered sequence of `search_drive_markdown` / `read_drive_markdown` / `chat` calls from `records`, plus the per-trace read count. This surfaces search-first ordering (SPEC `§V.41`) and compare-vs-non-compare shape; it is the order/shape of calls, never reply content (SPEC `§V.57`).
+
+Keep it terse. Do NOT write it to a file, do NOT let it change the verdict, and do NOT grade reply content.
+
 ## On FAIL
 
 This skill is a gate, not a debugger. If a variant FAILs, the operator's next move is `/logfire:debug` to drill into the failing `[T_SEND_C, T_SEND_C+300s]` window with full span context, or to inspect the deployed instance (prod variant) / the local `mailpilot run` capture (dev variant). This skill does not retry, does not amend the spec, and does not auto-file an issue.
@@ -430,7 +444,7 @@ This skill is a gate, not a debugger. If a variant FAILs, the operator's next mo
 
 - SPEC `§V.52` -- `logfire.configure(environment=...)` so spans carry `deployment_environment`; each variant filters its own.
 - SPEC `§V.57` -- burst payload from `qa.py pick`, three-branch mix; aggregate-only, content not graded per-message.
-- SPEC `§V.59` -- this skill's contract: 2 variants from `outbound@lab5.ca`, prod warm/non-destructive vs dev full Phase 0, `[TGD-<HHMMSS>-<i>]` subjects, PASS = aggregate C4 + zero error/warn per env. Gate detail: `.claude/check-extras.md` `§V.59`.
+- SPEC `§V.59` -- this skill's contract: 2 variants from `outbound@lab5.ca`, prod warm/non-destructive vs dev full Phase 0, `[TGD-<HHMMSS>-<i>]` subjects, PASS = aggregate C4 + zero error/warn per env, plus the chat-only advisory post-mortem report every run. Gate detail + post-mortem report-format template + trend/timeline SQL: `.claude/check-extras.md` `§V.59` (kept there per SPEC `§V.100` progressive-disclosure).
 - SPEC `§V.61` -- latency verdict from `agent.invoke` spans (CLI poll = round-trip only); two-budget `sla_agent`/`sla_delivery` split. Thresholds: `.claude/check-extras.md` `§V.61`.
 - SPEC `§V.69` -- event-driven full sweep on classify; N=4 per-variant burst `T_delivery <= 75s`.
 - SPEC `§V.70` -- per-branch burst retry-rate: non-compare `== 0`, compare `<= 2` self-correcting fact-check re-drafts; flat `<= 5%` ratio governs larger N. Prod + dev measured separately. Measurement detail: `.claude/check-extras.md` `§V.70`.

@@ -107,6 +107,85 @@ Report (NOT gated): max_sla_agent_compare_s (compare-type advisory ceiling 120s 
 
 Output: per-variant PASS|FAIL line + 4-bullet C4 metrics block + final OVERALL line; chat-only (no report file); no /sdd:spec auto-invoke.
 
+### §V.59 post-mortem report (chat-only, advisory, every run per variant)
+
+Emitted after each variant's C4 metrics block, every run (PASS or FAIL). Never alters the verdict (§V.59 — C4 gates alone decide); no .md artifact; structural/timing aggregates only, never reply content (§V.57 intact). Format = 3 labelled parts (a)/(b)/(c), a few lines each — NOT a phase matrix / §1-§2-§3 report. Templates + SQL live here, not inlined in the skill body (§V.100).
+
+(a) Breach attribution. Per FAILED gate -> the failing span(s) + owning §V:
+
+| Breached gate | Failing span(s) to name | Owning §V |
+| --- | --- | --- |
+| n_invokes != 4 / n_distinct_email_ids != 4 | merged/dropped/extra agent.invoke (by email_id) | §V.26 |
+| n_compare != 1 / n_noncompare != 3 | mis-branched agent.invoke (x-check C4.c read counts) | §V.27 |
+| p95_sla_agent_noncompare > 75 | slowest non-compare agent.invoke (email_id) | §V.61 |
+| p95_sla_delivery > 75 | agent.invoke w/ max sla_delivery_seconds | §V.69 |
+| n_exceptions / n_warns > 0 | the is_exception / level='warn' span | §V.59 |
+| n_tool_errors_noncompare > 0 / n_tool_errors_compare > 2 | agent.invoke w/ tool_error_count > 0 (branch: non-compare strict, compare cap-2) | §V.70 |
+| avg_cache_hit_ratio < 0.5 | agent.invoke w/ low cache_read/in_tok | §V.47 |
+| overlap_pairs < 2 | the serialized agent.invoke set | §V.23 |
+| read_drive_markdown max_dur >= 60 / n_exc > 0 | the read_drive_markdown span | §V.38 |
+
+self-heal-timing artifact vs real regression (sla_delivery only): if the breaching invoke's subject is in the B2 self-heal resend set, the resend re-anchored its delivery_s after T_SEND_C -> flag artifact (advisory, not a §V.69 regression). Else real regression. On PASS -> "no gate breached".
+
+(b) run-over-run trend SQL (widened same-env window; latest row = this run, compare vs prior rows). sla_agent / retry_rate / tokens are run-independent (span-local), so trend cleanly; sla_delivery is per-run-anchored, so trend it via the agent-span end-to-end proxy and report this run's absolute p95 vs the §V.69 ceiling:
+
+```sql
+SELECT
+  date_trunc('day', start_timestamp) AS run_day,
+  COUNT(*) AS n_invokes,
+  approx_percentile_cont(EXTRACT(EPOCH FROM (end_timestamp - start_timestamp)), 0.95) AS p95_sla_agent_s,
+  SUM(COALESCE((attributes->>'tool_error_count')::int, 0))::float
+    / NULLIF(COUNT(*)::float, 0) AS retry_rate,
+  SUM((attributes->>'input_tokens')::int)  AS total_in_tok,
+  SUM((attributes->>'output_tokens')::int) AS total_out_tok
+FROM records
+WHERE deployment_environment = '<ENV>'
+  AND span_name = 'agent.invoke'
+  AND attributes->>'trigger' = 'task'
+  AND start_timestamp >= '<T_SEND_C>'::timestamptz - INTERVAL '14 days'
+  AND start_timestamp <= '<T_SEND_C>'::timestamptz + INTERVAL '300 seconds'
+GROUP BY run_day
+ORDER BY run_day;
+```
+
+Flag any metric drifting toward its gate ceiling even while still passing.
+
+(c) per-invoke tool-call timeline SQL (search/read/chat order per trace; call shape only, not content per §V.57):
+
+```sql
+WITH invoke AS (
+  SELECT trace_id, attributes->>'email_id' AS email_id, start_timestamp AS invoke_start
+  FROM records
+  WHERE deployment_environment = '<ENV>'
+    AND span_name = 'agent.invoke'
+    AND attributes->>'trigger' = 'task'
+    AND start_timestamp >= '<T_SEND_C>'
+    AND start_timestamp <= '<T_SEND_C>'::timestamptz + INTERVAL '300 seconds'
+    <WF_PREDICATE>
+)
+SELECT
+  i.email_id,
+  array_agg(COALESCE(r.attributes->>'gen_ai.tool.name', 'chat') ORDER BY r.start_timestamp) AS call_timeline,
+  COUNT(*) FILTER (WHERE r.attributes->>'gen_ai.tool.name' = 'search_drive_markdown') AS n_search,
+  COUNT(*) FILTER (WHERE r.attributes->>'gen_ai.tool.name' = 'read_drive_markdown')   AS n_read
+FROM invoke i
+JOIN records r ON r.trace_id = i.trace_id
+WHERE r.attributes->>'gen_ai.tool.name' IN ('search_drive_markdown', 'read_drive_markdown')
+   OR r.attributes->>'gen_ai.operation.name' = 'chat'
+GROUP BY i.email_id, i.invoke_start
+ORDER BY i.invoke_start;
+```
+
+call_timeline shows search-first ordering (§V.41); n_read >= 2 marks the compare invoke (matches C4.a is_compare).
+
+Report-format template (chat output):
+```
+post-mortem [<variant>/<ENV>]:
+  (a) breach: <"no gate breached" | <gate> -> <email_id> (§V.NN)[, self-heal artifact|real regression]; ...>
+  (b) trend: sla_agent p95 <this>s vs <prior-median>s ; sla_delivery p95 <this>s (ceil 75s) ; retry_rate <this> vs <prior> ; tokens in/out <this> vs <prior>
+  (c) timeline: <email_id>: [search,read,chat,...] (search <n>/read <n>) ; ... one line per invoke
+```
+
 ## §V.61 — reply-latency SLA thresholds
 
 sla_agent_seconds gating: > 50s steady-state critical; compare-type > 90s critical, 50-90s advisory.
