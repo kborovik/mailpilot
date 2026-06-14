@@ -86,16 +86,11 @@ Scoped runs (UUID/domain args): resolve each arg to its company row first; drop 
 
 ## Stage: batch gate
 
-- `len(stale) == 0` -> emit `{"seeded": 0, "skipped": 0, "failed": 0, "results": [], "ok": true}` and stop.
-- `--limit N` given -> cap to first N, no question.
-- `len(stale) > 10` and no `--limit` -> invoke `AskUserQuestion` (sole interaction gate):
-  - **question**: `"<N> enriched companies need contacts. How many should the finder process this run?"`
-  - **header**: `"Find batch"`
-  - **options**:
-    - `"First 10 (Recommended)"` -- cap to first 10
-    - `"First 25"` -- cap to first 25
-    - `"All <N>"` -- every stale row
-- Else (1-10 rows) -> proceed w/ all, no question.
+Shared gate mechanics (`--limit`, the `>10` `AskUserQuestion`, the First-10 / First-25 / All-N options, the 1-10 proceed rule) -> see `.claude/skills/lead-companies/references/lead-pipeline-conventions.md` (Batch gate). `<rows>` = the `stale[]` array from the stale query. This skill's per-skill gate parameters:
+
+- empty-set run summary (`len(stale) == 0`): `{"seeded": 0, "skipped": 0, "failed": 0, "results": [], "ok": true}`.
+- **question**: `"<N> enriched companies need contacts. How many should the finder process this run?"`
+- **header**: `"Find batch"`
 
 ## Stage: discover
 
@@ -199,10 +194,7 @@ After all stages, emit one aggregate JSON: `{"seeded": N, "skipped": N, "failed"
 
 ## Conventions
 
-- ASCII-only project artifacts per §C. Math-glyph encoding admitted for skill prose per `/sdd:glyph`.
-- All `mailpilot` commands run via `uv run mailpilot`.
-- Envelope shape per §V.4: `list|search|...` -> `{"<plural>": [...], "ok": true}`; `view|create|...` -> `{"<singular>": {...}, "ok": true}`. Extract through the wrap.
-- Capture stdout only (`2>/dev/null`) before any JSON parse. Every `uv run mailpilot` command writes an always-on operator-log line to stderr (`HH:MM:SS event=... k=v`); the JSON envelope -- including the `{"error":"duplicate_key", ...}` failure case from `contact create` -- is on stdout. Do not `2>&1` into a JSON parser: the leading stderr line corrupts the parse while the command actually succeeded.
+Shared across the lead-pipeline siblings (§V.100 single-source) -> see `.claude/skills/lead-companies/references/lead-pipeline-conventions.md` (Conventions: ASCII / `uv run mailpilot` / §V.4 envelope-unwrap / JSON-via-`python3` + `printf` / stdout-only capture past the always-on stderr operator-log line). The `{"error":"duplicate_key", ...}` failure case here is `contact create`.
 
 ## Prerequisites
 
@@ -211,6 +203,7 @@ After all stages, emit one aggregate JSON: `{"seeded": N, "skipped": N, "failed"
 - `curl` on PATH (the agent's vendor transport).
 - Anthropic credentials reachable (Sonnet finders).
 - `>=1` company already enriched (`profile IS NOT NULL`) -- run `/lead-companies` first.
+- Shared Conventions / batch-gate / Next-block prose lives in the sibling skill's `.claude/skills/lead-companies/references/lead-pipeline-conventions.md` (§V.100 single-source); this skill cites that path, so it goes stale if `/lead-companies` is moved or packaged alone.
 
 ## Rendering
 
@@ -218,7 +211,7 @@ After all stages, emit one aggregate JSON: `{"seeded": N, "skipped": N, "failed"
 
 ## OUTPUT -- "Next" block
 
-Heading `## Next`; 1-5 atomic items (one sentence each, no `Reply` prefix); positional dispatch.
+Next-block format (heading, 1-5 atomic items, positional dispatch) -> see `.claude/skills/lead-companies/references/lead-pipeline-conventions.md` (OUTPUT -- "Next" block).
 
 Canonical examples -- after a discovery run:
 
