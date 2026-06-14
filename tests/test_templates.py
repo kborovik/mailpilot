@@ -76,6 +76,27 @@ class TestUniversalTemplateInvariants:
         assert "No markdown" not in template.protocol
 
 
+def test_base_mandates_pipe_table_for_spec_rows() -> None:
+    """§V.42 / §B.78: _BASE must explicitly mandate a GFM pipe table for
+    product-spec rows so the outbound format lint is a backstop, not the
+    primary enforcement. A permissive "may use Markdown tables" alone is the
+    bug §B.78 records -- the agent emits a space-aligned spec block first, the
+    lint rejects, the agent retries (7/8 invocations under burst, retry_rate
+    0.875 >> the §V.70 0.05 ceiling)."""
+    base = templates_module._BASE  # pyright: ignore[reportPrivateUsage]
+    # Marked as a hard requirement, not a permissive suggestion.
+    assert "MUST" in base
+    # The mandated rendering is a pipe table with a |---| header separator.
+    assert "pipe table" in base
+    assert "|---|" in base
+    # Scoped to product-spec rows per §V.42 (model numbers, flow rates, ...).
+    assert "model numbers" in base
+    # The mandate flows into every template that composes _BASE.
+    for template in TEMPLATES.values():
+        assert "pipe table" in template.protocol
+        assert "|---|" in template.protocol
+
+
 # -- Per-template contract -----------------------------------------------------
 
 

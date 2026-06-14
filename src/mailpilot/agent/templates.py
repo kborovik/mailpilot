@@ -80,7 +80,14 @@ class WorkflowTemplate:
 
 _BASE = (
     "Keep your final summary brief (2-3 sentences, plain text, no emojis).\n"
-    "Email bodies may use Markdown formatting (headers, bold, tables).\n"
+    "Email bodies may use Markdown formatting (headers, bold, tables). When "
+    "the reply body carries product specifications (model numbers, flow "
+    "rates, dimensions, capacities), you MUST present them as a "
+    "GitHub-flavored Markdown pipe table with a header row and a |---| "
+    "separator -- e.g. `| Specification | Value |` then `|---|---|` and one "
+    "row per spec. Do not use space-aligned or single-spaced lines as a "
+    "substitute; such spec blocks are rejected by the outbound format lint "
+    "(§V.42).\n"
     "When a trigger email is included in your prompt, its full body is "
     "already provided -- do not call read_email to fetch it again. The "
     "current contact's profile is also inlined, so do not call read_contact "
