@@ -89,7 +89,7 @@ Source- and format-agnostic ingestion. Extracts the apex domain (+ optional CSV 
 1. Detect format from the file's first non-empty line (peek at raw bytes, not the `Read` tool's line-numbered output):
    - Contains `,` and >=1 known header token (`domain`, `website`, `company_url`, `url`) -> **CSV mode**.
    - Else -> **plain-text mode**.
-2. **CSV mode** — ! parse with an RFC-4180 parser (`csv.DictReader`), not physical-line iteration of `Read`-tool output or split-on-`\n` / split-on-`,` (per §V.74). Quoted fields carry embedded newlines and commas (lead-export `company_description` columns) so one logical row spans many physical lines; line iteration mis-seeds prose fragments as phantom rows. Domain column auto-detect = first match in `[domain, website, company_url, url]`; operator MAY name a column in the invocation prose to override. Name column auto-detect = first match in `[company_name, name, company]` — seeds the `company.name` placeholder per §V.72 carve-out (display label only, not a profile field; enricher overwrites w/ site-canonical name). Extraction recipe — one printed line per logical row, TAB-separated `<domain>\t<display-name>` (name blank when no name-ish column):
+2. **CSV mode** — MUST parse with an RFC-4180 parser (`csv.DictReader`), not physical-line iteration of `Read`-tool output or split-on-`\n` / split-on-`,` (per §V.74). Quoted fields carry embedded newlines and commas (lead-export `company_description` columns) so one logical row spans many physical lines; line iteration mis-seeds prose fragments as phantom rows. Domain column auto-detect = first match in `[domain, website, company_url, url]`; operator MAY name a column in the invocation prose to override. Name column auto-detect = first match in `[company_name, name, company]` — seeds the `company.name` placeholder per §V.72 carve-out (display label only, not a profile field; enricher overwrites w/ site-canonical name). Extraction recipe — one printed line per logical row, TAB-separated `<domain>\t<display-name>` (name blank when no name-ish column):
    ```
    python3 - "$CSV_PATH" "${COLUMN:-}" <<'PY'
    import csv, sys
@@ -170,7 +170,7 @@ uv run mailpilot company list --no-profile 2>/dev/null \
 
 Pass that JSON array as the Workflow `args` value directly — an actual JSON value, not a file path or a re-stringified blob. The snippet's `typeof args === 'string'` guard covers the runtime-stringifies case either way.
 
-The enrich logic is saved at `.claude/workflows/lead-companies-enrich.js` so INVOKE BY NAME — `Workflow({name: 'lead-companies-enrich', args: <array>})` — do not re-paste the body. The block below is the §V.73 spec-of-record mirror of that saved file (self-contained, runnable as authored); the body below `meta` ! stay byte-identical to the saved file (the saved `meta` adds registry-only fields — `whenToUse`, a fuller `description`):
+The enrich logic is saved at `.claude/workflows/lead-companies-enrich.js` so INVOKE BY NAME — `Workflow({name: 'lead-companies-enrich', args: <array>})` — do not re-paste the body. The block below is the §V.73 spec-of-record mirror of that saved file (self-contained, runnable as authored); the body below `meta` MUST stay byte-identical to the saved file (the saved `meta` adds registry-only fields — `whenToUse`, a fuller `description`):
 
 ```js
 export const meta = {

@@ -112,7 +112,7 @@ Follow your system prompt procedure. Return the JSON verdict per spec.
 
 `>=2` stale rows -> hand the capped `stale[]` array (from the stale-query Bash call) to the `Workflow` tool as `args` -- an actual JSON value, not a file path or a re-stringified blob. The snippet's `typeof args === 'string'` guard covers the runtime-stringifies case either way.
 
-The discover logic is saved at `.claude/workflows/lead-contacts-find.js` so INVOKE BY NAME -- `Workflow({name: 'lead-contacts-find', args: <array>})` -- do not re-paste the body. The block below is the §V.73 spec-of-record mirror of that saved file (self-contained, runnable as authored); the body below `meta` ! stay byte-identical to the saved file (the saved `meta` adds registry-only fields -- `whenToUse`, a fuller `description`):
+The discover logic is saved at `.claude/workflows/lead-contacts-find.js` so INVOKE BY NAME -- `Workflow({name: 'lead-contacts-find', args: <array>})` -- do not re-paste the body. The block below is the §V.73 spec-of-record mirror of that saved file (self-contained, runnable as authored); the body below `meta` MUST stay byte-identical to the saved file (the saved `meta` adds registry-only fields -- `whenToUse`, a fuller `description`):
 
 ```js
 export const meta = {

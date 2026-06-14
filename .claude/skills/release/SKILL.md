@@ -215,11 +215,11 @@ Apply `core:steno` skill to release notes. Drop articles and filler, fragments a
 ## Requirements
 
 - Manifest = `pyproject.toml`. Build backend = `uv_build` (declared in `[build-system]`). Single wheel emitted: `mailpilot-<x.y.z>-py3-none-any.whl`.
-- `uv.lock` ! re-locked alongside the manifest bump and committed in the same `chore: release v<x.y.z>` commit. Why: `uv.lock` records the workspace package version; leaving it stale means the next `uv` invocation rewrites it outside any release commit.
+- `uv.lock` MUST be re-locked alongside the manifest bump and committed in the same `chore: release v<x.y.z>` commit. Why: `uv.lock` records the workspace package version; leaving it stale means the next `uv` invocation rewrites it outside any release commit.
 - SemVer only — `x.y.z`, no pre-release suffixes.
 - Annotated tag (`-a` / `--annotate`), not lightweight.
 - All `git tag --annotate` and `git commit` calls pass `--cleanup=verbatim` — git's default `commit.cleanup=strip` would silently drop `#`-prefix lines (release-note section headers) from messages.
-- Confirm before mutation. Do not silently rewrite version files. Confirm step ! list tags scheduled for deletion in retag-baseline mode, push refs, wheel path, gh release create cmd.
+- Confirm before mutation. Do not silently rewrite version files. Confirm step MUST list tags scheduled for deletion in retag-baseline mode, push refs, wheel path, gh release create cmd.
 - Self-release commits (`chore: release v*`) excluded from auto-detect scan.
 - Baseline mode for first release: do not bump if no prior tag and no explicit arg.
 - Retag-baseline recovery: explicit `retag-baseline` arg drops every prior tag matching pattern and retags HEAD at current manifest version. Requires >= 1 prior tag. Manifest unchanged.
