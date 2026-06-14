@@ -8,9 +8,13 @@ MAKEFLAGS += --no-builtin-rules --no-builtin-variables
 export PATH := $(abspath .venv)/bin:/opt/homebrew/opt/postgresql@18/bin:$(PATH)
 DATA_DIR := $(HOME)/.mailpilot
 
-default: .venv help
+default: submodules .venv help
 
-check: lint py-test ## Run lint and tests
+check: submodules lint py-test ## Run lint and tests
+
+submodules: ## Initialize the workflows/ catalog git submodule
+	$(call header,Updating git submodules)
+	git submodule update --init
 
 lint: py-format py-lint py-types ## Lint Python code
 

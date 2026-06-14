@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Any, NoReturn
 import click
 
 if TYPE_CHECKING:
+    import pathlib
+
     from logfire import ScrubMatch
 
 # Keep in sync with ActivityType in models.py and CHECK constraint in schema.sql.
@@ -2493,39 +2495,57 @@ def _import_workflow_row(
     return _import_workflow_update(connection, current, entry)
 
 
-@workflow.command("import")
-@click.option("--account-id", required=True, help="Owning Gmail account ID.")
-@click.option(
-    "--file",
-    "file",
-    default=None,
-    type=click.Path(exists=True, dir_okay=False),
-    help="Path to JSON payload. If omitted, read from stdin.",
-)
-def workflow_import(account_id: str, file: str | None) -> None:
-    """Import workflows for an account from a declarative JSON payload (§V.63).
+def _parse_toml_catalog_dir(
+    path: pathlib.Path,
+) -> tuple[list[dict[str, Any]], list[dict[str, object]]]:
+    """Glob ``*.toml`` in a catalog dir; collect each as an entry (§V.103).
 
-    The payload is the same shape produced by ``workflow export``: a list of
-    objects with ``name``, ``template``, ``objective``, ``instructions``,
-    ``theme``. Upsert is keyed on ``(account_id, name)``. Workflows absent
-    from the DB are created (and activated when both ``objective`` and
-    ``instructions`` are non-empty). Workflows already present are updated
-    in-place for changed fields only; ``template`` differences emit a per-row
-    ``template_immutable`` error and the batch continues. ``status`` is never
-    written by import -- it remains operational state owned by start/stop.
+    A file that fails to parse becomes a per-row error so the rest of the
+    catalog still imports (§V.63).
+    """
+    import tomllib
+
+    entries: list[dict[str, Any]] = []
+    pre_errors: list[dict[str, object]] = []
+    for toml_path in sorted(path.glob("*.toml")):
+        try:
+            with toml_path.open("rb") as handle:
+                entries.append(tomllib.load(handle))
+        except tomllib.TOMLDecodeError as exc:
+            pre_errors.append(
+                {
+                    "name": toml_path.name,
+                    "error": "validation_error",
+                    "message": f"malformed TOML in {toml_path.name}: {exc}",
+                }
+            )
+    return entries, pre_errors
+
+
+def _load_workflow_import_entries(
+    file: str | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, object]]]:
+    """Parse a ``workflow import`` source into entries + per-row pre-errors (§V.103).
+
+    Dispatch by shape: a directory globs ``*.toml`` (catalog batch), a ``.toml``
+    file parses to one entry, and anything else (a ``.json`` file or stdin) is a
+    JSON array. Top-level malformed input exits via ``output_error``.
     """
     import pathlib
     import sys
+    import tomllib
 
-    from mailpilot.database import (
-        get_account,
-        initialize_database,
-        list_workflows_full,
-    )
-    from mailpilot.operator_log import cli_mutation
-
-    if file:
-        raw = pathlib.Path(file).read_text()
+    if file is not None:
+        path = pathlib.Path(file)
+        if path.is_dir():
+            return _parse_toml_catalog_dir(path)
+        if path.suffix == ".toml":
+            try:
+                with path.open("rb") as handle:
+                    return [tomllib.load(handle)], []
+            except tomllib.TOMLDecodeError as exc:
+                output_error(f"malformed TOML: {exc}", "validation_error")
+        raw = path.read_text()
     else:
         if sys.stdin.isatty():
             output_error(
@@ -2534,13 +2554,56 @@ def workflow_import(account_id: str, file: str | None) -> None:
             )
         raw = sys.stdin.read()
     try:
-        entries = json.loads(raw)
+        parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
         output_error(f"malformed JSON: {exc}", "validation_error")
-    if not isinstance(entries, list):
+    if not isinstance(parsed, list):
         output_error(
             "payload must be a JSON array of workflow objects", "validation_error"
         )
+    return parsed, []
+
+
+@workflow.command("import")
+@click.option("--account-id", required=True, help="Owning Gmail account ID.")
+@click.option(
+    "--file",
+    "file",
+    default=None,
+    type=click.Path(exists=True),
+    help=(
+        "Workflow source. '.json' = a workflow array (live-state dump); '.toml' "
+        "= one workflow (catalog entry); a directory imports every '*.toml' in "
+        "it. If omitted, JSON is read from stdin."
+    ),
+)
+def workflow_import(account_id: str, file: str | None) -> None:
+    """Import workflows for an account from a declarative source (§V.63, §V.103).
+
+    Dispatch is by input shape:
+
+    * ``--file X.json`` (or stdin) -- a JSON array of workflow objects, the same
+      shape ``workflow export`` produces (live-state dump).
+    * ``--file X.toml`` -- one workflow as pure TOML; ``instructions`` may use a
+      multi-line literal string. Parsed to a row byte-identical to the JSON path.
+    * ``--file <dir>`` -- every ``*.toml`` in the directory (catalog batch); a
+      file that fails to parse becomes a per-row error and the batch continues.
+
+    Each parsed entry feeds the same upsert (keyed on ``(account_id, name)``)
+    and validation as the JSON path: workflows absent from the DB are created
+    (and activated when both ``objective`` and ``instructions`` are non-empty),
+    present workflows are updated for changed fields only, ``template``
+    differences emit a per-row ``template_immutable`` error, and ``status`` is
+    never written by import. Stdin remains JSON only.
+    """
+    from mailpilot.database import (
+        get_account,
+        initialize_database,
+        list_workflows_full,
+    )
+    from mailpilot.operator_log import cli_mutation
+
+    entries, pre_errors = _load_workflow_import_entries(file)
 
     connection = initialize_database(_database_url())
     try:
@@ -2550,13 +2613,14 @@ def workflow_import(account_id: str, file: str | None) -> None:
             "workflow",
             "import",
             account_id=account_id,
-            row_count=len(entries),
+            row_count=len(entries) + len(pre_errors),
         ):
             existing = {w.name: w for w in list_workflows_full(connection, account_id)}
-            results = [
+            results: list[dict[str, object]] = [*pre_errors]
+            results.extend(
                 _import_workflow_row(connection, account_id, existing, entry)
                 for entry in entries
-            ]
+            )
             output({"workflows": results})
     finally:
         connection.close()

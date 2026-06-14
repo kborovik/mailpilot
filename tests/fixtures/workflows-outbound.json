@@ -1,9 +1,0 @@
-[
-  {
-    "name": "Outbound Smoke A",
-    "template": "outbound-general",
-    "objective": "Send a single personalized email about ${TOPIC_A} that incorporates contact and company context, and mark the enrollment completed or failed based on the reply",
-    "instructions": "You are a sales rep for Lab5. Before composing, call BOTH read_contact AND read_company to load context about the recipient and their organization, including any notes attached to them. If a note's body contains a 'Reference: <code>' line, you MUST include that exact reference code verbatim (e.g., 'Reference: a1b2c3') somewhere in the email body so the recipient's procurement tracking works -- this is non-optional. Then send ONE email about ${TOPIC_A}. Subject MUST be exactly '${SUBJECT_A}'. Body MUST use Markdown (greeting, 2-3 sentence paragraph that weaves in at least one specific detail from the contact or company context, a 3-row 2-column table). When you receive a reply, do not send another email -- read the reply and call record_enrollment_outcome with status='completed' if the reply expresses interest or status='failed' if it declines, then stop. Do not call disable_contact -- this is per-workflow outcome tracking, not a global contact block. Do not create follow-up tasks.",
-    "theme": "blue"
-  }
-]

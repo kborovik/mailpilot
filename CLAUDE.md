@@ -46,7 +46,9 @@ Concrete shape lives in code; spec invariants govern behaviour.
 - **Drive KB** (`drive.py`, `DriveClient`) — `drive.readonly` only. Folder ID in
   `workflow.instructions`. Isolation per §V.34-35.
 - **Workflows** — agent shape owned by template registry (`agent/templates.py`),
-  §V.44-46.
+  §V.44-46. File-based workflow *definitions* live in `workflows/*.toml` (private
+  `kborovik/workflows` submodule, §V.103) — distinct from `.claude/workflows/*.js`
+  Claude Code orchestration *scripts* (§V.73-74).
 - **Email rendering** (`email_renderer.py`) — Markdown to HTML, inline styles.
   Themes per §V.92.
 - **CLI** (`cli.py`) — thin dispatcher, JSON-only stdout. §V.1-5; full surface

@@ -95,6 +95,8 @@ This variant rebuilds local state from scratch and runs a local `mailpilot run` 
 
 ### dev Phase 0 setup
 
+**First**, materialize the catalog submodule: `git submodule update --init` (SPEC `§V.103`). Step 5 imports `workflows/demo-lab5-mailpilot.toml` from it; on a bare clone that file is absent until the submodule is initialized, and the import fails loud on a missing path.
+
 1. `make clean` -- drops and re-applies the schema; Gmail mailbox contents are untouched.
 2. Ensure development-scoped telemetry so the burst's spans carry `deployment_environment='development'` (SPEC `§V.52`):
    ```
@@ -112,11 +114,11 @@ This variant rebuilds local state from scratch and runs a local `mailpilot run` 
    mailpilot contact create --email outbound@lab5.ca --first-name Outbound --last-name TGD --company-id <COMPANY_ID>
    ```
    Save `COMPANY_ID`, `OUTBOUND_CONTACT_ID`.
-5. Import the demo inbound workflow (declarative, SPEC `§V.63`; the operator-style instructions cite the real folder id):
+5. Import the demo inbound workflow from the `workflows/` catalog submodule (declarative, SPEC `§V.63`/`§V.103`; the operator-style instructions cite the real folder id):
    ```
    mailpilot workflow import \
      --account-id <INBOUND_ACCOUNT_ID> \
-     --file tests/fixtures/workflows-inbound.json
+     --file workflows/demo-lab5-mailpilot.toml
    ```
    `workflow import` upserts on `(account_id, name)` and auto-activates when objective + instructions are non-empty. Capture the id and pre-enroll the sender:
    ```
@@ -285,7 +287,7 @@ done
 
 ### B4. Logfire aggregate gates (C4) -- the verdict
 
-All gates query `deployment_environment = '<ENV>'`, window `[T_SEND_C, T_SEND_C + 300s]`, `span_name = 'agent.invoke'`, `trigger = 'task'`. The dev variant additionally scopes by `<WF_PREDICATE>`; the prod variant omits it (the deployed workflow id is not known locally -- the burst is identified by env + trigger + window, which assumes the deployed demo system is otherwise quiet during the test). Primary verdict = `sla_agent_seconds` (our-side agent execution) per `§V.61`.
+Run each gate's SQL with `mcp__claude_ai_logfire__query_run` (project `mailpilot`); the returned rows are the verdict. All gates query `deployment_environment = '<ENV>'`, window `[T_SEND_C, T_SEND_C + 300s]`, `span_name = 'agent.invoke'`, `trigger = 'task'`. The dev variant additionally scopes by `<WF_PREDICATE>`; the prod variant omits it (the deployed workflow id is not known locally -- the burst is identified by env + trigger + window, which assumes the deployed demo system is otherwise quiet during the test). Primary verdict = `sla_agent_seconds` (our-side agent execution) per `§V.61`.
 
 **Gate C4.a -- per-span SLA + token economics (two-budget split, compare vs non-compare):**
 
