@@ -49,7 +49,7 @@ All three scenarios are **mandatory**. `make clean` runs **once**, at the very s
 
 ## Scripts
 
-Located at `.claude/skills/smoke-test/scripts/`. All QA-only -- KB-content maintenance (PDF conversion, verification, Drive push) lives outside the smoke test except for the Drive sync helper below.
+Located at `.claude/skills/smoke-test/scripts/`. All QA-only -- KB-content maintenance (datasheet authoring, PDF conversion, Drive upload) lives outside the smoke test; the demo Drive folder is hand-maintained, not synced from the repo (see Maintenance below).
 
 **Runtime (used during the test, in B3/B4/B6/B7):**
 
@@ -58,10 +58,9 @@ Located at `.claude/skills/smoke-test/scripts/`. All QA-only -- KB-content maint
 - `qa.py check --id ID --reply-text "<body>" | --reply-file PATH` -- **out-of-scope only** post-§V.57. Validates a decline reply against `forbidden_token_pairs` and `decline_signals`. Exit 0 = pass, 1 = fail, 2 = caller passed a non-outscope id (in-scope grading is operator-judged in gate B4; compare grading is operator-judged in gate B7). JSON on stdout lists fabrications / decline-signal absence.
 - `qa_pairs.json` -- 29 in-scope + 11 compare + 5 out-of-scope pairs. In-scope pairs retain `expected_tokens` for historical-run repro but the field is no longer consumed by any gate; the live source loaded via `qa.py source` is the grounding evidence. Compare pairs carry `source_files: list[str]` (>=2 files) and force the agent to issue >=2 `read_drive_markdown` calls and synthesize across manufacturers (Dow FilmTec vs Hydranautics vs LG Chem vs Toray RO membranes, Pulsafeeder vs ProMinent dosing pumps, Watts UV-COM vs Trojan UVMax UV, Pure Aqua PAPV vs ROPV pressure vessels, etc.). Out-of-scope pairs name (vendor, spec-shape) regex pairs the reply MUST NOT match, plus decline-signal phrases the reply MUST contain.
 
-**Maintenance (run only after the demo Drive folder content changes):**
+**Maintenance (only after the demo Drive folder content changes):**
 
-- `kb-docs/` -- repo source-of-truth markdown for the demo KB. The agent reads from Drive, not from this directory; this is the file set that gets pushed to Drive by `sync_kb_to_drive.py`. Edit files here, then sync.
-- `sync_kb_to_drive.py` -- push every `*.md` from `kb-docs/` into the demo Drive folder. Impersonates `kb@lab5.ca` (Shared Drive Manager); requires the service account to be authorized for `https://www.googleapis.com/auth/drive` (the full RW scope, not the read-only scope the test loop uses). Idempotent: existing files are content-diffed and updated in place so `web_view_link` stays stable; new files get `anyoneWithLink:reader` so the link the agent quotes opens for external recipients. `--dry-run` reports planned actions without writing. Run after adding manufacturer datasheets to `kb-docs/` and before re-running the smoke test.
+- The demo KB is hand-maintained directly in the demo Drive folder (`1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat`, inside Shared Drive `MailPilot`) -- there is no repo source-of-truth directory and no sync script. To add or edit a manufacturer datasheet, upload the `.md` to that folder as `kb@lab5.ca` (the Shared Drive Manager): via the Drive web UI, or any `https://www.googleapis.com/auth/drive` RW-scoped client impersonating `kb@lab5.ca` (the read-only scope the test loop uses cannot write). Set `anyoneWithLink:reader` on each new file so the `web_view_link` the agent quotes opens for external recipients. Then regenerate `qa_pairs.json` if you added an in-scope source.
 - `generate_qa_pairs.py` -- regenerate `qa_pairs.json`. Reads each `.md` from the live Drive folder via the impersonated DriveClient, asks Haiku 4.5 to draft one in-scope question per file with verifiable expected_tokens. Out-of-scope pairs are hand-curated inside the script; compare pairs are hand-curated directly in `qa_pairs.json` (one good compare pair takes more author judgement than one in-scope pair, so the model isn't asked to draft them).
 
 ---
@@ -106,7 +105,7 @@ print(len(files), [f['name'] for f in files])
 "
 ```
 
-Expect **at least 30 markdown files** (the original water-treatment catalog, plus the five compare-and-contrast targets pushed by `sync_kb_to_drive.py`: `lg-chem-bw-440-r-g2-ro-membrane.md`, `toray-tm720-440-ro-membrane.md`, `prominent-gamma-l-metering-pump.md`, `trojan-uvmax-pro-uv-disinfection.md`, `ropv-r80300b-pressure-vessel-fiberglass.md`). The size matters for two reasons: the agent can no longer succeed by listing every file (regression-masking risk for `search` vs `list`), and the compare-target docs MUST be present or gate B7 cannot grade groundedness against the live sources. If any of the five compare-target files is missing, run `uv run python .claude/skills/smoke-test/scripts/sync_kb_to_drive.py` to push them from the repo source-of-truth before continuing.
+Expect **at least 30 markdown files** (the original water-treatment catalog, plus the five compare-and-contrast targets: `lg-chem-bw-440-r-g2-ro-membrane.md`, `toray-tm720-440-ro-membrane.md`, `prominent-gamma-l-metering-pump.md`, `trojan-uvmax-pro-uv-disinfection.md`, `ropv-r80300b-pressure-vessel-fiberglass.md`). The size matters for two reasons: the agent can no longer succeed by listing every file (regression-masking risk for `search` vs `list`), and the compare-target docs MUST be present or gate B7 cannot grade groundedness against the live sources. If any of the five compare-target files is missing, upload it to the demo Drive folder (`1IUuPinOopUv_YWOZyFpt2ZX8Hd8bpZat`) as `kb@lab5.ca` with `anyoneWithLink:reader` before continuing -- the folder is hand-maintained, so there is no sync script to re-run.
 
 If the count is zero or `not_found`, the failure is Drive ACL, not KB content -- `inbound@lab5.ca`'s Shared Drive Reader membership is what makes files visible to the impersonated user. `anyoneWithLink:reader` alone does **not** make files appear here -- it only governs who can open the URL once it's pasted into the reply.
 
@@ -345,7 +344,7 @@ Do not stop the sync loop. Do not run `make clean`. Do not recreate accounts or 
   - `pure-aqua-industrial-water-softener.md` -- SF-series softeners (e.g., SF-100S).
   - `watts-uv-com-disinfection.md` -- UV-COM disinfection units.
 
-  Compare-and-contrast targets (pushed by `sync_kb_to_drive.py` from `kb-docs/`):
+  Compare-and-contrast targets (hand-uploaded to the demo Drive folder as `kb@lab5.ca`):
   - 8" brackish RO membranes (4-way bake-off): `dow-filmtec-eco-440i-ro-membrane.md`, `hydranautics-cpa4-ro-membrane.md`, `lg-chem-bw-440-r-g2-ro-membrane.md`, `toray-tm720-440-ro-membrane.md`.
   - Chemical dosing pumps: `pulsafeeder-chem-tech-100-150-chemical-dosing-pump.md` vs `prominent-gamma-l-metering-pump.md`.
   - UV disinfection: `watts-uv-com-disinfection.md` vs `trojan-uvmax-pro-uv-disinfection.md` (and `watts-smartstream-uv-disinfection.md` for an intra-vendor pair).
