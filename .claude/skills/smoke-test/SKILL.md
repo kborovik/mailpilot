@@ -9,7 +9,7 @@ model: sonnet
 
 ## What this tests
 
-Two scenarios share one Phase 0 setup and one `mailpilot run` loop. Outbound workflow from A stays active through B -> exercises real concurrent multi-workflow, multi-account operation. Agent-to-agent reply loop is prevented by two structural properties, not by isolation:
+Three scenarios share one Phase 0 setup and one `mailpilot run` loop. Outbound workflow from A stays active through B -> exercises real concurrent multi-workflow, multi-account operation. Agent-to-agent reply loop is prevented by two structural properties, not by isolation:
 
 - Distinct subjects per scenario, so each Gmail thread is owned by exactly one workflow type. A's thread -> `thread_match` -> outbound workflow. B's fresh threads -> classification -> demo's inbound workflow.
 - Enrollments terminate with `record_enrollment_outcome`, so the agent stops replying once a scenario reaches its outcome.
