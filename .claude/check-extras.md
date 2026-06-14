@@ -4,7 +4,7 @@ Mechanical audit (no LLM-judgment); trigger when `src/mailpilot/SKILL.md`, `.cla
 
 File-set scope:
 - `src/mailpilot/SKILL.md` — packaged skill body (external LLM agents); all four checks apply.
-- `.claude/skills/**/*.md` — operator-facing skill bodies (smoke-test, demo-test, etc.); per `§B.65` only checks (i) and (ii) apply (skill bodies do not enumerate settings so (iii) and (iv) do not apply).
+- `.claude/skills/**/*.md` — operator-facing skill bodies (test-google-drive, lead-companies, etc.); per `§B.65` only checks (i) and (ii) apply (skill bodies do not enumerate settings so (iii) and (iv) do not apply).
 
 Checks:
 (i) per-noun verb roster is a superset of `@<noun>.command("<verb>")` set in `cli.py` — fail mode: skill names a retired verb (e.g. `enrollment remove` post-T92).
@@ -83,15 +83,29 @@ Mechanical grep (manual judgment on hits — flag only must-sense prose, not bac
 
 4 attempts total; backoff [30, 120, 300]s; transient allow-list = Google 429/5xx, Anthropic 502/503/529, socket/TimeoutError; Drive socket timeout 60s feeds classifier; manual retry only failed/cancelled (completed + pending refused); retry UPDATE fires task_pending_trigger.
 
-## §V.59 — /demo-test pass gates
+## §V.59 — /test-google-drive pass gates
 
-pre-flight: requires outbound account else FAIL w/o send.
+2 variants from source outbound@lab5.ca, each judged by C4 Logfire aggregate over its own deployment_environment (§V.52), window [T_SEND_C, T_SEND_C+300s], span_name=agent.invoke, trigger=task. dev also scopes `workflow_id=DEMO_WORKFLOW_ID`; prod omits it (deployed workflow id unknown locally — burst identified by env + trigger + window, assumes deployed demo otherwise quiet).
 
-G1: reply round-trip <= 90s via direct Gmail query.
-G2: groundedness verdict vs live source doc per §V.57.
-G3: Logfire production env per §V.52 w/ required spans {agent.invoke trigger=task, gen_ai.tool.name=search_drive_markdown, gmail.send_message} + zero error/warn.
+- variant-prod: target hello@lab5.ca, env=production, warm/non-destructive (no make clean / no workflow create / no local run loop — deployed instance owns inbound); pre-flight requires outbound account else skip w/o send.
+- variant-dev: target inbound@lab5.ca, env=development, full Phase 0 (make clean + `config set logfire_environment development` + accounts/contacts/demo-workflow + local `mailpilot run` loop).
 
-Output: single PASS|FAIL line + 3-bullet Logfire summary; no report file; no /sdd:spec auto-invoke.
+N=4 burst, mix 2 in-scope / 1 out-of-scope / 1 compare via `qa.py pick` (§V.57). Subject `[TGD-<HHMMSS>-<i>]` fresh-randomized. Round-trip poll (local `email list` for dev, direct Gmail for prod) is sanity only, never the latency verdict (§V.61).
+
+C4 gated assertions (PASS = all hold, per variant; compare = read_drive_markdown count >= 2 in trace):
+- n_invokes == 4 AND n_distinct_email_ids == 4 (one span per inbound email §V.26; prod n_invokes > 4 = other demo traffic in window -> re-run quiet).
+- n_compare == 1 AND n_noncompare == 3.
+- p95(sla_agent_seconds) non-compare <= 75 (§V.61 burst over the 50s steady ceiling).
+- p95(sla_delivery_seconds) <= 75 (§V.69 per-variant burst delivery gate).
+- n_exceptions == 0 AND n_warns == 0 (zero error/warn scoped to env).
+- retry_rate (sum tool_error_count / n_invokes) <= 0.05 (§V.70; N=4 -> effectively n_tool_errors == 0).
+- avg_cache_hit_ratio >= 0.5 (§V.47 cache warmth).
+- overlap_pairs >= 2 (concurrency proof §V.23; max C(4,2)=6).
+- read_drive_markdown max_dur_s < 60 AND n_exc == 0 (§B.34 race signature absent, §V.38).
+
+Report (NOT gated): max_sla_agent_compare_s (advisory ceiling 120s per §B.62), max_sla_delivery_s, max_total_s, token totals.
+
+Output: per-variant PASS|FAIL line + 4-bullet C4 metrics block + final OVERALL line; chat-only (no report file); no /sdd:spec auto-invoke.
 
 ## §V.61 — reply-latency SLA thresholds
 
@@ -102,6 +116,6 @@ Verdict derived from agent.invoke span in Logfire; CLI poll = round-trip check o
 ## §V.70 — burst retry-rate contract measurement
 
 N-burst window (P <= 8, N <= 25): agent.tool_errors / agent.invoke span ratio <= 5%.
-Measured in smoke scenario-C Logfire window [T_SEND_C, T_SEND_C+300s] against sla_agent per §V.61.
+Measured in /test-google-drive per-variant burst window [T_SEND_C, T_SEND_C+300s] (prod env + dev env measured separately) against sla_agent per §V.61.
 Breach = prompt-fidelity regression under load -> investigate §V.41 (search-first), §V.57 (KB coverage), §V.42 (format-lint sensitivity).
 Orthogonal to §V.69: V70 binds agent-execution quality, V69 delivery timing.

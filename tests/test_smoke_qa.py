@@ -21,7 +21,7 @@ QA_PY_PATH = (
     Path(__file__).parent.parent
     / ".claude"
     / "skills"
-    / "smoke-test"
+    / "test-google-drive"
     / "scripts"
     / "qa.py"
 )
