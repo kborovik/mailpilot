@@ -355,6 +355,47 @@ def test_fragment_does_not_collapse_to_single_tool_example(
     )
 
 
+# -- §V.45: no SPEC citation in agent-visible text -----------------------------
+
+
+_SPEC_CITE = re.compile(r"§[VTB]\.[0-9]+")
+_ALL_TRIGGERS = ("task", "enrollment_run", "enrollment_schedule", "manual", "email")
+
+
+def test_composed_protocol_carries_no_spec_citation() -> None:
+    """§V.45 / §B.79: the runtime reply agent has no SPEC.md, so a literal
+    ``§V/§T/§B.<n>`` token in any composed protocol is dead authoring metadata
+    leaking into the system prompt. The governing invariant is cited in an
+    adjacent code comment instead -- e.g. the §V.42 pipe-table mandate keeps its
+    "rejected by the outbound format lint" motivation but drops the numbering.
+    Sweep every template across every trigger branch."""
+    for template in TEMPLATES.values():
+        for trigger in _ALL_TRIGGERS:
+            protocol = template.build_protocol(trigger)
+            match = _SPEC_CITE.search(protocol)
+            assert match is None, (
+                f"template {template.name!r} trigger={trigger!r}: composed "
+                f"protocol embeds SPEC cite {match.group()!r} -- §V.45 forbids "
+                f"§-numbering in agent-visible text (cite it in a comment)"
+            )
+
+
+def test_registered_tool_descriptions_carry_no_spec_citation() -> None:
+    """§V.45: a tool's model-visible description (derived from its docstring)
+    must not embed a ``§V/§T/§B.<n>`` token either -- the agent sees tool
+    descriptions in the same prompt context as the protocol. Sweep every tool
+    bound to any template."""
+    for template in TEMPLATES.values():
+        for tool in template.tools:
+            description = tool.description or ""
+            match = _SPEC_CITE.search(description)
+            assert match is None, (
+                f"template {template.name!r} tool {tool.name!r}: description "
+                f"embeds SPEC cite {match.group()!r} -- §V.45 forbids "
+                f"§-numbering in model-visible tool descriptions"
+            )
+
+
 # -- _build_agent integration --------------------------------------------------
 
 

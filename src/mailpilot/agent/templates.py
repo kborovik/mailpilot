@@ -78,6 +78,12 @@ class WorkflowTemplate:
 # one constant; every template that composes the fragment picks up the change.
 
 
+# _BASE mandates a GFM pipe table for product-spec rows; the outbound format
+# lint (_check_spec_table in tools.py) rejects space-aligned spec blocks -- the
+# pipe-table mandate is the primary enforcement, the lint a backstop (§V.42).
+# Per §V.45 the prompt string itself carries no §-cite: the runtime reply agent
+# has no SPEC.md, so the governing invariant is named here in the comment, not
+# in the model-visible text (closes §B.79).
 _BASE = (
     "Keep your final summary brief (2-3 sentences, plain text, no emojis).\n"
     "Email bodies may use Markdown formatting (headers, bold, tables). When "
@@ -86,8 +92,7 @@ _BASE = (
     "GitHub-flavored Markdown pipe table with a header row and a |---| "
     "separator -- e.g. `| Specification | Value |` then `|---|---|` and one "
     "row per spec. Do not use space-aligned or single-spaced lines as a "
-    "substitute; such spec blocks are rejected by the outbound format lint "
-    "(§V.42).\n"
+    "substitute; such spec blocks are rejected by the outbound format lint.\n"
     "When a trigger email is included in your prompt, its full body is "
     "already provided -- do not call read_email to fetch it again. The "
     "current contact's profile is also inlined, so do not call read_contact "
