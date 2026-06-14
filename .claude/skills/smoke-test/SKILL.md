@@ -1,10 +1,10 @@
 ---
 name: smoke-test
 description: |
-  End-to-end MailPilot smoke test against real Gmail across outbound@lab5.ca and inbound@lab5.ca. One Phase 0 setup -> 3 scenarios run sequentially without state reset. Scenario A = outbound workflow + manual operator reply. Scenario B = live KB-grounded inbound auto-reply demo at https://lab5.ca/mailpilot// (real Drive folder, in-scope single-source grounded reply + out-of-scope polite decline + multi-source compare-and-contrast across manufacturers e.g. Dow FilmTec vs Hydranautics vs LG Chem vs Toray RO membranes). Scenario C = burst-load oracle (8 emails fired at P=8 concurrency, mix 4 in-scope / 2 out-of-scope / 2 compare; aggregate Logfire + CLI verdicts only -- no per-message grading). Outbound workflow stays active across B and C -> verifies concurrent multi-account, multi-workflow operation under sustained load. All three scenarios mandatory. Use whenever user says "smoke test", "run end-to-end", "verify the system works", or after non-trivial changes to sync, routing, agent execution, KB grounding, or Pub/Sub code -- even without explicit invocation.
+  End-to-end MailPilot smoke test against real Gmail across outbound@lab5.ca and inbound@lab5.ca. One Phase 0 setup -> 3 mandatory scenarios run sequentially without state reset: Scenario A = outbound workflow + manual operator reply; Scenario B = live KB-grounded inbound auto-reply demo at https://lab5.ca/mailpilot/ (in-scope grounded reply, out-of-scope decline, multi-source compare-and-contrast); Scenario C = burst-load oracle under sustained concurrency. Verifies concurrent multi-account, multi-workflow operation under load. Use whenever user says "smoke test", "run end-to-end", "verify the system works", or after non-trivial changes to sync, routing, agent execution, KB grounding, or Pub/Sub code -- even without explicit invocation.
 argument-hint: (no arguments)
-# Broad Bash: end-to-end harness runs `make clean` + `uv run mailpilot` + `python3` + shell pipelines + parallel background sends; per-utility scoping would break the suite. Skill = `/logfire:debug` Logfire review; report is chat-only (no Write).
-allowed-tools: Bash, Read, Skill, mcp__claude_ai_logfire__query_run
+# Broad Bash: end-to-end harness runs `make clean` + `uv run mailpilot` + `python3` + shell pipelines + parallel background sends; per-utility scoping would break the suite. All Logfire review delegates to the `/logfire:debug` Skill (no direct MCP query); report is chat-only (no Write).
+allowed-tools: Bash, Read, Skill
 model: sonnet
 ---
 

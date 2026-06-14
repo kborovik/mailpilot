@@ -207,7 +207,7 @@ Rules:
 
 ### Step 7: G3 -- Logfire production-env span and error gate
 
-Single Logfire MCP query against project `mailpilot`, window `[TEST_START, now]`, filter `deployment_environment = 'production'`:
+Single Logfire query via `mcp__claude_ai_logfire__query_run` against project `mailpilot`, window `[TEST_START, now]`, filter `deployment_environment = 'production'`:
 
 ```sql
 WITH base AS (
