@@ -2,6 +2,9 @@
 name: demo-test
 description: |
   Liveness probe of the public lab5.ca/mailpilot/ system. Sends one KB-grounded question from outbound@lab5.ca to hello@lab5.ca, waits for the production-deployed agent to reply (within ~90s), and asserts the required Logfire spans fired in the `production` deployment_environment with zero errors or warnings. Output is a single PASS / FAIL line plus a 3-bullet Logfire summary -- no detailed report, no auto-write to disk, no `/sdd:spec` invocation. Assumes warm state (the demo workflow already runs on hello@lab5.ca in production); does NOT `make clean`, does NOT create accounts or workflows. Use whenever the user asks to verify the demo, says "demo test", "is the demo alive?", "check lab5.ca/mailpilot/", "demo liveness", or after a production deploy of MailPilot when a quick spot-check is wanted.
+argument-hint: (no arguments)
+# Broad Bash: liveness probe runs `uv run mailpilot` + `uv run python` (GmailClient impersonation, qa.py) + a shell topic-generator + `seq` poll loops; per-utility scoping would break the probe.
+allowed-tools: Bash, Read, mcp__claude_ai_logfire__query_run
 model: sonnet
 ---
 
