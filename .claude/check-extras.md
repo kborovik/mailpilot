@@ -20,7 +20,7 @@ Per-document scoping (see `src/mailpilot/agent/tools.py:_fact_check_body`):
 
 Zero-ledger (no `read_drive_markdown` calls this invocation) -> hook no-op.
 
-## Skill-body Workflow snippet executability
+## §V.73 — Skill-body Workflow snippet executability
 
 Mechanical audit; trigger when `.claude/skills/**/*.md` or `.claude/workflows/*.js` changed. Scope = every fenced ```js block that calls `parallel(`, `pipeline(`, or `agent(`, plus the saved-workflow byte-identity check (d).
 
@@ -51,7 +51,7 @@ Mechanical greps (manual judgment on hits):
   ```
   any `DIVERGENT` -> (d) fail (saved-file unaudited drift).
 
-## RFC-4180 CSV-ingestion parser mandate
+## §V.74 — RFC-4180 CSV-ingestion parser mandate
 
 Mechanical audit; trigger when `.claude/skills/**/*.md`, `.claude/skills/**/scripts/*.py`, or `src/**` changed. Scope = CSV-ingestion sites (handle a `.csv` path, a "CSV mode", or a comma-delimited lead export). The grep scope `.claude/skills/ src/` already recurses into `scripts/` so a `.py`-under-`scripts/` change is covered once the trigger-glob (previously `.md`-only) names it.
 
@@ -64,3 +64,30 @@ Mechanical greps (manual judgment on hits — flag only in CSV context):
 - `rg -n 'curl -sLI' .claude/skills/ src/` -> (ii) fail (HEAD-grep redirect resolution).
 
 Plain-text (non-CSV) line iteration is admitted (per-line domain/URL, `#`-comment skip) — do not flag.
+
+## §V.49 — bounded auto-retry parameters
+
+4 attempts total; backoff [30, 120, 300]s; transient allow-list = Google 429/5xx, Anthropic 502/503/529, socket/TimeoutError; Drive socket timeout 60s feeds classifier; manual retry only failed/cancelled (completed + pending refused); retry UPDATE fires task_pending_trigger.
+
+## §V.59 — /demo-test pass gates
+
+pre-flight: requires outbound account else FAIL w/o send.
+
+G1: reply round-trip <= 90s via direct Gmail query.
+G2: groundedness verdict vs live source doc per §V.57.
+G3: Logfire production env per §V.52 w/ required spans {agent.invoke trigger=task, gen_ai.tool.name=search_drive_markdown, gmail.send_message} + zero error/warn.
+
+Output: single PASS|FAIL line + 3-bullet Logfire summary; no report file; no /sdd:spec auto-invoke.
+
+## §V.61 — reply-latency SLA thresholds
+
+sla_agent_seconds gating: > 50s steady-state critical; compare-type > 90s critical, 50-90s advisory.
+sla_delivery_seconds: advisory (Gmail-side uncontrolled).
+Verdict derived from agent.invoke span in Logfire; CLI poll = round-trip check only.
+
+## §V.70 — burst retry-rate contract measurement
+
+N-burst window (P <= 8, N <= 25): agent.tool_errors / agent.invoke span ratio <= 5%.
+Measured in smoke scenario-C Logfire window [T_SEND_C, T_SEND_C+300s] against sla_agent per §V.61.
+Breach = prompt-fidelity regression under load -> investigate §V.41 (search-first), §V.57 (KB coverage), §V.42 (format-lint sensitivity).
+Orthogonal to §V.69: V70 binds agent-execution quality, V69 delivery timing.
