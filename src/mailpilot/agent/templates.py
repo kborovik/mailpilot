@@ -52,7 +52,8 @@ class WorkflowTemplate:
     _DEFERRED_TASK_INITIAL (initial-send-only instruction; prevents
     premature ``record_enrollment_outcome`` on first reach-out).
     Canonical fragment order per §V.45: _BASE -> _DEFERRED_TASK_<branch> ->
-    [overlay]? -> _DECLINE -> _NO_FABRICATION.
+    _DECLINE -> _NO_FABRICATION. Per §V.41 there is no workflow-specific
+    overlay fragment; KB-grounding discipline lives in workflow.instructions.
     """
 
     name: WorkflowTemplateName
@@ -131,42 +132,14 @@ _NO_FABRICATION = (
     "than guess.\n"
 )
 
-# Per §V.41 (KB grounding: search-first, 2-search budget, read top >=3,
-# per-target search on compare) and §V.68 (pre-send fact-check: numeric tokens
-# must appear verbatim in a read doc). The verbatim-citation / no-unit-conversion
-# clause closes the compare-branch fact-check breach class (cross-datasheet unit
-# conversion fabricates tokens -> re-draft -> §V.70 retry-rate inflation). Per
-# §V.45 the prompt string itself carries no §-cite -- the governing invariants
-# are named here, not in the model-visible text.
-_DRIVE_GROUNDING = (
-    "Workflow instructions reference a Google Drive folder of Markdown "
-    "notes. Ground every reply in that folder. Prefer "
-    "search_drive_markdown(folder_id, query) to target the most relevant "
-    "documents -- enumerating the whole folder with list_drive_markdown "
-    "wastes context once the KB grows past a handful of files. When "
-    "search_drive_markdown returns >=2 hits, call read_drive_markdown on the "
-    "top >=3 results (or all hits if fewer than 3) before composing the "
-    "reply, then pick the best match by model-number / spec match -- not "
-    "ranking order alone. Cite the source file in the reply. If two "
-    "consecutive search_drive_markdown calls return too few hits to ground "
-    "the reply, stop searching and call list_drive_markdown once instead -- "
-    "do not retry search_drive_markdown a third time. When the reply "
-    "addresses two or more distinct product targets (a compare-and-contrast "
-    "reply), the search-budget rule applies per target: issue at least one "
-    "target-specific search_drive_markdown query for each distinct target "
-    "before list_drive_markdown is acceptable as grounding for that target, "
-    "even when other targets are already grounded by earlier searches.\n"
-    "Cite every numeric specification value -- capacities, flow rates, "
-    "pressures, dimensions -- verbatim as published in a read document's "
-    "table rows. Do not convert units (for example gph to gpd, gpd to gph, "
-    "or psi to bar), and do not compute, interpolate, or round any figure: a "
-    "number that does not appear verbatim in a read document is rejected by "
-    "the pre-send fact-check, forcing a re-draft. If the figure is "
-    "not published in the unit the sender asked for, quote it in its "
-    "published unit rather than converting. This applies with particular "
-    "force to compare-and-contrast replies, where cross-datasheet unit "
-    "conversion is the most common source of fabricated numeric tokens.\n"
-)
+# Per §V.41 / §V.45 there is intentionally no Drive-grounding overlay fragment
+# here. KB-grounding discipline (search-first, 2-search budget then a single
+# list, read top >=3 hits, per-target search on compare) and the §V.68
+# verbatim-citation / no-unit-conversion guidance are workflow-specific
+# behaviour, so they live in the workflow definition's ``instructions`` field
+# (workflows/*.toml per §V.103), not a code-defined template fragment. The
+# inbound-google-drive template only binds the Drive tool set (_DRIVE); its
+# protocol is the same fragment-free composition as the non-Drive templates.
 
 
 # -- Tool tuples ---------------------------------------------------------------
@@ -233,7 +206,7 @@ TEMPLATES: dict[WorkflowTemplateName, WorkflowTemplate] = {
             "Inbound auto-reply grounded in a Google Drive Markdown knowledge base."
         ),
         protocol_pre=_BASE,
-        protocol_post=_DRIVE_GROUNDING + _DECLINE + _NO_FABRICATION,
+        protocol_post=_DECLINE + _NO_FABRICATION,
         tools=_CORE + _DRIVE,
     ),
 }

@@ -128,60 +128,45 @@ def test_inbound_google_drive_includes_drive_tools() -> None:
     assert "search_drive_markdown" in names
 
 
-def test_inbound_google_drive_protocol_carries_grounding() -> None:
-    """§V.41: KB grounding rule lives only in inbound-google-drive protocol."""
-    protocol = TEMPLATES["inbound-google-drive"].protocol
-    assert "search_drive_markdown" in protocol
-    assert "read_drive_markdown" in protocol
+def test_inbound_google_drive_binds_drive_tools_without_grounding_fragment() -> None:
+    """§V.41 / §V.45: inbound-google-drive binds the Drive tool set but its
+    protocol carries NO grounding fragment. The KB-grounding discipline
+    (search-first, 2-search budget, read top >=3, per-target compare search)
+    and the verbatim-citation / no-unit-conversion guidance are
+    workflow-specific behaviour -- they live in workflow.instructions
+    (workflows/*.toml per §V.103), never a code-defined template fragment.
 
-
-def test_inbound_google_drive_protocol_carries_search_budget_fallback() -> None:
-    """§V.41(+): after two consecutive search_drive_markdown misses the agent
-    must fall back to list_drive_markdown rather than spin further searches."""
-    protocol = TEMPLATES["inbound-google-drive"].protocol
-    assert "two consecutive search_drive_markdown" in protocol
-    assert "list_drive_markdown once instead" in protocol
-    assert "do not retry search_drive_markdown a third time" in protocol
-    # Regression: the existing >=3-reads-on-top-hits rule survives the amend.
-    assert "top >=3 results" in protocol
-
-
-def test_inbound_google_drive_protocol_carries_per_target_compare_rule() -> None:
-    """§V.41(+): compare-and-contrast replies (>=2 distinct product targets)
-    must issue >=1 target-specific search_drive_markdown per distinct target
-    before list_drive_markdown is acceptable as grounding for that target,
-    even when other targets are already grounded by earlier searches.
-
-    §V.45: the rule lives in the _DRIVE_GROUNDING overlay bound only to
-    inbound-google-drive -- non-Drive templates physically cannot trigger
-    the compare path."""
-    protocol = TEMPLATES["inbound-google-drive"].protocol
-    assert "compare-and-contrast" in protocol
-    assert "per target" in protocol
-    assert "each distinct target" in protocol
-    # Non-Drive templates must not pick up the per-target rule.
-    for name in ("outbound-general", "inbound-general"):
-        assert "compare-and-contrast" not in TEMPLATES[name].protocol
-
-
-def test_inbound_google_drive_protocol_forbids_numeric_derivation() -> None:
-    """§V.68(+)/§V.41: Drive-grounded replies must cite numeric spec values
-    verbatim from the source and must never unit-convert or compute derived
-    figures. This closes the compare-branch fact-check breach class observed
-    under burst (e.g. 5 gph -> 120 gpd, 100 gpd -> 4.17 gph, prose-buried
-    values quoted as if table-citable) where every derived/converted token is
-    rejected by the §V.68 pre-send fact-check, forcing self-correcting
-    re-drafts that inflate the §V.70 burst retry-rate.
-
-    §V.45: the rule lives in the _DRIVE_GROUNDING overlay bound only to
-    inbound-google-drive -- non-Drive templates do not read KB docs and so
-    must not carry the verbatim-citation ban."""
-    protocol = TEMPLATES["inbound-google-drive"].protocol
-    assert "verbatim as published" in protocol
-    assert "Do not convert units" in protocol
-    # Non-Drive templates must not pick up the verbatim-citation ban.
-    for name in ("outbound-general", "inbound-general"):
-        assert "verbatim as published" not in TEMPLATES[name].protocol
+    The proof is byte-level: with the grounding overlay removed, the Drive
+    template's protocol_post is identical to the non-Drive templates' (just
+    _DECLINE + _NO_FABRICATION); the only thing that distinguishes the Drive
+    template is its bound tool set."""
+    drive = TEMPLATES["inbound-google-drive"]
+    # Still binds all three Drive tools (§V.41: "binds the Drive tool set").
+    expected_drive = {
+        "list_drive_markdown",
+        "read_drive_markdown",
+        "search_drive_markdown",
+    }
+    assert expected_drive <= _tool_names(drive)
+    # No grounding fragment: protocol_post is identical to the fragment-free
+    # templates -- just _DECLINE + _NO_FABRICATION, no overlay.
+    assert drive.protocol_post == TEMPLATES["inbound-general"].protocol_post
+    assert drive.protocol_post == TEMPLATES["outbound-general"].protocol_post
+    # The grounding discipline markers must not leak into the composed protocol.
+    protocol = drive.protocol
+    for marker in (
+        "search_drive_markdown",
+        "read_drive_markdown",
+        "two consecutive",
+        "compare-and-contrast",
+        "verbatim as published",
+        "Do not convert units",
+    ):
+        assert marker not in protocol, (
+            f"§V.41: grounding marker {marker!r} leaked into the "
+            f"inbound-google-drive template protocol -- it belongs in "
+            f"workflow.instructions"
+        )
 
 
 def test_inbound_google_drive_drive_tools_marked_sequential() -> None:
@@ -268,11 +253,6 @@ def test_build_protocol_preserves_v33_fragment_order(
         f"template {template.name!r} trigger={trigger!r}: §V.45 order broken "
         f"(base={base_idx}, decline={decline_idx}, nofab={nofab_idx})"
     )
-    if template.name == "inbound-google-drive":
-        grounding_idx = protocol.find("Workflow instructions reference a Google Drive")
-        assert 0 < grounding_idx < decline_idx, (
-            "§V.45: _DRIVE_GROUNDING must precede _DECLINE in inbound-google-drive"
-        )
 
 
 def test_protocol_property_returns_task_branch() -> None:
