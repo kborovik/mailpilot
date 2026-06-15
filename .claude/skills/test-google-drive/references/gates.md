@@ -8,8 +8,11 @@ scopes by `<WF_PREDICATE>` (`AND r.attributes->>'workflow_id' = '<DEMO_WORKFLOW_
 the **prod** variant omits it -- the deployed workflow id is not known locally, so the
 burst is identified by env + trigger + window (which assumes the deployed demo system is
 otherwise quiet during the test). Primary verdict = `sla_agent_seconds` (our-side agent
-execution) per SPEC §V.61. A `compare` invocation = `read_drive_markdown` count >= 2 in its
-trace.
+execution) per SPEC §V.61. A `compare` invocation = `read_drive_markdown` count >= 2 under its
+own `agent.invoke` span, attributed via parent-span lineage (read span -> agent-run span ->
+`agent.invoke`) -- never by `trace_id`. Under §V.23 concurrent drain, co-tick invokes share one
+`trace_id` (inherited from a common `run.execute_task` parent), so a `trace_id`-keyed count
+smears reads across sibling invokes and false-splits the branch mix (§B.81).
 
 The rows these gates return ARE the verdict; the Phase 3 Gate report renders them
 span-free, and Phase 4 (FAIL only) drills into `references/investigate.md`.
@@ -18,13 +21,21 @@ span-free, and Phase 4 (FAIL only) drills into `references/investigate.md`.
 
 ```sql
 WITH read_counts AS (
-  SELECT trace_id, COUNT(*) AS read_count
-  FROM records
-  WHERE deployment_environment = '<ENV>'
-    AND attributes->>'gen_ai.tool.name' = 'read_drive_markdown'
-    AND start_timestamp >= '<T_SEND_C>'
-    AND start_timestamp <= '<T_SEND_C>'::timestamptz + INTERVAL '300 seconds'
-  GROUP BY trace_id
+  -- §V.59/§B.81: attribute each read_drive_markdown span to its OWNING
+  -- agent.invoke via parent-span lineage (read span -> agent-run span ->
+  -- agent.invoke), not by the shared trace. Under §V.23 concurrent drain,
+  -- co-tick invokes share one trace, so a trace-keyed count smears reads
+  -- across sibling invokes and false-splits the compare/non-compare branch.
+  SELECT invoke.span_id AS invoke_span_id, COUNT(*) AS read_count
+  FROM records read_span
+  JOIN records agent_run ON agent_run.span_id = read_span.parent_span_id
+  JOIN records invoke    ON invoke.span_id    = agent_run.parent_span_id
+  WHERE read_span.deployment_environment = '<ENV>'
+    AND read_span.attributes->>'gen_ai.tool.name' = 'read_drive_markdown'
+    AND invoke.span_name = 'agent.invoke'
+    AND read_span.start_timestamp >= '<T_SEND_C>'
+    AND read_span.start_timestamp <= '<T_SEND_C>'::timestamptz + INTERVAL '300 seconds'
+  GROUP BY invoke.span_id
 ),
 burst AS (
   SELECT
@@ -42,7 +53,7 @@ burst AS (
     COALESCE((r.attributes->>'tool_error_count')::int, 0) AS tool_error_count,
     COALESCE(rc.read_count, 0) >= 2 AS is_compare
   FROM records r
-  LEFT JOIN read_counts rc ON rc.trace_id = r.trace_id
+  LEFT JOIN read_counts rc ON rc.invoke_span_id = r.span_id
   WHERE r.deployment_environment = '<ENV>'
     AND r.span_name = 'agent.invoke'
     AND r.start_timestamp >= '<T_SEND_C>'
@@ -131,13 +142,20 @@ it defeats the burst-load oracle.
 ## Gate G.c -- Drive race signatures absent (§B.34)
 
 ```sql
-SELECT MAX(EXTRACT(EPOCH FROM (end_timestamp - start_timestamp))) AS max_dur_s,
-       SUM(CASE WHEN is_exception THEN 1 ELSE 0 END) AS n_exc
-FROM records
-WHERE deployment_environment = '<ENV>'
-  AND attributes->>'gen_ai.tool.name' = 'read_drive_markdown'
-  AND start_timestamp >= '<T_SEND_C>'
-  AND start_timestamp <= '<T_SEND_C>'::timestamptz + INTERVAL '300 seconds';
+-- §V.59/§B.81: scope the Drive-race scan to read_drive_markdown spans owned by
+-- a burst agent.invoke via parent-span lineage (read span -> agent-run span ->
+-- agent.invoke), NOT a bare trace/window scan -- the scan stays attributed to
+-- this burst's invokes even when co-tick siblings share one trace_id (§V.23).
+SELECT MAX(EXTRACT(EPOCH FROM (read_span.end_timestamp - read_span.start_timestamp))) AS max_dur_s,
+       SUM(CASE WHEN read_span.is_exception THEN 1 ELSE 0 END) AS n_exc
+FROM records read_span
+JOIN records agent_run ON agent_run.span_id = read_span.parent_span_id
+JOIN records invoke    ON invoke.span_id    = agent_run.parent_span_id
+WHERE read_span.deployment_environment = '<ENV>'
+  AND read_span.attributes->>'gen_ai.tool.name' = 'read_drive_markdown'
+  AND invoke.span_name = 'agent.invoke'
+  AND read_span.start_timestamp >= '<T_SEND_C>'
+  AND read_span.start_timestamp <= '<T_SEND_C>'::timestamptz + INTERVAL '300 seconds';
 ```
 
 Assert:

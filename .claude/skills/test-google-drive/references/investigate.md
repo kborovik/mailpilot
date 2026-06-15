@@ -42,7 +42,8 @@ order/shape of calls, never reply content (SPEC §V.57).
 
 ```sql
 WITH invoke AS (
-  SELECT trace_id, attributes->>'email_id' AS email_id, start_timestamp AS invoke_start
+  SELECT span_id AS invoke_span_id, attributes->>'email_id' AS email_id,
+         start_timestamp AS invoke_start
   FROM records
   WHERE deployment_environment = '<ENV>'
     AND span_name = 'agent.invoke'
@@ -53,13 +54,18 @@ WITH invoke AS (
 )
 SELECT
   i.email_id,
-  array_agg(COALESCE(r.attributes->>'gen_ai.tool.name', 'chat') ORDER BY r.start_timestamp) AS call_timeline,
-  COUNT(*) FILTER (WHERE r.attributes->>'gen_ai.tool.name' = 'search_drive_markdown') AS n_search,
-  COUNT(*) FILTER (WHERE r.attributes->>'gen_ai.tool.name' = 'read_drive_markdown')   AS n_read
+  array_agg(COALESCE(call_span.attributes->>'gen_ai.tool.name', 'chat') ORDER BY call_span.start_timestamp) AS call_timeline,
+  COUNT(*) FILTER (WHERE call_span.attributes->>'gen_ai.tool.name' = 'search_drive_markdown') AS n_search,
+  COUNT(*) FILTER (WHERE call_span.attributes->>'gen_ai.tool.name' = 'read_drive_markdown')   AS n_read
 FROM invoke i
-JOIN records r ON r.trace_id = i.trace_id
-WHERE r.attributes->>'gen_ai.tool.name' IN ('search_drive_markdown', 'read_drive_markdown')
-   OR r.attributes->>'gen_ai.operation.name' = 'chat'
+-- §V.59/§B.81: walk the parent-span lineage (agent.invoke -> agent-run span ->
+-- tool/chat span), not by the shared trace. Co-tick invokes share one
+-- trace under §V.23, so a trace join would smear every sibling invoke's
+-- calls into this row.
+JOIN records agent_run ON agent_run.parent_span_id = i.invoke_span_id
+JOIN records call_span ON call_span.parent_span_id = agent_run.span_id
+WHERE call_span.attributes->>'gen_ai.tool.name' IN ('search_drive_markdown', 'read_drive_markdown')
+   OR call_span.attributes->>'gen_ai.operation.name' = 'chat'
 GROUP BY i.email_id, i.invoke_start
 ORDER BY i.invoke_start;
 ```
