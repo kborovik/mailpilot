@@ -30,7 +30,7 @@ def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", text.lower()).strip()
 
 
-def _grade_inscope(body: str, grading: dict) -> tuple[str, dict]:
+def _grade_inscope(body: str, grading: dict, question: str = "") -> tuple[str, dict]:
     body_n = _norm(body)
     hits = {tok: (_norm(tok) in body_n) for tok in grading["expected_tokens"]}
     verdict = "PASS" if all(hits.values()) else "FAIL"
@@ -40,19 +40,28 @@ def _grade_inscope(body: str, grading: dict) -> tuple[str, dict]:
     }
 
 
-def _grade_outscope(body: str, grading: dict) -> tuple[str, dict]:
+def _grade_outscope(body: str, grading: dict, question: str = "") -> tuple[str, dict]:
     body_l = body.lower()
+    # A legitimate decline names the absent product and often restates the
+    # asker's own figures or links a referral page, so a bare "brand + any digit"
+    # check yields false positives. Mask digits the asker themselves supplied
+    # (question echo) and URL hosts before testing the forbidden pattern, so only
+    # numbers the agent *invented* for the absent product count as fabrication.
+    echoed = set(re.findall(r"\d[\d.,]*", question))
+    surface = re.sub(r"https?://\S+|\b\S+\.(?:com|net|org|io)\b", " ", body)
+    for value in echoed:
+        surface = surface.replace(value, " ")
     forbidden = [
         pair
         for pair in grading.get("forbidden_token_pairs", [])
-        if pair[0].lower() in body_l and re.search(pair[1], body, re.IGNORECASE)
+        if pair[0].lower() in body_l and re.search(pair[1], surface, re.IGNORECASE)
     ]
     declined = [s for s in grading.get("decline_signals", []) if s.lower() in body_l]
     verdict = "PASS" if not forbidden and declined else "FAIL"
     return verdict, {"fabrication_hits": forbidden, "decline_signals_found": declined}
 
 
-def _grade_compare(body: str, grading: dict) -> tuple[str, dict]:
+def _grade_compare(body: str, grading: dict, question: str = "") -> tuple[str, dict]:
     body_l = body.lower()
     body_n = _norm(body)
     cited = {
@@ -99,7 +108,9 @@ def main() -> int:
                 "detail": {},
             }
             continue
-        verdict, detail = GRADERS[case["type"]](reply["body"], case["grading"])
+        verdict, detail = GRADERS[case["type"]](
+            reply["body"], case["grading"], case.get("question", "")
+        )
         graded[case_id] = {"type": case["type"], "verdict": verdict, "detail": detail}
 
     counts = {"PASS": 0, "FAIL": 0, "NO_REPLY": 0}
