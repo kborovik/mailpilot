@@ -154,6 +154,9 @@ T131|x|impl §V.103(+) + §V.63 — TOML workflow-def; `workflow import --file` 
 T132|x|impl §V.41 + §V.45 — move workflow grounding from templates.py into workflow def instructions; delete `_DRIVE_GROUNDING`|V41,V45,V103,V68
 T137|x|impl §V.23 per §B.82 — detach OTel ctx in `_execute_task_in_worker`; fresh trace root per agent.invoke|V23,V52,B82
 T138|x|add mailpilot-reply-test skill — live e2e reply-test (outbound@lab5.ca->inbound@lab5.ca, `inbound-google-drive` auto-reply, grade vs QA-Pairs.json, Logfire tokens+latency, Opus failure escalation); replaces removed test-google-drive; reply-loop guard|V104,V99,V100
+T139|.|impl §V.42(+) per §B.83 — strip permissive "may use Markdown" line from `_BASE` in templates.py; extend guard test to assert `rg 'may use Markdown'` zero hits|V42,B83
+T140|.|impl §V.45(+) per §B.84 — strip §-cites from the six registered tool docstrings; broaden guard test + check-extras §V.45 recipe to grep `§[VTB]\.[0-9]+` over per-tool docstrings (model-visible descriptions), not just composed protocol|V45,B84
+T141|.|impl §V.102(+) per §B.85 — add `allowed-tools` + `argument-hint` to mailpilot-reply-test SKILL.md frontmatter|V102,B85
 
 ## §B BUGS
 
@@ -168,3 +171,6 @@ B77|2026-06-13|smoke-test SKILL.md documents `sync_kb_to_drive.py` + `kb-docs/` 
 B78|2026-06-14|_BASE "may use Markdown tables" (permissive) w/o pipe-table mandate; V42 lint reactive not preventive; agent generates space-aligned spec block first, lint rejects, retry — systematic 7/8 invocations under burst, retry_rate 0.875|V42
 B79|2026-06-14|_BASE protocol fragment (agent/templates.py:90) embeds literal SPEC cite `(§V.42)` — runtime agent has no SPEC.md, so the §-numbering is dead authoring metadata leaking into every reply-agent system prompt|V45
 B82|2026-06-15|§V.23 drain worker inherits the dispatching tick's sync.loop.iteration OTel context (py3.14 ThreadPoolExecutor.submit propagates the active span into workers), so every task drained in one tick opens run.execute_task -> agent.invoke under that tick's trace -> all co-tick invokes share one trace_id (not 1:1 w/ an agent.invoke); regressed when the sync.loop.iteration span (PR #77) began wrapping the drain dispatch|V23
+B83|2026-06-15|`_BASE` (templates.py:90) still carries the permissive "Email bodies may use Markdown formatting (headers, bold, tables)" line beside the §V.42 pipe-table mandate; T128 added the mandate but never stripped the permissive wording, so check-extras `rg 'may use Markdown'` is non-zero — re-opens the space-aligned-spec retry class §B.78 closed|V42
+B84|2026-06-15|six registered agent-tool docstrings (`tools.py` read_contact:557, create_task:376, record_enrollment_outcome:439, list_enrollments:514, read_company:583, read_drive_markdown:715) embed §-cites; pydantic-ai sends function docstrings to the model as tool descriptions, so the §-numbering leaks into every reply-agent tool schema — T130's guard test scanned the composed protocol string only, never the per-tool docstrings, so §V.45's "tool descriptions -> zero hits" went unaudited|V45
+B85|2026-06-15|mailpilot-reply-test SKILL.md frontmatter omits `allowed-tools` + `argument-hint`; T125 added both to demo-test/smoke-test but the later-added skill (T138) skipped them, violating §V.102 frontmatter-hygiene|V102
