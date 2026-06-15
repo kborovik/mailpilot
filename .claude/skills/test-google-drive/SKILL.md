@@ -207,40 +207,69 @@ inlined here (SPEC §V.100). Primary verdict = `sla_agent_seconds` per SPEC §V.
 Emitted **every run** (PASS or FAIL), **per variant**, from the C4 outputs. It is **advisory**
 (it never alters the verdict -- the C4 gates alone decide, SPEC §V.59), **chat-only** (no `.md`
 artifact), and **span-free**: structural/timing aggregates only, never any reply body, `email`/
-`trace` id, or per-invoke timeline (SPEC §V.57). One row per C4 gate: `mark  gate  measured
-threshold  §V`, where `ok` = held and `!!` = breach. Header line carries the C4-AND verdict.
+`trace` id, or per-invoke timeline (SPEC §V.57).
 
-```
-report [<variant>/<ENV>]: <PASS|FAIL>
-  ok  n_invokes          4        == 4          §V.26
-  ok  branch split       3nc/1c   3nc/1c        §V.27
-  ok  p95_sla_agent      41s      <= 75         §V.61
-  !!  p95_sla_delivery   88s      <= 75         §V.69   <- breach
-  ok  warns / errors     0 / 0    == 0          §V.59
-  ok  tool_errors        0nc/0c   nc==0,c<=2    §V.70
-  ok  cache_hit          0.81     >= 0.5        §V.47
-  ok  overlap_pairs      3        >= 2          §V.23
-  ok  read_drive max_dur 12s      < 60          §V.38
-```
+Render it as a **GFM table -- never a fenced ASCII block** (SPEC §V.59). An H3 header
+`### <variant>/<ENV> -- <PASS|FAIL>` carries the C4-AND verdict; then one row per C4 gate with
+columns `status | gate | measured | threshold | invariant`. Status is ASCII: `ok` = held,
+`!!` = breach; a breached gate's `measured` cell is rendered in **bold**. Emit it as rendered
+markdown (a real table, not inside a code fence), e.g. a PASS run:
 
-The per-gate measured/threshold/§V mapping is in `references/gates.md` ("Per-gate Gate-report
-mapping"). Keep it terse; do NOT write it to a file, do NOT let it change the verdict, do NOT
-grade reply content, and do NOT print any span / `email` id / `trace` id / timeline.
+### dev/development -- PASS
+
+| status | gate               | measured | threshold   | invariant |
+| ------ | ------------------ | -------- | ----------- | --------- |
+| ok     | n_invokes          | 4        | == 4        | §V.26     |
+| ok     | branch split       | 3nc/1c   | 3nc/1c      | §V.27     |
+| ok     | p95_sla_agent      | 41s      | <= 75       | §V.61     |
+| ok     | p95_sla_delivery   | 62s      | <= 75       | §V.69     |
+| ok     | warns / errors     | 0 / 0    | == 0        | §V.59     |
+| ok     | tool_errors        | 0nc/0c   | nc==0, c<=2 | §V.70     |
+| ok     | cache_hit          | 0.81     | >= 0.5      | §V.47     |
+| ok     | overlap_pairs      | 3        | >= 2        | §V.23     |
+| ok     | read_drive max_dur | 12s      | < 60        | §V.38     |
+
+On a breach the gate's `status` becomes `!!` and its `measured` cell is **bold** (markdown source
+`| !! | p95_sla_delivery | **88s** | <= 75 | §V.69 |`); Phase 4 then drills in. The per-gate
+measured/threshold/§V mapping is in `references/gates.md` ("Per-gate Gate-report mapping"). Keep
+it terse; do NOT write it to a file, do NOT wrap it in a code fence, do NOT let it change the
+verdict, do NOT grade reply content, and do NOT print any span / `email` id / `trace` id /
+timeline.
 
 ## Phase 4 -- On FAIL: investigate + remedy
 
-**Only when this variant FAILed.** Load `references/investigate.md` and auto-investigate the
+**Only when this variant FAILed.** The Phase 3 table already marked the breached gate(s) `!!`
+with their `measured` cell in **bold**. Load `references/investigate.md` and auto-investigate the
 **current-run** Logfire records yourself (same `mcp__claude_ai_logfire__query_run` access, window
 `[<T_SEND_C>, <T_SEND_C> + 300s]`, scoped to `<ENV>` -- no manual `/logfire:debug`, no separate
 debugger). Span detail (`email`/`trace` ids, the per-invoke timeline) lives there, FAIL-only --
 this is the only place it appears. Per the investigate.md steps: attribute each breach to its
-failing span(s) + owning §V, run the timeline query, map breach -> inspect -> remedy target, and
-emit one paste-ready `/sdd:spec`-ready remedy block per breached gate under a `## Next` heading.
+failing span(s) + owning §V, run the timeline query, and map breach -> inspect -> remedy target.
+
+Then emit, **per breached gate**, one `>` blockquote callout -- **Breach** / **Cause** /
+**Recurrence class** -- followed by exactly ONE consolidated `## Next` (the `/sdd:spec`
+`## OUTPUT -- "Next" block` contract): 1-5 positional `run <int>` items, one
+`/sdd:spec <remedy intent>` per breached gate (**item 1 is a `/sdd:spec` remedy**) plus a final
+`/test-google-drive <variant>` re-run item. The operator fires a fix with `run 1` (or
+selectively) -- no manual paste line. For example, a single `sla_delivery` real regression:
+
+> **Breach** -- p95_sla_delivery = 88s > 75 (§V.69), real regression.
+> **Cause** -- tick @14:30:11 classified 2 inbound but did not set `wakeup_event`; the next
+> tick's full sweep never fired -> 2 replies missed the 75s band.
+> **Recurrence class** -- delivery-SLA regression when classify-forces-full-sweep skips a tick.
+
+## Next
+
+1. /sdd:spec a burst tick that classified >=1 inbound failed to set wakeup_event, so the next
+   tick's full sweep never fired and delivery p95 breached §V.69 under load (trace <trace_id>);
+   add §B + a wakeup_event guard invariant
+2. /test-google-drive dev -- re-run once the fix lands
 
 A `sla_delivery` breach whose subject is in the Phase 1 `resent[]` self-heal set is a
-**self-heal-timing artifact** (advisory, not a §V.69 regression) -- drop it from the remedy. The
-investigation does not retry the burst, does not amend the spec, and does not auto-file an issue
-(SPEC §V.59 / §V.57). The remedy block is advisory -- it never alters the PASS/FAIL verdict.
+**self-heal-timing artifact** (advisory, not a §V.69 regression) -- drop it from the callouts and
+the `## Next`. The investigation does not retry the burst, does not amend the spec, and does not
+auto-file an issue (SPEC §V.59 / §V.57). A PASS run emits no `## Next`. The callouts + `## Next`
+are advisory -- they never alter the PASS/FAIL verdict.
 
 ## Phase 5 -- Teardown
 
@@ -252,9 +281,10 @@ investigation does not retry the burst, does not amend the spec, and does not au
 
 ## Output contract
 
-Per variant, in order: the **Phase 3 Gate report** (its header line is the variant's PASS/FAIL
-verdict), then -- on FAIL only -- the **Phase 4 `## Next`** remedy block. After all variants,
-one final line:
+Per variant, in order: the **Phase 3 Gate report** -- a GFM table whose
+`### <variant>/<ENV> -- <PASS|FAIL>` H3 header carries the verdict -- then, **on FAIL only**, the
+**Phase 4** breach blockquote callout(s) + exactly one consolidated `## Next`. A PASS run emits no
+`## Next`. After all variants, one final line:
 
 - `OVERALL PASS` -- every requested variant passed.
 - `OVERALL FAIL: <which variant(s) failed>` -- otherwise.
@@ -262,10 +292,12 @@ one final line:
 Do NOT:
 
 - Write any `.md` file to the repo. This oracle is chat-only.
-- Auto-invoke `/sdd:spec` (the Phase 4 remedy is paste-ready, not auto-run).
+- Wrap the Gate report in a code fence -- it is a rendered GFM table, not fenced ASCII (SPEC §V.59).
+- Auto-invoke `/sdd:spec` yourself -- the Phase 4 `## Next` is operator-dispatchable (`run <int>`),
+  not auto-run.
 - Render a phase matrix, §1/§2/§3 sections, or read/grade any reply body. (The `## Phase`
   headers above structure the *procedure*; the *chat output* is the span-free Gate report plus
-  the FAIL-only remedy -- not a phase matrix.) Structural health is the C4 aggregate.
+  the FAIL-only callouts + `## Next` -- not a phase matrix.) Structural health is the C4 aggregate.
 - Print any Logfire span / `email` id / `trace` id in the every-run output (span detail is
   Phase-4 / FAIL-only, SPEC §V.59).
 - Derive latency from the round-trip poll (SPEC §V.61).
@@ -279,9 +311,10 @@ Do NOT:
 - SPEC §V.59 -- this skill's contract: phase-numbered body, 2 variants from `outbound@lab5.ca`
   (prod warm/non-destructive vs dev full Phase 0), `[dev|prod|both]` default dev,
   `[TGD-<HHMMSS>-<i>]` subjects, burst owned by `scripts/burst.py`, PASS = aggregate C4 + zero
-  error/warn per env, span-free Gate report every run, FAIL-only auto-investigation ->
-  `/sdd:spec`-ready remedy. Gate SQL: `references/gates.md`; FAIL-only investigation SQL + remedy
-  template: `references/investigate.md` (kept there per SPEC §V.100 progressive-disclosure).
+  error/warn per env, span-free GFM-table Gate report every run, FAIL-only auto-investigation ->
+  breach blockquote callout(s) + one dispatchable `## Next`. Gate SQL: `references/gates.md`;
+  FAIL-only investigation SQL + remedy template: `references/investigate.md` (kept there per SPEC
+  §V.100 progressive-disclosure).
 - SPEC §V.61 -- latency verdict from `agent.invoke` spans (CLI poll = round-trip only);
   two-budget `sla_agent`/`sla_delivery` split. Thresholds: `.claude/check-extras.md` §V.61.
 - SPEC §V.69 -- event-driven full sweep on classify; N=4 per-variant burst `T_delivery <= 75s`.

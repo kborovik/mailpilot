@@ -5,9 +5,9 @@ auto-investigates the current-run Logfire records itself (same
 `mcp__claude_ai_logfire__query_run` access the gates used, window
 `[<T_SEND_C>, <T_SEND_C> + 300s]`, scoped to the variant's
 `deployment_environment` -- no manual `/logfire:debug`), classifies each breach,
-and emits a paste-ready remedy block. Span detail (`email_id` / `trace_id` /
-timeline) lives ONLY here -- it never appears in the every-run Gate report, which
-stays a span-free health verdict.
+and emits a `>` blockquote breach callout per breach + one consolidated dispatchable
+`## Next`. Span detail (`email_id` / `trace_id` / timeline) lives ONLY here -- it
+never appears in the every-run Gate report, which stays a span-free health verdict.
 
 This investigation is single-context (NOT a `.claude/workflows/*.js` multi-agent
 fan-out). It does not retry the burst, does not amend the spec, and does not
@@ -86,36 +86,39 @@ Per breached gate, what to inspect in the current-run records and the remedy tar
 | `n_invokes` / distinct-id (§V.26)      | merged / dropped / extra `agent.invoke`; the `is_routed` gate                          | §V.22 single-route-pass; §V.28 enrollment ensure   |
 | `cache_hit` (§V.47)                    | `agent.invoke` `cache_read` / `cache_creation` attrs                                   | §V.47 cache-key churn (instructions/tool defs)     |
 
-## Step 4 -- emit the /sdd:spec-ready remedy block
+## Step 4 -- emit the breach callout(s) + one consolidated `## Next`
 
-One block per breached gate (drop self-heal-timing artifacts). Backprop-shaped: breach -> cause
--> recurrence-class -> proposed §V/§B + a paste-ready `/sdd:spec` line. Print to chat under a
-`## Next` heading; advisory only -- it never alters the PASS/FAIL verdict (the C4 gates alone
-decide, SPEC §V.59) and writes no `.md` artifact (SPEC §V.57).
+Per breached gate (drop self-heal-timing artifacts), emit one `>` blockquote callout --
+**Breach** / **Cause** / **Recurrence class** (backprop-shaped: breach -> cause ->
+recurrence-class). Then emit exactly ONE consolidated `## Next` per the `/sdd:spec`
+`## OUTPUT -- "Next" block` contract: 1-5 positional `run <int>` items -- one
+`/sdd:spec <remedy intent>` per breached gate (**item 1 a `/sdd:spec` remedy**) plus a final
+`/test-google-drive <variant>` re-run item. The operator dispatches a fix with `run 1` (or
+selectively) -- no manual paste line. Advisory only -- it never alters the PASS/FAIL verdict (the
+C4 gates alone decide, SPEC §V.59) and writes no `.md` artifact (SPEC §V.57). Emit it as rendered
+markdown (real blockquote + real `## Next`), never inside a code fence.
 
-Template (fill `<...>` from Steps 1-3):
+Shape (one blockquote per breach, then one `## Next`; fill `<...>` from Steps 1-3):
 
-```
-## Remedy -- ready for /sdd:spec
-breach:           <gate>=<measured> > <threshold> (§V.NN), <real regression | artifact dropped>
-cause:            <what the current-run spans show -- the concrete failing path>
-recurrence class: <the class of failure a new invariant/bug would catch>
-proposed:         <backprop -> §B entry + which §V to tighten>
+> **Breach** -- <gate>=<measured> > <threshold> (§V.NN), <real regression | artifact dropped>
+> **Cause** -- <what the current-run spans show -- the concrete failing path>
+> **Recurrence class** -- <the class of failure a new invariant/bug would catch>
 
-/sdd:spec <free-form intent: the failing path + the trace to cite + the guard to add>
-```
+## Next
+
+1. /sdd:spec <free-form intent: the failing path + the trace to cite + the guard to add>
+2. /test-google-drive <variant> -- re-run once the fix lands
 
 Worked example (`sla_delivery` real regression):
 
-```
-## Remedy -- ready for /sdd:spec
-breach:           p95_sla_delivery=88s > 75 (§V.69), real regression
-cause:            tick @14:30:11 classified 2 inbound but did not set wakeup_event -> next
-                  tick's full sweep never fired -> 2 replies missed the 75s band
-recurrence class: delivery-SLA regression when classify-forces-full-sweep skips a burst tick
-proposed:         backprop -> §B entry + tighten §V.69 wakeup_event guard
+> **Breach** -- p95_sla_delivery = 88s > 75 (§V.69), real regression.
+> **Cause** -- tick @14:30:11 classified 2 inbound but did not set `wakeup_event`; the next
+> tick's full sweep never fired -> 2 replies missed the 75s band.
+> **Recurrence class** -- delivery-SLA regression when classify-forces-full-sweep skips a burst tick.
 
-/sdd:spec a burst tick that classified >=1 inbound failed to set wakeup_event, so the next
-  tick's full sweep never fired and delivery p95 breached §V.69 under load (trace <trace_id>);
-  add §B + invariant guard on the wakeup_event path
-```
+## Next
+
+1. /sdd:spec a burst tick that classified >=1 inbound failed to set wakeup_event, so the next
+   tick's full sweep never fired and delivery p95 breached §V.69 under load (trace <trace_id>);
+   add §B + a wakeup_event guard invariant
+2. /test-google-drive dev -- re-run once the fix lands
