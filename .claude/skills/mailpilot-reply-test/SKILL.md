@@ -40,6 +40,11 @@ the `mailpilot` console script, and the package are importable. Scripts live in
 
 - This sends **real Gmail** between `outbound@lab5.ca` and `inbound@lab5.ca`
   (1 message for Run-A, 4 for Run-B).
+- Step 0b runs `make clean`, which **drops and re-creates the local `mailpilot`
+  and `mailpilot_test` databases** (companies/contacts are exported first). This
+  is intentional — a clean DB is what makes each run deterministic — but it wipes
+  all local CRM state, so only run this skill against a local/dev database, never
+  a shared one.
 - `mailpilot run` has no per-account scope: while up it syncs **all** accounts
   and could auto-reply to any genuine inbound mail. The skill keeps it up only
   for the test window and stops it at teardown. **Teardown is mandatory** — run
@@ -54,7 +59,7 @@ the `mailpilot` console script, and the package are importable. Scripts live in
 |---|---|---|
 | Setup checks, Run-A, Run-B, Analysis | **Sonnet** sub-agents | Mechanical: run scripts / one SQL query, return a short summary. |
 | Failure investigation, Solution analysis | **Opus** sub-agents | Hard reasoning; isolated in sub-agents so the heavy Logfire/code reading never enters the orchestrator's window. |
-| Run-loop start + stop, report generation | Orchestrator, directly | The loop must outlive every phase, so the one process alive across all of them owns it; pairing start+stop there guarantees teardown always runs. Trivial deterministic commands. |
+| Baseline reset (`make clean` + account re-create), run-loop start + stop, report generation | Orchestrator, directly | The reset must precede every sub-agent phase; the loop must outlive every phase, so the one process alive across all of them owns it; pairing start+stop there guarantees teardown always runs. Trivial deterministic commands. |
 
 Spawn each sub-agent with the Agent tool and the stated `model`. Pass it `RUN_ID`
 and the exact commands; require it to return **only** the small JSON/summary
@@ -70,6 +75,24 @@ Reuse the printed value (e.g. `746e35cd`) as a **literal** wherever `$RUN_ID`
 appears below — substitute the actual string into each command. Do not rely on a
 shell variable: separate tool calls do not share shell state. Artifacts go to
 `.mptest/<run_id>/`.
+
+### 0b. Reset to a deterministic baseline — orchestrator, directly
+Every run must start from a known-empty database so results are reproducible and
+not contaminated by prior runs. Run `make clean` (exports companies/contacts,
+then drops + re-creates the `mailpilot` and `mailpilot_test` databases; the
+schema re-applies on first connection), then re-create the test accounts that the
+clean wiped:
+```bash
+make clean
+uv run mailpilot account create --email outbound@lab5.ca --display-name "MailPilot Outbound"
+uv run mailpilot account create --email inbound@lab5.ca  --display-name "MailPilot Inbound"
+uv run mailpilot account create --email hello@lab5.ca     --display-name "MailPilot Hello"
+```
+Do **not** re-import the demo workflow here — preflight (step 1) imports it
+idempotently onto the inbound account. The orchestrator owns this step because it
+is a trivial deterministic command that must run before any sub-agent phase. If
+`make clean` or an `account create` fails, surface the error and abort (the loop
+is not up yet, so there is nothing to tear down).
 
 ### 1. Setup checks — Sonnet sub-agent
 Have it run, in order, and report the result of each:
