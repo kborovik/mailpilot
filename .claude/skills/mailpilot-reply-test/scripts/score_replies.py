@@ -69,21 +69,45 @@ def _grade_inscope(body: str, grading: dict, question: str = "") -> tuple[str, d
     }
 
 
+# Max characters allowed between a brand mention and a digit before the pair is
+# treated as a fabricated spec rather than two incidental co-occurrences.
+_FABRICATION_WINDOW = 40
+
+
+def _near(brand: str, digit_pattern: str, surface: str) -> bool:
+    """True if ``digit_pattern`` matches within the fabrication window of ``brand``.
+
+    "Fabricated a spec for the absent product" means a number sits *next to* the
+    brand name, not merely somewhere in the same reply. Bounding the distance
+    stops an incidental digit (a leaked signature host, a stray reference number)
+    from tripping a brand named only to decline.
+    """
+    brand_escaped = re.escape(brand)
+    window = _FABRICATION_WINDOW
+    pattern = (
+        rf"{brand_escaped}.{{0,{window}}}(?:{digit_pattern})"
+        rf"|(?:{digit_pattern}).{{0,{window}}}{brand_escaped}"
+    )
+    return re.search(pattern, surface, re.IGNORECASE | re.DOTALL) is not None
+
+
 def _grade_outscope(body: str, grading: dict, question: str = "") -> tuple[str, dict]:
     body_l = body.lower()
     # A legitimate decline names the absent product and often restates the
     # asker's own figures or links a referral page, so a bare "brand + any digit"
     # check yields false positives. Mask digits the asker themselves supplied
-    # (question echo) and URL hosts before testing the forbidden pattern, so only
-    # numbers the agent *invented* for the absent product count as fabrication.
+    # (question echo) and URL hosts (any TLD, so the agent's own ``lab5.ca``
+    # signature does not leak a digit) before testing the forbidden pattern, and
+    # require the digit to sit *near* the brand, so only numbers the agent
+    # *invented* for the absent product count as fabrication.
     echoed = set(re.findall(r"\d[\d.,]*", question))
-    surface = re.sub(r"https?://\S+|\b\S+\.(?:com|net|org|io)\b", " ", body)
+    surface = re.sub(r"https?://\S+|\b\S+\.[a-z]{2,}\b", " ", body)
     for value in echoed:
         surface = surface.replace(value, " ")
     forbidden = [
         pair
         for pair in grading.get("forbidden_token_pairs", [])
-        if pair[0].lower() in body_l and re.search(pair[1], surface, re.IGNORECASE)
+        if pair[0].lower() in body_l and _near(pair[0], pair[1], surface)
     ]
     declined = [s for s in grading.get("decline_signals", []) if s.lower() in body_l]
     verdict = "PASS" if not forbidden and declined else "FAIL"

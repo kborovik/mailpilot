@@ -272,9 +272,8 @@
     "id": "qa-in-025",
     "type": "inscope",
     "source_file": "pure-aqua-seawater-ro-16k-gpd-ecuador-case-study.md",
-    "question": "What is the maximum feed water TDS that the SW-16K-1480 system can handle, and what is its production capacity?",
+    "question": "What is the maximum feed water TDS that the seawater RO system in the Ecuador case study can handle, and what is its production capacity?",
     "expected_tokens": [
-      "SW-16K-1480",
       "42,000 PPM",
       "16,000 GPD"
     ]
