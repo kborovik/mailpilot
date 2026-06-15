@@ -138,8 +138,8 @@ Checks:
 (iii) `description:` = triggering intent; vendor names + pipeline-stage rosters belong in body.
 
 Mechanical greps (manual judgment on hits):
-- `rg -L 'allowed-tools' .claude/skills/*/SKILL.md` -> each hit = missing key (VIOLATE).
-- `rg -L 'argument-hint' .claude/skills/*/SKILL.md` -> each hit = missing key (VIOLATE).
+- `rg --files-without-match 'allowed-tools' .claude/skills/*/SKILL.md` -> each listed file = missing key (VIOLATE). (`rg -L` is `--follow`, not files-without-match — it prints matches, inverting the read.)
+- `rg --files-without-match 'argument-hint' .claude/skills/*/SKILL.md` -> each listed file = missing key (VIOLATE).
 - `rg -n '^description:' .claude/skills/*/SKILL.md` -> review for vendor roster or full pipeline-stage detail in trigger text.
 
 ## §V.49 — bounded auto-retry parameters
