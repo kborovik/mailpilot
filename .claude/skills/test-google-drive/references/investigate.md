@@ -20,7 +20,7 @@ For each FAILED C4 gate, name the failing span(s) and the owning invariant:
 | Breached gate                                     | Failing span(s) to name                                              | Owning §V |
 | ------------------------------------------------- | -------------------------------------------------------------------- | --------- |
 | `n_invokes != 4` / distinct-id mismatch           | merged / dropped / extra `agent.invoke` (by `email_id`)              | §V.26     |
-| `n_compare != 1` / `n_noncompare != 3`            | mis-branched `agent.invoke` (x-check C4.c read counts)              | §V.27     |
+| `n_compare != 1` / `n_noncompare != 3`            | mis-branched `agent.invoke` (x-check G.c read counts)              | §V.27     |
 | `p95_sla_agent_noncompare > 75`                   | slowest non-compare `agent.invoke` (`email_id`)                     | §V.61     |
 | `p95_sla_delivery > 75`                            | `agent.invoke` with max `sla_delivery_seconds`                     | §V.69     |
 | `n_exceptions > 0` / `n_warns > 0`                 | the `is_exception` / `level='warn'` span                          | §V.59     |
@@ -65,7 +65,7 @@ ORDER BY i.invoke_start;
 ```
 
 `call_timeline` shows search-first ordering (§V.41); `n_read >= 2` marks the compare invoke
-(matches C4.a `is_compare`).
+(matches G.a `is_compare`).
 
 ## Step 3 -- breach -> inspect -> remedy target
 

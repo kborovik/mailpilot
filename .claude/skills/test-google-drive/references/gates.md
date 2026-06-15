@@ -14,7 +14,7 @@ trace.
 The rows these gates return ARE the verdict; the Phase 3 Gate report renders them
 span-free, and Phase 4 (FAIL only) drills into `references/investigate.md`.
 
-## Gate C4.a -- per-span SLA + token economics (two-budget split, compare vs non-compare)
+## Gate G.a -- per-span SLA + token economics (two-budget split, compare vs non-compare)
 
 ```sql
 WITH read_counts AS (
@@ -81,7 +81,7 @@ Gated assertions (all MUST hold):
   environment caveat, not a system failure.
 - `n_compare == 1` AND `n_noncompare == 3` -- matches the burst mix (1 qa-cmp + 2 qa-in + 1
   qa-out, SPEC §V.27). A mismatch means a compare invocation skipped a required read OR a
-  non-compare invocation issued a stray second read; cross-check against C4.c before flagging.
+  non-compare invocation issued a stray second read; cross-check against G.c before flagging.
 - `p95_sla_agent_noncompare_s <= 75` -- burst gate over non-compare invocations (SPEC §V.61;
   the §V.23 burst-load tolerance over the 50s steady single-source ceiling). A breach is an
   our-side regression of agent execution under load.
@@ -111,11 +111,11 @@ Reported (NOT gated):
 - `max_sla_delivery_s` -- reported alongside the gated p95.
 - `max_total_s`, `total_in_tok`, `total_out_tok` -- end-to-end and token totals, for reference.
 
-## Gate C4.b -- concurrency proof (no serialization regression)
+## Gate G.b -- concurrency proof (no serialization regression)
 
 ```sql
-WITH read_counts AS ( /* same CTE as C4.a */ ),
-burst AS ( /* same CTE as C4.a */ )
+WITH read_counts AS ( /* same CTE as G.a */ ),
+burst AS ( /* same CTE as G.a */ )
 SELECT COUNT(*) AS overlap_pairs
 FROM burst a, burst b
 WHERE a.email_id < b.email_id
@@ -128,7 +128,7 @@ floor of 2 is generous enough that only strict serialization (drain-layer pool r
 §V.23) fails it. A failure means the dispatcher serialized invocations -- a Critical Bug, since
 it defeats the burst-load oracle.
 
-## Gate C4.c -- Drive race signatures absent (§B.34)
+## Gate G.c -- Drive race signatures absent (§B.34)
 
 ```sql
 SELECT MAX(EXTRACT(EPOCH FROM (end_timestamp - start_timestamp))) AS max_dur_s,
@@ -149,7 +149,7 @@ Assert:
 
 ## Per-gate Gate-report mapping (Phase 3)
 
-The Phase 3 Gate report renders one row per gate from the C4.a/b/c outputs above:
+The Phase 3 Gate report renders one row per gate from the G.a/b/c outputs above:
 
 | Gate row             | Measured (from C4)             | Threshold        | §V    |
 | -------------------- | ------------------------------ | ---------------- | ----- |
@@ -160,5 +160,5 @@ The Phase 3 Gate report renders one row per gate from the C4.a/b/c outputs above
 | warns / errors       | `n_warns` / `n_exceptions`     | `== 0`           | §V.59 |
 | tool_errors nc / c   | `n_tool_errors_noncompare` / `..._compare` | `nc==0, c<=2` | §V.70 |
 | cache_hit            | `avg_cache_hit_ratio`          | `>= 0.5`         | §V.47 |
-| overlap_pairs        | `overlap_pairs` (C4.b)         | `>= 2`           | §V.23 |
-| read_drive max_dur   | `max_dur_s` (C4.c)             | `< 60`           | §V.38 |
+| overlap_pairs        | `overlap_pairs` (G.b)         | `>= 2`           | §V.23 |
+| read_drive max_dur   | `max_dur_s` (G.c)             | `< 60`           | §V.38 |

@@ -195,7 +195,7 @@ Parse the single JSON object it prints, then gate:
 
 ## Phase 2 -- Gates (C4)
 
-Load `references/gates.md` and run gates **C4.a / C4.b / C4.c** with
+Load `references/gates.md` and run gates **G.a / G.b / G.c** with
 `mcp__claude_ai_logfire__query_run` (project `mailpilot`), substituting `<ENV>`, `<T_SEND_C>`
 (from Phase 1), and `<WF_PREDICATE>` per the variant's parameter column (dev fills it with
 `DEMO_WORKFLOW_ID`; prod leaves it empty). The returned rows ARE the verdict. PASS = every gated
@@ -289,7 +289,7 @@ Do NOT:
   fact-check re-drafts; flat `<= 5%` ratio governs larger N. Prod + dev measured separately.
   Measurement detail: `.claude/check-extras.md` §V.70.
 - SPEC §V.23 / §V.26 / §V.38 / §V.47 -- concurrent drain pool, one span per inbound email,
-  sequential Drive dispatch, prompt-cache attrs (C4.b / C4.a / C4.c gates).
+  sequential Drive dispatch, prompt-cache attrs (G.b / G.a / G.c gates).
 - SPEC §V.37 -- Gmail credential construction via `GmailClient("outbound@lab5.ca")` (prod
   round-trip poll, in `burst.py`).
 - SPEC §V.63 / §V.103 -- declarative `workflow import` from the `workflows/` catalog submodule
