@@ -157,7 +157,7 @@ T138|x|add mailpilot-reply-test skill — live e2e reply-test (outbound@lab5.ca-
 T139|x|impl §V.42(+) per §B.83 — strip permissive "may use Markdown" line from `_BASE` in templates.py; extend guard test to assert `rg 'may use Markdown'` zero hits|V42,B83
 T140|x|impl §V.45(+) per §B.84 — strip §-cites from the six registered tool docstrings; broaden guard test + check-extras §V.45 recipe to grep `§[VTB]\.[0-9]+` over per-tool docstrings (model-visible descriptions), not just composed protocol|V45,B84
 T141|x|impl §V.102(+) per §B.85 — add `allowed-tools` + `argument-hint` to mailpilot-reply-test SKILL.md frontmatter|V102,B85
-T142|.|impl §V.102(+) per §B.86 — drop `mcp__claude_ai_logfire__query_run` from mailpilot-reply-test SKILL.md `allowed-tools` (orchestrator never invokes it; Phase-4 sub-agent does, own palette)|V102,B86
+T142|x|impl §V.102(+) per §B.86 — drop `mcp__claude_ai_logfire__query_run` from mailpilot-reply-test SKILL.md `allowed-tools` (orchestrator never invokes it; Phase-4 sub-agent does, own palette)|V102,B86
 
 ## §B BUGS
 
