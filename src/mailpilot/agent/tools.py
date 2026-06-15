@@ -387,7 +387,7 @@ def create_task(  # noqa: PLR0913
 
     Args:
         connection: Open database connection.
-        enrollment_id: Current enrollment FK (NOT NULL per §V.28).
+        enrollment_id: Current enrollment FK (NOT NULL).
         workflow_id: Current workflow FK (denormalised from enrollment).
         contact_id: Contact this task targets (denormalised from enrollment).
         description: What the agent should do when the task runs.
@@ -451,7 +451,7 @@ def record_enrollment_outcome(
 
     Args:
         connection: Open database connection.
-        enrollment_id: Enrollment ID (scalar per §V.12).
+        enrollment_id: Enrollment ID (scalar).
         outcome: "completed" or "failed".
         reason: Agent's explanation (e.g., "meeting booked", "no response").
 
@@ -521,7 +521,7 @@ def list_enrollments(
     person A at the same company already completed the objective). Each
     row includes ``latest_outcome`` (``completed`` / ``failed`` / ``None``),
     ``latest_outcome_reason``, and ``latest_outcome_at`` -- pulled from the
-    activity timeline since outcomes are timeline-only per §V.15.
+    activity timeline since outcomes are timeline-only.
 
     Args:
         connection: Open database connection.
@@ -558,7 +558,7 @@ def read_contact(
     connection: psycopg.Connection[dict[str, Any]],
     email: str,
 ) -> dict[str, Any]:
-    """Look up a contact by email address with inlined notes (§V.8).
+    """Look up a contact by email address with inlined notes.
 
     Routes through ``database.load_contact_view`` so the agent and the
     operator (CLI ``contact view``) see byte-identical context, including
@@ -569,7 +569,7 @@ def read_contact(
         email: Contact email address.
 
     Returns:
-        ContactView dict on success; per §V.39 error dict on lookup failure.
+        ContactView dict on success; an error dict on lookup failure.
     """
     contact = database.get_contact_by_email(connection, email)
     if contact is None:
@@ -584,7 +584,7 @@ def read_company(
     connection: psycopg.Connection[dict[str, Any]],
     domain: str,
 ) -> dict[str, Any]:
-    """Look up a company by domain with inlined notes (§V.8).
+    """Look up a company by domain with inlined notes.
 
     Routes through ``database.load_company_view`` so the agent and the
     operator (CLI ``company view``) see byte-identical context including
@@ -595,7 +595,7 @@ def read_company(
         domain: Company primary domain.
 
     Returns:
-        CompanyView dict on success; per §V.39 error dict on lookup failure.
+        CompanyView dict on success; an error dict on lookup failure.
     """
     company = database.get_company_by_domain(connection, domain)
     if company is None:
@@ -723,7 +723,7 @@ def read_drive_markdown(
         drive_client: Drive client scoped to the current account.
         file_id: Drive file ID, typically returned by ``list_drive_markdown``.
         read_ledger: Per-invocation ``{file_id: content}`` map populated on
-            successful reads per §V.68. ``reply_email`` and ``send_email``
+            successful reads. ``reply_email`` and ``send_email``
             consult the same map at pre-send time to reject bodies citing
             numeric tokens absent from the union of reads.
 

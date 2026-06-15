@@ -300,6 +300,7 @@ def test_template_dataclass_is_frozen() -> None:
 import re  # noqa: E402
 
 from mailpilot.agent import templates as templates_module  # noqa: E402
+from mailpilot.agent import tools as agent_tools_module  # noqa: E402
 
 
 def _known_tool_names() -> set[str]:
@@ -385,6 +386,28 @@ def test_registered_tool_descriptions_carry_no_spec_citation() -> None:
             assert match is None, (
                 f"template {template.name!r} tool {tool.name!r}: description "
                 f"embeds SPEC cite {match.group()!r} -- §V.45 forbids "
+                f"§-numbering in model-visible tool descriptions"
+            )
+
+
+def test_registered_tool_source_docstrings_carry_no_spec_citation() -> None:
+    """§V.45 / §B.84: pydantic-ai derives a tool's full model-visible schema --
+    description AND per-parameter help -- from the registered function's
+    docstring, including the Args/Returns sections. T130's guard scanned only
+    ``tool.description`` (the wrapper summary), so §-cites buried in an Args or
+    Returns line of a source-function docstring (read_contact, create_task,
+    record_enrollment_outcome, list_enrollments, read_company, read_drive_markdown)
+    leaked to the model unaudited. Sweep the full source docstring of every
+    registered tool. Internal helpers (_fact_check_body, _check_spec_table) are
+    out of scope -- they are never registered, so the model never sees them."""
+    for template in TEMPLATES.values():
+        for tool in template.tools:
+            source_fn = getattr(agent_tools_module, tool.name)
+            docstring = source_fn.__doc__ or ""
+            match = _SPEC_CITE.search(docstring)
+            assert match is None, (
+                f"template {template.name!r} tool {tool.name!r}: source "
+                f"docstring embeds SPEC cite {match.group()!r} -- §V.45 forbids "
                 f"§-numbering in model-visible tool descriptions"
             )
 
