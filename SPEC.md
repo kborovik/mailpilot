@@ -124,6 +124,7 @@ V100: skill-body progressive-disclosure — live procedure inline; rarely-loaded
 V101: skill-body obligation vocabulary — `.claude/skills/**` prose marks a hard requirement w/ an explicit word (`MUST` / `required`), never bare ` ! ` as must; backticked shell (`[ ! -f ]`, `!=`) + SPEC.md/telegraph register exempt. Scope = `.claude/skills/**/*.md` prose, grep ` ! ` -> zero must-sense hits — recipe → .claude/check-extras.md §V.101
 V102: project-skill frontmatter hygiene — every `.claude/skills/**/SKILL.md` sets `allowed-tools` + `argument-hint`; `description` = triggering intent only — recipe → .claude/check-extras.md §V.102
 V103: file-based workflow defs = `workflows/*.toml`, 1 workflow/file, pure TOML (stdlib tomllib, no new dep); fields = Workflow row 1:1 {name, template, theme, objective, instructions}, instructions = TOML multi-line literal string; `workflow import --file X.toml` parses -> row byte-identical to JSON-array import + shared validation (malformed/missing-required -> validation_error per §V.54, no partial write §V.94); `--file <dir>` globs `*.toml` (batch catalog apply, per-row errors continue §V.63); `workflows/` = private git submodule kborovik/workflows; any skill-cited `workflows/` path needs `git submodule update --init` (resolves §V.99 only post-init); root `workflows/*.toml` (CRM defs) distinct from `.claude/workflows/*.js` (Claude Code scripts §V.73-74)
+V104: mailpilot-reply-test reply-loop guard — live reply-test (`.claude/skills/mailpilot-reply-test`) requires `outbound@lab5.ca` have no active workflow; `inbound-google-drive` agent reply lands in outbound mailbox -> `skipped_no_workflows` (§V.76), no second reply; any active outbound workflow re-enters routing -> inbound<->outbound auto-reply loop; no-outbound-workflow = load-bearing test precondition not incidental
 
 ## §T TASKS
 
@@ -152,6 +153,7 @@ T130|x|impl §V.45(+) — strip §-cites from _BASE + guard test: no §[VTB] tok
 T131|x|impl §V.103(+) + §V.63 — TOML workflow-def; `workflow import --file` .toml + dir; migrate fixtures → `workflows/` submodule|V103,V63,V99
 T132|x|impl §V.41 + §V.45 — move workflow grounding from templates.py into workflow def instructions; delete `_DRIVE_GROUNDING`|V41,V45,V103,V68
 T137|x|impl §V.23 per §B.82 — detach OTel ctx in `_execute_task_in_worker`; fresh trace root per agent.invoke|V23,V52,B82
+T138|x|add mailpilot-reply-test skill — live e2e reply-test (outbound@lab5.ca->inbound@lab5.ca, `inbound-google-drive` auto-reply, grade vs QA-Pairs.json, Logfire tokens+latency, Opus failure escalation); replaces removed test-google-drive; reply-loop guard|V104,V99,V100
 
 ## §B BUGS
 
