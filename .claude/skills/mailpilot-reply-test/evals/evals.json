@@ -1,0 +1,24 @@
+{
+  "skill_name": "mailpilot-reply-test",
+  "notes": "Validation for this skill is a LIVE Run-A smoke (1 real email) rather than the with-skill/without-skill matrix, since the harness sends real Gmail and starts the run loop. These prompts exist for description-triggering optimization and to document how the skill is invoked.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Smoke-test the mailpilot reply agent for the lab5.ca demo — send a question from outbound to inbound and make sure it auto-replies grounded in the Drive KB. Just do the single-email Run-A for now.",
+      "expected_output": "Runs setup checks (preflight ok, QA↔Drive grounded), starts the run loop, sends 1 in-scope email, captures the threaded reply, scores it against expected_tokens, pulls tokens+latency from Logfire, stops the loop, and prints a brief report with a pass/fail verdict.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Run the full mailpilot demo reply test (Run-A and the 4-email Run-B), then give me a brief report on pass rate, token use, and reply latency.",
+      "expected_output": "Executes Run-A (1 in-scope) and Run-B (2 in-scope + 1 compare + 1 out-of-scope, sent simultaneously), grades all replies, queries Logfire for per-reply tokens and latency, and produces report.md with pass rate, token totals, and concurrency/latency numbers. Teardown stops the loop.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Does the demo agent still politely decline products that aren't in the KB, and does it cite both datasheets on a compare question? Test it and if anything fails, dig into Logfire and tell me why plus how to fix it.",
+      "expected_output": "Runs the suite (Run-B covers compare + out-of-scope), grades decline behavior (no fabricated specs + decline signal) and compare structure (cites sources, names models, uses a table). On any FAIL/NO_REPLY, an Opus sub-agent investigates Logfire for root cause and a second Opus sub-agent proposes concrete fixes, folded into the report.",
+      "files": []
+    }
+  ]
+}
