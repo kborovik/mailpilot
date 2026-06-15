@@ -35,6 +35,7 @@ from typing import Any, Literal, cast
 import click
 import logfire
 import psycopg
+from opentelemetry import context as otel_context
 from psycopg.rows import dict_row
 
 from mailpilot.database import (
@@ -571,12 +572,21 @@ def _execute_task_in_worker(settings: Settings, task: Any) -> None:
         )
         operator_event("error", source="sync.drain.connect_failed", message=str(exc))
         return
+    # Detach the dispatching tick's sync.loop.iteration OTel context before
+    # execute_task so run.execute_task -> agent.invoke open as a fresh trace
+    # root, not children of the dispatch span. py3.14 ThreadPoolExecutor.submit
+    # copies the submitting thread's contextvars into the worker, so without
+    # this every co-tick invoke would share one trace_id -- breaking the
+    # trace_id-is-1:1-with-an-agent.invoke contract and smearing the gate-side
+    # per-invoke read attribution (§V.23, closes §B.82; backstops §B.81).
+    context_token = otel_context.attach(otel_context.Context())
     try:
         execute_task(connection, settings, task)
     except Exception as exc:
         logfire.exception("sync.drain.task_failed", task_id=getattr(task, "id", None))
         operator_event("error", source="sync.drain.task_failed", message=str(exc))
     finally:
+        otel_context.detach(context_token)
         connection.close()
 
 
