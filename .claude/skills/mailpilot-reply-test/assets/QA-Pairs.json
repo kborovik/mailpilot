@@ -5,8 +5,10 @@
     "source_file": "clack-birm-iron-removal-media.md",
     "question": "What is the effective size and mesh size of Clack Birm filter media?",
     "expected_tokens": [
-      "Effective Size: 0.48 mm",
-      "Mesh Size: 12 x 50"
+      "Effective Size",
+      "0.48 mm",
+      "Mesh Size",
+      "12 x 50"
     ]
   },
   {

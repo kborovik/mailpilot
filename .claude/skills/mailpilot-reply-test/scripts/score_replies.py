@@ -25,14 +25,43 @@ from _common import read_json, run_dir, write_json
 
 TABLE_SEPARATOR = re.compile(r"\|\s*:?-{3,}")
 
+# Fold the Unicode dash family to ASCII "-" so typographic variants (en/em dash,
+# minus sign, non-breaking hyphen) match the ASCII hyphen used in spec tokens.
+# Dash variants are typographic, never semantic, in spec values. Code points:
+# U+2010 hyphen, U+2011 non-breaking hyphen, U+2012 figure dash, U+2013 en dash,
+# U+2014 em dash, U+2015 horizontal bar, U+2212 minus sign.
+_DASHES = str.maketrans(
+    dict.fromkeys(
+        map(chr, (0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015, 0x2212)), "-"
+    )
+)
+
 
 def _norm(text: str) -> str:
-    return re.sub(r"\s+", " ", text.lower()).strip()
+    return re.sub(r"\s+", " ", text.lower().translate(_DASHES)).strip()
+
+
+def _loose(tok: str, body_n: str) -> bool:
+    """Tolerate separator drift in number+unit tokens, e.g. "54-in" vs "54 in.".
+
+    Only fires for tokens shaped ``<number><sep><short-unit>``; the numeric part
+    must still match exactly, so a wrong dimension cannot pass.
+    """
+    match = re.fullmatch(r"(\d[\d.,]*)[-.\s]+([a-z]{1,4})\.?", _norm(tok))
+    if not match:
+        return False
+    number, unit = match.group(1), match.group(2)
+    return (
+        re.search(rf"{re.escape(number)}[-.\s]*{re.escape(unit)}\b", body_n) is not None
+    )
 
 
 def _grade_inscope(body: str, grading: dict, question: str = "") -> tuple[str, dict]:
     body_n = _norm(body)
-    hits = {tok: (_norm(tok) in body_n) for tok in grading["expected_tokens"]}
+    hits = {
+        tok: (_norm(tok) in body_n or _loose(tok, body_n))
+        for tok in grading["expected_tokens"]
+    }
     verdict = "PASS" if all(hits.values()) else "FAIL"
     return verdict, {
         "token_hits": hits,
