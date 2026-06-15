@@ -12,6 +12,8 @@ description: >-
   decline behavior, or measure reply latency and token cost — even when they
   only say "test the mailpilot reply", "run the demo test", or "smoke-test the
   agent". This is LIVE Gmail traffic; do not invoke it for unit tests.
+argument-hint: (no arguments)
+allowed-tools: Bash(uv run *), Bash(pkill *), Read, Agent, AskUserQuestion, mcp__claude_ai_logfire__query_run
 ---
 
 # MailPilot reply test

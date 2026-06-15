@@ -156,7 +156,7 @@ T137|x|impl §V.23 per §B.82 — detach OTel ctx in `_execute_task_in_worker`; 
 T138|x|add mailpilot-reply-test skill — live e2e reply-test (outbound@lab5.ca->inbound@lab5.ca, `inbound-google-drive` auto-reply, grade vs QA-Pairs.json, Logfire tokens+latency, Opus failure escalation); replaces removed test-google-drive; reply-loop guard|V104,V99,V100
 T139|x|impl §V.42(+) per §B.83 — strip permissive "may use Markdown" line from `_BASE` in templates.py; extend guard test to assert `rg 'may use Markdown'` zero hits|V42,B83
 T140|x|impl §V.45(+) per §B.84 — strip §-cites from the six registered tool docstrings; broaden guard test + check-extras §V.45 recipe to grep `§[VTB]\.[0-9]+` over per-tool docstrings (model-visible descriptions), not just composed protocol|V45,B84
-T141|.|impl §V.102(+) per §B.85 — add `allowed-tools` + `argument-hint` to mailpilot-reply-test SKILL.md frontmatter|V102,B85
+T141|x|impl §V.102(+) per §B.85 — add `allowed-tools` + `argument-hint` to mailpilot-reply-test SKILL.md frontmatter|V102,B85
 
 ## §B BUGS
 
