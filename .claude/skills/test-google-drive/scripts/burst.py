@@ -289,7 +289,9 @@ def _poll_gmail(source_email: str, target: str, since_epoch: int, count: int) ->
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--account-id", required=True, help="outbound source account id")
+    parser.add_argument(
+        "--account-id", required=True, help="outbound source account id"
+    )
     parser.add_argument("--target", required=True, help="burst recipient address")
     parser.add_argument(
         "--env",
@@ -348,7 +350,9 @@ def main() -> int:
     # < N persisted after self-heal = genuine send failure, not the system under
     # test -> fatal; the run is invalidated before the C4 verdict.
     if persisted < args.n:
-        result["fatal"] = f"only {persisted}/{args.n} outbound rows persisted after self-heal"
+        result["fatal"] = (
+            f"only {persisted}/{args.n} outbound rows persisted after self-heal"
+        )
         print(json.dumps(result, indent=2))
         return 1
 
