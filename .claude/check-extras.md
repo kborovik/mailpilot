@@ -82,19 +82,3 @@ Mechanical grep (manual judgment on hits — flag only must-sense prose, not bac
 ## §V.49 — bounded auto-retry parameters
 
 4 attempts total; backoff [30, 120, 300]s; transient allow-list = Google 429/5xx, Anthropic 502/503/529, socket/TimeoutError; Drive socket timeout 60s feeds classifier; manual retry only failed/cancelled (completed + pending refused); retry UPDATE fires task_pending_trigger.
-
-## §V.61 — reply-latency SLA thresholds
-
-sla_agent_seconds gating: > 50s steady-state critical; compare-type > 90s critical, 50-90s advisory.
-sla_delivery_seconds: advisory (Gmail-side uncontrolled).
-Verdict derived from agent.invoke span in Logfire; CLI poll = round-trip check only.
-
-## §V.70 — burst retry-rate contract measurement
-
-Per-branch at the N=4 burst (the flat ratio is statistically void at small sample: 1 tool error = 25% >> 5%):
-- non-compare invocations: SUM(tool_error_count) FILTER (WHERE NOT is_compare) == 0 (verbatim-citing single-source replies must be retry-clean).
-- compare invocation: SUM(tool_error_count) FILTER (WHERE is_compare) <= 2 (cross-datasheet synthesis structurally induces §V.68 fact-check re-drafts from unit conversion; the agent self-corrects within the §V.71 cap-3). A compare that exhausts cap-3 emits a reply_email.reply_rejection.cap_reached logfire.warn -> already fails the C4 n_warns == 0 gate, so the floor cannot mask a non-self-correcting agent.
-- larger-N bursts (P <= 8, N <= 25): the flat agent.tool_errors / agent.invoke ratio <= 5% still governs (reported for trend at N=4).
-Measured in /test-google-drive per-variant burst window [T_SEND_C, T_SEND_C+300s] (prod env + dev env measured separately) against sla_agent per §V.61.
-Breach = prompt-fidelity regression under load -> investigate §V.41 (search-first / verbatim citation), §V.57 (KB coverage), §V.42 (format-lint sensitivity), §V.68 (fact-check).
-Orthogonal to §V.69: V70 binds agent-execution quality, V69 delivery timing.
