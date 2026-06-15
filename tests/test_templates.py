@@ -97,6 +97,19 @@ def test_base_mandates_pipe_table_for_spec_rows() -> None:
         assert "|---|" in template.protocol
 
 
+def test_base_strips_permissive_markdown_wording() -> None:
+    """§V.42 / §B.83: the permissive "may use Markdown" line must be gone from
+    _BASE. T128 added the pipe-table mandate but left the permissive wording
+    beside it; the agent reads the soft phrasing first, emits a space-aligned
+    spec block, the lint rejects, and it retries (the §B.78 retry class §B.83
+    re-opened). The check-extras §V.42 recipe greps for this exact phrase, so
+    the mandate must stand alone."""
+    base = templates_module._BASE  # pyright: ignore[reportPrivateUsage]
+    assert "may use Markdown" not in base
+    for template in TEMPLATES.values():
+        assert "may use Markdown" not in template.protocol
+
+
 # -- Per-template contract -----------------------------------------------------
 
 

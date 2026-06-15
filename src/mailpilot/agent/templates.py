@@ -87,8 +87,7 @@ class WorkflowTemplate:
 # in the model-visible text (closes §B.79).
 _BASE = (
     "Keep your final summary brief (2-3 sentences, plain text, no emojis).\n"
-    "Email bodies may use Markdown formatting (headers, bold, tables). When "
-    "the reply body carries product specifications (model numbers, flow "
+    "When the reply body carries product specifications (model numbers, flow "
     "rates, dimensions, capacities), you MUST present them as a "
     "GitHub-flavored Markdown pipe table with a header row and a |---| "
     "separator -- e.g. `| Specification | Value |` then `|---|---|` and one "
