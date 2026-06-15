@@ -12,6 +12,17 @@ Checks:
 (iii) settings key list in `## Settings` == `Settings.model_fields` keys in `settings.py` — `src/mailpilot/SKILL.md` only.
 (iv) env-var-prefix description in `## Settings` == `SettingsConfigDict(env_prefix=...)` value in `settings.py` (`MAILPILOT_*`) — `src/mailpilot/SKILL.md` only.
 
+## §V.42 — Outbound format-check rejection algorithm
+
+Trigger when `src/mailpilot/agent/` or `src/mailpilot/email_renderer.py` changed.
+
+Rejection condition: >= 3 consecutive spec-shape lines (short label + whitespace + value) in reply body w/o `|---|` separator -> `format_check_mismatch`. ASCII rule-lines (`---`, `===`, `___`) not treated as separators.
+
+_BASE requirement: MUST explicitly mandate GFM pipe table w/ header row + `|---|` separator for spec rows (model numbers, flow rates, dimensions, capacities); "may use Markdown tables" (permissive) alone insufficient — format-lint is backstop, not primary enforcement.
+
+Mechanical check:
+- `rg -n 'may use Markdown' src/mailpilot/agent/templates.py` -> zero hits (permissive wording retired).
+
 ## §V.68 — _fact_check_body corpus-build algorithm
 
 Per-document scoping (see `src/mailpilot/agent/tools.py:_fact_check_body`):
@@ -65,6 +76,32 @@ Mechanical greps (manual judgment on hits — flag only in CSV context):
 
 Plain-text (non-CSV) line iteration is admitted (per-line domain/URL, `#`-comment skip) — do not flag.
 
+## §V.99 — Skill-path resolution check
+
+Trigger when `.claude/skills/**/*.md` changed.
+
+Checks:
+(i) Script refs (`uv run python .claude/skills/**/scripts/*.py`) each resolve on disk.
+(ii) Source-of-truth dirs named in prose or runtime recovery gates exist.
+
+Cited-but-absent path = recovery instruction that errors when the operator needs it.
+
+Mechanical greps (manual judgment on hits):
+- `rg -n '\.claude/skills/\S+\.py' .claude/skills/` -> each cited `.py` path must exist at that path.
+- Backticked dir refs: `rg -n '`\.claude/skills/[^`]+/`' .claude/skills/` -> each cited dir must exist on disk. Non-dir backtick refs exempt.
+
+## §V.100 — Skill-body progressive-disclosure audit
+
+Trigger when `.claude/skills/**/*.md` changed.
+
+Checks:
+(i) Body >~500 lines = VIOLATE (procedure buried among run-end-only material -> extract to `references/*.md`).
+(ii) Near-verbatim prose shared across sibling skills MUST live in one shared `references/*.md` both cite, not copied per-skill.
+
+Mechanical checks:
+- `wc -l .claude/skills/*/SKILL.md | sort -rn` -> flag files over 500 lines for extraction review.
+- `rg -c 'Conventions|batch gate|Next block' .claude/skills/*/SKILL.md` -> any term in multiple skill bodies -> check for shared-reference extraction opportunity.
+
 ## §V.101 — must-sense ` ! ` ban
 
 Mechanical audit; trigger when `.claude/skills/**/*.md` changed. Scope = skill-body prose. A hard requirement ! be marked w/ an explicit word (`MUST` / `required`); a bare telegraph ` ! ` (must-glyph) in prose reads as negation in code, so a model executing the skill can invert the constraint (silent constraint flip — the failure §V.101 was authored to block).
@@ -78,6 +115,20 @@ Checks:
 
 Mechanical grep (manual judgment on hits — flag only must-sense prose, not backticked/fenced shell):
 - `rg -n ' ! ' .claude/skills/` -> classify each hit: backticked-shell / fenced-code -> exempt; prose obligation -> (i) fail (convert to `MUST`). Zero hits -> pass.
+
+## §V.102 — Skill frontmatter hygiene audit
+
+Trigger when `.claude/skills/**/*.md` changed.
+
+Checks:
+(i) Every `.claude/skills/**/SKILL.md` sets `allowed-tools` (scoped safety rail).
+(ii) Every `.claude/skills/**/SKILL.md` sets `argument-hint` (invocation shape).
+(iii) `description:` = triggering intent; vendor names + pipeline-stage rosters belong in body.
+
+Mechanical greps (manual judgment on hits):
+- `rg -L 'allowed-tools' .claude/skills/*/SKILL.md` -> each hit = missing key (VIOLATE).
+- `rg -L 'argument-hint' .claude/skills/*/SKILL.md` -> each hit = missing key (VIOLATE).
+- `rg -n '^description:' .claude/skills/*/SKILL.md` -> review for vendor roster or full pipeline-stage detail in trigger text.
 
 ## §V.49 — bounded auto-retry parameters
 
