@@ -12,6 +12,7 @@ and ``operator_event("error", source="<noun>.<verb>", ...)``.
 from __future__ import annotations
 
 import json
+import pathlib
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -704,22 +705,20 @@ def test_workflow_import_idempotent_on_unchanged_rows(
     runner: CliRunner,
     mock_connection: MagicMock,
     capsys: pytest.CaptureFixture[str],
+    tmp_path: pathlib.Path,
 ) -> None:
     """Re-run import on already-up-to-date rows -> every row event has changed=[]."""
     existing = _make_workflow(
         name="Outbound", objective="x", instructions="y", theme="blue"
     )
     account = _make_account()
-    payload = json.dumps(
-        [
-            {
-                "name": "Outbound",
-                "template": "outbound-general",
-                "objective": "x",
-                "instructions": "y",
-                "theme": "blue",
-            }
-        ]
+    toml_file = tmp_path / "outbound.toml"
+    toml_file.write_text(
+        'name = "Outbound"\n'
+        'template = "outbound-general"\n'
+        'theme = "blue"\n'
+        'objective = "x"\n'
+        "instructions = '''\ny'''\n"
     )
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
@@ -730,8 +729,14 @@ def test_workflow_import_idempotent_on_unchanged_rows(
     ):
         result = runner.invoke(
             main,
-            ["workflow", "import", "--account-id", account.id],
-            input=payload,
+            [
+                "workflow",
+                "import",
+                "--account-id",
+                account.id,
+                "--file",
+                str(toml_file),
+            ],
         )
 
     assert result.exit_code == 0, result.output

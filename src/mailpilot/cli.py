@@ -2334,13 +2334,72 @@ def workflow_stop(workflow_id: str) -> None:
         connection.close()
 
 
-_WORKFLOW_EXPORT_FIELDS = ("name", "template", "objective", "instructions", "theme")
+def _toml_basic_string(value: str) -> str:
+    r"""Quote ``value`` as a TOML basic string with the minimal escaping.
+
+    Single-line def fields (``name``, ``template``, ``theme``, ``objective``)
+    round-trip through this; ``\``, ``"`` and control bytes are escaped so the
+    emitted file re-parses to the original value.
+    """
+    escaped = (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
+    return f'"{escaped}"'
+
+
+def _workflow_slug(name: str) -> str:
+    """Derive a filesystem-safe ``*.toml`` stem from a workflow ``name``.
+
+    Import keys on the in-file ``name`` field, not the filename, so the slug is
+    purely cosmetic -- it only needs to be deterministic for stable diffs.
+    """
+    import re
+
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return slug or "workflow"
+
+
+def _workflow_to_toml(workflow: Any) -> str:
+    """Serialize a ``Workflow`` row to a one-workflow TOML catalog entry (§V.103).
+
+    Emits the def fields ``{name, template, theme, objective, instructions}`` in
+    a fixed order; ``instructions`` uses a multi-line literal string so pipes and
+    quotes survive verbatim. The leading newline after the opening ``'''`` is
+    trimmed by the TOML parser, so the value re-parses byte-identically.
+    """
+    return (
+        f"name = {_toml_basic_string(workflow.name)}\n"
+        f"template = {_toml_basic_string(workflow.template)}\n"
+        f"theme = {_toml_basic_string(workflow.theme)}\n"
+        f"objective = {_toml_basic_string(workflow.objective)}\n"
+        f"instructions = '''\n{workflow.instructions}'''\n"
+    )
 
 
 @workflow.command("export")
 @click.option("--account-id", required=True, help="Owning Gmail account ID.")
-def workflow_export(account_id: str) -> None:
-    """Export workflows for an account as a declarative JSON payload."""
+@click.option(
+    "--out-dir",
+    "out_dir",
+    required=True,
+    type=click.Path(file_okay=False),
+    help="Directory to write one '*.toml' per workflow. Created if absent.",
+)
+def workflow_export(account_id: str, out_dir: str) -> None:
+    """Export an account's workflows as one TOML file each (§V.103, §V.63).
+
+    TOML-only: writes one ``*.toml`` per workflow into ``--out-dir`` (def fields
+    ``{name, template, theme, objective, instructions}``, name-sorted) and prints
+    a JSON status envelope listing the paths written. TOML never reaches stdout
+    -- stdout stays strict JSON per §V.3. ``export -> dir -> import`` round-trips
+    idempotently.
+    """
+    import pathlib
+
     from mailpilot.database import (
         get_account,
         initialize_database,
@@ -2352,11 +2411,14 @@ def workflow_export(account_id: str) -> None:
         if get_account(connection, account_id) is None:
             output_error(f"account not found: {account_id}", "not_found")
         workflows = list_workflows_full(connection, account_id)
-        payload = [
-            {field: getattr(w, field) for field in _WORKFLOW_EXPORT_FIELDS}
-            for w in workflows
-        ]
-        output({"workflows": payload})
+        directory = pathlib.Path(out_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        written: list[dict[str, str]] = []
+        for current in workflows:
+            path = directory / f"{_workflow_slug(current.name)}.toml"
+            path.write_text(_workflow_to_toml(current))
+            written.append({"name": current.name, "path": str(path)})
+        output({"workflows": written})
     finally:
         connection.close()
 
@@ -2527,41 +2589,33 @@ def _load_workflow_import_entries(
 ) -> tuple[list[dict[str, Any]], list[dict[str, object]]]:
     """Parse a ``workflow import`` source into entries + per-row pre-errors (§V.103).
 
-    Dispatch by shape: a directory globs ``*.toml`` (catalog batch), a ``.toml``
-    file parses to one entry, and anything else (a ``.json`` file or stdin) is a
-    JSON array. Top-level malformed input exits via ``output_error``.
+    TOML-only per §V.103, §V.63 (no JSON, no stdin). Dispatch by shape: a
+    directory globs ``*.toml`` (catalog batch, per-file parse errors become
+    per-row pre-errors) and a single ``.toml`` file parses to one entry. A
+    missing ``--file`` or a non-TOML path exits via ``output_error`` with
+    ``validation_error``.
     """
     import pathlib
-    import sys
     import tomllib
 
-    if file is not None:
-        path = pathlib.Path(file)
-        if path.is_dir():
-            return _parse_toml_catalog_dir(path)
-        if path.suffix == ".toml":
-            try:
-                with path.open("rb") as handle:
-                    return [tomllib.load(handle)], []
-            except tomllib.TOMLDecodeError as exc:
-                output_error(f"malformed TOML: {exc}", "validation_error")
-        raw = path.read_text()
-    else:
-        if sys.stdin.isatty():
-            output_error(
-                "no input: provide --file PATH or pipe JSON via stdin",
-                "validation_error",
-            )
-        raw = sys.stdin.read()
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        output_error(f"malformed JSON: {exc}", "validation_error")
-    if not isinstance(parsed, list):
+    if file is None:
         output_error(
-            "payload must be a JSON array of workflow objects", "validation_error"
+            "no input: provide --file PATH (a '.toml' file or a directory)",
+            "validation_error",
         )
-    return parsed, []
+    path = pathlib.Path(file)
+    if path.is_dir():
+        return _parse_toml_catalog_dir(path)
+    if path.suffix == ".toml":
+        try:
+            with path.open("rb") as handle:
+                return [tomllib.load(handle)], []
+        except tomllib.TOMLDecodeError as exc:
+            output_error(f"malformed TOML: {exc}", "validation_error")
+    output_error(
+        "unsupported workflow source: expected a '.toml' file or a directory",
+        "validation_error",
+    )
 
 
 @workflow.command("import")
@@ -2572,29 +2626,25 @@ def _load_workflow_import_entries(
     default=None,
     type=click.Path(exists=True),
     help=(
-        "Workflow source. '.json' = a workflow array (live-state dump); '.toml' "
-        "= one workflow (catalog entry); a directory imports every '*.toml' in "
-        "it. If omitted, JSON is read from stdin."
+        "Workflow source (TOML only): a '.toml' file imports one workflow "
+        "(catalog entry); a directory imports every '*.toml' in it."
     ),
 )
 def workflow_import(account_id: str, file: str | None) -> None:
-    """Import workflows for an account from a declarative source (§V.63, §V.103).
+    """Import workflows for an account from TOML catalog files (§V.63, §V.103).
 
-    Dispatch is by input shape:
+    TOML-only -- no JSON, no stdin. Dispatch is by ``--file`` shape:
 
-    * ``--file X.json`` (or stdin) -- a JSON array of workflow objects, the same
-      shape ``workflow export`` produces (live-state dump).
     * ``--file X.toml`` -- one workflow as pure TOML; ``instructions`` may use a
-      multi-line literal string. Parsed to a row byte-identical to the JSON path.
+      multi-line literal string.
     * ``--file <dir>`` -- every ``*.toml`` in the directory (catalog batch); a
       file that fails to parse becomes a per-row error and the batch continues.
 
-    Each parsed entry feeds the same upsert (keyed on ``(account_id, name)``)
-    and validation as the JSON path: workflows absent from the DB are created
-    (and activated when both ``objective`` and ``instructions`` are non-empty),
-    present workflows are updated for changed fields only, ``template``
-    differences emit a per-row ``template_immutable`` error, and ``status`` is
-    never written by import. Stdin remains JSON only.
+    Each parsed entry feeds the same upsert (keyed on ``(account_id, name)``):
+    workflows absent from the DB are created (and activated when both
+    ``objective`` and ``instructions`` are non-empty), present workflows are
+    updated for changed fields only, ``template`` differences emit a per-row
+    ``template_immutable`` error, and ``status`` is never written by import.
     """
     from mailpilot.database import (
         get_account,

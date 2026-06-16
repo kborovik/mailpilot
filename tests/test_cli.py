@@ -3692,15 +3692,24 @@ def test_workflow_stop_invalid_state(
 # -- workflow export -----------------------------------------------------------
 
 
-def test_workflow_export_envelope(
-    runner: CliRunner, mock_connection: MagicMock
+def test_workflow_export_writes_toml_files_and_json_envelope(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
 ) -> None:
+    """§V.103/§V.3: export writes one '*.toml'/workflow to --out-dir; stdout = JSON.
+
+    The TOML file re-parses to the def fields, and stdout carries only the JSON
+    status envelope of paths written -- TOML never reaches stdout.
+    """
+    import tomllib
+
     account = _make_account()
     workflow = _make_workflow(
+        name="Demo outreach",
         objective="Book demos",
-        instructions="You are a sales rep.",
+        instructions="You are a sales rep.\nCite the source file.\n",
         theme="green",
     )
+    out_dir = tmp_path / "catalog"
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
@@ -3710,32 +3719,41 @@ def test_workflow_export_envelope(
         ) as mock_list,
     ):
         result = runner.invoke(
-            main, ["workflow", "export", "--account-id", _ACCOUNT_ID]
+            main,
+            [
+                "workflow",
+                "export",
+                "--account-id",
+                _ACCOUNT_ID,
+                "--out-dir",
+                str(out_dir),
+            ],
         )
 
     assert result.exit_code == 0, result.output
     mock_list.assert_called_once_with(mock_connection, _ACCOUNT_ID)
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert isinstance(data["workflows"], list)
     assert len(data["workflows"]) == 1
-    row = data["workflows"][0]
-    assert set(row.keys()) == {
-        "name",
-        "template",
-        "objective",
-        "instructions",
-        "theme",
+    written = data["workflows"][0]
+    assert written["name"] == "Demo outreach"
+    toml_path = pathlib.Path(written["path"])
+    assert toml_path.parent == out_dir
+    assert toml_path.suffix == ".toml"
+
+    with toml_path.open("rb") as handle:
+        parsed = tomllib.load(handle)
+    assert parsed == {
+        "name": "Demo outreach",
+        "template": "outbound-general",
+        "theme": "green",
+        "objective": "Book demos",
+        "instructions": "You are a sales rep.\nCite the source file.\n",
     }
-    assert row["name"] == "Demo outreach"
-    assert row["template"] == "outbound-general"
-    assert row["objective"] == "Book demos"
-    assert row["instructions"] == "You are a sales rep."
-    assert row["theme"] == "green"
 
 
 def test_workflow_export_account_not_found(
-    runner: CliRunner, mock_connection: MagicMock
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
 ) -> None:
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
@@ -3743,7 +3761,15 @@ def test_workflow_export_account_not_found(
         patch("mailpilot.database.get_account", return_value=None),
     ):
         result = runner.invoke(
-            main, ["workflow", "export", "--account-id", "acc-missing"]
+            main,
+            [
+                "workflow",
+                "export",
+                "--account-id",
+                "acc-missing",
+                "--out-dir",
+                str(tmp_path),
+            ],
         )
 
     assert result.exit_code == 1
@@ -3753,7 +3779,7 @@ def test_workflow_export_account_not_found(
 
 
 def test_workflow_export_preserves_db_order(
-    runner: CliRunner, mock_connection: MagicMock
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
 ) -> None:
     account = _make_account()
     ordered = [
@@ -3768,7 +3794,15 @@ def test_workflow_export_preserves_db_order(
         patch("mailpilot.database.list_workflows_full", return_value=ordered),
     ):
         result = runner.invoke(
-            main, ["workflow", "export", "--account-id", _ACCOUNT_ID]
+            main,
+            [
+                "workflow",
+                "export",
+                "--account-id",
+                _ACCOUNT_ID,
+                "--out-dir",
+                str(tmp_path),
+            ],
         )
 
     assert result.exit_code == 0, result.output
@@ -3777,7 +3811,7 @@ def test_workflow_export_preserves_db_order(
     assert names == ["Alpha", "Bravo", "Charlie"]
 
 
-# -- workflow import -----------------------------------------------------------
+# -- workflow import (TOML-only, §V.103) ---------------------------------------
 
 
 def _import_payload(**overrides: Any) -> dict[str, Any]:
@@ -3791,13 +3825,30 @@ def _import_payload(**overrides: Any) -> dict[str, Any]:
     return {**base, **overrides}
 
 
+def _write_workflow_toml(path: pathlib.Path, payload: dict[str, Any]) -> None:
+    """Write a single-workflow ``.toml`` from an import payload dict (test helper).
+
+    Single-line fields use TOML basic strings; ``instructions`` uses a multi-line
+    literal string, mirroring the catalog convention ``workflow export`` emits.
+    """
+    lines: list[str] = []
+    for key in ("name", "template", "theme", "objective"):
+        if key in payload:
+            value = payload[key].replace("\\", "\\\\").replace('"', '\\"')
+            lines.append(f'{key} = "{value}"')
+    body = "\n".join(lines)
+    if "instructions" in payload:
+        body += f"\ninstructions = '''\n{payload['instructions']}'''"
+    path.write_text(body + "\n")
+
+
 def test_workflow_import_create_path_activates(
     runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
 ) -> None:
     account = _make_account()
     created = _make_workflow(theme="green")
-    file = tmp_path / "wf.json"
-    file.write_text(json.dumps([_import_payload()]))
+    file = tmp_path / "wf.toml"
+    _write_workflow_toml(file, _import_payload())
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
@@ -3850,10 +3901,8 @@ def test_workflow_import_create_path_draft_no_activation(
 ) -> None:
     account = _make_account()
     created = _make_workflow(objective="", instructions="")
-    file = tmp_path / "wf.json"
-    file.write_text(
-        json.dumps([_import_payload(objective="Book demos", instructions="")])
-    )
+    file = tmp_path / "wf.toml"
+    _write_workflow_toml(file, _import_payload(objective="Book demos", instructions=""))
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
@@ -3889,17 +3938,14 @@ def test_workflow_import_update_path_diff_only(
         theme="blue",
         status="active",
     )
-    file = tmp_path / "wf.json"
-    file.write_text(
-        json.dumps(
-            [
-                _import_payload(
-                    objective="New objective",
-                    instructions="Old instructions",
-                    theme="blue",
-                )
-            ]
-        )
+    file = tmp_path / "wf.toml"
+    _write_workflow_toml(
+        file,
+        _import_payload(
+            objective="New objective",
+            instructions="Old instructions",
+            theme="blue",
+        ),
     )
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
@@ -3944,8 +3990,8 @@ def test_workflow_import_unchanged_no_mutation(
         theme="green",
         status="active",
     )
-    file = tmp_path / "wf.json"
-    file.write_text(json.dumps([_import_payload()]))
+    file = tmp_path / "wf.toml"
+    _write_workflow_toml(file, _import_payload())
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
@@ -3978,16 +4024,21 @@ def test_workflow_import_unchanged_no_mutation(
 def test_workflow_import_template_immutable_row_error(
     runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
 ) -> None:
+    """§V.63/§V.103: a per-row template_immutable error does not abort the batch.
+
+    Two ``.toml`` files in a catalog dir: the first collides with an existing
+    workflow on a changed ``template`` (error), the second is a fresh create.
+    """
     account = _make_account()
     existing = _make_workflow(template="inbound-general", type="inbound")
-    file = tmp_path / "wf.json"
-    file.write_text(
-        json.dumps(
-            [
-                _import_payload(template="outbound-general"),
-                _import_payload(name="Other workflow", template="inbound-general"),
-            ]
-        )
+    catalog = tmp_path / "catalog"
+    catalog.mkdir()
+    _write_workflow_toml(
+        catalog / "demo.toml", _import_payload(template="outbound-general")
+    )
+    _write_workflow_toml(
+        catalog / "other.toml",
+        _import_payload(name="Other workflow", template="inbound-general"),
     )
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
@@ -4003,14 +4054,7 @@ def test_workflow_import_template_immutable_row_error(
     ):
         result = runner.invoke(
             main,
-            [
-                "workflow",
-                "import",
-                "--account-id",
-                _ACCOUNT_ID,
-                "--file",
-                str(file),
-            ],
+            ["workflow", "import", "--account-id", _ACCOUNT_ID, "--file", str(catalog)],
         )
 
     assert result.exit_code == 0, result.output
@@ -4018,101 +4062,36 @@ def test_workflow_import_template_immutable_row_error(
     assert data["ok"] is True
     rows = data["workflows"]
     assert len(rows) == 2
-    assert rows[0]["name"] == "Demo outreach"
-    assert rows[0]["error"] == "template_immutable"
-    assert "inbound-general" in rows[0]["message"]
-    assert rows[1] == {"name": "Other workflow", "action": "created"}
+    by_name = {row["name"]: row for row in rows}
+    assert by_name["Demo outreach"]["error"] == "template_immutable"
+    assert "inbound-general" in by_name["Demo outreach"]["message"]
+    assert by_name["Other workflow"] == {"name": "Other workflow", "action": "created"}
     mock_create.assert_called_once()
 
 
-def test_workflow_import_from_stdin(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
-    account = _make_account()
-    created = _make_workflow()
-    payload = json.dumps([_import_payload()])
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_account", return_value=account),
-        patch("mailpilot.database.list_workflows_full", return_value=[]),
-        patch("mailpilot.database.create_workflow", return_value=created),
-        patch("mailpilot.database.update_workflow", return_value=created),
-        patch("mailpilot.database.activate_workflow", return_value=created),
-    ):
+def test_workflow_import_requires_file(runner: CliRunner) -> None:
+    """§V.103/§V.63: omitting --file -> validation_error envelope, exit 1 (no stdin).
+
+    Workflow import is TOML-only; with no ``--file`` it never falls back to stdin
+    -- the DB is never initialized, so no ``initialize_database`` patch is needed.
+    """
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
         result = runner.invoke(
-            main,
-            ["workflow", "import", "--account-id", _ACCOUNT_ID],
-            input=payload,
+            main, ["workflow", "import", "--account-id", _ACCOUNT_ID]
         )
 
-    assert result.exit_code == 0, result.output
-    data = json.loads(result.output)
-    assert data["workflows"] == [{"name": "Demo outreach", "action": "created"}]
-
-
-def test_workflow_import_malformed_json_top_error(
-    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
-) -> None:
-    account = _make_account()
-    file = tmp_path / "wf.json"
-    file.write_text("{not json")
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_account", return_value=account),
-    ):
-        result = runner.invoke(
-            main,
-            [
-                "workflow",
-                "import",
-                "--account-id",
-                _ACCOUNT_ID,
-                "--file",
-                str(file),
-            ],
-        )
-
-    assert result.exit_code == 1
-    data = json.loads(result.output)
+    assert result.exit_code == 1, result.output
+    data = json.loads(result.stderr)
     assert data["error"] == "validation_error"
-    assert "JSON" in data["message"] or "json" in data["message"].lower()
-
-
-def test_workflow_import_payload_not_array(
-    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
-) -> None:
-    account = _make_account()
-    file = tmp_path / "wf.json"
-    file.write_text(json.dumps({"workflows": []}))
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_account", return_value=account),
-    ):
-        result = runner.invoke(
-            main,
-            [
-                "workflow",
-                "import",
-                "--account-id",
-                _ACCOUNT_ID,
-                "--file",
-                str(file),
-            ],
-        )
-
-    assert result.exit_code == 1
-    data = json.loads(result.output)
-    assert data["error"] == "validation_error"
+    assert "no input" in data["message"]
+    assert "--file" in data["message"]
 
 
 def test_workflow_import_account_not_found(
     runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
 ) -> None:
-    file = tmp_path / "wf.json"
-    file.write_text(json.dumps([_import_payload()]))
+    file = tmp_path / "wf.toml"
+    _write_workflow_toml(file, _import_payload())
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
@@ -4137,77 +4116,6 @@ def test_workflow_import_account_not_found(
 
 
 # -- §V.103 TOML catalog import ------------------------------------------------
-
-
-def test_workflow_import_toml_row_byte_identical_to_json(
-    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
-) -> None:
-    """§V.103: a .toml entry imports to a row byte-identical to the JSON-array path.
-
-    Imports the same logical fields via both ``.json`` and ``.toml`` and asserts
-    the captured ``create_workflow`` / ``update_workflow`` calls are equal --
-    proving the TOML path produces the same row through the shared upsert.
-    """
-    account = _make_account()
-    instructions = "You are a sales rep.\nCite the source file.\n"
-    json_file = tmp_path / "wf.json"
-    json_file.write_text(
-        json.dumps(
-            [
-                {
-                    "name": "Demo outreach",
-                    "template": "outbound-general",
-                    "objective": "Book demos",
-                    "instructions": instructions,
-                    "theme": "green",
-                }
-            ]
-        )
-    )
-    toml_file = tmp_path / "wf.toml"
-    toml_file.write_text(
-        'name = "Demo outreach"\n'
-        'template = "outbound-general"\n'
-        'theme = "green"\n'
-        'objective = "Book demos"\n'
-        "instructions = '''\n"
-        "You are a sales rep.\n"
-        "Cite the source file.\n"
-        "'''\n"
-    )
-
-    def _import(path: pathlib.Path) -> tuple[Any, Any]:
-        created = _make_workflow(theme="green")
-        with (
-            patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-            patch(
-                "mailpilot.database.initialize_database", return_value=mock_connection
-            ),
-            patch("mailpilot.database.get_account", return_value=account),
-            patch("mailpilot.database.list_workflows_full", return_value=[]),
-            patch(
-                "mailpilot.database.create_workflow", return_value=created
-            ) as mock_create,
-            patch(
-                "mailpilot.database.update_workflow", return_value=created
-            ) as mock_update,
-            patch("mailpilot.database.activate_workflow", return_value=created),
-        ):
-            result = runner.invoke(
-                main,
-                [
-                    "workflow",
-                    "import",
-                    "--account-id",
-                    _ACCOUNT_ID,
-                    "--file",
-                    str(path),
-                ],
-            )
-        assert result.exit_code == 0, result.output
-        return mock_create.call_args, mock_update.call_args
-
-    assert _import(json_file) == _import(toml_file)
 
 
 def test_workflow_import_toml_multiline_literal_preserved(
@@ -4408,14 +4316,17 @@ def test_workflow_import_toml_missing_required_field(
     [
         ("company", "import"),
         ("contact", "import"),
-        ("workflow", "import", "--account-id", _ACCOUNT_ID),
     ],
-    ids=["company", "contact", "workflow"],
+    ids=["company", "contact"],
 )
 def test_import_tty_stdin_errors_without_read(
     runner: CliRunner, command: tuple[str, ...]
 ) -> None:
-    """§V.63: TTY stdin (no --file, no pipe) -> validation_error, no read()."""
+    """§V.63: TTY stdin (no --file, no pipe) -> validation_error, no read().
+
+    Company/contact import still read JSON from stdin; workflow import is
+    TOML-only and never touches stdin (see ``test_workflow_import_requires_file``).
+    """
     from click.testing import _NamedTextIOWrapper  # pyright: ignore[reportPrivateUsage]
 
     read_mock = MagicMock(

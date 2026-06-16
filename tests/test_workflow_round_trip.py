@@ -1,16 +1,17 @@
-"""§V.63 round-trip integration tests for ``workflow export`` / ``workflow import``.
+"""§V.63/§V.103 round-trip integration for ``workflow export`` / ``workflow import``.
 
 Uses the real ``database_connection`` fixture and the Click ``CliRunner`` to
 exercise the end-to-end declarative flow against a Postgres instance. The
 mock-based unit tests live in ``tests/test_cli.py``; this file owns the
-seed -> export -> truncate -> import -> diff loop and the idempotence
-assertion.
+seed -> export-to-dir -> truncate -> import-from-dir -> re-export -> diff loop
+and the idempotence assertion. Export/import is TOML-only per §V.103.
 """
 
 from __future__ import annotations
 
 import json
 import pathlib
+import tomllib
 from typing import Any
 from unittest.mock import patch
 
@@ -50,7 +51,7 @@ def _seed_workflows(
         connection,
         alpha.id,
         objective="Book demos with mid-market accounts.",
-        instructions="You are a courteous sales rep.",
+        instructions="You are a courteous sales rep.\nCite every figure.\n",
     )
     activate_workflow(connection, alpha.id)
 
@@ -113,87 +114,94 @@ def _invoke(
     return json.loads(result.stdout)
 
 
+def _read_catalog(directory: pathlib.Path) -> dict[str, str]:
+    """Map ``filename -> file text`` for every ``*.toml`` in ``directory``."""
+    return {p.name: p.read_text() for p in sorted(directory.glob("*.toml"))}
+
+
 def test_workflow_export_import_round_trip_and_idempotence(
     runner: CliRunner,
     database_connection: psycopg.Connection[dict[str, Any]],
     tmp_path: pathlib.Path,
 ) -> None:
-    """§V.63: declarative round-trip preserves payload and second import is a no-op.
+    """§V.63/§V.103: TOML round-trip preserves files and a second import is a no-op.
 
     1. seed three workflows (mixed templates / themes / statuses)
-    2. ``workflow export`` -> capture payload
+    2. ``workflow export --out-dir`` -> one ``*.toml`` per workflow
     3. truncate workflow rows for the account
-    4. ``workflow import`` from the captured payload -> all ``created``
-    5. re-export -> payload byte-equal to original
+    4. ``workflow import --file <dir>`` -> all ``created``
+    5. re-export to a fresh dir -> catalog byte-equal to the original
     6. re-import on unchanged DB -> all ``unchanged``, ``update_workflow`` not called
     """
     account = make_test_account(database_connection)
     _seed_workflows(database_connection, account.id)
 
-    original = _invoke(
-        runner, database_connection, ["workflow", "export", "--account-id", account.id]
-    )["workflows"]
-    assert len(original) == 3
+    out_one = tmp_path / "export_one"
+    export = _invoke(
+        runner,
+        database_connection,
+        ["workflow", "export", "--account-id", account.id, "--out-dir", str(out_one)],
+    )
+    assert len(export["workflows"]) == 3
+    assert [row["name"] for row in export["workflows"]] == [
+        "Alpha outbound",
+        "Bravo inbound draft",
+        "Charlie KB",
+    ]
+    original_catalog = _read_catalog(out_one)
+    assert len(original_catalog) == 3
 
     database_connection.execute(
         "DELETE FROM workflow WHERE account_id = %s", (account.id,)
     )
     database_connection.commit()
 
-    payload_file = tmp_path / "workflows.json"
-    payload_file.write_text(json.dumps(original))
     import_result = _invoke(
         runner,
         database_connection,
-        [
-            "workflow",
-            "import",
-            "--account-id",
-            account.id,
-            "--file",
-            str(payload_file),
-        ],
+        ["workflow", "import", "--account-id", account.id, "--file", str(out_one)],
     )
     assert all(row["action"] == "created" for row in import_result["workflows"])
 
-    round_tripped = _invoke(
-        runner, database_connection, ["workflow", "export", "--account-id", account.id]
-    )["workflows"]
-    assert round_tripped == original
-    for row in round_tripped:
-        assert set(row.keys()) == set(_EXPORT_FIELDS)
+    out_two = tmp_path / "export_two"
+    _invoke(
+        runner,
+        database_connection,
+        ["workflow", "export", "--account-id", account.id, "--out-dir", str(out_two)],
+    )
+    assert _read_catalog(out_two) == original_catalog
 
     with patch("mailpilot.database.update_workflow") as mock_update:
         idempotent = _invoke(
             runner,
             database_connection,
-            [
-                "workflow",
-                "import",
-                "--account-id",
-                account.id,
-                "--file",
-                str(payload_file),
-            ],
+            ["workflow", "import", "--account-id", account.id, "--file", str(out_one)],
         )
     assert all(row["action"] == "unchanged" for row in idempotent["workflows"])
     mock_update.assert_not_called()
 
 
-def test_workflow_export_payload_excludes_account_email(
+def test_workflow_export_toml_excludes_denormalized_fields(
     runner: CliRunner,
     database_connection: psycopg.Connection[dict[str, Any]],
+    tmp_path: pathlib.Path,
 ) -> None:
-    """§V.63 round-trip purity: ``account_email`` (§V.5 parent-NI clause) is a
-    read-only denormalization for view/list rendering. ``workflow export`` payload
-    must remain keyed on ``(account_id, name)`` and exclude denormalized fields,
-    else a fresh import would attempt to write a non-existent column.
+    """§V.103 round-trip purity: exported TOML carries only the def fields.
+
+    ``account_email`` (§V.5 parent-NI denorm) and ``account_id`` are read-only
+    view fields; an exported catalog entry that carried them would attempt to
+    write a non-existent / wrong column on re-import. Every ``*.toml`` must parse
+    to exactly ``{name, template, theme, objective, instructions}``.
     """
     account = make_test_account(database_connection)
     _seed_workflows(database_connection, account.id)
-    exported = _invoke(
-        runner, database_connection, ["workflow", "export", "--account-id", account.id]
-    )["workflows"]
-    for row in exported:
-        assert "account_email" not in row
-        assert "account_id" not in row
+    out_dir = tmp_path / "catalog"
+    _invoke(
+        runner,
+        database_connection,
+        ["workflow", "export", "--account-id", account.id, "--out-dir", str(out_dir)],
+    )
+    for path in sorted(out_dir.glob("*.toml")):
+        with path.open("rb") as handle:
+            parsed = tomllib.load(handle)
+        assert set(parsed.keys()) == set(_EXPORT_FIELDS)

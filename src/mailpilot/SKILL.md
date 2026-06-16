@@ -129,18 +129,19 @@ mailpilot contact disable --contact-id <CID> --reason "left company"
 
 ### Define a workflow declaratively
 
-Workflows are reproducible via export/import. Round-trip is keyed on
-`(account_id, name)` and is idempotent on unchanged input.
+Workflow definitions are one TOML file per workflow. Export/import is TOML-only
+and idempotent; round-trip is keyed on `(account_id, name)`.
 
 ```
-mailpilot workflow export --account-id <ID> > workflows.json
-mailpilot workflow import --account-id <ID> --file workflows.json
-# or via stdin:
-cat workflows.json | mailpilot workflow import --account-id <ID>
+mailpilot workflow export --account-id <ID> --out-dir workflows/
+mailpilot workflow import --account-id <ID> --file workflows/
 ```
 
-Each row in the JSON array carries `name`, `template`, `objective`,
-`instructions`, `theme`. Available templates:
+`workflow export` writes one `*.toml` per workflow into `--out-dir` and prints a
+JSON status envelope of the paths written (TOML never goes to stdout). `workflow
+import` takes a single `.toml` file or a directory of them (`*.toml` glob). Each
+file carries `name`, `template`, `objective`, `instructions`, `theme`, with
+`instructions` as a TOML multi-line literal string. Available templates:
 
 ```
 mailpilot template list
