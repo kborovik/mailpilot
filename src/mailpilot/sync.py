@@ -639,8 +639,10 @@ def sync_account(
     Runs the per-account inbound pipeline:
 
     1. Incremental sync via ``GmailClient.get_history`` when the account
-       has a stored ``gmail_history_id``. Falls back to a full INBOX
-       listing on history 404.
+       has a stored ``gmail_history_id`` and has synced before. Falls back
+       to a full INBOX listing on history 404, and the first sync
+       (``last_synced_at`` NULL) always lists the full INBOX regardless of
+       a watch-anchored ``gmail_history_id`` (§V.75, §B.90).
     2. For each new message: fetch, extract text, auto-resolve the
        sender to a contact, and store an ``inbound`` email row.
     3. Apply the 7-day recency gate: messages older than the window land
@@ -824,14 +826,19 @@ def _collect_new_message_ids(
 ) -> tuple[list[str], str]:
     """Return message IDs to fetch and the sync mode used.
 
-    Tries incremental sync first when a history ID is known, falling
-    back to a full INBOX listing on a 404. Callers still dedupe against
-    the ``email`` table before fetching, so duplicates within the list
-    (e.g. same message in multiple history records) are harmless.
+    Tries incremental sync first when a history ID is known *and* the
+    account has synced before, falling back to a full INBOX listing on a
+    404. The first sync (``last_synced_at`` NULL) always lists the full
+    INBOX even when a watch-anchored ``gmail_history_id`` is set, so
+    pre-watch mail gets hydrated (§V.75, §B.90); reply-safety for that
+    backlog comes from the §V.76 recency/workflow-window gate. Callers
+    still dedupe against the ``email`` table before fetching, so
+    duplicates within the list (e.g. same message in multiple history
+    records) are harmless.
     """
     from googleapiclient.errors import HttpError
 
-    if account.gmail_history_id:
+    if account.gmail_history_id and account.last_synced_at is not None:
         try:
             history = gmail_client.get_history(
                 start_history_id=account.gmail_history_id,

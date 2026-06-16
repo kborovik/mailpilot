@@ -32,7 +32,13 @@ from mailpilot.database import (
     upsert_sync_status,
 )
 from mailpilot.gmail import GmailClient
-from mailpilot.sync import is_pid_alive, send_email, start_sync_loop, sync_account
+from mailpilot.sync import (
+    _collect_new_message_ids,  # pyright: ignore[reportPrivateUsage]
+    is_pid_alive,
+    send_email,
+    start_sync_loop,
+    sync_account,
+)
 
 
 def test_upsert_and_get_sync_status(
@@ -686,7 +692,13 @@ def test_sync_account_incremental_via_history_api(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     account = make_test_account(database_connection, email="inc@example.com")
-    account = update_account(database_connection, account.id, gmail_history_id="500")
+    # Previously-synced account (last_synced_at set) -> incremental path (§V.75).
+    account = update_account(
+        database_connection,
+        account.id,
+        gmail_history_id="500",
+        last_synced_at=datetime.now(UTC),
+    )
     assert account is not None
     client, service = _make_mock_client(account.email)
     _set_history(
@@ -716,8 +728,13 @@ def test_sync_account_falls_back_to_full_sync_on_history_404(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     account = make_test_account(database_connection, email="stale@example.com")
+    # Previously-synced account with a stale history id -> incremental is
+    # attempted, then 404 falls back to a full sweep (§V.75).
     account = update_account(
-        database_connection, account.id, gmail_history_id="ancient"
+        database_connection,
+        account.id,
+        gmail_history_id="ancient",
+        last_synced_at=datetime.now(UTC),
     )
     assert account is not None
     client, service = _make_mock_client(account.email)
@@ -732,6 +749,38 @@ def test_sync_account_falls_back_to_full_sync_on_history_404(
     service.users.return_value.history.return_value.list.assert_called()
     # ...then full sync kicked in.
     service.users.return_value.messages.return_value.list.assert_called()
+
+
+def test_sync_account_first_sync_forces_full_despite_history_id(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    # Fresh account: watch registration set a gmail_history_id, but the
+    # account has never synced (last_synced_at NULL). The first sync must
+    # ignore the watch-anchored checkpoint and list the full INBOX to
+    # hydrate pre-watch mail (§V.75, §B.90); reply-safety comes from §V.76.
+    account = make_test_account(database_connection, email="firstsync@example.com")
+    account = update_account(database_connection, account.id, gmail_history_id="700")
+    assert account is not None
+    assert account.last_synced_at is None
+    client, service = _make_mock_client(account.email)
+    _set_history(service, history_records=[])
+    _set_list_messages(service, [{"id": "pre-watch", "threadId": "t-pre"}])
+    _set_get_messages(service, [_make_gmail_message("pre-watch", "t-pre")])
+
+    # Mode is full even though a history id is present.
+    ids, mode = _collect_new_message_ids(account, client)
+    assert mode == "full"
+    assert ids == ["pre-watch"]
+
+    stored = sync_account(database_connection, account, client, make_test_settings())
+
+    assert stored == 1
+    # Watch-anchored history id ignored on first sync -> history API untouched.
+    service.users.return_value.history.return_value.list.assert_not_called()
+    service.users.return_value.messages.return_value.list.assert_called()
+    email = get_email_by_gmail_message_id(database_connection, "pre-watch")
+    assert email is not None
+    assert email.subject == "Hello there"
 
 
 def test_sync_account_skips_duplicate_messages(
