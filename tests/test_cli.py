@@ -7487,3 +7487,178 @@ def test_mutation_dead_stops_when_schema_pending(runner: CliRunner) -> None:
 
     assert result.exit_code == 1
     mock_create.assert_not_called()
+
+
+# -- db noun: init / migrate / check (§V.110, §V.108, §V.109) ------------------
+
+
+def _init_report(**overrides: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "provisioned": False,
+        "verdict": "current",
+        "recorded_hash": "a" * 64,
+        "current_hash": "a" * 64,
+        "applied": 1,
+        "pending": 0,
+    }
+    return {**base, **overrides}
+
+
+def test_db_init_provisions_empty(runner: CliRunner) -> None:
+    """Empty DB → provision; ok envelope under the `db` singular key (§V.110)."""
+    report = _init_report(provisioned=True)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.provision_database", return_value=report),
+    ):
+        result = runner.invoke(main, ["db", "init"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["db"]["provisioned"] is True
+    assert data["db"]["message"] == "database provisioned"
+
+
+def test_db_init_noop_when_already_current(runner: CliRunner) -> None:
+    """Account present + current → idempotent no-op-with-message, exit 0 (§V.110)."""
+    report = _init_report(provisioned=False, verdict="current")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.provision_database", return_value=report),
+    ):
+        result = runner.invoke(main, ["db", "init"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["db"]["message"] == "database already initialized"
+
+
+def test_db_init_refuses_when_account_exists_not_current(runner: CliRunner) -> None:
+    """Account present + pending → refuses (no --force), error envelope, exit 1."""
+    report = _init_report(provisioned=False, verdict="pending", pending=2)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.provision_database", return_value=report),
+    ):
+        result = runner.invoke(main, ["db", "init"])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "already_initialized"
+
+
+def test_db_migrate_applies_pending(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """`db migrate` reports applied migrations under the `db` key (§V.108)."""
+    applied = [{"version": 2, "name": "add_widget"}]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.migrate_database", return_value=applied),
+    ):
+        result = runner.invoke(main, ["db", "migrate"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["db"]["count"] == 1
+    assert data["db"]["applied"] == applied
+
+
+def test_db_migrate_noop_when_nothing_pending(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.migrate_database", return_value=[]),
+    ):
+        result = runner.invoke(main, ["db", "migrate"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["db"]["count"] == 0
+    assert data["db"]["applied"] == []
+
+
+def test_db_check_current_is_ok(runner: CliRunner, mock_connection: MagicMock) -> None:
+    """verdict=current → ok envelope + exit 0, report keys per §I.cli."""
+    status = SchemaStatus(
+        verdict="current",
+        recorded_hash="a" * 64,
+        current_hash="a" * 64,
+        applied=1,
+        pending=0,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.determine_schema_verdict", return_value=status),
+    ):
+        result = runner.invoke(main, ["db", "check"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert set(data["db"].keys()) == {
+        "recorded_hash",
+        "current_hash",
+        "applied",
+        "pending",
+        "verdict",
+    }
+    assert data["db"]["verdict"] == "current"
+
+
+def test_db_check_pending_exits_one_with_report(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """verdict=pending → schema_migration_pending envelope, report inlined, exit 1."""
+    status = SchemaStatus(
+        verdict="pending",
+        recorded_hash="a" * 64,
+        current_hash="b" * 64,
+        applied=1,
+        pending=3,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.determine_schema_verdict", return_value=status),
+    ):
+        result = runner.invoke(main, ["db", "check"])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "schema_migration_pending"
+    assert data["report"]["verdict"] == "pending"
+    assert data["report"]["pending"] == 3
+
+
+def test_db_check_drift_exits_one_with_report(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """verdict=drift → schema_drift envelope, report inlined, exit 1 (§V.109)."""
+    status = SchemaStatus(
+        verdict="drift",
+        recorded_hash="dead" * 16,
+        current_hash="beef" * 16,
+        applied=1,
+        pending=0,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.determine_schema_verdict", return_value=status),
+    ):
+        result = runner.invoke(main, ["db", "check"])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "schema_drift"
+    assert data["report"]["verdict"] == "drift"

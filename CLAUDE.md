@@ -53,8 +53,11 @@ Concrete shape lives in code; spec invariants govern behaviour.
   Themes per §V.92.
 - **CLI** (`cli.py`) — thin dispatcher, JSON-only stdout. §V.1-5; full surface
   in §I.
-- **Schema** (`schema.sql`) — PostgreSQL 18, auto-applied on first connection.
-  Connection via `database_url`.
+- **Schema** (`schema.sql`) — PostgreSQL 18. Empty DBs auto-provision on first
+  connection (data-loss-free, §V.110); a populated DB is never mutated as a
+  connection side-effect — advance it explicitly via `mailpilot db init`
+  (provision empty) / `mailpilot db migrate` (apply pending `migrations/`), and
+  audit with `mailpilot db check`. Connection via `database_url`.
 - **Database** (`database.py`) — flat module with `# -- Entity ---` headers.
   Conventions: `create_X` / `get_X` / `list_X` / `update_X` / `search_X`. Every
   fn takes `psycopg.Connection` and returns a `models.py` model. Dynamic SQL via

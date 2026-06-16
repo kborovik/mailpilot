@@ -23,6 +23,7 @@ from mailpilot.database import (
     determine_schema_verdict,
     get_status_payload,
     initialize_database,
+    provision_database,
 )
 from mailpilot.models import SchemaMetadata, SchemaStatus
 
@@ -497,3 +498,68 @@ def test_initialize_tolerate_does_not_dead_stop_on_drift(
     with patch("mailpilot.database.psycopg.connect", return_value=mock_conn):
         connection = initialize_database("postgresql://localhost/test")
     assert connection is mock_conn  # no SystemExit on the read path
+
+
+# -- provision_database (`db init` path, §V.110) ------------------------------
+
+
+def _provision_conn_mock(*, account_exists: bool) -> MagicMock:
+    """Connection mock whose `account` probe reports empty / populated DB."""
+    probe_cursor = MagicMock()
+    probe_cursor.fetchone.return_value = {"oid": "account" if account_exists else None}
+    connection = MagicMock()
+
+    def execute_side_effect(query: Any, *_params: Any) -> MagicMock:
+        if "to_regclass" in str(query):
+            return probe_cursor
+        return MagicMock()
+
+    connection.execute.side_effect = execute_side_effect
+    return connection
+
+
+def test_provision_database_provisions_empty_db():
+    """Account absent → schema applied, report carries provisioned=True (§V.110)."""
+    conn = _provision_conn_mock(account_exists=False)
+    status = SchemaStatus(
+        verdict="current",
+        recorded_hash="a" * 64,
+        current_hash="a" * 64,
+        applied=1,
+        pending=0,
+    )
+    with (
+        patch("mailpilot.database.psycopg.connect", return_value=conn),
+        patch("mailpilot.database.determine_schema_verdict", return_value=status),
+    ):
+        report = provision_database("postgresql://localhost/test")
+
+    assert report["provisioned"] is True
+    assert report["verdict"] == "current"
+    executed = [str(call.args[0]) for call in conn.execute.call_args_list]
+    assert any("CREATE TABLE" in q for q in executed)
+    conn.close.assert_called_once()
+
+
+def test_provision_database_never_mutates_populated_db():
+    """Account present → never re-applies schema (no --force); reports verdict."""
+    conn = _provision_conn_mock(account_exists=True)
+    status = SchemaStatus(
+        verdict="pending",
+        recorded_hash="a" * 64,
+        current_hash="b" * 64,
+        applied=1,
+        pending=2,
+    )
+    with (
+        patch("mailpilot.database.psycopg.connect", return_value=conn),
+        patch("mailpilot.database.determine_schema_verdict", return_value=status),
+    ):
+        report = provision_database("postgresql://localhost/test")
+
+    assert report["provisioned"] is False
+    assert report["verdict"] == "pending"
+    assert report["pending"] == 2
+    executed = [str(call.args[0]) for call in conn.execute.call_args_list]
+    assert not any("CREATE TABLE" in q for q in executed)
+    conn.close.assert_called_once()

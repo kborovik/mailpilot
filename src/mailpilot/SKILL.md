@@ -14,11 +14,12 @@ mailpilot --version | --help | --completion <shell> | --skill | --debug
 ```
 
 Nouns: `account`, `company`, `contact`, `workflow`, `enrollment`, `task`,
-`email`, `activity`, `tag`, `note`, `template`.
+`email`, `activity`, `tag`, `note`, `template`, `db`.
 
 Verbs: `list`, `search`, `view`, `create`, `update`, `disable`, `add`,
 `reply`, `send`, `start`, `stop`, `cancel`, `retry`, `run`, `sync`,
-`export`, `import`. Not every verb applies to every noun -- use
+`export`, `import`, `init`, `migrate`, `check`. Not every verb applies to every
+noun -- use
 `mailpilot <noun> --help` to enumerate. `config` exposes the `get` and `set`
 subverbs for reading and writing persistent configuration.
 
@@ -30,7 +31,8 @@ diagnostics go to stderr and never to stdout.
 - `list`, `search`, `sync`, `export`, `import`:
   `{"<plural>": [...], "ok": true}`
 - `view`, `create`, `update`, `disable`, `add`, `reply`, `send`,
-  `start`, `stop`, `cancel`, `retry`: `{"<singular>": {...}, "ok": true}`
+  `start`, `stop`, `cancel`, `retry`, `init`, `migrate`, `check`:
+  `{"<singular>": {...}, "ok": true}`
 - error: `{"error": "<code>", "message": "<text>", "ok": false}`
 
 Plural keys mirror the noun (`accounts`, `companies`, `contacts`,
@@ -101,6 +103,20 @@ mailpilot enrollment list --workflow-id <ID>
 mailpilot task list --status pending
 mailpilot email list --account-id <ID> --limit 50
 ```
+
+### Provision and migrate the schema
+
+```
+mailpilot db init
+mailpilot db migrate
+mailpilot db check
+```
+
+`db init` provisions an empty database from the bundled schema; it refuses a
+populated database (no destructive re-init) and is an idempotent no-op once
+current. `db migrate` applies pending forward migrations, one transaction each.
+`db check` reports the schema verdict and exits non-zero on `pending`/`drift`,
+so it doubles as a deploy gate.
 
 ### Onboard an account
 

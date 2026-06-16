@@ -116,11 +116,19 @@ def output_entity(key: str, model: Any) -> None:
     )
 
 
-def output_error(message: str, code: str) -> NoReturn:
-    """Print structured JSON error to stderr and exit."""
+def output_error(
+    message: str, code: str, extra: dict[str, object] | None = None
+) -> NoReturn:
+    """Print structured JSON error to stderr and exit.
+
+    ``extra`` merges additional fields into the envelope -- e.g. ``db check``
+    inlines its schema report alongside the error code per §I.cli / §V.109.
+    """
     from opentelemetry import trace
 
     payload: dict[str, object] = {"error": code, "message": message, "ok": False}
+    if extra:
+        payload.update(extra)
     current = trace.get_current_span()
     ctx = current.get_span_context() if current else None
     if ctx is not None and ctx.is_valid:
@@ -277,6 +285,99 @@ def run() -> None:
         start_sync_loop(connection, settings)
     finally:
         connection.close()
+
+
+# -- DB schema commands --------------------------------------------------------
+
+
+@main.group()
+def db() -> None:
+    """Provision and migrate the database schema (off the hot path, §V.110)."""
+
+
+@db.command("init")
+def db_init() -> None:
+    """Provision an empty database from schema.sql.
+
+    Refuses to touch a populated database -- no --force footgun; idempotent
+    no-op-with-message when the schema is already current (§V.110).
+    """
+    from mailpilot.database import provision_database
+
+    report = provision_database(_database_url())
+    if report["provisioned"]:
+        output({"db": {**report, "message": "database provisioned"}})
+        return
+    if report["verdict"] == "current":
+        output({"db": {**report, "message": "database already initialized"}})
+        return
+    if report["verdict"] == "pending":
+        output_error(
+            "database already initialized; run 'mailpilot db migrate' to advance it",
+            "already_initialized",
+            {"report": report},
+        )
+    output_error(
+        "database already initialized; schema drift detected -- "
+        "investigate divergence (no migration path)",
+        "already_initialized",
+        {"report": report},
+    )
+
+
+@db.command("migrate")
+def db_migrate() -> None:
+    """Apply pending forward migrations in version order (§V.108).
+
+    Each migration runs in its own transaction and is recorded in
+    ``schema_migrations``; a no-op when nothing is pending.
+    """
+    from mailpilot.database import initialize_database, migrate_database
+
+    connection = initialize_database(_database_url())
+    try:
+        applied = migrate_database(connection)
+    finally:
+        connection.close()
+    output({"db": {"applied": applied, "count": len(applied)}})
+
+
+@db.command("check")
+def db_check() -> None:
+    """Report the schema verdict; exit 1 on pending or drift (§V.109).
+
+    A scriptable deploy gate: ``current`` -> ok envelope + exit 0;
+    ``pending``/``drift`` -> ``schema_migration_pending``/``schema_drift``
+    error envelope with the report inlined + exit 1 (§I.cli / §V.4).
+    """
+    from mailpilot.database import determine_schema_verdict, initialize_database
+
+    connection = initialize_database(_database_url())
+    try:
+        status = determine_schema_verdict(connection)
+    finally:
+        connection.close()
+    report: dict[str, object] = {
+        "recorded_hash": status.recorded_hash,
+        "current_hash": status.current_hash,
+        "applied": status.applied,
+        "pending": status.pending,
+        "verdict": status.verdict,
+    }
+    if status.verdict == "current":
+        output({"db": report})
+        return
+    if status.verdict == "pending":
+        output_error(
+            f"{status.pending} schema migration(s) pending; run 'mailpilot db migrate'",
+            "schema_migration_pending",
+            {"report": report},
+        )
+    output_error(
+        "schema drift detected; investigate divergence -- no migration path",
+        "schema_drift",
+        {"report": report},
+    )
 
 
 # -- Config commands -----------------------------------------------------------

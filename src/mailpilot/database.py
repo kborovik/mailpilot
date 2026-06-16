@@ -308,6 +308,108 @@ def determine_schema_verdict(
     )
 
 
+def _connect_database(database_url: str) -> psycopg.Connection[dict[str, Any]]:
+    """Open an autocommit PostgreSQL connection or dead-stop with a hint.
+
+    A connect failure is mapped to a ``SystemExit`` carrying an operator hint,
+    pairing ``logfire.exception`` with ``operator_event("error")`` per §V.51 so
+    the operator console is never silent on DB-connect failure.
+
+    Args:
+        database_url: PostgreSQL connection URL.
+
+    Returns:
+        Open autocommit connection (``dict_row`` factory).
+    """
+    db_name = database_url.rsplit("/", 1)[-1]
+    try:
+        return cast(
+            psycopg.Connection[dict[str, Any]],
+            psycopg.connect(database_url, row_factory=dict_row, autocommit=True),  # type: ignore[arg-type]
+        )
+    except psycopg.OperationalError as exc:
+        message = str(exc)
+        if "does not exist" in message:
+            hint = f"run 'createdb {db_name}' to create it"
+        elif "Connection refused" in message:
+            hint = "is PostgreSQL running? check your system's service manager"
+        else:
+            hint = "check your database_url setting"
+        logfire.exception("database connection failed", database=db_name, hint=hint)
+        operator_event("error", source="database.connect", message=str(exc))
+        raise SystemExit(f"database connection failed: {hint}") from None
+
+
+def _provision_schema(
+    connection: psycopg.Connection[dict[str, Any]],
+    schema_sql: str,
+    current_hash: str,
+) -> None:
+    """Apply ``schema.sql`` on an empty database and stamp the ledgers (§V.110).
+
+    Runs the canonical full-schema build, records the singleton
+    ``schema_metadata`` row, then baseline-stamps the migration ledger
+    (§V.108/§V.109): a fresh build already embeds every shipped migration's
+    structure, so each is recorded as applied — keeping ``db migrate`` a no-op
+    and the verdict ``current`` (zero pending) on a fresh DB. The caller owns
+    the autocommit connection and the empty-DB precondition.
+
+    Args:
+        connection: Open autocommit connection on an empty database.
+        schema_sql: Canonical ``schema.sql`` body.
+        current_hash: Normalized hash of ``schema_sql`` (§V.19).
+    """
+    connection.execute(schema_sql)  # type: ignore[arg-type]
+    connection.execute(
+        "INSERT INTO schema_metadata (mailpilot_version, schema_hash) VALUES (%s, %s)",
+        (_MAILPILOT_VERSION, current_hash),
+    )
+    for migration_version, migration_name, _path in _discover_migrations():
+        connection.execute(
+            "INSERT INTO schema_migrations (version, name, mailpilot_version) "
+            "VALUES (%s, %s, %s)",
+            (migration_version, migration_name, _MAILPILOT_VERSION),
+        )
+
+
+def provision_database(database_url: str) -> dict[str, object]:
+    """Provision an empty database or report an existing one (``db init``, §V.110).
+
+    Connects, probes for the ``account`` table, and provisions from
+    ``schema.sql`` only when it is absent — the data-loss-free path with no
+    ``--force`` to wipe a populated DB. A populated database is never mutated as
+    a structural side-effect: ``provisioned`` reads False and the caller
+    (``db init``) no-ops on a ``current`` verdict or refuses otherwise.
+
+    Args:
+        database_url: PostgreSQL connection URL.
+
+    Returns:
+        Report dict ``{provisioned, verdict, recorded_hash, current_hash,
+        applied, pending}`` — ``provisioned`` says whether structure was just
+        created; the remaining fields mirror ``db check``.
+    """
+    connection = _connect_database(database_url)
+    try:
+        schema_sql = SCHEMA_PATH.read_text()
+        current_hash = _compute_schema_hash(schema_sql)
+        probe = connection.execute("SELECT to_regclass('account') AS oid").fetchone()
+        provisioned = probe is None or probe.get("oid") is None
+        if provisioned:
+            _provision_schema(connection, schema_sql, current_hash)
+        status = determine_schema_verdict(connection)
+        return {
+            "provisioned": provisioned,
+            "verdict": status.verdict,
+            "recorded_hash": status.recorded_hash,
+            "current_hash": status.current_hash,
+            "applied": status.applied,
+            "pending": status.pending,
+        }
+    finally:
+        connection.close()
+
+
 def initialize_database(
     database_url: str, *, require_current_schema: bool = False
 ) -> psycopg.Connection[dict[str, Any]]:
@@ -329,23 +431,7 @@ def initialize_database(
     Returns:
         Open database connection with schema provisioned or verified.
     """
-    db_name = database_url.rsplit("/", 1)[-1]
-    try:
-        connection = cast(
-            psycopg.Connection[dict[str, Any]],
-            psycopg.connect(database_url, row_factory=dict_row, autocommit=True),  # type: ignore[arg-type]
-        )
-    except psycopg.OperationalError as exc:
-        message = str(exc)
-        if "does not exist" in message:
-            hint = f"run 'createdb {db_name}' to create it"
-        elif "Connection refused" in message:
-            hint = "is PostgreSQL running? check your system's service manager"
-        else:
-            hint = "check your database_url setting"
-        logfire.exception("database connection failed", database=db_name, hint=hint)
-        operator_event("error", source="database.connect", message=str(exc))
-        raise SystemExit(f"database connection failed: {hint}") from None
+    connection = _connect_database(database_url)
     # Skip the schema apply when the database is already initialized.
     # schema.sql contains DROP TRIGGER + CREATE TRIGGER on the task table
     # which takes AccessExclusiveLock and deadlocks against the sync loop's
@@ -356,22 +442,7 @@ def initialize_database(
     current_hash = _compute_schema_hash(schema_sql)
     probe = connection.execute("SELECT to_regclass('account') AS oid").fetchone()  # type: ignore[union-attr]
     if probe is None or probe.get("oid") is None:
-        connection.execute(schema_sql)  # type: ignore[arg-type]
-        connection.execute(
-            "INSERT INTO schema_metadata (mailpilot_version, schema_hash) "
-            "VALUES (%s, %s)",
-            (_MAILPILOT_VERSION, current_hash),
-        )
-        # Baseline-stamp the migration ledger (§V.108/§V.109): a fresh build
-        # from schema.sql already embeds every shipped migration's structure,
-        # so record them as applied. Keeps `db migrate` a no-op on a fresh DB
-        # and the verdict `current` (zero pending) rather than ledger-behind.
-        for migration_version, migration_name, _path in _discover_migrations():
-            connection.execute(
-                "INSERT INTO schema_migrations (version, name, mailpilot_version) "
-                "VALUES (%s, %s, %s)",
-                (migration_version, migration_name, _MAILPILOT_VERSION),
-            )
+        _provision_schema(connection, schema_sql, current_hash)
     elif require_current_schema:
         # Write-path gate (§V.109): dead-stop before any write lands on a
         # mismatched schema. Distinct codes since the remedy differs — `drift`
