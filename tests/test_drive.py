@@ -107,12 +107,103 @@ def test_search_markdown_query_includes_fulltext_and_folder_with_shared_drive_fl
     query = call_kwargs["q"]
     assert "mimeType='text/markdown'" in query
     assert "'FOLDER42' in parents" in query
-    assert "fullText contains 'shipping policy'" in query
     assert "trashed = false" in query
     assert call_kwargs["fields"] == "files(id, name)"
     assert call_kwargs["corpora"] == "allDrives"
     assert call_kwargs["supportsAllDrives"] is True
     assert call_kwargs["includeItemsFromAllDrives"] is True
+
+
+def test_search_markdown_multi_word_query_or_joins_per_token_predicates() -> None:
+    """§V.106: a multi-word query never collapses to a single whole-phrase
+    ``fullText contains '{query}'`` predicate; each token is its own predicate,
+    OR-joined."""
+    service = _make_service()
+    client = DriveClient.from_service("user@example.com", service)
+
+    client.search_markdown("FOLDER", "shipping policy")
+
+    query = service.files.return_value.list.call_args.kwargs["q"]
+    assert "fullText contains 'shipping'" in query
+    assert "fullText contains 'policy'" in query
+    assert " or " in query
+    # never the whole-phrase predicate that regressed in §B.89
+    assert "fullText contains 'shipping policy'" not in query
+
+
+def test_search_markdown_hyphenated_token_tried_whole_and_split() -> None:
+    """§V.106 / §B.89: a hyphenated model code is searched whole AND split, so
+    the in-table ``DM42-Q-FRP`` is not stranded by Drive's punctuation
+    tokenization."""
+    service = _make_service()
+    client = DriveClient.from_service("user@example.com", service)
+
+    client.search_markdown("FOLDER", "DM42-Q-FRP")
+
+    query = service.files.return_value.list.call_args.kwargs["q"]
+    assert "fullText contains 'DM42-Q-FRP'" in query
+    assert "fullText contains 'DM42'" in query
+    assert "fullText contains 'Q'" in query
+    assert "fullText contains 'FRP'" in query
+    assert " or " in query
+
+
+def test_search_markdown_single_token_emits_one_predicate() -> None:
+    """§V.106: a single salient term surfaces the file via one predicate (no
+    spurious OR)."""
+    service = _make_service()
+    client = DriveClient.from_service("user@example.com", service)
+
+    client.search_markdown("FOLDER", "datasheet")
+
+    query = service.files.return_value.list.call_args.kwargs["q"]
+    assert "fullText contains 'datasheet'" in query
+    assert " or " not in query
+
+
+def test_search_markdown_caps_predicate_count_at_eight_tokens() -> None:
+    """§V.106: ~8-token cap bounds query length on a verbose question."""
+    service = _make_service()
+    client = DriveClient.from_service("user@example.com", service)
+
+    client.search_markdown("FOLDER", "a b c d e f g h i j k")
+
+    query = service.files.return_value.list.call_args.kwargs["q"]
+    assert query.count("fullText contains") == 8
+
+
+def test_search_markdown_unions_and_dedupes_results_by_file_id() -> None:
+    """§V.106: per-token matches are unioned and de-duplicated by file_id,
+    preserving first-seen (Drive relevance) order."""
+    service = _make_service(
+        list_response={
+            "files": [
+                {"id": "f7", "name": "shipping.md"},
+                {"id": "f3", "name": "returns.md"},
+                {"id": "f7", "name": "shipping.md"},
+            ]
+        }
+    )
+    client = DriveClient.from_service("user@example.com", service)
+
+    result = client.search_markdown("FOLDER", "shipping returns policy")
+
+    assert result == [
+        {"file_id": "f7", "name": "shipping.md"},
+        {"file_id": "f3", "name": "returns.md"},
+    ]
+
+
+def test_search_markdown_blank_query_returns_empty_without_api_call() -> None:
+    """§V.106: a query with no searchable tokens never emits an invalid empty
+    predicate group; it short-circuits to an empty list."""
+    service = _make_service()
+    client = DriveClient.from_service("user@example.com", service)
+
+    result = client.search_markdown("FOLDER", "   ")
+
+    assert result == []
+    service.files.return_value.list.assert_not_called()
 
 
 def test_search_markdown_no_match_returns_empty_list() -> None:

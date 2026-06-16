@@ -161,7 +161,7 @@ T142|x|impl §V.102(+) per §B.86 — drop `mcp__claude_ai_logfire__query_run` f
 T143|x|impl §V.77(+) per §B.87 — send_email recovers the existing row via get_email_by_gmail_message_id on post-send create_email ON-CONFLICT None (idempotent send), raises only when genuinely unrecoverable; add test_send_email_recovers_existing_row_on_duplicate_gmail_message_id|V77,B87
 T144|x|impl §V.105(+) per §B.88 — refactor `score_replies.py` out-scope+compare from verdict to advisory-signal emit (token_hits, fabrication_candidates, has_table); add Sonnet judge sub-agent (reads reply body + case rubric + signals + source datasheet -> verdict+rationale) as verdict-of-record for those types; in-scope token check unchanged; update references/grading.md + SKILL.md scoring phase|V105,B88
 T145|x|abolish runtime fact-check per §V.71 amend — remove _fact_check_body + send_email/reply_email call sites + read_ledger plumbing + reply_rejection fact_check half + check-extras fact-check recipe; numeric-spec grounding caught at test-time via reply-test grading (§V.105) not runtime; TDD|V71,V42,V105
-T146|.|impl §V.106(+) per §B.89 — search_markdown tokenizes query on whitespace, per-token `fullText contains` OR-joined (raw token retained), union+dedupe by file_id, ~8-token cap; add pytest-httpx test asserting hyphenated/multi-word query emits OR predicates + unions results|V106,B89
+T146|x|impl §V.106(+) per §B.89 — search_markdown tokenizes query on whitespace, per-token `fullText contains` OR-joined (raw token retained), union+dedupe by file_id, ~8-token cap; add pytest-httpx test asserting hyphenated/multi-word query emits OR predicates + unions results|V106,B89
 
 ## §B BUGS
 
