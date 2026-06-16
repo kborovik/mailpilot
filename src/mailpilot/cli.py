@@ -129,6 +129,46 @@ def output_error(message: str, code: str) -> NoReturn:
     raise SystemExit(1)
 
 
+def _resolve_account_id(
+    connection: Any,
+    account_id: str | None,
+    account_email: str | None,
+) -> str:
+    """Resolve the target account id from mutually exclusive ref flags (§V.107).
+
+    Account-requiring commands accept exactly one of ``--account-id`` /
+    ``--account-email``. An email is resolved case-insensitively to its owning
+    account via the natural key (§V.90); an unknown email exits ``not_found``
+    per §V.94. Setting both flags or neither exits ``validation_error``.
+
+    Args:
+        connection: Open database connection.
+        account_id: Value of ``--account-id`` (None when unset).
+        account_email: Value of ``--account-email`` (None when unset).
+
+    Returns:
+        The resolved account id; downstream callers re-fetch the full row.
+    """
+    from mailpilot.database import get_account_by_email
+
+    if account_id is not None and account_email is not None:
+        output_error(
+            "--account-id and --account-email are mutually exclusive",
+            "validation_error",
+        )
+    if account_id is not None:
+        return account_id
+    if account_email is not None:
+        account = get_account_by_email(connection, account_email)
+        if account is None:
+            output_error(f"account not found: {account_email}", "not_found")
+        return account.id
+    output_error(
+        "one of --account-id / --account-email is required",
+        "validation_error",
+    )
+
+
 # -- Main CLI ------------------------------------------------------------------
 
 
@@ -1299,7 +1339,12 @@ def email_view(email_id: str) -> None:
 
 
 @email.command("send")
-@click.option("--account-id", required=True, help="Sending account ID.")
+@click.option("--account-id", default=None, help="Sending account ID.")
+@click.option(
+    "--account-email",
+    default=None,
+    help="Sending account email (alternative to --account-id).",
+)
 @click.option(
     "--to",
     "to",
@@ -1313,7 +1358,8 @@ def email_view(email_id: str) -> None:
 @click.option("--cc", default=None, help="CC recipient(s), comma-separated.")
 @click.option("--bcc", default=None, help="BCC recipient(s), comma-separated.")
 def email_send(
-    account_id: str,
+    account_id: str | None,
+    account_email: str | None,
     to: tuple[str, ...],
     subject: str,
     body: str,
@@ -1341,6 +1387,7 @@ def email_send(
     settings = get_settings()
     connection = initialize_database(_database_url())
     try:
+        account_id = _resolve_account_id(connection, account_id, account_email)
         account = get_account(connection, account_id)
         if account is None:
             output_error(f"account not found: {account_id}", "not_found")
@@ -1375,7 +1422,12 @@ def email_send(
 
 
 @email.command("reply")
-@click.option("--account-id", required=True, help="Sending account ID.")
+@click.option("--account-id", default=None, help="Sending account ID.")
+@click.option(
+    "--account-email",
+    default=None,
+    help="Sending account email (alternative to --account-id).",
+)
 @click.option(
     "--email-id",
     required=True,
@@ -1386,7 +1438,8 @@ def email_send(
 @click.option("--cc", default=None, help="CC recipient(s), comma-separated.")
 @click.option("--bcc", default=None, help="BCC recipient(s), comma-separated.")
 def email_reply(
-    account_id: str,
+    account_id: str | None,
+    account_email: str | None,
     email_id: str,
     body: str,
     workflow_id: str | None,
@@ -1411,6 +1464,7 @@ def email_reply(
     settings = get_settings()
     connection = initialize_database(_database_url())
     try:
+        account_id = _resolve_account_id(connection, account_id, account_email)
         account = get_account(connection, account_id)
         if account is None:
             output_error(f"account not found: {account_id}", "not_found")
@@ -2022,7 +2076,12 @@ def _create_and_populate_workflow(
         "Immutable after creation; direction is derived from the template."
     ),
 )
-@click.option("--account-id", required=True, help="Owning Gmail account ID.")
+@click.option("--account-id", default=None, help="Owning Gmail account ID.")
+@click.option(
+    "--account-email",
+    default=None,
+    help="Owning Gmail account email (alternative to --account-id).",
+)
 @click.option("--objective", default=None, help="Workflow objective.")
 @click.option(
     "--instructions",
@@ -2049,7 +2108,8 @@ def _create_and_populate_workflow(
 def workflow_create(
     name: str,
     template: str,
-    account_id: str,
+    account_id: str | None,
+    account_email: str | None,
     objective: str | None,
     instructions: str | None,
     instructions_file: str | None,
@@ -2081,6 +2141,7 @@ def workflow_create(
     activate = not draft and has_objective and has_instructions
     connection = initialize_database(_database_url())
     try:
+        account_id = _resolve_account_id(connection, account_id, account_email)
         if get_account(connection, account_id) is None:
             output_error(f"account not found: {account_id}", "not_found")
         with cli_mutation(
@@ -2381,7 +2442,12 @@ def _workflow_to_toml(workflow: Any) -> str:
 
 
 @workflow.command("export")
-@click.option("--account-id", required=True, help="Owning Gmail account ID.")
+@click.option("--account-id", default=None, help="Owning Gmail account ID.")
+@click.option(
+    "--account-email",
+    default=None,
+    help="Owning Gmail account email (alternative to --account-id).",
+)
 @click.option(
     "--out-dir",
     "out_dir",
@@ -2389,7 +2455,9 @@ def _workflow_to_toml(workflow: Any) -> str:
     type=click.Path(file_okay=False),
     help="Directory to write one '*.toml' per workflow. Created if absent.",
 )
-def workflow_export(account_id: str, out_dir: str) -> None:
+def workflow_export(
+    account_id: str | None, account_email: str | None, out_dir: str
+) -> None:
     """Export an account's workflows as one TOML file each (§V.103, §V.63).
 
     TOML-only: writes one ``*.toml`` per workflow into ``--out-dir`` (def fields
@@ -2408,6 +2476,7 @@ def workflow_export(account_id: str, out_dir: str) -> None:
 
     connection = initialize_database(_database_url())
     try:
+        account_id = _resolve_account_id(connection, account_id, account_email)
         if get_account(connection, account_id) is None:
             output_error(f"account not found: {account_id}", "not_found")
         workflows = list_workflows_full(connection, account_id)
@@ -2619,7 +2688,12 @@ def _load_workflow_import_entries(
 
 
 @workflow.command("import")
-@click.option("--account-id", required=True, help="Owning Gmail account ID.")
+@click.option("--account-id", default=None, help="Owning Gmail account ID.")
+@click.option(
+    "--account-email",
+    default=None,
+    help="Owning Gmail account email (alternative to --account-id).",
+)
 @click.option(
     "--file",
     "file",
@@ -2630,7 +2704,9 @@ def _load_workflow_import_entries(
         "(catalog entry); a directory imports every '*.toml' in it."
     ),
 )
-def workflow_import(account_id: str, file: str | None) -> None:
+def workflow_import(
+    account_id: str | None, account_email: str | None, file: str | None
+) -> None:
     """Import workflows for an account from TOML catalog files (§V.63, §V.103).
 
     TOML-only -- no JSON, no stdin. Dispatch is by ``--file`` shape:
@@ -2657,6 +2733,7 @@ def workflow_import(account_id: str, file: str | None) -> None:
 
     connection = initialize_database(_database_url())
     try:
+        account_id = _resolve_account_id(connection, account_id, account_email)
         if get_account(connection, account_id) is None:
             output_error(f"account not found: {account_id}", "not_found")
         with cli_mutation(

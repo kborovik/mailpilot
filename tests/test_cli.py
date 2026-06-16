@@ -7115,3 +7115,312 @@ def test_template_view_unknown_returns_not_found(runner: CliRunner) -> None:
     data = json.loads(result.output)
     assert data["ok"] is False
     assert data["error"] == "not_found"
+
+
+# -- §V.107 account-ref resolver (--account-id | --account-email) --------------
+
+
+def test_email_send_resolves_account_email(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.107: `email send --account-email` resolves the owning account id."""
+    account = _make_account()
+    sent = _make_email(direction="outbound", status="sent", sent_at=_NOW)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.get_account_by_email", return_value=account
+        ) as mock_by_email,
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.gmail.GmailClient") as mock_client_cls,
+        patch("mailpilot.email_ops.send_email", return_value=sent) as mock_send,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "email",
+                "send",
+                "--account-email",
+                "TEST@example.com",
+                "--to",
+                "recipient@example.com",
+                "--subject",
+                "Hi",
+                "--body",
+                "Hello",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_by_email.assert_called_once_with(mock_connection, "TEST@example.com")
+    mock_client_cls.assert_called_once_with(account.email)
+    assert mock_send.call_args.kwargs["account"] == account
+
+
+def test_email_send_requires_an_account_ref(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.107: neither --account-id nor --account-email -> validation_error."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "email",
+                "send",
+                "--to",
+                "recipient@example.com",
+                "--subject",
+                "Hi",
+                "--body",
+                "Hello",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "validation_error"
+
+
+def test_email_send_rejects_both_account_refs(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.107: both --account-id and --account-email set -> validation_error."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "email",
+                "send",
+                "--account-id",
+                _ACCOUNT_ID,
+                "--account-email",
+                "test@example.com",
+                "--to",
+                "recipient@example.com",
+                "--subject",
+                "Hi",
+                "--body",
+                "Hello",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "validation_error"
+
+
+def test_email_send_unknown_account_email_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.107/§V.94: unknown --account-email -> not_found, no send."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account_by_email", return_value=None),
+        patch("mailpilot.email_ops.send_email") as mock_send,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "email",
+                "send",
+                "--account-email",
+                "missing@example.com",
+                "--to",
+                "recipient@example.com",
+                "--subject",
+                "Hi",
+                "--body",
+                "Hello",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "not_found"
+    mock_send.assert_not_called()
+
+
+def test_email_reply_resolves_account_email(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.107: `email reply --account-email` resolves the owning account id."""
+    account = _make_account()
+    sent = _make_email(direction="outbound", status="sent", sent_at=_NOW)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.get_account_by_email", return_value=account
+        ) as mock_by_email,
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.gmail.GmailClient"),
+        patch("mailpilot.email_ops.reply_email", return_value=sent) as mock_reply,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "email",
+                "reply",
+                "--account-email",
+                "test@example.com",
+                "--email-id",
+                "original-1",
+                "--body",
+                "hi",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_by_email.assert_called_once_with(mock_connection, "test@example.com")
+    assert mock_reply.call_args.kwargs["account"] == account
+
+
+def test_workflow_create_resolves_account_email(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.107: `workflow create --account-email` resolves the owning account id."""
+    workflow = _make_workflow()
+    account = _make_account()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.get_account_by_email", return_value=account
+        ) as mock_by_email,
+        patch("mailpilot.database.get_account", return_value=account),
+        patch(
+            "mailpilot.database.create_workflow", return_value=workflow
+        ) as mock_create,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "create",
+                "--name",
+                "Demo outreach",
+                "--template",
+                "outbound-general",
+                "--account-email",
+                "test@example.com",
+                "--draft",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_by_email.assert_called_once_with(mock_connection, "test@example.com")
+    assert mock_create.call_args.kwargs["account_id"] == account.id
+
+
+def test_workflow_create_requires_an_account_ref(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.107: workflow create with neither account ref -> validation_error."""
+    account = _make_account()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.database.create_workflow") as mock_create,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "create",
+                "--name",
+                "Demo outreach",
+                "--template",
+                "outbound-general",
+                "--draft",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    mock_create.assert_not_called()
+
+
+def test_workflow_export_resolves_account_email(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    """§V.107: `workflow export --account-email` resolves the owning account id."""
+    account = _make_account()
+    workflow = _make_workflow(name="Demo outreach")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.get_account_by_email", return_value=account
+        ) as mock_by_email,
+        patch("mailpilot.database.get_account", return_value=account),
+        patch(
+            "mailpilot.database.list_workflows_full", return_value=[workflow]
+        ) as mock_list,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "export",
+                "--account-email",
+                "test@example.com",
+                "--out-dir",
+                str(tmp_path / "catalog"),
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_by_email.assert_called_once_with(mock_connection, "test@example.com")
+    mock_list.assert_called_once_with(mock_connection, account.id)
+
+
+def test_workflow_import_resolves_account_email(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    """§V.107: `workflow import --account-email` resolves the owning account id."""
+    account = _make_account()
+    created = _make_workflow(theme="green")
+    file = tmp_path / "wf.toml"
+    _write_workflow_toml(file, _import_payload())
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.get_account_by_email", return_value=account
+        ) as mock_by_email,
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.database.list_workflows_full", return_value=[]),
+        patch(
+            "mailpilot.database.create_workflow", return_value=created
+        ) as mock_create,
+        patch("mailpilot.database.update_workflow", return_value=created),
+        patch("mailpilot.database.activate_workflow", return_value=created),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "import",
+                "--account-email",
+                "test@example.com",
+                "--file",
+                str(file),
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_by_email.assert_called_once_with(mock_connection, "test@example.com")
+    assert mock_create.call_args.kwargs["account_id"] == account.id
