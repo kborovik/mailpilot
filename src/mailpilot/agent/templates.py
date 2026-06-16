@@ -133,12 +133,12 @@ _NO_FABRICATION = (
 
 # Per §V.41 / §V.45 there is intentionally no Drive-grounding overlay fragment
 # here. KB-grounding discipline (search-first, 2-search budget then a single
-# list, read top >=3 hits, per-target search on compare) and the §V.68
-# verbatim-citation / no-unit-conversion guidance are workflow-specific
-# behaviour, so they live in the workflow definition's ``instructions`` field
-# (workflows/*.toml per §V.103), not a code-defined template fragment. The
-# inbound-google-drive template only binds the Drive tool set (_DRIVE); its
-# protocol is the same fragment-free composition as the non-Drive templates.
+# list, read top >=3 hits, per-target search on compare) and verbatim-citation
+# / no-unit-conversion guidance are workflow-specific behaviour, so they live
+# in the workflow definition's ``instructions`` field (workflows/*.toml per
+# §V.103), not a code-defined template fragment. The inbound-google-drive
+# template only binds the Drive tool set (_DRIVE); its protocol is the same
+# fragment-free composition as the non-Drive templates.
 
 
 # -- Tool tuples ---------------------------------------------------------------

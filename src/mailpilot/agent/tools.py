@@ -40,16 +40,14 @@ from mailpilot.drive import DriveClient
 from mailpilot.models import Account
 from mailpilot.settings import Settings
 
-# §V.71: per-agent-invocation reply-rejection counter (root cause §B.57, §B.59).
+# §V.71: per-agent-invocation reply-rejection counter (root cause §B.57).
 # ``run.execute_task`` enters ``reply_rejection_scope`` to install a fresh
 # counter for each task; ``reply_email`` and ``send_email`` increment the
-# counter on every ``_check_spec_table`` (format) hit AND every
-# ``_fact_check_body`` (fact_check) hit, and bypass BOTH checks once the
-# counter reaches ``_REPLY_REJECTION_CAP``. Bounds worst-case latency under
-# prompt-fidelity loops (B7 17 calls / 195s, C burst 35 calls / 495s observed
-# in §B.57; B7 9 fact-check rejections / 265s in §B.59). Outside a scope
-# (legacy / CLI paths without a task row) the counter stays ``None`` and both
-# checks behave as before.
+# counter on every ``_check_spec_table`` (format) hit and bypass the check
+# once the counter reaches ``_REPLY_REJECTION_CAP``. Bounds worst-case latency
+# under prompt-fidelity loops (B7 17 calls / 195s, C burst 35 calls / 495s
+# observed in §B.57). Outside a scope (legacy / CLI paths without a task row)
+# the counter stays ``None`` and the check behaves as before.
 
 
 class _ReplyRejectionCounter:
@@ -71,10 +69,9 @@ def reply_rejection_scope() -> Generator[None]:
 
     Wrap each task-drained ``agent.invoke`` so successive ``reply_email`` /
     ``send_email`` calls from the same task share a counter. The cap kicks in
-    after ``_REPLY_REJECTION_CAP`` consecutive rejections (format-lint or
-    fact-check, in any mix); further calls bypass both checks and emit a
-    ``logfire.warn`` so the regression is observable instead of silently
-    looping.
+    after ``_REPLY_REJECTION_CAP`` consecutive format-lint rejections; further
+    calls bypass the check and emit a ``logfire.warn`` so the regression is
+    observable instead of silently looping.
     """
     token = _REPLY_REJECTIONS.set(_ReplyRejectionCounter())
     try:
@@ -86,7 +83,7 @@ def reply_rejection_scope() -> Generator[None]:
 def _consume_reply_rejection(
     *,
     tool: str,
-    rejection_type: Literal["format", "fact_check"],
+    rejection_type: Literal["format"],
     workflow_id: str,
     email_id: str | None,
 ) -> bool:
@@ -136,89 +133,6 @@ def _consume_reply_rejection(
 _SPEC_ROW_RE = re.compile(r"^[^|]{1,80}\s+\S.*$")
 _PIPE_SEPARATOR_RE = re.compile(r"\|\s*-{3,}\s*\|")
 
-# Per §V.68 (root cause §B.46): numeric-spec value tokens cited in an outbound
-# body must each appear verbatim in the union of same-invocation
-# ``read_drive_markdown`` returns. Candidate tokens = integers >=2 digits and
-# decimals (``\b\d+(?:\.\d+)?\b`` filtered to len>=2). The 2-char floor preserves
-# prose immunity (single digits embedded in sentences like "I'll get back in a
-# day or two" do not trip the lint) while catching the B.46 fabrications
-# (``65``, ``120``, ``35``) and decimal specs (``0.48 mm``).
-_NUMERIC_TOKEN_RE = re.compile(r"\b\d+(?:\.\d+)?\b")
-
-# §V.68(+) per §B.60: bullet-list spec lines (``"- Key: Value"``) under
-# Physical Properties / operation-constraint headers carry valid citable
-# numeric tokens. ``_fact_check_body`` admits these alongside pipe-row lines
-# on table-bearing docs; the explicit ``Key:`` label anchors context so the
-# §B.56 prose-coincidence collision class stays closed.
-_LIST_ITEM_RE = re.compile(r"^\s*[-*]\s")
-
-
-def _fact_check_body(
-    body: str, read_ledger: dict[str, str] | None
-) -> dict[str, Any] | None:
-    r"""Reject outbound bodies citing numeric tokens absent from the KB ledger.
-
-    §V.68: when one or more ``read_drive_markdown`` calls succeeded in the
-    current ``agent.invoke``, every candidate numeric-spec value-token in the
-    proposed outbound body must appear verbatim in a pipe-table-row line of
-    at-least-one ledgered read whenever that doc carries pipe-table rows; for
-    prose-only docs (no ``|`` lines), the whole content participates so the
-    check does not invert ground-truth on docs without tables. Pipe-table-row
-    scoping (§V.68(+), §B.56) kills prose-line collisions where a fabricated
-    spec token coincidentally appears in a sentence such as
-    ``"35-110 degrees F"`` while the canonical spec pipe-row carries a
-    different value. Per-document scoping (§V.68(+), §B.58) preserves the
-    anti-collision intent on table-bearing docs and restores grounding on
-    prose-only KB docs (e.g. ``kdf-process-filtration-media.md`` whose source
-    phrases like ``"KDF 55 medium can remove over 99%"`` are the canonical
-    citation surface). Table-bearing docs further admit bullet-list lines
-    matching ``r"^\s*[-*]\s"`` alongside pipe-rows (§V.68(+), §B.60) so
-    Physical Properties / operation-constraint bullets like
-    ``"- Specific Gravity: 2.0"`` ground citable numeric tokens; the explicit
-    ``Key:`` label anchors context so the §B.56 cross-product prose-line
-    collision class stays closed. Zero-ledger invocations skip the check so
-    out-of-scope declines and non-KB-grounded workflows stay unaffected.
-    Returns the error dict on mismatch so the agent re-drafts via the §V.39
-    tool-error path; returns ``None`` to let the send proceed.
-    """
-    if not read_ledger:
-        return None
-    union_parts: list[str] = []
-    for content in read_ledger.values():
-        lines = content.splitlines()
-        pipe_lines = [line for line in lines if "|" in line]
-        if pipe_lines:
-            # §V.68(+) / §B.60: table-bearing doc admit set = pipe-row lines
-            # union bullet-list lines (``"- Key: Value"`` / ``"* Key: Value"``).
-            # Bullets carry explicit ``Key:`` labels so they are context-anchored
-            # and do not re-open the §B.56 prose-coincidence collision class.
-            union_parts.extend(pipe_lines)
-            union_parts.extend(line for line in lines if _LIST_ITEM_RE.match(line))
-        else:
-            union_parts.append(content)
-    union = "\n".join(union_parts)
-    unsupported: list[str] = []
-    seen: set[str] = set()
-    for token in _NUMERIC_TOKEN_RE.findall(body):
-        if len(token) < 2:
-            continue
-        if token in union:
-            continue
-        if token in seen:
-            continue
-        seen.add(token)
-        unsupported.append(token)
-    if not unsupported:
-        return None
-    return {
-        "error": "fact_check_mismatch",
-        "message": (
-            "numeric tokens in body not found in same-invocation "
-            "read_drive_markdown content: " + ", ".join(unsupported)
-        ),
-        "unsupported": unsupported,
-    }
-
 
 def _check_spec_table(body: str) -> dict[str, str] | None:
     """Lint email body for spec rows missing a pipe-table separator (§V.42).
@@ -265,7 +179,6 @@ def send_email(  # noqa: PLR0913
     body: str,
     cc: str | None = None,
     bcc: str | None = None,
-    read_ledger: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Agent tool: send a new outbound email via Gmail.
 
@@ -282,16 +195,6 @@ def send_email(  # noqa: PLR0913
         )
         if not bypass:
             return format_error
-    fact_check_error = _fact_check_body(body, read_ledger)
-    if fact_check_error is not None:
-        bypass = _consume_reply_rejection(
-            tool="send_email",
-            rejection_type="fact_check",
-            workflow_id=workflow_id,
-            email_id=None,
-        )
-        if not bypass:
-            return fact_check_error
     try:
         email = email_ops.send_email(
             connection,
@@ -325,7 +228,6 @@ def reply_email(  # noqa: PLR0913
     body: str,
     cc: str | None = None,
     bcc: str | None = None,
-    read_ledger: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Agent tool: reply in-thread. Wraps :func:`email_ops.reply_email`.
 
@@ -341,16 +243,6 @@ def reply_email(  # noqa: PLR0913
         )
         if not bypass:
             return format_error
-    fact_check_error = _fact_check_body(body, read_ledger)
-    if fact_check_error is not None:
-        bypass = _consume_reply_rejection(
-            tool="reply_email",
-            rejection_type="fact_check",
-            workflow_id=workflow_id,
-            email_id=email_id,
-        )
-        if not bypass:
-            return fact_check_error
     try:
         email = email_ops.reply_email(
             connection,
@@ -715,17 +607,12 @@ def search_drive_markdown(
 def read_drive_markdown(
     drive_client: DriveClient,
     file_id: str,
-    read_ledger: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Read a Markdown file from Drive.
 
     Args:
         drive_client: Drive client scoped to the current account.
         file_id: Drive file ID, typically returned by ``list_drive_markdown``.
-        read_ledger: Per-invocation ``{file_id: content}`` map populated on
-            successful reads. ``reply_email`` and ``send_email``
-            consult the same map at pre-send time to reject bodies citing
-            numeric tokens absent from the union of reads.
 
     Returns:
         ``{"name": ..., "content": ..., "web_view_link": ...}`` on success,
@@ -754,8 +641,6 @@ def read_drive_markdown(
             "error": "drive_unavailable",
             "message": str(exc),
         }
-    if read_ledger is not None:
-        read_ledger[file_id] = result.get("content", "")
     return result
 
 

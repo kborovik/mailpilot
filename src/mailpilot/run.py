@@ -54,10 +54,10 @@ def execute_task(
         ),
         # §V.71: install a per-task reply-rejection counter so
         # ``reply_email`` / ``send_email`` calls share the cap across one
-        # ``agent.invoke``. Counter covers both format-lint and fact-check
-        # rejections so neither rejection class can loop unbounded. Outside
-        # this scope (CLI ``enrollment run``, etc.) the counter is absent and
-        # both checks behave as before.
+        # ``agent.invoke``. The counter covers format-lint rejections so the
+        # rejection class cannot loop unbounded. Outside this scope (CLI
+        # ``enrollment run``, etc.) the counter is absent and the check
+        # behaves as before.
         reply_rejection_scope(),
     ):
         workflow = get_workflow(connection, task.workflow_id)

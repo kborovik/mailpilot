@@ -398,8 +398,8 @@ def test_registered_tool_source_docstrings_carry_no_spec_citation() -> None:
     Returns line of a source-function docstring (read_contact, create_task,
     record_enrollment_outcome, list_enrollments, read_company, read_drive_markdown)
     leaked to the model unaudited. Sweep the full source docstring of every
-    registered tool. Internal helpers (_fact_check_body, _check_spec_table) are
-    out of scope -- they are never registered, so the model never sees them."""
+    registered tool. Internal helpers (_check_spec_table) are out of scope --
+    they are never registered, so the model never sees them."""
     for template in TEMPLATES.values():
         for tool in template.tools:
             source_fn = getattr(agent_tools_module, tool.name)
