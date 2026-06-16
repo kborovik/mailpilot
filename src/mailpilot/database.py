@@ -62,6 +62,24 @@ _INLINE_NOTES_CAP = 10
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
+MIGRATIONS_PATH = Path(__file__).parent / "migrations"
+
+# Filename grammar for forward-only migrations: NNN_snake_description.sql with a
+# monotonic integer prefix (§V.108). Files that do not match (e.g. README, a
+# stray .sql scratch file) are ignored by discovery.
+_MIGRATION_FILENAME_RE = re.compile(r"^(\d+)_([a-z0-9_]+)\.sql$")
+
+# The migration ledger is the machinery's own bookkeeping table. It is also
+# declared in schema.sql for fresh-DB builds; both definitions MUST match (the
+# init==migrations identity test enforces it, §V.108).
+_ENSURE_MIGRATIONS_LEDGER_SQL = """\
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version            INTEGER PRIMARY KEY,
+    name               TEXT NOT NULL,
+    applied_at         TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    mailpilot_version  TEXT NOT NULL
+);"""
+
 
 def _new_id() -> str:
     """Generate a UUIDv7 string for use as a primary key."""
@@ -100,6 +118,104 @@ def _compute_schema_hash(sql: str) -> str:
     normalized = re.sub(r"--[^\n]*", "", sql)
     normalized = re.sub(r"\s+", " ", normalized).strip()
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _discover_migrations() -> list[tuple[int, str, Path]]:
+    """Return ``(version, name, path)`` for each forward migration, version-sorted.
+
+    Scans ``migrations/`` (package root, wheel-shipped) for files matching
+    ``NNN_snake_description.sql`` per §V.108. Non-matching files are skipped so
+    a README or scratch file never derails discovery. A duplicate version
+    prefix is a packaging error and raises ``ValueError``.
+
+    Returns:
+        Migrations sorted ascending by integer version.
+
+    Raises:
+        ValueError: Two migration files share the same version prefix.
+    """
+    migrations: list[tuple[int, str, Path]] = []
+    if not MIGRATIONS_PATH.is_dir():
+        return migrations
+    for path in MIGRATIONS_PATH.glob("*.sql"):
+        match = _MIGRATION_FILENAME_RE.match(path.name)
+        if match is None:
+            continue
+        migrations.append((int(match.group(1)), match.group(2), path))
+    migrations.sort(key=lambda item: item[0])
+    versions = [version for version, _name, _path in migrations]
+    if len(versions) != len(set(versions)):
+        raise ValueError(f"duplicate migration version prefix in {MIGRATIONS_PATH}")
+    return migrations
+
+
+def migrate_database(
+    connection: psycopg.Connection[dict[str, Any]],
+) -> list[dict[str, object]]:
+    """Apply pending forward migrations in version order, each in its own txn.
+
+    Ensures the ``schema_migrations`` ledger exists (so a DB predating the
+    migration system catches up), reads the applied versions, then applies
+    every ``migrations/NNN_*.sql`` whose version is absent from the ledger, in
+    ascending order. Each migration's DDL and its ledger ``INSERT`` commit
+    together — one transaction per migration (§V.108) — so a mid-run failure
+    leaves earlier migrations applied-and-recorded and the failing one rolled
+    back. Idempotent: a re-run with nothing pending is a no-op.
+
+    The connection is expected in manual-commit mode (``autocommit=False``),
+    matching ``initialize_database``; commit-per-migration is what makes each
+    migration its own transaction.
+
+    Args:
+        connection: Open database connection (manual-commit mode).
+
+    Returns:
+        Applied-migration records ``[{"version": int, "name": str}, ...]`` in
+        apply order; empty when nothing was pending.
+
+    Raises:
+        Exception: Re-raised after rollback if a migration's DDL fails.
+    """
+    connection.execute(_ENSURE_MIGRATIONS_LEDGER_SQL)  # type: ignore[arg-type]
+    connection.commit()
+
+    applied_versions = {
+        row["version"]
+        for row in connection.execute(
+            "SELECT version FROM schema_migrations"
+        ).fetchall()
+    }
+    # Close the read-only transaction so each migration below opens its own.
+    connection.rollback()
+
+    pending = [
+        (version, name, path)
+        for version, name, path in _discover_migrations()
+        if version not in applied_versions
+    ]
+
+    applied: list[dict[str, object]] = []
+    for version, name, path in pending:
+        try:
+            connection.execute(path.read_text())  # type: ignore[arg-type]
+            connection.execute(
+                "INSERT INTO schema_migrations (version, name, mailpilot_version) "
+                "VALUES (%s, %s, %s)",
+                (version, name, _MAILPILOT_VERSION),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            logfire.exception("schema migration failed", version=version, name=name)
+            operator_event(
+                "error",
+                source="database.migrate",
+                message=f"migration {version} failed",
+            )
+            raise
+        operator_event("schema.migrate", version=version, name=name)
+        applied.append({"version": version, "name": name})
+    return applied
 
 
 def _read_schema_metadata(

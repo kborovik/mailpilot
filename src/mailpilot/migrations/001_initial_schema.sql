@@ -238,16 +238,3 @@ CREATE TABLE IF NOT EXISTS schema_metadata (
     schema_hash        TEXT NOT NULL,
     applied_at         TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-
--- Forward-only migration ledger (§V.108). Non-singleton: one row per applied
--- migration keyed by monotonic version. Created here for fresh-DB builds; the
--- migrate machinery (database.migrate_database) ensures it exists on populated
--- DBs that predate the migration system, so its definition MUST stay in lockstep
--- with _ENSURE_MIGRATIONS_LEDGER_SQL (the init==migrations identity test guards
--- this).
-CREATE TABLE IF NOT EXISTS schema_migrations (
-    version            INTEGER PRIMARY KEY,
-    name               TEXT NOT NULL,
-    applied_at         TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    mailpilot_version  TEXT NOT NULL
-);
