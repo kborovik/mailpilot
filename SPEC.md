@@ -160,7 +160,7 @@ T140|x|impl §V.45(+) per §B.84 — strip §-cites from the six registered tool
 T141|x|impl §V.102(+) per §B.85 — add `allowed-tools` + `argument-hint` to mailpilot-reply-test SKILL.md frontmatter|V102,B85
 T142|x|impl §V.102(+) per §B.86 — drop `mcp__claude_ai_logfire__query_run` from mailpilot-reply-test SKILL.md `allowed-tools` (orchestrator never invokes it; Phase-4 sub-agent does, own palette)|V102,B86
 T143|x|impl §V.77(+) per §B.87 — send_email recovers the existing row via get_email_by_gmail_message_id on post-send create_email ON-CONFLICT None (idempotent send), raises only when genuinely unrecoverable; add test_send_email_recovers_existing_row_on_duplicate_gmail_message_id|V77,B87
-T144|.|impl §V.105(+) per §B.88 — refactor `score_replies.py` out-scope+compare from verdict to advisory-signal emit (token_hits, fabrication_candidates, has_table); add Sonnet judge sub-agent (reads reply body + case rubric + signals + source datasheet -> verdict+rationale) as verdict-of-record for those types; in-scope token check unchanged; update references/grading.md + SKILL.md scoring phase|V105,B88
+T144|x|impl §V.105(+) per §B.88 — refactor `score_replies.py` out-scope+compare from verdict to advisory-signal emit (token_hits, fabrication_candidates, has_table); add Sonnet judge sub-agent (reads reply body + case rubric + signals + source datasheet -> verdict+rationale) as verdict-of-record for those types; in-scope token check unchanged; update references/grading.md + SKILL.md scoring phase|V105,B88
 
 ## §B BUGS
 

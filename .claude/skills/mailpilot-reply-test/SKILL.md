@@ -35,8 +35,9 @@ the `mailpilot` console script, and the package are importable. Scripts live in
 - **Run-B**: 2 in-scope + 1 compare + 1 out-of-scope, sent simultaneously —
   exercises grounded answers, cross-datasheet compare, and polite decline under
   concurrency, and measures the parallel task drain.
-- Grades each reply (see `references/grading.md`), pulls per-reply tokens +
-  latency from Logfire, writes `report.md`, and investigates failures.
+- Grades each reply (see `references/grading.md`): in-scope deterministically,
+  out-scope + compare by a Sonnet judge sub-agent (§V.105). Pulls per-reply
+  tokens + latency from Logfire, writes `report.md`, and investigates failures.
 
 ## Safety — read before running
 
@@ -60,6 +61,7 @@ the `mailpilot` console script, and the package are importable. Scripts live in
 | Phase | Model | Why |
 |---|---|---|
 | Setup checks, Run-A, Run-B, Analysis | **Sonnet** sub-agents | Mechanical: run scripts / one SQL query, return a short summary. |
+| Reply judging (out-scope + compare) | **Sonnet** sub-agent | NL-shaped grading a deterministic script cannot do reliably (§V.105): reads the reply, rubric, advisory signals, and source datasheet, returns PASS/FAIL + rationale. |
 | Failure investigation, Solution analysis | **Opus** sub-agents | Hard reasoning; isolated in sub-agents so the heavy Logfire/code reading never enters the orchestrator's window. |
 | Baseline reset (`make clean` + account re-create), run-loop start + stop, report generation | Orchestrator, directly | The reset must precede every sub-agent phase; the loop must outlive every phase, so the one process alive across all of them owns it; pairing start+stop there guarantees teardown always runs. Trivial deterministic commands. |
 
@@ -124,14 +126,42 @@ uv run python .claude/skills/mailpilot-reply-test/scripts/send_emails.py    --ru
 uv run python .claude/skills/mailpilot-reply-test/scripts/collect_replies.py --run-id $RUN_ID --run A
 uv run python .claude/skills/mailpilot-reply-test/scripts/score_replies.py   --run-id $RUN_ID --run A
 ```
-Returns: the Run-A verdict + elapsed seconds. `collect_replies` polls until the
-reply arrives or it times out (~5 min); a missing reply is recorded as
-`NO_REPLY`, not an error.
+Returns: the Run-A verdict + elapsed seconds. Run-A is in-scope only, so
+`score_replies` grades it deterministically — no judge step. `collect_replies`
+polls until the reply arrives or it times out (~5 min); a missing reply is
+recorded as `NO_REPLY`, not an error.
 
 ### 3. Run-B — Sonnet sub-agent
 Same three commands with `--run B`. `send_emails` fires the 4 emails
-concurrently; `collect_replies` waits up to ~8 min for all four. Returns the 4
-verdicts + elapsed.
+concurrently; `collect_replies` waits up to ~8 min for all four. `score_replies`
+grades the 2 in-scope cases deterministically and writes a `"JUDGE"` sentinel for
+the compare + out-of-scope cases (§V.105) — step 3b resolves those. Returns the 2
+in-scope verdicts, the 2 pending-judge case ids, and elapsed.
+
+### 3b. Reply judging — Sonnet sub-agent
+Resolves the compare + out-of-scope verdicts that `score_replies` deferred. The
+sub-agent:
+1. Runs `judge_prep.py` to bundle each pending case's question, reply body,
+   rubric, advisory signals, and (for compare) the source datasheets:
+   ```bash
+   uv run python .claude/skills/mailpilot-reply-test/scripts/judge_prep.py --run-id $RUN_ID --run B
+   ```
+2. Reads `.mptest/$RUN_ID/judge_B.json`. For each case it decides a verdict:
+   - **out-scope** — PASS iff the reply clearly declines and invents no spec for
+     the absent product; the `fabrication_candidates` signal is only a hint —
+     question-echoed figures and referral links are not fabrication.
+   - **compare** — PASS iff the reply compares the named products grounded in the
+     supplied datasheets (numbers match the source), cites both sources, and uses
+     a GFM pipe table.
+3. Writes `.mptest/$RUN_ID/judgments_B.json` as
+   `{"<case_id>": {"verdict": "PASS"|"FAIL", "rationale": "<one line>"}}`, then
+   folds the verdicts in (recomputes `summary` + `failed`):
+   ```bash
+   uv run python .claude/skills/mailpilot-reply-test/scripts/apply_judgments.py --run-id $RUN_ID --run B
+   ```
+Returns: the finalized compare + out-of-scope verdicts with one-line rationales.
+If `judge_prep` reports a `datasheet_error`, judge grounding from the reply's own
+citations and note the degraded check in the rationale.
 
 ### 4. Analysis — Sonnet sub-agent (Logfire MCP)
 Skip if `preflight.logfire_ok` is false (note it in the report). Otherwise the
@@ -185,7 +215,8 @@ Check `scoring_A.json` / `scoring_B.json` `failed` flags.
 
 **7a. Investigation — Opus sub-agent.** Give it the failed `case_id`s, their
 `trigger_email_id`s, `window_start`, `logfire_environment`, and the paths to
-`scoring_*.json`, `replies_*.json`, and `run.log`. It uses the Logfire MCP to
+`scoring_*.json`, `replies_*.json`, `judgments_*.json` (the judge's rationale for
+any judged FAIL), and `run.log`. It uses the Logfire MCP to
 inspect, for those email ids: `agent.invoke` `status` / `result` /
 `agent_reasoning` / `tool_error_count`; any `is_exception = true` spans in the
 window; `run.task.transient_retry` events; and whether classification routed the
@@ -205,5 +236,6 @@ report folds in both sections.
 
 Everything for a run is under `.mptest/$RUN_ID/` (git-ignored): `preflight.json`,
 `validate_qa.json`, `run_manifest.json`, `sends_*.json`, `replies_*.json`,
-`scoring_*.json`, `logfire_metrics.json`, `run.log`, `run.pid`, `report.md`, and
-(on failure) `investigation.md` / `solutions.md`.
+`scoring_*.json`, `judge_*.json`, `judgments_*.json`, `logfire_metrics.json`,
+`run.log`, `run.pid`, `report.md`, and (on failure) `investigation.md` /
+`solutions.md`.

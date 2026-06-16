@@ -1,14 +1,23 @@
-"""Grade captured replies against the QA rubric (deterministic, no LLM).
+"""Grade captured replies against the QA rubric (see references/grading.md).
 
-Per case type (see references/grading.md):
-  in-scope  -> every expected token present (whitespace-normalized substring).
-  out-scope -> declined (>=1 decline signal) AND no fabricated spec
-               (no forbidden brand+number co-occurrence).
-  compare   -> every source file cited, every target model id mentioned, and a
-               GFM pipe table present (structural proxy; depth left to analysis).
-  no reply  -> NO_REPLY.
+Per case type the verdict source differs (§V.105):
+  in-scope  -> graded here, deterministically: every expected token present
+               (whitespace-normalized substring); false-PASS at worst, never a
+               false FAIL.
+  out-scope -> NOT decided here. Emits advisory signals (fabrication_candidates,
+               decline_signals_found) and a ``"JUDGE"`` sentinel verdict; a
+               Sonnet judge sub-agent is the verdict of record.
+  compare   -> NOT decided here. Emits advisory signals (token_hits, has_table)
+               and a ``"JUDGE"`` sentinel; the Sonnet judge decides.
+  no reply  -> NO_REPLY (any type).
 
-Writes ``scoring_<run>.json`` with a ``failed`` flag (true if any FAIL/NO_REPLY).
+Deterministic substring/regex grading of free-form NL replies (polite decline,
+cross-datasheet compare) yields false and seed-unstable verdicts (§B.88), so the
+out-scope/compare legs only surface signals; the judge reads the reply body, the
+rubric, those signals, and the source datasheet to rule (see SKILL.md step 3b).
+
+Writes ``scoring_<run>.json`` with a ``failed`` flag (true if any FAIL/NO_REPLY;
+``JUDGE`` cases stay pending until ``apply_judgments.py`` folds the verdict in).
 Always exits 0 so orchestration chains and teardown still run; branch on the flag.
 
 Usage:
@@ -24,6 +33,10 @@ import re
 from _common import read_json, run_dir, write_json
 
 TABLE_SEPARATOR = re.compile(r"\|\s*:?-{3,}")
+
+# Sentinel verdict for cases whose verdict of record is the Sonnet judge's, not
+# this script's. ``apply_judgments.py`` replaces it with the judged PASS/FAIL.
+JUDGE = "JUDGE"
 
 # Fold the Unicode dash family to ASCII "-" so typographic variants (en/em dash,
 # minus sign, non-breaking hyphen) match the ASCII hyphen used in spec tokens.
@@ -56,7 +69,8 @@ def _loose(tok: str, body_n: str) -> bool:
     )
 
 
-def _grade_inscope(body: str, grading: dict, question: str = "") -> tuple[str, dict]:
+def _grade_inscope(body: str, grading: dict) -> tuple[str, dict]:
+    """Deterministic in-scope grade: every expected token must be present."""
     body_n = _norm(body)
     hits = {
         tok: (_norm(tok) in body_n or _loose(tok, body_n))
@@ -69,75 +83,65 @@ def _grade_inscope(body: str, grading: dict, question: str = "") -> tuple[str, d
     }
 
 
-# Max characters allowed between a brand mention and a digit before the pair is
-# treated as a fabricated spec rather than two incidental co-occurrences.
-_FABRICATION_WINDOW = 40
+def _signals_outscope(body: str, grading: dict) -> dict:
+    """Advisory signals for an out-of-scope reply -- no verdict (§V.105).
 
-
-def _near(brand: str, digit_pattern: str, surface: str) -> bool:
-    """True if ``digit_pattern`` matches within the fabrication window of ``brand``.
-
-    "Fabricated a spec for the absent product" means a number sits *next to* the
-    brand name, not merely somewhere in the same reply. Bounding the distance
-    stops an incidental digit (a leaked signature host, a stray reference number)
-    from tripping a brand named only to decline.
+    A legitimate decline names the absent product and routinely restates the
+    asker's own figures or links a referral page, so a "brand + any digit" check
+    fires false positives (§B.88). The signals only flag *candidates*: the brand
+    string is present AND its forbidden pattern matches somewhere in the body.
+    The judge reads the actual reply and the rubric to rule whether a candidate
+    is a fabricated spec or an incidental echo.
     """
-    brand_escaped = re.escape(brand)
-    window = _FABRICATION_WINDOW
-    pattern = (
-        rf"{brand_escaped}.{{0,{window}}}(?:{digit_pattern})"
-        rf"|(?:{digit_pattern}).{{0,{window}}}{brand_escaped}"
-    )
-    return re.search(pattern, surface, re.IGNORECASE | re.DOTALL) is not None
-
-
-def _grade_outscope(body: str, grading: dict, question: str = "") -> tuple[str, dict]:
     body_l = body.lower()
-    # A legitimate decline names the absent product and often restates the
-    # asker's own figures or links a referral page, so a bare "brand + any digit"
-    # check yields false positives. Mask digits the asker themselves supplied
-    # (question echo) and URL hosts (any TLD, so the agent's own ``lab5.ca``
-    # signature does not leak a digit) before testing the forbidden pattern, and
-    # require the digit to sit *near* the brand, so only numbers the agent
-    # *invented* for the absent product count as fabrication.
-    echoed = set(re.findall(r"\d[\d.,]*", question))
-    surface = re.sub(r"https?://\S+|\b\S+\.[a-z]{2,}\b", " ", body)
-    for value in echoed:
-        surface = surface.replace(value, " ")
-    forbidden = [
+    fabrication_candidates = [
         pair
         for pair in grading.get("forbidden_token_pairs", [])
-        if pair[0].lower() in body_l and _near(pair[0], pair[1], surface)
+        if pair[0].lower() in body_l
+        and re.search(pair[1], body, re.IGNORECASE) is not None
     ]
     declined = [s for s in grading.get("decline_signals", []) if s.lower() in body_l]
-    verdict = "PASS" if not forbidden and declined else "FAIL"
-    return verdict, {"fabrication_hits": forbidden, "decline_signals_found": declined}
+    return {
+        "fabrication_candidates": fabrication_candidates,
+        "decline_signals_found": declined,
+    }
 
 
-def _grade_compare(body: str, grading: dict, question: str = "") -> tuple[str, dict]:
+def _signals_compare(body: str, grading: dict) -> dict:
+    """Advisory signals for a compare reply -- no verdict (§V.105).
+
+    Reports presence of each cited source file and mentioned model id under one
+    ``token_hits`` map, plus whether a GFM pipe table is present. Whether the
+    compared numbers are correct (the part a structural proxy cannot prove) is
+    left to the judge, which reads the source datasheets.
+    """
     body_l = body.lower()
     body_n = _norm(body)
-    cited = {
-        sf: (sf.lower() in body_l or sf.removesuffix(".md").lower() in body_l)
-        for sf in grading.get("must_cite", [])
+    token_hits = {
+        source: (
+            source.lower() in body_l or source.removesuffix(".md").lower() in body_l
+        )
+        for source in grading.get("must_cite", [])
     }
-    mentioned = {m: (_norm(m) in body_n) for m in grading.get("must_mention", [])}
-    has_table = (
-        bool(TABLE_SEPARATOR.search(body)) if grading.get("require_table") else True
+    token_hits.update(
+        {model: (_norm(model) in body_n) for model in grading.get("must_mention", [])}
     )
-    verdict = (
-        "PASS"
-        if all(cited.values()) and all(mentioned.values()) and has_table
-        else "FAIL"
-    )
-    return verdict, {"cited": cited, "mentioned": mentioned, "has_table": has_table}
+    has_table = bool(TABLE_SEPARATOR.search(body))
+    return {"token_hits": token_hits, "has_table": has_table}
 
 
-GRADERS = {
-    "inscope": _grade_inscope,
-    "outscope": _grade_outscope,
-    "compare": _grade_compare,
-}
+_SIGNALS = {"outscope": _signals_outscope, "compare": _signals_compare}
+
+
+def grade(case_type: str, body: str, grading: dict) -> tuple[str, dict]:
+    """Return (verdict, detail) for a replied case.
+
+    in-scope is decided here; out-scope and compare get a ``"JUDGE"`` sentinel
+    verdict plus advisory signals (§V.105) for the Sonnet judge to resolve.
+    """
+    if case_type == "inscope":
+        return _grade_inscope(body, grading)
+    return JUDGE, _SIGNALS[case_type](body, grading)
 
 
 def main() -> int:
@@ -161,14 +165,14 @@ def main() -> int:
                 "detail": {},
             }
             continue
-        verdict, detail = GRADERS[case["type"]](
-            reply["body"], case["grading"], case.get("question", "")
-        )
+        verdict, detail = grade(case["type"], reply["body"], case["grading"])
         graded[case_id] = {"type": case["type"], "verdict": verdict, "detail": detail}
 
-    counts = {"PASS": 0, "FAIL": 0, "NO_REPLY": 0}
+    counts = {"PASS": 0, "FAIL": 0, "NO_REPLY": 0, JUDGE: 0}
     for entry in graded.values():
         counts[entry["verdict"]] += 1
+    # JUDGE cases are pending the judge's verdict (apply_judgments.py finalizes);
+    # they do not set failed here.
     failed = counts["FAIL"] > 0 or counts["NO_REPLY"] > 0
 
     result = {"run": args.run, "cases": graded, "summary": counts, "failed": failed}

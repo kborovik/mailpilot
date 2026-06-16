@@ -18,7 +18,12 @@ from typing import Any
 
 from _common import read_json, run_dir
 
-VERDICT_MARK = {"PASS": "PASS ✅", "FAIL": "FAIL ❌", "NO_REPLY": "NO_REPLY ⏱"}
+VERDICT_MARK = {
+    "PASS": "PASS ✅",
+    "FAIL": "FAIL ❌",
+    "NO_REPLY": "NO_REPLY ⏱",
+    "JUDGE": "JUDGE (pending)",
+}
 
 
 def _opt(path: Path) -> Any:
@@ -175,29 +180,24 @@ def _emit_concurrency(directory: Path, out: list[str]) -> None:
     )
 
 
+def _cell(text: str) -> str:
+    """Sanitize a note for a Markdown table cell (no pipes/newlines)."""
+    return text.replace("|", "/").replace("\n", " ").strip()
+
+
 def _case_note(graded: dict) -> str:
     detail = graded.get("detail", {})
     if graded["verdict"] == "PASS":
         return ""
+    if graded["verdict"] == "JUDGE":
+        return "awaiting judge verdict"
+    # Out-scope + compare verdicts come from the Sonnet judge (§V.105); its
+    # rationale is the authoritative note. In-scope keeps the missing-token note.
+    rationale = detail.get("rationale")
+    if rationale:
+        return _cell(str(rationale))
     if graded["type"] == "inscope" and detail.get("missing"):
         return "missing: " + ", ".join(f"`{m}`" for m in detail["missing"])
-    if graded["type"] == "outscope":
-        if detail.get("fabrication_hits"):
-            return "fabricated spec for absent product"
-        if not detail.get("decline_signals_found"):
-            return "did not clearly decline"
-    if graded["type"] == "compare":
-        gaps = [
-            k
-            for k, v in {
-                **detail.get("cited", {}),
-                **detail.get("mentioned", {}),
-            }.items()
-            if not v
-        ]
-        if not detail.get("has_table", True):
-            gaps.append("no table")
-        return ("gaps: " + ", ".join(gaps)) if gaps else ""
     return ""
 
 
