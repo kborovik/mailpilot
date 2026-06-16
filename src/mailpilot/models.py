@@ -486,3 +486,24 @@ class SchemaMetadata(BaseModel):
     mailpilot_version: str
     schema_hash: str
     applied_at: datetime
+
+
+SchemaVerdict = Literal["current", "pending", "drift"]
+
+
+class SchemaStatus(BaseModel):
+    """Three-state schema verdict + supporting facts (§V.109).
+
+    Computed by ``database.determine_schema_verdict``; consumed by the status
+    ``schema`` block (§V.11), the ``run``/mutation write-gate (dead-stop on
+    ``pending``/``drift``), and the read-only ``db check`` report. ``verdict``
+    breaks the old metadata-row-missing vs table-missing collapse: a ledger
+    behind the shipped migrations reads ``pending`` (run ``db migrate``), a
+    hash mismatch with no migration path reads ``drift`` (investigate).
+    """
+
+    verdict: SchemaVerdict
+    recorded_hash: str | None
+    current_hash: str
+    applied: int
+    pending: int

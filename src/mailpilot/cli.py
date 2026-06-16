@@ -272,7 +272,7 @@ def run() -> None:
     from mailpilot.sync import start_sync_loop
 
     settings = get_settings()
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         start_sync_loop(connection, settings)
     finally:
@@ -348,7 +348,7 @@ def account_create(email: str, display_name: str) -> None:
 
     if not email.strip():
         output_error("email cannot be empty", "validation_error")
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         with cli_mutation("account", "create", email=email):
             created = create_account(connection, email=email, display_name=display_name)
@@ -407,7 +407,7 @@ def account_update(account_id: str, display_name: str | None) -> None:
     from mailpilot.database import get_account, initialize_database, update_account
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         before = get_account(connection, account_id)
         if before is None:
@@ -450,7 +450,7 @@ def account_sync(account_id: str | None) -> None:
     from mailpilot.sync import sync_account
 
     settings = get_settings()
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         if account_id is not None:
             single = get_account(connection, account_id)
@@ -528,7 +528,7 @@ def company_create(domain: str, name: str, note: str | None) -> None:
 
     if not domain.strip():
         output_error("domain cannot be empty", "validation_error")
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         with cli_mutation("company", "create", domain=domain):
             created = create_company(connection, name=name, domain=domain)
@@ -567,7 +567,7 @@ def company_update(company_id: str, name: str | None, profile_json: str | None) 
     from mailpilot.database import get_company, initialize_database, update_company
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         before = get_company(connection, company_id)
         if before is None:
@@ -741,7 +741,7 @@ def company_import(file: str | None) -> None:
             "payload must be a JSON array of company objects", "validation_error"
         )
 
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         with cli_mutation("company", "import", row_count=len(entries)):
             existing = {c.domain for c in list_companies(connection, limit=100_000)}
@@ -846,7 +846,7 @@ def contact_create(
     )
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         if company_id is not None and get_company(connection, company_id) is None:
             output_error(f"company not found: {company_id}", "not_found")
@@ -911,7 +911,7 @@ def contact_update(
     from mailpilot.database import get_contact, initialize_database, update_contact
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         before = get_contact(connection, contact_id)
         if before is None:
@@ -969,7 +969,7 @@ def contact_disable(contact_id: str, reason: str) -> None:
 
     if reason.strip() == "":
         output_error("reason cannot be empty", "validation_error")
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         before = get_contact(connection, contact_id)
         if before is None:
@@ -1158,7 +1158,7 @@ def contact_import(file: str | None) -> None:
             "payload must be a JSON array of contact objects", "validation_error"
         )
 
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         with cli_mutation("contact", "import", row_count=len(entries)):
             existing = {c.email for c in list_contacts(connection, limit=100_000)}
@@ -1385,7 +1385,7 @@ def email_send(
 
     to_joined = ",".join(to)
     settings = get_settings()
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         account_id = _resolve_account_id(connection, account_id, account_email)
         account = get_account(connection, account_id)
@@ -1462,7 +1462,7 @@ def email_reply(
         output_error("body cannot be empty", "validation_error")
 
     settings = get_settings()
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         account_id = _resolve_account_id(connection, account_id, account_email)
         account = get_account(connection, account_id)
@@ -1641,7 +1641,7 @@ def tag_add(contact_id: str | None, company_id: str | None, name: str) -> None:
             "exactly one of --contact-id or --company-id is required",
             "validation_error",
         )
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         if contact_id is not None:
             if get_contact(connection, contact_id) is None:
@@ -1723,7 +1723,7 @@ def tag_disable(
             "exactly one of --contact-id or --company-id is required",
             "validation_error",
         )
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         if contact_id is not None:
             if get_contact(connection, contact_id) is None:
@@ -1901,7 +1901,7 @@ def note_add(contact_id: str | None, company_id: str | None, body: str) -> None:
             "exactly one of --contact-id or --company-id is required",
             "validation_error",
         )
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         if contact_id is not None:
             if get_contact(connection, contact_id) is None:
@@ -2139,7 +2139,7 @@ def workflow_create(
         )
     resolved = _resolve_instructions(instructions, instructions_file)
     activate = not draft and has_objective and has_instructions
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         account_id = _resolve_account_id(connection, account_id, account_email)
         if get_account(connection, account_id) is None:
@@ -2218,7 +2218,7 @@ def workflow_update(
             "validation_error",
         )
     resolved = _resolve_instructions(instructions, instructions_file)
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         before = get_workflow(connection, workflow_id)
         if before is None:
@@ -2341,7 +2341,7 @@ def workflow_start(workflow_id: str) -> None:
     from mailpilot.database import activate_workflow, initialize_database
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         with cli_mutation("workflow", "start", entity_id=workflow_id):
             try:
@@ -2378,7 +2378,7 @@ def workflow_stop(workflow_id: str) -> None:
     from mailpilot.database import initialize_database, pause_workflow
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         with cli_mutation("workflow", "stop", entity_id=workflow_id):
             try:
@@ -2731,7 +2731,7 @@ def workflow_import(
 
     entries, pre_errors = _load_workflow_import_entries(file)
 
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         account_id = _resolve_account_id(connection, account_id, account_email)
         if get_account(connection, account_id) is None:
@@ -2913,7 +2913,7 @@ def enrollment_add(workflow_id: str, contact_id: str, scheduled_at: str | None) 
         except ValueError as exc:
             output_error(f"invalid --scheduled-at value: {exc}", "validation_error")
 
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         workflow = get_workflow(connection, workflow_id)
         if workflow is None:
@@ -2998,7 +2998,7 @@ def enrollment_run(enrollment_id: str) -> None:
     from mailpilot.settings import get_settings
 
     settings = get_settings()
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         record = get_enrollment_by_id(connection, enrollment_id)
         if record is None:
@@ -3082,7 +3082,7 @@ def enrollment_disable(enrollment_id: str, reason: str) -> None:
 
     if reason.strip() == "":
         output_error("reason cannot be empty", "validation_error")
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         before = get_enrollment_by_id(connection, enrollment_id)
         if before is None:
@@ -3191,7 +3191,7 @@ def enrollment_update(enrollment_id: str, status: str, reason: str | None) -> No
     )
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         before = get_enrollment_by_id(connection, enrollment_id)
         if before is None:
@@ -3308,7 +3308,7 @@ def task_cancel(task_id: str) -> None:
     """Cancel a pending task."""
     from mailpilot.database import cancel_task, initialize_database
 
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         cancelled = cancel_task(connection, task_id)
         if cancelled is None:
@@ -3332,7 +3332,7 @@ def task_retry(task_id: str) -> None:
         manual_retry_task,
     )
 
-    connection = initialize_database(_database_url())
+    connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         existing = get_task(connection, task_id)
         if existing is None:

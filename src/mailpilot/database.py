@@ -46,6 +46,8 @@ from mailpilot.models import (
     Note,
     NoteSummary,
     SchemaMetadata,
+    SchemaStatus,
+    SchemaVerdict,
     SyncStatus,
     Tag,
     Task,
@@ -241,14 +243,91 @@ def _read_schema_metadata(
     return SchemaMetadata.model_validate(row)
 
 
-def initialize_database(database_url: str) -> psycopg.Connection[dict[str, Any]]:
-    """Open a PostgreSQL connection and apply the schema.
+def _read_applied_migration_versions(
+    connection: psycopg.Connection[dict[str, Any]],
+) -> set[int]:
+    """Return the set of migration versions recorded in `schema_migrations`.
+
+    A missing ledger table (a DB predating the migration system, §V.108)
+    yields the empty set; the failed transaction is rolled back so the next
+    query on the connection runs clean (cf. ``_read_schema_metadata``).
+    """
+    try:
+        rows = connection.execute("SELECT version FROM schema_migrations").fetchall()
+    except psycopg.errors.UndefinedTable:
+        connection.rollback()
+        return set()
+    return {row["version"] for row in rows}
+
+
+def determine_schema_verdict(
+    connection: psycopg.Connection[dict[str, Any]],
+) -> SchemaStatus:
+    """Classify the live schema as `current`, `pending`, or `drift` (§V.109).
+
+    Breaks the metadata-row-missing vs table-missing → None collapse by
+    consulting the migration ledger alongside the recorded hash:
+
+    - ``drift`` when ``schema_metadata`` is absent (broken provisioning).
+    - ``current`` when the recorded hash equals the canonical ``schema.sql``
+      hash — the structure matches the latest declaration, so any ledger gap
+      is an un-recorded baseline, not a real pending change.
+    - ``pending`` when the hash diverges *and* shipped migrations are absent
+      from the ledger — a forward path exists (run ``db migrate``).
+    - ``drift`` when the hash diverges with no migration to explain it
+      (manual edit | DB ahead of code).
+
+    The verdict is purely diagnostic here; tiered enforcement (tolerate for
+    read-only diagnosis, dead-stop for ``run`` + mutations) lives in the
+    callers per §V.18.
+    """
+    current_hash = _compute_schema_hash(SCHEMA_PATH.read_text())
+    recorded = _read_schema_metadata(connection)
+    applied_versions = _read_applied_migration_versions(connection)
+    pending_versions = [
+        version
+        for version, _name, _path in _discover_migrations()
+        if version not in applied_versions
+    ]
+
+    if recorded is None:
+        verdict: SchemaVerdict = "drift"
+    elif recorded.schema_hash == current_hash:
+        verdict = "current"
+    elif pending_versions:
+        verdict = "pending"
+    else:
+        verdict = "drift"
+
+    return SchemaStatus(
+        verdict=verdict,
+        recorded_hash=recorded.schema_hash if recorded else None,
+        current_hash=current_hash,
+        applied=len(applied_versions),
+        pending=len(pending_versions),
+    )
+
+
+def initialize_database(
+    database_url: str, *, require_current_schema: bool = False
+) -> psycopg.Connection[dict[str, Any]]:
+    """Open a PostgreSQL connection, provisioning or verifying the schema.
+
+    An empty database is provisioned from ``schema.sql`` (the data-loss-free
+    auto-provision path) and the migration ledger is baseline-stamped so a
+    fresh build reads ``current`` with zero pending migrations. A populated
+    database is only verified: when ``require_current_schema`` is set (the
+    ``run`` + mutation write-path per §V.109) a non-``current`` verdict
+    dead-stops with the matching error envelope and exit 1; otherwise drift is
+    tolerated and reported (read-only diagnosis path).
 
     Args:
         database_url: PostgreSQL connection URL.
+        require_current_schema: When True, refuse to return a connection unless
+            the schema verdict is ``current`` (write-path gate, §V.109/§V.18).
 
     Returns:
-        Open database connection with schema applied.
+        Open database connection with schema provisioned or verified.
     """
     db_name = database_url.rsplit("/", 1)[-1]
     try:
@@ -283,6 +362,52 @@ def initialize_database(database_url: str) -> psycopg.Connection[dict[str, Any]]
             "VALUES (%s, %s)",
             (_MAILPILOT_VERSION, current_hash),
         )
+        # Baseline-stamp the migration ledger (§V.108/§V.109): a fresh build
+        # from schema.sql already embeds every shipped migration's structure,
+        # so record them as applied. Keeps `db migrate` a no-op on a fresh DB
+        # and the verdict `current` (zero pending) rather than ledger-behind.
+        for migration_version, migration_name, _path in _discover_migrations():
+            connection.execute(
+                "INSERT INTO schema_migrations (version, name, mailpilot_version) "
+                "VALUES (%s, %s, %s)",
+                (migration_version, migration_name, _MAILPILOT_VERSION),
+            )
+    elif require_current_schema:
+        # Write-path gate (§V.109): dead-stop before any write lands on a
+        # mismatched schema. Distinct codes since the remedy differs — `drift`
+        # = investigate divergence, `pending` = run `db migrate`.
+        status = determine_schema_verdict(connection)
+        if status.verdict != "current":
+            logfire.warn(
+                "schema not current; refusing write-path command",
+                verdict=status.verdict,
+                recorded_hash=status.recorded_hash,
+                current_hash=status.current_hash,
+                pending=status.pending,
+            )
+            operator_event(
+                "error",
+                source="database.schema_gate",
+                verdict=status.verdict,
+                recorded_hash=status.recorded_hash,
+                current_hash=status.current_hash,
+            )
+            connection.close()
+            from mailpilot.cli import output_error
+
+            if status.verdict == "drift":
+                output_error(
+                    "schema drift detected "
+                    f"(recorded_hash={status.recorded_hash} "
+                    f"current_hash={status.current_hash}); "
+                    "investigate divergence -- no migration path",
+                    "schema_drift",
+                )
+            output_error(
+                f"{status.pending} schema migration(s) pending; "
+                "run 'mailpilot db migrate'",
+                "schema_migration_pending",
+            )
     else:
         recorded = _read_schema_metadata(connection)
         if recorded is None or recorded.schema_hash != current_hash:
@@ -325,20 +450,20 @@ def _scrub_database_url(url: str) -> str:
 def _schema_block(
     connection: psycopg.Connection[dict[str, Any]],
 ) -> dict[str, object]:
-    """Return the `schema` block shape per §V.18: {hash, applied_at, drift}.
+    """Return the `schema` block per §V.11: three-state verdict + facts.
 
-    Drift branches (row missing, table missing, hash mismatch) all surface
-    ``drift: true`` with whatever recorded values exist (or ``null``).
+    Carries ``verdict`` in {current, pending, drift} (not a bare drift bool,
+    §V.109), the recorded vs canonical schema hashes, and applied/pending
+    migration counts. Read-only diagnosis: reports whatever the verdict is,
+    never dead-stops (the gate lives on the write-path per §V.18).
     """
-    current_hash = _compute_schema_hash(SCHEMA_PATH.read_text())
-    recorded = _read_schema_metadata(connection)
-    if recorded is None:
-        return {"hash": None, "applied_at": None, "drift": True}
-    drift = recorded.schema_hash != current_hash
+    status = determine_schema_verdict(connection)
     return {
-        "hash": recorded.schema_hash,
-        "applied_at": recorded.applied_at.isoformat(),
-        "drift": drift,
+        "verdict": status.verdict,
+        "recorded_hash": status.recorded_hash,
+        "current_hash": status.current_hash,
+        "applied": status.applied,
+        "pending": status.pending,
     }
 
 

@@ -26,6 +26,7 @@ from mailpilot.models import (
     Enrollment,
     EnrollmentSummary,
     Note,
+    SchemaStatus,
     Tag,
     Task,
     Workflow,
@@ -7424,3 +7425,65 @@ def test_workflow_import_resolves_account_email(
     assert result.exit_code == 0, result.output
     mock_by_email.assert_called_once_with(mock_connection, "test@example.com")
     assert mock_create.call_args.kwargs["account_id"] == account.id
+
+
+# -- write-path schema gate wiring (§V.109) -----------------------------------
+
+
+def _gate_db_mock() -> MagicMock:
+    """Connection mock whose `account` probe reports an initialized DB."""
+    probe_cursor = MagicMock()
+    probe_cursor.fetchone.return_value = {"oid": "account"}
+    connection = MagicMock()
+
+    def execute_side_effect(query: Any, *_params: Any) -> MagicMock:
+        if "to_regclass" in str(query):
+            return probe_cursor
+        return MagicMock()
+
+    connection.execute.side_effect = execute_side_effect
+    return connection
+
+
+def test_run_dead_stops_when_schema_not_current(runner: CliRunner) -> None:
+    """`run` refuses to start the sync loop on a non-current schema (§V.109)."""
+    drift = SchemaStatus(
+        verdict="drift",
+        recorded_hash="a" * 64,
+        current_hash="b" * 64,
+        applied=1,
+        pending=0,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.psycopg.connect", return_value=_gate_db_mock()),
+        patch("mailpilot.database.determine_schema_verdict", return_value=drift),
+        patch("mailpilot.sync.start_sync_loop") as mock_loop,
+    ):
+        result = runner.invoke(main, ["run"])
+
+    assert result.exit_code == 1
+    mock_loop.assert_not_called()
+
+
+def test_mutation_dead_stops_when_schema_pending(runner: CliRunner) -> None:
+    """A mutation (`company create`) refuses to write on a pending schema."""
+    pending = SchemaStatus(
+        verdict="pending",
+        recorded_hash="a" * 64,
+        current_hash="b" * 64,
+        applied=1,
+        pending=1,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.psycopg.connect", return_value=_gate_db_mock()),
+        patch("mailpilot.database.determine_schema_verdict", return_value=pending),
+        patch("mailpilot.database.create_company") as mock_create,
+    ):
+        result = runner.invoke(
+            main, ["company", "create", "--name", "Acme", "--domain", "acme.com"]
+        )
+
+    assert result.exit_code == 1
+    mock_create.assert_not_called()

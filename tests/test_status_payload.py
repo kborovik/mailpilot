@@ -281,10 +281,12 @@ def test_pre_seeded_stale_hash_surfaces_drift_and_pins_version(
         applied_at=datetime(2020, 1, 1, tzinfo=UTC),
     )
     monkeypatch.setattr(db_mod, "_read_schema_metadata", lambda _conn: stale)
+    # No migration explains the divergence → verdict=drift (not pending).
+    monkeypatch.setattr(db_mod, "_discover_migrations", list)
 
     payload = get_status_payload(database_connection, make_test_settings())
     schema = payload["schema"]
     assert isinstance(schema, dict)
-    assert schema["drift"] is True
-    assert schema["hash"] == "cafef00d" * 8
+    assert schema["verdict"] == "drift"
+    assert schema["recorded_hash"] == "cafef00d" * 8
     assert payload["version"] == _MAILPILOT_VERSION

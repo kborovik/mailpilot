@@ -6,6 +6,7 @@ Covers §V.18 (drift warn + status envelope) and §V.19 (normalized hash).
 import hashlib
 import re
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -19,10 +20,11 @@ from mailpilot.database import (
     _MAILPILOT_VERSION,  # pyright: ignore[reportPrivateUsage]
     SCHEMA_PATH,
     _compute_schema_hash,  # pyright: ignore[reportPrivateUsage]
+    determine_schema_verdict,
     get_status_payload,
     initialize_database,
 )
-from mailpilot.models import SchemaMetadata
+from mailpilot.models import SchemaMetadata, SchemaStatus
 
 # -- _compute_schema_hash (§V.19) ---------------------------------------------
 
@@ -196,55 +198,302 @@ def test_initialize_legacy_db_drift_via_missing_table(
     assert "recorded_hash=None" in err
 
 
-# -- get_status_payload schema block (§V.18/§V.11 envelope) -------------------
+# -- determine_schema_verdict three-state logic (§V.109) ----------------------
 
 
-def test_status_envelope_no_drift_schema_block_shape(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    """No drift → ``schema`` exposes {hash, applied_at, drift=false} only."""
-    payload = get_status_payload(database_connection, make_test_settings())
-    block = payload["schema"]
-    assert isinstance(block, dict)
-    assert set(block.keys()) == {"hash", "applied_at", "drift"}
-    assert block["drift"] is False
-    current_hash = _compute_schema_hash(SCHEMA_PATH.read_text())
-    assert block["hash"] == current_hash
-    assert isinstance(block["applied_at"], str)
-    assert payload["version"] == _MAILPILOT_VERSION
-
-
-def test_status_envelope_drift_hash_mismatch(
-    database_connection: psycopg.Connection[dict[str, Any]],
+def _patch_verdict_inputs(
     monkeypatch: pytest.MonkeyPatch,
-):
-    """Stale recorded hash → drift=true, recorded hash echoed verbatim."""
-    stale = SchemaMetadata(
-        mailpilot_version="0.0.0",
-        schema_hash="deadbeef" * 8,
-        applied_at=datetime(2020, 1, 1, tzinfo=UTC),
+    *,
+    recorded_hash: str | None,
+    applied: set[int],
+    discovered: list[int],
+    current_hash: str = "H",
+) -> None:
+    """Stub every determine_schema_verdict dependency for DB-free logic tests."""
+    monkeypatch.setattr(db_mod, "_compute_schema_hash", lambda _sql: current_hash)
+    recorded = (
+        None
+        if recorded_hash is None
+        else SchemaMetadata(
+            mailpilot_version="x",
+            schema_hash=recorded_hash,
+            applied_at=datetime(2020, 1, 1, tzinfo=UTC),
+        )
     )
-    monkeypatch.setattr(db_mod, "_read_schema_metadata", lambda _conn: stale)
+    monkeypatch.setattr(db_mod, "_read_schema_metadata", lambda _conn: recorded)
+    monkeypatch.setattr(
+        db_mod, "_read_applied_migration_versions", lambda _conn: set(applied)
+    )
+    monkeypatch.setattr(
+        db_mod,
+        "_discover_migrations",
+        lambda: [(v, f"m{v}", Path(f"/{v}.sql")) for v in discovered],
+    )
 
-    payload = get_status_payload(database_connection, make_test_settings())
-    block = payload["schema"]
-    assert isinstance(block, dict)
-    assert block["drift"] is True
-    assert block["hash"] == "deadbeef" * 8
-    assert payload["version"] == _MAILPILOT_VERSION
+
+def test_verdict_current_when_hash_matches_and_ledger_complete(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _patch_verdict_inputs(monkeypatch, recorded_hash="H", applied={1}, discovered=[1])
+    status = determine_schema_verdict(MagicMock())
+    assert status.verdict == "current"
+    assert status.applied == 1
+    assert status.pending == 0
+    assert status.recorded_hash == "H"
+    assert status.current_hash == "H"
 
 
-def test_status_envelope_drift_row_missing(
+def test_verdict_current_when_hash_matches_even_if_ledger_behind(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Hash matches canonical schema.sql → current; a ledger gap is an
+    un-recorded baseline, not a real pending change (§V.109)."""
+    _patch_verdict_inputs(monkeypatch, recorded_hash="H", applied=set(), discovered=[1])
+    status = determine_schema_verdict(MagicMock())
+    assert status.verdict == "current"
+    assert status.pending == 1  # reported, but does not gate
+
+
+def test_verdict_pending_when_hash_diverges_and_migration_unapplied(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Ledger behind the shipped migrations + hash diverged → pending."""
+    _patch_verdict_inputs(
+        monkeypatch, recorded_hash="OLD", applied={1}, discovered=[1, 2]
+    )
+    status = determine_schema_verdict(MagicMock())
+    assert status.verdict == "pending"
+    assert status.pending == 1
+
+
+def test_verdict_drift_when_hash_diverges_with_no_migration_path(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Hash mismatch | manual edit, every migration applied → drift."""
+    _patch_verdict_inputs(monkeypatch, recorded_hash="OLD", applied={1}, discovered=[1])
+    status = determine_schema_verdict(MagicMock())
+    assert status.verdict == "drift"
+    assert status.pending == 0
+
+
+def test_verdict_drift_when_metadata_missing(monkeypatch: pytest.MonkeyPatch):
+    """Breaks the row/table-missing → None collapse: absent metadata = drift."""
+    _patch_verdict_inputs(monkeypatch, recorded_hash=None, applied={1}, discovered=[1])
+    status = determine_schema_verdict(MagicMock())
+    assert status.verdict == "drift"
+    assert status.recorded_hash is None
+
+
+# -- get_status_payload schema block (§V.11 three-state verdict) --------------
+
+
+def _patch_status(monkeypatch: pytest.MonkeyPatch, status: SchemaStatus) -> None:
+    monkeypatch.setattr(db_mod, "determine_schema_verdict", lambda _conn: status)
+
+
+def test_status_schema_block_shape_and_values(
     database_connection: psycopg.Connection[dict[str, Any]],
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Missing row → drift=true with hash/applied_at = null."""
-    monkeypatch.setattr(db_mod, "_read_schema_metadata", lambda _conn: None)
-
+    """`schema` block exposes verdict + recorded/current hash + counts only."""
+    _patch_status(
+        monkeypatch,
+        SchemaStatus(
+            verdict="current",
+            recorded_hash="a" * 64,
+            current_hash="a" * 64,
+            applied=1,
+            pending=0,
+        ),
+    )
     payload = get_status_payload(database_connection, make_test_settings())
     block = payload["schema"]
     assert isinstance(block, dict)
-    assert block["drift"] is True
-    assert block["hash"] is None
-    assert block["applied_at"] is None
+    assert set(block.keys()) == {
+        "verdict",
+        "recorded_hash",
+        "current_hash",
+        "applied",
+        "pending",
+    }
+    assert block["verdict"] == "current"
+    assert block["recorded_hash"] == "a" * 64
+    assert block["current_hash"] == "a" * 64
+    assert block["applied"] == 1
+    assert block["pending"] == 0
     assert payload["version"] == _MAILPILOT_VERSION
+
+
+def test_status_schema_block_reports_pending(
+    database_connection: psycopg.Connection[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _patch_status(
+        monkeypatch,
+        SchemaStatus(
+            verdict="pending",
+            recorded_hash="a" * 64,
+            current_hash="b" * 64,
+            applied=1,
+            pending=2,
+        ),
+    )
+    block = get_status_payload(database_connection, make_test_settings())["schema"]
+    assert isinstance(block, dict)
+    assert block["verdict"] == "pending"
+    assert block["pending"] == 2
+
+
+def test_status_schema_block_reports_drift(
+    database_connection: psycopg.Connection[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _patch_status(
+        monkeypatch,
+        SchemaStatus(
+            verdict="drift",
+            recorded_hash="deadbeef" * 8,
+            current_hash="b" * 64,
+            applied=1,
+            pending=0,
+        ),
+    )
+    block = get_status_payload(database_connection, make_test_settings())["schema"]
+    assert isinstance(block, dict)
+    assert block["verdict"] == "drift"
+    assert block["recorded_hash"] == "deadbeef" * 8
+
+
+def test_status_schema_block_real_db_is_current(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """A provisioned test DB reports verdict=current with the canonical hash.
+
+    Read-only diagnosis tolerates whatever the verdict is; on a freshly
+    provisioned DB the recorded hash matches ``schema.sql`` so verdict=current.
+    """
+    block = get_status_payload(database_connection, make_test_settings())["schema"]
+    assert isinstance(block, dict)
+    assert block["verdict"] == "current"
+    assert block["current_hash"] == _compute_schema_hash(SCHEMA_PATH.read_text())
+
+
+# -- initialize_database baseline-stamp on provision (§V.108/§V.109) ----------
+
+
+def test_initialize_baseline_stamps_migration_ledger_on_fresh_db():
+    """Fresh provision records every shipped migration as applied (§V.108)."""
+    probe_cursor = MagicMock()
+    probe_cursor.fetchone.return_value = {"oid": None}
+    mock_conn = MagicMock()
+    mock_conn.execute.return_value = probe_cursor
+
+    with patch("mailpilot.database.psycopg.connect", return_value=mock_conn):
+        initialize_database("postgresql://localhost/test")
+
+    ledger_inserts = [
+        call
+        for call in mock_conn.execute.call_args_list
+        if "INSERT INTO schema_migrations" in str(call.args[0])
+    ]
+    assert ledger_inserts, "fresh provision must baseline-stamp the ledger"
+    stamped_versions = {call.args[1][0] for call in ledger_inserts}
+    assert 1 in stamped_versions  # frozen 001_initial_schema baseline
+
+
+# -- write-path gate: dead-stop on pending/drift (§V.109/§V.18) ---------------
+
+
+def _populated_db_mock() -> MagicMock:
+    """Connection mock whose `account` probe reports an initialized DB."""
+    probe_cursor = MagicMock()
+    probe_cursor.fetchone.return_value = {"oid": "account"}
+    mock_conn = MagicMock()
+
+    def execute_side_effect(query: Any, *_params: Any) -> MagicMock:
+        if "to_regclass" in str(query):
+            return probe_cursor
+        return MagicMock()
+
+    mock_conn.execute.side_effect = execute_side_effect
+    return mock_conn
+
+
+def test_initialize_enforce_dead_stops_on_drift(
+    capfire: CaptureLogfire, capsys: pytest.CaptureFixture[str]
+):
+    """require_current_schema + drift → SystemExit(1) + schema_drift envelope."""
+    mock_conn = _populated_db_mock()
+    drift = SchemaStatus(
+        verdict="drift",
+        recorded_hash="dead" * 16,
+        current_hash="beef" * 16,
+        applied=1,
+        pending=0,
+    )
+    with (
+        patch("mailpilot.database.psycopg.connect", return_value=mock_conn),
+        patch("mailpilot.database.determine_schema_verdict", return_value=drift),
+        pytest.raises(SystemExit) as exc,
+    ):
+        initialize_database("postgresql://localhost/test", require_current_schema=True)
+
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert '"error": "schema_drift"' in err
+    assert '"ok": false' in err
+    mock_conn.close.assert_called_once()
+
+
+def test_initialize_enforce_dead_stops_on_pending(
+    capfire: CaptureLogfire, capsys: pytest.CaptureFixture[str]
+):
+    """require_current_schema + pending → SystemExit(1) + distinct code."""
+    mock_conn = _populated_db_mock()
+    pending = SchemaStatus(
+        verdict="pending",
+        recorded_hash="a" * 64,
+        current_hash="b" * 64,
+        applied=1,
+        pending=3,
+    )
+    with (
+        patch("mailpilot.database.psycopg.connect", return_value=mock_conn),
+        patch("mailpilot.database.determine_schema_verdict", return_value=pending),
+        pytest.raises(SystemExit) as exc,
+    ):
+        initialize_database("postgresql://localhost/test", require_current_schema=True)
+
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert '"error": "schema_migration_pending"' in err
+
+
+def test_initialize_enforce_passes_when_current():
+    """require_current_schema + current → returns the connection, no exit."""
+    mock_conn = _populated_db_mock()
+    current = SchemaStatus(
+        verdict="current",
+        recorded_hash="a" * 64,
+        current_hash="a" * 64,
+        applied=1,
+        pending=0,
+    )
+    with (
+        patch("mailpilot.database.psycopg.connect", return_value=mock_conn),
+        patch("mailpilot.database.determine_schema_verdict", return_value=current),
+    ):
+        connection = initialize_database(
+            "postgresql://localhost/test", require_current_schema=True
+        )
+    assert connection is mock_conn
+
+
+def test_initialize_tolerate_does_not_dead_stop_on_drift(
+    capfire: CaptureLogfire,
+):
+    """Default read path tolerates drift — reports, never dead-stops (§V.18)."""
+    mock_conn = _existing_db_mock(recorded_hash="deadbeef" * 8)
+    with patch("mailpilot.database.psycopg.connect", return_value=mock_conn):
+        connection = initialize_database("postgresql://localhost/test")
+    assert connection is mock_conn  # no SystemExit on the read path
