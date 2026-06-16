@@ -1183,9 +1183,11 @@ def send_email(  # noqa: PLR0913
         ``status="sent"``.
 
     Raises:
-        RuntimeError: If the DB insert unexpectedly returns None (would
-            only happen on a duplicate Gmail message ID, which the API
-            does not reuse for fresh sends).
+        RuntimeError: If Gmail accepts the send but the row is genuinely
+            unrecoverable — the post-send insert returns None (duplicate
+            gmail_message_id) and no existing row can be re-fetched. A
+            recoverable conflict instead returns the existing row
+            (idempotent send), so a delivered message is never orphaned.
     """
     del settings  # reserved for future tuning (per-account overrides, etc.)
     with logfire.span(
@@ -1294,24 +1296,41 @@ def send_email(  # noqa: PLR0913
             recipients=outbound_recipients,
         )
         if email is None:
-            # Gmail accepted the send but the DB insert returned None (would
-            # only happen on a duplicate gmail_message_id, which Gmail should
-            # never reuse). The message has been delivered; log loudly so the
-            # orphan is recoverable from traces even though the span
-            # attributes below will not be set.
-            logfire.error(
-                "sync.send_email.orphan_gmail_send",
+            # Gmail accepted the send but the insert hit ON CONFLICT
+            # (gmail_message_id) DO NOTHING — a row already carries this
+            # message id (e.g. a cold-start send/insert race). The message is
+            # delivered and already tracked, so recover the existing row and
+            # return it: the send is idempotent rather than orphaning a
+            # genuinely-sent message (§V.77, success-then-conflict direction).
+            recovered = (
+                get_email_by_gmail_message_id(connection, gmail_message_id)
+                if gmail_message_id is not None
+                else None
+            )
+            if recovered is None:
+                # Unrecoverable: Gmail returned no id, or the conflicting row
+                # vanished. The send is genuinely orphaned — log loudly so it
+                # is traceable, then raise.
+                logfire.error(
+                    "sync.send_email.orphan_gmail_send",
+                    account_id=account.id,
+                    gmail_message_id=gmail_message_id,
+                    gmail_thread_id=gmail_thread_id,
+                    to=to,
+                    workflow_id=workflow_id,
+                    contact_id=contact_id,
+                )
+                raise RuntimeError(
+                    "outbound email insert returned None for "
+                    f"gmail_message_id={gmail_message_id}"
+                )
+            logfire.debug(
+                "sync.send_email.recovered_existing_row",
                 account_id=account.id,
+                email_id=recovered.id,
                 gmail_message_id=gmail_message_id,
-                gmail_thread_id=gmail_thread_id,
-                to=to,
-                workflow_id=workflow_id,
-                contact_id=contact_id,
             )
-            raise RuntimeError(
-                "outbound email insert returned None for "
-                f"gmail_message_id={gmail_message_id}"
-            )
+            email = recovered
         span.set_attribute("email_id", email.id)
         span.set_attribute("gmail_message_id", gmail_message_id)
         return email

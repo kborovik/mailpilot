@@ -1208,6 +1208,47 @@ def test_send_email_propagates_gmail_errors(
     assert list_emails(database_connection, account_id=account.id) == []
 
 
+def test_send_email_recovers_existing_row_on_duplicate_gmail_message_id(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Gmail-accepted send whose row already exists recovers it, not raises.
+
+    When Gmail accepts the send but the post-send ``create_email`` hits
+    ``ON CONFLICT (gmail_message_id) DO NOTHING`` and returns None, the
+    delivered message is already tracked. ``send_email`` must recover and
+    return the existing row (idempotent) instead of raising and orphaning a
+    genuinely-sent message — the success-then-insert-conflict direction of
+    §V.77.
+    """
+    account = make_test_account(database_connection, email="sender@example.com")
+    client, _ = _make_send_client(account.email)
+    # Pre-existing row carrying the gmail_message_id the mock send returns,
+    # forcing the post-send insert to conflict (cold-start send/insert race).
+    existing = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="Hello",
+        gmail_message_id="gmail-msg-1",
+        status="sent",
+    )
+    assert existing is not None
+
+    email = send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Hello",
+        body="Body text",
+    )
+
+    # Idempotent: returns the pre-existing row, no RuntimeError, no duplicate.
+    assert email.id == existing.id
+    assert len(list_emails(database_connection, account_id=account.id)) == 1
+
+
 def test_send_email_passes_cc_and_bcc(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
