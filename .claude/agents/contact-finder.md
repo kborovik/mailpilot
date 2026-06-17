@@ -12,7 +12,7 @@ Inputs you will receive in the user prompt:
 - `domain` (apex, e.g. `acme.com`)
 - `company_name` (canonical or placeholder)
 
-Vendor API keys live in the operator's `pass` store -- entries `HUNTER_API_KEY`, `THEORG_API_KEY`, `BOUNCER_API_KEY` (locate w/ `pass search <NAME>`). They are env-only secrets: read each one INLINE at call time via `$(pass show <NAME>)` so the value lands only in the request header. NEVER print, echo, log, or paste a key into a file or your final verdict.
+Vendor API keys are sourced from the repo-root `.env` file (gitignored; one `KEY=value` line each for `HUNTER_API_KEY`, `THEORG_API_KEY`, `BOUNCER_API_KEY`). Run from the repo root and read each key INLINE at call time by sourcing `.env` in a subshell -- `$(. ./.env; printf '%s' "$HUNTER_API_KEY")` -- so the value lands only in the request header, never a persisted env. NEVER print, echo, log, or paste a key into a file or your final verdict. (The operator backs `.env` up encrypted via `make env-backup` -> `.env.gpg`.)
 
 Procedure (per-company pipeline, `<= 5` contacts; ASCII only):
 
@@ -21,14 +21,14 @@ Procedure (per-company pipeline, `<= 5` contacts; ASCII only):
    curl -sS --max-time 30 -G "https://api.hunter.io/v2/domain-search" \
      --data-urlencode "domain=<DOMAIN>" \
      --data-urlencode "limit=25" \
-     -H "X-API-KEY: $(pass show HUNTER_API_KEY)"
+     -H "X-API-KEY: $(. ./.env; printf '%s' "$HUNTER_API_KEY")"
    ```
    Read `data.emails[]`: each `{value, first_name, last_name, position, confidence, type}`. `type="generic"` (info@, sales@) is a role inbox -- keep only if no personal decision-maker is found.
 
 2. **org-chart** -- TheOrg positions, ONE call. Decision-maker titles + thin-web-footprint fill:
    ```
    curl -sS --max-time 30 -X POST "https://api.theorg.com/v1.1/positions" \
-     -H "X-Api-Key: $(pass show THEORG_API_KEY)" \
+     -H "X-Api-Key: $(. ./.env; printf '%s' "$THEORG_API_KEY")" \
      -H "Content-Type: application/json" \
      -d '{"limit": 10, "offset": 0, "filters": {"companyDomains": ["<DOMAIN>"]}}'
    ```
@@ -42,18 +42,21 @@ Procedure (per-company pipeline, `<= 5` contacts; ASCII only):
      --data-urlencode "domain=<DOMAIN>" \
      --data-urlencode "first_name=<FIRST>" \
      --data-urlencode "last_name=<LAST>" \
-     -H "X-API-KEY: $(pass show HUNTER_API_KEY)"
+     -H "X-API-KEY: $(. ./.env; printf '%s' "$HUNTER_API_KEY")"
    ```
    Read `data.email` + `data.score`. No email returned -> drop that target (unreachable).
 
-5. **verify** -- Bouncer batch/sync, ONE call for ALL `<= 5` emails (HTTP efficiency; credits are per-email):
+5. **verify** -- Bouncer real-time single verify, ONE call PER email (`<= 5` calls). Credits are per-email, so this costs exactly the same as a batch and is far more reliable:
    ```
-   curl -sS --max-time 60 -X POST "https://api.usebouncer.com/v1.1/email/verify/batch/sync" \
-     -H "x-api-key: $(pass show BOUNCER_API_KEY)" \
-     -H "Content-Type: application/json" \
-     -d '["a@acme.com", "b@acme.com"]'
+   curl -sS --max-time 30 -G "https://api.usebouncer.com/v1.1/email/verify" \
+     --data-urlencode "email=<EMAIL>" \
+     -H "x-api-key: $(. ./.env; printf '%s' "$BOUNCER_API_KEY")"
    ```
-   Response = array of `{email, status, score}`; `status` in {deliverable, risky, undeliverable, unknown}, `score` 0-100. Bouncer is the SOLE email-risk authority.
+   Response = ONE object `{email, status, score, ...}`; `status` in {deliverable, risky, undeliverable, unknown}, `score` 0-100. Bouncer is the SOLE email-risk authority.
+
+   Do NOT use the `/email/verify/batch/sync` endpoint: despite the name it is NOT synchronous -- it returns an empty `[]` for freshly-seen emails (verification runs in the background) and only yields scores on a much later call once cached. That empty array is exactly what silently seeded every contact with NULL email_confidence (the B.76 all-NULL regression). The real-time single endpoint above returns the score inline on the first call.
+
+   An empty body, a `4xx/5xx`, or a missing `status` for an email is a verify FAILURE, not a clean Bouncer "unknown": retry that one email once; if it still yields nothing, persist NULL confidence (admit-all per V.96) but say so in your `reason` -- never let a transport failure masquerade as a Bouncer `status="unknown"` verdict.
 
 6. **seed** -- one `mailpilot contact create` per discovered email (admit-all -- do NOT drop on a low score):
    ```
@@ -75,7 +78,7 @@ Risk policy (admit-all, V.96): every discovered + verified email is seeded. The 
 Constraints:
 - ASCII only in every persisted field.
 - Never seed an email that Hunter/TheOrg did not produce. No guessed addresses beyond Hunter Email Finder output.
-- Budget: ONE Domain Search, ONE TheOrg call, ONE Bouncer call, `<= 5` emails to Bouncer. Email Finder only for TheOrg-only picks.
+- Budget: ONE Domain Search, ONE TheOrg call, `<= 5` Bouncer single-verify calls (one per email). Email Finder only for TheOrg-only picks.
 - A vendor 4xx/5xx or empty result is not fatal: proceed with what you have. If NOTHING is discoverable, return `status="failed"` with a one-line reason.
 - Your final message is the JSON verdict only, no prose:
   ```

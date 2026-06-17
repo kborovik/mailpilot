@@ -179,7 +179,7 @@ T151|x|impl §V.109(+) + §V.11(∆) + §V.18(∆) — three-state verdict in `_
 T152|x|impl §V.110(+) + §I `db` noun — `initialize_database()` connect+verify (auto-provision only when `account` absent); `db init|migrate|check` CLI (init refuses if `account` exists, no `--force`; check exit 1 on pending|drift); rewrite CLAUDE.md "auto-applied on first connection" line to db init/migrate path; TDD|V110
 T153|x|impl §V.111(+) per §B.91 — strip §-cites from Click command/group docstrings + option `help=` strings in cli.py (db group + init/migrate/check, company profile help=, etc.); add guard test walking the Click tree asserting each rendered `--help` carries zero `§[VTB]\.[0-9]+`; TDD|V111,B91
 T154|x|impl §V.112(+) per §B.92 — seed_companies.py seeded_stale projection (touched_apexes accumulator + scope_stale_to_seeded helper) distinct from global stale; SKILL.md fast-path/enrich prose selects stale (file/bare) vs seeded_stale (domain/URL-token); regression tests test_seed_reports_touched_apexes + test_scope_stale_to_seeded_*; TDD|V112,B92
-T155|.|impl §V.113(+) per §B.93 — contact-finder.md verify step -> Bouncer real-time single GET /email/verify (per-email, <=5), drop batch/sync; empty|4xx/5xx|missing-status = verify-failure not clean unknown; add guard test grepping contact-finder.md (batch/sync absent, single-verify present); TDD|V113,B93
+T155|x|impl §V.113(+) per §B.93 — contact-finder.md verify step -> Bouncer real-time single GET /email/verify (per-email, <=5), drop batch/sync; empty|4xx/5xx|missing-status = verify-failure not clean unknown; add guard test grepping contact-finder.md (batch/sync absent, single-verify present); TDD|V113,B93
 
 ## §B BUGS
 
