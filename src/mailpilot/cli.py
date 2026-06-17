@@ -292,7 +292,7 @@ def run() -> None:
 
 @main.group()
 def db() -> None:
-    """Provision and migrate the database schema (off the hot path, §V.110)."""
+    """Provision and migrate the database schema, off the connection hot path."""
 
 
 @db.command("init")
@@ -300,7 +300,7 @@ def db_init() -> None:
     """Provision an empty database from schema.sql.
 
     Refuses to touch a populated database -- no --force footgun; idempotent
-    no-op-with-message when the schema is already current (§V.110).
+    no-op-with-message when the schema is already current.
     """
     from mailpilot.database import provision_database
 
@@ -327,7 +327,7 @@ def db_init() -> None:
 
 @db.command("migrate")
 def db_migrate() -> None:
-    """Apply pending forward migrations in version order (§V.108).
+    """Apply pending forward migrations in version order.
 
     Each migration runs in its own transaction and is recorded in
     ``schema_migrations``; a no-op when nothing is pending.
@@ -344,11 +344,11 @@ def db_migrate() -> None:
 
 @db.command("check")
 def db_check() -> None:
-    """Report the schema verdict; exit 1 on pending or drift (§V.109).
+    """Report the schema verdict; exit 1 on pending or drift.
 
     A scriptable deploy gate: ``current`` -> ok envelope + exit 0;
     ``pending``/``drift`` -> ``schema_migration_pending``/``schema_drift``
-    error envelope with the report inlined + exit 1 (§I.cli / §V.4).
+    error envelope with the report inlined + exit 1.
     """
     from mailpilot.database import determine_schema_verdict, initialize_database
 
@@ -659,7 +659,7 @@ def company_create(domain: str, name: str, note: str | None) -> None:
 @click.option(
     "--profile-json",
     default=None,
-    help="JSON object validated against CompanyProfile (§V.72).",
+    help="JSON object validated against CompanyProfile.",
 )
 def company_update(company_id: str, name: str | None, profile_json: str | None) -> None:
     """Update a company."""
@@ -722,13 +722,13 @@ def company_search(query: str, limit: int) -> None:
     "--has-profile",
     is_flag=True,
     default=False,
-    help="Return only companies with a non-NULL profile (§V.72).",
+    help="Return only companies with a non-NULL profile.",
 )
 @click.option(
     "--no-profile",
     is_flag=True,
     default=False,
-    help="Return only companies with a NULL profile (§V.72).",
+    help="Return only companies with a NULL profile.",
 )
 def company_list(
     limit: int, since: str | None, has_profile: bool, no_profile: bool
@@ -782,7 +782,7 @@ def company_view(company_id: str) -> None:
     help="Optional path to also write the JSON array. Stdout still emits envelope.",
 )
 def company_export(file: str | None) -> None:
-    """Export all companies as a declarative JSON payload (§V.4)."""
+    """Export all companies as a declarative JSON payload."""
     import pathlib
 
     from mailpilot.database import get_company, initialize_database, list_companies
@@ -808,7 +808,7 @@ def company_export(file: str | None) -> None:
     help="Path to JSON array of company objects. If omitted, read from stdin.",
 )
 def company_import(file: str | None) -> None:
-    """Import companies from a declarative JSON array (§V.63 batch-error pattern).
+    """Import companies from a declarative JSON array.
 
     Each row resolves to either ``{"name": ..., "action": "created"}`` or
     ``{"name": ..., "error": CODE, "message": ...}``; per-row failures do not
@@ -1199,7 +1199,7 @@ def contact_view(contact_id: str) -> None:
     help="Optional path to also write the JSON array. Stdout still emits envelope.",
 )
 def contact_export(file: str | None) -> None:
-    """Export all contacts as a declarative JSON payload (§V.4)."""
+    """Export all contacts as a declarative JSON payload."""
     import pathlib
 
     from mailpilot.database import get_contact, initialize_database, list_contacts
@@ -1225,7 +1225,7 @@ def contact_export(file: str | None) -> None:
     help="Path to JSON array of contact objects. If omitted, read from stdin.",
 )
 def contact_import(file: str | None) -> None:
-    """Import contacts from a declarative JSON array (§V.63 batch-error pattern).
+    """Import contacts from a declarative JSON array.
 
     Each row resolves to either ``{"email": ..., "action": "created"}`` or
     ``{"email": ..., "error": CODE, "message": ...}``; per-row failures do not
@@ -1801,7 +1801,7 @@ def tag_add(contact_id: str | None, company_id: str | None, name: str) -> None:
 def tag_disable(
     contact_id: str | None, company_id: str | None, name: str, reason: str
 ) -> None:
-    """Soft-disable a tag on a contact or company (§V.10 tag coverage).
+    """Soft-disable a tag on a contact or company.
 
     Flips ``disabled_reason`` on the active tag row and appends a
     ``tag_disabled`` activity carrying the reason. Disabled is terminal --
@@ -2559,12 +2559,12 @@ def _workflow_to_toml(workflow: Any) -> str:
 def workflow_export(
     account_id: str | None, account_email: str | None, out_dir: str
 ) -> None:
-    """Export an account's workflows as one TOML file each (§V.103, §V.63).
+    """Export an account's workflows as one TOML file each.
 
     TOML-only: writes one ``*.toml`` per workflow into ``--out-dir`` (def fields
     ``{name, template, theme, objective, instructions}``, name-sorted) and prints
     a JSON status envelope listing the paths written. TOML never reaches stdout
-    -- stdout stays strict JSON per §V.3. ``export -> dir -> import`` round-trips
+    -- stdout stays strict JSON. ``export -> dir -> import`` round-trips
     idempotently.
     """
     import pathlib
@@ -2808,7 +2808,7 @@ def _load_workflow_import_entries(
 def workflow_import(
     account_id: str | None, account_email: str | None, file: str | None
 ) -> None:
-    """Import workflows for an account from TOML catalog files (§V.63, §V.103).
+    """Import workflows for an account from TOML catalog files.
 
     TOML-only -- no JSON, no stdin. Dispatch is by ``--file`` shape:
 
@@ -2982,7 +2982,7 @@ def _maybe_schedule_first_touch(
     default=None,
     help=(
         "ISO 8601 timestamp for scheduled first reach-out (outbound workflows "
-        "only). Inserts a pending task drained by the run loop per SPEC §V.32."
+        "only). Inserts a pending task drained by the run loop."
     ),
 )
 def enrollment_add(workflow_id: str, contact_id: str, scheduled_at: str | None) -> None:
@@ -3167,7 +3167,7 @@ def enrollment_run(enrollment_id: str) -> None:
     help="Explanation written to disabled_reason and the enrollment_disabled activity.",
 )
 def enrollment_disable(enrollment_id: str, reason: str) -> None:
-    """Soft-disable an enrollment via terminal lifecycle exit (§V.10, §V.15).
+    """Soft-disable an enrollment via terminal lifecycle exit.
 
     Flips ``status='disabled'``, writes ``disabled_reason``, and appends an
     ``enrollment_disabled`` activity carrying the reason. Disabled is

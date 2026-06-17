@@ -175,7 +175,7 @@ T149|x|impl §V.75(∆) per §B.90 — first sync hydrates pre-existing INBOX: _
 T150|x|impl §V.108(+) — `migrations/NNN_*.sql` registry @ package root (wheel-shipped) + `schema_migrations` ledger in schema.sql; `db migrate` applies pending in order, each own txn, records version/name/applied_at/mailpilot_version; identity test fresh `db init` == apply-all-from-zero byte-identical; TDD|V108
 T151|x|impl §V.109(+) + §V.11(∆) + §V.18(∆) — three-state verdict in `_read_schema_metadata` (ledger-behind=pending, hash-mismatch=drift, breaks None collapse); `run`+mutation gate dead-stops drift->`schema_drift` / pending->`schema_migration_pending` envelope+exit 1; status schema block carries verdict+hashes+applied/pending counts; `status`/`db check` tolerate; TDD|V109,V11,V18
 T152|x|impl §V.110(+) + §I `db` noun — `initialize_database()` connect+verify (auto-provision only when `account` absent); `db init|migrate|check` CLI (init refuses if `account` exists, no `--force`; check exit 1 on pending|drift); rewrite CLAUDE.md "auto-applied on first connection" line to db init/migrate path; TDD|V110
-T153|.|impl §V.111(+) per §B.91 — strip §-cites from Click command/group docstrings + option `help=` strings in cli.py (db group + init/migrate/check, company profile help=, etc.); add guard test walking the Click tree asserting each rendered `--help` carries zero `§[VTB]\.[0-9]+`; TDD|V111,B91
+T153|x|impl §V.111(+) per §B.91 — strip §-cites from Click command/group docstrings + option `help=` strings in cli.py (db group + init/migrate/check, company profile help=, etc.); add guard test walking the Click tree asserting each rendered `--help` carries zero `§[VTB]\.[0-9]+`; TDD|V111,B91
 
 ## §B BUGS
 
