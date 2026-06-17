@@ -1,12 +1,20 @@
 ---
 name: lead-companies
 description: |
-  Create company records from domain names or CSV lead exports, then enrich
-  each into a cold-email-grade profile. Single free-form invocation -- no
-  sub-commands; the skill classifies the input itself. Triggers on
-  "/lead-companies", "enrich companies", "create companies from domains".
+  Create and enrich company records for cold-email outreach in the mailpilot
+  CRM. Use this whenever the user hands over one or more companies to get into
+  the CRM and profiled: any request to add, create, seed, or import company
+  rows from domains, website URLs, a domains.txt, or a CSV / lead export (e.g.
+  TheirStack), and/or to research, profile, or enrich what each company does,
+  its products, and who it sells to. Seeding and enrichment run as one
+  free-form pass (no sub-commands; the skill classifies the input) and scale
+  from a single company to dozens. Also the right call for "enrich the
+  companies with no profile yet." Fires on "/lead-companies". Not for finding
+  people -- decision-makers, titles, or emails belong to /lead-contacts; nor
+  for one-off "just tell me about this site" lookups that save nothing,
+  drafting individual emails, or merging/deduping rows and schema questions.
 argument-hint: [<domain>... | <file-path>] [--limit N]
-allowed-tools: Bash(mailpilot company *), Bash(curl *), Bash(lynx *), Bash(python3 *), Read, Task, Workflow, AskUserQuestion
+allowed-tools: Bash(uv run mailpilot company *), Bash(curl *), Bash(lynx *), Bash(python3 *), Read, Task, Workflow, AskUserQuestion
 model: opus
 ---
 
@@ -47,11 +55,11 @@ Minimize tool calls — run the two stages each as ONE tool call:
   python3 .claude/skills/lead-companies/scripts/seed_companies.py [--dry-run] [--column NAME] <file-or-domain>...
   ```
 
-  Emits ONE JSON object: `{created|would_create, existing, skipped, collapsed, stale, dry_run, ok}`. The `stale` field is the exact `[{id, domain, name}]` projection the enrich Workflow consumes so not a second `company list --no-profile` round trip. `--dry-run` resolves + reports w/o DB writes (preview). Mixed file + inline-domain args admitted; UUID args land in `skipped` (enrich-only, not seedable).
+  Emits ONE JSON object: `{created|would_create, existing, skipped, collapsed, stale, seeded_stale, dry_run, ok}`. Both `stale` and `seeded_stale` are `[{id, domain, name}]` projections ready to hand the enrich Workflow as `args` — no second `company list --no-profile` round trip. `stale` = every `profile IS NULL` row (the enrich set for a **file or bare** run's global stale pass); `seeded_stale` = the subset touched this run (the scoped enrich set for a **domain/URL-token** run, so one seeded domain does not drag the whole backlog into enrichment — the Pipeline table's "stale scoped to those rows"). `--dry-run` resolves + reports w/o DB writes (preview). Mixed file + inline-domain args admitted; UUID args land in `skipped` (enrich-only, not seedable).
 
-- **Enrich (>=2 stale rows)** -> ONE Workflow call BY NAME: `Workflow({name: 'lead-companies-enrich', args: <stale array from the seed script>})`, not pasting the inline snippet. Single stale row -> direct `Task(subagent_type="company-profiler", ...)` per §Stage: enrich.
+- **Enrich (>=2 stale rows)** -> ONE Workflow call BY NAME: `Workflow({name: 'lead-companies-enrich', args: <enrich array>})`, not pasting the inline snippet. The `<enrich array>` is the seed script's `stale` field for a file/bare run, or its `seeded_stale` field for a domain/URL-token run (pick by which Pipeline-table row the args matched). Single stale row -> direct `Task(subagent_type="company-profiler", ...)` per §Stage: enrich.
 
-So full file-arg pipeline = 1 Bash (seed script) + 1 Workflow (enrich) + the batch-gate `AskUserQuestion` when >10 stale and not `--limit` — replacing the ~2N+3 per-row Bash calls. The per-stage sections below document the canonical behavior; reach for them only when debugging a row the script reported in `skipped`.
+So full file-arg pipeline = 1 Bash (seed script) + 1 Workflow (enrich) + the batch-gate `AskUserQuestion` when >10 stale and not `--limit` — replacing the ~2N+3 per-row Bash calls. The canonical ingest/seed/domain recipes the script mirrors live in `references/lead-companies-stages.md` (see §Stage recipes); reach for them only when debugging a row the script reported in `skipped`.
 
 ## Scope
 
@@ -73,50 +81,9 @@ Shared across the lead-pipeline siblings (§V.100 single-source) -> see `.claude
 - `mcp__claude_ai_Tavily__tavily_extract` reachable — the enricher's sole fetch fallback (curl + lynx -> Tavily). Matches `company-profiler` agent tool surface; not FireCrawl (token historically dead, agent not granted the tool).
 - Anthropic credentials reachable (Sonnet enrichers).
 
-## Stage: ingest (file args)
+## Stage recipes (canonical / debugging)
 
-Source- and format-agnostic ingestion. Extracts the apex domain (+ optional CSV display name per §V.72 carve-out); not profile-body content.
-
-1. Detect format from the file's first non-empty line (peek at raw bytes, not the `Read` tool's line-numbered output):
-   - Contains `,` and >=1 known header token (`domain`, `website`, `company_url`, `url`) -> **CSV mode**.
-   - Else -> **plain-text mode**.
-2. **CSV mode** — MUST parse with an RFC-4180 parser (`csv.DictReader`), not physical-line iteration of `Read`-tool output or split-on-`\n` / split-on-`,` (per §V.74). Quoted fields carry embedded newlines and commas (lead-export `company_description` columns) so one logical row spans many physical lines; line iteration mis-seeds prose fragments as phantom rows. Domain column auto-detect = first match in `[domain, website, company_url, url]`; operator MAY name a column in the invocation prose to override. Name column auto-detect = first match in `[company_name, name, company]` — seeds the `company.name` placeholder per §V.72 carve-out (display label only, not a profile field; enricher overwrites w/ site-canonical name). Extraction recipe — one printed line per logical row, TAB-separated `<domain>\t<display-name>` (name blank when no name-ish column):
-   ```
-   python3 - "$CSV_PATH" "${COLUMN:-}" <<'PY'
-   import csv, sys
-   path, override = sys.argv[1], (sys.argv[2] or None)
-   domain_candidates = ["domain", "website", "company_url", "url"]
-   name_candidates = ["company_name", "name", "company"]
-   with open(path, newline="", encoding="utf-8-sig") as handle:
-       reader = csv.DictReader(handle)
-       columns = reader.fieldnames or []
-       column = override or next((c for c in domain_candidates if c in columns), None)
-       if column is None:
-           sys.exit("no domain column found; name the column in the invocation")
-       name_col = next((c for c in name_candidates if c in columns), None)
-       for row in reader:
-           value = (row.get(column) or "").strip()
-           if not value:
-               continue
-           name = (row.get(name_col) or "").strip() if name_col else ""
-           print(value + "\t" + name)  # <domain> TAB <display-name>; name MAY be empty
-   PY
-   ```
-   `newline=""` keeps the parser in charge of embedded newlines; `encoding="utf-8-sig"` strips a leading BOM. Split each printed line on the first TAB -> `(domain, display_name)`; an empty `display_name` -> seed stage falls back to the resolved apex.
-3. **Plain-text mode**: every non-empty non-comment line (skip lines starting w/ `#`): extract apex from the line (raw domain or full URL admitted). Line iteration admitted here per §V.74 — non-CSV, one domain/URL per physical line.
-4. Every extracted `(domain, display_name)` pair: hand to the seed stage below (plain-text mode yields `display_name = ""`).
-5. Do not pre-populate the profile JSONB body from CSV columns or text-line annotations — every seeded row lands `profile IS NULL` so agent enrichment downstream (§V.72). The CSV `company.name` placeholder (step 2) is the ONLY non-domain datum carried; all other columns (descriptions, industry, revenue, LinkedIn) discarded.
-
-## Stage: seed (domain values)
-
-Every value — `(domain, display_name)` from CSV ingest, or a bare domain from an inline/plain-text arg (`display_name = ""`):
-
-1. `apex = extract_apex(domain)` — lowercase, strip leading `www.`, parse via `urllib.parse.urlsplit` if URL-shaped.
-2. `resolved = resolve_apex(apex)` — follow the full redirect chain via `curl -sL -o /dev/null --max-time 12 -w '%{url_effective}' -A "Mozilla/5.0" "https://<apex>/"` (hop-agnostic, CR-free per §V.74); re-extract apex from the final effective URL if the chain ended elsewhere; else `resolved = apex`. The `display_name` travels with the row unchanged (a redirect to a sister domain does not alter the company's display label).
-3. `name = display_name if display_name else resolved` (§V.72 carve-out: CSV display name when present, else the apex placeholder). `uv run mailpilot company create --domain <resolved> --name <name>` — race-safe per §V.16 (duplicate -> envelope `{"error":"duplicate_key", ...}` w/ exit 1 -> treat as existing, continue). Name is placeholder; the enricher overwrites it w/ the site-canonical name.
-4. Track per-value outcome for the run summary: `{"created": [<id>...], "existing": [<domain>...], "skipped": [{"input": ..., "resolved": ..., "reason": ...}]}`.
-
-Collision-on-resolved-apex (resolved-apex already owned by another company row, whether created earlier this run or in a prior run): skip + log per §V.72 design — operator dedups manually. Decide merge vs silent re-seed by the owner's name (§V.98): on the `create` `duplicate_key`, fetch the owning row's name (`uv run mailpilot company search <resolved>` -> match the exact-domain row). When the incoming CSV display name diverges (case- and whitespace-insensitive) from that owner name, record the collision in a `collapsed: [{"resolved": <apex>, "owner_name": <owner>, "incoming_names": [...]}]` accumulator for the run summary — a distinct-entity merge (e.g. the sole `whitecapsupply.com` row named "National Concrete Accessories" landing on a row already owned by "White Cap") silently becomes one company, and `collapsed` is the only operator-visible signal of the merge. A same-name re-seed (or a nameless plain-text/inline domain) carries no merge signal -> stays a silent `existing`. Fires both intra-batch (a name handled earlier this run) and onto a previously-seeded row (owner name fetched from the DB).
+The ingest, seed, and domain-resolution mechanics live in `.claude/skills/lead-companies/references/lead-companies-stages.md` — the human-readable mirror of what `scripts/seed_companies.py` runs verbatim (CSV `csv.DictReader` parse + `company create` per §V.74/§V.72, the `%{url_effective}` redirect resolve, and the §V.98 `collapsed` collision rule). The fast path covers all of it in one Bash call; reach for that file only to debug a row the script reported under `skipped`. The live procedure (stale query, batch gate, enrich, run summary) stays inline below.
 
 ## Stage: stale query
 
@@ -147,7 +114,7 @@ Enrich the company profile for:
 Follow your system prompt procedure. Return the JSON verdict per spec.
 ```
 
->=2 stale rows -> hand the capped `companies[]` to the `Workflow` tool as `args`. Capture the array from the stale query first (stdout only — see §Conventions), projecting just the fields the snippet reads:
+>=2 stale rows -> hand the capped `companies[]` to the `Workflow` tool as `args`. On a seed-bearing run the array is already in hand — the seed script's `stale` field (file/bare run) or `seeded_stale` field (domain/URL-token run, scoped to the rows just touched so the backlog is not dragged in). Only a bare invocation with no seed script run needs to capture it fresh from the stale query (stdout only — see §Conventions), projecting just the fields the snippet reads:
 
 ```
 uv run mailpilot company list --no-profile 2>/dev/null \
@@ -219,29 +186,7 @@ The batch loop caps in-flight enrichers at 3 per `parallel()` call — the chunk
 
 ## Run summary
 
-After all stages, emit one aggregate JSON: `{"created": N, "existing": N, "enriched": N, "skipped": N, "failed": N, "results": [...], "ok": true}` — omit seed fields on bare invocations, omit enrich fields when 0 stale rows. When the batch gate (per §Stage: batch gate) caps below the stale-count — operator picks `First 10`/`First 25` over a larger N, or `--limit N` < stale-count — append `"deferred": <stale-count - dispatched>` (the stale rows the stale query found minus the capped count actually dispatched to enrich) so the operator sees how many rows were left `profile IS NULL` for a follow-up run per §V.97; all stale dispatched -> `deferred: 0` or omit the field. A bare `created`/`enriched` count is never the sole remainder signal. When >=1 name-divergent collision-on-resolved-apex fired (per §Stage: seed), append `"collapsed": [{"resolved": <apex>, "owner_name": <owner>, "incoming_names": [...]}]` so the operator sees which distinct-entity rows merged onto one company (incoming CSV display name diverging from the owner's name per §V.98) — a bare `existing: N` count hides the merge. Same-name re-seeds stay folded into `existing`.
-
-## Domain extraction & redirect resolution
-
-```
-extract_apex(url_or_domain):
-    1. parse -> host (urllib.parse.urlsplit)
-    2. lowercase
-    3. strip leading "www."
-    4. return host (no further subdomain stripping)
-
-resolve_apex(initial):
-    # -w '%{url_effective}' prints the final URL after the full redirect chain,
-    # CR-free (per spec V.74). It is always set, so when there is no redirect
-    # the final apex equals `initial`. A HEAD-based location-header grep is
-    # brittle: 403 bot-blocking origins answer HEAD differently, and awk
-    # retains the header's trailing CR -> corrupts a bare-host redirect target.
-    final_url = curl -sL -o /dev/null --max-time 12 -w '%{url_effective}' \
-                -A "Mozilla/5.0" "https://<initial>/"
-    return extract_apex(final_url) if final_url else initial
-```
-
-Subdomain preservation: `shop.acme.com` not collapsed to `acme.com` — preserves distinct entity identity if shop is a separate company row.
+After all stages, emit one aggregate JSON: `{"created": N, "existing": N, "enriched": N, "skipped": N, "failed": N, "results": [...], "ok": true}` — omit seed fields on bare invocations, omit enrich fields when 0 stale rows. When the batch gate (per §Stage: batch gate) caps below the stale-count — operator picks `First 10`/`First 25` over a larger N, or `--limit N` < stale-count — append `"deferred": <stale-count - dispatched>` (the stale rows the stale query found minus the capped count actually dispatched to enrich) so the operator sees how many rows were left `profile IS NULL` for a follow-up run per §V.97; all stale dispatched -> `deferred: 0` or omit the field. A bare `created`/`enriched` count is never the sole remainder signal. When >=1 name-divergent collision-on-resolved-apex fired (the §V.98 rule the seed script applies — see §Stage recipes), append `"collapsed": [{"resolved": <apex>, "owner_name": <owner>, "incoming_names": [...]}]` so the operator sees which distinct-entity rows merged onto one company (incoming CSV display name diverging from the owner's name per §V.98) — a bare `existing: N` count hides the merge. Same-name re-seeds stay folded into `existing`.
 
 ## Rendering
 
@@ -249,17 +194,7 @@ Subdomain preservation: `shop.acme.com` not collapsed to `acme.com` — preserve
 
 ## Profile shape
 
-Stored as `company.profile JSONB NULL`, validated server-side via `CompanyProfile` Pydantic model (`src/mailpilot/models.py` per §V.72):
-
-```yaml
-summary: str           # 1-5 sentences -- what they do, who they serve, hook
-products: list[str]    # what they sell -- pitch relevance
-target_customers: str  # who they sell to -- ICP signal
-timezone: str | None   # IANA, e.g. "America/Toronto"; null if multi-zone or unclear
-sources: list[str]     # >=1 url fetched/cited
-```
-
-Required = {summary, products, target_customers, sources}. Optional = {timezone}. Invalid JSON -> CLI rejects w/ `{"error":"validation_error", ...}` envelope per §V.54.
+The enrichment target is the `company.profile JSONB NULL` column, validated server-side against the `CompanyProfile` Pydantic model (`src/mailpilot/models.py`); field semantics, the required/optional split, and the multi-zone `timezone` null rule are authoritative in §V.72, and invalid JSON is rejected with `{"error":"validation_error", ...}` per §V.54. The operator-facing YAML gloss lives in `references/lead-companies-stages.md` (Profile shape); the `company-profiler` agent owns producing it.
 
 ## OUTPUT — "Next" block
 

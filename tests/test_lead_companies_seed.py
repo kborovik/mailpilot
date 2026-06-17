@@ -129,3 +129,52 @@ def test_intra_batch_divergent_merge_records_collapsed(
             "incoming_names": ["National Concrete Accessories"],
         }
     ]
+
+
+def test_seed_reports_touched_apexes(
+    seed_module: types.ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `touched_apexes` is the scope key main() uses to build `seeded_stale`: it
+    # must list every resolved apex handled this run, created or duplicate-key.
+    monkeypatch.setattr(seed_module, "resolve_apex", lambda apex: apex)
+    monkeypatch.setattr(
+        seed_module,
+        "create_company",
+        lambda domain, _name, _dry_run: ("created", {"id": f"id-{domain}"}),
+    )
+
+    result = seed_module.seed([("acme.com", ""), ("beta.io", "")], dry_run=False)
+
+    assert result["touched_apexes"] == ["acme.com", "beta.io"]
+
+
+def test_scope_stale_to_seeded_drops_untouched_backlog(
+    seed_module: types.ModuleType,
+) -> None:
+    # A domain-token run must enrich only rows it touched, never the whole
+    # `profile IS NULL` backlog (Pipeline table: "stale scoped to those rows").
+    stale = [
+        {"id": "id-acme", "domain": "acme.com", "name": "Acme"},
+        {"id": "id-old1", "domain": "legacy-one.com", "name": "Legacy One"},
+        {"id": "id-old2", "domain": "legacy-two.com", "name": "Legacy Two"},
+    ]
+
+    scoped = seed_module.scope_stale_to_seeded(
+        stale, created_ids={"id-acme"}, touched_apexes=set()
+    )
+
+    assert scoped == [{"id": "id-acme", "domain": "acme.com", "name": "Acme"}]
+
+
+def test_scope_stale_to_seeded_matches_reseed_by_domain(
+    seed_module: types.ModuleType,
+) -> None:
+    # A duplicate-key re-seed produces no new id, so the row is reachable only
+    # via its resolved apex in `touched_apexes` -- it must still be enriched.
+    stale = [{"id": "id-wc", "domain": "whitecapsupply.com", "name": "White Cap"}]
+
+    scoped = seed_module.scope_stale_to_seeded(
+        stale, created_ids=set(), touched_apexes={"whitecapsupply.com"}
+    )
+
+    assert scoped == stale

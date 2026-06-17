@@ -30,14 +30,21 @@ Emits ONE JSON object on stdout (stderr carries progress only):
       "skipped":   [{"input","resolved","reason"}, ...],
       "collapsed": [{"resolved":"<apex>","owner_name":"<owner>",
                      "incoming_names":[...]}, ...],  # name-divergent merges
-      "stale":     [{"id","domain","name"}, ...],  # profile IS NULL, for enrich
+      "stale":        [{"id","domain","name"}, ...],  # ALL profile IS NULL
+      "seeded_stale": [{"id","domain","name"}, ...],  # stale subset touched this run
       "dry_run":   false,
       "ok": true
     }
 
-The `stale` array is the exact projection the lead-companies-enrich Workflow
-consumes as `args`. On a dry run no rows are created, so `stale` reflects the
-pre-existing stale set only and `created` is replaced by `would_create`.
+The `stale` array is every `profile IS NULL` row in the DB -- the enrich set for
+a file or bare invocation (global stale pass). The `seeded_stale` array is the
+subset of `stale` whose rows were created or matched this run -- the scoped
+enrich set for a domain/URL-token invocation, so a single seeded domain does not
+drag the whole stale backlog into enrichment (the Pipeline table's "stale scoped
+to those rows"). Each array is a ready-to-consume `args` value for the
+lead-companies-enrich Workflow. On a dry run no rows are created, so `stale`
+reflects the pre-existing stale set only and `created` is replaced by
+`would_create`.
 """
 
 from __future__ import annotations
@@ -371,7 +378,31 @@ def seed(pairs: list[tuple[str, str]], dry_run: bool) -> dict[str, list[object]]
         "existing": existing,
         "skipped": skipped,
         "collapsed": collapsed,
+        # Every resolved apex created or matched this run -- the scope key for
+        # `seeded_stale` (a domain-token run enriches only rows it touched).
+        "touched_apexes": sorted(seen_resolved),
     }
+
+
+def scope_stale_to_seeded(
+    stale: list[dict[str, str]],
+    created_ids: set[str],
+    touched_apexes: set[str],
+) -> list[dict[str, str]]:
+    """Narrow the global stale set to rows seeded or matched this run.
+
+    A domain/URL-token invocation must enrich only the rows it just touched, not
+    the whole `profile IS NULL` backlog (the Pipeline table's "stale scoped to
+    those rows"). A row qualifies if it was created this run (`id` in
+    ``created_ids``) or its domain resolved to an apex handled this run (`domain`
+    in ``touched_apexes`` -- covers the duplicate-key re-seed that produced no
+    new id). File and bare invocations ignore this and enrich the full ``stale``.
+    """
+    return [
+        row
+        for row in stale
+        if row["id"] in created_ids or row["domain"] in touched_apexes
+    ]
 
 
 def main() -> int:
@@ -394,7 +425,12 @@ def main() -> int:
 
     result = seed(pairs, parsed.dry_run)
     result["skipped"] = arg_skipped + result["skipped"]
-    result["stale"] = query_stale()
+
+    stale = query_stale()
+    created_ids = {str(i) for i in result.get("created") or []}
+    touched_apexes = set(result.pop("touched_apexes", []))
+    result["stale"] = stale
+    result["seeded_stale"] = scope_stale_to_seeded(stale, created_ids, touched_apexes)
     result["dry_run"] = parsed.dry_run
     result["ok"] = True
 

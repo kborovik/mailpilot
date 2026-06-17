@@ -9,7 +9,7 @@ each skill body.
 
 ## Conventions
 
-- ASCII-only project artifacts per §C. Math-glyph encoding admitted for skill prose per `/sdd:glyph`.
+- ASCII-only project artifacts per §C. 
 - All `mailpilot` commands run via `uv run mailpilot`.
 - Envelope shape per §V.4: `list|search|...` -> `{"<plural>": [...], "ok": true}`; `view|create|update|...` -> `{"<singular>": {...}, "ok": true}`. Extract through the wrap.
 - Parse JSON via `python3 -c '...'`; use `printf '%s' "$VAR"` over `echo "$VAR"` when piping captured JSON (`echo` mangles `\n` inside string fields).

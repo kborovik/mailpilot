@@ -7,7 +7,7 @@ description: |
   Single free-form invocation -- no sub-commands. Triggers on "/lead-contacts",
   "find contacts", "discover decision-makers for enriched companies".
 argument-hint: [<company-id>... | <domain>...] [--limit N]
-allowed-tools: Bash(mailpilot company *), Bash(mailpilot contact *), Bash(python3 *), Read, Task, Workflow, AskUserQuestion
+allowed-tools: Bash(uv run mailpilot company *), Bash(uv run mailpilot contact *), Bash(python3 *), Read, Task, Workflow, AskUserQuestion
 model: opus
 ---
 
