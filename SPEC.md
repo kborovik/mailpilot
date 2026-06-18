@@ -180,7 +180,7 @@ T152|x|impl §V.110(+) + §I `db` noun — `initialize_database()` connect+verif
 T153|x|impl §V.111(+) per §B.91 — strip §-cites from Click command/group docstrings + option `help=` strings in cli.py (db group + init/migrate/check, company profile help=, etc.); add guard test walking the Click tree asserting each rendered `--help` carries zero `§[VTB]\.[0-9]+`; TDD|V111,B91
 T154|x|impl §V.112(+) per §B.92 — seed_companies.py seeded_stale projection (touched_apexes accumulator + scope_stale_to_seeded helper) distinct from global stale; SKILL.md fast-path/enrich prose selects stale (file/bare) vs seeded_stale (domain/URL-token); regression tests test_seed_reports_touched_apexes + test_scope_stale_to_seeded_*; TDD|V112,B92
 T155|x|impl §V.113(+) per §B.93 — contact-finder.md verify step -> Bouncer real-time single GET /email/verify (per-email, <=5), drop batch/sync; empty|4xx/5xx|missing-status = verify-failure not clean unknown; add guard test grepping contact-finder.md (batch/sync absent, single-verify present); TDD|V113,B93
-T156|.|impl §V.8(∆) per §B.94 — extend ContactView w/ title + email_confidence + company_domain (load_contact_view fetches company domain); `contact view` carries every `contact list` field, singular envelope verb-invariant; recurrence-guard test asserts ContactView field set superset of Contact columns + summary denorm; TDD|V8,B94
+T156|x|impl §V.8(∆) per §B.94 — extend ContactView w/ title + email_confidence + company_domain (load_contact_view fetches company domain); `contact view` carries every `contact list` field, singular envelope verb-invariant; recurrence-guard test asserts ContactView field set superset of Contact columns + summary denorm; TDD|V8,B94
 
 ## §B BUGS
 

@@ -4412,6 +4412,74 @@ def test_load_company_view_surfaces_profile_field(
     assert view.profile == profile
 
 
+def test_load_contact_view_carries_title_and_email_confidence(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.8/§B.94: ContactView forwards title + email_confidence (§V.95).
+
+    These flat lead-metadata columns were silently dropped by Pydantic
+    ``extra=ignore`` when ``ContactView`` omitted them from its field set —
+    the same invisible-projection-drift class as the §B.67 ``profile`` guard.
+    """
+    from mailpilot.database import create_contact, load_contact_view
+
+    contact = create_contact(
+        database_connection,
+        email="lead@example.com",
+        title="VP Engineering",
+        email_confidence=87,
+    )
+    assert contact is not None
+
+    view = load_contact_view(database_connection, contact.id)
+
+    assert view is not None
+    assert view.title == "VP Engineering"
+    assert view.email_confidence == 87
+
+
+def test_load_contact_view_carries_company_domain(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.8/§V.5: ContactView carries company_domain (LEFT JOIN company).
+
+    NULL when the contact has no parent company.
+    """
+    from mailpilot.database import load_contact_view
+
+    company = make_test_company(database_connection, name="Acme", domain="acme.com")
+    joined = make_test_contact(
+        database_connection, email="alice@acme.com", company_id=company.id
+    )
+    orphan = make_test_contact(database_connection, email="solo@example.com")
+
+    joined_view = load_contact_view(database_connection, joined.id)
+    orphan_view = load_contact_view(database_connection, orphan.id)
+
+    assert joined_view is not None
+    assert joined_view.company_domain == "acme.com"
+    assert orphan_view is not None
+    assert orphan_view.company_domain is None
+
+
+def test_contact_view_field_set_superset_of_base_and_summary() -> None:
+    """§V.8/§B.94: ContactView field set ⊇ Contact columns + ContactSummary denorm.
+
+    Recurrence guard: a view model omitting a base column is silently stripped
+    from ``**contact.model_dump()`` (Pydantic ``extra=ignore``), so the field
+    set is tracked against both the base entity and the list/search summary.
+    """
+    from mailpilot.models import Contact, ContactSummary, ContactView
+
+    base = set(Contact.model_fields)
+    summary = set(ContactSummary.model_fields)
+    view = set(ContactView.model_fields)
+
+    assert base <= view, f"ContactView missing base columns: {base - view}"
+    assert summary <= view, f"ContactView missing summary denorm: {summary - view}"
+    assert {"title", "email_confidence", "company_domain"} <= view
+
+
 # -- _BASE template fragment carries §V.8 directive --------------------------
 
 

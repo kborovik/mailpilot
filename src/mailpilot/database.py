@@ -3856,20 +3856,29 @@ def load_contact_view(
     by ``created_at`` DESC, full body verbatim. Totals reflect the actual row
     count, not the cap. ``company_notes`` is always ``[]`` when the contact
     has no parent company.
+
+    The projection is a base-entity superset per §V.8: every ``Contact``
+    column is forwarded via ``**contact.model_dump()`` and ``company_domain``
+    is fetched from the parent company (LEFT JOIN semantics, NULL when the
+    contact has no company).
     """
     contact = get_contact(connection, contact_id)
     if contact is None:
         return None
     notes, notes_total = _load_notes_for_owner(connection, "contact_id", contact_id)
     if contact.company_id is not None:
+        company = get_company(connection, contact.company_id)
+        company_domain = company.domain if company is not None else None
         company_notes, company_notes_total = _load_notes_for_owner(
             connection, "company_id", contact.company_id
         )
     else:
+        company_domain = None
         company_notes = []
         company_notes_total = 0
     return ContactView(
         **contact.model_dump(),
+        company_domain=company_domain,
         notes=notes,
         notes_total=notes_total,
         company_notes=company_notes,

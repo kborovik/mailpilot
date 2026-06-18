@@ -434,13 +434,24 @@ class ContactView(BaseModel):
     ``_INLINE_NOTES_CAP`` in ``database.py``); ``company_notes`` carries the
     parent company's notes when ``company_id`` is set, else an empty list.
     Totals reflect the actual row count in the database, not the cap.
+
+    Per §V.8 the projection is a base-entity superset: it carries every
+    ``Contact`` column (including the ``title`` + ``email_confidence`` lead
+    metadata per §V.95) plus ``company_domain`` (LEFT JOIN company per §V.5,
+    NULL when ``company_id`` is NULL), so ``contact view`` carries every
+    ``contact list`` field and the singular ``{"contact": {...}}`` field set
+    stays verb-invariant. Omitting a base column would let Pydantic
+    ``extra=ignore`` silently strip it from ``**contact.model_dump()`` (§B.94).
     """
 
     id: str
     email: str
     company_id: str | None = None
+    company_domain: str | None = None
     first_name: str | None = None
     last_name: str | None = None
+    title: str | None = None
+    email_confidence: int | None = None
     disabled_reason: str | None = None
     notes: list[Note] = []
     notes_total: int = 0
