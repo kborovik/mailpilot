@@ -185,7 +185,7 @@ T155|x|impl §V.113(+) per §B.93 — contact-finder.md verify step -> Bouncer r
 T156|x|impl §V.8(∆) per §B.94 — extend ContactView w/ title + email_confidence + company_domain; verb-invariant test; TDD|V8,B94
 T157|x|impl §V.96(∆) — CompanySummary + list_companies contact_count; --max-contacts/--min-contacts; TDD|V96
 T158|x|impl §V.114(+) + §V.96(∆) per §B.95 — company.disabled_reason col + migration; `company disable` verb + double-disable gate; `company list` default-excludes disabled + --include-disabled; Company/CompanySummary models; lead-contacts disables company on contact-finder zero-genuine verdict (status=skipped no-DM reason, NEVER status=failed) w/ no_contacts_found:<date> at run end + SKILL.md prose; TDD|V114,V96,B95
-T159|.|impl §V.108(∆) per §B.97 — `migrate_database` re-stamps `schema_metadata.schema_hash` + `mailpilot_version` to canonical hash as final step of successful migrate, re-baselines @ 0-pending when all migrations applied but recorded hash stale -> verdict `current`; regression test (init at stale hash -> migrate -> assert verdict current, not drift); TDD|V108,B97
+T159|x|impl §V.108(∆) per §B.97 — `migrate_database` re-stamps `schema_metadata.schema_hash` + `mailpilot_version` to canonical hash as final step of successful migrate, re-baselines @ 0-pending when all migrations applied but recorded hash stale -> verdict `current`; regression test (init at stale hash -> migrate -> assert verdict current, not drift); TDD|V108,B97
 
 ## §B BUGS
 

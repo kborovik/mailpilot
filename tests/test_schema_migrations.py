@@ -31,7 +31,9 @@ from mailpilot.database import (
     _MAILPILOT_VERSION,  # pyright: ignore[reportPrivateUsage]
     MIGRATIONS_PATH,
     SCHEMA_PATH,
+    _compute_schema_hash,  # pyright: ignore[reportPrivateUsage]
     _discover_migrations,  # pyright: ignore[reportPrivateUsage]
+    determine_schema_verdict,
     migrate_database,
 )
 
@@ -237,6 +239,45 @@ def test_migrate_each_migration_is_its_own_transaction(
     exists = migration_schema.execute("SELECT to_regclass('okrow') AS oid").fetchone()
     assert exists is not None
     assert exists["oid"] is not None
+
+
+# -- re-stamp recorded hash: migrate-forward resolves `current` (§V.108/§B.97) -
+
+
+def test_migrate_rebaselines_stale_recorded_hash_to_current(
+    migration_schema: psycopg.Connection[dict[str, Any]],
+):
+    """§V.108/§B.97: every shipped migration applied but a stale recorded hash
+    (a DB init'd at an older version then migrated forward) must re-stamp on
+    migrate so the verdict resolves `current`, not phantom `drift` -- even with
+    nothing pending."""
+    conn = migration_schema
+    # Build the full canonical schema, then reproduce the §B.97 false-drift
+    # state: all shipped migrations recorded as applied (-> 0 pending) but the
+    # recorded hash frozen at an older value.
+    conn.execute(SCHEMA_PATH.read_text())  # type: ignore[arg-type]
+    for version, name, _path in _discover_migrations():
+        conn.execute(
+            "INSERT INTO schema_migrations (version, name, mailpilot_version) "
+            "VALUES (%s, %s, %s)",
+            (version, name, _MAILPILOT_VERSION),
+        )
+    conn.execute(
+        "INSERT INTO schema_metadata (id, mailpilot_version, schema_hash) "
+        "VALUES (1, %s, %s)",
+        ("0.0.0", "stale-hash-from-an-older-mailpilot-version"),
+    )
+    conn.commit()
+
+    # Precondition: this is exactly the phantom drift the bug produced.
+    assert determine_schema_verdict(conn).verdict == "drift"
+
+    # Nothing is pending, but migrate must still re-baseline the recorded hash.
+    assert migrate_database(conn) == []
+
+    status = determine_schema_verdict(conn)
+    assert status.verdict == "current"
+    assert status.recorded_hash == _compute_schema_hash(SCHEMA_PATH.read_text())
 
 
 # -- identity invariant: schema.sql == apply-all-migrations-from-zero (§V.108) -

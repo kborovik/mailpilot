@@ -162,7 +162,14 @@ def migrate_database(
     ascending order. Each migration's DDL and its ledger ``INSERT`` commit
     together — one transaction per migration (§V.108) — so a mid-run failure
     leaves earlier migrations applied-and-recorded and the failing one rolled
-    back. Idempotent: a re-run with nothing pending is a no-op.
+    back.
+
+    As a final step it re-stamps ``schema_metadata.schema_hash`` (and
+    ``mailpilot_version``) to the canonical ``schema.sql`` hash so a
+    migrated-forward DB resolves verdict ``current`` not phantom ``drift``
+    (§V.108/§V.109, §B.97) — re-baselining even when nothing was pending but the
+    recorded hash is stale. Idempotent: a re-run with the hash already current
+    applies and re-stamps nothing.
 
     The connection is expected in manual-commit mode (``autocommit=False``),
     matching ``initialize_database``; commit-per-migration is what makes each
@@ -217,6 +224,25 @@ def migrate_database(
             raise
         operator_event("schema.migrate", version=version, name=name)
         applied.append({"version": version, "name": name})
+
+    # Re-stamp the recorded hash to the canonical `schema.sql` hash so a
+    # migrated-forward DB resolves verdict `current`, not phantom `drift`
+    # (§V.108/§V.109, §B.97). Runs whether or not a migration applied this
+    # call: it also re-baselines the 0-pending case -- every shipped migration
+    # already applied but the recorded hash frozen at an older value. No-op
+    # when `schema_metadata` is absent (isolated migrate-from-zero) or already
+    # current.
+    current_hash = _compute_schema_hash(SCHEMA_PATH.read_text())
+    recorded = _read_schema_metadata(connection)
+    if recorded is not None and recorded.schema_hash != current_hash:
+        connection.execute(
+            "UPDATE schema_metadata SET schema_hash = %s, mailpilot_version = %s, "
+            "applied_at = CURRENT_TIMESTAMP WHERE id = 1",
+            (current_hash, _MAILPILOT_VERSION),
+        )
+        connection.commit()
+    else:
+        connection.rollback()
     return applied
 
 
