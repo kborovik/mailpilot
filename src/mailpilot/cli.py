@@ -730,8 +730,25 @@ def company_search(query: str, limit: int) -> None:
     default=False,
     help="Return only companies with a NULL profile.",
 )
+@click.option(
+    "--max-contacts",
+    type=int,
+    default=None,
+    help="Return only companies with contact_count <= N (inclusive).",
+)
+@click.option(
+    "--min-contacts",
+    type=int,
+    default=None,
+    help="Return only companies with contact_count >= N (composes with --max).",
+)
 def company_list(
-    limit: int, since: str | None, has_profile: bool, no_profile: bool
+    limit: int,
+    since: str | None,
+    has_profile: bool,
+    no_profile: bool,
+    max_contacts: int | None,
+    min_contacts: int | None,
 ) -> None:
     """List companies as summaries."""
     from mailpilot.database import initialize_database, list_companies
@@ -750,7 +767,12 @@ def company_list(
     connection = initialize_database(_database_url())
     try:
         companies = list_companies(
-            connection, limit=limit, since=since, has_profile=profile_filter
+            connection,
+            limit=limit,
+            since=since,
+            has_profile=profile_filter,
+            max_contacts=max_contacts,
+            min_contacts=min_contacts,
         )
         output({"companies": [c.model_dump(mode="json") for c in companies]})
     finally:

@@ -61,12 +61,20 @@ class Company(BaseModel):
 
 
 class CompanySummary(BaseModel):
-    """List-view projection of `Company`."""
+    """List-view projection of `Company`.
+
+    Carries ``contact_count`` (child COUNT via LEFT JOIN contact, **including
+    disabled** rows per §V.96) so ``company list --max-contacts`` /
+    ``--min-contacts`` filter on the child cardinality without a per-company
+    N+1 probe; counting disabled rows keeps it aligned with the
+    discovery-memoization rule (§V.96), not the active-only set.
+    """
 
     id: str
     name: str
     domain: str
     has_profile: bool
+    contact_count: int
     created_at: datetime
 
 

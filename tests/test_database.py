@@ -268,6 +268,125 @@ def test_list_companies_filter_has_profile_false(
     assert partial_id not in ids
 
 
+def test_list_companies_contact_count_includes_disabled(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.96: contact_count is a child COUNT that INCLUDES disabled contacts.
+
+    The count tracks the discovery-memoization rule (idempotent re-run skips a
+    known-bad, since-disabled address), so a disabled contact must still count
+    — an active-only COUNT would re-admit it as a phantom gap.
+    """
+    from mailpilot.database import create_contact, disable_contact
+
+    empty = make_test_company(database_connection, name="Empty", domain="empty.com")
+    populated = make_test_company(database_connection, name="Pop", domain="pop.com")
+    create_contact(database_connection, email="a@pop.com", company_id=populated.id)
+    bounced = create_contact(
+        database_connection, email="b@pop.com", company_id=populated.id
+    )
+    assert bounced is not None
+    disable_contact(database_connection, bounced.id, reason="bounced: hard bounce")
+
+    by_id = {c.id: c for c in list_companies(database_connection)}
+    assert by_id[empty.id].contact_count == 0
+    assert by_id[populated.id].contact_count == 2
+
+
+def test_list_companies_max_contacts_inclusive(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.96: --max-contacts N is an inclusive upper bound (count <= N)."""
+    from mailpilot.database import create_contact
+
+    zero = make_test_company(database_connection, name="Zero", domain="zero.com")
+    one = make_test_company(database_connection, name="One", domain="one.com")
+    two = make_test_company(database_connection, name="Two", domain="two.com")
+    create_contact(database_connection, email="a@one.com", company_id=one.id)
+    create_contact(database_connection, email="a@two.com", company_id=two.id)
+    create_contact(database_connection, email="b@two.com", company_id=two.id)
+
+    surfaced = list_companies(database_connection, max_contacts=1)
+    assert {c.id for c in surfaced} == {zero.id, one.id}
+
+
+def test_list_companies_min_contacts_inclusive(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.96: --min-contacts N is an inclusive lower bound (count >= N)."""
+    from mailpilot.database import create_contact
+
+    make_test_company(database_connection, name="Zero", domain="zero.com")
+    one = make_test_company(database_connection, name="One", domain="one.com")
+    two = make_test_company(database_connection, name="Two", domain="two.com")
+    create_contact(database_connection, email="a@one.com", company_id=one.id)
+    create_contact(database_connection, email="a@two.com", company_id=two.id)
+    create_contact(database_connection, email="b@two.com", company_id=two.id)
+
+    surfaced = list_companies(database_connection, min_contacts=1)
+    assert {c.id for c in surfaced} == {one.id, two.id}
+
+
+def test_list_companies_min_max_contacts_compose(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.96: min + max compose into a closed inclusive range on contact_count."""
+    from mailpilot.database import create_contact
+
+    make_test_company(database_connection, name="Zero", domain="zero.com")
+    one = make_test_company(database_connection, name="One", domain="one.com")
+    three = make_test_company(database_connection, name="Three", domain="three.com")
+    create_contact(database_connection, email="a@one.com", company_id=one.id)
+    for i in range(3):
+        create_contact(
+            database_connection, email=f"c{i}@three.com", company_id=three.id
+        )
+
+    surfaced = list_companies(database_connection, min_contacts=1, max_contacts=2)
+    assert {c.id for c in surfaced} == {one.id}
+
+
+def test_list_companies_discover_set_one_query(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.96: --has-profile + --max-contacts 4 == lead-contacts discover set.
+
+    Profile-bearing companies with fewer than 5 contacts, in one query: the
+    no-profile row and the at-cap (5-contact) row are both excluded.
+    """
+    from mailpilot.database import create_contact
+
+    no_profile = make_test_company(
+        database_connection, name="NoProfile", domain="noprofile.com"
+    )
+    create_contact(
+        database_connection, email="x@noprofile.com", company_id=no_profile.id
+    )
+    under_cap = make_test_company(
+        database_connection, name="UnderCap", domain="undercap.com"
+    )
+    at_cap = make_test_company(database_connection, name="AtCap", domain="atcap.com")
+    for company in (under_cap, at_cap):
+        update_company(
+            database_connection,
+            company.id,
+            profile={
+                "summary": "Co.",
+                "products": ["P1"],
+                "target_customers": "Enterprise.",
+                "sources": ["https://x/"],
+            },
+        )
+    create_contact(database_connection, email="a@undercap.com", company_id=under_cap.id)
+    for i in range(5):
+        create_contact(
+            database_connection, email=f"c{i}@atcap.com", company_id=at_cap.id
+        )
+
+    discover = list_companies(database_connection, has_profile=True, max_contacts=4)
+    assert {c.id for c in discover} == {under_cap.id}
+
+
 def test_search_companies(database_connection: psycopg.Connection[dict[str, Any]]):
     make_test_company(database_connection, name="Acme Inc", domain="acme.com")
     make_test_company(database_connection, name="Beta Corp", domain="beta.com")
@@ -275,6 +394,21 @@ def test_search_companies(database_connection: psycopg.Connection[dict[str, Any]
     assert len(results) == 1
     assert results[0].name == "Acme Inc"
     assert results[0].has_profile is False
+
+
+def test_search_companies_projects_contact_count(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.96: search_companies mirrors the contact_count projection."""
+    from mailpilot.database import create_contact
+
+    company = make_test_company(database_connection, name="Acme", domain="acme.com")
+    create_contact(database_connection, email="a@acme.com", company_id=company.id)
+    create_contact(database_connection, email="b@acme.com", company_id=company.id)
+
+    results = search_companies(database_connection, "acme")
+    assert len(results) == 1
+    assert results[0].contact_count == 2
 
 
 def test_search_companies_projects_has_profile(

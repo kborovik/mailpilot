@@ -588,7 +588,12 @@ def test_company_list_with_limit(runner: CliRunner, mock_connection: MagicMock) 
 
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
-        mock_connection, limit=5, since=None, has_profile=None
+        mock_connection,
+        limit=5,
+        since=None,
+        has_profile=None,
+        max_contacts=None,
+        min_contacts=None,
     )
 
 
@@ -608,6 +613,8 @@ def test_company_list_with_since(runner: CliRunner, mock_connection: MagicMock) 
         limit=100,
         since="2024-01-01T00:00:00",
         has_profile=None,
+        max_contacts=None,
+        min_contacts=None,
     )
 
 
@@ -623,7 +630,12 @@ def test_company_list_has_profile_flag(
 
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
-        mock_connection, limit=100, since=None, has_profile=True
+        mock_connection,
+        limit=100,
+        since=None,
+        has_profile=True,
+        max_contacts=None,
+        min_contacts=None,
     )
 
 
@@ -639,7 +651,12 @@ def test_company_list_no_profile_flag(
 
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
-        mock_connection, limit=100, since=None, has_profile=False
+        mock_connection,
+        limit=100,
+        since=None,
+        has_profile=False,
+        max_contacts=None,
+        min_contacts=None,
     )
 
 
@@ -661,6 +678,50 @@ def test_company_list_has_profile_xor(
     assert data["error"] == "validation_error"
     assert "mutually exclusive" in data["message"]
     mock_list.assert_not_called()
+
+
+def test_company_list_max_contacts_flag(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.96: --max-contacts N flows to list_companies as the upper bound."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_companies", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(main, ["company", "list", "--max-contacts", "4"])
+
+    assert result.exit_code == 0
+    mock_list.assert_called_once_with(
+        mock_connection,
+        limit=100,
+        since=None,
+        has_profile=None,
+        max_contacts=4,
+        min_contacts=None,
+    )
+
+
+def test_company_list_min_contacts_flag(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.96: --min-contacts N flows to list_companies as the lower bound."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_companies", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(main, ["company", "list", "--min-contacts", "1"])
+
+    assert result.exit_code == 0
+    mock_list.assert_called_once_with(
+        mock_connection,
+        limit=100,
+        since=None,
+        has_profile=None,
+        max_contacts=None,
+        min_contacts=1,
+    )
 
 
 # -- company view --------------------------------------------------------------
@@ -927,7 +988,9 @@ def test_company_export_envelope_and_file(
     company_a = _make_company(id="id-1", domain="acme.com")
     company_b = _make_company(id="id-2", domain="beta.com")
     summaries = [
-        CompanySummary.model_validate({**c.model_dump(), "has_profile": False})
+        CompanySummary.model_validate(
+            {**c.model_dump(), "has_profile": False, "contact_count": 0}
+        )
         for c in (company_a, company_b)
     ]
     export_file = str(tmp_path / "companies.json")
@@ -956,7 +1019,9 @@ def test_company_export_stdout_only(
 ) -> None:
     company = _make_company(id="id-1", domain="acme.com")
     summaries = [
-        CompanySummary.model_validate({**company.model_dump(), "has_profile": False})
+        CompanySummary.model_validate(
+            {**company.model_dump(), "has_profile": False, "contact_count": 0}
+        )
     ]
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
@@ -1034,7 +1099,9 @@ def test_company_import_per_row_error_continues_batch(
     """Duplicate domain on row 1 must not block create on row 2 (§V.63)."""
     existing = [_make_company(id="id-existing", domain="acme.com")]
     existing_summaries = [
-        CompanySummary.model_validate({**c.model_dump(), "has_profile": False})
+        CompanySummary.model_validate(
+            {**c.model_dump(), "has_profile": False, "contact_count": 0}
+        )
         for c in existing
     ]
     entries = [

@@ -935,8 +935,15 @@ def list_companies(
     limit: int = 100,
     since: str | None = None,
     has_profile: bool | None = None,
+    max_contacts: int | None = None,
+    min_contacts: int | None = None,
 ) -> list[CompanySummary]:
     """List companies as summaries.
+
+    Joins ``contact`` once (LEFT JOIN) so each summary carries
+    ``contact_count`` (child cardinality, **including disabled** rows per
+    §V.96) without an N+1 probe; the count tracks the discovery-memoization
+    rule, so disabled contacts are counted, not the active-only set.
 
     Args:
         connection: Open database connection.
@@ -945,24 +952,41 @@ def list_companies(
         has_profile: ``True`` returns only rows where ``profile IS NOT NULL``;
             ``False`` returns only rows where ``profile IS NULL``; ``None``
             (default) returns all rows. Per §V.72 operator filter surface.
+        max_contacts: When set, returns only companies whose ``contact_count``
+            is ``<= N`` (inclusive upper bound). Mirrors
+            ``--max-email-confidence`` (§V.95); ``--has-profile --max-contacts
+            4`` expresses the lead-contacts discover set in one query (§V.96).
+        min_contacts: When set, returns only companies whose ``contact_count``
+            is ``>= N`` (inclusive lower bound); composes with ``max_contacts``
+            into a closed range.
 
     Returns:
         List of company summaries ordered by name.
     """
     conditions: list[Composed | SQL] = []
+    having: list[SQL] = []
     params: dict[str, object] = {"limit": limit}
     if since is not None:
-        conditions.append(SQL("created_at >= %(since)s"))
+        conditions.append(SQL("c.created_at >= %(since)s"))
         params["since"] = since
     if has_profile is True:
-        conditions.append(SQL("profile IS NOT NULL"))
+        conditions.append(SQL("c.profile IS NOT NULL"))
     elif has_profile is False:
-        conditions.append(SQL("profile IS NULL"))
+        conditions.append(SQL("c.profile IS NULL"))
+    if max_contacts is not None:
+        having.append(SQL("COUNT(ct.id) <= %(max_contacts)s"))
+        params["max_contacts"] = max_contacts
+    if min_contacts is not None:
+        having.append(SQL("COUNT(ct.id) >= %(min_contacts)s"))
+        params["min_contacts"] = min_contacts
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
+    having_clause = SQL("HAVING ") + SQL(" AND ").join(having) if having else SQL("")
     query = SQL(
-        "SELECT id, name, domain, (profile IS NOT NULL) AS has_profile, created_at "
-        "FROM company {where} ORDER BY LOWER(name) LIMIT %(limit)s"
-    ).format(where=where)
+        "SELECT c.id, c.name, c.domain, (c.profile IS NOT NULL) AS has_profile, "
+        "c.created_at, COUNT(ct.id) AS contact_count "
+        "FROM company c LEFT JOIN contact ct ON ct.company_id = c.id "
+        "{where} GROUP BY c.id {having} ORDER BY LOWER(c.name) LIMIT %(limit)s"
+    ).format(where=where, having=having_clause)
     rows = connection.execute(query, params).fetchall()
     return [CompanySummary.model_validate(row) for row in rows]
 
@@ -980,16 +1004,21 @@ def search_companies(
         limit: Maximum number of results.
 
     Returns:
-        Matching company summaries ordered by name.
+        Matching company summaries ordered by name. Each carries
+        ``contact_count`` (LEFT JOIN contact COUNT, incl. disabled per §V.96),
+        mirroring ``list_companies``.
     """
     pattern = f"%{query}%"
     rows = connection.execute(
         """\
-        SELECT id, name, domain, (profile IS NOT NULL) AS has_profile, created_at
-        FROM company
-        WHERE LOWER(name) LIKE LOWER(%(pattern)s)
-           OR LOWER(domain) LIKE LOWER(%(pattern)s)
-        ORDER BY LOWER(name)
+        SELECT c.id, c.name, c.domain, (c.profile IS NOT NULL) AS has_profile,
+               c.created_at, COUNT(ct.id) AS contact_count
+        FROM company c
+        LEFT JOIN contact ct ON ct.company_id = c.id
+        WHERE LOWER(c.name) LIKE LOWER(%(pattern)s)
+           OR LOWER(c.domain) LIKE LOWER(%(pattern)s)
+        GROUP BY c.id
+        ORDER BY LOWER(c.name)
         LIMIT %(limit)s
         """,
         {"pattern": pattern, "limit": limit},
