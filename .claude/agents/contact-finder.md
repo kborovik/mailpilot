@@ -20,7 +20,7 @@ Procedure (per-company pipeline, `<= 5` contacts; ASCII only):
    ```
    curl -sS --max-time 30 -G "https://api.hunter.io/v2/domain-search" \
      --data-urlencode "domain=<DOMAIN>" \
-     --data-urlencode "limit=25" \
+     --data-urlencode "limit=10" \
      -H "X-API-KEY: $(. ./.env; printf '%s' "$HUNTER_API_KEY")"
    ```
    Read `data.emails[]`: each `{value, first_name, last_name, position, confidence, type}`. `type="generic"` (info@, sales@) is a role inbox -- keep only if no personal decision-maker is found.
