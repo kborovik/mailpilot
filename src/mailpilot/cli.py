@@ -700,6 +700,53 @@ def company_update(company_id: str, name: str | None, profile_json: str | None) 
         connection.close()
 
 
+@company.command("disable")
+@click.argument("company_id")
+@click.option(
+    "--reason",
+    required=True,
+    help="Explanation written to disabled_reason.",
+)
+def company_disable(company_id: str, reason: str) -> None:
+    """Soft-disable a company by writing disabled_reason.
+
+    A disabled company is hidden from `company list` unless `--include-disabled`
+    is passed. Disable is reversible -- re-enable by clearing disabled_reason
+    via `company update`. Disabling an already-disabled company is rejected.
+    """
+    from mailpilot.database import disable_company, get_company, initialize_database
+    from mailpilot.operator_log import cli_mutation, operator_event
+
+    if reason.strip() == "":
+        output_error("reason cannot be empty", "validation_error")
+    connection = initialize_database(_database_url(), require_current_schema=True)
+    try:
+        before = get_company(connection, company_id)
+        if before is None:
+            output_error(f"company not found: {company_id}", "not_found")
+        if before.disabled_reason is not None:
+            output_error(
+                f"company {company_id} is already disabled "
+                f"(reason: {before.disabled_reason})",
+                "validation_error",
+            )
+        with cli_mutation("company", "disable", entity_id=company_id):
+            updated = disable_company(connection, company_id, reason)
+            if updated is None:
+                output_error(
+                    f"company {company_id} is already disabled",
+                    "validation_error",
+                )
+            operator_event(
+                "company.disable",
+                entity_id=company_id,
+                changed=["disabled_reason"],
+            )
+            output_entity("company", updated)
+    finally:
+        connection.close()
+
+
 @company.command("search")
 @click.argument("query")
 @click.option("--limit", default=100, help="Maximum results.")
@@ -742,6 +789,12 @@ def company_search(query: str, limit: int) -> None:
     default=None,
     help="Return only companies with contact_count >= N (composes with --max).",
 )
+@click.option(
+    "--include-disabled",
+    is_flag=True,
+    default=False,
+    help="Include disabled companies (hidden by default).",
+)
 def company_list(
     limit: int,
     since: str | None,
@@ -749,6 +802,7 @@ def company_list(
     no_profile: bool,
     max_contacts: int | None,
     min_contacts: int | None,
+    include_disabled: bool,
 ) -> None:
     """List companies as summaries."""
     from mailpilot.database import initialize_database, list_companies
@@ -773,6 +827,7 @@ def company_list(
             has_profile=profile_filter,
             max_contacts=max_contacts,
             min_contacts=min_contacts,
+            include_disabled=include_disabled,
         )
         output({"companies": [c.model_dump(mode="json") for c in companies]})
     finally:
@@ -811,7 +866,7 @@ def company_export(file: str | None) -> None:
 
     connection = initialize_database(_database_url())
     try:
-        summaries = list_companies(connection, limit=100_000)
+        summaries = list_companies(connection, limit=100_000, include_disabled=True)
         full = [get_company(connection, s.id) for s in summaries]
         data = [c.model_dump(mode="json") for c in full if c is not None]
         if file is not None:

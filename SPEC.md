@@ -184,7 +184,7 @@ T154|x|impl §V.112(+) per §B.92 — seeded_stale distinct from global stale in
 T155|x|impl §V.113(+) per §B.93 — contact-finder.md verify step -> Bouncer real-time single GET /email/verify (per-email, <=5), drop batch/sync; empty|4xx/5xx|missing-status = verify-failure not clean unknown; add guard test grepping contact-finder.md (batch/sync absent, single-verify present); TDD|V113,B93
 T156|x|impl §V.8(∆) per §B.94 — extend ContactView w/ title + email_confidence + company_domain; verb-invariant test; TDD|V8,B94
 T157|x|impl §V.96(∆) — CompanySummary + list_companies contact_count; --max-contacts/--min-contacts; TDD|V96
-T158|.|impl §V.114(+) + §V.96(∆) per §B.95 — company.disabled_reason col + migration; `company disable` verb + double-disable gate; `company list` default-excludes disabled + --include-disabled; Company/CompanySummary models; lead-contacts disables company on contact-finder zero-genuine verdict (status=skipped no-DM reason, NEVER status=failed) w/ no_contacts_found:<date> at run end + SKILL.md prose; TDD|V114,V96,B95
+T158|x|impl §V.114(+) + §V.96(∆) per §B.95 — company.disabled_reason col + migration; `company disable` verb + double-disable gate; `company list` default-excludes disabled + --include-disabled; Company/CompanySummary models; lead-contacts disables company on contact-finder zero-genuine verdict (status=skipped no-DM reason, NEVER status=failed) w/ no_contacts_found:<date> at run end + SKILL.md prose; TDD|V114,V96,B95
 
 ## §B BUGS
 

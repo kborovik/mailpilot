@@ -937,6 +937,7 @@ def list_companies(
     has_profile: bool | None = None,
     max_contacts: int | None = None,
     min_contacts: int | None = None,
+    include_disabled: bool = False,
 ) -> list[CompanySummary]:
     """List companies as summaries.
 
@@ -944,6 +945,11 @@ def list_companies(
     ``contact_count`` (child cardinality, **including disabled** rows per
     §V.96) without an N+1 probe; the count tracks the discovery-memoization
     rule, so disabled contacts are counted, not the active-only set.
+
+    Disabled companies (``disabled_reason IS NOT NULL``) are hidden by default
+    (§V.114) -- a company memoized as having no discoverable contacts drops
+    out of the listing and so out of the lead-contacts discover set (§V.96).
+    Pass ``include_disabled=True`` to surface them.
 
     Args:
         connection: Open database connection.
@@ -959,6 +965,8 @@ def list_companies(
         min_contacts: When set, returns only companies whose ``contact_count``
             is ``>= N`` (inclusive lower bound); composes with ``max_contacts``
             into a closed range.
+        include_disabled: When ``True``, includes disabled companies; the
+            default (``False``) hides them (§V.114).
 
     Returns:
         List of company summaries ordered by name.
@@ -973,6 +981,8 @@ def list_companies(
         conditions.append(SQL("c.profile IS NOT NULL"))
     elif has_profile is False:
         conditions.append(SQL("c.profile IS NULL"))
+    if not include_disabled:
+        conditions.append(SQL("c.disabled_reason IS NULL"))
     if max_contacts is not None:
         having.append(SQL("COUNT(ct.id) <= %(max_contacts)s"))
         params["max_contacts"] = max_contacts
@@ -983,7 +993,7 @@ def list_companies(
     having_clause = SQL("HAVING ") + SQL(" AND ").join(having) if having else SQL("")
     query = SQL(
         "SELECT c.id, c.name, c.domain, (c.profile IS NOT NULL) AS has_profile, "
-        "c.created_at, COUNT(ct.id) AS contact_count "
+        "c.disabled_reason, c.created_at, COUNT(ct.id) AS contact_count "
         "FROM company c LEFT JOIN contact ct ON ct.company_id = c.id "
         "{where} GROUP BY c.id {having} ORDER BY LOWER(c.name) LIMIT %(limit)s"
     ).format(where=where, having=having_clause)
@@ -1012,7 +1022,7 @@ def search_companies(
     rows = connection.execute(
         """\
         SELECT c.id, c.name, c.domain, (c.profile IS NOT NULL) AS has_profile,
-               c.created_at, COUNT(ct.id) AS contact_count
+               c.disabled_reason, c.created_at, COUNT(ct.id) AS contact_count
         FROM company c
         LEFT JOIN contact ct ON ct.company_id = c.id
         WHERE LOWER(c.name) LIKE LOWER(%(pattern)s)
@@ -1078,6 +1088,47 @@ def update_company(
     updates["id"] = company_id
     query = _build_update("company", updates, SQL("id = %(id)s"))
     row = connection.execute(query, updates).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Company.model_validate(row)
+
+
+def disable_company(
+    connection: psycopg.Connection[dict[str, Any]],
+    company_id: str,
+    reason: str,
+) -> Company | None:
+    """Soft-disable a company by writing ``disabled_reason``.
+
+    A ``disabled_reason IS NULL`` gate blocks double-disable: an already
+    disabled company does not match, so the call returns ``None`` without
+    overwriting an earlier reason. Disable is reversible -- clear
+    ``disabled_reason`` via ``update_company`` to re-enable the company (a
+    company with no discoverable contacts this cycle may have some next).
+
+    Args:
+        connection: Open database connection.
+        company_id: Company ID.
+        reason: Explanation written to ``disabled_reason`` (stored verbatim);
+            the lead-contacts memoization path writes
+            ``no_contacts_found:<YYYY-MM-DD>``.
+
+    Returns:
+        Updated company, or ``None`` when no active (not-yet-disabled) company
+        with that id exists -- i.e. missing or already disabled.
+    """
+    row = connection.execute(
+        """\
+        UPDATE company
+        SET disabled_reason = %(reason)s,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = %(id)s
+          AND disabled_reason IS NULL
+        RETURNING *
+        """,
+        {"id": company_id, "reason": reason},
+    ).fetchone()
     connection.commit()
     if row is None:
         return None

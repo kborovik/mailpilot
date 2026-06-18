@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS company (
     domain                TEXT UNIQUE NOT NULL,
     profile               JSONB,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    disabled_reason       TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_company_name ON company(LOWER(name));

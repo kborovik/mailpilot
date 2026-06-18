@@ -56,6 +56,7 @@ class Company(BaseModel):
     name: str
     domain: str
     profile: dict[str, Any] | None = None
+    disabled_reason: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -75,6 +76,7 @@ class CompanySummary(BaseModel):
     domain: str
     has_profile: bool
     contact_count: int
+    disabled_reason: str | None = None
     created_at: datetime
 
 
@@ -481,6 +483,7 @@ class CompanyView(BaseModel):
     name: str
     domain: str
     profile: dict[str, Any] | None = None
+    disabled_reason: str | None = None
     notes: list[Note] = []
     notes_total: int = 0
     created_at: datetime

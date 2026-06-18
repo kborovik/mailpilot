@@ -15,7 +15,7 @@ model: opus
 
 Turn enriched company rows into verified decision-maker `contact` rows. For each company w/ a `profile` and `< 5` contacts, a Sonnet `contact-finder` agent discovers people (Hunter + TheOrg), picks `<= 5` decision-makers, finds + verifies their emails (Hunter Email Finder + Bouncer), and seeds them via `mailpilot contact create`.
 
-Spec: §V.96 (discover set + admit-all + idempotent memoization), §V.95 (`contact.title` + `contact.email_confidence` lead-metadata columns), §V.73 (`lead-contacts-find.js` body byte-identical to the skill-mirror snippet below).
+Spec: §V.96 (discover set + admit-all + idempotent memoization + negative-verdict disable), §V.114 (company soft-disable + `--include-disabled`), §V.95 (`contact.title` + `contact.email_confidence` lead-metadata columns), §V.73 (`lead-contacts-find.js` body byte-identical to the skill-mirror snippet below).
 
 Sibling skill `/lead-companies` seeds + enriches the company rows this skill consumes -- run it first.
 
@@ -49,7 +49,7 @@ So full pipeline = 1 Bash (stale query) + 1 Workflow (discover) + the batch-gate
 
 ## Stage: stale query
 
-Discover set per §V.96 = companies w/ `profile IS NOT NULL` AND contact-count `< 5`. There is no single CLI filter for this join, so cross-reference `company list --has-profile` against a per-company `contact list` count. Count INCLUDES disabled rows (`--include-disabled`) so a company whose 5 discovered addresses later bounce/unsubscribe still drops out of the discover set -- the persisted rows memoize the verdict and re-run does not re-discover them (§V.96).
+Discover set per §V.96 = companies w/ `profile IS NOT NULL` AND contact-count `< 5`, EXCLUDING disabled companies. `company list` projects `contact_count` (LEFT JOIN COUNT, INCLUDING disabled contact rows so a company whose addresses later bounce still memoizes out) and default-excludes disabled companies (§V.114), so `company list --has-profile --max-contacts 4` expresses the entire discover set in ONE call -- `--max-contacts 4` is `contact_count <= 4` (i.e. `< 5`). This replaces the old per-company `contact list` N+1 probe (§V.96). A company disabled by the negative-verdict memoization stage (`no_contacts_found:<date>`) is hidden by default and so never re-enters the discover set.
 
 ONE Bash call (stdout-only JSON; see §Conventions on the always-on stderr operator-log line):
 
@@ -57,26 +57,20 @@ ONE Bash call (stdout-only JSON; see §Conventions on the always-on stderr opera
 python3 - <<'PY'
 import json, subprocess
 
-def mp(*args):
-    out = subprocess.run(["uv", "run", "mailpilot", *args],
-                         capture_output=True, text=True).stdout
-    return json.loads(out)
-
-companies = mp("company", "list", "--has-profile", "--limit", "100")["companies"]
-stale = []
-for company in companies:
-    contacts = mp("contact", "list", "--company-id", company["id"],
-                  "--include-disabled", "--limit", "5")["contacts"]
-    if len(contacts) < 5:
-        stale.append({"id": company["id"], "domain": company["domain"],
-                      "name": company["name"]})
+out = subprocess.run(
+    ["uv", "run", "mailpilot", "company", "list",
+     "--has-profile", "--max-contacts", "4", "--limit", "100"],
+    capture_output=True, text=True).stdout
+companies = json.loads(out)["companies"]
+stale = [{"id": c["id"], "domain": c["domain"], "name": c["name"]}
+         for c in companies]
 print(json.dumps(stale))
 PY
 ```
 
-`--limit 5` on the contact list caps the count probe -- any company already at `>= 5` returns 5 rows, fails `< 5`, and is excluded. The printed JSON array is the `stale` value handed to the discover stage.
+The printed JSON array is the `stale` value handed to the discover stage.
 
-Scoped runs (UUID/domain args): resolve each arg to its company row first; drop rows that are `profile IS NULL` (`no_profile`) or already at `>= 5` contacts (`contact_cap`); pass only the survivors as the `stale` array.
+Scoped runs (UUID/domain args): resolve each arg to its company row first; drop rows that are `profile IS NULL` (`no_profile`), already at `>= 5` contacts (`contact_cap`), or disabled (`disabled`); pass only the survivors as the `stale` array.
 
 ## Stage: batch gate
 
@@ -165,6 +159,22 @@ return results.filter(Boolean)
 
 The batch loop caps in-flight finders at 3 per `parallel()` call -- the chunking, not any runtime setting, enforces the concurrency-3 budget per §V.73. The Workflow runtime's own per-call cap = `min(16, cores-2)` is a separate, higher ceiling.
 
+## Stage: negative-verdict memoization (§V.96/§V.114)
+
+At run end -- after the discover verdicts are collected -- disable every company a finder reported as genuinely empty, so it drops out of the discover set and the next run does not re-burn Hunter/TheOrg credits on it (closes §B.95). This is the negative mirror of the positive memoization (a persisted `contact` row stops re-discovery via `contact.email` UNIQUE §V.90): a finder that ran and found nobody leaves no row, so the empty verdict MUST be memoized on the company instead.
+
+Walk each verdict from the discover stage:
+
+- `status == "skipped"` AND `contacts_created == 0` AND the `reason` denotes no decision-makers (the finder begins that `reason` with "no decision-makers") -> the company yielded ZERO genuine contacts. Disable it with today's date:
+  ```
+  uv run mailpilot company disable <company_id> --reason "no_contacts_found:<YYYY-MM-DD>"
+  ```
+  A disabled company is hidden from `company list` default (§V.114), so the next stale query (`company list --has-profile --max-contacts 4`) will not re-dispatch a finder for it.
+- `status == "failed"` -> a TRANSIENT vendor/transport fault. NEVER disable -- the company stays in the discover set and is retried next run. Disabling here would strand a retryable company.
+- `status == "seeded"`, or `status == "skipped"` with an "already seeded" reason -> the company has contacts; do NOT disable.
+
+The trigger is the finder VERDICT, never a blanket `contact_count == 0` sweep: a company sits at zero contacts simply because no finder has run yet. Only a finder that completed and returned a definitive no-decision-makers verdict memoizes the empty result. Disable is reversible -- clearing `disabled_reason` re-enables the company (unlike a bounced contact, a company with no discoverable contacts this cycle may have some next), and `mailpilot company list --include-disabled` surfaces the memoized rows for review.
+
 ## Risk policy (admit-all, §V.96)
 
 - Every discovered + Bouncer-verified email -> seeded as a `contact`. Low Bouncer score never drops a row.
@@ -185,7 +195,7 @@ This skill itself needs no vendor key; it only queries the local DB and dispatch
 
 ## Run summary
 
-After all stages, emit one aggregate JSON: `{"seeded": N, "skipped": N, "failed": N, "flagged": N, "results": [...], "ok": true}` -- `seeded` = companies w/ `>=1` new contact, `flagged` = total high-risk rows surfaced for review, `results` = the per-company verdicts. When the batch gate (per §Stage: batch gate) caps below the stale-count -- operator picks `First 10`/`First 25` over a larger N, or `--limit N` < stale-count -- append `"deferred": <stale-count - dispatched>` (the stale companies the stale query found minus the capped count actually dispatched to discover) so the operator sees how many companies were left under the `< 5`-contact threshold for a follow-up run per §V.97; all stale dispatched -> `deferred: 0` or omit the field. A bare `seeded` count is never the sole remainder signal. On scoped runs, include a `"skipped": [{"input": ..., "reason": "no_profile" | "contact_cap" | "not_found"}]` detail so the operator sees which args were not dispatched.
+After all stages, emit one aggregate JSON: `{"seeded": N, "skipped": N, "failed": N, "flagged": N, "disabled": N, "results": [...], "ok": true}` -- `seeded` = companies w/ `>=1` new contact, `flagged` = total high-risk rows surfaced for review, `disabled` = companies memoized as having no discoverable contacts this run (the negative-verdict stage, `no_contacts_found:<date>`), `results` = the per-company verdicts. When the batch gate (per §Stage: batch gate) caps below the stale-count -- operator picks `First 10`/`First 25` over a larger N, or `--limit N` < stale-count -- append `"deferred": <stale-count - dispatched>` (the stale companies the stale query found minus the capped count actually dispatched to discover) so the operator sees how many companies were left under the `< 5`-contact threshold for a follow-up run per §V.97; all stale dispatched -> `deferred: 0` or omit the field. A bare `seeded` count is never the sole remainder signal. On scoped runs, include a `"skipped": [{"input": ..., "reason": "no_profile" | "contact_cap" | "not_found"}]` detail so the operator sees which args were not dispatched.
 
 ## Conventions
 

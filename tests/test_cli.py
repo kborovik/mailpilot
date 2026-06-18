@@ -594,6 +594,7 @@ def test_company_list_with_limit(runner: CliRunner, mock_connection: MagicMock) 
         has_profile=None,
         max_contacts=None,
         min_contacts=None,
+        include_disabled=False,
     )
 
 
@@ -615,6 +616,7 @@ def test_company_list_with_since(runner: CliRunner, mock_connection: MagicMock) 
         has_profile=None,
         max_contacts=None,
         min_contacts=None,
+        include_disabled=False,
     )
 
 
@@ -636,6 +638,7 @@ def test_company_list_has_profile_flag(
         has_profile=True,
         max_contacts=None,
         min_contacts=None,
+        include_disabled=False,
     )
 
 
@@ -657,6 +660,7 @@ def test_company_list_no_profile_flag(
         has_profile=False,
         max_contacts=None,
         min_contacts=None,
+        include_disabled=False,
     )
 
 
@@ -699,6 +703,7 @@ def test_company_list_max_contacts_flag(
         has_profile=None,
         max_contacts=4,
         min_contacts=None,
+        include_disabled=False,
     )
 
 
@@ -721,7 +726,125 @@ def test_company_list_min_contacts_flag(
         has_profile=None,
         max_contacts=None,
         min_contacts=1,
+        include_disabled=False,
     )
+
+
+def test_company_list_include_disabled_flag(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.114: --include-disabled forwards include_disabled=True."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_companies", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(main, ["company", "list", "--include-disabled"])
+
+    assert result.exit_code == 0
+    mock_list.assert_called_once_with(
+        mock_connection,
+        limit=100,
+        since=None,
+        has_profile=None,
+        max_contacts=None,
+        min_contacts=None,
+        include_disabled=True,
+    )
+
+
+# -- company disable -----------------------------------------------------------
+
+
+def test_company_disable_happy_path(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.114: company disable writes disabled_reason and returns the company."""
+    before = _make_company(disabled_reason=None)
+    after = _make_company(disabled_reason="no_contacts_found:2026-06-18")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=before),
+        patch("mailpilot.database.disable_company", return_value=after) as mock_disable,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "disable",
+                before.id,
+                "--reason",
+                "no_contacts_found:2026-06-18",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_disable.assert_called_once_with(
+        mock_connection, before.id, "no_contacts_found:2026-06-18"
+    )
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["company"]["disabled_reason"] == "no_contacts_found:2026-06-18"
+
+
+def test_company_disable_already_disabled(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.114: double-disable is rejected by the disabled_reason IS NULL gate."""
+    before = _make_company(disabled_reason="no_contacts_found:2026-06-01")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=before),
+        patch("mailpilot.database.disable_company") as mock_disable,
+    ):
+        result = runner.invoke(
+            main, ["company", "disable", before.id, "--reason", "again"]
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "validation_error"
+    assert "already disabled" in data["message"]
+    mock_disable.assert_not_called()
+
+
+def test_company_disable_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.114: disabling a missing company yields a not_found envelope."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=None),
+        patch("mailpilot.database.disable_company") as mock_disable,
+    ):
+        result = runner.invoke(
+            main, ["company", "disable", "missing-id", "--reason", "x"]
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "not_found"
+    mock_disable.assert_not_called()
+
+
+def test_company_disable_empty_reason(runner: CliRunner) -> None:
+    """§V.114: an empty reason is rejected before any DB call."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+    ):
+        result = runner.invoke(
+            main, ["company", "disable", "some-id", "--reason", "  "]
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "validation_error"
 
 
 # -- company view --------------------------------------------------------------

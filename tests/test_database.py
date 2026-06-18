@@ -35,6 +35,7 @@ from mailpilot.database import (
     create_task,
     create_tasks_for_routed_emails,
     create_workflow,
+    disable_company,
     disable_enrollment,
     find_pending_first_touch_task,
     get_account,
@@ -385,6 +386,106 @@ def test_list_companies_discover_set_one_query(
 
     discover = list_companies(database_connection, has_profile=True, max_contacts=4)
     assert {c.id for c in discover} == {under_cap.id}
+
+
+def test_disable_company_sets_reason(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.114: disable_company writes disabled_reason verbatim."""
+    company = make_test_company(database_connection)
+    updated = disable_company(
+        database_connection, company.id, "no_contacts_found:2026-06-18"
+    )
+    assert updated is not None
+    assert updated.disabled_reason == "no_contacts_found:2026-06-18"
+    fetched = get_company(database_connection, company.id)
+    assert fetched is not None
+    assert fetched.disabled_reason == "no_contacts_found:2026-06-18"
+
+
+def test_disable_company_double_disable_gate_returns_none(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.114: the disabled_reason IS NULL gate blocks double-disable.
+
+    A second disable does not match the already-disabled row, returns None,
+    and leaves the first reason intact (mirrors §V.10 tag disable).
+    """
+    company = make_test_company(database_connection)
+    assert disable_company(database_connection, company.id, "first reason") is not None
+    second = disable_company(database_connection, company.id, "second reason")
+    assert second is None
+    fetched = get_company(database_connection, company.id)
+    assert fetched is not None
+    assert fetched.disabled_reason == "first reason"
+
+
+def test_disable_company_not_found_returns_none(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.114: disabling a missing company returns None."""
+    assert disable_company(database_connection, "nonexistent", "reason") is None
+
+
+def test_list_companies_excludes_disabled_by_default(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.114/§V.96: disabled companies drop out of `company list` by default.
+
+    A disabled company is out of the lead-contacts discover set; passing
+    include_disabled=True surfaces it again with its reason projected.
+    """
+    active = make_test_company(database_connection, name="Active", domain="active.com")
+    disabled = make_test_company(
+        database_connection, name="Disabled", domain="disabled.com"
+    )
+    disable_company(database_connection, disabled.id, "no_contacts_found:2026-06-18")
+
+    default = list_companies(database_connection)
+    assert {c.id for c in default} == {active.id}
+
+    everyone = list_companies(database_connection, include_disabled=True)
+    by_id = {c.id: c for c in everyone}
+    assert set(by_id) == {active.id, disabled.id}
+    assert by_id[disabled.id].disabled_reason == "no_contacts_found:2026-06-18"
+    assert by_id[active.id].disabled_reason is None
+
+
+def test_disable_company_reenable_via_update(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.114: clearing disabled_reason re-enables the company.
+
+    Unlike terminal tag/contact disable, a company disable is reversible -- a
+    re-enabled company reappears in the default listing.
+    """
+    company = make_test_company(database_connection)
+    disable_company(database_connection, company.id, "no_contacts_found:2026-06-18")
+    assert list_companies(database_connection) == []
+
+    reenabled = update_company(database_connection, company.id, disabled_reason=None)
+    assert reenabled is not None
+    assert reenabled.disabled_reason is None
+    assert {c.id for c in list_companies(database_connection)} == {company.id}
+
+
+def test_company_view_field_set_superset_of_base_and_summary() -> None:
+    """§V.8: CompanyView field set ⊇ Company columns + CompanySummary projection.
+
+    Recurrence guard: a view model omitting a base column is silently stripped
+    from ``**company.model_dump()`` (Pydantic ``extra=ignore``), so disabled_reason
+    must live on CompanyView too or `company view` would drop it.
+    """
+    from mailpilot.models import Company, CompanySummary, CompanyView
+
+    base = set(Company.model_fields)
+    summary = set(CompanySummary.model_fields)
+    view = set(CompanyView.model_fields)
+
+    assert base <= view, f"CompanyView missing base columns: {base - view}"
+    assert "disabled_reason" in base
+    assert "disabled_reason" in summary
+    assert "disabled_reason" in view
 
 
 def test_search_companies(database_connection: psycopg.Connection[dict[str, Any]]):
