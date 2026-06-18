@@ -175,10 +175,11 @@ Why admit-all: dropping a bad/unknown email means re-discovering + re-verifying 
 
 ## Vendor keys
 
-The `contact-finder` agent (not this skill, not app code) calls three vendors -- Hunter, TheOrg, Bouncer. Keys live in the operator's `pass` store, env-only per §V.96 (NOT in `settings.py`, NOT in telemetry):
+The `contact-finder` agent (not this skill, not app code) calls three vendors -- Hunter, TheOrg, Bouncer. Keys are sourced from the repo-root `.env` file, env-only per §V.96 (NOT in `settings.py`, NOT in telemetry):
 
-- `pass search THEORG_API_KEY` (and `HUNTER_API_KEY`, `BOUNCER_API_KEY`) locates each entry.
-- The agent injects each key inline at call time via `$(pass show <NAME>)` -- never echoed, never persisted by app code.
+- `.env` is gitignored and holds one `KEY=value` line each for `HUNTER_API_KEY`, `THEORG_API_KEY`, `BOUNCER_API_KEY`.
+- The agent (running from the repo root) reads each key inline at call time by sourcing `.env` in a subshell -- `$(. ./.env; printf '%s' "$HUNTER_API_KEY")` -- never echoed, never persisted by app code.
+- Back the file up encrypted with `make env-backup` (gpg -> `.env.gpg`, committable); restore by decrypting `.env.gpg` back to `.env`.
 
 This skill itself needs no vendor key; it only queries the local DB and dispatches agents.
 
@@ -193,7 +194,7 @@ Shared across the lead-pipeline siblings (§V.100 single-source) -> see `.claude
 ## Prerequisites
 
 - `mailpilot` installed locally w/ a working DB (`mailpilot config get database_url`).
-- `pass` on PATH with `HUNTER_API_KEY`, `THEORG_API_KEY`, `BOUNCER_API_KEY` entries (the `contact-finder` agent reads them).
+- A repo-root `.env` (gitignored) with `HUNTER_API_KEY`, `THEORG_API_KEY`, `BOUNCER_API_KEY` (`KEY=value` per line); the `contact-finder` agent sources it at call time. Confirm with `. ./.env && [ -n "$HUNTER_API_KEY" ] && echo ok` before a run -- a missing key 401s every vendor call. Back up encrypted via `make env-backup` -> `.env.gpg`.
 - `curl` on PATH (the agent's vendor transport).
 - Anthropic credentials reachable (Sonnet finders).
 - `>=1` company already enriched (`profile IS NOT NULL`) -- run `/lead-companies` first.

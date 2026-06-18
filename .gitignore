@@ -3,6 +3,7 @@
 .claude/ralph-loop.local.md
 .claude/skills/*-workspace/
 .claude/worktrees/
+.skill-eval/
 .env
 .firecrawl/
 .mptest/

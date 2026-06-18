@@ -69,6 +69,9 @@ uv.lock: pyproject.toml
 config-backup:
 	gpg -er E4AFCA7FBB19FC029D519A524AEBB5178D5E96C1 -o config.json.gpg ~/.mailpilot/config.json
 
+env-backup:
+	gpg --yes -er E4AFCA7FBB19FC029D519A524AEBB5178D5E96C1 -o .env.gpg .env
+
 ###############################################################################
 # Colors and Headers
 ###############################################################################
