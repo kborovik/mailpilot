@@ -59,7 +59,7 @@ Every `list` filter flag belongs to exactly one of six families, each with a fix
 1. **Scope** — `--<singular-noun>-id <UUID>`. Narrow to children of a parent by its foreign key (FK). Validation runs `get_<entity>` and returns a `not_found` envelope when the referenced id is absent.
 2. **Enum** — `--<axis> <value>` with `type=click.Choice(<schema enum>)`. Any column whose value set is a schema CHECK enum must be a `Choice` mirroring it, never a free string (§V.88). The `--status` value set is entity-local. Fixes `--route-method`.
 3. **Range** — `--min-<field>` and `--max-<field>`. Numeric or ordinal. Both bounds are offered, both inclusive and composable. NULL-inclusive where the column is nullable and meaningful (§V.95).
-4. **Presence** — `--<field>/--no-<field>`, a single tri-state with `default=None`. Marks a nullable column as has or hasn't. One Click option replaces the two-flag form and its manual XOR.
+4. **Presence** — `--has-<field>/--no-<field>`, a single tri-state with `default=None`. Marks a nullable column as has or hasn't. One Click option replaces the two-flag form and its manual XOR. The two sides need no shared stem: Click derives the parameter name (`has_<field>`) from the positive side, so `--no-<field>` is a clean off-switch with no `--no-has-<field>` artifact.
 5. **Text-match** — field-named (`--company-domain`, `--title`, `--from`, `--to`). Exact match only on `list`. Case-folding follows the column's natural-key semantics (§V.90 — domain and email are case-insensitive). Substring or fuzzy match belongs to the `search` verb, never a `list` filter.
 6. **Lifecycle** — `--include-disabled` (is_flag, default False) plus `--since` and `--until <ISO>`. A soft-deletable entity hides disabled rows by default and opts in via `--include-disabled` (§V.10, §V.114). The time window is a closed interval `[since, until]`, both bounds inclusive, mirroring Range, over one declared column per entity (`created_at` default; `updated_at` enrollment; `scheduled_at` task). The `help=` text always names the bound column. Every list command offers `--since` and `--until`.
 
@@ -80,7 +80,7 @@ A filter-option vocabulary lives at the top of `cli.py` or in `_filters.py`, com
 @scope_option("company")             # --company-id + get_company validation -> not_found
 @enum_option("status", EMAIL_STATUS) # --status, Choice(schema enum)
 @range_options("contacts")           # --min-contacts / --max-contacts
-@presence_option("profile")          # --profile/--no-profile tri-state
+@presence_option("profile")          # --has-profile/--no-profile tri-state
 ```
 
 This collapses the 16 repeated `--limit` flags and the per-entity copy-paste to one source of truth. Asking whether a flag is in the standard is the same as asking whether it came from a vocabulary decorator.
@@ -155,7 +155,7 @@ Notation: a bare option is required, a bracketed `[--option]` is optional, and `
 - `company search <query>`
 - `company export [--file <path>]` — write the company catalog as JSON.
 - `company import [--file <path>]` — load a company catalog from JSON.
-- `company list` — filters: `[--profile/--no-profile]` *(standard; today `--has-profile` plus `--no-profile`)*, `[--min-contacts <int>]`, `[--max-contacts <int>]`, `[--tag <name>]` *(standard)*, `[--include-disabled]`. Projects `contact_count`.
+- `company list` — filters: `[--has-profile/--no-profile]` *(standard; collapses today's two-flag `--has-profile` plus `--no-profile` into one tri-state)*, `[--min-contacts <int>]`, `[--max-contacts <int>]`, `[--tag <name>]` *(standard)*, `[--include-disabled]`. Projects `contact_count`.
 
 ### contact
 
@@ -260,6 +260,7 @@ Notation: a bare option is required, a bracketed `[--option]` is optional, and `
 - **Decision:** A Scope filter with a missing id returns `not_found`. **Why:** This matches existing email, workflow, enrollment, and task validation (`cli.py:1478`); a silent-empty result hides operator typos.
 - **Decision:** List text filters are exact only; substring moves to `search`. **Why:** This keeps `list` semantics predictable and indexable; substring and fuzzy match are the search verb's purpose. `--title` case-insensitive substring is the lone deviation, fixed by the retrofit.
 - **Decision:** Rename `--type` to `--direction` with no alias. **Why:** No scripts depend on `--type` yet; one canonical name beats the cost of carrying a deprecated alias.
+- **Decision:** The Presence tri-state is named `--has-<field>/--no-<field>`, not `--<field>/--no-<field>`. **Why:** `--has-profile` reads as "has a profile" where bare `--profile` is ambiguous; Click does not require matching stems and derives the parameter name from the positive side, so the negative stays the clean `--no-profile` (no `--no-has-profile`). The derived `has_profile` param also matches the existing `list_companies` argument and the projected `CompanySummary.has_profile`, so no downstream rename.
 - **Decision:** `--limit` is the only result control; no `--offset` or `--order-by`. **Why:** YAGNI — no paging or sort demand yet.
 - **Decision:** Add `--until` to every list command now. **Why:** A symmetric closed-interval window everywhere beats per-entity asymmetry, and a shared decorator makes it low-cost.
 - **Decision:** One §T retrofits all 11 list commands in a single pass. **Why:** A half-applied convention is worse than none; the decorators make the sweep mechanical.
