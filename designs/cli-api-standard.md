@@ -50,7 +50,7 @@ Every command picks one verb from the closed set (§I.cli). The verbs group by r
 - **Search** — a positional `<query>` argument plus `--limit`: `contact search <query>`.
 - **Filters** — options only, drawn from the six families below.
 - **Parent scope** — `add` and parent-scoped reads name the owner with a Scope option (`--contact-id` or `--company-id`, exactly one where the entity allows either).
-- **Account reference** — account-requiring commands accept `--account-id` or `--account-email`, exactly one, resolved through a shared helper (§V.107). The email resolves case-insensitively per the account natural key (§V.90).
+- **Account reference** — account-requiring commands accept `--account-id` or `--account-email`, exactly one, resolved through a shared helper (§V.107). The email resolves case-insensitively per the account natural key (§V.90). `account sync` reuses the same resolver but makes the pair optional — at most one when given, all accounts when both are omitted — since sync defaults to the full account set rather than requiring a target.
 
 ## Filter flags (six families)
 
@@ -143,7 +143,7 @@ Notation: a bare option is required, a bracketed `[--option]` is optional, and `
 - `account create --email <addr> [--display-name <text>]`
 - `account view <account_id>`
 - `account update <account_id> [--display-name <text>]`
-- `account sync [--account-id <id>]` — one-shot Gmail sync; all accounts when omitted.
+- `account sync [--account-id <id> | --account-email <addr>] [--since <iso>]` — one-shot Gmail sync; all accounts when no selector is given, at most one when given. `--since` bounds the initial full-INBOX backfill (a Gmail `after:` query on the full-listing path); incremental history-based syncs ignore it.
 - `account list` — filters: none beyond the universal controls.
 
 ### company
@@ -242,6 +242,7 @@ Notation: a bare option is required, a bracketed `[--option]` is optional, and `
 - §V.20 and §V.88 narrow in effect: `route_method`, and any schema-enum filter, must surface as a `click.Choice` mirroring the authoritative schema set.
 - §V.95 and §V.96 are subsumed with unchanged behavior: `--min-email-confidence` and `--max-email-confidence`, plus `--min-contacts` and `--max-contacts`, become Range exemplars, where NULL-inclusion follows the Range rule.
 - §V.10 and §V.114 are subsumed: `--include-disabled` is the Lifecycle rule.
+- §V.107 gains `account sync` as an optional account-ref member: the resolver is shared, but the `--account-id` or `--account-email` pair is optional (at most one; all accounts when omitted), not the "exactly one" required form. A new control, `account sync --since <iso>`, bounds the initial full-INBOX backfill via a Gmail `after:` query; it is an Action-verb parameter, not the Lifecycle list-filter `--since`, and the full-INBOX listing path (`sync.py`, first sync or 404 fallback) gains the bound while incremental history syncs are unaffected.
 - §V.5 is unchanged: the `company_domain` LEFT JOIN denormalization still feeds the `--company-domain` filter, now exact-only.
 - §V.111 constrains the implementation: every generated `help=` string stays free of `§[VTB].<n>`.
 - One behavior change needs a retrofit: `contact list --title` flips from case-insensitive substring to exact. Title substring discovery moves to `contact search`; search-side title coverage is a follow-up (see Out of scope).
@@ -265,6 +266,8 @@ Notation: a bare option is required, a bracketed `[--option]` is optional, and `
 - **Decision:** Add `--until` to every list command now. **Why:** A symmetric closed-interval window everywhere beats per-entity asymmetry, and a shared decorator makes it low-cost.
 - **Decision:** One §T retrofits all 11 list commands in a single pass. **Why:** A half-applied convention is worse than none; the decorators make the sweep mechanical.
 - **Decision (default, not user-gated):** `--since` and `--until` are both inclusive (closed interval). **Why:** This keeps taxonomy consistency with Range's inclusive `--min` and `--max`.
+- **Decision:** `account sync --since` reuses the `--since` name for the initial-backfill window, not the Lifecycle list-filter family. **Why:** The meaning is the same inclusive lower time bound, so a second name would be drift; only the target differs — `account sync` bounds the Gmail full-INBOX fetch (an `after:` query), where a `list` filter bounds a DB column. `account sync` is an Action verb, not a `list`, so it carries no `--until` companion and no `--limit`. The bound applies only on the full-listing path; an incremental history-based sync is keyed on `gmail_history_id` and ignores it.
+- **Decision:** `account sync` extends the account-ref pair to an optional selector. **Why:** Sync defaults to all accounts, so requiring `(--account-id | --account-email)` would break the no-argument all-accounts behavior; the same §V.107 resolver runs, but the pair is optional and at most one.
 
 ## Success criterion
 
