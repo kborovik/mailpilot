@@ -36,6 +36,27 @@ Agent-operated CRM. Gmail is the comms layer. Two layers of intelligence:
   (`requires-python = ">=3.14"`, ruff `target-version = "py314"`). Do not
   rewrite to tuple form.
 
+## Prose register (steno)
+
+Human-facing review prose follows the `steno` skill (sdd plugin). Lead with the
+fact, spell out symbols, drop idiom. Applies to GitHub issues and pull requests,
+commit-message bodies, READMEs, and user-facing docs. LLM-facing writes (SPEC.md
+and spec-adjacent files) use `telegraph` instead — keep the two registers apart.
+
+- **Lead-first** — subject and verb open the sentence, at most 8 words. Qualifier
+  and topic-shift clauses go to the tail.
+- **Spell out symbols** — keep only `|` and `§`. Write "leads to" for `→`, "at
+  least" for `≥`, "at most" for `≤`, "and" for `&`.
+- **No idiom** — write the literal meaning. No metaphor, colloquialism, or
+  jargon-idiom ("load-bearing", "hand-rolled", "low-hanging fruit").
+- **Preserve verbatim** — code, paths, URLs, identifiers, flags, numbers,
+  versions, SHAs, error strings, and `#123` issue or pull-request refs.
+- **Cite rides the tail** — `§V.<n>` or `§T.<n>` closes the sentence, never opens
+  it. Subject and verb lead.
+
+The Conventional Commits title prefix (`type(area):`) stays fixed — the register
+applies to the body, not the subject. Full rules live in the `steno` skill.
+
 ## Architecture map
 
 Concrete shape lives in code; spec invariants govern behaviour.
@@ -94,11 +115,6 @@ The `database_connection` fixture truncates tables before each test. Helpers
 `make_test_settings()` and `load_fixture()` live in `conftest.py`. HTTP mocks via
 `pytest-httpx`. Span-contract tests use `capfire` from `logfire.testing`.
 Live-Gmail coverage goes through `/smoke-test`.
-
-**Patching gotcha.** A CLI command that calls `get_contact()` / `get_company()`
-/ `get_account()` for FK validation requires every test for that command to
-patch `get_*` with a valid return. Adding FK validation to an existing command
-breaks its tests until the patches are added.
 
 ## Observability
 
