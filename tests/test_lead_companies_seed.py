@@ -178,3 +178,45 @@ def test_scope_stale_to_seeded_matches_reseed_by_domain(
     )
 
     assert scoped == stale
+
+
+def test_fetch_owner_name_uses_exact_company_view(
+    seed_module: types.ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # §T.164: the resolved apex is a domain natural key (§V.90), so the owner's
+    # name resolves through the one polymorphic `company view <domain>` (§V.107).
+    # The fuzzy `company search <domain>` + client-side exact-domain filter is
+    # retired -- search matches name OR domain via LIKE, view resolves exactly.
+    captured: dict[str, list[str]] = {}
+
+    class _Proc:
+        stdout = (
+            '{"company": {"domain": "whitecapsupply.com", "name": "White Cap"},'
+            ' "ok": true}'
+        )
+
+    def fake_run(argv: list[str], **_kwargs: object) -> _Proc:
+        captured["argv"] = argv
+        return _Proc()
+
+    monkeypatch.setattr(seed_module.subprocess, "run", fake_run)
+
+    name = seed_module.fetch_owner_name("whitecapsupply.com")
+
+    assert name == "White Cap"
+    assert captured["argv"][:5] == ["uv", "run", "mailpilot", "company", "view"]
+    assert captured["argv"][-1] == "whitecapsupply.com"
+    assert "search" not in captured["argv"]
+
+
+def test_fetch_owner_name_not_found_returns_empty(
+    seed_module: types.ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An unknown domain -> `company view` emits a `not_found` envelope with no
+    # `company` key -> empty owner name (no merge signal, stays silent existing).
+    class _Proc:
+        stdout = '{"error": "not_found", "message": "no company", "ok": false}'
+
+    monkeypatch.setattr(seed_module.subprocess, "run", lambda *_a, **_k: _Proc())
+
+    assert seed_module.fetch_owner_name("nope.com") == ""

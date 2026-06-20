@@ -239,24 +239,23 @@ def fetch_owner_name(domain: str) -> str:
 
     On a create ``duplicate_key`` the resolved apex is already owned; comparing
     the owner's name to the incoming CSV display name distinguishes a silent
-    re-seed (same name) from a hidden entity merge (divergent name). ``company
-    search`` matches name OR domain via LIKE, so filter for the exact-domain
-    row. Empty string if the row cannot be read.
+    re-seed (same name) from a hidden entity merge (divergent name). The domain
+    is a natural key (SPEC.md V.90), so ``company view <domain>`` resolves the
+    one owning row directly (SPEC.md V.107) -- no fuzzy ``company search`` LIKE
+    match plus client-side exact-domain filter. Empty string if the row cannot
+    be read (unknown domain -> ``not_found`` envelope, no ``company`` key).
     """
     proc = subprocess.run(
-        ["uv", "run", "mailpilot", "company", "search", domain],
+        ["uv", "run", "mailpilot", "company", "view", domain],
         capture_output=True,
         text=True,
         check=False,
     )
     try:
-        companies = json.loads(proc.stdout)["companies"]
+        company = json.loads(proc.stdout)["company"]
     except json.JSONDecodeError, KeyError:
         return ""
-    for company in companies:
-        if str(company.get("domain", "")).lower() == domain.lower():
-            return str(company.get("name") or "")
-    return ""
+    return str(company.get("name") or "")
 
 
 def query_stale() -> list[dict[str, str]]:
