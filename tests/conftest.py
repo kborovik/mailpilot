@@ -12,6 +12,8 @@ import pytest
 from psycopg.rows import dict_row
 
 from mailpilot.database import (
+    assign_tag_to_company,
+    assign_tag_to_contact,
     create_account,
     create_activity,
     create_company,
@@ -20,6 +22,7 @@ from mailpilot.database import (
     create_note,
     create_tag,
     create_workflow,
+    get_tag_by_name,
     initialize_database,
 )
 from mailpilot.models import (
@@ -30,6 +33,7 @@ from mailpilot.models import (
     Enrollment,
     Note,
     Tag,
+    TagAssignment,
     Workflow,
 )
 from mailpilot.settings import Settings
@@ -74,8 +78,8 @@ def database_connection() -> Iterator[psycopg.Connection[dict[str, Any]]]:
         psycopg.connect(TEST_DATABASE_URL, row_factory=dict_row),  # type: ignore[arg-type]
     )
     conn.execute(
-        "TRUNCATE TABLE note, tag, activity, sync_status, task, email, "
-        "enrollment, workflow, contact, company, account CASCADE"
+        "TRUNCATE TABLE note, tag_assignment, tag, activity, sync_status, task, "
+        "email, enrollment, workflow, contact, company, account CASCADE"
     )
     conn.commit()
     yield conn
@@ -211,19 +215,34 @@ def make_test_activity(
 
 def make_test_tag(
     connection: psycopg.Connection[dict[str, Any]],
+    name: str = "prospect",
+) -> Tag:
+    """Define a tag in the controlled vocabulary (§V.116)."""
+    tag = create_tag(connection, name=name)
+    assert tag is not None, f"tag '{name}' already exists"
+    return tag
+
+
+def make_test_tag_assignment(
+    connection: psycopg.Connection[dict[str, Any]],
     contact_id: str | None = None,
     company_id: str | None = None,
     name: str = "prospect",
-) -> Tag:
-    """Create a test tag in the database."""
-    tag = create_tag(
-        connection,
-        name=name,
-        contact_id=contact_id,
-        company_id=company_id,
-    )
-    assert tag is not None, f"tag '{name}' already exists"
-    return tag
+) -> TagAssignment:
+    """Define a vocabulary tag (if needed) and link it to one owner (§V.116)."""
+    existing = get_tag_by_name(connection, name)
+    tag = existing if existing is not None else make_test_tag(connection, name=name)
+    if contact_id is not None:
+        assignment = assign_tag_to_contact(
+            connection, tag_id=tag.id, contact_id=contact_id
+        )
+    else:
+        assert company_id is not None
+        assignment = assign_tag_to_company(
+            connection, tag_id=tag.id, company_id=company_id
+        )
+    assert assignment is not None, f"tag '{name}' already on owner"
+    return assignment
 
 
 def make_test_note(

@@ -187,28 +187,42 @@ CREATE INDEX IF NOT EXISTS idx_activity_company_timeline
     ON activity(company_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_activity_type ON activity(type);
 
+-- Tags = operator-maintained controlled vocabulary, two tables (§V.116).
+-- `tag` holds the vocabulary (one row per defined tag, name globally unique
+-- §V.90, soft-delete via disabled_reason §V.10). `tag_assignment` is the link
+-- (one row per tag-and-owner pair, owner XOR contact|company mirroring §V.13).
 CREATE TABLE IF NOT EXISTS tag (
     id              TEXT PRIMARY KEY,
+    name            TEXT UNIQUE NOT NULL,
+    disabled_reason TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (disabled_reason IS NULL OR TRIM(disabled_reason) <> '')
+);
+
+CREATE TABLE IF NOT EXISTS tag_assignment (
+    id              TEXT PRIMARY KEY,
+    tag_id          TEXT NOT NULL REFERENCES tag(id),
     contact_id      TEXT REFERENCES contact(id),
     company_id      TEXT REFERENCES company(id),
-    name            TEXT NOT NULL,
-    disabled_reason TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (
         (contact_id IS NOT NULL AND company_id IS NULL)
         OR
         (contact_id IS NULL AND company_id IS NOT NULL)
-    ),
-    CHECK (disabled_reason IS NULL OR TRIM(disabled_reason) <> '')
+    )
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_tag_contact_unique
-    ON tag(contact_id, name)
-    WHERE contact_id IS NOT NULL AND disabled_reason IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_tag_company_unique
-    ON tag(company_id, name)
-    WHERE company_id IS NOT NULL AND disabled_reason IS NULL;
-CREATE INDEX IF NOT EXISTS idx_tag_name ON tag(name);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tag_assignment_contact_unique
+    ON tag_assignment(tag_id, contact_id)
+    WHERE contact_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tag_assignment_company_unique
+    ON tag_assignment(tag_id, company_id)
+    WHERE company_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_tag_assignment_tag ON tag_assignment(tag_id);
+CREATE INDEX IF NOT EXISTS idx_tag_assignment_contact
+    ON tag_assignment(contact_id) WHERE contact_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_tag_assignment_company
+    ON tag_assignment(company_id) WHERE company_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS note (
     id              TEXT PRIMARY KEY,

@@ -196,30 +196,34 @@ changes.
 ### Send and reply by hand
 
 ```
-mailpilot email send --account-id <ID> --to lead@example.com \
+mailpilot email send --account-email <ADDR> --to lead@example.com \
     --subject "Hello" --body "..."
-mailpilot email reply --account-id <ID> --email-id <EMAIL_ID> --body "..."
+mailpilot email reply --account-email <ADDR> --email-id <EMAIL_ID> --body "..."
 ```
 
 ### Tag, note, and audit
 
 ```
-mailpilot tag add --contact-id <CID> vip
-mailpilot tag disable --contact-id <CID> vip --reason "<text>"
-mailpilot note add --contact-id <CID> --body "Met at conf 2026."
-mailpilot activity list --contact-id <CID>
+mailpilot tag create vip
+mailpilot tag add --tag vip --contact-email <ADDR>
+mailpilot tag remove --tag vip --contact-email <ADDR>
+mailpilot tag disable vip --reason "<text>"
+mailpilot note add --contact-email <ADDR> --body "Met at conf 2026."
+mailpilot activity list --contact-email <ADDR>
 ```
 
-Tags and notes attach to exactly one of `contact_id` or `company_id`.
-Activities may attach to either, both, or neither.
+Tags are a controlled vocabulary: `tag create` defines a name, `tag add`
+links it to a contact or company, `tag remove` unlinks, and `tag disable`
+retires the name. A note attaches to exactly one of `contact_id` or
+`company_id`. Activities may attach to either, both, or neither.
 
 ### Task queue
 
 ```
 mailpilot task list --status pending
-mailpilot task view --task-id <TID>
-mailpilot task cancel --task-id <TID>
-mailpilot task retry --task-id <TID>     # only on failed or cancelled rows
+mailpilot task view <TID>
+mailpilot task cancel <TID>
+mailpilot task retry <TID>     # only on failed or cancelled rows
 ```
 
 ### Run the sync loop

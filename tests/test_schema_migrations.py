@@ -84,6 +84,13 @@ def _write_migration(directory: Path, filename: str, body: str) -> None:
     (directory / filename).write_text(body)
 
 
+def _read_shipped_migration(version_prefix: str) -> str:
+    """Return the body of the shipped migration whose file starts ``NNN_``."""
+    matches = sorted(MIGRATIONS_PATH.glob(f"{version_prefix}_*.sql"))
+    assert matches, f"no shipped migration with prefix {version_prefix}"
+    return matches[0].read_text()
+
+
 def _normalize_sql(text: str) -> str:
     """Strip comments and collapse whitespace (mirrors §V.19 normalization)."""
     return re.sub(r"\s+", " ", re.sub(r"--[^\n]*", "", text)).strip()
@@ -278,6 +285,78 @@ def test_migrate_rebaselines_stale_recorded_hash_to_current(
     status = determine_schema_verdict(conn)
     assert status.verdict == "current"
     assert status.recorded_hash == _compute_schema_hash(SCHEMA_PATH.read_text())
+
+
+# -- migration 003 data fold: legacy per-owner tags -> vocabulary (§V.116) -----
+
+
+def test_migration_003_folds_legacy_tags_into_vocabulary(
+    migration_schema: psycopg.Connection[dict[str, Any]],
+):
+    """§V.116: migration 003 folds the legacy per-owner `tag` table into a
+    vocabulary `tag` (one row per distinct name) plus a `tag_assignment` link
+    (one row per legacy tag row). A name carried by multiple owners collapses to
+    one vocabulary row; a disabled legacy row carries its reason onto the vocab
+    row."""
+    conn = migration_schema
+    # Build the pre-003 world: initial schema + the 002 column add.
+    conn.execute(_read_shipped_migration("001"))  # type: ignore[arg-type]
+    conn.execute(_read_shipped_migration("002"))  # type: ignore[arg-type]
+    conn.commit()
+
+    # Seed two owners and legacy (per-owner) tag rows in the old shape.
+    conn.execute(
+        "INSERT INTO company (id, name, domain) VALUES (%s, %s, %s)",
+        ("co1", "Acme", "acme.com"),
+    )
+    conn.execute(
+        "INSERT INTO contact (id, email, company_id) VALUES (%s, %s, %s)",
+        ("ct1", "a@acme.com", "co1"),
+    )
+    # 'vip' on a company AND a contact -> one vocab row, two assignments.
+    conn.execute(
+        "INSERT INTO tag (id, company_id, name) VALUES (%s, %s, %s)",
+        ("t1", "co1", "vip"),
+    )
+    conn.execute(
+        "INSERT INTO tag (id, contact_id, name) VALUES (%s, %s, %s)",
+        ("t2", "ct1", "vip"),
+    )
+    # 'cold' on the contact, disabled -> vocab row carries the reason.
+    conn.execute(
+        "INSERT INTO tag (id, contact_id, name, disabled_reason) "
+        "VALUES (%s, %s, %s, %s)",
+        ("t3", "ct1", "cold", "stale"),
+    )
+    conn.commit()
+
+    # Apply the fold.
+    conn.execute(_read_shipped_migration("003"))  # type: ignore[arg-type]
+    conn.commit()
+
+    vocab = conn.execute(
+        "SELECT name, disabled_reason FROM tag ORDER BY name"
+    ).fetchall()
+    assert [(r["name"], r["disabled_reason"]) for r in vocab] == [
+        ("cold", "stale"),
+        ("vip", None),
+    ]
+
+    assignments = conn.execute(
+        "SELECT t.name, a.contact_id, a.company_id "
+        "FROM tag_assignment a JOIN tag t ON t.id = a.tag_id "
+        "ORDER BY t.name, a.company_id NULLS LAST"
+    ).fetchall()
+    assert [(r["name"], r["contact_id"], r["company_id"]) for r in assignments] == [
+        ("cold", "ct1", None),
+        ("vip", None, "co1"),
+        ("vip", "ct1", None),
+    ]
+    # Minted ids are valid (uuidv7()::text), distinct across vocab + links.
+    all_ids = conn.execute(
+        "SELECT id FROM tag UNION ALL SELECT id FROM tag_assignment"
+    ).fetchall()
+    assert len({r["id"] for r in all_ids}) == 5  # 2 vocab + 3 assignments
 
 
 # -- identity invariant: schema.sql == apply-all-migrations-from-zero (§V.108) -

@@ -31,8 +31,7 @@ One implicit pipeline -- no sub-command dispatch. Classify free-form args, run e
 
 Classification rules:
 
-- Arg matches UUID shape -> company id; resolve via `mailpilot company view <ID>`.
-- Else -> domain token; resolve via `mailpilot company search "<arg>" --limit 1`.
+- Resolve each arg to its company row via `mailpilot company view <arg>` -- one polymorphic resolve (§V.107): a UUID matches by id, a domain by its natural key (§V.90). No fuzzy `company search`; an unknown arg -> `not_found` envelope.
 - A company that is not yet enriched (`profile IS NULL`) or already has `>= 5` contacts -> record `{"skipped": ..., "reason": "no_profile" | "contact_cap"}`, do not dispatch.
 - `--limit N` pre-answers the batch gate (no AskUserQuestion fires).
 
@@ -225,7 +224,7 @@ Canonical examples -- after a discovery run:
 
 1. mailpilot contact list --max-email-confidence 70 -- review the high-risk flagged rows
 2. /lead-contacts -- re-run for companies still under 5 contacts
-3. mailpilot contact list --company-id <ID> -- spot-check one company's seeded contacts
+3. mailpilot contact list --company-domain <domain> -- spot-check one company's seeded contacts
 ```
 
 After a stale-query w/ zero enriched companies:

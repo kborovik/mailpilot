@@ -14,10 +14,27 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 import click
 
+from mailpilot._filters import (
+    DIRECTIONS,
+    enum_option,
+    include_disabled_option,
+    limit_option,
+    presence_option,
+    range_options,
+    scope_option,
+    tag_filter_options,
+    time_window_options,
+)
+
 if TYPE_CHECKING:
     import pathlib
 
     from logfire import ScrubMatch
+
+    from mailpilot.models import Account, Company, Contact
+
+# Hex digit set for the UUID-shape probe in _looks_like_uuid (natural-key vs id).
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 
 # Keep in sync with ActivityType in models.py and CHECK constraint in schema.sql.
 _ACTIVITY_TYPES = [
@@ -35,6 +52,26 @@ _ACTIVITY_TYPES = [
     "enrollment_resumed",
     "enrollment_disabled",
 ]
+
+# Persisted email.route_method values; mirrors the schema CHECK set and the
+# email projection enum (the 7 routing decisions an operator can filter on).
+_ROUTE_METHODS = [
+    "classified",
+    "thread_match",
+    "rfc_message_id_match",
+    "skipped_outside_window",
+    "skipped_no_workflows",
+    "skipped_predates_workflows",
+    "skipped_no_inbound_workflows",
+]
+
+# workflow.status / enrollment.status / task.status CHECK sets, mirrored from
+# schema.sql so the Choice options reject out-of-set values at parse time.
+_WORKFLOW_STATUSES = ["draft", "active", "paused"]
+_WORKFLOW_TEMPLATES = ["outbound-general", "inbound-general", "inbound-google-drive"]
+_EMAIL_STATUSES = ["sent", "received", "bounced"]
+_ENROLLMENT_STATUSES = ["active", "paused", "disabled"]
+_TASK_STATUSES = ["pending", "completed", "failed", "cancelled"]
 
 
 def _database_url() -> str:
@@ -137,44 +174,160 @@ def output_error(
     raise SystemExit(1)
 
 
-def _resolve_account_id(
-    connection: Any,
-    account_id: str | None,
-    account_email: str | None,
-) -> str:
-    """Resolve the target account id from mutually exclusive ref flags (§V.107).
+def _looks_like_uuid(value: str) -> bool:
+    """Return True when ``value`` has the 8-4-4-4-12 hex shape of a UUID (§V.107).
 
-    Account-requiring commands accept exactly one of ``--account-id`` /
-    ``--account-email``. An email is resolved case-insensitively to its owning
-    account via the natural key (§V.90); an unknown email exits ``not_found``
-    per §V.94. Setting both flags or neither exits ``validation_error``.
+    Natural keys never collide with this shape: a domain carries dots, an
+    email an at-sign, a tag name is free text. So a value of this shape is an
+    id and anything else is a natural key -- the basis for polymorphic
+    resolution.
+    """
+    parts = value.split("-")
+    if len(parts) != 5:
+        return False
+    expected_lengths = (8, 4, 4, 4, 12)
+    return all(
+        len(part) == length and all(ch in _HEX_DIGITS for ch in part)
+        for part, length in zip(parts, expected_lengths, strict=True)
+    )
+
+
+def _resolve_account(connection: Any, account_ref: str | None) -> Account:
+    """Resolve an account reference (email or UUID) to its full row (§V.107).
+
+    A UUID-shaped ref resolves by id; any other value resolves by the email
+    natural key (§V.90), case-insensitively via ``get_account_by_email``. A
+    None ref (the flag was omitted) exits ``validation_error``; an unknown key
+    exits ``not_found`` per §V.94.
 
     Args:
         connection: Open database connection.
-        account_id: Value of ``--account-id`` (None when unset).
-        account_email: Value of ``--account-email`` (None when unset).
+        account_ref: Value of ``--account-email`` (email | UUID | None).
 
     Returns:
-        The resolved account id; downstream callers re-fetch the full row.
+        The resolved ``Account`` row.
     """
-    from mailpilot.database import get_account_by_email
+    from mailpilot.database import get_account, get_account_by_email
 
-    if account_id is not None and account_email is not None:
-        output_error(
-            "--account-id and --account-email are mutually exclusive",
-            "validation_error",
-        )
-    if account_id is not None:
-        return account_id
-    if account_email is not None:
-        account = get_account_by_email(connection, account_email)
-        if account is None:
-            output_error(f"account not found: {account_email}", "not_found")
-        return account.id
-    output_error(
-        "one of --account-id / --account-email is required",
-        "validation_error",
+    if account_ref is None:
+        output_error("--account-email is required", "validation_error")
+    account = (
+        get_account(connection, account_ref)
+        if _looks_like_uuid(account_ref)
+        else get_account_by_email(connection, account_ref)
     )
+    if account is None:
+        output_error(f"account not found: {account_ref}", "not_found")
+    return account
+
+
+def _resolve_company(connection: Any, company_ref: str) -> Company:
+    """Resolve a company reference (domain or UUID) to its full row (§V.107).
+
+    A UUID-shaped ref resolves by id; any other value resolves by the domain
+    natural key (§V.90) via ``get_company_by_domain``. An unknown key exits
+    ``not_found`` per §V.94.
+
+    Args:
+        connection: Open database connection.
+        company_ref: A company domain or UUID.
+
+    Returns:
+        The resolved ``Company`` row.
+    """
+    from mailpilot.database import get_company, get_company_by_domain
+
+    company = (
+        get_company(connection, company_ref)
+        if _looks_like_uuid(company_ref)
+        else get_company_by_domain(connection, company_ref)
+    )
+    if company is None:
+        output_error(f"company not found: {company_ref}", "not_found")
+    return company
+
+
+def _resolve_contact(connection: Any, contact_ref: str) -> Contact:
+    """Resolve a contact reference (email or UUID) to its full row (§V.107).
+
+    A UUID-shaped ref resolves by id; any other value resolves by the email
+    natural key (§V.90) via ``get_contact_by_email``. An unknown key exits
+    ``not_found`` per §V.94.
+
+    Args:
+        connection: Open database connection.
+        contact_ref: A contact email or UUID.
+
+    Returns:
+        The resolved ``Contact`` row.
+    """
+    from mailpilot.database import get_contact, get_contact_by_email
+
+    contact = (
+        get_contact(connection, contact_ref)
+        if _looks_like_uuid(contact_ref)
+        else get_contact_by_email(connection, contact_ref)
+    )
+    if contact is None:
+        output_error(f"contact not found: {contact_ref}", "not_found")
+    return contact
+
+
+def _resolve_company_id(connection: Any, company_ref: str) -> str:
+    """Resolve a company reference to its id, deferring existence to the caller.
+
+    A UUID-shaped ref passes through unfetched (the caller's own ``load``/
+    ``get`` validates existence); a domain resolves via the natural key,
+    exiting ``not_found`` when unknown (§V.94, §V.107).
+    """
+    if _looks_like_uuid(company_ref):
+        return company_ref
+    from mailpilot.database import get_company_by_domain
+
+    company = get_company_by_domain(connection, company_ref)
+    if company is None:
+        output_error(f"company not found: {company_ref}", "not_found")
+    return company.id
+
+
+def _resolve_contact_id(connection: Any, contact_ref: str) -> str:
+    """Resolve a contact reference to its id, deferring existence to the caller.
+
+    A UUID-shaped ref passes through unfetched (the caller's own ``load``/
+    ``get`` validates existence); an email resolves via the natural key,
+    exiting ``not_found`` when unknown (§V.94, §V.107).
+    """
+    if _looks_like_uuid(contact_ref):
+        return contact_ref
+    from mailpilot.database import get_contact_by_email
+
+    contact = get_contact_by_email(connection, contact_ref)
+    if contact is None:
+        output_error(f"contact not found: {contact_ref}", "not_found")
+    return contact.id
+
+
+def _resolve_tag(connection: Any, tag_ref: str) -> Any:
+    """Resolve a tag reference (name or UUID) to its vocabulary row (§V.116).
+
+    Tags are addressed by their globally unique name (operators never paste
+    tag ids); a UUID-shaped ref still resolves by id so a tag id round-trips
+    from one command's output into the next (§V.107). An undefined or malformed
+    name exits ``not_found`` (§V.94) -- ``tag add`` never auto-creates the tag.
+    """
+    from mailpilot.database import get_tag, get_tag_by_name
+
+    try:
+        tag = (
+            get_tag(connection, tag_ref)
+            if _looks_like_uuid(tag_ref)
+            else get_tag_by_name(connection, tag_ref)
+        )
+    except ValueError:
+        tag = None
+    if tag is None:
+        output_error(f"tag not found: {tag_ref}", "not_found")
+    return tag
 
 
 # -- Main CLI ------------------------------------------------------------------
@@ -470,49 +623,45 @@ def account_create(email: str, display_name: str) -> None:
 
 
 @account.command("list")
-@click.option("--limit", default=100, help="Maximum results.")
-@click.option("--since", default=None, help="ISO datetime lower bound on created_at.")
-def account_list(limit: int, since: str | None) -> None:
+@time_window_options("created_at")
+@limit_option
+def account_list(limit: int, since: str | None, until: str | None) -> None:
     """List Gmail accounts as summaries."""
     from mailpilot.database import initialize_database, list_accounts
 
     connection = initialize_database(_database_url())
     try:
-        accounts = list_accounts(connection, limit=limit, since=since)
+        accounts = list_accounts(connection, limit=limit, since=since, until=until)
         output({"accounts": [a.model_dump(mode="json") for a in accounts]})
     finally:
         connection.close()
 
 
 @account.command("view")
-@click.argument("account_id")
-def account_view(account_id: str) -> None:
-    """Show a Gmail account by ID."""
-    from mailpilot.database import get_account, initialize_database
+@click.argument("account_ref")
+def account_view(account_ref: str) -> None:
+    """Show a Gmail account by email or ID."""
+    from mailpilot.database import initialize_database
 
     connection = initialize_database(_database_url())
     try:
-        found = get_account(connection, account_id)
-        if found is None:
-            output_error(f"account not found: {account_id}", "not_found")
-        output_entity("account", found)
+        output_entity("account", _resolve_account(connection, account_ref))
     finally:
         connection.close()
 
 
 @account.command("update")
-@click.argument("account_id")
+@click.argument("account_ref")
 @click.option("--display-name", default=None, help="Display name.")
-def account_update(account_id: str, display_name: str | None) -> None:
-    """Update a Gmail account."""
-    from mailpilot.database import get_account, initialize_database, update_account
+def account_update(account_ref: str, display_name: str | None) -> None:
+    """Update a Gmail account (addressed by email or ID)."""
+    from mailpilot.database import initialize_database, update_account
     from mailpilot.operator_log import cli_mutation, operator_event
 
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
-        before = get_account(connection, account_id)
-        if before is None:
-            output_error(f"account not found: {account_id}", "not_found")
+        before = _resolve_account(connection, account_ref)
+        account_id = before.id
         fields: dict[str, object] = {}
         if display_name is not None:
             fields["display_name"] = display_name
@@ -537,12 +686,22 @@ def account_update(account_id: str, display_name: str | None) -> None:
 
 @account.command("sync")
 @click.option(
-    "--account-id",
+    "--account-email",
     default=None,
-    help="Sync only the given account; omit to sync all accounts.",
+    help="Sync only the given account (email or ID); omit to sync all accounts.",
 )
-def account_sync(account_id: str | None) -> None:
+@click.option(
+    "--since",
+    default=None,
+    help=(
+        "ISO datetime lower bound on the initial full-INBOX backfill "
+        "(Gmail 'after:'); ignored once incremental history sync takes over."
+    ),
+)
+def account_sync(account_email: str | None, since: str | None) -> None:
     """Run a one-shot Gmail sync for one or all accounts."""
+    from datetime import datetime
+
     import logfire
 
     from mailpilot.database import get_account, initialize_database, list_accounts
@@ -550,14 +709,18 @@ def account_sync(account_id: str | None) -> None:
     from mailpilot.settings import get_settings
     from mailpilot.sync import sync_account
 
+    backfill_since: datetime | None = None
+    if since is not None:
+        try:
+            backfill_since = datetime.fromisoformat(since)
+        except ValueError as exc:
+            output_error(f"invalid --since value: {exc}", "validation_error")
+
     settings = get_settings()
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
-        if account_id is not None:
-            single = get_account(connection, account_id)
-            if single is None:
-                output_error(f"account not found: {account_id}", "not_found")
-            accounts = [single]
+        if account_email is not None:
+            accounts = [_resolve_account(connection, account_email)]
         else:
             summaries = list_accounts(connection, limit=1000)
             accounts = [
@@ -576,7 +739,13 @@ def account_sync(account_id: str | None) -> None:
                 }
                 try:
                     client = GmailClient(acc.email)
-                    stored = sync_account(connection, acc, client, settings)
+                    stored = sync_account(
+                        connection,
+                        acc,
+                        client,
+                        settings,
+                        backfill_since=backfill_since,
+                    )
                     row["stored"] = stored
                     total_stored += stored
                 except Exception as exc:
@@ -654,25 +823,26 @@ def company_create(domain: str, name: str, note: str | None) -> None:
 
 
 @company.command("update")
-@click.argument("company_id")
+@click.argument("company_ref")
 @click.option("--name", default=None, help="Company name.")
 @click.option(
     "--profile-json",
     default=None,
     help="JSON object validated against CompanyProfile.",
 )
-def company_update(company_id: str, name: str | None, profile_json: str | None) -> None:
-    """Update a company."""
+def company_update(
+    company_ref: str, name: str | None, profile_json: str | None
+) -> None:
+    """Update a company (addressed by domain or ID)."""
     import json
 
-    from mailpilot.database import get_company, initialize_database, update_company
+    from mailpilot.database import initialize_database, update_company
     from mailpilot.operator_log import cli_mutation, operator_event
 
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
-        before = get_company(connection, company_id)
-        if before is None:
-            output_error(f"company not found: {company_id}", "not_found")
+        before = _resolve_company(connection, company_ref)
+        company_id = before.id
         fields: dict[str, object] = {}
         if name is not None:
             fields["name"] = name
@@ -701,29 +871,28 @@ def company_update(company_id: str, name: str | None, profile_json: str | None) 
 
 
 @company.command("disable")
-@click.argument("company_id")
+@click.argument("company_ref")
 @click.option(
     "--reason",
     required=True,
     help="Explanation written to disabled_reason.",
 )
-def company_disable(company_id: str, reason: str) -> None:
+def company_disable(company_ref: str, reason: str) -> None:
     """Soft-disable a company by writing disabled_reason.
 
     A disabled company is hidden from `company list` unless `--include-disabled`
     is passed. Disable is reversible -- re-enable by clearing disabled_reason
     via `company update`. Disabling an already-disabled company is rejected.
     """
-    from mailpilot.database import disable_company, get_company, initialize_database
+    from mailpilot.database import disable_company, initialize_database
     from mailpilot.operator_log import cli_mutation, operator_event
 
     if reason.strip() == "":
         output_error("reason cannot be empty", "validation_error")
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
-        before = get_company(connection, company_id)
-        if before is None:
-            output_error(f"company not found: {company_id}", "not_found")
+        before = _resolve_company(connection, company_ref)
+        company_id = before.id
         if before.disabled_reason is not None:
             output_error(
                 f"company {company_id} is already disabled "
@@ -763,71 +932,47 @@ def company_search(query: str, limit: int) -> None:
 
 
 @company.command("list")
-@click.option("--limit", default=100, help="Maximum results.")
-@click.option("--since", default=None, help="ISO datetime lower bound on created_at.")
-@click.option(
-    "--has-profile",
-    is_flag=True,
-    default=False,
-    help="Return only companies with a non-NULL profile.",
+@presence_option("profile", "Filter on presence of a company profile.")
+@range_options(
+    "contacts",
+    "Return only companies with contact_count >= N (composes with --max).",
+    "Return only companies with contact_count <= N (inclusive).",
 )
-@click.option(
-    "--no-profile",
-    is_flag=True,
-    default=False,
-    help="Return only companies with a NULL profile.",
-)
-@click.option(
-    "--max-contacts",
-    type=int,
-    default=None,
-    help="Return only companies with contact_count <= N (inclusive).",
-)
-@click.option(
-    "--min-contacts",
-    type=int,
-    default=None,
-    help="Return only companies with contact_count >= N (composes with --max).",
-)
-@click.option(
-    "--include-disabled",
-    is_flag=True,
-    default=False,
-    help="Include disabled companies (hidden by default).",
-)
+@tag_filter_options
+@include_disabled_option
+@time_window_options("created_at")
+@limit_option
 def company_list(
     limit: int,
     since: str | None,
-    has_profile: bool,
-    no_profile: bool,
+    until: str | None,
+    has_profile: bool | None,
     max_contacts: int | None,
     min_contacts: int | None,
     include_disabled: bool,
+    tag: str | None,
+    no_tag: str | None,
 ) -> None:
     """List companies as summaries."""
     from mailpilot.database import initialize_database, list_companies
 
-    if has_profile and no_profile:
-        output_error(
-            "--has-profile and --no-profile are mutually exclusive",
-            "validation_error",
-        )
-    profile_filter: bool | None = None
-    if has_profile:
-        profile_filter = True
-    elif no_profile:
-        profile_filter = False
-
     connection = initialize_database(_database_url())
     try:
+        tag_id = _resolve_tag(connection, tag).id if tag is not None else None
+        exclude_tag_id = (
+            _resolve_tag(connection, no_tag).id if no_tag is not None else None
+        )
         companies = list_companies(
             connection,
             limit=limit,
             since=since,
-            has_profile=profile_filter,
+            until=until,
+            has_profile=has_profile,
             max_contacts=max_contacts,
             min_contacts=min_contacts,
             include_disabled=include_disabled,
+            tag=tag_id,
+            exclude_tag=exclude_tag_id,
         )
         output({"companies": [c.model_dump(mode="json") for c in companies]})
     finally:
@@ -835,16 +980,17 @@ def company_list(
 
 
 @company.command("view")
-@click.argument("company_id")
-def company_view(company_id: str) -> None:
-    """Show a company by ID with inlined notes."""
+@click.argument("company_ref")
+def company_view(company_ref: str) -> None:
+    """Show a company by domain or ID with inlined notes."""
     from mailpilot.database import initialize_database, load_company_view
 
     connection = initialize_database(_database_url())
     try:
+        company_id = _resolve_company_id(connection, company_ref)
         found = load_company_view(connection, company_id)
         if found is None:
-            output_error(f"company not found: {company_id}", "not_found")
+            output_error(f"company not found: {company_ref}", "not_found")
         output_entity("company", found)
     finally:
         connection.close()
@@ -993,7 +1139,7 @@ def contact() -> None:
 @click.option("--email", required=True, help="Email address.")
 @click.option("--first-name", default=None, help="First name.")
 @click.option("--last-name", default=None, help="Last name.")
-@click.option("--company-id", default=None, help="Company ID.")
+@click.option("--company-domain", default=None, help="Owning company (domain or ID).")
 @click.option("--title", default=None, help="Role label (lead-metadata).")
 @click.option(
     "--email-confidence",
@@ -1010,7 +1156,7 @@ def contact_create(
     email: str,
     first_name: str | None,
     last_name: str | None,
-    company_id: str | None,
+    company_domain: str | None,
     title: str | None,
     email_confidence: int | None,
     note: str | None,
@@ -1019,15 +1165,17 @@ def contact_create(
     from mailpilot.database import (
         add_contact_note,
         create_contact,
-        get_company,
         initialize_database,
     )
     from mailpilot.operator_log import cli_mutation, operator_event
 
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
-        if company_id is not None and get_company(connection, company_id) is None:
-            output_error(f"company not found: {company_id}", "not_found")
+        company_id = (
+            _resolve_company(connection, company_domain).id
+            if company_domain is not None
+            else None
+        )
         with cli_mutation("contact", "create", email=email, company_id=company_id):
             created = create_contact(
                 connection,
@@ -1064,11 +1212,11 @@ def contact_create(
 
 
 @contact.command("update")
-@click.argument("contact_id")
+@click.argument("contact_ref")
 @click.option("--email", default=None, help="Email address.")
 @click.option("--first-name", default=None, help="First name.")
 @click.option("--last-name", default=None, help="Last name.")
-@click.option("--company-id", default=None, help="Company ID.")
+@click.option("--company-domain", default=None, help="Owning company (domain or ID).")
 @click.option("--title", default=None, help="Role label (lead-metadata).")
 @click.option(
     "--email-confidence",
@@ -1077,23 +1225,22 @@ def contact_create(
     help="Deliverability score 0-100; low = high risk (lead-metadata).",
 )
 def contact_update(
-    contact_id: str,
+    contact_ref: str,
     email: str | None,
     first_name: str | None,
     last_name: str | None,
-    company_id: str | None,
+    company_domain: str | None,
     title: str | None,
     email_confidence: int | None,
 ) -> None:
-    """Update a contact."""
-    from mailpilot.database import get_contact, initialize_database, update_contact
+    """Update a contact (addressed by email or ID)."""
+    from mailpilot.database import initialize_database, update_contact
     from mailpilot.operator_log import cli_mutation, operator_event
 
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
-        before = get_contact(connection, contact_id)
-        if before is None:
-            output_error(f"contact not found: {contact_id}", "not_found")
+        before = _resolve_contact(connection, contact_ref)
+        contact_id = before.id
         fields: dict[str, object] = {}
         if email is not None:
             fields["email"] = email
@@ -1101,8 +1248,8 @@ def contact_update(
             fields["first_name"] = first_name
         if last_name is not None:
             fields["last_name"] = last_name
-        if company_id is not None:
-            fields["company_id"] = company_id
+        if company_domain is not None:
+            fields["company_id"] = _resolve_company(connection, company_domain).id
         if title is not None:
             fields["title"] = title
         if email_confidence is not None:
@@ -1134,24 +1281,23 @@ def contact_update(
 
 
 @contact.command("disable")
-@click.argument("contact_id")
+@click.argument("contact_ref")
 @click.option(
     "--reason",
     required=True,
     help="Explanation written to disabled_reason.",
 )
-def contact_disable(contact_id: str, reason: str) -> None:
-    """Soft-disable a contact by writing disabled_reason."""
-    from mailpilot.database import disable_contact, get_contact, initialize_database
+def contact_disable(contact_ref: str, reason: str) -> None:
+    """Soft-disable a contact by writing disabled_reason (addressed by email or ID)."""
+    from mailpilot.database import disable_contact, initialize_database
     from mailpilot.operator_log import cli_mutation, operator_event
 
     if reason.strip() == "":
         output_error("reason cannot be empty", "validation_error")
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
-        before = get_contact(connection, contact_id)
-        if before is None:
-            output_error(f"contact not found: {contact_id}", "not_found")
+        before = _resolve_contact(connection, contact_ref)
+        contact_id = before.id
         with cli_mutation("contact", "disable", entity_id=contact_id):
             updated = disable_contact(connection, contact_id, reason)
             if updated is None:
@@ -1187,64 +1333,63 @@ def contact_search(query: str, limit: int) -> None:
 
 
 @contact.command("list")
-@click.option("--limit", default=100, help="Maximum results.")
-@click.option("--company-id", default=None, help="Filter by company ID.")
-@click.option("--since", default=None, help="ISO datetime lower bound on created_at.")
-@click.option(
-    "--include-disabled",
-    is_flag=True,
-    default=False,
-    help="Also list contacts with a non-null disabled_reason (default: hide).",
-)
-@click.option(
-    "--max-email-confidence",
-    type=int,
-    default=None,
-    help="Surface only rows with email_confidence <= N (low-score lead review).",
-)
-@click.option(
-    "--min-email-confidence",
-    type=int,
-    default=None,
-    help="Surface only rows with email_confidence >= N (composes with --max).",
-)
-@click.option(
+@scope_option(
     "--company-domain",
-    default=None,
-    help="Filter by the joined company domain (exact match).",
+    "company_domain",
+    "Filter by owning company (domain or ID).",
+)
+@range_options(
+    "email-confidence",
+    "Surface only rows with email_confidence >= N (composes with --max).",
+    "Surface only rows with email_confidence <= N (low-score lead review).",
 )
 @click.option(
     "--title",
     default=None,
-    help="Filter by title (case-insensitive substring match).",
+    help="Filter by title (case-insensitive exact match; use search for substring).",
 )
+@tag_filter_options
+@include_disabled_option
+@time_window_options("created_at")
+@limit_option
 def contact_list(
     limit: int,
-    company_id: str | None,
+    company_domain: str | None,
     since: str | None,
+    until: str | None,
     include_disabled: bool,
     max_email_confidence: int | None,
     min_email_confidence: int | None,
-    company_domain: str | None,
     title: str | None,
+    tag: str | None,
+    no_tag: str | None,
 ) -> None:
     """List contacts as summaries."""
-    from mailpilot.database import get_company, initialize_database, list_contacts
+    from mailpilot.database import initialize_database, list_contacts
 
     connection = initialize_database(_database_url())
     try:
-        if company_id is not None and get_company(connection, company_id) is None:
-            output_error(f"company not found: {company_id}", "not_found")
+        company_id = (
+            _resolve_company(connection, company_domain).id
+            if company_domain is not None
+            else None
+        )
+        tag_id = _resolve_tag(connection, tag).id if tag is not None else None
+        exclude_tag_id = (
+            _resolve_tag(connection, no_tag).id if no_tag is not None else None
+        )
         contacts = list_contacts(
             connection,
             limit=limit,
             company_id=company_id,
             since=since,
+            until=until,
             include_disabled=include_disabled,
             max_email_confidence=max_email_confidence,
             min_email_confidence=min_email_confidence,
-            company_domain=company_domain,
             title=title,
+            tag=tag_id,
+            exclude_tag=exclude_tag_id,
         )
         output({"contacts": [c.model_dump(mode="json") for c in contacts]})
     finally:
@@ -1252,16 +1397,17 @@ def contact_list(
 
 
 @contact.command("view")
-@click.argument("contact_id")
-def contact_view(contact_id: str) -> None:
-    """Show a contact by ID with inlined notes (own + parent company)."""
+@click.argument("contact_ref")
+def contact_view(contact_ref: str) -> None:
+    """Show a contact by email or ID with inlined notes (own + parent company)."""
     from mailpilot.database import initialize_database, load_contact_view
 
     connection = initialize_database(_database_url())
     try:
+        contact_id = _resolve_contact_id(connection, contact_ref)
         found = load_contact_view(connection, contact_id)
         if found is None:
-            output_error(f"contact not found: {contact_id}", "not_found")
+            output_error(f"contact not found: {contact_ref}", "not_found")
         output_entity("contact", found)
     finally:
         connection.close()
@@ -1423,39 +1569,30 @@ def email_search(query: str, limit: int) -> None:
 
 
 @email.command("list")
-@click.option("--limit", default=100, help="Maximum number of results.")
-@click.option("--contact-id", default=None, help="Filter by contact ID.")
-@click.option("--account-id", default=None, help="Filter by account ID.")
-@click.option("--since", default=None, help="ISO datetime lower bound.")
-@click.option("--thread-id", default=None, help="Filter by Gmail thread ID.")
-@click.option(
-    "--direction",
-    default=None,
-    type=click.Choice(["inbound", "outbound"]),
-    help="Filter by direction.",
-)
-@click.option("--workflow-id", default=None, help="Filter by workflow ID.")
-@click.option(
-    "--status",
-    default=None,
-    type=click.Choice(["sent", "received", "bounced"]),
-    help="Filter by email status.",
+@scope_option("--contact-email", "contact_email", "Filter by contact (email or ID).")
+@scope_option("--account-email", "account_email", "Filter by account (email or ID).")
+@scope_option("--workflow-id", "workflow_id", "Filter by workflow ID.")
+@scope_option("--thread-id", "thread_id", "Filter by Gmail thread ID.")
+@enum_option("--direction", "direction", DIRECTIONS, "Filter by direction.")
+@enum_option("--status", "status", _EMAIL_STATUSES, "Filter by email status.")
+@enum_option(
+    "--route-method",
+    "route_method",
+    _ROUTE_METHODS,
+    "Filter by persisted routing decision.",
 )
 @click.option("--from", "sender", default=None, help="Filter by sender email address.")
 @click.option(
     "--to", "recipient", default=None, help="Filter by recipient email address."
 )
-@click.option(
-    "--route-method",
-    "route_method",
-    default=None,
-    help="Filter by persisted routing decision (e.g. classified, thread_match).",
-)
+@time_window_options("COALESCE(sent_at, received_at)")
+@limit_option
 def email_list(
     limit: int,
-    contact_id: str | None,
-    account_id: str | None,
+    contact_email: str | None,
+    account_email: str | None,
     since: str | None,
+    until: str | None,
     thread_id: str | None,
     direction: str | None,
     workflow_id: str | None,
@@ -1466,8 +1603,6 @@ def email_list(
 ) -> None:
     """List emails with optional filters."""
     from mailpilot.database import (
-        get_account,
-        get_contact,
         get_workflow,
         initialize_database,
         list_emails,
@@ -1475,10 +1610,16 @@ def email_list(
 
     connection = initialize_database(_database_url())
     try:
-        if contact_id is not None and get_contact(connection, contact_id) is None:
-            output_error(f"contact not found: {contact_id}", "not_found")
-        if account_id is not None and get_account(connection, account_id) is None:
-            output_error(f"account not found: {account_id}", "not_found")
+        contact_id = (
+            _resolve_contact(connection, contact_email).id
+            if contact_email is not None
+            else None
+        )
+        account_id = (
+            _resolve_account(connection, account_email).id
+            if account_email is not None
+            else None
+        )
         if workflow_id is not None and get_workflow(connection, workflow_id) is None:
             output_error(f"workflow not found: {workflow_id}", "not_found")
         emails = list_emails(
@@ -1487,6 +1628,7 @@ def email_list(
             contact_id=contact_id,
             account_id=account_id,
             since=since,
+            until=until,
             thread_id=thread_id,
             direction=direction,
             workflow_id=workflow_id,
@@ -1517,11 +1659,10 @@ def email_view(email_id: str) -> None:
 
 
 @email.command("send")
-@click.option("--account-id", default=None, help="Sending account ID.")
 @click.option(
     "--account-email",
     default=None,
-    help="Sending account email (alternative to --account-id).",
+    help="Sending account (email or ID).",
 )
 @click.option(
     "--to",
@@ -1536,7 +1677,6 @@ def email_view(email_id: str) -> None:
 @click.option("--cc", default=None, help="CC recipient(s), comma-separated.")
 @click.option("--bcc", default=None, help="BCC recipient(s), comma-separated.")
 def email_send(
-    account_id: str | None,
     account_email: str | None,
     to: tuple[str, ...],
     subject: str,
@@ -1552,7 +1692,7 @@ def email_send(
     import logfire
 
     from mailpilot import email_ops
-    from mailpilot.database import get_account, get_workflow, initialize_database
+    from mailpilot.database import get_workflow, initialize_database
     from mailpilot.gmail import GmailClient
     from mailpilot.settings import get_settings
 
@@ -1565,10 +1705,7 @@ def email_send(
     settings = get_settings()
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
-        account_id = _resolve_account_id(connection, account_id, account_email)
-        account = get_account(connection, account_id)
-        if account is None:
-            output_error(f"account not found: {account_id}", "not_found")
+        account = _resolve_account(connection, account_email)
         if workflow_id is not None and get_workflow(connection, workflow_id) is None:
             output_error(f"workflow not found: {workflow_id}", "not_found")
         client = GmailClient(account.email)
@@ -1600,11 +1737,10 @@ def email_send(
 
 
 @email.command("reply")
-@click.option("--account-id", default=None, help="Sending account ID.")
 @click.option(
     "--account-email",
     default=None,
-    help="Sending account email (alternative to --account-id).",
+    help="Sending account (email or ID).",
 )
 @click.option(
     "--email-id",
@@ -1616,7 +1752,6 @@ def email_send(
 @click.option("--cc", default=None, help="CC recipient(s), comma-separated.")
 @click.option("--bcc", default=None, help="BCC recipient(s), comma-separated.")
 def email_reply(
-    account_id: str | None,
     account_email: str | None,
     email_id: str,
     body: str,
@@ -1632,7 +1767,7 @@ def email_reply(
     import logfire
 
     from mailpilot import email_ops
-    from mailpilot.database import get_account, get_workflow, initialize_database
+    from mailpilot.database import get_workflow, initialize_database
     from mailpilot.gmail import GmailClient
     from mailpilot.settings import get_settings
 
@@ -1642,10 +1777,7 @@ def email_reply(
     settings = get_settings()
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
-        account_id = _resolve_account_id(connection, account_id, account_email)
-        account = get_account(connection, account_id)
-        if account is None:
-            output_error(f"account not found: {account_id}", "not_found")
+        account = _resolve_account(connection, account_email)
         if workflow_id is not None and get_workflow(connection, workflow_id) is None:
             output_error(f"workflow not found: {workflow_id}", "not_found")
         client = GmailClient(account.email)
@@ -1683,9 +1815,9 @@ def activity() -> None:
     """Manage activity timeline events."""
 
 
-@activity.command("create")
-@click.option("--contact-id", default=None, help="Contact ID.")
-@click.option("--company-id", default=None, help="Optional company ID.")
+@activity.command("add")
+@click.option("--contact-email", default=None, help="Owner contact (email or ID).")
+@click.option("--company-domain", default=None, help="Owner company (domain or ID).")
 @click.option(
     "--type",
     "activity_type",
@@ -1695,35 +1827,42 @@ def activity() -> None:
 )
 @click.option("--summary", required=True, help="One-line description.")
 @click.option("--detail", default=None, help="JSON detail payload.")
-def activity_create(
-    contact_id: str | None,
-    company_id: str | None,
+def activity_add(
+    contact_email: str | None,
+    company_domain: str | None,
     activity_type: str,
     summary: str,
     detail: str | None,
 ) -> None:
-    """Create an activity event. At least one of --contact-id / --company-id."""
+    """Attach an activity event to a contact or company.
+
+    At least one of --contact-email / --company-domain is required.
+    """
     from mailpilot.database import (
         create_activity,
-        get_company,
-        get_contact,
         initialize_database,
     )
 
     if not summary.strip():
         output_error("summary cannot be empty", "validation_error")
-    if contact_id is None and company_id is None:
+    if contact_email is None and company_domain is None:
         output_error(
-            "at least one of --contact-id or --company-id is required",
+            "at least one of --contact-email or --company-domain is required",
             "validation_error",
         )
     detail_dict: dict[str, object] = json.loads(detail) if detail else {}
     connection = initialize_database(_database_url())
     try:
-        if contact_id is not None and get_contact(connection, contact_id) is None:
-            output_error(f"contact not found: {contact_id}", "not_found")
-        if company_id is not None and get_company(connection, company_id) is None:
-            output_error(f"company not found: {company_id}", "not_found")
+        contact_id = (
+            _resolve_contact(connection, contact_email).id
+            if contact_email is not None
+            else None
+        )
+        company_id = (
+            _resolve_company(connection, company_domain).id
+            if company_domain is not None
+            else None
+        )
         created = create_activity(
             connection,
             contact_id=contact_id,
@@ -1738,43 +1877,42 @@ def activity_create(
 
 
 @activity.command("list")
-@click.option("--contact-id", default=None, help="Filter by contact ID.")
-@click.option("--company-id", default=None, help="Filter by company ID.")
-@click.option(
-    "--type",
-    "activity_type",
-    default=None,
-    type=click.Choice(_ACTIVITY_TYPES),
-    help="Filter by activity type.",
-)
-@click.option("--limit", default=100, help="Maximum results.")
-@click.option("--since", default=None, help="ISO datetime lower bound.")
+@scope_option("--contact-email", "contact_email", "Filter by contact (email or ID).")
+@scope_option("--company-domain", "company_domain", "Filter by company (domain or ID).")
+@enum_option("--type", "activity_type", _ACTIVITY_TYPES, "Filter by activity type.")
+@time_window_options("created_at")
+@limit_option
 def activity_list(
-    contact_id: str | None,
-    company_id: str | None,
+    contact_email: str | None,
+    company_domain: str | None,
     activity_type: str | None,
     limit: int,
     since: str | None,
+    until: str | None,
 ) -> None:
-    """List activities (requires --contact-id or --company-id)."""
+    """List activities (requires --contact-email or --company-domain)."""
     from mailpilot.database import (
-        get_company,
-        get_contact,
         initialize_database,
         list_activities,
     )
 
-    if contact_id is None and company_id is None:
+    if contact_email is None and company_domain is None:
         output_error(
-            "at least one of --contact-id or --company-id is required",
+            "at least one of --contact-email or --company-domain is required",
             "missing_filter",
         )
     connection = initialize_database(_database_url())
     try:
-        if contact_id is not None and get_contact(connection, contact_id) is None:
-            output_error(f"contact not found: {contact_id}", "not_found")
-        if company_id is not None and get_company(connection, company_id) is None:
-            output_error(f"company not found: {company_id}", "not_found")
+        contact_id = (
+            _resolve_contact(connection, contact_email).id
+            if contact_email is not None
+            else None
+        )
+        company_id = (
+            _resolve_company(connection, company_domain).id
+            if company_domain is not None
+            else None
+        )
         activities = list_activities(
             connection,
             contact_id=contact_id,
@@ -1782,6 +1920,7 @@ def activity_list(
             activity_type=activity_type,
             limit=limit,
             since=since,
+            until=until,
         )
         output({"activities": [a.model_dump(mode="json") for a in activities]})
     finally:
@@ -1793,160 +1932,99 @@ def activity_list(
 
 @main.group()
 def tag() -> None:
-    """Manage tags on contacts and companies."""
+    """Manage the controlled tag vocabulary and its assignments."""
 
 
-@tag.command("add")
-@click.option("--contact-id", default=None, help="Contact ID.")
-@click.option("--company-id", default=None, help="Company ID.")
+@tag.command("create")
 @click.argument("name")
-def tag_add(contact_id: str | None, company_id: str | None, name: str) -> None:
-    """Add a tag to a contact or company."""
+def tag_create(name: str) -> None:
+    """Define a tag in the controlled vocabulary.
+
+    Creates a vocabulary entry; linking owners to it is the `tag add` verb. A
+    name already defined is rejected (names are globally unique).
+    """
     from mailpilot.database import (
         _normalize_tag_name,  # pyright: ignore[reportPrivateUsage]
-        add_company_tag,
-        add_contact_tag,
-        get_company,
-        get_contact,
+        create_tag,
         initialize_database,
     )
     from mailpilot.operator_log import cli_mutation, operator_event
 
     if not name.strip():
         output_error("tag name cannot be empty", "validation_error")
-    if (contact_id is None) == (company_id is None):
-        output_error(
-            "exactly one of --contact-id or --company-id is required",
-            "validation_error",
-        )
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
-        if contact_id is not None:
-            if get_contact(connection, contact_id) is None:
-                output_error(f"contact {contact_id} not found", "not_found")
-            owner = ("contact", contact_id)
-        else:
-            assert company_id is not None
-            if get_company(connection, company_id) is None:
-                output_error(f"company {company_id} not found", "not_found")
-            owner = ("company", company_id)
-        with cli_mutation(
-            "tag", "add", name=name, owner_type=owner[0], owner_id=owner[1]
-        ):
-            if contact_id is not None:
-                try:
-                    created = add_contact_tag(
-                        connection, contact_id=contact_id, name=name
-                    )
-                except ValueError as exc:
-                    output_error(str(exc), "validation_error")
-            else:
-                assert company_id is not None
-                try:
-                    created = add_company_tag(
-                        connection, company_id=company_id, name=name
-                    )
-                except ValueError as exc:
-                    output_error(str(exc), "validation_error")
+        with cli_mutation("tag", "create", name=name):
+            try:
+                created = create_tag(connection, name=name)
+            except ValueError as exc:
+                output_error(str(exc), "validation_error")
             if created is None:
                 normalized = _normalize_tag_name(name)
-                output_error(
-                    f"tag '{normalized}' already exists on {owner[0]} {owner[1]}",
-                    "already_exists",
-                )
-            operator_event(
-                "tag.add",
-                name=created.name,
-                owner_type=owner[0],
-                owner_id=owner[1],
-                changed=["name"],
-            )
+                output_error(f"tag '{normalized}' already exists", "already_exists")
+            operator_event("tag.create", name=created.name, changed=["name"])
             output_entity("tag", created)
     finally:
         connection.close()
 
 
+@tag.command("view")
+@click.argument("name")
+def tag_view(name: str) -> None:
+    """Show a vocabulary tag by name with its usage_count."""
+    from mailpilot.database import get_tag_summary_by_name, initialize_database
+
+    connection = initialize_database(_database_url())
+    try:
+        try:
+            found = get_tag_summary_by_name(connection, name)
+        except ValueError:
+            found = None
+        if found is None:
+            output_error(f"tag not found: {name}", "not_found")
+        output_entity("tag", found)
+    finally:
+        connection.close()
+
+
 @tag.command("disable")
-@click.option("--contact-id", default=None, help="Contact ID.")
-@click.option("--company-id", default=None, help="Company ID.")
 @click.argument("name")
 @click.option(
     "--reason",
     required=True,
-    help="Explanation written to disabled_reason and the tag_disabled activity.",
+    help="Explanation written to disabled_reason.",
 )
-def tag_disable(
-    contact_id: str | None, company_id: str | None, name: str, reason: str
-) -> None:
-    """Soft-disable a tag on a contact or company.
+def tag_disable(name: str, reason: str) -> None:
+    """Soft-retire a tag in the controlled vocabulary.
 
-    Flips ``disabled_reason`` on the active tag row and appends a
-    ``tag_disabled`` activity carrying the reason. Disabled is terminal --
-    re-adding the same name means creating a fresh row via ``tag add``.
+    Flips disabled_reason on the vocabulary row, so the tag drops out of the
+    default `tag list` but stays linked to its owners. Re-enable by clearing
+    disabled_reason. Disabling an already-disabled tag is rejected.
     """
-    from mailpilot.database import (
-        _normalize_tag_name,  # pyright: ignore[reportPrivateUsage]
-        disable_company_tag,
-        disable_contact_tag,
-        get_company,
-        get_contact,
-        initialize_database,
-    )
+    from mailpilot.database import disable_tag, initialize_database
     from mailpilot.operator_log import cli_mutation, operator_event
 
     if reason.strip() == "":
         output_error("reason cannot be empty", "validation_error")
-    if (contact_id is None) == (company_id is None):
-        output_error(
-            "exactly one of --contact-id or --company-id is required",
-            "validation_error",
-        )
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
-        if contact_id is not None:
-            if get_contact(connection, contact_id) is None:
-                output_error(f"contact {contact_id} not found", "not_found")
-            owner = ("contact", contact_id)
-        else:
-            assert company_id is not None
-            if get_company(connection, company_id) is None:
-                output_error(f"company {company_id} not found", "not_found")
-            owner = ("company", company_id)
-        with cli_mutation(
-            "tag", "disable", entity_id=name, owner_type=owner[0], owner_id=owner[1]
-        ):
-            if contact_id is not None:
-                try:
-                    updated = disable_contact_tag(
-                        connection,
-                        contact_id=contact_id,
-                        name=name,
-                        reason=reason,
-                    )
-                except ValueError as exc:
-                    output_error(str(exc), "validation_error")
-            else:
-                assert company_id is not None
-                try:
-                    updated = disable_company_tag(
-                        connection,
-                        company_id=company_id,
-                        name=name,
-                        reason=reason,
-                    )
-                except ValueError as exc:
-                    output_error(str(exc), "validation_error")
+        before = _resolve_tag(connection, name)
+        if before.disabled_reason is not None:
+            output_error(
+                f"tag '{before.name}' is already disabled "
+                f"(reason: {before.disabled_reason})",
+                "validation_error",
+            )
+        with cli_mutation("tag", "disable", entity_id=before.name):
+            updated = disable_tag(connection, name=before.name, reason=reason)
             if updated is None:
-                normalized = _normalize_tag_name(name)
                 output_error(
-                    f"tag '{normalized}' not found on {owner[0]} {owner[1]}",
-                    "not_found",
+                    f"tag '{before.name}' is already disabled",
+                    "validation_error",
                 )
             operator_event(
                 "tag.disable",
                 entity_id=updated.name,
-                owner_type=owner[0],
-                owner_id=owner[1],
                 changed=["disabled_reason"],
             )
             output_entity("tag", updated)
@@ -1954,60 +2032,181 @@ def tag_disable(
         connection.close()
 
 
-@tag.command("list")
-@click.option("--contact-id", default=None, help="Contact ID.")
-@click.option("--company-id", default=None, help="Company ID.")
-@click.option("--limit", default=100, help="Maximum results.")
-@click.option("--since", default=None, help="ISO datetime lower bound on created_at.")
+@tag.command("add")
 @click.option(
-    "--include-disabled",
-    is_flag=True,
-    default=False,
-    help="Include rows whose disabled_reason is set (default: active only).",
+    "--tag", "tag_name", required=True, help="Defined tag to link (name or ID)."
 )
+@click.option("--contact-email", default=None, help="Owner contact (email or ID).")
+@click.option("--company-domain", default=None, help="Owner company (domain or ID).")
+def tag_add(
+    tag_name: str, contact_email: str | None, company_domain: str | None
+) -> None:
+    """Link a defined tag to a contact or company.
+
+    Errors `not_found` when the tag is undefined -- `tag add` never creates the
+    tag as a side effect (define vocabulary with `tag create`).
+    """
+    from mailpilot.database import (
+        assign_tag_to_company,
+        assign_tag_to_contact,
+        initialize_database,
+    )
+    from mailpilot.operator_log import cli_mutation, operator_event
+
+    if (contact_email is None) == (company_domain is None):
+        output_error(
+            "exactly one of --contact-email or --company-domain is required",
+            "validation_error",
+        )
+    connection = initialize_database(_database_url(), require_current_schema=True)
+    try:
+        tag_row = _resolve_tag(connection, tag_name)
+        if contact_email is not None:
+            owner = ("contact", _resolve_contact(connection, contact_email).id)
+        else:
+            assert company_domain is not None
+            owner = ("company", _resolve_company(connection, company_domain).id)
+        with cli_mutation(
+            "tag", "add", name=tag_row.name, owner_type=owner[0], owner_id=owner[1]
+        ):
+            if owner[0] == "contact":
+                created = assign_tag_to_contact(
+                    connection, tag_id=tag_row.id, contact_id=owner[1]
+                )
+            else:
+                created = assign_tag_to_company(
+                    connection, tag_id=tag_row.id, company_id=owner[1]
+                )
+            if created is None:
+                output_error(
+                    f"tag '{tag_row.name}' already on {owner[0]} {owner[1]}",
+                    "already_exists",
+                )
+            operator_event(
+                "tag.add",
+                name=tag_row.name,
+                owner_type=owner[0],
+                owner_id=owner[1],
+                changed=["tag_id"],
+            )
+            output_entity("tag_assignment", created)
+    finally:
+        connection.close()
+
+
+@tag.command("remove")
+@click.option(
+    "--tag", "tag_name", required=True, help="Defined tag to unlink (name or ID)."
+)
+@click.option("--contact-email", default=None, help="Owner contact (email or ID).")
+@click.option("--company-domain", default=None, help="Owner company (domain or ID).")
+def tag_remove(
+    tag_name: str, contact_email: str | None, company_domain: str | None
+) -> None:
+    """Unlink a tag from a contact or company (inverse of `tag add`).
+
+    Removes only the link; the tag vocabulary entry and the owner both survive.
+    """
+    from mailpilot.database import (
+        initialize_database,
+        remove_tag_from_company,
+        remove_tag_from_contact,
+    )
+    from mailpilot.operator_log import cli_mutation, operator_event
+
+    if (contact_email is None) == (company_domain is None):
+        output_error(
+            "exactly one of --contact-email or --company-domain is required",
+            "validation_error",
+        )
+    connection = initialize_database(_database_url(), require_current_schema=True)
+    try:
+        tag_row = _resolve_tag(connection, tag_name)
+        if contact_email is not None:
+            owner = ("contact", _resolve_contact(connection, contact_email).id)
+        else:
+            assert company_domain is not None
+            owner = ("company", _resolve_company(connection, company_domain).id)
+        with cli_mutation(
+            "tag", "remove", name=tag_row.name, owner_type=owner[0], owner_id=owner[1]
+        ):
+            if owner[0] == "contact":
+                removed = remove_tag_from_contact(
+                    connection, tag_id=tag_row.id, contact_id=owner[1]
+                )
+            else:
+                removed = remove_tag_from_company(
+                    connection, tag_id=tag_row.id, company_id=owner[1]
+                )
+            if removed is None:
+                output_error(
+                    f"tag '{tag_row.name}' not on {owner[0]} {owner[1]}",
+                    "not_found",
+                )
+            operator_event(
+                "tag.remove",
+                name=tag_row.name,
+                owner_type=owner[0],
+                owner_id=owner[1],
+                changed=["tag_id"],
+            )
+            output_entity("tag_assignment", removed)
+    finally:
+        connection.close()
+
+
+@tag.command("list")
+@scope_option(
+    "--contact-email", "contact_email", "List one contact's tags (email or ID)."
+)
+@scope_option(
+    "--company-domain", "company_domain", "List one company's tags (domain or ID)."
+)
+@include_disabled_option
+@time_window_options("created_at")
+@limit_option
 def tag_list(
-    contact_id: str | None,
-    company_id: str | None,
+    contact_email: str | None,
+    company_domain: str | None,
     limit: int,
     since: str | None,
+    until: str | None,
     include_disabled: bool,
 ) -> None:
-    """List tags on a contact or company."""
-    from mailpilot.database import (
-        get_company,
-        get_contact,
-        initialize_database,
-        list_tags,
-    )
+    """List the tag vocabulary with usage_count, or one owner's tags.
 
-    if (contact_id is None) == (company_id is None):
+    With no owner option, lists the whole vocabulary (each row carrying its
+    global usage_count). With --contact-email or --company-domain, lists the
+    tags assigned to that owner.
+    """
+    from mailpilot.database import initialize_database, list_tags
+
+    if contact_email is not None and company_domain is not None:
         output_error(
-            "exactly one of --contact-id or --company-id is required",
+            "pass at most one of --contact-email or --company-domain",
             "validation_error",
         )
     connection = initialize_database(_database_url())
     try:
-        if contact_id is not None:
-            if get_contact(connection, contact_id) is None:
-                output_error(f"contact {contact_id} not found", "not_found")
-            tags = list_tags(
-                connection,
-                contact_id=contact_id,
-                limit=limit,
-                since=since,
-                include_disabled=include_disabled,
-            )
-        else:
-            assert company_id is not None
-            if get_company(connection, company_id) is None:
-                output_error(f"company {company_id} not found", "not_found")
-            tags = list_tags(
-                connection,
-                company_id=company_id,
-                limit=limit,
-                since=since,
-                include_disabled=include_disabled,
-            )
+        contact_id = (
+            _resolve_contact(connection, contact_email).id
+            if contact_email is not None
+            else None
+        )
+        company_id = (
+            _resolve_company(connection, company_domain).id
+            if company_domain is not None
+            else None
+        )
+        tags = list_tags(
+            connection,
+            contact_id=contact_id,
+            company_id=company_id,
+            limit=limit,
+            since=since,
+            until=until,
+            include_disabled=include_disabled,
+        )
         output({"tags": [t.model_dump(mode="json") for t in tags]})
     finally:
         connection.close()
@@ -2015,24 +2214,10 @@ def tag_list(
 
 @tag.command("search")
 @click.argument("name")
-@click.option(
-    "--type",
-    "owner",
-    default=None,
-    type=click.Choice(["contact", "company"]),
-    help="Filter by owner type.",
-)
-@click.option("--limit", default=100, help="Maximum results.")
-@click.option(
-    "--include-disabled",
-    is_flag=True,
-    default=False,
-    help="Include rows whose disabled_reason is set (default: active only).",
-)
-def tag_search(
-    name: str, owner: str | None, limit: int, include_disabled: bool
-) -> None:
-    """Search tags by name."""
+@include_disabled_option
+@limit_option
+def tag_search(name: str, limit: int, include_disabled: bool) -> None:
+    """Search the tag vocabulary by name substring."""
     from mailpilot.database import initialize_database, search_tags
 
     connection = initialize_database(_database_url())
@@ -2040,7 +2225,6 @@ def tag_search(
         tags = search_tags(
             connection,
             name=name,
-            owner=owner,
             limit=limit,
             include_disabled=include_disabled,
         )
@@ -2058,44 +2242,37 @@ def note() -> None:
 
 
 @note.command("add")
-@click.option("--contact-id", default=None, help="Contact ID.")
-@click.option("--company-id", default=None, help="Company ID.")
+@click.option("--contact-email", default=None, help="Owner contact (email or ID).")
+@click.option("--company-domain", default=None, help="Owner company (domain or ID).")
 @click.option("--body", required=True, help="Note text.")
-def note_add(contact_id: str | None, company_id: str | None, body: str) -> None:
+def note_add(contact_email: str | None, company_domain: str | None, body: str) -> None:
     """Add a note to a contact or company."""
     from mailpilot.database import (
         add_company_note,
         add_contact_note,
-        get_company,
-        get_contact,
         initialize_database,
     )
     from mailpilot.operator_log import cli_mutation, operator_event
 
     if not body.strip():
         output_error("note body cannot be empty", "validation_error")
-    if (contact_id is None) == (company_id is None):
+    if (contact_email is None) == (company_domain is None):
         output_error(
-            "exactly one of --contact-id or --company-id is required",
+            "exactly one of --contact-email or --company-domain is required",
             "validation_error",
         )
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
-        if contact_id is not None:
-            if get_contact(connection, contact_id) is None:
-                output_error(f"contact {contact_id} not found", "not_found")
-            owner = ("contact", contact_id)
+        if contact_email is not None:
+            owner = ("contact", _resolve_contact(connection, contact_email).id)
         else:
-            assert company_id is not None
-            if get_company(connection, company_id) is None:
-                output_error(f"company {company_id} not found", "not_found")
-            owner = ("company", company_id)
+            assert company_domain is not None
+            owner = ("company", _resolve_company(connection, company_domain).id)
         with cli_mutation("note", "add", owner_type=owner[0], owner_id=owner[1]):
-            if contact_id is not None:
-                created = add_contact_note(connection, contact_id=contact_id, body=body)
+            if owner[0] == "contact":
+                created = add_contact_note(connection, contact_id=owner[1], body=body)
             else:
-                assert company_id is not None
-                created = add_company_note(connection, company_id=company_id, body=body)
+                created = add_company_note(connection, company_id=owner[1], body=body)
             operator_event(
                 "note.add",
                 entity_id=created.id,
@@ -2109,40 +2286,46 @@ def note_add(contact_id: str | None, company_id: str | None, body: str) -> None:
 
 
 @note.command("list")
-@click.option("--contact-id", default=None, help="Contact ID.")
-@click.option("--company-id", default=None, help="Company ID.")
-@click.option("--limit", default=100, help="Maximum results.")
-@click.option("--since", default=None, help="ISO datetime lower bound.")
+@scope_option("--contact-email", "contact_email", "Filter by contact (email or ID).")
+@scope_option("--company-domain", "company_domain", "Filter by company (domain or ID).")
+@time_window_options("created_at")
+@limit_option
 def note_list(
-    contact_id: str | None, company_id: str | None, limit: int, since: str | None
+    contact_email: str | None,
+    company_domain: str | None,
+    limit: int,
+    since: str | None,
+    until: str | None,
 ) -> None:
     """List notes on a contact or company."""
     from mailpilot.database import (
-        get_company,
-        get_contact,
         initialize_database,
         list_notes,
     )
 
-    if (contact_id is None) == (company_id is None):
+    if (contact_email is None) == (company_domain is None):
         output_error(
-            "exactly one of --contact-id or --company-id is required",
+            "exactly one of --contact-email or --company-domain is required",
             "validation_error",
         )
     connection = initialize_database(_database_url())
     try:
-        if contact_id is not None:
-            if get_contact(connection, contact_id) is None:
-                output_error(f"contact {contact_id} not found", "not_found")
+        if contact_email is not None:
             notes = list_notes(
-                connection, contact_id=contact_id, limit=limit, since=since
+                connection,
+                contact_id=_resolve_contact(connection, contact_email).id,
+                limit=limit,
+                since=since,
+                until=until,
             )
         else:
-            assert company_id is not None
-            if get_company(connection, company_id) is None:
-                output_error(f"company {company_id} not found", "not_found")
+            assert company_domain is not None
             notes = list_notes(
-                connection, company_id=company_id, limit=limit, since=since
+                connection,
+                company_id=_resolve_company(connection, company_domain).id,
+                limit=limit,
+                since=since,
+                until=until,
             )
         output({"notes": [n.model_dump(mode="json") for n in notes]})
     finally:
@@ -2254,11 +2437,10 @@ def _create_and_populate_workflow(
         "Immutable after creation; direction is derived from the template."
     ),
 )
-@click.option("--account-id", default=None, help="Owning Gmail account ID.")
 @click.option(
     "--account-email",
     default=None,
-    help="Owning Gmail account email (alternative to --account-id).",
+    help="Owning Gmail account (email or ID).",
 )
 @click.option("--objective", default=None, help="Workflow objective.")
 @click.option(
@@ -2286,7 +2468,6 @@ def _create_and_populate_workflow(
 def workflow_create(
     name: str,
     template: str,
-    account_id: str | None,
     account_email: str | None,
     objective: str | None,
     instructions: str | None,
@@ -2295,7 +2476,7 @@ def workflow_create(
     draft: bool,
 ) -> None:
     """Create a new workflow."""
-    from mailpilot.database import get_account, initialize_database
+    from mailpilot.database import initialize_database
     from mailpilot.operator_log import cli_mutation, operator_event
 
     if not name.strip():
@@ -2319,9 +2500,7 @@ def workflow_create(
     activate = not draft and has_objective and has_instructions
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
-        account_id = _resolve_account_id(connection, account_id, account_email)
-        if get_account(connection, account_id) is None:
-            output_error(f"account not found: {account_id}", "not_found")
+        account_id = _resolve_account(connection, account_email).id
         with cli_mutation(
             "workflow",
             "create",
@@ -2445,43 +2624,35 @@ def workflow_search(query: str, limit: int) -> None:
 
 
 @workflow.command("list")
-@click.option("--account-id", default=None, help="Filter by account ID.")
-@click.option(
-    "--status",
-    default=None,
-    type=click.Choice(["draft", "active", "paused"]),
-    help="Filter by workflow status.",
+@scope_option("--account-email", "account_email", "Filter by account (email or ID).")
+@enum_option("--status", "status", _WORKFLOW_STATUSES, "Filter by workflow status.")
+@enum_option(
+    "--direction", "workflow_type", DIRECTIONS, "Filter by workflow direction."
 )
-@click.option(
-    "--type",
-    "workflow_type",
-    default=None,
-    type=click.Choice(["inbound", "outbound"]),
-    help="Filter by workflow direction.",
+@enum_option(
+    "--template", "template", _WORKFLOW_TEMPLATES, "Filter by workflow template."
 )
-@click.option(
-    "--template",
-    default=None,
-    type=click.Choice(["outbound-general", "inbound-general", "inbound-google-drive"]),
-    help="Filter by workflow template.",
-)
-@click.option("--limit", default=100, help="Maximum results.")
-@click.option("--since", default=None, help="ISO datetime lower bound on created_at.")
+@time_window_options("created_at")
+@limit_option
 def workflow_list(
-    account_id: str | None,
+    account_email: str | None,
     status: str | None,
     workflow_type: str | None,
     template: str | None,
     limit: int,
     since: str | None,
+    until: str | None,
 ) -> None:
     """List workflows as summaries."""
-    from mailpilot.database import get_account, initialize_database, list_workflows
+    from mailpilot.database import initialize_database, list_workflows
 
     connection = initialize_database(_database_url())
     try:
-        if account_id is not None and get_account(connection, account_id) is None:
-            output_error(f"account not found: {account_id}", "not_found")
+        account_id = (
+            _resolve_account(connection, account_email).id
+            if account_email is not None
+            else None
+        )
         workflows = list_workflows(
             connection,
             account_id=account_id,
@@ -2490,6 +2661,7 @@ def workflow_list(
             template=template,
             limit=limit,
             since=since,
+            until=until,
         )
         output({"workflows": [w.model_dump(mode="json") for w in workflows]})
     finally:
@@ -2620,11 +2792,10 @@ def _workflow_to_toml(workflow: Any) -> str:
 
 
 @workflow.command("export")
-@click.option("--account-id", default=None, help="Owning Gmail account ID.")
 @click.option(
     "--account-email",
     default=None,
-    help="Owning Gmail account email (alternative to --account-id).",
+    help="Owning Gmail account (email or ID).",
 )
 @click.option(
     "--out-dir",
@@ -2633,9 +2804,7 @@ def _workflow_to_toml(workflow: Any) -> str:
     type=click.Path(file_okay=False),
     help="Directory to write one '*.toml' per workflow. Created if absent.",
 )
-def workflow_export(
-    account_id: str | None, account_email: str | None, out_dir: str
-) -> None:
+def workflow_export(account_email: str | None, out_dir: str) -> None:
     """Export an account's workflows as one TOML file each.
 
     TOML-only: writes one ``*.toml`` per workflow into ``--out-dir`` (def fields
@@ -2647,16 +2816,13 @@ def workflow_export(
     import pathlib
 
     from mailpilot.database import (
-        get_account,
         initialize_database,
         list_workflows_full,
     )
 
     connection = initialize_database(_database_url())
     try:
-        account_id = _resolve_account_id(connection, account_id, account_email)
-        if get_account(connection, account_id) is None:
-            output_error(f"account not found: {account_id}", "not_found")
+        account_id = _resolve_account(connection, account_email).id
         workflows = list_workflows_full(connection, account_id)
         directory = pathlib.Path(out_dir)
         directory.mkdir(parents=True, exist_ok=True)
@@ -2866,11 +3032,10 @@ def _load_workflow_import_entries(
 
 
 @workflow.command("import")
-@click.option("--account-id", default=None, help="Owning Gmail account ID.")
 @click.option(
     "--account-email",
     default=None,
-    help="Owning Gmail account email (alternative to --account-id).",
+    help="Owning Gmail account (email or ID).",
 )
 @click.option(
     "--file",
@@ -2882,9 +3047,7 @@ def _load_workflow_import_entries(
         "(catalog entry); a directory imports every '*.toml' in it."
     ),
 )
-def workflow_import(
-    account_id: str | None, account_email: str | None, file: str | None
-) -> None:
+def workflow_import(account_email: str | None, file: str | None) -> None:
     """Import workflows for an account from TOML catalog files.
 
     TOML-only -- no JSON, no stdin. Dispatch is by ``--file`` shape:
@@ -2901,7 +3064,6 @@ def workflow_import(
     ``template_immutable`` error, and ``status`` is never written by import.
     """
     from mailpilot.database import (
-        get_account,
         initialize_database,
         list_workflows_full,
     )
@@ -2911,9 +3073,7 @@ def workflow_import(
 
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
-        account_id = _resolve_account_id(connection, account_id, account_email)
-        if get_account(connection, account_id) is None:
-            output_error(f"account not found: {account_id}", "not_found")
+        account_id = _resolve_account(connection, account_email).id
         with cli_mutation(
             "workflow",
             "import",
@@ -2940,12 +3100,7 @@ def template() -> None:
 
 
 @template.command("list")
-@click.option(
-    "--direction",
-    default=None,
-    type=click.Choice(["inbound", "outbound"]),
-    help="Filter by template direction.",
-)
+@enum_option("--direction", "direction", DIRECTIONS, "Filter by template direction.")
 def template_list(direction: str | None) -> None:
     """List all workflow templates as summaries."""
     from mailpilot.agent.templates import TEMPLATES
@@ -3052,7 +3207,7 @@ def _maybe_schedule_first_touch(
 
 @enrollment.command("add")
 @click.option("--workflow-id", required=True, help="Workflow ID.")
-@click.option("--contact-id", required=True, help="Contact ID.")
+@click.option("--contact-email", required=True, help="Contact (email or ID).")
 @click.option(
     "--scheduled-at",
     "scheduled_at",
@@ -3062,7 +3217,9 @@ def _maybe_schedule_first_touch(
         "only). Inserts a pending task drained by the run loop."
     ),
 )
-def enrollment_add(workflow_id: str, contact_id: str, scheduled_at: str | None) -> None:
+def enrollment_add(
+    workflow_id: str, contact_email: str, scheduled_at: str | None
+) -> None:
     """Enroll a contact in a workflow.
 
     When ``--scheduled-at`` is given on an outbound workflow, a pending
@@ -3077,7 +3234,6 @@ def enrollment_add(workflow_id: str, contact_id: str, scheduled_at: str | None) 
         create_activity,
         create_enrollment,
         get_account,
-        get_contact,
         get_enrollment,
         get_workflow,
         initialize_database,
@@ -3101,9 +3257,8 @@ def enrollment_add(workflow_id: str, contact_id: str, scheduled_at: str | None) 
                 "--scheduled-at only valid for outbound workflows",
                 "invalid_state",
             )
-        contact = get_contact(connection, contact_id)
-        if contact is None:
-            output_error(f"contact not found: {contact_id}", "not_found")
+        contact = _resolve_contact(connection, contact_email)
+        contact_id = contact.id
         account = get_account(connection, workflow.account_id)
         _reject_enrollment_self_loop(account, contact, workflow.name)
         mutation_attrs: dict[str, Any] = {
@@ -3301,26 +3456,21 @@ def enrollment_view(enrollment_id: str) -> None:
 
 
 @enrollment.command("list")
-@click.option("--workflow-id", default=None, help="Filter by workflow ID.")
-@click.option("--contact-id", default=None, help="Filter by contact ID.")
-@click.option(
-    "--status",
-    default=None,
-    type=click.Choice(["active", "paused", "disabled"]),
-    help="Filter by enrollment status.",
-)
-@click.option("--limit", default=100, help="Maximum results.")
-@click.option("--since", default=None, help="ISO datetime lower bound on updated_at.")
+@scope_option("--workflow-id", "workflow_id", "Filter by workflow ID.")
+@scope_option("--contact-email", "contact_email", "Filter by contact (email or ID).")
+@enum_option("--status", "status", _ENROLLMENT_STATUSES, "Filter by enrollment status.")
+@time_window_options("updated_at")
+@limit_option
 def enrollment_list(
     workflow_id: str | None,
-    contact_id: str | None,
+    contact_email: str | None,
     status: str | None,
     limit: int,
     since: str | None,
+    until: str | None,
 ) -> None:
     """List enrollments as summaries. Filter by workflow, contact, or both."""
     from mailpilot.database import (
-        get_contact,
         get_workflow,
         initialize_database,
         list_enrollments_detailed,
@@ -3330,8 +3480,11 @@ def enrollment_list(
     try:
         if workflow_id is not None and get_workflow(connection, workflow_id) is None:
             output_error(f"workflow not found: {workflow_id}", "not_found")
-        if contact_id is not None and get_contact(connection, contact_id) is None:
-            output_error(f"contact not found: {contact_id}", "not_found")
+        contact_id = (
+            _resolve_contact(connection, contact_email).id
+            if contact_email is not None
+            else None
+        )
         rows = list_enrollments_detailed(
             connection,
             workflow_id=workflow_id,
@@ -3339,6 +3492,7 @@ def enrollment_list(
             status=status,
             limit=limit,
             since=since,
+            until=until,
         )
         output({"enrollments": [r.model_dump(mode="json") for r in rows]})
     finally:
@@ -3420,26 +3574,21 @@ def task() -> None:
 
 
 @task.command("list")
-@click.option("--workflow-id", default=None, help="Filter by workflow ID.")
-@click.option("--contact-id", default=None, help="Filter by contact ID.")
-@click.option(
-    "--status",
-    default=None,
-    type=click.Choice(["pending", "completed", "failed", "cancelled"]),
-    help="Filter by task status.",
-)
-@click.option("--limit", default=100, help="Maximum results.")
-@click.option("--since", default=None, help="ISO datetime lower bound on scheduled_at.")
+@scope_option("--workflow-id", "workflow_id", "Filter by workflow ID.")
+@scope_option("--contact-email", "contact_email", "Filter by contact (email or ID).")
+@enum_option("--status", "status", _TASK_STATUSES, "Filter by task status.")
+@time_window_options("scheduled_at")
+@limit_option
 def task_list(
     workflow_id: str | None,
-    contact_id: str | None,
+    contact_email: str | None,
     status: str | None,
     limit: int,
     since: str | None,
+    until: str | None,
 ) -> None:
     """List tasks as summaries with optional filters."""
     from mailpilot.database import (
-        get_contact,
         get_workflow,
         initialize_database,
         list_tasks,
@@ -3449,8 +3598,11 @@ def task_list(
     try:
         if workflow_id is not None and get_workflow(connection, workflow_id) is None:
             output_error(f"workflow not found: {workflow_id}", "not_found")
-        if contact_id is not None and get_contact(connection, contact_id) is None:
-            output_error(f"contact not found: {contact_id}", "not_found")
+        contact_id = (
+            _resolve_contact(connection, contact_email).id
+            if contact_email is not None
+            else None
+        )
         tasks = list_tasks(
             connection,
             workflow_id=workflow_id,
@@ -3458,6 +3610,7 @@ def task_list(
             status=status,
             limit=limit,
             since=since,
+            until=until,
         )
         output({"tasks": [t.model_dump(mode="json") for t in tasks]})
     finally:
@@ -3497,7 +3650,7 @@ def task_cancel(task_id: str) -> None:
 
 
 @task.command("retry")
-@click.option("--task-id", required=True, help="Task ID to retry.")
+@click.argument("task_id")
 def task_retry(task_id: str) -> None:
     """Reset a failed or cancelled task for a fresh attempt.
 

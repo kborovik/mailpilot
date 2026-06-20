@@ -633,6 +633,8 @@ def sync_account(
     account: Account,
     gmail_client: GmailClient,
     settings: Settings,
+    *,
+    backfill_since: datetime | None = None,
 ) -> int:
     """Sync new inbound messages for a single Gmail account.
 
@@ -655,6 +657,9 @@ def sync_account(
         account: Account to sync.
         gmail_client: Gmail client scoped to the account.
         settings: Application settings (reserved for future use).
+        backfill_since: Lower bound on the initial full-INBOX backfill,
+            applied as a Gmail ``after:`` predicate on the full-listing
+            path only (§V.75). Incremental history syncs ignore it.
 
     Returns:
         Number of newly stored email rows.
@@ -670,7 +675,9 @@ def sync_account(
             # message that arrives during this run will still be above this
             # checkpoint and be picked up on the next incremental sync.
             checkpoint = gmail_client.get_profile().get("historyId") or ""
-            message_ids, mode = _collect_new_message_ids(account, gmail_client)
+            message_ids, mode = _collect_new_message_ids(
+                account, gmail_client, backfill_since
+            )
             span.set_attribute("mode", mode)
             span.set_attribute("fetched_count", len(message_ids))
             # Filter out message IDs already stored, then batch-fetch the
@@ -823,6 +830,7 @@ def _backfill_contact_names(
 def _collect_new_message_ids(
     account: Account,
     gmail_client: GmailClient,
+    backfill_since: datetime | None = None,
 ) -> tuple[list[str], str]:
     """Return message IDs to fetch and the sync mode used.
 
@@ -835,6 +843,11 @@ def _collect_new_message_ids(
     still dedupe against the ``email`` table before fetching, so
     duplicates within the list (e.g. same message in multiple history
     records) are harmless.
+
+    ``backfill_since`` bounds only the full-listing path -- it becomes a
+    Gmail ``after:`` epoch predicate (§V.75) so an operator can cap how
+    far back the initial hydration reaches. The incremental history path
+    ignores it: a checkpoint already bounds that sweep.
     """
     from googleapiclient.errors import HttpError
 
@@ -856,7 +869,16 @@ def _collect_new_message_ids(
         else:
             return (_extract_added_message_ids(history), "incremental")
 
+    query = ""
+    if backfill_since is not None:
+        anchor = (
+            backfill_since
+            if backfill_since.tzinfo is not None
+            else backfill_since.replace(tzinfo=UTC)
+        )
+        query = f"after:{int(anchor.timestamp())}"
     stubs = gmail_client.list_messages(
+        query=query,
         max_results=_FULL_SYNC_MAX_RESULTS,
         label_ids=["INBOX"],
     )

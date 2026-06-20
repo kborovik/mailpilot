@@ -91,7 +91,7 @@ The ingest, seed, and domain-resolution mechanics live in `.claude/skills/lead-c
 uv run mailpilot company list --no-profile [--limit N]
 ```
 
-Envelope unwrap -> `companies[]` (`CompanySummary` w/ `has_profile=false`). Domain/UUID-scoped runs: resolve each arg to its row (`uv run mailpilot company search "<arg>" --limit 1` for domains, `uv run mailpilot company view <ID>` for UUIDs; no match -> record `{"error": "not_found", "input": <arg>}` in the run summary) and enrich only those still stale — already-enriched rows report `already_enriched`.
+Envelope unwrap -> `companies[]` (`CompanySummary` w/ `has_profile=false`). Domain/UUID-scoped runs: resolve each arg to its row via `uv run mailpilot company view <arg>` — one polymorphic resolve per §V.107 (a domain matches its natural key, a UUID matches by id; no fuzzy `company search`), `not_found` envelope -> record `{"error": "not_found", "input": <arg>}` in the run summary — and enrich only those still stale; already-enriched rows report `already_enriched`.
 
 ## Stage: batch gate
 

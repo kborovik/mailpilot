@@ -126,21 +126,37 @@ def test_activity_type_literal_uses_enrollment_vocabulary() -> None:
     }
 
 
-def test_tag_uses_nullable_contact_company_fks() -> None:
-    """Polymorphic entity_type/entity_id replaced with typed FKs (#102 suggestion 1)."""
+def test_tag_is_owner_free_vocabulary_row() -> None:
+    """§V.116: a `Tag` is a vocabulary entry -- name + disabled_reason only, no
+    per-owner FKs (owners link via `TagAssignment`)."""
     from mailpilot.models import Tag
 
-    contact_tag = Tag(
-        id="t1",
-        contact_id="c1",
-        company_id=None,
-        name="prospect",
-        created_at=NOW,
+    tag = Tag(id="t1", name="prospect", created_at=NOW)
+    assert tag.name == "prospect"
+    assert tag.disabled_reason is None
+    assert not hasattr(tag, "contact_id")
+    assert not hasattr(tag, "company_id")
+
+
+def test_tag_summary_carries_usage_count() -> None:
+    """§V.116: `TagSummary` projects usage_count for list/view."""
+    from mailpilot.models import TagSummary
+
+    summary = TagSummary(id="t1", name="vip", usage_count=3, created_at=NOW)
+    assert summary.usage_count == 3
+    assert summary.disabled_reason is None
+
+
+def test_tag_assignment_links_one_owner() -> None:
+    """§V.116: `TagAssignment` binds a vocabulary tag to one owner (XOR)."""
+    from mailpilot.models import TagAssignment
+
+    assignment = TagAssignment(
+        id="a1", tag_id="t1", contact_id="c1", company_id=None, created_at=NOW
     )
-    assert contact_tag.contact_id == "c1"
-    assert contact_tag.company_id is None
-    assert not hasattr(contact_tag, "entity_type")
-    assert not hasattr(contact_tag, "entity_id")
+    assert assignment.tag_id == "t1"
+    assert assignment.contact_id == "c1"
+    assert assignment.company_id is None
 
 
 def test_note_uses_nullable_contact_company_fks() -> None:
