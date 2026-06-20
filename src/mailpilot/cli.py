@@ -14,6 +14,17 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 import click
 
+from mailpilot._filters import (
+    DIRECTIONS,
+    enum_option,
+    include_disabled_option,
+    limit_option,
+    presence_option,
+    range_options,
+    scope_option,
+    time_window_options,
+)
+
 if TYPE_CHECKING:
     import pathlib
 
@@ -35,6 +46,26 @@ _ACTIVITY_TYPES = [
     "enrollment_resumed",
     "enrollment_disabled",
 ]
+
+# Persisted email.route_method values; mirrors the schema CHECK set and the
+# email projection enum (the 7 routing decisions an operator can filter on).
+_ROUTE_METHODS = [
+    "classified",
+    "thread_match",
+    "rfc_message_id_match",
+    "skipped_outside_window",
+    "skipped_no_workflows",
+    "skipped_predates_workflows",
+    "skipped_no_inbound_workflows",
+]
+
+# workflow.status / enrollment.status / task.status CHECK sets, mirrored from
+# schema.sql so the Choice options reject out-of-set values at parse time.
+_WORKFLOW_STATUSES = ["draft", "active", "paused"]
+_WORKFLOW_TEMPLATES = ["outbound-general", "inbound-general", "inbound-google-drive"]
+_EMAIL_STATUSES = ["sent", "received", "bounced"]
+_ENROLLMENT_STATUSES = ["active", "paused", "disabled"]
+_TASK_STATUSES = ["pending", "completed", "failed", "cancelled"]
 
 
 def _database_url() -> str:
@@ -470,15 +501,15 @@ def account_create(email: str, display_name: str) -> None:
 
 
 @account.command("list")
-@click.option("--limit", default=100, help="Maximum results.")
-@click.option("--since", default=None, help="ISO datetime lower bound on created_at.")
-def account_list(limit: int, since: str | None) -> None:
+@time_window_options("created_at")
+@limit_option
+def account_list(limit: int, since: str | None, until: str | None) -> None:
     """List Gmail accounts as summaries."""
     from mailpilot.database import initialize_database, list_accounts
 
     connection = initialize_database(_database_url())
     try:
-        accounts = list_accounts(connection, limit=limit, since=since)
+        accounts = list_accounts(connection, limit=limit, since=since, until=until)
         output({"accounts": [a.model_dump(mode="json") for a in accounts]})
     finally:
         connection.close()
@@ -763,43 +794,20 @@ def company_search(query: str, limit: int) -> None:
 
 
 @company.command("list")
-@click.option("--limit", default=100, help="Maximum results.")
-@click.option("--since", default=None, help="ISO datetime lower bound on created_at.")
-@click.option(
-    "--has-profile",
-    is_flag=True,
-    default=False,
-    help="Return only companies with a non-NULL profile.",
+@presence_option("profile", "Filter on presence of a company profile.")
+@range_options(
+    "contacts",
+    "Return only companies with contact_count >= N (composes with --max).",
+    "Return only companies with contact_count <= N (inclusive).",
 )
-@click.option(
-    "--no-profile",
-    is_flag=True,
-    default=False,
-    help="Return only companies with a NULL profile.",
-)
-@click.option(
-    "--max-contacts",
-    type=int,
-    default=None,
-    help="Return only companies with contact_count <= N (inclusive).",
-)
-@click.option(
-    "--min-contacts",
-    type=int,
-    default=None,
-    help="Return only companies with contact_count >= N (composes with --max).",
-)
-@click.option(
-    "--include-disabled",
-    is_flag=True,
-    default=False,
-    help="Include disabled companies (hidden by default).",
-)
+@include_disabled_option
+@time_window_options("created_at")
+@limit_option
 def company_list(
     limit: int,
     since: str | None,
-    has_profile: bool,
-    no_profile: bool,
+    until: str | None,
+    has_profile: bool | None,
     max_contacts: int | None,
     min_contacts: int | None,
     include_disabled: bool,
@@ -807,24 +815,14 @@ def company_list(
     """List companies as summaries."""
     from mailpilot.database import initialize_database, list_companies
 
-    if has_profile and no_profile:
-        output_error(
-            "--has-profile and --no-profile are mutually exclusive",
-            "validation_error",
-        )
-    profile_filter: bool | None = None
-    if has_profile:
-        profile_filter = True
-    elif no_profile:
-        profile_filter = False
-
     connection = initialize_database(_database_url())
     try:
         companies = list_companies(
             connection,
             limit=limit,
             since=since,
-            has_profile=profile_filter,
+            until=until,
+            has_profile=has_profile,
             max_contacts=max_contacts,
             min_contacts=min_contacts,
             include_disabled=include_disabled,
@@ -1187,26 +1185,11 @@ def contact_search(query: str, limit: int) -> None:
 
 
 @contact.command("list")
-@click.option("--limit", default=100, help="Maximum results.")
-@click.option("--company-id", default=None, help="Filter by company ID.")
-@click.option("--since", default=None, help="ISO datetime lower bound on created_at.")
-@click.option(
-    "--include-disabled",
-    is_flag=True,
-    default=False,
-    help="Also list contacts with a non-null disabled_reason (default: hide).",
-)
-@click.option(
-    "--max-email-confidence",
-    type=int,
-    default=None,
-    help="Surface only rows with email_confidence <= N (low-score lead review).",
-)
-@click.option(
-    "--min-email-confidence",
-    type=int,
-    default=None,
-    help="Surface only rows with email_confidence >= N (composes with --max).",
+@scope_option("--company-id", "company_id", "Filter by company ID.")
+@range_options(
+    "email-confidence",
+    "Surface only rows with email_confidence >= N (composes with --max).",
+    "Surface only rows with email_confidence <= N (low-score lead review).",
 )
 @click.option(
     "--company-domain",
@@ -1216,12 +1199,16 @@ def contact_search(query: str, limit: int) -> None:
 @click.option(
     "--title",
     default=None,
-    help="Filter by title (case-insensitive substring match).",
+    help="Filter by title (case-insensitive exact match; use search for substring).",
 )
+@include_disabled_option
+@time_window_options("created_at")
+@limit_option
 def contact_list(
     limit: int,
     company_id: str | None,
     since: str | None,
+    until: str | None,
     include_disabled: bool,
     max_email_confidence: int | None,
     min_email_confidence: int | None,
@@ -1240,6 +1227,7 @@ def contact_list(
             limit=limit,
             company_id=company_id,
             since=since,
+            until=until,
             include_disabled=include_disabled,
             max_email_confidence=max_email_confidence,
             min_email_confidence=min_email_confidence,
@@ -1423,39 +1411,30 @@ def email_search(query: str, limit: int) -> None:
 
 
 @email.command("list")
-@click.option("--limit", default=100, help="Maximum number of results.")
-@click.option("--contact-id", default=None, help="Filter by contact ID.")
-@click.option("--account-id", default=None, help="Filter by account ID.")
-@click.option("--since", default=None, help="ISO datetime lower bound.")
-@click.option("--thread-id", default=None, help="Filter by Gmail thread ID.")
-@click.option(
-    "--direction",
-    default=None,
-    type=click.Choice(["inbound", "outbound"]),
-    help="Filter by direction.",
-)
-@click.option("--workflow-id", default=None, help="Filter by workflow ID.")
-@click.option(
-    "--status",
-    default=None,
-    type=click.Choice(["sent", "received", "bounced"]),
-    help="Filter by email status.",
+@scope_option("--contact-id", "contact_id", "Filter by contact ID.")
+@scope_option("--account-id", "account_id", "Filter by account ID.")
+@scope_option("--workflow-id", "workflow_id", "Filter by workflow ID.")
+@scope_option("--thread-id", "thread_id", "Filter by Gmail thread ID.")
+@enum_option("--direction", "direction", DIRECTIONS, "Filter by direction.")
+@enum_option("--status", "status", _EMAIL_STATUSES, "Filter by email status.")
+@enum_option(
+    "--route-method",
+    "route_method",
+    _ROUTE_METHODS,
+    "Filter by persisted routing decision.",
 )
 @click.option("--from", "sender", default=None, help="Filter by sender email address.")
 @click.option(
     "--to", "recipient", default=None, help="Filter by recipient email address."
 )
-@click.option(
-    "--route-method",
-    "route_method",
-    default=None,
-    help="Filter by persisted routing decision (e.g. classified, thread_match).",
-)
+@time_window_options("COALESCE(sent_at, received_at)")
+@limit_option
 def email_list(
     limit: int,
     contact_id: str | None,
     account_id: str | None,
     since: str | None,
+    until: str | None,
     thread_id: str | None,
     direction: str | None,
     workflow_id: str | None,
@@ -1487,6 +1466,7 @@ def email_list(
             contact_id=contact_id,
             account_id=account_id,
             since=since,
+            until=until,
             thread_id=thread_id,
             direction=direction,
             workflow_id=workflow_id,
@@ -1738,23 +1718,18 @@ def activity_create(
 
 
 @activity.command("list")
-@click.option("--contact-id", default=None, help="Filter by contact ID.")
-@click.option("--company-id", default=None, help="Filter by company ID.")
-@click.option(
-    "--type",
-    "activity_type",
-    default=None,
-    type=click.Choice(_ACTIVITY_TYPES),
-    help="Filter by activity type.",
-)
-@click.option("--limit", default=100, help="Maximum results.")
-@click.option("--since", default=None, help="ISO datetime lower bound.")
+@scope_option("--contact-id", "contact_id", "Filter by contact ID.")
+@scope_option("--company-id", "company_id", "Filter by company ID.")
+@enum_option("--type", "activity_type", _ACTIVITY_TYPES, "Filter by activity type.")
+@time_window_options("created_at")
+@limit_option
 def activity_list(
     contact_id: str | None,
     company_id: str | None,
     activity_type: str | None,
     limit: int,
     since: str | None,
+    until: str | None,
 ) -> None:
     """List activities (requires --contact-id or --company-id)."""
     from mailpilot.database import (
@@ -1782,6 +1757,7 @@ def activity_list(
             activity_type=activity_type,
             limit=limit,
             since=since,
+            until=until,
         )
         output({"activities": [a.model_dump(mode="json") for a in activities]})
     finally:
@@ -1955,21 +1931,17 @@ def tag_disable(
 
 
 @tag.command("list")
-@click.option("--contact-id", default=None, help="Contact ID.")
-@click.option("--company-id", default=None, help="Company ID.")
-@click.option("--limit", default=100, help="Maximum results.")
-@click.option("--since", default=None, help="ISO datetime lower bound on created_at.")
-@click.option(
-    "--include-disabled",
-    is_flag=True,
-    default=False,
-    help="Include rows whose disabled_reason is set (default: active only).",
-)
+@scope_option("--contact-id", "contact_id", "Contact ID.")
+@scope_option("--company-id", "company_id", "Company ID.")
+@include_disabled_option
+@time_window_options("created_at")
+@limit_option
 def tag_list(
     contact_id: str | None,
     company_id: str | None,
     limit: int,
     since: str | None,
+    until: str | None,
     include_disabled: bool,
 ) -> None:
     """List tags on a contact or company."""
@@ -1995,6 +1967,7 @@ def tag_list(
                 contact_id=contact_id,
                 limit=limit,
                 since=since,
+                until=until,
                 include_disabled=include_disabled,
             )
         else:
@@ -2006,6 +1979,7 @@ def tag_list(
                 company_id=company_id,
                 limit=limit,
                 since=since,
+                until=until,
                 include_disabled=include_disabled,
             )
         output({"tags": [t.model_dump(mode="json") for t in tags]})
@@ -2109,12 +2083,16 @@ def note_add(contact_id: str | None, company_id: str | None, body: str) -> None:
 
 
 @note.command("list")
-@click.option("--contact-id", default=None, help="Contact ID.")
-@click.option("--company-id", default=None, help="Company ID.")
-@click.option("--limit", default=100, help="Maximum results.")
-@click.option("--since", default=None, help="ISO datetime lower bound.")
+@scope_option("--contact-id", "contact_id", "Contact ID.")
+@scope_option("--company-id", "company_id", "Company ID.")
+@time_window_options("created_at")
+@limit_option
 def note_list(
-    contact_id: str | None, company_id: str | None, limit: int, since: str | None
+    contact_id: str | None,
+    company_id: str | None,
+    limit: int,
+    since: str | None,
+    until: str | None,
 ) -> None:
     """List notes on a contact or company."""
     from mailpilot.database import (
@@ -2135,14 +2113,22 @@ def note_list(
             if get_contact(connection, contact_id) is None:
                 output_error(f"contact {contact_id} not found", "not_found")
             notes = list_notes(
-                connection, contact_id=contact_id, limit=limit, since=since
+                connection,
+                contact_id=contact_id,
+                limit=limit,
+                since=since,
+                until=until,
             )
         else:
             assert company_id is not None
             if get_company(connection, company_id) is None:
                 output_error(f"company {company_id} not found", "not_found")
             notes = list_notes(
-                connection, company_id=company_id, limit=limit, since=since
+                connection,
+                company_id=company_id,
+                limit=limit,
+                since=since,
+                until=until,
             )
         output({"notes": [n.model_dump(mode="json") for n in notes]})
     finally:
@@ -2445,28 +2431,16 @@ def workflow_search(query: str, limit: int) -> None:
 
 
 @workflow.command("list")
-@click.option("--account-id", default=None, help="Filter by account ID.")
-@click.option(
-    "--status",
-    default=None,
-    type=click.Choice(["draft", "active", "paused"]),
-    help="Filter by workflow status.",
+@scope_option("--account-id", "account_id", "Filter by account ID.")
+@enum_option("--status", "status", _WORKFLOW_STATUSES, "Filter by workflow status.")
+@enum_option(
+    "--direction", "workflow_type", DIRECTIONS, "Filter by workflow direction."
 )
-@click.option(
-    "--type",
-    "workflow_type",
-    default=None,
-    type=click.Choice(["inbound", "outbound"]),
-    help="Filter by workflow direction.",
+@enum_option(
+    "--template", "template", _WORKFLOW_TEMPLATES, "Filter by workflow template."
 )
-@click.option(
-    "--template",
-    default=None,
-    type=click.Choice(["outbound-general", "inbound-general", "inbound-google-drive"]),
-    help="Filter by workflow template.",
-)
-@click.option("--limit", default=100, help="Maximum results.")
-@click.option("--since", default=None, help="ISO datetime lower bound on created_at.")
+@time_window_options("created_at")
+@limit_option
 def workflow_list(
     account_id: str | None,
     status: str | None,
@@ -2474,6 +2448,7 @@ def workflow_list(
     template: str | None,
     limit: int,
     since: str | None,
+    until: str | None,
 ) -> None:
     """List workflows as summaries."""
     from mailpilot.database import get_account, initialize_database, list_workflows
@@ -2490,6 +2465,7 @@ def workflow_list(
             template=template,
             limit=limit,
             since=since,
+            until=until,
         )
         output({"workflows": [w.model_dump(mode="json") for w in workflows]})
     finally:
@@ -2940,12 +2916,7 @@ def template() -> None:
 
 
 @template.command("list")
-@click.option(
-    "--direction",
-    default=None,
-    type=click.Choice(["inbound", "outbound"]),
-    help="Filter by template direction.",
-)
+@enum_option("--direction", "direction", DIRECTIONS, "Filter by template direction.")
 def template_list(direction: str | None) -> None:
     """List all workflow templates as summaries."""
     from mailpilot.agent.templates import TEMPLATES
@@ -3301,22 +3272,18 @@ def enrollment_view(enrollment_id: str) -> None:
 
 
 @enrollment.command("list")
-@click.option("--workflow-id", default=None, help="Filter by workflow ID.")
-@click.option("--contact-id", default=None, help="Filter by contact ID.")
-@click.option(
-    "--status",
-    default=None,
-    type=click.Choice(["active", "paused", "disabled"]),
-    help="Filter by enrollment status.",
-)
-@click.option("--limit", default=100, help="Maximum results.")
-@click.option("--since", default=None, help="ISO datetime lower bound on updated_at.")
+@scope_option("--workflow-id", "workflow_id", "Filter by workflow ID.")
+@scope_option("--contact-id", "contact_id", "Filter by contact ID.")
+@enum_option("--status", "status", _ENROLLMENT_STATUSES, "Filter by enrollment status.")
+@time_window_options("updated_at")
+@limit_option
 def enrollment_list(
     workflow_id: str | None,
     contact_id: str | None,
     status: str | None,
     limit: int,
     since: str | None,
+    until: str | None,
 ) -> None:
     """List enrollments as summaries. Filter by workflow, contact, or both."""
     from mailpilot.database import (
@@ -3339,6 +3306,7 @@ def enrollment_list(
             status=status,
             limit=limit,
             since=since,
+            until=until,
         )
         output({"enrollments": [r.model_dump(mode="json") for r in rows]})
     finally:
@@ -3420,22 +3388,18 @@ def task() -> None:
 
 
 @task.command("list")
-@click.option("--workflow-id", default=None, help="Filter by workflow ID.")
-@click.option("--contact-id", default=None, help="Filter by contact ID.")
-@click.option(
-    "--status",
-    default=None,
-    type=click.Choice(["pending", "completed", "failed", "cancelled"]),
-    help="Filter by task status.",
-)
-@click.option("--limit", default=100, help="Maximum results.")
-@click.option("--since", default=None, help="ISO datetime lower bound on scheduled_at.")
+@scope_option("--workflow-id", "workflow_id", "Filter by workflow ID.")
+@scope_option("--contact-id", "contact_id", "Filter by contact ID.")
+@enum_option("--status", "status", _TASK_STATUSES, "Filter by task status.")
+@time_window_options("scheduled_at")
+@limit_option
 def task_list(
     workflow_id: str | None,
     contact_id: str | None,
     status: str | None,
     limit: int,
     since: str | None,
+    until: str | None,
 ) -> None:
     """List tasks as summaries with optional filters."""
     from mailpilot.database import (
@@ -3458,6 +3422,7 @@ def task_list(
             status=status,
             limit=limit,
             since=since,
+            until=until,
         )
         output({"tasks": [t.model_dump(mode="json") for t in tasks]})
     finally:

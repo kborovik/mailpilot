@@ -818,6 +818,7 @@ def list_accounts(
     connection: psycopg.Connection[dict[str, Any]],
     limit: int = 100,
     since: str | None = None,
+    until: str | None = None,
 ) -> list[AccountSummary]:
     """List accounts as summaries (identify/filter/order fields only).
 
@@ -827,7 +828,8 @@ def list_accounts(
     Args:
         connection: Open database connection.
         limit: Maximum results.
-        since: ISO datetime lower bound on ``created_at``.
+        since: ISO datetime inclusive lower bound on ``created_at``.
+        until: ISO datetime inclusive upper bound on ``created_at``.
 
     Returns:
         List of account summaries ordered by creation time.
@@ -837,6 +839,9 @@ def list_accounts(
     if since is not None:
         conditions.append(SQL("created_at >= %(since)s"))
         params["since"] = since
+    if until is not None:
+        conditions.append(SQL("created_at <= %(until)s"))
+        params["until"] = until
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
         "SELECT id, email, display_name, last_synced_at, created_at "
@@ -960,6 +965,7 @@ def list_companies(
     connection: psycopg.Connection[dict[str, Any]],
     limit: int = 100,
     since: str | None = None,
+    until: str | None = None,
     has_profile: bool | None = None,
     max_contacts: int | None = None,
     min_contacts: int | None = None,
@@ -980,7 +986,8 @@ def list_companies(
     Args:
         connection: Open database connection.
         limit: Maximum results.
-        since: ISO datetime lower bound on ``created_at``.
+        since: ISO datetime inclusive lower bound on ``created_at``.
+        until: ISO datetime inclusive upper bound on ``created_at``.
         has_profile: ``True`` returns only rows where ``profile IS NOT NULL``;
             ``False`` returns only rows where ``profile IS NULL``; ``None``
             (default) returns all rows. Per §V.72 operator filter surface.
@@ -1003,6 +1010,9 @@ def list_companies(
     if since is not None:
         conditions.append(SQL("c.created_at >= %(since)s"))
         params["since"] = since
+    if until is not None:
+        conditions.append(SQL("c.created_at <= %(until)s"))
+        params["until"] = until
     if has_profile is True:
         conditions.append(SQL("c.profile IS NOT NULL"))
     elif has_profile is False:
@@ -1394,6 +1404,7 @@ def list_contacts(
     limit: int = 100,
     company_id: str | None = None,
     since: str | None = None,
+    until: str | None = None,
     include_disabled: bool = False,
     max_email_confidence: int | None = None,
     min_email_confidence: int | None = None,
@@ -1410,7 +1421,8 @@ def list_contacts(
         connection: Open database connection.
         limit: Maximum results.
         company_id: Filter by company ID.
-        since: ISO datetime lower bound on ``created_at``.
+        since: ISO datetime inclusive lower bound on ``created_at``.
+        until: ISO datetime inclusive upper bound on ``created_at``.
         include_disabled: When False (default), only contacts with
             ``disabled_reason IS NULL`` are returned.
         max_email_confidence: When set, surfaces rows with
@@ -1424,8 +1436,9 @@ def list_contacts(
             ``max_email_confidence`` into a closed range. NULL-score rows
             are excluded by the lower bound (§V.95).
         company_domain: When set, matches the joined ``company.domain``.
-        title: When set, a case-insensitive substring (ILIKE) match on
-            ``contact.title``.
+        title: When set, a case-insensitive exact match on ``contact.title``.
+            Substring/fuzzy title matching is the ``contact search`` verb's
+            job, never the ``list`` filter (§V.115 family 5).
 
     Returns:
         List of contact summaries ordered by email.
@@ -1438,6 +1451,9 @@ def list_contacts(
     if since is not None:
         conditions.append(SQL("c.created_at >= %(since)s"))
         params["since"] = since
+    if until is not None:
+        conditions.append(SQL("c.created_at <= %(until)s"))
+        params["until"] = until
     if not include_disabled:
         conditions.append(SQL("c.disabled_reason IS NULL"))
     if max_email_confidence is not None:
@@ -1455,8 +1471,8 @@ def list_contacts(
         conditions.append(SQL("co.domain = %(company_domain)s"))
         params["company_domain"] = company_domain
     if title is not None:
-        conditions.append(SQL("c.title ILIKE %(title)s"))
-        params["title"] = f"%{title}%"
+        conditions.append(SQL("LOWER(c.title) = LOWER(%(title)s)"))
+        params["title"] = title
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
         "SELECT c.id, c.email, c.first_name, c.last_name, c.title, "
@@ -1484,7 +1500,9 @@ def search_contacts(
     Returns:
         Matching contact summaries ordered by email. Each carries
         ``title`` + ``company_domain`` (LEFT JOIN company per §V.5),
-        mirroring ``list_contacts``.
+        mirroring ``list_contacts``. Substring matching covers email, name,
+        and ``title`` -- the fuzzy half of the exact ``contact list --title``
+        filter (§V.115 family 5).
     """
     pattern = f"%{query}%"
     rows = connection.execute(
@@ -1497,6 +1515,7 @@ def search_contacts(
         WHERE LOWER(c.email) LIKE LOWER(%(pattern)s)
            OR LOWER(COALESCE(c.first_name, '')) LIKE LOWER(%(pattern)s)
            OR LOWER(COALESCE(c.last_name, '')) LIKE LOWER(%(pattern)s)
+           OR LOWER(COALESCE(c.title, '')) LIKE LOWER(%(pattern)s)
         ORDER BY c.email
         LIMIT %(limit)s
         """,
@@ -1671,6 +1690,7 @@ def list_workflows(
     template: str | None = None,
     limit: int = 100,
     since: str | None = None,
+    until: str | None = None,
 ) -> list[WorkflowSummary]:
     """List workflows as summaries with optional filters.
 
@@ -1681,7 +1701,8 @@ def list_workflows(
         workflow_type: Filter by workflow type ("inbound" or "outbound").
         template: Filter by template name.
         limit: Maximum results.
-        since: ISO datetime lower bound on ``created_at``.
+        since: ISO datetime inclusive lower bound on ``created_at``.
+        until: ISO datetime inclusive upper bound on ``created_at``.
 
     Returns:
         List of workflow summaries ordered by creation time.
@@ -1703,6 +1724,9 @@ def list_workflows(
     if since is not None:
         conditions.append(SQL("workflow.created_at >= %(since)s"))
         params["since"] = since
+    if until is not None:
+        conditions.append(SQL("workflow.created_at <= %(until)s"))
+        params["until"] = until
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
         "SELECT workflow.id, workflow.name, workflow.template, workflow.type, "
@@ -2241,6 +2265,7 @@ def list_enrollments_detailed(
     status: str | None = None,
     limit: int = 100,
     since: str | None = None,
+    until: str | None = None,
 ) -> list[EnrollmentSummary]:
     """List enrollments with denormalised contact info as summaries.
 
@@ -2255,7 +2280,8 @@ def list_enrollments_detailed(
         contact_id: Optional contact FK filter.
         status: Filter by enrollment status.
         limit: Maximum results.
-        since: ISO datetime lower bound on ``e.updated_at``.
+        since: ISO datetime inclusive lower bound on ``e.updated_at``.
+        until: ISO datetime inclusive upper bound on ``e.updated_at``.
 
     Returns:
         List of enrollment summaries.
@@ -2274,6 +2300,9 @@ def list_enrollments_detailed(
     if since is not None:
         where_parts.append(SQL("e.updated_at >= %(since)s"))
         params["since"] = since
+    if until is not None:
+        where_parts.append(SQL("e.updated_at <= %(until)s"))
+        params["until"] = until
     where_clause = (
         SQL("WHERE ") + SQL(" AND ").join(where_parts) if where_parts else SQL("")
     )
@@ -2434,6 +2463,7 @@ def list_emails(
     contact_id: str | None = None,
     account_id: str | None = None,
     since: str | None = None,
+    until: str | None = None,
     thread_id: str | None = None,
     direction: str | None = None,
     workflow_id: str | None = None,
@@ -2449,7 +2479,10 @@ def list_emails(
         limit: Maximum results.
         contact_id: Filter by contact ID.
         account_id: Filter by account ID.
-        since: ISO datetime lower bound for COALESCE(sent_at, received_at).
+        since: ISO datetime inclusive lower bound for
+            ``COALESCE(sent_at, received_at)``.
+        until: ISO datetime inclusive upper bound for
+            ``COALESCE(sent_at, received_at)``.
         thread_id: Filter by Gmail thread ID.
         direction: Filter by direction ("inbound" or "outbound").
         workflow_id: Filter by workflow ID.
@@ -2488,6 +2521,9 @@ def list_emails(
     if since is not None:
         conditions.append(SQL("COALESCE(sent_at, received_at) >= %(since)s"))
         params["since"] = since
+    if until is not None:
+        conditions.append(SQL("COALESCE(sent_at, received_at) <= %(until)s"))
+        params["until"] = until
     if sender is not None:
         conditions.append(SQL("LOWER(sender) = LOWER(%(sender)s)"))
         params["sender"] = sender
@@ -2973,6 +3009,7 @@ def list_tasks(
     status: str | None = None,
     limit: int = 100,
     since: str | None = None,
+    until: str | None = None,
 ) -> list[TaskSummary]:
     """List tasks as summaries with optional filters.
 
@@ -2982,7 +3019,8 @@ def list_tasks(
         contact_id: Filter by contact ID.
         status: Filter by task status.
         limit: Maximum results.
-        since: ISO datetime lower bound on ``scheduled_at``.
+        since: ISO datetime inclusive lower bound on ``scheduled_at``.
+        until: ISO datetime inclusive upper bound on ``scheduled_at``.
 
     Returns:
         List of task summaries ordered by scheduled_at descending.
@@ -3001,6 +3039,9 @@ def list_tasks(
     if since is not None:
         conditions.append(SQL("scheduled_at >= %(since)s"))
         params["since"] = since
+    if until is not None:
+        conditions.append(SQL("scheduled_at <= %(until)s"))
+        params["until"] = until
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
         "SELECT id, enrollment_id, workflow_id, contact_id, email_id, "
@@ -3298,6 +3339,7 @@ def list_activities(
     activity_type: str | None = None,
     limit: int = 100,
     since: str | None = None,
+    until: str | None = None,
 ) -> list[ActivitySummary]:
     """List activities as summaries with required contact or company filter.
 
@@ -3309,7 +3351,8 @@ def list_activities(
         company_id: Filter by company ID.
         activity_type: Filter by activity type.
         limit: Maximum number of results.
-        since: ISO datetime lower bound for created_at.
+        since: ISO datetime inclusive lower bound for created_at.
+        until: ISO datetime inclusive upper bound for created_at.
 
     Returns:
         Activity summaries ordered by created_at descending.
@@ -3333,6 +3376,9 @@ def list_activities(
     if since is not None:
         conditions.append(SQL("created_at >= %(since)s"))
         params["since"] = since
+    if until is not None:
+        conditions.append(SQL("created_at <= %(until)s"))
+        params["until"] = until
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
         "SELECT id, contact_id, company_id, email_id, workflow_id, task_id, "
@@ -3413,6 +3459,7 @@ def list_tags(
     company_id: str | None = None,
     limit: int = 100,
     since: str | None = None,
+    until: str | None = None,
     include_disabled: bool = False,
 ) -> list[Tag]:
     """List tags on a contact or company.
@@ -3438,6 +3485,9 @@ def list_tags(
     if since is not None:
         where_parts.append(SQL("created_at >= %(since)s"))
         params["since"] = since
+    if until is not None:
+        where_parts.append(SQL("created_at <= %(until)s"))
+        params["until"] = until
     if not include_disabled:
         where_parts.append(SQL("disabled_reason IS NULL"))
     where = SQL("WHERE ") + SQL(" AND ").join(where_parts)
@@ -3782,6 +3832,7 @@ def list_notes(
     company_id: str | None = None,
     limit: int = 100,
     since: str | None = None,
+    until: str | None = None,
 ) -> list[NoteSummary]:
     """List notes on a contact or company as summaries with body previews.
 
@@ -3804,6 +3855,9 @@ def list_notes(
     if since is not None:
         where_parts.append(SQL("created_at >= %(since)s"))
         params["since"] = since
+    if until is not None:
+        where_parts.append(SQL("created_at <= %(until)s"))
+        params["until"] = until
     where = SQL("WHERE ") + SQL(" AND ").join(where_parts)
     query = SQL(
         "SELECT id, contact_id, company_id, "

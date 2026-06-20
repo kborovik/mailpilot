@@ -239,7 +239,7 @@ def test_account_list_limit_and_since(
 
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
-        mock_connection, limit=5, since="2024-01-01T00:00:00"
+        mock_connection, limit=5, since="2024-01-01T00:00:00", until=None
     )
 
 
@@ -591,6 +591,7 @@ def test_company_list_with_limit(runner: CliRunner, mock_connection: MagicMock) 
         mock_connection,
         limit=5,
         since=None,
+        until=None,
         has_profile=None,
         max_contacts=None,
         min_contacts=None,
@@ -613,6 +614,7 @@ def test_company_list_with_since(runner: CliRunner, mock_connection: MagicMock) 
         mock_connection,
         limit=100,
         since="2024-01-01T00:00:00",
+        until=None,
         has_profile=None,
         max_contacts=None,
         min_contacts=None,
@@ -635,6 +637,7 @@ def test_company_list_has_profile_flag(
         mock_connection,
         limit=100,
         since=None,
+        until=None,
         has_profile=True,
         max_contacts=None,
         min_contacts=None,
@@ -657,6 +660,7 @@ def test_company_list_no_profile_flag(
         mock_connection,
         limit=100,
         since=None,
+        until=None,
         has_profile=False,
         max_contacts=None,
         min_contacts=None,
@@ -664,9 +668,15 @@ def test_company_list_no_profile_flag(
     )
 
 
-def test_company_list_has_profile_xor(
+def test_company_list_profile_presence_tristate(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
+    """§V.115 family 4: --has-profile/--no-profile is one tri-state flag.
+
+    Passing both switches no longer errors -- the last one wins, the Click
+    way for a single boolean flag. There is no two-flag XOR and no
+    ``--no-has-profile`` artifact (covered in tests/test_filters.py).
+    """
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
@@ -676,12 +686,9 @@ def test_company_list_has_profile_xor(
             main, ["company", "list", "--has-profile", "--no-profile"]
         )
 
-    assert result.exit_code == 1
-    data = json.loads(result.output)
-    assert data["ok"] is False
-    assert data["error"] == "validation_error"
-    assert "mutually exclusive" in data["message"]
-    mock_list.assert_not_called()
+    assert result.exit_code == 0
+    _, kwargs = mock_list.call_args
+    assert kwargs["has_profile"] is False
 
 
 def test_company_list_max_contacts_flag(
@@ -700,6 +707,7 @@ def test_company_list_max_contacts_flag(
         mock_connection,
         limit=100,
         since=None,
+        until=None,
         has_profile=None,
         max_contacts=4,
         min_contacts=None,
@@ -723,6 +731,7 @@ def test_company_list_min_contacts_flag(
         mock_connection,
         limit=100,
         since=None,
+        until=None,
         has_profile=None,
         max_contacts=None,
         min_contacts=1,
@@ -746,6 +755,7 @@ def test_company_list_include_disabled_flag(
         mock_connection,
         limit=100,
         since=None,
+        until=None,
         has_profile=None,
         max_contacts=None,
         min_contacts=None,
@@ -1728,6 +1738,7 @@ def test_contact_list_with_filters(
         limit=5,
         company_id="cid-1",
         since=None,
+        until=None,
         include_disabled=False,
         max_email_confidence=None,
         min_email_confidence=None,
@@ -1752,6 +1763,7 @@ def test_contact_list_include_disabled(
         limit=100,
         company_id=None,
         since=None,
+        until=None,
         include_disabled=True,
         max_email_confidence=None,
         min_email_confidence=None,
@@ -1779,6 +1791,7 @@ def test_contact_list_max_email_confidence(
         limit=100,
         company_id=None,
         since=None,
+        until=None,
         include_disabled=False,
         max_email_confidence=40,
         min_email_confidence=None,
@@ -1806,6 +1819,7 @@ def test_contact_list_min_email_confidence(
         limit=100,
         company_id=None,
         since=None,
+        until=None,
         include_disabled=False,
         max_email_confidence=None,
         min_email_confidence=60,
@@ -1833,6 +1847,7 @@ def test_contact_list_company_domain(
         limit=100,
         company_id=None,
         since=None,
+        until=None,
         include_disabled=False,
         max_email_confidence=None,
         min_email_confidence=None,
@@ -1842,7 +1857,12 @@ def test_contact_list_company_domain(
 
 
 def test_contact_list_title(runner: CliRunner, mock_connection: MagicMock) -> None:
-    """§V.5: --title flows to list_contacts as a substring filter."""
+    """§V.115 family 5: --title flows to list_contacts as an exact-match filter.
+
+    The exact-vs-substring semantics live in the database layer; the CLI passes
+    the raw term through. Substring title matching is the ``contact search``
+    verb's job (covered in tests/test_database.py).
+    """
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
@@ -1856,6 +1876,7 @@ def test_contact_list_title(runner: CliRunner, mock_connection: MagicMock) -> No
         limit=100,
         company_id=None,
         since=None,
+        until=None,
         include_disabled=False,
         max_email_confidence=None,
         min_email_confidence=None,
@@ -1880,6 +1901,7 @@ def test_contact_list_with_since(runner: CliRunner, mock_connection: MagicMock) 
         limit=100,
         company_id=None,
         since="2024-01-01T00:00:00",
+        until=None,
         include_disabled=False,
         max_email_confidence=None,
         min_email_confidence=None,
@@ -2185,6 +2207,7 @@ def test_email_list(runner: CliRunner, mock_connection: MagicMock) -> None:
         contact_id=None,
         account_id=None,
         since=None,
+        until=None,
         thread_id=None,
         direction=None,
         workflow_id=None,
@@ -2237,6 +2260,7 @@ def test_email_list_with_filters(runner: CliRunner, mock_connection: MagicMock) 
         contact_id="cid",
         account_id="aid",
         since=None,
+        until=None,
         thread_id=None,
         direction=None,
         workflow_id=None,
@@ -2281,6 +2305,7 @@ def test_email_list_with_new_filters(
         contact_id=None,
         account_id=None,
         since="2024-01-01T00:00:00Z",
+        until=None,
         thread_id="thread_abc",
         direction="inbound",
         workflow_id=_WORKFLOW_ID,
@@ -2462,6 +2487,7 @@ def test_email_list_with_from_and_to_filters(
         contact_id=None,
         account_id=None,
         since=None,
+        until=None,
         thread_id=None,
         direction=None,
         workflow_id=None,
@@ -3631,6 +3657,7 @@ def test_workflow_list(runner: CliRunner, mock_connection: MagicMock) -> None:
         template=None,
         limit=100,
         since=None,
+        until=None,
     )
     data = json.loads(result.output)
     assert len(data["workflows"]) == 2
@@ -3657,6 +3684,7 @@ def test_workflow_list_by_account(
         template=None,
         limit=100,
         since=None,
+        until=None,
     )
 
 
@@ -3688,7 +3716,7 @@ def test_workflow_list_with_filters(
     ):
         result = runner.invoke(
             main,
-            ["workflow", "list", "--status", "active", "--type", "outbound"],
+            ["workflow", "list", "--status", "active", "--direction", "outbound"],
         )
 
     assert result.exit_code == 0
@@ -3700,6 +3728,7 @@ def test_workflow_list_with_filters(
         template=None,
         limit=100,
         since=None,
+        until=None,
     )
 
 
@@ -5088,6 +5117,7 @@ def test_activity_list_with_filters(
         activity_type="email_sent",
         limit=5,
         since="2024-01-01T00:00:00Z",
+        until=None,
     )
 
 
@@ -5541,6 +5571,7 @@ def test_tag_list(runner: CliRunner, mock_connection: MagicMock) -> None:
         contact_id="cid-1",
         limit=100,
         since=None,
+        until=None,
         include_disabled=False,
     )
     data = json.loads(result.output)
@@ -5570,6 +5601,7 @@ def test_tag_list_include_disabled_flag(
         contact_id="cid-1",
         limit=100,
         since=None,
+        until=None,
         include_disabled=True,
     )
 
@@ -5604,6 +5636,7 @@ def test_tag_list_limit_and_since(
         contact_id="cid-1",
         limit=5,
         since="2024-01-01T00:00:00",
+        until=None,
         include_disabled=False,
     )
 
@@ -5915,7 +5948,7 @@ def test_note_list_with_limit(runner: CliRunner, mock_connection: MagicMock) -> 
 
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
-        mock_connection, contact_id="cid-1", limit=5, since=None
+        mock_connection, contact_id="cid-1", limit=5, since=None, until=None
     )
 
 
@@ -5945,6 +5978,7 @@ def test_note_list_with_since(runner: CliRunner, mock_connection: MagicMock) -> 
         contact_id="cid-1",
         limit=100,
         since="2024-01-01T00:00:00Z",
+        until=None,
     )
 
 
@@ -6671,6 +6705,7 @@ def test_enrollment_list(runner: CliRunner, mock_connection: MagicMock) -> None:
         status=None,
         limit=100,
         since=None,
+        until=None,
     )
     data = json.loads(result.output)
     assert data["ok"] is True
@@ -6711,6 +6746,7 @@ def test_enrollment_list_with_status(
         status="paused",
         limit=100,
         since=None,
+        until=None,
     )
 
 
@@ -6745,6 +6781,7 @@ def test_enrollment_list_with_limit(
         status=None,
         limit=5,
         since=None,
+        until=None,
     )
 
 
@@ -6772,6 +6809,7 @@ def test_enrollment_list_filters_by_contact(
         status=None,
         limit=100,
         since=None,
+        until=None,
     )
 
 
@@ -6958,6 +6996,7 @@ def test_task_list(runner: CliRunner, mock_connection: MagicMock) -> None:
         status=None,
         limit=100,
         since=None,
+        until=None,
     )
     data = json.loads(result.output)
     assert len(data["tasks"]) == 1
@@ -6998,6 +7037,7 @@ def test_task_list_with_filters(runner: CliRunner, mock_connection: MagicMock) -
         status="pending",
         limit=10,
         since=None,
+        until=None,
     )
 
 
@@ -7852,3 +7892,78 @@ def test_db_check_drift_exits_one_with_report(
     data = json.loads(result.output)
     assert data["error"] == "schema_drift"
     assert data["report"]["verdict"] == "drift"
+
+
+# -- §V.115 six-family filter taxonomy -----------------------------------------
+
+
+def test_account_list_until_flows_to_db(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.115 family 6: --until wires the inclusive upper time bound."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_accounts", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(
+            main, ["account", "list", "--until", "2024-12-31T23:59:59"]
+        )
+
+    assert result.exit_code == 0
+    mock_list.assert_called_once_with(
+        mock_connection, limit=100, since=None, until="2024-12-31T23:59:59"
+    )
+
+
+def test_task_list_until_flows_to_db(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.115 family 6: task list --until covers the scheduled_at window."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.list_tasks", return_value=[]) as mock_list,
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(main, ["task", "list", "--until", "2025-01-01T00:00:00"])
+
+    assert result.exit_code == 0
+    _, kwargs = mock_list.call_args
+    assert kwargs["until"] == "2025-01-01T00:00:00"
+    assert kwargs["since"] is None
+
+
+def test_email_list_route_method_accepts_enum_value(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.20/§V.88: --route-method is a Choice over the 7 persisted decisions."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.list_emails", return_value=[]) as mock_list,
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(
+            main, ["email", "list", "--route-method", "skipped_no_workflows"]
+        )
+
+    assert result.exit_code == 0
+    _, kwargs = mock_list.call_args
+    assert kwargs["route_method"] == "skipped_no_workflows"
+
+
+def test_email_list_route_method_rejects_out_of_set(runner: CliRunner) -> None:
+    """§V.88: an out-of-set --route-method value is rejected at parse time."""
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(main, ["email", "list", "--route-method", "bogus"])
+
+    assert result.exit_code != 0
+    assert "bogus" in result.output
+
+
+def test_workflow_list_type_flag_removed(runner: CliRunner) -> None:
+    """§V.115: workflow --type is renamed to --direction with no back-compat alias."""
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(main, ["workflow", "list", "--type", "inbound"])
+
+    assert result.exit_code != 0
+    assert "no such option" in result.output.lower()

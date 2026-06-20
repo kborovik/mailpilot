@@ -906,10 +906,10 @@ def test_list_contacts_company_domain_filter(
     assert {c.id for c in surfaced} == {keep.id}
 
 
-def test_list_contacts_title_filter(
+def test_list_contacts_title_filter_is_exact(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """§V.5: --title is a case-insensitive substring (ILIKE) match."""
+    """§V.115 family 5: list --title is case-insensitive exact, not substring."""
     vp = create_contact(
         database_connection, email="vp@example.com", title="VP Engineering"
     )
@@ -917,8 +917,42 @@ def test_list_contacts_title_filter(
     create_contact(database_connection, email="blank@example.com")
     assert vp is not None
 
-    surfaced = list_contacts(database_connection, title="engineer")
+    # Exact (case-folded) match surfaces the row.
+    surfaced = list_contacts(database_connection, title="vp engineering")
     assert {c.id for c in surfaced} == {vp.id}
+    # A substring no longer matches on the list filter.
+    assert list_contacts(database_connection, title="engineer") == []
+
+
+def test_search_contacts_matches_title_substring(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.115 family 5: substring title matching lives on the search verb."""
+    vp = create_contact(
+        database_connection, email="vp@example.com", title="VP Engineering"
+    )
+    create_contact(database_connection, email="rep@example.com", title="Sales Rep")
+    assert vp is not None
+
+    results = search_contacts(database_connection, "engineer")
+    assert {c.id for c in results} == {vp.id}
+
+
+def test_list_contacts_until_upper_bounds_created_at(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.115 family 6: --until is an inclusive upper bound on created_at."""
+    contact = create_contact(database_connection, email="early@example.com")
+    assert contact is not None
+
+    # The contact's own created_at is an inclusive upper bound (it appears).
+    at_or_before = list_contacts(
+        database_connection, until=contact.created_at.isoformat()
+    )
+    assert contact.id in {c.id for c in at_or_before}
+    # An upper bound strictly before creation excludes it.
+    before = list_contacts(database_connection, until="2000-01-01T00:00:00+00:00")
+    assert before == []
 
 
 def test_get_contact_by_email(database_connection: psycopg.Connection[dict[str, Any]]):
