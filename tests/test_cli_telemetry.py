@@ -625,7 +625,7 @@ def test_workflow_create_emits_span_and_event(
                 "Outbound",
                 "--template",
                 "outbound-general",
-                "--account-id",
+                "--account-email",
                 account.id,
                 "--draft",
             ],
@@ -732,7 +732,7 @@ def test_workflow_import_idempotent_on_unchanged_rows(
             [
                 "workflow",
                 "import",
-                "--account-id",
+                "--account-email",
                 account.id,
                 "--file",
                 str(toml_file),
@@ -774,7 +774,7 @@ def test_enrollment_add_emits_span_and_event(
                 "add",
                 "--workflow-id",
                 workflow.id,
-                "--contact-id",
+                "--contact-email",
                 contact.id,
             ],
         )
@@ -815,7 +815,7 @@ def test_enrollment_add_scheduled_at_event_carries_field(
                 "add",
                 "--workflow-id",
                 workflow.id,
-                "--contact-id",
+                "--contact-email",
                 contact.id,
                 "--scheduled-at",
                 "2026-06-01T10:00:00+00:00",
@@ -902,7 +902,7 @@ def test_tag_add_emits_span_and_event(
         patch("mailpilot.database.add_contact_tag", return_value=tag),
     ):
         result = runner.invoke(
-            main, ["tag", "add", "--contact-id", contact.id, "prospect"]
+            main, ["tag", "add", "--contact-email", contact.id, "prospect"]
         )
 
     assert result.exit_code == 0, result.output
@@ -933,7 +933,7 @@ def test_tag_disable_emits_span_and_event(
             [
                 "tag",
                 "disable",
-                "--contact-id",
+                "--contact-email",
                 contact.id,
                 "prospect",
                 "--reason",
@@ -965,7 +965,7 @@ def test_note_add_emits_span_and_event(
         patch("mailpilot.database.add_contact_note", return_value=note),
     ):
         result = runner.invoke(
-            main, ["note", "add", "--contact-id", contact.id, "--body", "Hello"]
+            main, ["note", "add", "--contact-email", contact.id, "--body", "Hello"]
         )
 
     assert result.exit_code == 0, result.output
@@ -1110,7 +1110,7 @@ def test_workflow_create_duplicate_emits_duplicate_key_envelope(
                 "Dup",
                 "--template",
                 "outbound-general",
-                "--account-id",
+                "--account-email",
                 account.id,
                 "--draft",
             ],

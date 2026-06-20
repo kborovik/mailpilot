@@ -1408,7 +1408,6 @@ def list_contacts(
     include_disabled: bool = False,
     max_email_confidence: int | None = None,
     min_email_confidence: int | None = None,
-    company_domain: str | None = None,
     title: str | None = None,
 ) -> list[ContactSummary]:
     """List contacts as summaries with optional filters.
@@ -1435,7 +1434,6 @@ def list_contacts(
             ``email_confidence >= N``; composes with
             ``max_email_confidence`` into a closed range. NULL-score rows
             are excluded by the lower bound (§V.95).
-        company_domain: When set, matches the joined ``company.domain``.
         title: When set, a case-insensitive exact match on ``contact.title``.
             Substring/fuzzy title matching is the ``contact search`` verb's
             job, never the ``list`` filter (§V.115 family 5).
@@ -1467,9 +1465,6 @@ def list_contacts(
     if min_email_confidence is not None:
         conditions.append(SQL("c.email_confidence >= %(min_email_confidence)s"))
         params["min_email_confidence"] = min_email_confidence
-    if company_domain is not None:
-        conditions.append(SQL("co.domain = %(company_domain)s"))
-        params["company_domain"] = company_domain
     if title is not None:
         conditions.append(SQL("LOWER(c.title) = LOWER(%(title)s)"))
         params["title"] = title

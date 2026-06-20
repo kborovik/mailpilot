@@ -140,7 +140,14 @@ def test_workflow_export_import_round_trip_and_idempotence(
     export = _invoke(
         runner,
         database_connection,
-        ["workflow", "export", "--account-id", account.id, "--out-dir", str(out_one)],
+        [
+            "workflow",
+            "export",
+            "--account-email",
+            account.id,
+            "--out-dir",
+            str(out_one),
+        ],
     )
     assert len(export["workflows"]) == 3
     assert [row["name"] for row in export["workflows"]] == [
@@ -159,7 +166,7 @@ def test_workflow_export_import_round_trip_and_idempotence(
     import_result = _invoke(
         runner,
         database_connection,
-        ["workflow", "import", "--account-id", account.id, "--file", str(out_one)],
+        ["workflow", "import", "--account-email", account.id, "--file", str(out_one)],
     )
     assert all(row["action"] == "created" for row in import_result["workflows"])
 
@@ -167,7 +174,14 @@ def test_workflow_export_import_round_trip_and_idempotence(
     _invoke(
         runner,
         database_connection,
-        ["workflow", "export", "--account-id", account.id, "--out-dir", str(out_two)],
+        [
+            "workflow",
+            "export",
+            "--account-email",
+            account.id,
+            "--out-dir",
+            str(out_two),
+        ],
     )
     assert _read_catalog(out_two) == original_catalog
 
@@ -175,7 +189,14 @@ def test_workflow_export_import_round_trip_and_idempotence(
         idempotent = _invoke(
             runner,
             database_connection,
-            ["workflow", "import", "--account-id", account.id, "--file", str(out_one)],
+            [
+                "workflow",
+                "import",
+                "--account-email",
+                account.id,
+                "--file",
+                str(out_one),
+            ],
         )
     assert all(row["action"] == "unchanged" for row in idempotent["workflows"])
     mock_update.assert_not_called()
@@ -199,7 +220,14 @@ def test_workflow_export_toml_excludes_denormalized_fields(
     _invoke(
         runner,
         database_connection,
-        ["workflow", "export", "--account-id", account.id, "--out-dir", str(out_dir)],
+        [
+            "workflow",
+            "export",
+            "--account-email",
+            account.id,
+            "--out-dir",
+            str(out_dir),
+        ],
     )
     for path in sorted(out_dir.glob("*.toml")):
         with path.open("rb") as handle:

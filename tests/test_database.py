@@ -891,21 +891,6 @@ def test_list_contacts_min_max_email_confidence_compose(
     assert {c.id for c in surfaced} == {in_band.id}
 
 
-def test_list_contacts_company_domain_filter(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    """§V.5: --company-domain matches the joined company.domain."""
-    acme = make_test_company(database_connection, name="Acme", domain="acme.com")
-    globex = make_test_company(database_connection, name="Globex", domain="globex.com")
-    keep = create_contact(database_connection, email="a@acme.com", company_id=acme.id)
-    create_contact(database_connection, email="g@globex.com", company_id=globex.id)
-    create_contact(database_connection, email="orphan@nowhere.com")
-    assert keep is not None
-
-    surfaced = list_contacts(database_connection, company_domain="acme.com")
-    assert {c.id for c in surfaced} == {keep.id}
-
-
 def test_list_contacts_title_filter_is_exact(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
