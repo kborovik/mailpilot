@@ -48,7 +48,7 @@ and spec-adjacent files) use `telegraph` instead — keep the two registers apar
 - **Spell out symbols** — keep only `|` and `§`. Write "leads to" for `→`, "at
   least" for `≥`, "at most" for `≤`, "and" for `&`.
 - **No idiom** — write the literal meaning. No metaphor, colloquialism, or
-  jargon-idiom ("load-bearing", "hand-rolled", "low-hanging fruit").
+  jargon-idiom (`load-bearing`, `hand-rolled`, `low-hanging fruit`).
 - **Preserve verbatim** — code, paths, URLs, identifiers, flags, numbers,
   versions, SHAs, error strings, and `#123` issue or pull-request refs.
 - **Cite rides the tail** — `§V.<n>` or `§T.<n>` closes the sentence, never opens
@@ -56,6 +56,33 @@ and spec-adjacent files) use `telegraph` instead — keep the two registers apar
 
 The Conventional Commits title prefix (`type(area):`) stays fixed — the register
 applies to the body, not the subject. Full rules live in the `steno` skill.
+
+## Clarity standard for human-facing output
+
+These rules govern chat replies and human-facing writing — GitHub issues and
+pull requests, commit-message bodies, READMEs, and user docs. SPEC.md and
+spec-adjacent files use the telegraph register instead, so these rules do not
+apply there.
+
+<!-- sdd:direct-instruction:begin -->
+
+- **Main point first.** Open each reply, paragraph, or bullet with the fact. Put
+  background and qualifiers after it.
+- **One idea per sentence.** Keep sentences short. Split a long sentence rather
+  than trimming words from it.
+- **Plain words.** Write the literal meaning. Do not use idiom (`low-hanging
+  fruit`), word-level metaphor (`smell`, `bite`), colloquialism, or jargon-idiom
+  (`load-bearing`, `hand-rolled`).
+- **Spell out symbols.** Write `→` as "leads to", `≥` as "at least", `≤` as "at
+  most", `&` as "and", and a leading `~` before a number as "about". Keep `|` for
+  separators and `§` for spec citations.
+- **Citation at the tail.** End a sentence with the `§V.<n>` citation; never open
+  on it.
+- **When the operator asks you to decide,** state the choice in one sentence,
+  list each option on one line, and recommend one. Do not end with a prose "or
+  keep going?" question.
+
+<!-- sdd:direct-instruction:end -->
 
 ## Architecture map
 
