@@ -4847,10 +4847,10 @@ def _make_activity(**overrides: Any) -> Activity:
     return Activity(**{**defaults, **overrides})
 
 
-# -- activity create -----------------------------------------------------------
+# -- activity add --------------------------------------------------------------
 
 
-def test_activity_create(runner: CliRunner, mock_connection: MagicMock) -> None:
+def test_activity_add(runner: CliRunner, mock_connection: MagicMock) -> None:
     activity = _make_activity()
     contact = _make_contact()
     with (
@@ -4865,7 +4865,7 @@ def test_activity_create(runner: CliRunner, mock_connection: MagicMock) -> None:
             main,
             [
                 "activity",
-                "create",
+                "add",
                 "--contact-id",
                 "cid-1",
                 "--type",
@@ -4889,7 +4889,7 @@ def test_activity_create(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert data["activity"]["type"] == "email_sent"
 
 
-def test_activity_create_company_only(
+def test_activity_add_company_only(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     """Company-only activity rows are allowed (#102 sugg 2)."""
@@ -4905,7 +4905,7 @@ def test_activity_create_company_only(
             main,
             [
                 "activity",
-                "create",
+                "add",
                 "--company-id",
                 "comp-1",
                 "--type",
@@ -4918,7 +4918,7 @@ def test_activity_create_company_only(
     assert result.exit_code == 0
 
 
-def test_activity_create_with_detail(
+def test_activity_add_with_detail(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     activity = _make_activity(detail={"email_id": "e-1"})
@@ -4935,7 +4935,7 @@ def test_activity_create_with_detail(
             main,
             [
                 "activity",
-                "create",
+                "add",
                 "--contact-id",
                 "cid-1",
                 "--type",
@@ -4958,7 +4958,7 @@ def test_activity_create_with_detail(
     )
 
 
-def test_activity_create_empty_summary(
+def test_activity_add_empty_summary(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     with (
@@ -4969,7 +4969,7 @@ def test_activity_create_empty_summary(
             main,
             [
                 "activity",
-                "create",
+                "add",
                 "--contact-id",
                 "cid-1",
                 "--type",
@@ -4985,7 +4985,7 @@ def test_activity_create_empty_summary(
     assert "summary" in data["message"]
 
 
-def test_activity_create_contact_not_found(
+def test_activity_add_contact_not_found(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     with (
@@ -4997,7 +4997,7 @@ def test_activity_create_contact_not_found(
             main,
             [
                 "activity",
-                "create",
+                "add",
                 "--contact-id",
                 "cid-missing",
                 "--type",
@@ -5013,7 +5013,7 @@ def test_activity_create_contact_not_found(
     assert "contact" in data["message"]
 
 
-def test_activity_create_company_not_found(
+def test_activity_add_company_not_found(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     contact = _make_contact()
@@ -5027,7 +5027,7 @@ def test_activity_create_company_not_found(
             main,
             [
                 "activity",
-                "create",
+                "add",
                 "--contact-id",
                 "cid-1",
                 "--type",
@@ -5043,6 +5043,28 @@ def test_activity_create_company_not_found(
     data = json.loads(result.output)
     assert data["error"] == "not_found"
     assert "company" in data["message"]
+
+
+def test_activity_create_verb_retired(runner: CliRunner) -> None:
+    """§I.cli: the owner-attaching verb is `activity add`; `activity create`
+    no longer resolves (the standard reconciles the outlier to `add`)."""
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "activity",
+                "create",
+                "--contact-id",
+                "cid-1",
+                "--type",
+                "email_sent",
+                "--summary",
+                "Sent intro",
+            ],
+        )
+
+    assert result.exit_code == 2
+    assert "No such command" in result.output
 
 
 # -- activity list -------------------------------------------------------------
@@ -7133,7 +7155,7 @@ def test_task_retry_resets_failed_row(
         patch("mailpilot.database.get_task", return_value=failed),
         patch("mailpilot.database.manual_retry_task", return_value=reset) as mock_retry,
     ):
-        result = runner.invoke(main, ["task", "retry", "--task-id", failed.id])
+        result = runner.invoke(main, ["task", "retry", failed.id])
 
     assert result.exit_code == 0, result.output
     mock_retry.assert_called_once_with(mock_connection, failed.id)
@@ -7148,7 +7170,7 @@ def test_task_retry_not_found(runner: CliRunner, mock_connection: MagicMock) -> 
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_task", return_value=None),
     ):
-        result = runner.invoke(main, ["task", "retry", "--task-id", "missing"])
+        result = runner.invoke(main, ["task", "retry", "missing"])
 
     assert result.exit_code == 1
     data = json.loads(result.output)
@@ -7165,7 +7187,7 @@ def test_task_retry_pending_invalid_state(
         patch("mailpilot.database.get_task", return_value=pending),
         patch("mailpilot.database.manual_retry_task", return_value=None),
     ):
-        result = runner.invoke(main, ["task", "retry", "--task-id", pending.id])
+        result = runner.invoke(main, ["task", "retry", pending.id])
 
     assert result.exit_code == 1
     data = json.loads(result.output)
@@ -7184,11 +7206,21 @@ def test_task_retry_completed_invalid_state(
         patch("mailpilot.database.get_task", return_value=completed),
         patch("mailpilot.database.manual_retry_task", return_value=None),
     ):
-        result = runner.invoke(main, ["task", "retry", "--task-id", completed.id])
+        result = runner.invoke(main, ["task", "retry", completed.id])
 
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["error"] == "invalid_state"
+
+
+def test_task_retry_rejects_task_id_option(runner: CliRunner) -> None:
+    """§V.107: the retry target is a positional `<task_id>`, never a
+    `--task-id` option -- the flag no longer exists."""
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(main, ["task", "retry", "--task-id", "t-1"])
+
+    assert result.exit_code == 2
+    assert "No such option" in result.output
 
 
 # -- run command ---------------------------------------------------------------

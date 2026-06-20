@@ -217,9 +217,9 @@ Activities may attach to either, both, or neither.
 
 ```
 mailpilot task list --status pending
-mailpilot task view --task-id <TID>
-mailpilot task cancel --task-id <TID>
-mailpilot task retry --task-id <TID>     # only on failed or cancelled rows
+mailpilot task view <TID>
+mailpilot task cancel <TID>
+mailpilot task retry <TID>     # only on failed or cancelled rows
 ```
 
 ### Run the sync loop
