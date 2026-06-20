@@ -115,6 +115,8 @@ The verbs split across two lifecycles:
 
 Reporting follows from the split: `company list --tag <name>` and `contact list --tag <name>` return every entity carrying a curated tag, an Enum-family filter over the assignment join. The closed vocabulary keeps the report axis trustworthy; free strings could not.
 
+A single negative companion `--no-tag <name>` returns every entity NOT carrying the named tag — the same Enum-family membership filter, negated. It is the one controlled exception to the intersection-only filter rule (see Out of scope). It exists for memoization. The lead-contacts pipeline marks a company `no-contacts-found` after a discovery cycle finds nobody, then drops it from the next discover set with `--no-tag no-contacts-found`. This retires the current `company disable --reason no_contacts_found:<date>` abuse, which hides an enriched company from every `company list` default to store a per-pipeline cache fact. `--no-tag` resolves through the vocabulary the way `--tag` does, so an undefined name errors `not_found`. It composes with `--tag` as an intersection — carries A, not B — and no further negation is admitted.
+
 Tags carry `name` only for now. A `category` or `description` is deferred (see Out of scope).
 
 ## CLI API map
@@ -160,7 +162,7 @@ Notation: a bare option is required, a bracketed `[--option]` is optional, and `
 - `company search <query>`
 - `company export [--file <path>]` — write the company catalog as JSON.
 - `company import [--file <path>]` — load a company catalog from JSON.
-- `company list` — filters: `[--has-profile/--no-profile]` *(standard; collapses today's two-flag `--has-profile` plus `--no-profile` into one tri-state)*, `[--min-contacts <int>]`, `[--max-contacts <int>]`, `[--tag <name>]` *(standard)*, `[--include-disabled]`. Projects `contact_count`.
+- `company list` — filters: `[--has-profile/--no-profile]` *(standard; collapses today's two-flag `--has-profile` plus `--no-profile` into one tri-state)*, `[--min-contacts <int>]`, `[--max-contacts <int>]`, `[--tag <name>]` *(standard)*, `[--no-tag <name>]` *(standard)*, `[--include-disabled]`. Projects `contact_count`.
 
 ### contact
 
@@ -171,7 +173,7 @@ Notation: a bare option is required, a bracketed `[--option]` is optional, and `
 - `contact search <query>`
 - `contact export [--file <path>]` — write the contact catalog as JSON.
 - `contact import [--file <path>]` — load a contact catalog from JSON.
-- `contact list` — filters: `[--company-domain <domain>]` *(standard; the former `--company-id` Scope and `--company-domain` Text-match collapse into one polymorphic Scope reference — unknown domain errors `not_found`)*, `[--title <text>]` (exact) *(standard; today substring)*, `[--min-email-confidence <int>]`, `[--max-email-confidence <int>]`, `[--tag <name>]` *(standard)*, `[--include-disabled]`. Projects `title` and `company_domain`.
+- `contact list` — filters: `[--company-domain <domain>]` *(standard; the former `--company-id` Scope and `--company-domain` Text-match collapse into one polymorphic Scope reference — unknown domain errors `not_found`)*, `[--title <text>]` (exact) *(standard; today substring)*, `[--min-email-confidence <int>]`, `[--max-email-confidence <int>]`, `[--tag <name>]` *(standard)*, `[--no-tag <name>]` *(standard)*, `[--include-disabled]`. Projects `title` and `company_domain`.
 
 ### email
 
@@ -239,7 +241,7 @@ Notation: a bare option is required, a bracketed `[--option]` is optional, and `
 
 - A new §V (proposed) codifies the six-family filter taxonomy: the naming rules, the mandate that a `Choice` mirrors each schema enum, list text filters exact-only (substring moves to `search`), the `--since` and `--until` closed interval over one declared column, `--limit` as the only result control, and canonical `--direction`.
 - §I.cli is amended to document the create-add-remove rule and to make `task retry` take a positional `<task_id>`. The noun set is unchanged; the verb set gains `remove`. `activity create` becomes `activity add`.
-- A new §V codifies the tag vocabulary: a `tag` table with globally unique names, a `tag_assignment` join over company or contact, `tag add` erroring on an undefined tag, and a `usage_count` projection on `tag list`.
+- A new §V codifies the tag vocabulary: a `tag` table with globally unique names, a `tag_assignment` join over company or contact, `tag add` erroring on an undefined tag, and a `usage_count` projection on `tag list`. The same §V admits `--no-tag <name>` as the single negative membership filter, the bounded exception to intersection-only composition, so memoization drops a tagged company from a `list` without `disable`.
 - §V.90 changes for tags: name uniqueness moves from per-owner active rows to globally unique vocabulary rows, and an assignment is unique per tag-and-owner.
 - §V.10 changes for tags: `tag disable` retires a vocabulary entry rather than a per-owner row; detaching a link is the new `tag remove` verb.
 - A new §T migrates existing tags forward (§V.108): each distinct name becomes one vocabulary row, and each existing tag row becomes one assignment.
@@ -255,6 +257,7 @@ Notation: a bare option is required, a bracketed `[--option]` is optional, and `
 - One behavior change needs a retrofit: `contact list --title` flips from case-insensitive substring to exact. Title substring discovery moves to `contact search`; search-side title coverage is a follow-up (see Out of scope).
 - §V.4, §V.8, and the §I.cli envelope are otherwise unchanged.
 - A new §T retrofits all 11 list commands onto the filter decorators in one pass: rename `--type` to `--direction`, convert `--route-method` to a `Choice`, flip `--title` to exact, add `--until` everywhere, and convert company presence to a tri-state. A sibling §T applies the verb and target fixes: rename `task retry` to a positional target and `activity create` to `activity add`. A third §T sweeps the natural-key migration: positional targets and owner options on keyed entities accept the natural key (UUID still resolved), the account-ref pair collapses to `--account-email`, and `--company-domain` moves from Text-match to Scope. TDD.
+- A new §T sweeps the lead-pipeline skills (`/lead-companies`, `/lead-contacts`) and `scripts/seed_companies.py` onto the standard, in step with the `cli.py` migration. Domain resolution moves off the fuzzy `company search "<arg>" --limit 1` (and the `fetch_owner_name` client-side exact-domain filter) onto exact polymorphic `company view <domain>`, which errors `not_found` on a miss rather than risking a wrong-row substring match. The renamed flags propagate into skill prose: the lead-contacts Next block's `contact list --company-id <ID>` becomes `--company-domain`, and any `--type` becomes `--direction`. Skill prose sits outside pytest, so a grep over the skill tree verifies the sweep. A follow-up §T may migrate the lead-contacts negative-verdict memoization (§V.96) from `company disable` onto a `no-contacts-found` tag plus the `--no-tag` filter; that changes the §V.96 mechanism, so it is a spec change beyond this mechanical sweep.
 
 ## Design decisions
 
@@ -263,6 +266,7 @@ Notation: a bare option is required, a bracketed `[--option]` is optional, and `
 - **Decision:** `tag add` errors on an undefined tag and never auto-creates it. **Why:** Auto-create is what turns a vocabulary back into free text; this is the Enum filter family's rule applied to data.
 - **Decision:** Add the `add` and `remove` pair; `disable` retires a vocabulary entry. **Why:** Linking and retiring are different lifecycles, and overloading `disable` for detach is what makes today's tag model confusing.
 - **Decision:** Tags attach to both companies and contacts, and carry `name` only for now. **Why:** Notes and activities already own contact-or-company, so tags match for consistency; `category` waits until a report needs grouping (YAGNI).
+- **Decision:** Admit one negative filter, `--no-tag <name>`, against the intersection-only rule. **Why:** Memoization needs it. The lead-contacts pipeline must drop a company from the discover set once a finder cycle returns nobody. Today it abuses `company disable`, which hides an enriched company from every `company list` default to store a per-pipeline cache fact. A `no-contacts-found` tag plus `--no-tag` expresses the same exclusion and keeps `disable` meaning retired. The exception stays bounded — tags are a closed vocabulary, so an undefined name errors, and only a single negation is admitted, no general `--not` or `--or`.
 - **Decision:** Every single-entity verb takes a positional target; the target is never a `--<entity>-id` option. **Why:** Positional targets read uniformly and free the option namespace for filters; `task retry --task-id` is the lone deviation.
 - **Decision:** The natural key is the canonical CLI identifier wherever §V.90 defines one (account email, company domain, contact email, tag name); the UUID stays accepted, resolved polymorphically. **Why:** This is an agent-operated, operator-facing CRM — operators and agents reason in domains and emails, not UUIDs, and §V.107 already proved the pattern (`--account-email`). Generalizing it makes command traces legible (`tag add --tag vip --company-domain acme.com`) and the resolvers already exist (`get_account_by_email`, `get_company_by_domain`, `get_contact_by_email`). Keeping the UUID accepted preserves round-trip: the `id` field and the foreign keys (`contact_id`, `company_id`) in one command's output feed straight into the next. Disambiguation is free — a UUIDv7 (`8-4-4-4-12` hex) never collides with a domain (dots) or an email (at-sign). Keyless entities (email, note, task, workflow, enrollment) have no single natural key, so they stay UUID-addressed; the rule reads "natural key where one exists, UUID otherwise."
 - **Decision:** Collapse the §V.107 account-ref pair `(--account-id | --account-email)` to one `--account-email`. **Why:** A single polymorphic flag resolves an email or a UUID, so the two-flag "exactly one" form is redundant; one flag is simpler and the UUID path survives.
@@ -290,7 +294,7 @@ Notation: a bare option is required, a bracketed `[--option]` is optional, and `
 - Every error path emits a code from the closed vocabulary; no command invents an inline code.
 - Every command emits the §I.cli envelope on stdout and nothing else; `json.load` over any command output succeeds.
 - A tag name exists once globally; `tag add` against an undefined name errors and never creates it.
-- `company list --tag <name>` and `contact list --tag <name>` return entities by curated tag, and `tag list` projects `usage_count`.
+- `company list --tag <name>` and `contact list --tag <name>` return entities by curated tag, `company list --no-tag <name>` returns entities lacking it, and `tag list` projects `usage_count`.
 - For tags, `add` and `remove` manage links while `disable` retires vocabulary entries; the two lifecycles never overlap.
 - A new command is written by composing vocabulary decorators and picking a verb from the set, with zero re-invention.
 
@@ -299,6 +303,6 @@ Notation: a bare option is required, a bracketed `[--option]` is optional, and `
 - The `search` verb's full-text search (FTS) semantics beyond the shared `--limit`; whether `contact search` indexes `title` (follow-up for the substring affordance displaced from `--title`).
 - Import and export format unification — companies and contacts stay JSON, workflows stay TOML (§V.103).
 - Output projection beyond the §V.5 and §V.8 rules; no global `--format` or field-selection flag.
-- Filter composition beyond intersection — no `--or`, `--not`, or `--exclude`.
+- Filter composition beyond intersection — no `--or`, `--not`, or `--exclude`. The lone exception is `--no-tag <name>`, a single negative tag-membership filter for memoization (see Tags as controlled vocabulary); no other negation, disjunction, or boolean composition is admitted.
 - Tag attributes beyond `name` (category, description, color), and tag hierarchy or aliases.
 - Cursor, keyset, or offset pagination, and sort flags.
