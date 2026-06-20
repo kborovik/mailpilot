@@ -59,7 +59,7 @@ Minimize tool calls — run the two stages each as ONE tool call:
 
 - **Enrich (>=2 stale rows)** -> ONE Workflow call BY NAME: `Workflow({name: 'lead-companies-enrich', args: <enrich array>})`, not pasting the inline snippet. The `<enrich array>` is the seed script's `stale` field for a file/bare run, or its `seeded_stale` field for a domain/URL-token run (pick by which Pipeline-table row the args matched). Single stale row -> direct `Task(subagent_type="company-profiler", ...)` per §Stage: enrich.
 
-So full file-arg pipeline = 1 Bash (seed script) + 1 Workflow (enrich) + the batch-gate `AskUserQuestion` when >10 stale and not `--limit` — replacing the ~2N+3 per-row Bash calls. The canonical ingest/seed/domain recipes the script mirrors live in `references/lead-companies-stages.md` (see §Stage recipes); reach for them only when debugging a row the script reported in `skipped`.
+So full file-arg pipeline = 1 Bash (seed script) + 1 Workflow (enrich) + the batch-gate `AskUserQuestion` when >9 stale and not `--limit` — replacing the ~2N+3 per-row Bash calls. The canonical ingest/seed/domain recipes the script mirrors live in `references/lead-companies-stages.md` (see §Stage recipes); reach for them only when debugging a row the script reported in `skipped`.
 
 ## Scope
 
@@ -95,7 +95,7 @@ Envelope unwrap -> `companies[]` (`CompanySummary` w/ `has_profile=false`). Doma
 
 ## Stage: batch gate
 
-Shared gate mechanics (`--limit`, the `>10` `AskUserQuestion`, the First-10 / First-25 / All-N options, the 1-10 proceed rule) -> see `.claude/skills/lead-companies/references/lead-pipeline-conventions.md` (Batch gate). `<rows>` = the `companies[]` from the stale query. This skill's per-skill gate parameters:
+Shared gate mechanics (`--limit`, the `>9` `AskUserQuestion`, the First-9 / First-25 / All-N options, the 1-9 proceed rule) -> see `.claude/skills/lead-companies/references/lead-pipeline-conventions.md` (Batch gate). `<rows>` = the `companies[]` from the stale query. This skill's per-skill gate parameters:
 
 - empty-set run summary (`len(companies) == 0`): `{"enriched": 0, "skipped": 0, "failed": 0, "results": [], "ok": true}`.
 - **question**: `"<N> companies need enrichment. How many should the enricher process this run?"`
@@ -186,7 +186,7 @@ The batch loop caps in-flight enrichers at 3 per `parallel()` call — the chunk
 
 ## Run summary
 
-After all stages, emit one aggregate JSON: `{"created": N, "existing": N, "enriched": N, "skipped": N, "failed": N, "results": [...], "ok": true}` — omit seed fields on bare invocations, omit enrich fields when 0 stale rows. When the batch gate (per §Stage: batch gate) caps below the stale-count — operator picks `First 10`/`First 25` over a larger N, or `--limit N` < stale-count — append `"deferred": <stale-count - dispatched>` (the stale rows the stale query found minus the capped count actually dispatched to enrich) so the operator sees how many rows were left `profile IS NULL` for a follow-up run per §V.97; all stale dispatched -> `deferred: 0` or omit the field. A bare `created`/`enriched` count is never the sole remainder signal. When >=1 name-divergent collision-on-resolved-apex fired (the §V.98 rule the seed script applies — see §Stage recipes), append `"collapsed": [{"resolved": <apex>, "owner_name": <owner>, "incoming_names": [...]}]` so the operator sees which distinct-entity rows merged onto one company (incoming CSV display name diverging from the owner's name per §V.98) — a bare `existing: N` count hides the merge. Same-name re-seeds stay folded into `existing`.
+After all stages, emit one aggregate JSON: `{"created": N, "existing": N, "enriched": N, "skipped": N, "failed": N, "results": [...], "ok": true}` — omit seed fields on bare invocations, omit enrich fields when 0 stale rows. When the batch gate (per §Stage: batch gate) caps below the stale-count — operator picks `First 9`/`First 25` over a larger N, or `--limit N` < stale-count — append `"deferred": <stale-count - dispatched>` (the stale rows the stale query found minus the capped count actually dispatched to enrich) so the operator sees how many rows were left `profile IS NULL` for a follow-up run per §V.97; all stale dispatched -> `deferred: 0` or omit the field. A bare `created`/`enriched` count is never the sole remainder signal. When >=1 name-divergent collision-on-resolved-apex fired (the §V.98 rule the seed script applies — see §Stage recipes), append `"collapsed": [{"resolved": <apex>, "owner_name": <owner>, "incoming_names": [...]}]` so the operator sees which distinct-entity rows merged onto one company (incoming CSV display name diverging from the owner's name per §V.98) — a bare `existing: N` count hides the merge. Same-name re-seeds stay folded into `existing`.
 
 ## Rendering
 

@@ -24,11 +24,11 @@ citing skill supplies inline (their counter keys differ).
 
 - `len(<rows>) == 0` -> emit the skill's empty-set run summary (every counter `0`, `"results": [], "ok": true`) and stop.
 - `--limit N` given -> cap to first N, no question.
-- `len(<rows>) > 10` and no `--limit` -> invoke `AskUserQuestion` (sole interaction gate) with the skill's `question` + `header` and these options:
-  - `"First 10 (Recommended)"` -- cap to first 10
+- `len(<rows>) > 9` and no `--limit` -> invoke `AskUserQuestion` (sole interaction gate) with the skill's `question` + `header` and these options:
+  - `"First 9 (Recommended)"` -- cap to first 9 (three full waves at the concurrency-3 enrich/discover budget, no straggler wave of 1)
   - `"First 25"` -- cap to first 25
   - `"All <N>"` -- every stale row
-- Else (1-10 rows) -> proceed w/ all, no question.
+- Else (1-9 rows) -> proceed w/ all, no question.
 
 ## OUTPUT -- "Next" block
 

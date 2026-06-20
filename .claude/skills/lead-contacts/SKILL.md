@@ -44,7 +44,7 @@ Minimize tool calls -- run the two stages each as ONE tool call:
 - **Stale query** -> ONE Bash call (`python3` heredoc below) that emits the exact `[{id, domain, name}]` discover set the Workflow consumes -- not a per-company `contact list` loop in skill prose.
 - **Discover (>=2 stale rows)** -> ONE Workflow call BY NAME: `Workflow({name: 'lead-contacts-find', args: <stale array>})`, not pasting the inline snippet. Single stale row -> direct `Task(subagent_type="contact-finder", ...)` per §Stage: discover.
 
-So full pipeline = 1 Bash (stale query) + 1 Workflow (discover) + the batch-gate `AskUserQuestion` when `>10` stale and not `--limit`.
+So full pipeline = 1 Bash (stale query) + 1 Workflow (discover) + the batch-gate `AskUserQuestion` when `>9` stale and not `--limit`.
 
 ## Stage: stale query
 
@@ -73,7 +73,7 @@ Scoped runs (UUID/domain args): resolve each arg to its company row first; drop 
 
 ## Stage: batch gate
 
-Shared gate mechanics (`--limit`, the `>10` `AskUserQuestion`, the First-10 / First-25 / All-N options, the 1-10 proceed rule) -> see `.claude/skills/lead-companies/references/lead-pipeline-conventions.md` (Batch gate). `<rows>` = the `stale[]` array from the stale query. This skill's per-skill gate parameters:
+Shared gate mechanics (`--limit`, the `>9` `AskUserQuestion`, the First-9 / First-25 / All-N options, the 1-9 proceed rule) -> see `.claude/skills/lead-companies/references/lead-pipeline-conventions.md` (Batch gate). `<rows>` = the `stale[]` array from the stale query. This skill's per-skill gate parameters:
 
 - empty-set run summary (`len(stale) == 0`): `{"seeded": 0, "skipped": 0, "failed": 0, "results": [], "ok": true}`.
 - **question**: `"<N> enriched companies need contacts. How many should the finder process this run?"`
@@ -194,7 +194,7 @@ This skill itself needs no vendor key; it only queries the local DB and dispatch
 
 ## Run summary
 
-After all stages, emit one aggregate JSON: `{"seeded": N, "skipped": N, "failed": N, "flagged": N, "disabled": N, "results": [...], "ok": true}` -- `seeded` = companies w/ `>=1` new contact, `flagged` = total high-risk rows surfaced for review, `disabled` = companies memoized as having no discoverable contacts this run (the negative-verdict stage, `no_contacts_found:<date>`), `results` = the per-company verdicts. When the batch gate (per §Stage: batch gate) caps below the stale-count -- operator picks `First 10`/`First 25` over a larger N, or `--limit N` < stale-count -- append `"deferred": <stale-count - dispatched>` (the stale companies the stale query found minus the capped count actually dispatched to discover) so the operator sees how many companies were left under the `< 5`-contact threshold for a follow-up run per §V.97; all stale dispatched -> `deferred: 0` or omit the field. A bare `seeded` count is never the sole remainder signal. On scoped runs, include a `"skipped": [{"input": ..., "reason": "no_profile" | "contact_cap" | "not_found"}]` detail so the operator sees which args were not dispatched.
+After all stages, emit one aggregate JSON: `{"seeded": N, "skipped": N, "failed": N, "flagged": N, "disabled": N, "results": [...], "ok": true}` -- `seeded` = companies w/ `>=1` new contact, `flagged` = total high-risk rows surfaced for review, `disabled` = companies memoized as having no discoverable contacts this run (the negative-verdict stage, `no_contacts_found:<date>`), `results` = the per-company verdicts. When the batch gate (per §Stage: batch gate) caps below the stale-count -- operator picks `First 9`/`First 25` over a larger N, or `--limit N` < stale-count -- append `"deferred": <stale-count - dispatched>` (the stale companies the stale query found minus the capped count actually dispatched to discover) so the operator sees how many companies were left under the `< 5`-contact threshold for a follow-up run per §V.97; all stale dispatched -> `deferred: 0` or omit the field. A bare `seeded` count is never the sole remainder signal. On scoped runs, include a `"skipped": [{"input": ..., "reason": "no_profile" | "contact_cap" | "not_found"}]` detail so the operator sees which args were not dispatched.
 
 ## Conventions
 
