@@ -22,6 +22,7 @@ from mailpilot._filters import (
     presence_option,
     range_options,
     scope_option,
+    tag_filter_options,
     time_window_options,
 )
 
@@ -304,6 +305,29 @@ def _resolve_contact_id(connection: Any, contact_ref: str) -> str:
     if contact is None:
         output_error(f"contact not found: {contact_ref}", "not_found")
     return contact.id
+
+
+def _resolve_tag(connection: Any, tag_ref: str) -> Any:
+    """Resolve a tag reference (name or UUID) to its vocabulary row (§V.116).
+
+    Tags are addressed by their globally unique name (operators never paste
+    tag ids); a UUID-shaped ref still resolves by id so a tag id round-trips
+    from one command's output into the next (§V.107). An undefined or malformed
+    name exits ``not_found`` (§V.94) -- ``tag add`` never auto-creates the tag.
+    """
+    from mailpilot.database import get_tag, get_tag_by_name
+
+    try:
+        tag = (
+            get_tag(connection, tag_ref)
+            if _looks_like_uuid(tag_ref)
+            else get_tag_by_name(connection, tag_ref)
+        )
+    except ValueError:
+        tag = None
+    if tag is None:
+        output_error(f"tag not found: {tag_ref}", "not_found")
+    return tag
 
 
 # -- Main CLI ------------------------------------------------------------------
@@ -914,6 +938,7 @@ def company_search(query: str, limit: int) -> None:
     "Return only companies with contact_count >= N (composes with --max).",
     "Return only companies with contact_count <= N (inclusive).",
 )
+@tag_filter_options
 @include_disabled_option
 @time_window_options("created_at")
 @limit_option
@@ -925,12 +950,18 @@ def company_list(
     max_contacts: int | None,
     min_contacts: int | None,
     include_disabled: bool,
+    tag: str | None,
+    no_tag: str | None,
 ) -> None:
     """List companies as summaries."""
     from mailpilot.database import initialize_database, list_companies
 
     connection = initialize_database(_database_url())
     try:
+        tag_id = _resolve_tag(connection, tag).id if tag is not None else None
+        exclude_tag_id = (
+            _resolve_tag(connection, no_tag).id if no_tag is not None else None
+        )
         companies = list_companies(
             connection,
             limit=limit,
@@ -940,6 +971,8 @@ def company_list(
             max_contacts=max_contacts,
             min_contacts=min_contacts,
             include_disabled=include_disabled,
+            tag=tag_id,
+            exclude_tag=exclude_tag_id,
         )
         output({"companies": [c.model_dump(mode="json") for c in companies]})
     finally:
@@ -1315,6 +1348,7 @@ def contact_search(query: str, limit: int) -> None:
     default=None,
     help="Filter by title (case-insensitive exact match; use search for substring).",
 )
+@tag_filter_options
 @include_disabled_option
 @time_window_options("created_at")
 @limit_option
@@ -1327,6 +1361,8 @@ def contact_list(
     max_email_confidence: int | None,
     min_email_confidence: int | None,
     title: str | None,
+    tag: str | None,
+    no_tag: str | None,
 ) -> None:
     """List contacts as summaries."""
     from mailpilot.database import initialize_database, list_contacts
@@ -1338,6 +1374,10 @@ def contact_list(
             if company_domain is not None
             else None
         )
+        tag_id = _resolve_tag(connection, tag).id if tag is not None else None
+        exclude_tag_id = (
+            _resolve_tag(connection, no_tag).id if no_tag is not None else None
+        )
         contacts = list_contacts(
             connection,
             limit=limit,
@@ -1348,6 +1388,8 @@ def contact_list(
             max_email_confidence=max_email_confidence,
             min_email_confidence=min_email_confidence,
             title=title,
+            tag=tag_id,
+            exclude_tag=exclude_tag_id,
         )
         output({"contacts": [c.model_dump(mode="json") for c in contacts]})
     finally:
@@ -1890,146 +1932,99 @@ def activity_list(
 
 @main.group()
 def tag() -> None:
-    """Manage tags on contacts and companies."""
+    """Manage the controlled tag vocabulary and its assignments."""
 
 
-@tag.command("add")
-@click.option("--contact-email", default=None, help="Owner contact (email or ID).")
-@click.option("--company-domain", default=None, help="Owner company (domain or ID).")
+@tag.command("create")
 @click.argument("name")
-def tag_add(contact_email: str | None, company_domain: str | None, name: str) -> None:
-    """Add a tag to a contact or company."""
+def tag_create(name: str) -> None:
+    """Define a tag in the controlled vocabulary.
+
+    Creates a vocabulary entry; linking owners to it is the `tag add` verb. A
+    name already defined is rejected (names are globally unique).
+    """
     from mailpilot.database import (
         _normalize_tag_name,  # pyright: ignore[reportPrivateUsage]
-        add_company_tag,
-        add_contact_tag,
+        create_tag,
         initialize_database,
     )
     from mailpilot.operator_log import cli_mutation, operator_event
 
     if not name.strip():
         output_error("tag name cannot be empty", "validation_error")
-    if (contact_email is None) == (company_domain is None):
-        output_error(
-            "exactly one of --contact-email or --company-domain is required",
-            "validation_error",
-        )
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
-        if contact_email is not None:
-            owner = ("contact", _resolve_contact(connection, contact_email).id)
-        else:
-            assert company_domain is not None
-            owner = ("company", _resolve_company(connection, company_domain).id)
-        with cli_mutation(
-            "tag", "add", name=name, owner_type=owner[0], owner_id=owner[1]
-        ):
-            if owner[0] == "contact":
-                try:
-                    created = add_contact_tag(
-                        connection, contact_id=owner[1], name=name
-                    )
-                except ValueError as exc:
-                    output_error(str(exc), "validation_error")
-            else:
-                try:
-                    created = add_company_tag(
-                        connection, company_id=owner[1], name=name
-                    )
-                except ValueError as exc:
-                    output_error(str(exc), "validation_error")
+        with cli_mutation("tag", "create", name=name):
+            try:
+                created = create_tag(connection, name=name)
+            except ValueError as exc:
+                output_error(str(exc), "validation_error")
             if created is None:
                 normalized = _normalize_tag_name(name)
-                output_error(
-                    f"tag '{normalized}' already exists on {owner[0]} {owner[1]}",
-                    "already_exists",
-                )
-            operator_event(
-                "tag.add",
-                name=created.name,
-                owner_type=owner[0],
-                owner_id=owner[1],
-                changed=["name"],
-            )
+                output_error(f"tag '{normalized}' already exists", "already_exists")
+            operator_event("tag.create", name=created.name, changed=["name"])
             output_entity("tag", created)
     finally:
         connection.close()
 
 
+@tag.command("view")
+@click.argument("name")
+def tag_view(name: str) -> None:
+    """Show a vocabulary tag by name with its usage_count."""
+    from mailpilot.database import get_tag_summary_by_name, initialize_database
+
+    connection = initialize_database(_database_url())
+    try:
+        try:
+            found = get_tag_summary_by_name(connection, name)
+        except ValueError:
+            found = None
+        if found is None:
+            output_error(f"tag not found: {name}", "not_found")
+        output_entity("tag", found)
+    finally:
+        connection.close()
+
+
 @tag.command("disable")
-@click.option("--contact-email", default=None, help="Owner contact (email or ID).")
-@click.option("--company-domain", default=None, help="Owner company (domain or ID).")
 @click.argument("name")
 @click.option(
     "--reason",
     required=True,
-    help="Explanation written to disabled_reason and the tag_disabled activity.",
+    help="Explanation written to disabled_reason.",
 )
-def tag_disable(
-    contact_email: str | None, company_domain: str | None, name: str, reason: str
-) -> None:
-    """Soft-disable a tag on a contact or company.
+def tag_disable(name: str, reason: str) -> None:
+    """Soft-retire a tag in the controlled vocabulary.
 
-    Flips ``disabled_reason`` on the active tag row and appends a
-    ``tag_disabled`` activity carrying the reason. Disabled is terminal --
-    re-adding the same name means creating a fresh row via ``tag add``.
+    Flips disabled_reason on the vocabulary row, so the tag drops out of the
+    default `tag list` but stays linked to its owners. Re-enable by clearing
+    disabled_reason. Disabling an already-disabled tag is rejected.
     """
-    from mailpilot.database import (
-        _normalize_tag_name,  # pyright: ignore[reportPrivateUsage]
-        disable_company_tag,
-        disable_contact_tag,
-        initialize_database,
-    )
+    from mailpilot.database import disable_tag, initialize_database
     from mailpilot.operator_log import cli_mutation, operator_event
 
     if reason.strip() == "":
         output_error("reason cannot be empty", "validation_error")
-    if (contact_email is None) == (company_domain is None):
-        output_error(
-            "exactly one of --contact-email or --company-domain is required",
-            "validation_error",
-        )
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
-        if contact_email is not None:
-            owner = ("contact", _resolve_contact(connection, contact_email).id)
-        else:
-            assert company_domain is not None
-            owner = ("company", _resolve_company(connection, company_domain).id)
-        with cli_mutation(
-            "tag", "disable", entity_id=name, owner_type=owner[0], owner_id=owner[1]
-        ):
-            if owner[0] == "contact":
-                try:
-                    updated = disable_contact_tag(
-                        connection,
-                        contact_id=owner[1],
-                        name=name,
-                        reason=reason,
-                    )
-                except ValueError as exc:
-                    output_error(str(exc), "validation_error")
-            else:
-                try:
-                    updated = disable_company_tag(
-                        connection,
-                        company_id=owner[1],
-                        name=name,
-                        reason=reason,
-                    )
-                except ValueError as exc:
-                    output_error(str(exc), "validation_error")
+        before = _resolve_tag(connection, name)
+        if before.disabled_reason is not None:
+            output_error(
+                f"tag '{before.name}' is already disabled "
+                f"(reason: {before.disabled_reason})",
+                "validation_error",
+            )
+        with cli_mutation("tag", "disable", entity_id=before.name):
+            updated = disable_tag(connection, name=before.name, reason=reason)
             if updated is None:
-                normalized = _normalize_tag_name(name)
                 output_error(
-                    f"tag '{normalized}' not found on {owner[0]} {owner[1]}",
-                    "not_found",
+                    f"tag '{before.name}' is already disabled",
+                    "validation_error",
                 )
             operator_event(
                 "tag.disable",
                 entity_id=updated.name,
-                owner_type=owner[0],
-                owner_id=owner[1],
                 changed=["disabled_reason"],
             )
             output_entity("tag", updated)
@@ -2037,9 +2032,136 @@ def tag_disable(
         connection.close()
 
 
+@tag.command("add")
+@click.option(
+    "--tag", "tag_name", required=True, help="Defined tag to link (name or ID)."
+)
+@click.option("--contact-email", default=None, help="Owner contact (email or ID).")
+@click.option("--company-domain", default=None, help="Owner company (domain or ID).")
+def tag_add(
+    tag_name: str, contact_email: str | None, company_domain: str | None
+) -> None:
+    """Link a defined tag to a contact or company.
+
+    Errors `not_found` when the tag is undefined -- `tag add` never creates the
+    tag as a side effect (define vocabulary with `tag create`).
+    """
+    from mailpilot.database import (
+        assign_tag_to_company,
+        assign_tag_to_contact,
+        initialize_database,
+    )
+    from mailpilot.operator_log import cli_mutation, operator_event
+
+    if (contact_email is None) == (company_domain is None):
+        output_error(
+            "exactly one of --contact-email or --company-domain is required",
+            "validation_error",
+        )
+    connection = initialize_database(_database_url(), require_current_schema=True)
+    try:
+        tag_row = _resolve_tag(connection, tag_name)
+        if contact_email is not None:
+            owner = ("contact", _resolve_contact(connection, contact_email).id)
+        else:
+            assert company_domain is not None
+            owner = ("company", _resolve_company(connection, company_domain).id)
+        with cli_mutation(
+            "tag", "add", name=tag_row.name, owner_type=owner[0], owner_id=owner[1]
+        ):
+            if owner[0] == "contact":
+                created = assign_tag_to_contact(
+                    connection, tag_id=tag_row.id, contact_id=owner[1]
+                )
+            else:
+                created = assign_tag_to_company(
+                    connection, tag_id=tag_row.id, company_id=owner[1]
+                )
+            if created is None:
+                output_error(
+                    f"tag '{tag_row.name}' already on {owner[0]} {owner[1]}",
+                    "already_exists",
+                )
+            operator_event(
+                "tag.add",
+                name=tag_row.name,
+                owner_type=owner[0],
+                owner_id=owner[1],
+                changed=["tag_id"],
+            )
+            output_entity("tag_assignment", created)
+    finally:
+        connection.close()
+
+
+@tag.command("remove")
+@click.option(
+    "--tag", "tag_name", required=True, help="Defined tag to unlink (name or ID)."
+)
+@click.option("--contact-email", default=None, help="Owner contact (email or ID).")
+@click.option("--company-domain", default=None, help="Owner company (domain or ID).")
+def tag_remove(
+    tag_name: str, contact_email: str | None, company_domain: str | None
+) -> None:
+    """Unlink a tag from a contact or company (inverse of `tag add`).
+
+    Removes only the link; the tag vocabulary entry and the owner both survive.
+    """
+    from mailpilot.database import (
+        initialize_database,
+        remove_tag_from_company,
+        remove_tag_from_contact,
+    )
+    from mailpilot.operator_log import cli_mutation, operator_event
+
+    if (contact_email is None) == (company_domain is None):
+        output_error(
+            "exactly one of --contact-email or --company-domain is required",
+            "validation_error",
+        )
+    connection = initialize_database(_database_url(), require_current_schema=True)
+    try:
+        tag_row = _resolve_tag(connection, tag_name)
+        if contact_email is not None:
+            owner = ("contact", _resolve_contact(connection, contact_email).id)
+        else:
+            assert company_domain is not None
+            owner = ("company", _resolve_company(connection, company_domain).id)
+        with cli_mutation(
+            "tag", "remove", name=tag_row.name, owner_type=owner[0], owner_id=owner[1]
+        ):
+            if owner[0] == "contact":
+                removed = remove_tag_from_contact(
+                    connection, tag_id=tag_row.id, contact_id=owner[1]
+                )
+            else:
+                removed = remove_tag_from_company(
+                    connection, tag_id=tag_row.id, company_id=owner[1]
+                )
+            if removed is None:
+                output_error(
+                    f"tag '{tag_row.name}' not on {owner[0]} {owner[1]}",
+                    "not_found",
+                )
+            operator_event(
+                "tag.remove",
+                name=tag_row.name,
+                owner_type=owner[0],
+                owner_id=owner[1],
+                changed=["tag_id"],
+            )
+            output_entity("tag_assignment", removed)
+    finally:
+        connection.close()
+
+
 @tag.command("list")
-@scope_option("--contact-email", "contact_email", "Filter by contact (email or ID).")
-@scope_option("--company-domain", "company_domain", "Filter by company (domain or ID).")
+@scope_option(
+    "--contact-email", "contact_email", "List one contact's tags (email or ID)."
+)
+@scope_option(
+    "--company-domain", "company_domain", "List one company's tags (domain or ID)."
+)
 @include_disabled_option
 @time_window_options("created_at")
 @limit_option
@@ -2051,38 +2173,40 @@ def tag_list(
     until: str | None,
     include_disabled: bool,
 ) -> None:
-    """List tags on a contact or company."""
-    from mailpilot.database import (
-        initialize_database,
-        list_tags,
-    )
+    """List the tag vocabulary with usage_count, or one owner's tags.
 
-    if (contact_email is None) == (company_domain is None):
+    With no owner option, lists the whole vocabulary (each row carrying its
+    global usage_count). With --contact-email or --company-domain, lists the
+    tags assigned to that owner.
+    """
+    from mailpilot.database import initialize_database, list_tags
+
+    if contact_email is not None and company_domain is not None:
         output_error(
-            "exactly one of --contact-email or --company-domain is required",
+            "pass at most one of --contact-email or --company-domain",
             "validation_error",
         )
     connection = initialize_database(_database_url())
     try:
-        if contact_email is not None:
-            tags = list_tags(
-                connection,
-                contact_id=_resolve_contact(connection, contact_email).id,
-                limit=limit,
-                since=since,
-                until=until,
-                include_disabled=include_disabled,
-            )
-        else:
-            assert company_domain is not None
-            tags = list_tags(
-                connection,
-                company_id=_resolve_company(connection, company_domain).id,
-                limit=limit,
-                since=since,
-                until=until,
-                include_disabled=include_disabled,
-            )
+        contact_id = (
+            _resolve_contact(connection, contact_email).id
+            if contact_email is not None
+            else None
+        )
+        company_id = (
+            _resolve_company(connection, company_domain).id
+            if company_domain is not None
+            else None
+        )
+        tags = list_tags(
+            connection,
+            contact_id=contact_id,
+            company_id=company_id,
+            limit=limit,
+            since=since,
+            until=until,
+            include_disabled=include_disabled,
+        )
         output({"tags": [t.model_dump(mode="json") for t in tags]})
     finally:
         connection.close()
@@ -2090,24 +2214,10 @@ def tag_list(
 
 @tag.command("search")
 @click.argument("name")
-@click.option(
-    "--type",
-    "owner",
-    default=None,
-    type=click.Choice(["contact", "company"]),
-    help="Filter by owner type.",
-)
-@click.option("--limit", default=100, help="Maximum results.")
-@click.option(
-    "--include-disabled",
-    is_flag=True,
-    default=False,
-    help="Include rows whose disabled_reason is set (default: active only).",
-)
-def tag_search(
-    name: str, owner: str | None, limit: int, include_disabled: bool
-) -> None:
-    """Search tags by name."""
+@include_disabled_option
+@limit_option
+def tag_search(name: str, limit: int, include_disabled: bool) -> None:
+    """Search the tag vocabulary by name substring."""
     from mailpilot.database import initialize_database, search_tags
 
     connection = initialize_database(_database_url())
@@ -2115,7 +2225,6 @@ def tag_search(
         tags = search_tags(
             connection,
             name=name,
-            owner=owner,
             limit=limit,
             include_disabled=include_disabled,
         )

@@ -50,6 +50,8 @@ from mailpilot.models import (
     SchemaVerdict,
     SyncStatus,
     Tag,
+    TagAssignment,
+    TagSummary,
     Task,
     TaskSummary,
     Workflow,
@@ -970,6 +972,8 @@ def list_companies(
     max_contacts: int | None = None,
     min_contacts: int | None = None,
     include_disabled: bool = False,
+    tag: str | None = None,
+    exclude_tag: str | None = None,
 ) -> list[CompanySummary]:
     """List companies as summaries.
 
@@ -1000,6 +1004,13 @@ def list_companies(
             into a closed range.
         include_disabled: When ``True``, includes disabled companies; the
             default (``False``) hides them (§V.114).
+        tag: When set (a resolved tag id), returns only companies carrying that
+            tag -- an Enum-family membership filter over ``tag_assignment``
+            (§V.116). Composes with ``exclude_tag`` as an intersection.
+        exclude_tag: When set (a resolved tag id), returns only companies NOT
+            carrying that tag -- the single negated membership filter (§V.116),
+            for memoization (drop a memoized company from the discover set
+            without ``company disable``).
 
     Returns:
         List of company summaries ordered by name.
@@ -1025,6 +1036,22 @@ def list_companies(
     if min_contacts is not None:
         having.append(SQL("COUNT(ct.id) >= %(min_contacts)s"))
         params["min_contacts"] = min_contacts
+    if tag is not None:
+        conditions.append(
+            SQL(
+                "EXISTS (SELECT 1 FROM tag_assignment ta "
+                "WHERE ta.company_id = c.id AND ta.tag_id = %(tag_id)s)"
+            )
+        )
+        params["tag_id"] = tag
+    if exclude_tag is not None:
+        conditions.append(
+            SQL(
+                "NOT EXISTS (SELECT 1 FROM tag_assignment ta "
+                "WHERE ta.company_id = c.id AND ta.tag_id = %(exclude_tag_id)s)"
+            )
+        )
+        params["exclude_tag_id"] = exclude_tag
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     having_clause = SQL("HAVING ") + SQL(" AND ").join(having) if having else SQL("")
     query = SQL(
@@ -1409,6 +1436,8 @@ def list_contacts(
     max_email_confidence: int | None = None,
     min_email_confidence: int | None = None,
     title: str | None = None,
+    tag: str | None = None,
+    exclude_tag: str | None = None,
 ) -> list[ContactSummary]:
     """List contacts as summaries with optional filters.
 
@@ -1437,6 +1466,11 @@ def list_contacts(
         title: When set, a case-insensitive exact match on ``contact.title``.
             Substring/fuzzy title matching is the ``contact search`` verb's
             job, never the ``list`` filter (§V.115 family 5).
+        tag: When set (a resolved tag id), returns only contacts carrying that
+            tag -- an Enum-family membership filter over ``tag_assignment``
+            (§V.116). Composes with ``exclude_tag`` as an intersection.
+        exclude_tag: When set (a resolved tag id), returns only contacts NOT
+            carrying that tag -- the single negated membership filter (§V.116).
 
     Returns:
         List of contact summaries ordered by email.
@@ -1468,6 +1502,22 @@ def list_contacts(
     if title is not None:
         conditions.append(SQL("LOWER(c.title) = LOWER(%(title)s)"))
         params["title"] = title
+    if tag is not None:
+        conditions.append(
+            SQL(
+                "EXISTS (SELECT 1 FROM tag_assignment ta "
+                "WHERE ta.contact_id = c.id AND ta.tag_id = %(tag_id)s)"
+            )
+        )
+        params["tag_id"] = tag
+    if exclude_tag is not None:
+        conditions.append(
+            SQL(
+                "NOT EXISTS (SELECT 1 FROM tag_assignment ta "
+                "WHERE ta.contact_id = c.id AND ta.tag_id = %(exclude_tag_id)s)"
+            )
+        )
+        params["exclude_tag_id"] = exclude_tag
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
         "SELECT c.id, c.email, c.first_name, c.last_name, c.title, "
@@ -3412,40 +3462,97 @@ def _normalize_tag_name(name: str) -> str:
 def create_tag(
     connection: psycopg.Connection[dict[str, Any]],
     name: str,
-    contact_id: str | None = None,
-    company_id: str | None = None,
 ) -> Tag | None:
-    """Create a tag on a contact or company.
+    """Define a tag in the controlled vocabulary (§V.116).
 
-    Exactly one of ``contact_id`` or ``company_id`` must be provided.
-    The name is normalized via ``_normalize_tag_name``. Uses ON CONFLICT
-    DO NOTHING -- returns None if the tag already exists.
+    The name is normalized via ``_normalize_tag_name`` then inserted into the
+    ``tag`` vocabulary table. ``name`` is globally unique (§V.90), so a
+    second create of the same name uses ON CONFLICT DO NOTHING and returns
+    ``None`` (the caller surfaces ``already_exists``).
 
     Raises:
-        ValueError: If neither or both of contact_id/company_id are set,
-        or if the tag name fails normalization.
+        ValueError: If the tag name fails normalization.
     """
-    if (contact_id is None) == (company_id is None):
-        raise ValueError("exactly one of contact_id or company_id is required")
     normalized = _normalize_tag_name(name)
     row = connection.execute(
         """\
-        INSERT INTO tag (id, contact_id, company_id, name)
-        VALUES (%(id)s, %(contact_id)s, %(company_id)s, %(name)s)
-        ON CONFLICT DO NOTHING
+        INSERT INTO tag (id, name)
+        VALUES (%(id)s, %(name)s)
+        ON CONFLICT (name) DO NOTHING
         RETURNING *
         """,
-        {
-            "id": _new_id(),
-            "contact_id": contact_id,
-            "company_id": company_id,
-            "name": normalized,
-        },
+        {"id": _new_id(), "name": normalized},
     ).fetchone()
     connection.commit()
     if row is None:
         return None
     return Tag.model_validate(row)
+
+
+def get_tag(
+    connection: psycopg.Connection[dict[str, Any]],
+    tag_id: str,
+) -> Tag | None:
+    """Resolve a vocabulary tag by id (§V.107 polymorphic UUID branch).
+
+    Operators address tags by name; this id branch keeps a tag id round-trip
+    from one command's output into the next. Returns ``None`` when absent.
+    """
+    row = connection.execute("SELECT * FROM tag WHERE id = %s", (tag_id,)).fetchone()
+    if row is None:
+        return None
+    return Tag.model_validate(row)
+
+
+def get_tag_by_name(
+    connection: psycopg.Connection[dict[str, Any]],
+    name: str,
+) -> Tag | None:
+    """Resolve a vocabulary tag by its globally unique name (§V.90/§V.107).
+
+    The name is normalized first. Returns ``None`` when no tag is defined --
+    the caller surfaces ``not_found``. Used to resolve ``--tag <name>`` to a
+    tag id without the operator pasting ids.
+
+    Raises:
+        ValueError: If the tag name fails normalization.
+    """
+    normalized = _normalize_tag_name(name)
+    row = connection.execute(
+        "SELECT * FROM tag WHERE name = %s", (normalized,)
+    ).fetchone()
+    if row is None:
+        return None
+    return Tag.model_validate(row)
+
+
+def get_tag_summary_by_name(
+    connection: psycopg.Connection[dict[str, Any]],
+    name: str,
+) -> TagSummary | None:
+    """Resolve a vocabulary tag by name with its ``usage_count`` (§V.116).
+
+    Backs ``tag view``: the vocabulary row plus the number of owners carrying
+    it (``tag_assignment`` count). Returns ``None`` when no tag is defined.
+
+    Raises:
+        ValueError: If the tag name fails normalization.
+    """
+    normalized = _normalize_tag_name(name)
+    row = connection.execute(
+        """\
+        SELECT t.id, t.name, t.disabled_reason, t.created_at,
+               COUNT(a.id) AS usage_count
+        FROM tag t
+        LEFT JOIN tag_assignment a ON a.tag_id = t.id
+        WHERE t.name = %s
+        GROUP BY t.id
+        """,
+        (normalized,),
+    ).fetchone()
+    if row is None:
+        return None
+    return TagSummary.model_validate(row)
 
 
 def list_tags(
@@ -3456,159 +3563,163 @@ def list_tags(
     since: str | None = None,
     until: str | None = None,
     include_disabled: bool = False,
-) -> list[Tag]:
-    """List tags on a contact or company.
+) -> list[TagSummary]:
+    """List vocabulary tags with a projected ``usage_count`` (§V.116).
 
-    Tag has no Summary projection -- the full row already matches the
-    summary contract. Disabled rows (``disabled_reason IS NOT NULL``) are
-    excluded by default; pass ``include_disabled=True`` to include them
-    (§V.10 tag-coverage clause).
+    Owner-free (neither ``contact_id`` nor ``company_id``): returns the whole
+    vocabulary. With an owner: returns only the tags assigned to that contact
+    or company. ``usage_count`` is always the tag's global assignment count, so
+    the owner-scoped view still reports how widely each tag is used.
+
+    Disabled vocabulary rows (``disabled_reason IS NOT NULL``) are excluded by
+    default; pass ``include_disabled=True`` to include them (§V.10). ``since`` /
+    ``until`` bound the vocabulary row's ``created_at``.
 
     Raises:
-        ValueError: If neither or both of contact_id/company_id are set.
+        ValueError: If both ``contact_id`` and ``company_id`` are set.
     """
-    if (contact_id is None) == (company_id is None):
-        raise ValueError("exactly one of contact_id or company_id is required")
+    if contact_id is not None and company_id is not None:
+        raise ValueError("at most one of contact_id or company_id may be set")
     params: dict[str, object] = {"limit": limit}
-    where_parts: list[Composed | SQL] = []
-    if contact_id is not None:
-        where_parts.append(SQL("contact_id = %(contact_id)s"))
-        params["contact_id"] = contact_id
-    else:
-        where_parts.append(SQL("company_id = %(company_id)s"))
-        params["company_id"] = company_id
+    conditions: list[Composed | SQL] = []
     if since is not None:
-        where_parts.append(SQL("created_at >= %(since)s"))
+        conditions.append(SQL("t.created_at >= %(since)s"))
         params["since"] = since
     if until is not None:
-        where_parts.append(SQL("created_at <= %(until)s"))
+        conditions.append(SQL("t.created_at <= %(until)s"))
         params["until"] = until
     if not include_disabled:
-        where_parts.append(SQL("disabled_reason IS NULL"))
-    where = SQL("WHERE ") + SQL(" AND ").join(where_parts)
-    query = SQL("SELECT * FROM tag {} ORDER BY name LIMIT %(limit)s").format(where)
-    rows = connection.execute(query, params).fetchall()
-    return [Tag.model_validate(row) for row in rows]
+        conditions.append(SQL("t.disabled_reason IS NULL"))
 
+    owner_join = SQL("")
+    if contact_id is not None:
+        owner_join = SQL(
+            "JOIN tag_assignment owner ON owner.tag_id = t.id "
+            "AND owner.contact_id = %(contact_id)s"
+        )
+        params["contact_id"] = contact_id
+    elif company_id is not None:
+        owner_join = SQL(
+            "JOIN tag_assignment owner ON owner.tag_id = t.id "
+            "AND owner.company_id = %(company_id)s"
+        )
+        params["company_id"] = company_id
 
-def list_contacts_by_tag(
-    connection: psycopg.Connection[dict[str, Any]],
-    name: str,
-    limit: int = 100,
-    include_disabled: bool = False,
-) -> list[str]:
-    """Return contact IDs with the given tag (normalized).
-
-    Excludes disabled tag rows by default (§V.10 tag-coverage clause).
-    """
-    normalized = _normalize_tag_name(name)
-    params: dict[str, object] = {"name": normalized, "limit": limit}
-    disabled_filter = (
-        SQL("") if include_disabled else SQL("AND disabled_reason IS NULL")
-    )
+    where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
-        """\
-        SELECT contact_id FROM tag
-        WHERE contact_id IS NOT NULL AND name = %(name)s {}
-        ORDER BY created_at
-        LIMIT %(limit)s
-        """
-    ).format(disabled_filter)
+        "SELECT t.id, t.name, t.disabled_reason, t.created_at, "
+        "(SELECT COUNT(*) FROM tag_assignment a WHERE a.tag_id = t.id) "
+        "AS usage_count "
+        "FROM tag t {owner_join} {where} "
+        "ORDER BY t.name LIMIT %(limit)s"
+    ).format(owner_join=owner_join, where=where)
     rows = connection.execute(query, params).fetchall()
-    return [row["contact_id"] for row in rows]
-
-
-def list_companies_by_tag(
-    connection: psycopg.Connection[dict[str, Any]],
-    name: str,
-    limit: int = 100,
-    include_disabled: bool = False,
-) -> list[str]:
-    """Return company IDs with the given tag (normalized).
-
-    Excludes disabled tag rows by default (§V.10 tag-coverage clause).
-    """
-    normalized = _normalize_tag_name(name)
-    params: dict[str, object] = {"name": normalized, "limit": limit}
-    disabled_filter = (
-        SQL("") if include_disabled else SQL("AND disabled_reason IS NULL")
-    )
-    query = SQL(
-        """\
-        SELECT company_id FROM tag
-        WHERE company_id IS NOT NULL AND name = %(name)s {}
-        ORDER BY created_at
-        LIMIT %(limit)s
-        """
-    ).format(disabled_filter)
-    rows = connection.execute(query, params).fetchall()
-    return [row["company_id"] for row in rows]
+    return [TagSummary.model_validate(row) for row in rows]
 
 
 def search_tags(
     connection: psycopg.Connection[dict[str, Any]],
     name: str,
-    owner: str | None = None,
     limit: int = 100,
     include_disabled: bool = False,
-) -> list[Tag]:
-    """Search tags by name pattern with optional owner filter.
+) -> list[TagSummary]:
+    """Search the vocabulary by name substring, with ``usage_count`` (§V.116).
 
-    Excludes disabled tag rows by default (§V.10 tag-coverage clause).
+    Substring/fuzzy matching is the ``search`` verb's job (§V.115); ``tag
+    list`` does exact/owner filtering. Disabled rows are excluded by default.
 
     Args:
         connection: Open database connection.
-        name: Pattern to LIKE-match against tag ``name``.
-        owner: ``"contact"`` to limit to contact tags, ``"company"`` to
-            limit to company tags, ``None`` for both.
+        name: Substring to LIKE-match against the vocabulary ``name``.
         limit: Maximum number of results.
         include_disabled: When ``True`` include disabled rows.
     """
-    if owner not in (None, "contact", "company"):
-        raise ValueError("owner must be 'contact', 'company', or None")
     pattern = f"%{name.strip().lower()}%"
     params: dict[str, object] = {"pattern": pattern, "limit": limit}
-    extra_filters: list[SQL] = []
-    if owner == "contact":
-        extra_filters.append(SQL("AND contact_id IS NOT NULL"))
-    elif owner == "company":
-        extra_filters.append(SQL("AND company_id IS NOT NULL"))
-    if not include_disabled:
-        extra_filters.append(SQL("AND disabled_reason IS NULL"))
-    extra = SQL(" ").join(extra_filters) if extra_filters else SQL("")
+    disabled_filter = (
+        SQL("") if include_disabled else SQL("AND t.disabled_reason IS NULL")
+    )
     query = SQL(
-        "SELECT * FROM tag WHERE name LIKE %(pattern)s {} ORDER BY name LIMIT %(limit)s"
-    ).format(extra)
+        "SELECT t.id, t.name, t.disabled_reason, t.created_at, "
+        "(SELECT COUNT(*) FROM tag_assignment a WHERE a.tag_id = t.id) "
+        "AS usage_count "
+        "FROM tag t WHERE t.name LIKE %(pattern)s {disabled_filter} "
+        "ORDER BY t.name LIMIT %(limit)s"
+    ).format(disabled_filter=disabled_filter)
     rows = connection.execute(query, params).fetchall()
-    return [Tag.model_validate(row) for row in rows]
+    return [TagSummary.model_validate(row) for row in rows]
 
 
-def add_contact_tag(
+def disable_tag(
     connection: psycopg.Connection[dict[str, Any]],
-    contact_id: str,
     name: str,
+    reason: str,
 ) -> Tag | None:
-    """Add a tag to a contact and emit a `tag_added` activity atomically.
+    """Soft-retire a vocabulary tag (§V.10/§V.116).
 
-    The two writes share one transaction. Returns ``None`` if the tag
-    already exists -- in that case no activity is written.
+    Flips ``disabled_reason`` on the matching active vocabulary row
+    (``disabled_reason IS NULL`` gate blocks double-disable). A retired tag
+    stays linked to its owners but drops out of the default ``tag list``.
+    Returns ``None`` when no active tag with the name exists (undefined or
+    already disabled) -- the caller distinguishes the two. This is a vocabulary
+    lifecycle, not a per-owner event, so it writes no activity (an activity
+    needs a contact or company owner, §V.17).
+
+    Raises:
+        ValueError: If the tag name fails normalization.
     """
     normalized = _normalize_tag_name(name)
+    row = connection.execute(
+        """\
+        UPDATE tag
+        SET disabled_reason = %(reason)s
+        WHERE name = %(name)s AND disabled_reason IS NULL
+        RETURNING *
+        """,
+        {"name": normalized, "reason": reason},
+    ).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Tag.model_validate(row)
+
+
+def assign_tag_to_contact(
+    connection: psycopg.Connection[dict[str, Any]],
+    tag_id: str,
+    contact_id: str,
+) -> TagAssignment | None:
+    """Link a vocabulary tag to a contact and emit ``tag_added`` (§V.91/§V.116).
+
+    The assignment INSERT and the ``tag_added`` activity commit in one
+    transaction (§V.91). Returns ``None`` if the link already exists (ON
+    CONFLICT DO NOTHING) -- no activity is written in that case. The activity
+    carries the contact's company so it surfaces on the company timeline too
+    (§V.17 multi-target).
+
+    Raises:
+        ValueError: If the contact does not exist.
+    """
     contact_row = connection.execute(
         "SELECT company_id FROM contact WHERE id = %s", (contact_id,)
     ).fetchone()
     if contact_row is None:
         raise ValueError(f"contact not found: {contact_id}")
     tag_row = connection.execute(
+        "SELECT name FROM tag WHERE id = %s", (tag_id,)
+    ).fetchone()
+    if tag_row is None:
+        raise ValueError(f"tag not found: {tag_id}")
+    assignment_row = connection.execute(
         """\
-        INSERT INTO tag (id, contact_id, company_id, name)
-        VALUES (%(id)s, %(contact_id)s, NULL, %(name)s)
+        INSERT INTO tag_assignment (id, tag_id, contact_id, company_id)
+        VALUES (%(id)s, %(tag_id)s, %(contact_id)s, NULL)
         ON CONFLICT DO NOTHING
         RETURNING *
         """,
-        {"id": _new_id(), "contact_id": contact_id, "name": normalized},
+        {"id": _new_id(), "tag_id": tag_id, "contact_id": contact_id},
     ).fetchone()
-    if tag_row is None:
+    if assignment_row is None:
         connection.commit()
         return None
     connection.execute(
@@ -3625,21 +3736,27 @@ def add_contact_tag(
             "id": _new_id(),
             "contact_id": contact_id,
             "company_id": contact_row["company_id"],
-            "summary": f"Tagged as {normalized}",
-            "detail": Json({"tag": normalized}),
+            "summary": f"Tagged as {tag_row['name']}",
+            "detail": Json({"tag": tag_row["name"]}),
         },
     )
     connection.commit()
-    return Tag.model_validate(tag_row)
+    return TagAssignment.model_validate(assignment_row)
 
 
-def add_company_tag(
+def assign_tag_to_company(
     connection: psycopg.Connection[dict[str, Any]],
+    tag_id: str,
     company_id: str,
-    name: str,
-) -> Tag | None:
-    """Add a tag to a company and emit a `tag_added` company activity atomically."""
-    normalized = _normalize_tag_name(name)
+) -> TagAssignment | None:
+    """Link a vocabulary tag to a company and emit ``tag_added`` (§V.91/§V.116).
+
+    Mirrors ``assign_tag_to_contact``. Returns ``None`` if the link already
+    exists.
+
+    Raises:
+        ValueError: If the company does not exist.
+    """
     if (
         connection.execute(
             "SELECT 1 FROM company WHERE id = %s", (company_id,)
@@ -3648,15 +3765,20 @@ def add_company_tag(
     ):
         raise ValueError(f"company not found: {company_id}")
     tag_row = connection.execute(
+        "SELECT name FROM tag WHERE id = %s", (tag_id,)
+    ).fetchone()
+    if tag_row is None:
+        raise ValueError(f"tag not found: {tag_id}")
+    assignment_row = connection.execute(
         """\
-        INSERT INTO tag (id, contact_id, company_id, name)
-        VALUES (%(id)s, NULL, %(company_id)s, %(name)s)
+        INSERT INTO tag_assignment (id, tag_id, contact_id, company_id)
+        VALUES (%(id)s, %(tag_id)s, NULL, %(company_id)s)
         ON CONFLICT DO NOTHING
         RETURNING *
         """,
-        {"id": _new_id(), "company_id": company_id, "name": normalized},
+        {"id": _new_id(), "tag_id": tag_id, "company_id": company_id},
     ).fetchone()
-    if tag_row is None:
+    if assignment_row is None:
         connection.commit()
         return None
     connection.execute(
@@ -3672,52 +3794,49 @@ def add_company_tag(
         {
             "id": _new_id(),
             "company_id": company_id,
-            "summary": f"Tagged as {normalized}",
-            "detail": Json({"tag": normalized}),
+            "summary": f"Tagged as {tag_row['name']}",
+            "detail": Json({"tag": tag_row["name"]}),
         },
     )
     connection.commit()
-    return Tag.model_validate(tag_row)
+    return TagAssignment.model_validate(assignment_row)
 
 
-def disable_contact_tag(
+def remove_tag_from_contact(
     connection: psycopg.Connection[dict[str, Any]],
+    tag_id: str,
     contact_id: str,
-    name: str,
-    reason: str,
-) -> Tag | None:
-    """Soft-disable a contact-tag and emit a `tag_disabled` activity (§V.10).
+) -> TagAssignment | None:
+    """Unlink a vocabulary tag from a contact and emit ``tag_removed`` (§V.116).
 
-    Single transaction: flips ``disabled_reason`` on the matching active tag
-    row (``disabled_reason IS NULL`` gate ensures already-disabled rows are
-    not double-disabled), then appends a ``tag_disabled`` activity carrying
-    the reason. Returns the updated ``Tag`` row, or ``None`` when no active
-    tag with the given name exists on the contact.
+    Inverse of ``assign_tag_to_contact``: deletes the link and appends a
+    ``tag_removed`` activity in one transaction (§V.91), retiring neither the
+    tag vocabulary nor the contact. Returns ``None`` when no such link exists
+    (the caller surfaces ``not_found``).
 
     Raises:
-        ValueError: If the contact does not exist or the name fails
-            normalization.
+        ValueError: If the contact does not exist.
     """
-    normalized = _normalize_tag_name(name)
     contact_row = connection.execute(
         "SELECT company_id FROM contact WHERE id = %s", (contact_id,)
     ).fetchone()
     if contact_row is None:
         raise ValueError(f"contact not found: {contact_id}")
-    updated_row = connection.execute(
+    deleted_row = connection.execute(
         """\
-        UPDATE tag
-        SET disabled_reason = %(reason)s
-        WHERE contact_id = %(contact_id)s
-          AND name = %(name)s
-          AND disabled_reason IS NULL
+        DELETE FROM tag_assignment
+        WHERE tag_id = %(tag_id)s AND contact_id = %(contact_id)s
         RETURNING *
         """,
-        {"contact_id": contact_id, "name": normalized, "reason": reason},
+        {"tag_id": tag_id, "contact_id": contact_id},
     ).fetchone()
-    if updated_row is None:
+    if deleted_row is None:
         connection.commit()
         return None
+    tag_row = connection.execute(
+        "SELECT name FROM tag WHERE id = %s", (tag_id,)
+    ).fetchone()
+    tag_name = tag_row["name"] if tag_row is not None else tag_id
     connection.execute(
         """\
         INSERT INTO activity (
@@ -3725,48 +3844,56 @@ def disable_contact_tag(
         )
         VALUES (
             %(id)s, %(contact_id)s, %(company_id)s,
-            'tag_disabled', %(summary)s, %(detail)s
+            'tag_removed', %(summary)s, %(detail)s
         )
         """,
         {
             "id": _new_id(),
             "contact_id": contact_id,
             "company_id": contact_row["company_id"],
-            "summary": f"Disabled tag {normalized}",
-            "detail": Json({"tag": normalized, "reason": reason}),
+            "summary": f"Untagged {tag_name}",
+            "detail": Json({"tag": tag_name}),
         },
     )
     connection.commit()
-    return Tag.model_validate(updated_row)
+    return TagAssignment.model_validate(deleted_row)
 
 
-def disable_company_tag(
+def remove_tag_from_company(
     connection: psycopg.Connection[dict[str, Any]],
+    tag_id: str,
     company_id: str,
-    name: str,
-    reason: str,
-) -> Tag | None:
-    """Soft-disable a company-tag and emit a `tag_disabled` activity (§V.10).
+) -> TagAssignment | None:
+    """Unlink a vocabulary tag from a company and emit ``tag_removed`` (§V.116).
 
-    Mirrors ``disable_contact_tag`` shape. Returns the updated ``Tag`` row,
-    or ``None`` when no active tag with the given name exists on the
-    company.
+    Mirrors ``remove_tag_from_contact``. Returns ``None`` when no such link
+    exists.
+
+    Raises:
+        ValueError: If the company does not exist.
     """
-    normalized = _normalize_tag_name(name)
-    updated_row = connection.execute(
+    if (
+        connection.execute(
+            "SELECT 1 FROM company WHERE id = %s", (company_id,)
+        ).fetchone()
+        is None
+    ):
+        raise ValueError(f"company not found: {company_id}")
+    deleted_row = connection.execute(
         """\
-        UPDATE tag
-        SET disabled_reason = %(reason)s
-        WHERE company_id = %(company_id)s
-          AND name = %(name)s
-          AND disabled_reason IS NULL
+        DELETE FROM tag_assignment
+        WHERE tag_id = %(tag_id)s AND company_id = %(company_id)s
         RETURNING *
         """,
-        {"company_id": company_id, "name": normalized, "reason": reason},
+        {"tag_id": tag_id, "company_id": company_id},
     ).fetchone()
-    if updated_row is None:
+    if deleted_row is None:
         connection.commit()
         return None
+    tag_row = connection.execute(
+        "SELECT name FROM tag WHERE id = %s", (tag_id,)
+    ).fetchone()
+    tag_name = tag_row["name"] if tag_row is not None else tag_id
     connection.execute(
         """\
         INSERT INTO activity (
@@ -3774,18 +3901,18 @@ def disable_company_tag(
         )
         VALUES (
             %(id)s, NULL, %(company_id)s,
-            'tag_disabled', %(summary)s, %(detail)s
+            'tag_removed', %(summary)s, %(detail)s
         )
         """,
         {
             "id": _new_id(),
             "company_id": company_id,
-            "summary": f"Disabled tag {normalized}",
-            "detail": Json({"tag": normalized, "reason": reason}),
+            "summary": f"Untagged {tag_name}",
+            "detail": Json({"tag": tag_name}),
         },
     )
     connection.commit()
-    return Tag.model_validate(updated_row)
+    return TagAssignment.model_validate(deleted_row)
 
 
 # -- Note ----------------------------------------------------------------------

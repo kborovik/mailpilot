@@ -17,6 +17,7 @@ from conftest import (
     make_test_enrollment,
     make_test_note,
     make_test_tag,
+    make_test_tag_assignment,
     make_test_workflow,
 )
 from mailpilot.database import (
@@ -2631,127 +2632,114 @@ def test_normalize_tag_name_rejects_invalid() -> None:
         _normalize_tag_name("hot.lead")
 
 
-def test_create_contact_tag_and_company_tag(
+# -- vocabulary (§V.116) -------------------------------------------------------
+
+
+def test_create_tag_defines_owner_free_vocabulary_row(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """create_tag accepts contact_id XOR company_id."""
-    company = make_test_company(database_connection)
-    contact = make_test_contact(database_connection)
-
-    contact_tag = create_tag(
-        database_connection, contact_id=contact.id, name="prospect"
-    )
-    assert contact_tag is not None
-    assert contact_tag.contact_id == contact.id
-    assert contact_tag.company_id is None
-    assert contact_tag.name == "prospect"
-
-    company_tag = create_tag(
-        database_connection, company_id=company.id, name="enterprise"
-    )
-    assert company_tag is not None
-    assert company_tag.company_id == company.id
-    assert company_tag.contact_id is None
-
-
-def test_create_tag_requires_exactly_one_owner(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    """contact_id XOR company_id; passing both or neither raises."""
-    with pytest.raises(ValueError, match="exactly one"):
-        create_tag(database_connection, name="x")
-    with pytest.raises(ValueError, match="exactly one"):
-        create_tag(database_connection, contact_id="c1", company_id="co1", name="x")
+    """§V.116: create_tag defines a vocabulary entry, no owner."""
+    tag = create_tag(database_connection, name="prospect")
+    assert tag is not None
+    assert tag.name == "prospect"
+    assert tag.disabled_reason is None
+    assert not hasattr(tag, "contact_id")
 
 
 def test_create_tag_normalizes_name(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     """create_tag applies _normalize_tag_name."""
-    contact = make_test_contact(database_connection)
-    tag = create_tag(database_connection, contact_id=contact.id, name="Hot Lead")
+    tag = create_tag(database_connection, name="Hot Lead")
     assert tag is not None
     assert tag.name == "hot-lead"
 
 
-def test_create_tag_idempotent_on_duplicate(
+def test_create_tag_duplicate_name_returns_none(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """Duplicate insert returns None thanks to ON CONFLICT DO NOTHING."""
-    contact = make_test_contact(database_connection)
-    first = create_tag(database_connection, contact_id=contact.id, name="prospect")
-    second = create_tag(database_connection, contact_id=contact.id, name="prospect")
+    """§V.90: tag.name is globally unique; a second create returns None."""
+    first = create_tag(database_connection, name="prospect")
+    second = create_tag(database_connection, name="prospect")
     assert first is not None
     assert second is None
 
 
-def test_list_tags_by_contact(
+def test_get_tag_by_name_and_by_id(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
+    """§V.107: a tag resolves by its unique name and by id."""
+    from mailpilot.database import get_tag, get_tag_by_name
+
+    created = create_tag(database_connection, name="vip")
+    assert created is not None
+    by_name = get_tag_by_name(database_connection, "VIP")  # case-folded
+    assert by_name is not None
+    assert by_name.id == created.id
+    by_id = get_tag(database_connection, created.id)
+    assert by_id is not None
+    assert by_id.name == "vip"
+    assert get_tag_by_name(database_connection, "ghost") is None
+
+
+def test_get_tag_summary_projects_usage_count(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.116: tag view carries usage_count (assignment count)."""
+    from mailpilot.database import get_tag_summary_by_name
+
+    tag = create_tag(database_connection, name="vip")
+    assert tag is not None
+    a = make_test_contact(database_connection, email="x1@acme.test")
+    b = make_test_contact(database_connection, email="x2@acme.test")
+    make_test_tag_assignment(database_connection, contact_id=a.id, name="vip")
+    make_test_tag_assignment(database_connection, contact_id=b.id, name="vip")
+    summary = get_tag_summary_by_name(database_connection, "vip")
+    assert summary is not None
+    assert summary.usage_count == 2
+
+
+def test_list_tags_vocabulary_with_usage_count(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.116: owner-free list_tags returns the whole vocabulary + usage_count."""
+    create_tag(database_connection, name="cold")
+    create_tag(database_connection, name="vip")
     contact = make_test_contact(database_connection)
-    create_tag(database_connection, contact_id=contact.id, name="prospect")
-    create_tag(database_connection, contact_id=contact.id, name="cold")
+    make_test_tag_assignment(database_connection, contact_id=contact.id, name="vip")
+    tags = list_tags(database_connection)
+    by_name = {t.name: t.usage_count for t in tags}
+    assert by_name == {"cold": 0, "vip": 1}
+
+
+def test_list_tags_by_owner_lists_only_assigned(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.116: list_tags scoped to an owner lists that owner's tags only."""
+    create_tag(database_connection, name="cold")
+    contact = make_test_contact(database_connection)
+    make_test_tag_assignment(database_connection, contact_id=contact.id, name="vip")
     tags = list_tags(database_connection, contact_id=contact.id)
-    assert {t.name for t in tags} == {"prospect", "cold"}
+    assert [t.name for t in tags] == ["vip"]
+    assert tags[0].usage_count == 1
 
 
 def test_list_tags_empty(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     contact = make_test_contact(database_connection)
-    tags = list_tags(database_connection, contact_id=contact.id)
-    assert tags == []
+    assert list_tags(database_connection, contact_id=contact.id) == []
 
 
-def test_list_contacts_by_tag_name(
+def test_search_tags_vocabulary(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    from mailpilot.database import list_contacts_by_tag
-
-    a = make_test_contact(database_connection, email="x1@acme.test")
-    b = make_test_contact(database_connection, email="x2@acme.test")
-    create_tag(database_connection, contact_id=a.id, name="hot")
-    create_tag(database_connection, contact_id=b.id, name="hot")
-    ids = list_contacts_by_tag(database_connection, name="hot")
-    assert set(ids) == {a.id, b.id}
-
-
-def test_list_companies_by_tag_name(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    from mailpilot.database import list_companies_by_tag
-
-    a = make_test_company(database_connection, name="A", domain="a.test")
-    b = make_test_company(database_connection, name="B", domain="b.test")
-    create_tag(database_connection, company_id=a.id, name="enterprise")
-    create_tag(database_connection, company_id=b.id, name="enterprise")
-    ids = list_companies_by_tag(database_connection, name="enterprise")
-    assert set(ids) == {a.id, b.id}
-
-
-def test_search_tags(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    contact = make_test_contact(database_connection)
-    create_tag(database_connection, contact_id=contact.id, name="prospect")
-    create_tag(database_connection, contact_id=contact.id, name="cold")
-
+    """§V.116: search_tags substring-matches vocabulary names + usage_count."""
+    create_tag(database_connection, name="prospect")
+    create_tag(database_connection, name="cold")
     results = search_tags(database_connection, name="pro")
-    assert len(results) == 1
-    assert results[0].name == "prospect"
-
-
-def test_search_tags_with_owner(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    contact = make_test_contact(database_connection)
-    company = make_test_company(database_connection)
-    create_tag(database_connection, contact_id=contact.id, name="prospect")
-    create_tag(database_connection, company_id=company.id, name="prospect")
-
-    results = search_tags(database_connection, name="prospect", owner="contact")
-    assert len(results) == 1
-    assert results[0].contact_id == contact.id
+    assert [t.name for t in results] == ["prospect"]
+    assert results[0].usage_count == 0
 
 
 def test_status_payload_counts_block_includes_tags(
@@ -2759,27 +2747,93 @@ def test_status_payload_counts_block_includes_tags(
 ):
     from conftest import make_test_settings
 
-    contact = make_test_contact(database_connection)
-    make_test_tag(database_connection, contact_id=contact.id)
+    make_test_tag(database_connection, name="prospect")
     payload = get_status_payload(database_connection, make_test_settings())
     counts = payload["counts"]
     assert isinstance(counts, dict)
     assert counts["tags"] == 1
 
 
-# -- Atomic helpers ----------------------------------------------------------
+# -- vocabulary soft-disable (§V.10/§V.116) ------------------------------------
 
 
-def test_add_contact_tag_emits_activity_atomically(
+def test_disable_tag_soft_retires_and_writes_no_activity(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """add_contact_tag writes tag + tag_added activity in one transaction."""
-    from mailpilot.database import add_contact_tag
+    """§V.116/§V.17: disable_tag retires the vocabulary row and -- being
+    owner-free -- writes no activity (an activity needs a contact/company)."""
+    from mailpilot.database import disable_tag
 
     contact = make_test_contact(database_connection)
-    tag = add_contact_tag(database_connection, contact_id=contact.id, name="prospect")
+    make_test_tag_assignment(database_connection, contact_id=contact.id, name="cold")
+    disabled = disable_tag(database_connection, name="cold", reason="stale")
+    assert disabled is not None
+    assert disabled.name == "cold"
+    assert disabled.disabled_reason == "stale"
+    # No tag_disabled activity is written for a vocabulary retire.
+    activities = list_activities(database_connection, contact_id=contact.id)
+    assert "tag_disabled" not in [a.type for a in activities]
+
+
+def test_disable_tag_double_disable_returns_none(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.10: disabled_reason IS NULL gate blocks double-disable."""
+    from mailpilot.database import disable_tag
+
+    create_tag(database_connection, name="cold")
+    first = disable_tag(database_connection, name="cold", reason="stale")
+    second = disable_tag(database_connection, name="cold", reason="again")
+    assert first is not None
+    assert second is None
+
+
+def test_disable_tag_undefined_returns_none(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from mailpilot.database import disable_tag
+
+    assert disable_tag(database_connection, name="ghost", reason="x") is None
+
+
+def test_disabled_tag_hidden_from_default_list(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.10: a retired vocabulary tag drops from the default list."""
+    from mailpilot.database import disable_tag
+
+    create_tag(database_connection, name="hot")
+    create_tag(database_connection, name="cold")
+    disable_tag(database_connection, name="cold", reason="stale")
+    assert {t.name for t in list_tags(database_connection)} == {"hot"}
+    all_tags = list_tags(database_connection, include_disabled=True)
+    assert {t.name for t in all_tags} == {"hot", "cold"}
+    assert [t.name for t in search_tags(database_connection, name="co")] == []
+    assert [
+        t.name
+        for t in search_tags(database_connection, name="co", include_disabled=True)
+    ] == ["cold"]
+
+
+# -- assignment link lifecycle (§V.91/§V.116) ----------------------------------
+
+
+def test_assign_tag_to_contact_emits_activity_atomically(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.91: assign_tag_to_contact links + emits tag_added in one transaction."""
+    from mailpilot.database import assign_tag_to_contact
+
+    contact = make_test_contact(database_connection)
+    tag = create_tag(database_connection, name="prospect")
     assert tag is not None
-    assert tag.name == "prospect"
+    assignment = assign_tag_to_contact(
+        database_connection, tag_id=tag.id, contact_id=contact.id
+    )
+    assert assignment is not None
+    assert assignment.tag_id == tag.id
+    assert assignment.contact_id == contact.id
+    assert assignment.company_id is None
     assert [t.name for t in list_tags(database_connection, contact_id=contact.id)] == [
         "prospect"
     ]
@@ -2789,131 +2843,32 @@ def test_add_contact_tag_emits_activity_atomically(
     assert activities[0].summary == "Tagged as prospect"
 
 
-def test_add_contact_tag_returns_none_on_duplicate_no_activity(
+def test_assign_tag_duplicate_returns_none_no_activity(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """Duplicate tag insert returns None and emits no activity."""
-    from mailpilot.database import add_contact_tag
+    """A re-link of the same (tag, owner) returns None, writes no activity."""
+    from mailpilot.database import assign_tag_to_contact
 
     contact = make_test_contact(database_connection)
-    add_contact_tag(database_connection, contact_id=contact.id, name="prospect")
-    second = add_contact_tag(
-        database_connection, contact_id=contact.id, name="prospect"
+    tag = create_tag(database_connection, name="prospect")
+    assert tag is not None
+    assign_tag_to_contact(database_connection, tag_id=tag.id, contact_id=contact.id)
+    second = assign_tag_to_contact(
+        database_connection, tag_id=tag.id, contact_id=contact.id
     )
     assert second is None
-    activities = list_activities(database_connection, contact_id=contact.id)
-    assert len(activities) == 1
+    assert len(list_activities(database_connection, contact_id=contact.id)) == 1
 
 
-def test_disable_contact_tag_emits_activity_atomically(
+def test_assign_tag_to_company_emits_company_activity(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """§V.10 tag-coverage: disable_contact_tag flips disabled_reason +
-    appends a `tag_disabled` activity in one transaction.
-    """
-    from mailpilot.database import add_contact_tag, disable_contact_tag
-
-    contact = make_test_contact(database_connection)
-    add_contact_tag(database_connection, contact_id=contact.id, name="cold")
-    disabled = disable_contact_tag(
-        database_connection,
-        contact_id=contact.id,
-        name="cold",
-        reason="stale lead",
-    )
-    assert disabled is not None
-    assert disabled.name == "cold"
-    assert disabled.contact_id == contact.id
-    assert disabled.company_id is None
-    assert disabled.disabled_reason == "stale lead"
-    activities = list_activities(database_connection, contact_id=contact.id)
-    types = [a.type for a in activities]
-    assert "tag_disabled" in types
-    disable_event = next(a for a in activities if a.type == "tag_disabled")
-    assert disable_event.summary == "Disabled tag cold"
-
-
-def test_disable_contact_tag_not_found_returns_none(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    """§V.10 tag-coverage: absent tag yields None, no activity emit."""
-    from mailpilot.database import disable_contact_tag
-
-    contact = make_test_contact(database_connection)
-    assert (
-        disable_contact_tag(
-            database_connection,
-            contact_id=contact.id,
-            name="ghost",
-            reason="missing",
-        )
-        is None
-    )
-    activities = list_activities(database_connection, contact_id=contact.id)
-    assert [a.type for a in activities] == []
-
-
-def test_disable_contact_tag_idempotent_returns_none(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    """§V.10 tag-coverage: re-disabling an already-disabled row returns
-    None (filtered by `disabled_reason IS NULL`) and emits no second
-    activity row.
-    """
-    from mailpilot.database import add_contact_tag, disable_contact_tag
-
-    contact = make_test_contact(database_connection)
-    add_contact_tag(database_connection, contact_id=contact.id, name="cold")
-    first = disable_contact_tag(
-        database_connection,
-        contact_id=contact.id,
-        name="cold",
-        reason="stale",
-    )
-    second = disable_contact_tag(
-        database_connection,
-        contact_id=contact.id,
-        name="cold",
-        reason="stale again",
-    )
-    assert first is not None
-    assert second is None
-    disable_events = [
-        a
-        for a in list_activities(database_connection, contact_id=contact.id)
-        if a.type == "tag_disabled"
-    ]
-    assert len(disable_events) == 1
-
-
-def test_disable_contact_tag_admits_readd_with_partial_index(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    """§V.10 tag-coverage: partial unique index scoped to
-    `disabled_reason IS NULL` admits a fresh ``tag add`` of the same name.
-    """
-    from mailpilot.database import add_contact_tag, disable_contact_tag
-
-    contact = make_test_contact(database_connection)
-    add_contact_tag(database_connection, contact_id=contact.id, name="cold")
-    disable_contact_tag(
-        database_connection,
-        contact_id=contact.id,
-        name="cold",
-        reason="stale",
-    )
-    readded = add_contact_tag(database_connection, contact_id=contact.id, name="cold")
-    assert readded is not None
-    assert readded.disabled_reason is None
-
-
-def test_add_company_tag_emits_company_activity(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    from mailpilot.database import add_company_tag
+    from mailpilot.database import assign_tag_to_company
 
     company = make_test_company(database_connection)
-    add_company_tag(database_connection, company_id=company.id, name="enterprise")
+    tag = create_tag(database_connection, name="enterprise")
+    assert tag is not None
+    assign_tag_to_company(database_connection, tag_id=tag.id, company_id=company.id)
     activities = list_activities(database_connection, company_id=company.id)
     assert len(activities) == 1
     assert activities[0].type == "tag_added"
@@ -2921,123 +2876,149 @@ def test_add_company_tag_emits_company_activity(
     assert activities[0].contact_id is None
 
 
-def test_disable_company_tag_emits_activity_atomically(
+def test_assign_tag_unknown_contact_raises(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """§V.10 tag-coverage: disable_company_tag mirrors contact path."""
-    from mailpilot.database import add_company_tag, disable_company_tag
+    from mailpilot.database import assign_tag_to_contact
+
+    tag = create_tag(database_connection, name="prospect")
+    assert tag is not None
+    with pytest.raises(ValueError, match="contact not found"):
+        assign_tag_to_contact(database_connection, tag_id=tag.id, contact_id="ghost")
+
+
+def test_remove_tag_from_contact_deletes_and_emits_activity(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.116: tag remove unlinks and emits tag_removed; vocabulary survives."""
+    from mailpilot.database import get_tag_by_name, remove_tag_from_contact
+
+    contact = make_test_contact(database_connection)
+    make_test_tag_assignment(database_connection, contact_id=contact.id, name="cold")
+    tag = get_tag_by_name(database_connection, "cold")
+    assert tag is not None
+    removed = remove_tag_from_contact(
+        database_connection, tag_id=tag.id, contact_id=contact.id
+    )
+    assert removed is not None
+    assert list_tags(database_connection, contact_id=contact.id) == []
+    # Vocabulary entry is untouched.
+    assert get_tag_by_name(database_connection, "cold") is not None
+    activities = list_activities(database_connection, contact_id=contact.id)
+    types = [a.type for a in activities]
+    assert "tag_removed" in types
+    removed_event = next(a for a in activities if a.type == "tag_removed")
+    assert removed_event.summary == "Untagged cold"
+
+
+def test_remove_tag_absent_returns_none_no_activity(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from mailpilot.database import remove_tag_from_contact
+
+    contact = make_test_contact(database_connection)
+    tag = create_tag(database_connection, name="cold")
+    assert tag is not None
+    assert (
+        remove_tag_from_contact(
+            database_connection, tag_id=tag.id, contact_id=contact.id
+        )
+        is None
+    )
+    assert [
+        a.type for a in list_activities(database_connection, contact_id=contact.id)
+    ] == []
+
+
+def test_remove_tag_from_company(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from mailpilot.database import get_tag_by_name, remove_tag_from_company
 
     company = make_test_company(database_connection)
-    add_company_tag(database_connection, company_id=company.id, name="enterprise")
-    disabled = disable_company_tag(
-        database_connection,
-        company_id=company.id,
-        name="enterprise",
-        reason="dissolved",
+    make_test_tag_assignment(
+        database_connection, company_id=company.id, name="enterprise"
     )
-    assert disabled is not None
-    assert disabled.name == "enterprise"
-    assert disabled.company_id == company.id
-    assert disabled.contact_id is None
-    assert disabled.disabled_reason == "dissolved"
-    activities = list_activities(database_connection, company_id=company.id)
-    types = [a.type for a in activities]
-    assert "tag_disabled" in types
+    tag = get_tag_by_name(database_connection, "enterprise")
+    assert tag is not None
+    removed = remove_tag_from_company(
+        database_connection, tag_id=tag.id, company_id=company.id
+    )
+    assert removed is not None
+    assert list_tags(database_connection, company_id=company.id) == []
+    types = [
+        a.type for a in list_activities(database_connection, company_id=company.id)
+    ]
+    assert "tag_removed" in types
 
 
-def test_list_tags_excludes_disabled_by_default(
+# -- membership filters on company/contact list (§V.116) -----------------------
+
+
+def test_list_companies_filter_by_tag(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """§V.10 tag-coverage: list_tags filters disabled rows by default."""
-    from mailpilot.database import add_contact_tag, disable_contact_tag
-
-    contact = make_test_contact(database_connection)
-    add_contact_tag(database_connection, contact_id=contact.id, name="hot")
-    add_contact_tag(database_connection, contact_id=contact.id, name="cold")
-    disable_contact_tag(
-        database_connection,
-        contact_id=contact.id,
-        name="cold",
-        reason="stale",
-    )
-    active = list_tags(database_connection, contact_id=contact.id)
-    assert {t.name for t in active} == {"hot"}
-    all_tags = list_tags(
-        database_connection, contact_id=contact.id, include_disabled=True
-    )
-    assert {t.name for t in all_tags} == {"hot", "cold"}
-
-
-def test_list_contacts_by_tag_excludes_disabled(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    """§V.10 tag-coverage: list_contacts_by_tag excludes disabled rows."""
-    from mailpilot.database import (
-        add_contact_tag,
-        disable_contact_tag,
-        list_contacts_by_tag,
-    )
-
-    a = make_test_contact(database_connection, email="x1@acme.test")
-    b = make_test_contact(database_connection, email="x2@acme.test")
-    add_contact_tag(database_connection, contact_id=a.id, name="hot")
-    add_contact_tag(database_connection, contact_id=b.id, name="hot")
-    disable_contact_tag(
-        database_connection, contact_id=b.id, name="hot", reason="stale"
-    )
-    assert list_contacts_by_tag(database_connection, name="hot") == [a.id]
-    assert set(
-        list_contacts_by_tag(database_connection, name="hot", include_disabled=True)
-    ) == {a.id, b.id}
-
-
-def test_list_companies_by_tag_excludes_disabled(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    """§V.10 tag-coverage: list_companies_by_tag excludes disabled rows."""
-    from mailpilot.database import (
-        add_company_tag,
-        disable_company_tag,
-        list_companies_by_tag,
-    )
-
+    """§V.116: list_companies tag= keeps only companies carrying the tag."""
     a = make_test_company(database_connection, name="A", domain="a.test")
     b = make_test_company(database_connection, name="B", domain="b.test")
-    add_company_tag(database_connection, company_id=a.id, name="enterprise")
-    add_company_tag(database_connection, company_id=b.id, name="enterprise")
-    disable_company_tag(
-        database_connection,
-        company_id=b.id,
-        name="enterprise",
-        reason="dissolved",
-    )
-    assert list_companies_by_tag(database_connection, name="enterprise") == [a.id]
-    assert set(
-        list_companies_by_tag(
-            database_connection, name="enterprise", include_disabled=True
-        )
-    ) == {a.id, b.id}
+    tag = create_tag(database_connection, name="enterprise")
+    assert tag is not None
+    make_test_tag_assignment(database_connection, company_id=a.id, name="enterprise")
+    rows = list_companies(database_connection, tag=tag.id)
+    assert [c.domain for c in rows] == ["a.test"]
+    assert b.domain not in [c.domain for c in rows]
 
 
-def test_search_tags_excludes_disabled(
+def test_list_companies_exclude_by_no_tag(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """§V.10 tag-coverage: search_tags excludes disabled rows by default."""
-    from mailpilot.database import add_contact_tag, disable_contact_tag
-
-    contact = make_test_contact(database_connection)
-    add_contact_tag(database_connection, contact_id=contact.id, name="prospect")
-    add_contact_tag(database_connection, contact_id=contact.id, name="cold")
-    disable_contact_tag(
-        database_connection,
-        contact_id=contact.id,
-        name="cold",
-        reason="stale",
+    """§V.116: list_companies exclude_tag keeps only companies NOT carrying it."""
+    a = make_test_company(database_connection, name="A", domain="a.test")
+    make_test_company(database_connection, name="B", domain="b.test")
+    tag = create_tag(database_connection, name="no-contacts-found")
+    assert tag is not None
+    make_test_tag_assignment(
+        database_connection, company_id=a.id, name="no-contacts-found"
     )
-    active = search_tags(database_connection, name="co")
-    assert [t.name for t in active] == []
-    all_results = search_tags(database_connection, name="co", include_disabled=True)
-    assert [t.name for t in all_results] == ["cold"]
+    rows = list_companies(database_connection, exclude_tag=tag.id)
+    assert [c.domain for c in rows] == ["b.test"]
+
+
+def test_list_companies_tag_and_no_tag_intersection(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.116: --tag and --no-tag compose as an intersection (carries A not B)."""
+    a = make_test_company(database_connection, name="A", domain="a.test")
+    b = make_test_company(database_connection, name="B", domain="b.test")
+    profiled = create_tag(database_connection, name="profiled")
+    skip = create_tag(database_connection, name="no-contacts-found")
+    assert profiled is not None
+    assert skip is not None
+    make_test_tag_assignment(database_connection, company_id=a.id, name="profiled")
+    make_test_tag_assignment(database_connection, company_id=b.id, name="profiled")
+    make_test_tag_assignment(
+        database_connection, company_id=b.id, name="no-contacts-found"
+    )
+    rows = list_companies(database_connection, tag=profiled.id, exclude_tag=skip.id)
+    assert [c.domain for c in rows] == ["a.test"]
+
+
+def test_list_contacts_filter_by_tag(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.116: list_contacts tag= / exclude_tag= over the assignment join."""
+    a = make_test_contact(database_connection, email="x1@acme.test")
+    b = make_test_contact(database_connection, email="x2@acme.test")
+    tag = create_tag(database_connection, name="vip")
+    assert tag is not None
+    make_test_tag_assignment(database_connection, contact_id=a.id, name="vip")
+    assert [c.email for c in list_contacts(database_connection, tag=tag.id)] == [
+        "x1@acme.test"
+    ]
+    assert [
+        c.email for c in list_contacts(database_connection, exclude_tag=tag.id)
+    ] == ["x2@acme.test"]
+    assert b.email == "x2@acme.test"
 
 
 def test_add_contact_note_emits_activity_atomically(
@@ -4462,15 +4443,13 @@ def test_list_tasks_since(
 def test_list_tags_limit_and_since(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    contact = make_test_contact(database_connection)
-    make_test_tag(database_connection, contact_id=contact.id, name="a")
-    make_test_tag(database_connection, contact_id=contact.id, name="b")
-    assert len(list_tags(database_connection, contact_id=contact.id, limit=1)) == 1
+    make_test_tag(database_connection, name="a")
+    make_test_tag(database_connection, name="b")
+    assert len(list_tags(database_connection, limit=1)) == 1
     assert (
         len(
             list_tags(
                 database_connection,
-                contact_id=contact.id,
                 since="9999-01-01T00:00:00",
             )
         )

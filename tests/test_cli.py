@@ -28,6 +28,8 @@ from mailpilot.models import (
     Note,
     SchemaStatus,
     Tag,
+    TagAssignment,
+    TagSummary,
     Task,
     Workflow,
 )
@@ -613,6 +615,8 @@ def test_company_list_with_limit(runner: CliRunner, mock_connection: MagicMock) 
         max_contacts=None,
         min_contacts=None,
         include_disabled=False,
+        tag=None,
+        exclude_tag=None,
     )
 
 
@@ -636,6 +640,8 @@ def test_company_list_with_since(runner: CliRunner, mock_connection: MagicMock) 
         max_contacts=None,
         min_contacts=None,
         include_disabled=False,
+        tag=None,
+        exclude_tag=None,
     )
 
 
@@ -659,6 +665,8 @@ def test_company_list_has_profile_flag(
         max_contacts=None,
         min_contacts=None,
         include_disabled=False,
+        tag=None,
+        exclude_tag=None,
     )
 
 
@@ -682,6 +690,8 @@ def test_company_list_no_profile_flag(
         max_contacts=None,
         min_contacts=None,
         include_disabled=False,
+        tag=None,
+        exclude_tag=None,
     )
 
 
@@ -729,6 +739,8 @@ def test_company_list_max_contacts_flag(
         max_contacts=4,
         min_contacts=None,
         include_disabled=False,
+        tag=None,
+        exclude_tag=None,
     )
 
 
@@ -753,6 +765,8 @@ def test_company_list_min_contacts_flag(
         max_contacts=None,
         min_contacts=1,
         include_disabled=False,
+        tag=None,
+        exclude_tag=None,
     )
 
 
@@ -777,6 +791,8 @@ def test_company_list_include_disabled_flag(
         max_contacts=None,
         min_contacts=None,
         include_disabled=True,
+        tag=None,
+        exclude_tag=None,
     )
 
 
@@ -1789,6 +1805,8 @@ def test_contact_list_with_filters(
         max_email_confidence=None,
         min_email_confidence=None,
         title=None,
+        tag=None,
+        exclude_tag=None,
     )
 
 
@@ -1813,6 +1831,8 @@ def test_contact_list_include_disabled(
         max_email_confidence=None,
         min_email_confidence=None,
         title=None,
+        tag=None,
+        exclude_tag=None,
     )
 
 
@@ -1840,6 +1860,8 @@ def test_contact_list_max_email_confidence(
         max_email_confidence=40,
         min_email_confidence=None,
         title=None,
+        tag=None,
+        exclude_tag=None,
     )
 
 
@@ -1867,6 +1889,8 @@ def test_contact_list_min_email_confidence(
         max_email_confidence=None,
         min_email_confidence=60,
         title=None,
+        tag=None,
+        exclude_tag=None,
     )
 
 
@@ -1899,6 +1923,8 @@ def test_contact_list_company_domain(
         max_email_confidence=None,
         min_email_confidence=None,
         title=None,
+        tag=None,
+        exclude_tag=None,
     )
 
 
@@ -1947,6 +1973,8 @@ def test_contact_list_title(runner: CliRunner, mock_connection: MagicMock) -> No
         max_email_confidence=None,
         min_email_confidence=None,
         title="VP",
+        tag=None,
+        exclude_tag=None,
     )
 
 
@@ -1971,6 +1999,8 @@ def test_contact_list_with_since(runner: CliRunner, mock_connection: MagicMock) 
         max_email_confidence=None,
         min_email_confidence=None,
         title=None,
+        tag=None,
+        exclude_tag=None,
     )
 
 
@@ -5346,100 +5376,236 @@ def test_activity_list_company_not_found(
 # -- Tag -----------------------------------------------------------------------
 
 
+_TAG_ID = "01234567-0000-7000-0000-000000000011"
+_TAG_CONTACT_ID = "01234567-0000-7000-0000-000000000003"
+_TAG_COMPANY_ID = "01234567-0000-7000-0000-000000000002"
+
+
 def _make_tag(**overrides: Any) -> Tag:
     defaults: dict[str, Any] = {
-        "id": "01234567-0000-7000-0000-000000000011",
-        "contact_id": "01234567-0000-7000-0000-000000000003",
-        "company_id": None,
+        "id": _TAG_ID,
         "name": "prospect",
+        "disabled_reason": None,
         "created_at": _NOW,
     }
     return Tag(**{**defaults, **overrides})
 
 
+def _make_tag_summary(**overrides: Any) -> TagSummary:
+    defaults: dict[str, Any] = {
+        "id": _TAG_ID,
+        "name": "prospect",
+        "usage_count": 0,
+        "disabled_reason": None,
+        "created_at": _NOW,
+    }
+    return TagSummary(**{**defaults, **overrides})
+
+
+def _make_tag_assignment(**overrides: Any) -> TagAssignment:
+    defaults: dict[str, Any] = {
+        "id": "01234567-0000-7000-0000-0000000000a1",
+        "tag_id": _TAG_ID,
+        "contact_id": _TAG_CONTACT_ID,
+        "company_id": None,
+        "created_at": _NOW,
+    }
+    return TagAssignment(**{**defaults, **overrides})
+
+
+# -- tag create ----------------------------------------------------------------
+
+
+def test_tag_create(runner: CliRunner, mock_connection: MagicMock) -> None:
+    tag = _make_tag(name="vip")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_tag", return_value=tag) as mock_create,
+        patch("mailpilot.operator_log.operator_event") as mock_event,
+    ):
+        result = runner.invoke(main, ["tag", "create", "vip"])
+
+    assert result.exit_code == 0
+    mock_create.assert_called_once_with(mock_connection, name="vip")
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["tag"]["name"] == "vip"
+    create_events = [
+        call for call in mock_event.call_args_list if call.args[:1] == ("tag.create",)
+    ]
+    assert len(create_events) == 1
+
+
+def test_tag_create_already_exists(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_tag", return_value=None),
+    ):
+        result = runner.invoke(main, ["tag", "create", "vip"])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "already_exists"
+
+
+def test_tag_create_empty_name(runner: CliRunner, mock_connection: MagicMock) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(main, ["tag", "create", ""])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "name" in data["message"]
+
+
+def test_tag_create_rejects_invalid_name(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.create_tag",
+            side_effect=ValueError("invalid tag name: 'hot/lead'"),
+        ),
+    ):
+        result = runner.invoke(main, ["tag", "create", "hot/lead"])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "invalid tag" in data["message"].lower()
+
+
+# -- tag view ------------------------------------------------------------------
+
+
+def test_tag_view(runner: CliRunner, mock_connection: MagicMock) -> None:
+    summary = _make_tag_summary(name="vip", usage_count=3)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.get_tag_summary_by_name", return_value=summary
+        ) as mock_view,
+    ):
+        result = runner.invoke(main, ["tag", "view", "vip"])
+
+    assert result.exit_code == 0
+    mock_view.assert_called_once_with(mock_connection, "vip")
+    data = json.loads(result.output)
+    assert data["tag"]["name"] == "vip"
+    assert data["tag"]["usage_count"] == 3
+
+
+def test_tag_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_tag_summary_by_name", return_value=None),
+    ):
+        result = runner.invoke(main, ["tag", "view", "ghost"])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+
+
 # -- tag add -------------------------------------------------------------------
 
 
-def test_tag_add(runner: CliRunner, mock_connection: MagicMock) -> None:
-    tag = _make_tag()
-    contact = _make_contact()
+def test_tag_add_on_contact(runner: CliRunner, mock_connection: MagicMock) -> None:
+    tag = _make_tag(name="prospect")
+    contact = _make_contact(id=_TAG_CONTACT_ID)
+    assignment = _make_tag_assignment()
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.add_contact_tag", return_value=tag) as mock_add,
+        patch("mailpilot.database.get_tag_by_name", return_value=tag),
         patch("mailpilot.database.get_contact", return_value=contact),
+        patch(
+            "mailpilot.database.assign_tag_to_contact", return_value=assignment
+        ) as mock_assign,
     ):
         result = runner.invoke(
             main,
-            [
-                "tag",
-                "add",
-                "--contact-email",
-                "01234567-0000-7000-0000-000000000003",
-                "prospect",
-            ],
+            ["tag", "add", "--tag", "prospect", "--contact-email", _TAG_CONTACT_ID],
         )
 
     assert result.exit_code == 0
-    mock_add.assert_called_once_with(
-        mock_connection,
-        contact_id="01234567-0000-7000-0000-000000000003",
-        name="prospect",
+    mock_assign.assert_called_once_with(
+        mock_connection, tag_id=_TAG_ID, contact_id=_TAG_CONTACT_ID
     )
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["tag"]["name"] == "prospect"
+    assert data["tag_assignment"]["tag_id"] == _TAG_ID
+    assert data["tag_assignment"]["contact_id"] == _TAG_CONTACT_ID
 
 
 def test_tag_add_on_company(runner: CliRunner, mock_connection: MagicMock) -> None:
-    tag = _make_tag(
-        contact_id=None,
-        company_id="01234567-0000-7000-0000-000000000002",
-        name="enterprise",
-    )
-    company = _make_company(id="01234567-0000-7000-0000-000000000002")
+    tag = _make_tag(name="enterprise")
+    company = _make_company(id=_TAG_COMPANY_ID)
+    assignment = _make_tag_assignment(contact_id=None, company_id=_TAG_COMPANY_ID)
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.add_company_tag", return_value=tag) as mock_add,
+        patch("mailpilot.database.get_tag_by_name", return_value=tag),
         patch("mailpilot.database.get_company", return_value=company),
+        patch(
+            "mailpilot.database.assign_tag_to_company", return_value=assignment
+        ) as mock_assign,
     ):
         result = runner.invoke(
             main,
-            [
-                "tag",
-                "add",
-                "--company-domain",
-                "01234567-0000-7000-0000-000000000002",
-                "enterprise",
-            ],
+            ["tag", "add", "--tag", "enterprise", "--company-domain", _TAG_COMPANY_ID],
         )
 
     assert result.exit_code == 0
-    mock_add.assert_called_once_with(
-        mock_connection,
-        company_id="01234567-0000-7000-0000-000000000002",
-        name="enterprise",
+    mock_assign.assert_called_once_with(
+        mock_connection, tag_id=_TAG_ID, company_id=_TAG_COMPANY_ID
     )
 
 
-def test_tag_add_already_exists(runner: CliRunner, mock_connection: MagicMock) -> None:
-    contact = _make_contact(id="01234567-0000-7000-0000-000000000003")
+def test_tag_add_undefined_tag_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.116: `tag add` errors not_found on an undefined tag, never creates it."""
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.add_contact_tag", return_value=None),
+        patch("mailpilot.database.get_tag_by_name", return_value=None),
     ):
         result = runner.invoke(
             main,
-            [
-                "tag",
-                "add",
-                "--contact-email",
-                "01234567-0000-7000-0000-000000000003",
-                "prospect",
-            ],
+            ["tag", "add", "--tag", "ghost", "--contact-email", _TAG_CONTACT_ID],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+    assert "tag" in data["message"]
+
+
+def test_tag_add_already_linked(runner: CliRunner, mock_connection: MagicMock) -> None:
+    tag = _make_tag(name="prospect")
+    contact = _make_contact(id=_TAG_CONTACT_ID)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_tag_by_name", return_value=tag),
+        patch("mailpilot.database.get_contact", return_value=contact),
+        patch("mailpilot.database.assign_tag_to_contact", return_value=None),
+    ):
+        result = runner.invoke(
+            main,
+            ["tag", "add", "--tag", "prospect", "--contact-email", _TAG_CONTACT_ID],
         )
 
     assert result.exit_code == 1
@@ -5450,9 +5616,11 @@ def test_tag_add_already_exists(runner: CliRunner, mock_connection: MagicMock) -
 def test_tag_add_contact_not_found(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
+    tag = _make_tag(name="prospect")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_tag_by_name", return_value=tag),
         patch("mailpilot.database.get_contact", return_value=None),
     ):
         result = runner.invoke(
@@ -5460,9 +5628,10 @@ def test_tag_add_contact_not_found(
             [
                 "tag",
                 "add",
+                "--tag",
+                "prospect",
                 "--contact-email",
                 "01234567-0000-7000-0000-0000000000c1",
-                "prospect",
             ],
         )
 
@@ -5472,134 +5641,114 @@ def test_tag_add_contact_not_found(
     assert "contact" in data["message"]
 
 
-def test_tag_add_company_not_found(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_company", return_value=None),
-    ):
-        result = runner.invoke(
-            main,
-            [
-                "tag",
-                "add",
-                "--company-domain",
-                "01234567-0000-7000-0000-0000000000c1",
-                "prospect",
-            ],
-        )
-
-    assert result.exit_code == 1
-    data = json.loads(result.output)
-    assert data["error"] == "not_found"
-    assert "company" in data["message"]
-
-
-def test_tag_add_no_entity(runner: CliRunner, mock_connection: MagicMock) -> None:
+def test_tag_add_no_owner(runner: CliRunner, mock_connection: MagicMock) -> None:
     """tag add without --contact-email or --company-domain should error."""
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
     ):
-        result = runner.invoke(main, ["tag", "add", "prospect"])
+        result = runner.invoke(main, ["tag", "add", "--tag", "prospect"])
 
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["error"] == "validation_error"
 
 
-def test_tag_add_empty_name(runner: CliRunner, mock_connection: MagicMock) -> None:
+# -- tag remove ----------------------------------------------------------------
+
+
+def test_tag_remove_on_contact(runner: CliRunner, mock_connection: MagicMock) -> None:
+    tag = _make_tag(name="prospect")
+    contact = _make_contact(id=_TAG_CONTACT_ID)
+    assignment = _make_tag_assignment()
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_tag_by_name", return_value=tag),
+        patch("mailpilot.database.get_contact", return_value=contact),
+        patch(
+            "mailpilot.database.remove_tag_from_contact", return_value=assignment
+        ) as mock_remove,
+        patch("mailpilot.operator_log.operator_event") as mock_event,
     ):
         result = runner.invoke(
             main,
-            [
-                "tag",
-                "add",
-                "--contact-email",
-                "01234567-0000-7000-0000-000000000003",
-                "",
-            ],
+            ["tag", "remove", "--tag", "prospect", "--contact-email", _TAG_CONTACT_ID],
         )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 0
+    mock_remove.assert_called_once_with(
+        mock_connection, tag_id=_TAG_ID, contact_id=_TAG_CONTACT_ID
+    )
     data = json.loads(result.output)
-    assert data["error"] == "validation_error"
-    assert "name" in data["message"]
+    assert data["tag_assignment"]["tag_id"] == _TAG_ID
+    remove_events = [
+        call for call in mock_event.call_args_list if call.args[:1] == ("tag.remove",)
+    ]
+    assert len(remove_events) == 1
 
 
-def test_tag_add_rejects_invalid_name(
+def test_tag_remove_not_linked_not_found(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    contact = _make_contact()
+    tag = _make_tag(name="prospect")
+    contact = _make_contact(id=_TAG_CONTACT_ID)
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_tag_by_name", return_value=tag),
         patch("mailpilot.database.get_contact", return_value=contact),
+        patch("mailpilot.database.remove_tag_from_contact", return_value=None),
     ):
         result = runner.invoke(
             main,
-            [
-                "tag",
-                "add",
-                "--contact-email",
-                "01234567-0000-7000-0000-000000000003",
-                "hot/lead",
-            ],
+            ["tag", "remove", "--tag", "prospect", "--contact-email", _TAG_CONTACT_ID],
         )
 
-    assert result.exit_code != 0
+    assert result.exit_code == 1
     data = json.loads(result.output)
-    assert data["error"] == "validation_error"
-    assert "invalid tag" in data["message"].lower()
+    assert data["error"] == "not_found"
+
+
+def test_tag_remove_undefined_tag_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_tag_by_name", return_value=None),
+    ):
+        result = runner.invoke(
+            main,
+            ["tag", "remove", "--tag", "ghost", "--contact-email", _TAG_CONTACT_ID],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
 
 
 # -- tag disable ---------------------------------------------------------------
 
 
 def test_tag_disable(runner: CliRunner, mock_connection: MagicMock) -> None:
-    """§V.10 tag coverage: singular envelope w/ full Tag row, status set.
-
-    §V.54: `disable` operator-event `changed=["disabled_reason"]`.
-    """
-    contact = _make_contact()
-    disabled = _make_tag(
-        contact_id="01234567-0000-7000-0000-000000000003",
-        name="prospect",
-        disabled_reason="stale",
-    )
+    """§V.116: vocabulary-level disable; §V.54 changed=['disabled_reason']."""
+    active = _make_tag(name="prospect")
+    disabled = _make_tag(name="prospect", disabled_reason="stale")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch(
-            "mailpilot.database.disable_contact_tag", return_value=disabled
-        ) as mock_disable,
-        patch("mailpilot.database.get_contact", return_value=contact),
+        patch("mailpilot.database.get_tag_by_name", return_value=active),
+        patch("mailpilot.database.disable_tag", return_value=disabled) as mock_disable,
         patch("mailpilot.operator_log.operator_event") as mock_event,
     ):
         result = runner.invoke(
-            main,
-            [
-                "tag",
-                "disable",
-                "--contact-email",
-                "01234567-0000-7000-0000-000000000003",
-                "prospect",
-                "--reason",
-                "stale",
-            ],
+            main, ["tag", "disable", "prospect", "--reason", "stale"]
         )
 
     assert result.exit_code == 0
     mock_disable.assert_called_once_with(
-        mock_connection,
-        contact_id="01234567-0000-7000-0000-000000000003",
-        name="prospect",
-        reason="stale",
+        mock_connection, name="prospect", reason="stale"
     )
     data = json.loads(result.output)
     assert data["ok"] is True
@@ -5611,74 +5760,45 @@ def test_tag_disable(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert len(disable_events) == 1
     assert disable_events[0].kwargs == {
         "entity_id": "prospect",
-        "owner_type": "contact",
-        "owner_id": "01234567-0000-7000-0000-000000000003",
         "changed": ["disabled_reason"],
     }
 
 
-def test_tag_disable_on_company(runner: CliRunner, mock_connection: MagicMock) -> None:
-    company = _make_company(id="01234567-0000-7000-0000-000000000002")
-    disabled = _make_tag(
-        contact_id=None,
-        company_id="01234567-0000-7000-0000-000000000002",
-        name="enterprise",
-        disabled_reason="dissolved",
-    )
+def test_tag_disable_undefined_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch(
-            "mailpilot.database.disable_company_tag", return_value=disabled
-        ) as mock_disable,
-        patch("mailpilot.database.get_company", return_value=company),
+        patch("mailpilot.database.get_tag_by_name", return_value=None),
     ):
-        result = runner.invoke(
-            main,
-            [
-                "tag",
-                "disable",
-                "--company-domain",
-                "01234567-0000-7000-0000-000000000002",
-                "enterprise",
-                "--reason",
-                "dissolved",
-            ],
-        )
-
-    assert result.exit_code == 0
-    mock_disable.assert_called_once_with(
-        mock_connection,
-        company_id="01234567-0000-7000-0000-000000000002",
-        name="enterprise",
-        reason="dissolved",
-    )
-
-
-def test_tag_disable_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:
-    contact = _make_contact()
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.disable_contact_tag", return_value=None),
-    ):
-        result = runner.invoke(
-            main,
-            [
-                "tag",
-                "disable",
-                "--contact-email",
-                "01234567-0000-7000-0000-000000000003",
-                "prospect",
-                "--reason",
-                "stale",
-            ],
-        )
+        result = runner.invoke(main, ["tag", "disable", "ghost", "--reason", "stale"])
 
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["error"] == "not_found"
+
+
+def test_tag_disable_already_disabled(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.10: double-disable is rejected before any write."""
+    already = _make_tag(name="prospect", disabled_reason="stale")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_tag_by_name", return_value=already),
+        patch("mailpilot.database.disable_tag") as mock_disable,
+    ):
+        result = runner.invoke(
+            main, ["tag", "disable", "prospect", "--reason", "again"]
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "already disabled" in data["message"]
+    mock_disable.assert_not_called()
 
 
 def test_tag_disable_empty_reason(
@@ -5688,18 +5808,7 @@ def test_tag_disable_empty_reason(
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
     ):
-        result = runner.invoke(
-            main,
-            [
-                "tag",
-                "disable",
-                "--contact-email",
-                "01234567-0000-7000-0000-000000000003",
-                "prospect",
-                "--reason",
-                "   ",
-            ],
-        )
+        result = runner.invoke(main, ["tag", "disable", "prospect", "--reason", "   "])
 
     assert result.exit_code == 1
     data = json.loads(result.output)
@@ -5707,98 +5816,29 @@ def test_tag_disable_empty_reason(
     assert "reason" in data["message"]
 
 
-def test_tag_disable_no_owner(runner: CliRunner, mock_connection: MagicMock) -> None:
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-    ):
-        result = runner.invoke(
-            main, ["tag", "disable", "prospect", "--reason", "stale"]
-        )
-
-    assert result.exit_code == 1
-    data = json.loads(result.output)
-    assert data["error"] == "validation_error"
-
-
-def test_tag_disable_contact_not_found(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_contact", return_value=None),
-    ):
-        result = runner.invoke(
-            main,
-            [
-                "tag",
-                "disable",
-                "--contact-email",
-                "01234567-0000-7000-0000-0000000000c1",
-                "prospect",
-                "--reason",
-                "stale",
-            ],
-        )
-
-    assert result.exit_code == 1
-    data = json.loads(result.output)
-    assert data["error"] == "not_found"
-    assert "contact" in data["message"]
-
-
-def test_tag_disable_company_not_found(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_company", return_value=None),
-    ):
-        result = runner.invoke(
-            main,
-            [
-                "tag",
-                "disable",
-                "--company-domain",
-                "01234567-0000-7000-0000-0000000000c2",
-                "prospect",
-                "--reason",
-                "stale",
-            ],
-        )
-
-    assert result.exit_code == 1
-    data = json.loads(result.output)
-    assert data["error"] == "not_found"
-    assert "company" in data["message"]
-
-
 # -- tag list ------------------------------------------------------------------
 
 
-def test_tag_list(runner: CliRunner, mock_connection: MagicMock) -> None:
+def test_tag_list_vocabulary_owner_free(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.116: tag list needs no owner -- it lists the vocabulary."""
     tags = [
-        _make_tag(id="id-1", name="cold"),
-        _make_tag(id="id-2", name="prospect"),
+        _make_tag_summary(id="id-1", name="cold", usage_count=2),
+        _make_tag_summary(id="id-2", name="prospect", usage_count=0),
     ]
-    contact = _make_contact()
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_contact", return_value=contact),
         patch("mailpilot.database.list_tags", return_value=tags) as mock_list,
     ):
-        result = runner.invoke(
-            main,
-            ["tag", "list", "--contact-email", "01234567-0000-7000-0000-000000000003"],
-        )
+        result = runner.invoke(main, ["tag", "list"])
 
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
         mock_connection,
-        contact_id="01234567-0000-7000-0000-000000000003",
+        contact_id=None,
+        company_id=None,
         limit=100,
         since=None,
         until=None,
@@ -5807,13 +5847,11 @@ def test_tag_list(runner: CliRunner, mock_connection: MagicMock) -> None:
     data = json.loads(result.output)
     assert data["ok"] is True
     assert len(data["tags"]) == 2
+    assert data["tags"][0]["usage_count"] == 2
 
 
-def test_tag_list_include_disabled_flag(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
-    """§V.10 tag-coverage: --include-disabled forwards include_disabled=True."""
-    contact = _make_contact()
+def test_tag_list_by_contact(runner: CliRunner, mock_connection: MagicMock) -> None:
+    contact = _make_contact(id=_TAG_CONTACT_ID)
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
@@ -5826,7 +5864,7 @@ def test_tag_list_include_disabled_flag(
                 "tag",
                 "list",
                 "--contact-email",
-                "01234567-0000-7000-0000-000000000003",
+                _TAG_CONTACT_ID,
                 "--include-disabled",
             ],
         )
@@ -5834,7 +5872,8 @@ def test_tag_list_include_disabled_flag(
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
         mock_connection,
-        contact_id="01234567-0000-7000-0000-000000000003",
+        contact_id=_TAG_CONTACT_ID,
+        company_id=None,
         limit=100,
         since=None,
         until=None,
@@ -5842,15 +5881,12 @@ def test_tag_list_include_disabled_flag(
     )
 
 
-def test_tag_list_limit_and_since(
+def test_tag_list_both_owners_errors(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    contact = _make_contact()
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.list_tags", return_value=[]) as mock_list,
     ):
         result = runner.invoke(
             main,
@@ -5858,32 +5894,11 @@ def test_tag_list_limit_and_since(
                 "tag",
                 "list",
                 "--contact-email",
-                "01234567-0000-7000-0000-000000000003",
-                "--limit",
-                "5",
-                "--since",
-                "2024-01-01T00:00:00",
+                _TAG_CONTACT_ID,
+                "--company-domain",
+                _TAG_COMPANY_ID,
             ],
         )
-
-    assert result.exit_code == 0
-    mock_list.assert_called_once_with(
-        mock_connection,
-        contact_id="01234567-0000-7000-0000-000000000003",
-        limit=5,
-        since="2024-01-01T00:00:00",
-        until=None,
-        include_disabled=False,
-    )
-
-
-def test_tag_list_no_entity(runner: CliRunner, mock_connection: MagicMock) -> None:
-    """tag list without --contact-email or --company-domain should error."""
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-    ):
-        result = runner.invoke(main, ["tag", "list"])
 
     assert result.exit_code == 1
     data = json.loads(result.output)
@@ -5909,74 +5924,34 @@ def test_tag_list_contact_not_found(
     assert "contact" in data["message"]
 
 
-def test_tag_list_company_not_found(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_company", return_value=None),
-    ):
-        result = runner.invoke(
-            main,
-            ["tag", "list", "--company-domain", "01234567-0000-7000-0000-0000000000c2"],
-        )
-
-    assert result.exit_code == 1
-    data = json.loads(result.output)
-    assert data["error"] == "not_found"
-    assert "company" in data["message"]
-
-
 # -- tag search ----------------------------------------------------------------
 
 
 def test_tag_search(runner: CliRunner, mock_connection: MagicMock) -> None:
-    tags = [_make_tag(name="prospect")]
+    tags = [_make_tag_summary(name="prospect", usage_count=1)]
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.search_tags", return_value=tags) as mock_search,
     ):
-        result = runner.invoke(main, ["tag", "search", "prospect"])
+        result = runner.invoke(main, ["tag", "search", "pro", "--limit", "5"])
 
     assert result.exit_code == 0
     mock_search.assert_called_once_with(
         mock_connection,
-        name="prospect",
-        owner=None,
-        limit=100,
+        name="pro",
+        limit=5,
         include_disabled=False,
     )
     data = json.loads(result.output)
     assert data["ok"] is True
     assert len(data["tags"]) == 1
-
-
-def test_tag_search_with_type(runner: CliRunner, mock_connection: MagicMock) -> None:
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.search_tags", return_value=[]) as mock_search,
-    ):
-        result = runner.invoke(
-            main, ["tag", "search", "prospect", "--type", "contact", "--limit", "5"]
-        )
-
-    assert result.exit_code == 0
-    mock_search.assert_called_once_with(
-        mock_connection,
-        name="prospect",
-        owner="contact",
-        limit=5,
-        include_disabled=False,
-    )
+    assert data["tags"][0]["usage_count"] == 1
 
 
 def test_tag_search_include_disabled_flag(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    """§V.10 tag-coverage: --include-disabled forwards include_disabled=True."""
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
@@ -5990,10 +5965,83 @@ def test_tag_search_include_disabled_flag(
     mock_search.assert_called_once_with(
         mock_connection,
         name="prospect",
-        owner=None,
         limit=100,
         include_disabled=True,
     )
+
+
+# -- company/contact list membership filters (§V.116) --------------------------
+
+
+def test_company_list_filter_by_tag(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    tag = _make_tag(name="vip")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_tag_by_name", return_value=tag),
+        patch("mailpilot.database.list_companies", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(main, ["company", "list", "--tag", "vip"])
+
+    assert result.exit_code == 0
+    _, kwargs = mock_list.call_args
+    assert kwargs["tag"] == _TAG_ID
+    assert kwargs["exclude_tag"] is None
+
+
+def test_company_list_no_tag_filter(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    tag = _make_tag(name="no-contacts-found")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_tag_by_name", return_value=tag),
+        patch("mailpilot.database.list_companies", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(
+            main, ["company", "list", "--no-tag", "no-contacts-found"]
+        )
+
+    assert result.exit_code == 0
+    _, kwargs = mock_list.call_args
+    assert kwargs["tag"] is None
+    assert kwargs["exclude_tag"] == _TAG_ID
+
+
+def test_company_list_tag_undefined_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_tag_by_name", return_value=None),
+    ):
+        result = runner.invoke(main, ["company", "list", "--tag", "ghost"])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+
+
+def test_contact_list_filter_by_tag(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    tag = _make_tag(name="vip")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_tag_by_name", return_value=tag),
+        patch("mailpilot.database.list_contacts", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(main, ["contact", "list", "--tag", "vip"])
+
+    assert result.exit_code == 0
+    _, kwargs = mock_list.call_args
+    assert kwargs["tag"] == _TAG_ID
+    assert kwargs["exclude_tag"] is None
 
 
 # -- note helpers --------------------------------------------------------------

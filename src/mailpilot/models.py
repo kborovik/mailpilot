@@ -396,18 +396,49 @@ class ActivitySummary(BaseModel):
 
 
 class Tag(BaseModel):
-    """Flexible label on a contact or company for segmentation.
+    """A defined tag in the operator-maintained controlled vocabulary (§V.116).
 
-    Exactly one of ``contact_id`` or ``company_id`` is set (XOR enforced
-    at the schema level). ``disabled_reason`` non-null marks a terminal
-    soft-disabled row (operator-killed lifecycle exit per §V.10 / §V.13).
+    One row per defined tag, ``name`` globally unique (§V.90). A tag is a
+    vocabulary entry, not a per-owner label -- owners are linked to it via
+    ``TagAssignment``. ``disabled_reason`` non-null soft-retires the vocabulary
+    entry (§V.10); a retired tag stays linked to its owners but drops out of the
+    default ``tag list``.
     """
 
     id: str
-    contact_id: str | None = None
-    company_id: str | None = None
     name: str
     disabled_reason: str | None = None
+    created_at: datetime
+
+
+class TagSummary(BaseModel):
+    """List/view projection of `Tag` carrying ``usage_count`` (§V.116).
+
+    ``usage_count`` is the number of ``tag_assignment`` rows pointing at the
+    vocabulary entry (how many owners carry the tag), projected by a join so
+    ``tag list`` and ``tag view`` report usage without an N+1 probe.
+    """
+
+    id: str
+    name: str
+    usage_count: int
+    disabled_reason: str | None = None
+    created_at: datetime
+
+
+class TagAssignment(BaseModel):
+    """A link binding a vocabulary `Tag` to one owner (§V.116).
+
+    Exactly one of ``contact_id`` or ``company_id`` is set (XOR enforced at the
+    schema level, mirroring §V.13). The link is created by ``tag add`` and
+    deleted by ``tag remove``; it carries no disabled state of its own -- the
+    soft-disable lifecycle lives on the vocabulary `Tag`.
+    """
+
+    id: str
+    tag_id: str
+    contact_id: str | None = None
+    company_id: str | None = None
     created_at: datetime
 
 

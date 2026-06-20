@@ -158,6 +158,30 @@ def range_options(field: str, help_min: str, help_max: str) -> _Decorator:
     return decorator
 
 
+def tag_filter_options(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Add ``--tag`` / ``--no-tag`` membership filters (§V.116).
+
+    ``--tag <name>`` keeps only owners carrying the named vocabulary tag;
+    ``--no-tag <name>`` keeps only owners NOT carrying it -- the single negated
+    membership filter, the one bounded exception to intersection-only
+    composition. Both resolve the name through the vocabulary in the command
+    body (an undefined name -> ``not_found``) and compose as an intersection.
+    """
+    fn = click.option(
+        "--no-tag",
+        "no_tag",
+        default=None,
+        help="Keep only rows NOT carrying this tag (name or ID).",
+    )(fn)
+    fn = click.option(
+        "--tag",
+        "tag",
+        default=None,
+        help="Keep only rows carrying this tag (name or ID).",
+    )(fn)
+    return fn
+
+
 def presence_option(field: str, help_text: str) -> _Decorator:
     """Build a ``--has-<field>`` / ``--no-<field>`` tri-state flag.
 
