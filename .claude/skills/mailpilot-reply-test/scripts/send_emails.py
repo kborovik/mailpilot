@@ -38,7 +38,7 @@ def main() -> int:
             [
                 "email",
                 "send",
-                "--account-id",
+                "--account-email",
                 outbound_id,
                 "--to",
                 inbound_email,

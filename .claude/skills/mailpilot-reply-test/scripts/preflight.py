@@ -34,7 +34,7 @@ DRIVE_ID_RE = re.compile(r"\b([A-Za-z0-9_-]{25,})\b")
 
 
 def _find_active_workflow(inbound_account_id: str) -> dict[str, str] | None:
-    data = mp(["workflow", "list", "--account-id", inbound_account_id], check=False)
+    data = mp(["workflow", "list", "--account-email", inbound_account_id], check=False)
     for workflow in data.get("workflows", []):
         if workflow.get("template") == WORKFLOW_TEMPLATE:
             return workflow
@@ -64,7 +64,7 @@ def _resolve_workflow(result: dict[str, object], issues: list[str]) -> None:
     if workflow is None and isinstance(inbound_id, str):
         # Idempotent upsert keyed on (account_id, name); auto-activates.
         mp(
-            ["workflow", "import", "--account-id", inbound_id, "--file", WORKFLOW_TOML],
+            ["workflow", "import", "--account-email", inbound_id, "--file", WORKFLOW_TOML],
             check=False,
         )
         workflow = _find_active_workflow(inbound_id)

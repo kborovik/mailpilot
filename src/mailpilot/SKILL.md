@@ -98,10 +98,10 @@ Keys:
 ```
 mailpilot status
 mailpilot account list
-mailpilot workflow list --account-id <ID>
+mailpilot workflow list --account-email <ACCOUNT_REF>
 mailpilot enrollment list --workflow-id <ID>
 mailpilot task list --status pending
-mailpilot email list --account-id <ID> --limit 50
+mailpilot email list --account-email <ACCOUNT_REF> --limit 50
 ```
 
 ### Provision and migrate the schema
@@ -122,10 +122,10 @@ so it doubles as a deploy gate.
 
 ```
 mailpilot account create --email outbound@example.com --display-name "Outbound"
-mailpilot account sync --account-id <ACCOUNT_ID>
+mailpilot account sync --account-email <ACCOUNT_REF>
 ```
 
-`account sync` performs a one-shot Gmail sync; omit `--account-id` to sync
+`account sync` performs a one-shot Gmail sync; omit `--account-email` to sync
 every account. The long-running `mailpilot run` loop handles ongoing
 Pub/Sub deltas.
 
@@ -134,13 +134,13 @@ Pub/Sub deltas.
 ```
 mailpilot company create --domain example.com --name "Example Co"
 mailpilot contact create --email lead@example.com \
-    --first-name "Ada" --last-name "Lovelace" --company-id <COMPANY_ID>
+    --first-name "Ada" --last-name "Lovelace" --company-domain <COMPANY_REF>
 ```
 
 Soft-disable a contact (preserves audit history) with:
 
 ```
-mailpilot contact disable --contact-id <CID> --reason "left company"
+mailpilot contact disable <CONTACT_REF> --reason "left company"
 ```
 
 ### Define a workflow declaratively
@@ -149,8 +149,8 @@ Workflow definitions are one TOML file per workflow. Export/import is TOML-only
 and idempotent; round-trip is keyed on `(account_id, name)`.
 
 ```
-mailpilot workflow export --account-id <ID> --out-dir workflows/
-mailpilot workflow import --account-id <ID> --file workflows/
+mailpilot workflow export --account-email <ACCOUNT_REF> --out-dir workflows/
+mailpilot workflow import --account-email <ACCOUNT_REF> --file workflows/
 ```
 
 `workflow export` writes one `*.toml` per workflow into `--out-dir` and prints a
@@ -170,12 +170,12 @@ when the value differs and continues with the rest of the batch.
 
 ### Enroll a contact
 
-`enrollment add` constructs the binding from `--workflow-id` + `--contact-id`
+`enrollment add` constructs the binding from `--workflow-id` + `--contact-email`
 and returns the freshly-minted scalar `id`; every other verb takes that id
 as a single positional argument.
 
 ```
-mailpilot enrollment add --workflow-id <WID> --contact-id <CID>
+mailpilot enrollment add --workflow-id <WID> --contact-email <CONTACT_REF>
 mailpilot enrollment run <ENROLLMENT_ID>                            # manual kick
 mailpilot enrollment view <ENROLLMENT_ID>
 mailpilot enrollment update <ENROLLMENT_ID> --status paused

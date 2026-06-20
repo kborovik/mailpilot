@@ -32,7 +32,7 @@ def _resolve_trigger_id(
         [
             "email",
             "list",
-            "--account-id",
+            "--account-email",
             inbound_id,
             "--thread-id",
             thread_id,
@@ -79,7 +79,7 @@ def main() -> int:
             [
                 "email",
                 "list",
-                "--account-id",
+                "--account-email",
                 inbound_id,
                 "--direction",
                 "outbound",

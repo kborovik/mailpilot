@@ -62,7 +62,7 @@ Procedure (per-company pipeline, `<= 5` contacts; ASCII only):
    ```
    uv run mailpilot contact create \
      --email "<EMAIL>" \
-     --company-id <ID> \
+     --company-domain <ID> \
      --first-name "<FIRST>" \
      --last-name "<LAST>" \
      --title "<ROLE>" \
@@ -70,7 +70,7 @@ Procedure (per-company pipeline, `<= 5` contacts; ASCII only):
    ```
    - `--email-confidence` <- the Bouncer `score` (0-100). OMIT the flag entirely when Bouncer `status="unknown"` (no signal -> persisted NULL per V.95).
    - `--title` <- the person's role string (Hunter `position` or TheOrg `title`).
-   - `--company-id` MUST be the input `company_id`; the CLI validates the FK (V.94).
+   - `--company-domain` accepts a domain or ID; pass the input `company_id` here, the CLI validates the FK (V.94).
    - Duplicate email -> CLI returns `{"error":"duplicate_key", ...}` exit 1; treat as already-seeded (idempotent per V.90), continue. Capture stdout only (an always-on operator-log line goes to stderr).
 
 Risk policy (admit-all, V.96): every discovered + verified email is seeded. The Bouncer score is a risk FLAG written to `email_confidence`, never a drop gate. Count rows where Bouncer `status != "deliverable"` OR `score < 70` OR score is unknown as `flagged` in your verdict -- the skill surfaces them for operator review.
