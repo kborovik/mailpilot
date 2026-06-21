@@ -64,7 +64,14 @@ def _resolve_workflow(result: dict[str, object], issues: list[str]) -> None:
     if workflow is None and isinstance(inbound_id, str):
         # Idempotent upsert keyed on (account_id, name); auto-activates.
         mp(
-            ["workflow", "import", "--account-email", inbound_id, "--file", WORKFLOW_TOML],
+            [
+                "workflow",
+                "import",
+                "--account-email",
+                inbound_id,
+                "--file",
+                WORKFLOW_TOML,
+            ],
             check=False,
         )
         workflow = _find_active_workflow(inbound_id)
