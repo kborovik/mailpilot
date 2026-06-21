@@ -422,6 +422,61 @@ def test_migration_004_folds_paused_enrollments_to_disabled(
     assert admitted["type"] == "enrollment_enabled"
 
 
+# -- migration 005: drop dead `tag_disabled` activity type (§V.10/§V.17) -------
+
+
+def test_migration_005_drops_tag_disabled_activity_type(
+    migration_schema: psycopg.Connection[dict[str, Any]],
+):
+    """§V.10/§V.17: migration 005 drops the never-emitted ``tag_disabled``
+    activity type from the CHECK. Vocabulary-tag disable/enable write no
+    activity (an activity targets a contact/company and a tag row owns neither,
+    §V.17), so no historical row carries it -- the CHECK tightens with no fold,
+    unlike the enrollment collapse that retained ``paused``/``resumed``."""
+    conn = migration_schema
+    # Build the pre-005 world: every shipped migration up to 004.
+    conn.execute(_read_shipped_migration("001"))  # type: ignore[arg-type]
+    conn.execute(_read_shipped_migration("002"))  # type: ignore[arg-type]
+    conn.execute(_read_shipped_migration("003"))  # type: ignore[arg-type]
+    conn.execute(_read_shipped_migration("004"))  # type: ignore[arg-type]
+    conn.commit()
+
+    conn.execute(
+        "INSERT INTO contact (id, email) VALUES (%s, %s)", ("ct1", "c@example.com")
+    )
+    conn.commit()
+
+    # Pre-005, the dead value is still admitted by the 004 CHECK.
+    conn.execute(
+        "INSERT INTO activity (id, contact_id, type) VALUES (%s, %s, %s)",
+        ("av0", "ct1", "tag_disabled"),
+    )
+    conn.execute("DELETE FROM activity WHERE id = 'av0'")
+    conn.commit()
+
+    # Apply the tighten.
+    conn.execute(_read_shipped_migration("005"))  # type: ignore[arg-type]
+    conn.commit()
+
+    # The tightened CHECK now rejects `tag_disabled`.
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            "INSERT INTO activity (id, contact_id, type) VALUES (%s, %s, %s)",
+            ("av1", "ct1", "tag_disabled"),
+        )
+    conn.rollback()
+
+    # A retained value is still admitted.
+    conn.execute(
+        "INSERT INTO activity (id, contact_id, type) VALUES (%s, %s, %s)",
+        ("av2", "ct1", "tag_removed"),
+    )
+    conn.commit()
+    admitted = conn.execute("SELECT type FROM activity WHERE id = 'av2'").fetchone()
+    assert admitted is not None
+    assert admitted["type"] == "tag_removed"
+
+
 # -- identity invariant: schema.sql == apply-all-migrations-from-zero (§V.108) -
 
 

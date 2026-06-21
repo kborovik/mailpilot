@@ -168,7 +168,6 @@ CREATE TABLE IF NOT EXISTS activity (
                     CHECK (type IN (
                         'email_sent', 'email_received',
                         'note_added', 'tag_added', 'tag_removed',
-                        'tag_disabled',
                         'status_changed',
                         'enrollment_added',
                         'enrollment_completed', 'enrollment_failed',

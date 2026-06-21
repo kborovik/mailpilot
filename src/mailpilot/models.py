@@ -352,7 +352,6 @@ ActivityType = Literal[
     "note_added",
     "tag_added",
     "tag_removed",
-    "tag_disabled",
     "status_changed",
     "enrollment_added",
     "enrollment_completed",
