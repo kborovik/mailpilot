@@ -177,6 +177,26 @@ def parse_text(path: str) -> list[tuple[str, str]]:
     return pairs
 
 
+def _extract_error_envelope(stderr: str) -> dict[str, object]:
+    """Parse the JSON error envelope from a failed command's stderr (SPEC.md V.3).
+
+    A failed ``uv run mailpilot`` command writes its
+    ``{"error": ..., "ok": false}`` envelope to STDERR (exit 1), not stdout --
+    operator lifecycle and errors go to stderr per SPEC.md V.3. The envelope is
+    the indented JSON block, possibly preceded by an always-on operator-log line
+    (``HH:MM:SS event=... k=v``). Locate the opening brace at the start of a line
+    and decode the first JSON value from there. Empty dict if no envelope parses.
+    """
+    match = re.search(r"^\{", stderr, re.MULTILINE)
+    if match is None:
+        return {}
+    try:
+        parsed, _ = json.JSONDecoder().raw_decode(stderr[match.start() :])
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def create_company(
     domain: str, name: str, dry_run: bool
 ) -> tuple[str, dict[str, object]]:
@@ -184,9 +204,13 @@ def create_company(
 
     Returns one of ``("created", {...})``, ``("existing", {...})``,
     ``("would_create", {...})`` (dry run), or ``("error", {...})``.
-    stdout carries the JSON envelope (race-safe duplicate -> exit 1 with
-    ``{"error":"duplicate_key",...}``); the always-on operator-log line is on
-    stderr and is discarded so it cannot corrupt the parse.
+
+    Per SPEC.md V.3 the streams split by outcome: a success exits 0 with the
+    ``{"company": {...}, "ok": true}`` envelope on STDOUT; a race-safe duplicate
+    (and any other failure) exits 1 with the ``{"error": ..., "ok": false}``
+    envelope on STDERR. The duplicate (``duplicate_key``) is therefore read off
+    stderr, never stdout -- the prior stdout-only parse saw empty stdout on a
+    duplicate and misfired the ``existing`` branch (SPEC.md B.99).
     """
     if dry_run:
         return "would_create", {"domain": domain, "name": name}
@@ -206,16 +230,20 @@ def create_company(
         text=True,
         check=False,
     )
-    raw = proc.stdout.strip()
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError:
-        return "error", {"domain": domain, "reason": raw[:200] or "no output"}
-    if payload.get("ok") and isinstance(payload.get("company"), dict):
-        return "created", payload["company"]
-    if payload.get("error") == "duplicate_key":
+    if proc.returncode == 0:
+        raw = proc.stdout.strip()
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return "error", {"domain": domain, "reason": raw[:200] or "no output"}
+        if payload.get("ok") and isinstance(payload.get("company"), dict):
+            return "created", payload["company"]
+        return "error", {"domain": domain, "reason": payload.get("error", "unknown")}
+    envelope = _extract_error_envelope(proc.stderr)
+    if envelope.get("error") == "duplicate_key":
         return "existing", {"domain": domain}
-    return "error", {"domain": domain, "reason": payload.get("error", "unknown")}
+    reason = envelope.get("error") or proc.stderr.strip()[:200] or "unknown"
+    return "error", {"domain": domain, "reason": reason}
 
 
 def names_diverge(incoming_name: str, owner_name: str) -> bool:

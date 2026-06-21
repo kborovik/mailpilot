@@ -72,7 +72,7 @@ External data sources contribute the apex domain + an optional `company.name` di
 
 ## Conventions
 
-Shared across the lead-pipeline siblings (§V.100 single-source) -> see `.claude/skills/lead-companies/references/lead-pipeline-conventions.md` (Conventions: ASCII / `uv run mailpilot` / §V.4 envelope-unwrap / JSON-via-`python3` + `printf` / stdout-only capture past the always-on stderr operator-log line). The `{"error":"duplicate_key", ...}` failure case here is `company create`.
+Shared across the lead-pipeline siblings (§V.100 single-source) -> see `.claude/skills/lead-companies/references/lead-pipeline-conventions.md` (Conventions: ASCII / `uv run mailpilot` / §V.4 envelope-unwrap / JSON-via-`python3` + `printf` / outcome-split capture -- success envelope on stdout, error envelope on stderr past the always-on operator-log line, per §V.3). The `{"error":"duplicate_key", ...}` failure case here is `company create`; it exits 1 with the envelope on stderr, not stdout.
 
 ## Prerequisites
 

@@ -71,13 +71,13 @@ Procedure (per-company pipeline, `<= 5` contacts; ASCII only):
    - `--email-confidence` <- the Bouncer `score` (0-100). OMIT the flag entirely when Bouncer `status="unknown"` (no signal -> persisted NULL per V.95).
    - `--title` <- the person's role string (Hunter `position` or TheOrg `title`).
    - `--company-domain` accepts a domain or ID; pass the input `company_id` here, the CLI validates the FK (V.94).
-   - Duplicate email -> CLI returns `{"error":"duplicate_key", ...}` exit 1; treat as already-seeded (idempotent per V.90), continue. Capture stdout only (an always-on operator-log line goes to stderr).
+   - Duplicate email -> CLI exits 1 with the `{"error":"duplicate_key", ...}` envelope on stderr (errors go to stderr per V.3, NOT stdout); treat as already-seeded (idempotent per V.90), continue. The duplicate signal is the exit-1 stderr envelope -- stdout is empty.
 
 7. **mark-flagged** -- for each seeded contact whose Bouncer verdict is high-risk (`status != "deliverable"` OR `score < 70` OR `status="unknown"`), tag it so the skill review query `contact list --tag email-unverified` surfaces it:
    ```
    uv run mailpilot tag add --tag email-unverified --contact-email "<EMAIL>"
    ```
-   The skill pre-defines the `email-unverified` vocabulary tag before dispatch, so this resolves; a `not_found` (tag undefined) or `already_exists` (re-run) is non-fatal -- continue. Capture stdout only. A deliverable email scored `>= 70` gets no tag.
+   The skill pre-defines the `email-unverified` vocabulary tag before dispatch, so this resolves; a `not_found` (tag undefined) or `already_exists` (re-run) exits 1 with the envelope on stderr (errors go to stderr per V.3) and is non-fatal -- continue. A deliverable email scored `>= 70` gets no tag.
 
 Risk policy (admit-all, V.96): every discovered + verified email is seeded. The Bouncer score is a risk FLAG written to `email_confidence`, never a drop gate. Count rows where Bouncer `status != "deliverable"` OR `score < 70` OR score is unknown as `flagged` in your verdict AND tag each with `email-unverified` (step 7) -- the skill's `contact list --tag email-unverified` query surfaces them for operator review.
 

@@ -13,7 +13,7 @@ each skill body.
 - All `mailpilot` commands run via `uv run mailpilot`.
 - Envelope shape per §V.4: `list|search|...` -> `{"<plural>": [...], "ok": true}`; `view|create|update|...` -> `{"<singular>": {...}, "ok": true}`. Extract through the wrap.
 - Parse JSON via `python3 -c '...'`; use `printf '%s' "$VAR"` over `echo "$VAR"` when piping captured JSON (`echo` mangles `\n` inside string fields).
-- Capture stdout only (`2>/dev/null`) before any JSON parse. Every `uv run mailpilot` command writes an always-on operator-log line to stderr (`HH:MM:SS event=... k=v`); the JSON envelope -- including the `{"error":"duplicate_key", ...}` failure case from a `create` (`company create` / `contact create`) -- is on stdout. Do not `2>&1` into a JSON parser: the leading stderr line corrupts the parse (`Extra data: line 1 column N`) while the command actually succeeded.
+- Split capture by outcome per §V.3. A SUCCESS exits 0 and writes its `{"<singular>": {...}, "ok": true}` envelope to stdout -- capture stdout (`2>/dev/null`) for it. An ERROR exits 1 and writes its `{"error": ..., "ok": false}` envelope to stderr (errors go to stderr per §V.3), beside the always-on operator-log line (`HH:MM:SS event=... k=v`). The `{"error":"duplicate_key", ...}` duplicate from a `create` (`company create` / `contact create`) lands on stderr, NOT stdout -- stdout is empty on a duplicate; classify it by exit code 1 plus the stderr `duplicate_key` envelope. Do not `2>&1` a successful command into a JSON parser: the leading stderr operator-log line corrupts the parse (`Extra data: line 1 column N`).
 
 ## Batch gate
 
