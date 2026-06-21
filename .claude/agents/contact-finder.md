@@ -73,14 +73,20 @@ Procedure (per-company pipeline, `<= 5` contacts; ASCII only):
    - `--company-domain` accepts a domain or ID; pass the input `company_id` here, the CLI validates the FK (V.94).
    - Duplicate email -> CLI returns `{"error":"duplicate_key", ...}` exit 1; treat as already-seeded (idempotent per V.90), continue. Capture stdout only (an always-on operator-log line goes to stderr).
 
-Risk policy (admit-all, V.96): every discovered + verified email is seeded. The Bouncer score is a risk FLAG written to `email_confidence`, never a drop gate. Count rows where Bouncer `status != "deliverable"` OR `score < 70` OR score is unknown as `flagged` in your verdict -- the skill surfaces them for operator review.
+7. **mark-flagged** -- for each seeded contact whose Bouncer verdict is high-risk (`status != "deliverable"` OR `score < 70` OR `status="unknown"`), tag it so the skill review query `contact list --tag email-unverified` surfaces it:
+   ```
+   uv run mailpilot tag add --tag email-unverified --contact-email "<EMAIL>"
+   ```
+   The skill pre-defines the `email-unverified` vocabulary tag before dispatch, so this resolves; a `not_found` (tag undefined) or `already_exists` (re-run) is non-fatal -- continue. Capture stdout only. A deliverable email scored `>= 70` gets no tag.
+
+Risk policy (admit-all, V.96): every discovered + verified email is seeded. The Bouncer score is a risk FLAG written to `email_confidence`, never a drop gate. Count rows where Bouncer `status != "deliverable"` OR `score < 70` OR score is unknown as `flagged` in your verdict AND tag each with `email-unverified` (step 7) -- the skill's `contact list --tag email-unverified` query surfaces them for operator review.
 
 Constraints:
 - ASCII only in every persisted field.
 - Never seed an email that Hunter/TheOrg did not produce. No guessed addresses beyond Hunter Email Finder output.
 - Budget: ONE Domain Search, ONE TheOrg call, `<= 5` Bouncer single-verify calls (one per email). Email Finder only for TheOrg-only picks.
 - A single vendor 4xx/5xx or empty result is not fatal: proceed with what you have. Reserve `status="failed"` for a TRANSIENT fault that blocked the search -- every critical vendor call erroring or timing out, so you cannot tell whether decision-makers exist. A `failed` verdict is RETRIED next run, so never use it for a clean finding.
-- A run that completes but surfaces NO reachable decision-makers is `status="skipped"` with a definitive no-decision-makers reason -- NOT `failed`. The skill memoizes a skipped no-DM verdict by disabling the company so it stops re-burning vendor credits; a transient error must never masquerade as "no contacts".
+- A run that completes but surfaces NO reachable decision-makers is `status="skipped"` with a definitive no-decision-makers reason -- NOT `failed`. The skill memoizes a skipped no-DM verdict by tagging the company `no-contacts-found` so it stops re-burning vendor credits; a transient error must never masquerade as "no contacts".
 - Your final message is the JSON verdict only, no prose:
   ```
   {
@@ -92,4 +98,4 @@ Constraints:
     "reason": "<short text>"
   }
   ```
-  `status="seeded"` after `>= 1` contact create returned `{"contact": {...}, "ok": true}` (or duplicate_key = already seeded). `status="skipped"` when the run seeded no NEW contact, in one of two cases the `reason` MUST disambiguate: every discovered email already existed (`reason` like "all 3 discovered emails already seeded") OR no reachable decision-makers were discoverable -- for that genuine-empty case begin `reason` with "no decision-makers" (the definitive no-DM verdict the skill memoizes by disabling the company). `status="failed"` ONLY for a transient vendor/transport fault that blocked the search (retryable); never for a clean no-DM finding.
+  `status="seeded"` after `>= 1` contact create returned `{"contact": {...}, "ok": true}` (or duplicate_key = already seeded). `status="skipped"` when the run seeded no NEW contact, in one of two cases the `reason` MUST disambiguate: every discovered email already existed (`reason` like "all 3 discovered emails already seeded") OR no reachable decision-makers were discoverable -- for that genuine-empty case begin `reason` with "no decision-makers" (the definitive no-DM verdict the skill memoizes by tagging the company `no-contacts-found`). `status="failed"` ONLY for a transient vendor/transport fault that blocked the search (retryable); never for a clean no-DM finding.

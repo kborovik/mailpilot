@@ -7,7 +7,7 @@ description: |
   Single free-form invocation -- no sub-commands. Triggers on "/lead-contacts",
   "find contacts", "discover decision-makers for enriched companies".
 argument-hint: [<company-id>... | <domain>...] [--limit N]
-allowed-tools: Bash(uv run mailpilot company *), Bash(uv run mailpilot contact *), Bash(python3 *), Read, Task, Workflow, AskUserQuestion
+allowed-tools: Bash(uv run mailpilot company *), Bash(uv run mailpilot contact *), Bash(uv run mailpilot tag *), Bash(python3 *), Read, Task, Workflow, AskUserQuestion
 model: opus
 ---
 
@@ -15,7 +15,7 @@ model: opus
 
 Turn enriched company rows into verified decision-maker `contact` rows. For each company w/ a `profile` and `< 5` contacts, a Sonnet `contact-finder` agent discovers people (Hunter + TheOrg), picks `<= 5` decision-makers, finds + verifies their emails (Hunter Email Finder + Bouncer), and seeds them via `mailpilot contact create`.
 
-Spec: §V.96 (discover set + admit-all + idempotent memoization + negative-verdict disable), §V.114 (company soft-disable + `--include-disabled`), §V.95 (`contact.title` + `contact.email_confidence` lead-metadata columns), §V.73 (`lead-contacts-find.js` body byte-identical to the skill-mirror snippet below).
+Spec: §V.96 (discover set + admit-all + idempotent positive memoization via `contact.email` UNIQUE), §V.116 (controlled tag vocabulary -- `no-contacts-found` company memoization, `email-unverified` contact flag, `company|contact list --tag`/`--no-tag` filters), §V.95 (`contact.title` + `contact.email_confidence` lead-metadata columns), §V.73 (`lead-contacts-find.js` body byte-identical to the skill-mirror snippet below).
 
 Sibling skill `/lead-companies` seeds + enriches the company rows this skill consumes -- run it first.
 
@@ -48,7 +48,9 @@ So full pipeline = 1 Bash (stale query) + 1 Workflow (discover) + the batch-gate
 
 ## Stage: stale query
 
-Discover set per §V.96 = companies w/ `profile IS NOT NULL` AND contact-count `< 5`, EXCLUDING disabled companies. `company list` projects `contact_count` (LEFT JOIN COUNT, INCLUDING disabled contact rows so a company whose addresses later bounce still memoizes out) and default-excludes disabled companies (§V.114), so `company list --has-profile --max-contacts 4` expresses the entire discover set in ONE call -- `--max-contacts 4` is `contact_count <= 4` (i.e. `< 5`). This replaces the old per-company `contact list` N+1 probe (§V.96). A company disabled by the negative-verdict memoization stage (`no_contacts_found:<date>`) is hidden by default and so never re-enters the discover set.
+Discover set per §V.96 = companies w/ `profile IS NOT NULL` AND contact-count `< 5`, EXCLUDING companies tagged `no-contacts-found` (§V.116). `company list` projects `contact_count` (LEFT JOIN COUNT, INCLUDING disabled contact rows so a company whose addresses later bounce still memoizes out), so `company list --has-profile --max-contacts 4 --no-tag no-contacts-found` expresses the entire discover set in ONE call -- `--max-contacts 4` is `contact_count <= 4` (i.e. `< 5`), and `--no-tag no-contacts-found` drops the memoized-empty companies (§V.116, the lone negated-membership filter). This replaces the old per-company `contact list` N+1 probe (§V.96). A company marked by the negative-verdict memoization stage (tagged `no-contacts-found`) is excluded by `--no-tag` and so never re-enters the discover set.
+
+The same Bash call FIRST ensures the two vocabulary tags exist -- `no-contacts-found` (company memoization) and `email-unverified` (the contact-finder's flag mark, §Risk policy). `tag add` errors `not_found` on an undefined tag (§V.116 never auto-creates), so the skill defines both up front with idempotent `tag create` (`already_exists` is success) BEFORE any discover dispatch, so the agent's `tag add --tag email-unverified` always resolves.
 
 ONE Bash call (stdout-only JSON; see §Conventions on the always-on stderr operator-log line):
 
@@ -56,9 +58,15 @@ ONE Bash call (stdout-only JSON; see §Conventions on the always-on stderr opera
 python3 - <<'PY'
 import json, subprocess
 
+# Ensure the lead-pipeline vocabulary exists (idempotent; already_exists = ok).
+for name in ("no-contacts-found", "email-unverified"):
+    subprocess.run(["uv", "run", "mailpilot", "tag", "create", name],
+                   capture_output=True, text=True)
+
 out = subprocess.run(
     ["uv", "run", "mailpilot", "company", "list",
-     "--has-profile", "--max-contacts", "4", "--limit", "100"],
+     "--has-profile", "--max-contacts", "4",
+     "--no-tag", "no-contacts-found", "--limit", "100"],
     capture_output=True, text=True).stdout
 companies = json.loads(out)["companies"]
 stale = [{"id": c["id"], "domain": c["domain"], "name": c["name"]}
@@ -69,7 +77,7 @@ PY
 
 The printed JSON array is the `stale` value handed to the discover stage.
 
-Scoped runs (UUID/domain args): resolve each arg to its company row first; drop rows that are `profile IS NULL` (`no_profile`), already at `>= 5` contacts (`contact_cap`), or disabled (`disabled`); pass only the survivors as the `stale` array.
+Scoped runs (UUID/domain args): run the same idempotent `tag create` preamble, then resolve each arg to its company row; drop rows that are `profile IS NULL` (`no_profile`), already at `>= 5` contacts (`contact_cap`), or tagged `no-contacts-found` (`no_contacts_found`) -- detect that mark with ONE `company list --tag no-contacts-found` membership lookup; pass only the survivors as the `stale` array.
 
 ## Stage: batch gate
 
@@ -158,29 +166,29 @@ return results.filter(Boolean)
 
 The batch loop caps in-flight finders at 3 per `parallel()` call -- the chunking, not any runtime setting, enforces the concurrency-3 budget per §V.73. The Workflow runtime's own per-call cap = `min(16, cores-2)` is a separate, higher ceiling.
 
-## Stage: negative-verdict memoization (§V.96/§V.114)
+## Stage: negative-verdict memoization (§V.96/§V.116)
 
-At run end -- after the discover verdicts are collected -- disable every company a finder reported as genuinely empty, so it drops out of the discover set and the next run does not re-burn Hunter/TheOrg credits on it (closes §B.95). This is the negative mirror of the positive memoization (a persisted `contact` row stops re-discovery via `contact.email` UNIQUE §V.90): a finder that ran and found nobody leaves no row, so the empty verdict MUST be memoized on the company instead.
+At run end -- after the discover verdicts are collected -- mark every company a finder reported as genuinely empty with the `no-contacts-found` tag, so it drops out of the discover set (the stale query's `--no-tag no-contacts-found`) and the next run does not re-burn Hunter/TheOrg credits on it (closes §B.95). This is the negative mirror of the positive memoization (a persisted `contact` row stops re-discovery via `contact.email` UNIQUE §V.90): a finder that ran and found nobody leaves no row, so the empty verdict MUST be memoized on the company instead.
 
 Walk each verdict from the discover stage:
 
-- `status == "skipped"` AND `contacts_created == 0` AND the `reason` denotes no decision-makers (the finder begins that `reason` with "no decision-makers") -> the company yielded ZERO genuine contacts. Disable it with today's date:
+- `status == "skipped"` AND `contacts_created == 0` AND the `reason` denotes no decision-makers (the finder begins that `reason` with "no decision-makers") -> the company yielded ZERO genuine contacts. Mark it:
   ```
-  uv run mailpilot company disable <company_id> --reason "no_contacts_found:<YYYY-MM-DD>"
+  uv run mailpilot tag add --tag no-contacts-found --company-domain <company_id>
   ```
-  A disabled company is hidden from `company list` default (§V.114), so the next stale query (`company list --has-profile --max-contacts 4`) will not re-dispatch a finder for it.
-- `status == "failed"` -> a TRANSIENT vendor/transport fault. NEVER disable -- the company stays in the discover set and is retried next run. Disabling here would strand a retryable company.
-- `status == "seeded"`, or `status == "skipped"` with an "already seeded" reason -> the company has contacts; do NOT disable.
+  `--company-domain` resolves the company by id or domain (§V.107). The tag carries `name` only (§V.116) -- no date payload; the `tag_assignment` row records when. The next stale query (`company list --has-profile --max-contacts 4 --no-tag no-contacts-found`) then skips the company.
+- `status == "failed"` -> a TRANSIENT vendor/transport fault. NEVER tag -- the company stays in the discover set and is retried next run. Tagging here would strand a retryable company.
+- `status == "seeded"`, or `status == "skipped"` with an "already seeded" reason -> the company has contacts; do NOT tag.
 
-The trigger is the finder VERDICT, never a blanket `contact_count == 0` sweep: a company sits at zero contacts simply because no finder has run yet. Only a finder that completed and returned a definitive no-decision-makers verdict memoizes the empty result. Disable is reversible -- clearing `disabled_reason` re-enables the company (unlike a bounced contact, a company with no discoverable contacts this cycle may have some next), and `mailpilot company list --include-disabled` surfaces the memoized rows for review.
+The trigger is the finder VERDICT, never a blanket `contact_count == 0` sweep: a company sits at zero contacts simply because no finder has run yet. Only a finder that completed and returned a definitive no-decision-makers verdict memoizes the empty result. The mark is reversible -- `mailpilot tag remove --tag no-contacts-found --company-domain <id>` re-admits the company to the discover set (unlike a bounced contact, a company with no discoverable contacts this cycle may have some next), and `mailpilot company list --tag no-contacts-found` surfaces the memoized rows for review.
 
 ## Risk policy (admit-all, §V.96)
 
 - Every discovered + Bouncer-verified email -> seeded as a `contact`. Low Bouncer score never drops a row.
 - `email_confidence` <- Bouncer score (0-100); Bouncer `status="unknown"` -> persisted `NULL` (no signal, unbilled) per §V.95.
-- Flag (surface in the run summary for operator review) any seeded row where Bouncer `status != "deliverable"` OR score `< 70` OR score is `NULL`. The flag threshold is pinned at 70 -- a high-risk row stays persisted + queryable, never silently dropped.
+- Flag any seeded row where Bouncer `status != "deliverable"` OR score `< 70` OR score is `NULL`. The contact-finder MARKS each flagged row with the `email-unverified` tag at seed time AND counts it in its verdict's `flagged`; the skill aggregates the count into the run summary. The flag threshold is pinned at 70 -- a high-risk row stays persisted, tagged, and queryable, never silently dropped.
 
-Why admit-all: dropping a bad/unknown email means re-discovering + re-verifying it next cycle (wasted vendor credits). Persisting it instead memoizes the verdict; idempotent re-run skips it via `contact.email` UNIQUE (§V.90). Review the flagged rows later with `mailpilot contact list --max-email-confidence 70`.
+Why admit-all: dropping a bad/unknown email means re-discovering + re-verifying it next cycle (wasted vendor credits). Persisting it instead memoizes the verdict; idempotent re-run skips it via `contact.email` UNIQUE (§V.90). Review the flagged rows later with `mailpilot contact list --tag email-unverified` (§V.116) -- an exact membership filter, unlike `--max-email-confidence 70` which also surfaces unrelated NULL-confidence rows never run through Bouncer.
 
 ## Vendor keys
 
@@ -194,7 +202,7 @@ This skill itself needs no vendor key; it only queries the local DB and dispatch
 
 ## Run summary
 
-After all stages, emit one aggregate JSON: `{"seeded": N, "skipped": N, "failed": N, "flagged": N, "disabled": N, "results": [...], "ok": true}` -- `seeded` = companies w/ `>=1` new contact, `flagged` = total high-risk rows surfaced for review, `disabled` = companies memoized as having no discoverable contacts this run (the negative-verdict stage, `no_contacts_found:<date>`), `results` = the per-company verdicts. When the batch gate (per §Stage: batch gate) caps below the stale-count -- operator picks `First 9`/`First 25` over a larger N, or `--limit N` < stale-count -- append `"deferred": <stale-count - dispatched>` (the stale companies the stale query found minus the capped count actually dispatched to discover) so the operator sees how many companies were left under the `< 5`-contact threshold for a follow-up run per §V.97; all stale dispatched -> `deferred: 0` or omit the field. A bare `seeded` count is never the sole remainder signal. On scoped runs, include a `"skipped": [{"input": ..., "reason": "no_profile" | "contact_cap" | "not_found"}]` detail so the operator sees which args were not dispatched.
+After all stages, emit one aggregate JSON: `{"seeded": N, "skipped": N, "failed": N, "flagged": N, "memoized": N, "results": [...], "ok": true}` -- `seeded` = companies w/ `>=1` new contact, `flagged` = total high-risk rows marked `email-unverified` for review, `memoized` = companies tagged `no-contacts-found` this run (the negative-verdict stage), `results` = the per-company verdicts. When the batch gate (per §Stage: batch gate) caps below the stale-count -- operator picks `First 9`/`First 25` over a larger N, or `--limit N` < stale-count -- append `"deferred": <stale-count - dispatched>` (the stale companies the stale query found minus the capped count actually dispatched to discover) so the operator sees how many companies were left under the `< 5`-contact threshold for a follow-up run per §V.97; all stale dispatched -> `deferred: 0` or omit the field. A bare `seeded` count is never the sole remainder signal. On scoped runs, include a `"skipped": [{"input": ..., "reason": "no_profile" | "contact_cap" | "not_found"}]` detail so the operator sees which args were not dispatched.
 
 ## Conventions
 
@@ -222,9 +230,10 @@ Canonical examples -- after a discovery run:
 ```
 ## Next
 
-1. mailpilot contact list --max-email-confidence 70 -- review the high-risk flagged rows
-2. /lead-contacts -- re-run for companies still under 5 contacts
-3. mailpilot contact list --company-domain <domain> -- spot-check one company's seeded contacts
+1. mailpilot contact list --tag email-unverified -- review the high-risk flagged rows
+2. mailpilot company list --tag no-contacts-found -- review companies memoized as having no discoverable contacts
+3. /lead-contacts -- re-run for companies still under 5 contacts
+4. mailpilot contact list --company-domain <domain> -- spot-check one company's seeded contacts
 ```
 
 After a stale-query w/ zero enriched companies:
