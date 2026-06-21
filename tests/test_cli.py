@@ -241,7 +241,32 @@ def test_account_list_limit_and_since(
 
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
-        mock_connection, limit=5, since="2024-01-01T00:00:00", until=None
+        mock_connection,
+        limit=5,
+        since="2024-01-01T00:00:00",
+        until=None,
+        include_disabled=False,
+    )
+
+
+def test_account_list_include_disabled_flag(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.118: --include-disabled forwards include_disabled=True."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_accounts", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(main, ["account", "list", "--include-disabled"])
+
+    assert result.exit_code == 0
+    mock_list.assert_called_once_with(
+        mock_connection,
+        limit=100,
+        since=None,
+        until=None,
+        include_disabled=True,
     )
 
 
@@ -350,6 +375,169 @@ def test_account_update_not_found(
     data = json.loads(result.output)
     assert data["ok"] is False
     assert data["error"] == "not_found"
+
+
+# -- account disable -----------------------------------------------------------
+
+
+def test_account_disable_happy_path(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.118: account disable writes disabled_reason and returns the account."""
+    before = _make_account(disabled_reason=None)
+    after = _make_account(disabled_reason="out of business")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=before),
+        patch("mailpilot.database.disable_account", return_value=after) as mock_disable,
+    ):
+        result = runner.invoke(
+            main,
+            ["account", "disable", before.id, "--reason", "out of business"],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_disable.assert_called_once_with(mock_connection, before.id, "out of business")
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["account"]["disabled_reason"] == "out of business"
+
+
+def test_account_disable_already_disabled(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.118: double-disable is rejected by the disabled_reason IS NULL gate."""
+    before = _make_account(disabled_reason="out of business")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=before),
+        patch("mailpilot.database.disable_account") as mock_disable,
+    ):
+        result = runner.invoke(
+            main, ["account", "disable", before.id, "--reason", "again"]
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "validation_error"
+    assert "already disabled" in data["message"]
+    mock_disable.assert_not_called()
+
+
+def test_account_disable_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.118: disabling a missing account yields a not_found envelope."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=None),
+        patch("mailpilot.database.disable_account") as mock_disable,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "account",
+                "disable",
+                "01234567-0000-7000-0000-0000000000fd",
+                "--reason",
+                "x",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "not_found"
+    mock_disable.assert_not_called()
+
+
+def test_account_disable_empty_reason(runner: CliRunner) -> None:
+    """§V.118: an empty reason is rejected before any DB call."""
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main, ["account", "disable", "some-id", "--reason", "  "]
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "validation_error"
+
+
+def test_account_enable_happy_path(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.118: account enable clears disabled_reason; §V.54 changed=['disabled_reason']."""
+    before = _make_account(disabled_reason="out of business")
+    after = _make_account(disabled_reason=None)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=before),
+        patch("mailpilot.database.enable_account", return_value=after) as mock_enable,
+        patch("mailpilot.operator_log.operator_event") as mock_event,
+    ):
+        result = runner.invoke(main, ["account", "enable", before.id])
+
+    assert result.exit_code == 0, result.output
+    mock_enable.assert_called_once_with(mock_connection, before.id)
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["account"]["disabled_reason"] is None
+    enable_events = [
+        call
+        for call in mock_event.call_args_list
+        if call.args[:1] == ("account.enable",)
+    ]
+    assert len(enable_events) == 1
+    assert enable_events[0].kwargs == {
+        "entity_id": before.id,
+        "changed": ["disabled_reason"],
+    }
+
+
+def test_account_enable_not_disabled(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.118: enabling an active account is rejected before any write."""
+    before = _make_account(disabled_reason=None)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=before),
+        patch("mailpilot.database.enable_account") as mock_enable,
+    ):
+        result = runner.invoke(main, ["account", "enable", before.id])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "not disabled" in data["message"]
+    mock_enable.assert_not_called()
+
+
+def test_account_enable_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.118: enabling a missing account yields a not_found envelope."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=None),
+        patch("mailpilot.database.enable_account") as mock_enable,
+    ):
+        result = runner.invoke(
+            main, ["account", "enable", "01234567-0000-7000-0000-0000000000fd"]
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+    mock_enable.assert_not_called()
 
 
 # -- account sync --------------------------------------------------------------
@@ -8445,7 +8633,11 @@ def test_account_list_until_flows_to_db(
 
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
-        mock_connection, limit=100, since=None, until="2024-12-31T23:59:59"
+        mock_connection,
+        limit=100,
+        since=None,
+        until="2024-12-31T23:59:59",
+        include_disabled=False,
     )
 
 

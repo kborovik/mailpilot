@@ -36,8 +36,10 @@ from mailpilot.database import (
     create_task,
     create_tasks_for_routed_emails,
     create_workflow,
+    disable_account,
     disable_company,
     disable_enrollment,
+    enable_account,
     enable_company,
     enable_enrollment,
     find_pending_first_touch_task,
@@ -110,6 +112,96 @@ def test_list_accounts(database_connection: psycopg.Connection[dict[str, Any]]):
     make_test_account(database_connection, email="b@test.com")
     accounts = list_accounts(database_connection)
     assert len(accounts) == 2
+
+
+def test_disable_account_sets_reason(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.118: disable_account writes disabled_reason verbatim."""
+    account = make_test_account(database_connection)
+    updated = disable_account(database_connection, account.id, "out of business")
+    assert updated is not None
+    assert updated.disabled_reason == "out of business"
+    fetched = get_account(database_connection, account.id)
+    assert fetched is not None
+    assert fetched.disabled_reason == "out of business"
+
+
+def test_disable_account_double_disable_gate_returns_none(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.118: the disabled_reason IS NULL gate blocks double-disable.
+
+    A second disable does not match the already-disabled row, returns None,
+    and leaves the first reason intact (mirror of §V.114 company disable).
+    """
+    account = make_test_account(database_connection)
+    assert disable_account(database_connection, account.id, "first") is not None
+    second = disable_account(database_connection, account.id, "second")
+    assert second is None
+    fetched = get_account(database_connection, account.id)
+    assert fetched is not None
+    assert fetched.disabled_reason == "first"
+
+
+def test_disable_account_not_found_returns_none(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.118: disabling a missing account returns None."""
+    assert disable_account(database_connection, "nonexistent", "reason") is None
+
+
+def test_list_accounts_excludes_disabled_by_default(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.118: disabled accounts drop out of `account list` by default.
+
+    A disabled account is gated out of the sync loop / watch renewal (which
+    read this listing); include_disabled=True surfaces it with its reason.
+    """
+    active = make_test_account(database_connection, email="active@test.com")
+    disabled = make_test_account(database_connection, email="disabled@test.com")
+    disable_account(database_connection, disabled.id, "out of business")
+
+    default = list_accounts(database_connection)
+    assert {a.id for a in default} == {active.id}
+
+    everyone = list_accounts(database_connection, include_disabled=True)
+    by_id = {a.id: a for a in everyone}
+    assert set(by_id) == {active.id, disabled.id}
+    assert by_id[disabled.id].disabled_reason == "out of business"
+    assert by_id[active.id].disabled_reason is None
+
+
+def test_enable_account_clears_reason(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.118: enable_account clears disabled_reason; the account relists."""
+    account = make_test_account(database_connection)
+    disable_account(database_connection, account.id, "out of business")
+    reenabled = enable_account(database_connection, account.id)
+    assert reenabled is not None
+    assert reenabled.disabled_reason is None
+    fetched = get_account(database_connection, account.id)
+    assert fetched is not None
+    assert fetched.disabled_reason is None
+    assert {a.id for a in list_accounts(database_connection)} == {account.id}
+
+
+def test_enable_account_gate_blocks_active(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.118: the disabled_reason IS NOT NULL gate blocks enabling an active
+    account (mirror of the double-disable gate)."""
+    account = make_test_account(database_connection)
+    assert enable_account(database_connection, account.id) is None
+
+
+def test_enable_account_not_found_returns_none(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.118: enabling a missing account returns None."""
+    assert enable_account(database_connection, "nonexistent") is None
 
 
 def test_update_account(database_connection: psycopg.Connection[dict[str, Any]]):

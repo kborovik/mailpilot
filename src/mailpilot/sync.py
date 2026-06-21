@@ -423,6 +423,12 @@ def _drain_sync_queue(
         if account is None:
             logfire.debug("sync.notification.unknown_email", email=email)
             continue
+        if account.disabled_reason is not None:
+            # §V.118: a disabled account is gated out of the sync loop. The
+            # full-sweep path skips it via list_accounts default-exclude; the
+            # Pub/Sub notify path resolves by email, so skip it explicitly.
+            logfire.debug("sync.notification.account_disabled", email=account.email)
+            continue
         operator_event("pubsub.notify", email=account.email)
         try:
             client = GmailClient(account.email)

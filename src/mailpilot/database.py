@@ -821,17 +821,26 @@ def list_accounts(
     limit: int = 100,
     since: str | None = None,
     until: str | None = None,
+    include_disabled: bool = False,
 ) -> list[AccountSummary]:
     """List accounts as summaries (identify/filter/order fields only).
 
     Internal callers needing the full record (e.g. ``gmail_history_id``,
     ``watch_expiration``) must hydrate via ``get_account()`` per id.
 
+    Disabled accounts (``disabled_reason IS NOT NULL``) are hidden by default
+    (§V.118) -- the sync loop full sweep, ``account sync`` all-accounts mode,
+    and ``renew_watches`` all read this default-excluding listing, so a
+    disabled account drops out of every Gmail-touching path at once. Pass
+    ``include_disabled=True`` to surface them.
+
     Args:
         connection: Open database connection.
         limit: Maximum results.
         since: ISO datetime inclusive lower bound on ``created_at``.
         until: ISO datetime inclusive upper bound on ``created_at``.
+        include_disabled: When ``True``, includes disabled accounts; the
+            default (``False``) hides them (§V.118).
 
     Returns:
         List of account summaries ordered by creation time.
@@ -844,10 +853,12 @@ def list_accounts(
     if until is not None:
         conditions.append(SQL("created_at <= %(until)s"))
         params["until"] = until
+    if not include_disabled:
+        conditions.append(SQL("disabled_reason IS NULL"))
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
-        "SELECT id, email, display_name, last_synced_at, created_at "
-        "FROM account {where} ORDER BY created_at LIMIT %(limit)s"
+        "SELECT id, email, display_name, last_synced_at, disabled_reason, "
+        "created_at FROM account {where} ORDER BY created_at LIMIT %(limit)s"
     ).format(where=where)
     rows = connection.execute(query, params).fetchall()
     return [AccountSummary.model_validate(row) for row in rows]
@@ -897,6 +908,82 @@ def update_account(
     updates["id"] = account_id
     query = _build_update("account", updates, SQL("id = %(id)s"))
     row = connection.execute(query, updates).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Account.model_validate(row)
+
+
+def disable_account(
+    connection: psycopg.Connection[dict[str, Any]],
+    account_id: str,
+    reason: str,
+) -> Account | None:
+    """Soft-disable an account by writing ``disabled_reason``.
+
+    A ``disabled_reason IS NULL`` gate blocks double-disable: an already
+    disabled account does not match, so the call returns ``None`` without
+    overwriting an earlier reason (mirror of ``disable_company`` per §V.118).
+    A disabled account is gated out of every Gmail-touching path -- the sync
+    loop, ``account sync`` all-accounts mode, ``renew_watches``, and send/reply
+    (§V.79). Disable is reversible via ``enable_account``.
+
+    Args:
+        connection: Open database connection.
+        account_id: Account ID.
+        reason: Explanation written to ``disabled_reason`` (stored verbatim).
+
+    Returns:
+        Updated account, or ``None`` when no active (not-yet-disabled) account
+        with that id exists -- i.e. missing or already disabled.
+    """
+    row = connection.execute(
+        """\
+        UPDATE account
+        SET disabled_reason = %(reason)s,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = %(id)s
+          AND disabled_reason IS NULL
+        RETURNING *
+        """,
+        {"id": account_id, "reason": reason},
+    ).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Account.model_validate(row)
+
+
+def enable_account(
+    connection: psycopg.Connection[dict[str, Any]],
+    account_id: str,
+) -> Account | None:
+    """Re-enable a soft-disabled account by clearing ``disabled_reason``.
+
+    Mirror of ``disable_account``. A ``disabled_reason IS NOT NULL`` gate
+    blocks enabling an already-active account: an active account does not
+    match, so the call returns ``None``. A re-enabled account reappears in the
+    default ``account list`` and resumes syncing (§V.118).
+
+    Args:
+        connection: Open database connection.
+        account_id: Account ID.
+
+    Returns:
+        Updated account, or ``None`` when no disabled account with that id
+        exists -- i.e. missing or already active.
+    """
+    row = connection.execute(
+        """\
+        UPDATE account
+        SET disabled_reason = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = %(id)s
+          AND disabled_reason IS NOT NULL
+        RETURNING *
+        """,
+        {"id": account_id},
+    ).fetchone()
     connection.commit()
     if row is None:
         return None

@@ -23,12 +23,18 @@ class Account(BaseModel):
 
 
 class AccountSummary(BaseModel):
-    """List-view projection of `Account`."""
+    """List-view projection of `Account`.
+
+    Carries ``disabled_reason`` (``None`` when active) so ``account list
+    --include-disabled`` surfaces the operator-supplied reason without a
+    per-account ``account view`` probe (§V.118, mirror of `CompanySummary`).
+    """
 
     id: str
     email: str
     display_name: str
     last_synced_at: datetime | None
+    disabled_reason: str | None = None
     created_at: datetime
 
 

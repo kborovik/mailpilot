@@ -624,15 +624,24 @@ def account_create(email: str, display_name: str) -> None:
 
 
 @account.command("list")
+@include_disabled_option
 @time_window_options("created_at")
 @limit_option
-def account_list(limit: int, since: str | None, until: str | None) -> None:
+def account_list(
+    limit: int, since: str | None, until: str | None, include_disabled: bool
+) -> None:
     """List Gmail accounts as summaries."""
     from mailpilot.database import initialize_database, list_accounts
 
     connection = initialize_database(_database_url())
     try:
-        accounts = list_accounts(connection, limit=limit, since=since, until=until)
+        accounts = list_accounts(
+            connection,
+            limit=limit,
+            since=since,
+            until=until,
+            include_disabled=include_disabled,
+        )
         output({"accounts": [a.model_dump(mode="json") for a in accounts]})
     finally:
         connection.close()
@@ -679,6 +688,91 @@ def account_update(account_ref: str, display_name: str | None) -> None:
                 "account.update",
                 entity_id=account_id,
                 changed=changed,
+            )
+            output_entity("account", updated)
+    finally:
+        connection.close()
+
+
+@account.command("disable")
+@click.argument("account_ref")
+@click.option(
+    "--reason",
+    required=True,
+    help="Explanation written to disabled_reason.",
+)
+def account_disable(account_ref: str, reason: str) -> None:
+    """Soft-disable a Gmail account by writing disabled_reason.
+
+    A disabled account is hidden from `account list` unless `--include-disabled`
+    is passed, and is gated out of every Gmail-touching path: the sync loop,
+    `account sync` all-accounts mode, watch renewal, and send/reply. Disable is
+    reversible -- re-enable with `account enable`. Disabling an already-disabled
+    account is rejected.
+    """
+    from mailpilot.database import disable_account, initialize_database
+    from mailpilot.operator_log import cli_mutation, operator_event
+
+    if reason.strip() == "":
+        output_error("reason cannot be empty", "validation_error")
+    connection = initialize_database(_database_url(), require_current_schema=True)
+    try:
+        before = _resolve_account(connection, account_ref)
+        account_id = before.id
+        if before.disabled_reason is not None:
+            output_error(
+                f"account {account_id} is already disabled "
+                f"(reason: {before.disabled_reason})",
+                "validation_error",
+            )
+        with cli_mutation("account", "disable", entity_id=account_id):
+            updated = disable_account(connection, account_id, reason)
+            if updated is None:
+                output_error(
+                    f"account {account_id} is already disabled",
+                    "validation_error",
+                )
+            operator_event(
+                "account.disable",
+                entity_id=account_id,
+                changed=["disabled_reason"],
+            )
+            output_entity("account", updated)
+    finally:
+        connection.close()
+
+
+@account.command("enable")
+@click.argument("account_ref")
+def account_enable(account_ref: str) -> None:
+    """Re-enable a soft-disabled Gmail account by clearing disabled_reason.
+
+    The account reappears in the default `account list` and resumes syncing.
+    Enabling an account that is not disabled is rejected.
+    """
+    from mailpilot.database import enable_account, initialize_database
+    from mailpilot.operator_log import cli_mutation, operator_event
+
+    connection = initialize_database(_database_url(), require_current_schema=True)
+    try:
+        before = _resolve_account(connection, account_ref)
+        account_id = before.id
+        if before.disabled_reason is None:
+            output_error(
+                f"account {account_id} is not disabled",
+                "validation_error",
+            )
+        with cli_mutation("account", "enable", entity_id=account_id):
+            updated = enable_account(connection, account_id)
+            if updated is None:
+                output_error(
+                    f"account {account_id} is not disabled",
+                    "validation_error",
+                )
+            operator_event(
+                "account.enable",
+                entity_id=account_id,
+                changed=["disabled_reason"],
             )
             output_entity("account", updated)
     finally:
