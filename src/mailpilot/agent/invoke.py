@@ -394,6 +394,11 @@ def _build_anthropic_model(settings: Settings) -> AnthropicModel:
     mid-conversation, which would bubble to ``run.task.agent_failed``
     with no retry (idempotency: tool-call mid-turn cannot be safely
     re-driven). See SPEC.md §V.48, §B.16.
+
+    ``anthropic_base_url`` is the wire endpoint. It defaults to
+    ``api.anthropic.com``; pointing it at an Anthropic-compatible endpoint
+    (e.g. ``https://api.novita.ai/anthropic``) routes the same Messages-API
+    call to that vendor with no code change.
     """
     if not settings.anthropic_api_key:
         raise ValueError(
@@ -404,6 +409,7 @@ def _build_anthropic_model(settings: Settings) -> AnthropicModel:
         settings.anthropic_model,
         provider=AnthropicProvider(
             api_key=settings.anthropic_api_key,
+            base_url=settings.anthropic_base_url,
             http_client=httpx.AsyncClient(timeout=httpx.Timeout(240.0)),
         ),
         settings=AnthropicModelSettings(

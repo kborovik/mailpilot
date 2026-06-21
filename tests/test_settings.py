@@ -14,8 +14,18 @@ def test_default_settings():
     settings = Settings()
     assert str(settings.database_url) == "postgresql://localhost/mailpilot"
     assert settings.anthropic_model == "claude-sonnet-4-6"
+    assert settings.anthropic_base_url == "https://api.anthropic.com"
     assert settings.logfire_environment == "development"
     assert settings.google_pubsub_topic == "mailpilot-topic-dev"
+
+
+def test_anthropic_base_url_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """MAILPILOT_ANTHROPIC_BASE_URL overrides the None default per §V.85."""
+    monkeypatch.setenv(
+        "MAILPILOT_ANTHROPIC_BASE_URL", "https://api.novita.ai/anthropic"
+    )
+    settings = Settings()
+    assert settings.anthropic_base_url == "https://api.novita.ai/anthropic"
 
 
 def test_run_interval_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

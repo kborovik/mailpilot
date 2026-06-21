@@ -233,7 +233,9 @@ def test_get_model_carries_cache_settings() -> None:
     request. Inspecting the bound settings is the structural contract.
     """
     _get_model.cache_clear()
-    model = _get_model("sk-test-cache", "claude-sonnet-4-6")
+    model = _get_model(
+        "sk-test-cache", "claude-sonnet-4-6", "https://api.anthropic.com"
+    )
     assert model.settings is not None
     assert model.settings.get("anthropic_cache_tool_definitions") is True
     assert model.settings.get("anthropic_cache_instructions") is True
@@ -247,6 +249,51 @@ def test_get_model_uses_240s_read_timeout() -> None:
     (see SPEC.md §B.16). 240s = 4x headroom. No retry on timeout.
     """
     _get_model.cache_clear()
-    model = _get_model("sk-test-timeout", "claude-sonnet-4-6")
+    model = _get_model(
+        "sk-test-timeout", "claude-sonnet-4-6", "https://api.anthropic.com"
+    )
     http_client = model._provider.client._client  # pyright: ignore[reportPrivateUsage]
     assert http_client.timeout.read == 240.0
+
+
+def test_get_model_default_base_url_targets_anthropic_endpoint() -> None:
+    """The default anthropic_base_url keeps the classifier on the Anthropic endpoint.
+
+    The settings default is the canonical Anthropic host, so threading it into
+    ``AnthropicProvider`` leaves the classifier on ``api.anthropic.com``.
+    """
+    default_base_url = make_test_settings().anthropic_base_url
+    _get_model.cache_clear()
+    model = _get_model("sk-test-default", "claude-sonnet-4-6", default_base_url)
+    base_url = str(model._provider.client.base_url)  # pyright: ignore[reportPrivateUsage]
+    assert "api.anthropic.com" in base_url
+
+
+def test_get_model_threads_base_url_override() -> None:
+    """A set base_url routes the classifier to the override endpoint.
+
+    Threading ``settings.anthropic_base_url`` into ``AnthropicProvider``
+    re-targets the wire endpoint, which is the Novita switch (§I config).
+    """
+    _get_model.cache_clear()
+    model = _get_model(
+        "sk-test-novita", "minimax/minimax-m3", "https://api.novita.ai/anthropic"
+    )
+    base_url = str(model._provider.client.base_url)  # pyright: ignore[reportPrivateUsage]
+    assert "api.novita.ai/anthropic" in base_url
+
+
+def test_get_model_cache_key_includes_base_url() -> None:
+    """base_url rides the lru_cache key, so changing it rebuilds the model.
+
+    Without base_url in the cache key, a switch to Novita would return a model
+    still bound to the prior endpoint until cache eviction.
+    """
+    _get_model.cache_clear()
+    anthropic_model = _get_model(
+        "sk-shared", "claude-sonnet-4-6", "https://api.anthropic.com"
+    )
+    novita_model = _get_model(
+        "sk-shared", "claude-sonnet-4-6", "https://api.novita.ai/anthropic"
+    )
+    assert anthropic_model is not novita_model

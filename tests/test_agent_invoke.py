@@ -1232,6 +1232,37 @@ def test_build_anthropic_model_uses_240s_read_timeout() -> None:
     assert http_client.timeout.read == 240.0
 
 
+def test_build_anthropic_model_defaults_to_anthropic_endpoint() -> None:
+    """The default anthropic_base_url leaves the workflow agent on the Anthropic endpoint.
+
+    The settings default is the canonical Anthropic host, so model construction
+    targets ``api.anthropic.com`` unless ``anthropic_base_url`` is overridden.
+    """
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="claude-sonnet-4-6"
+    )
+    assert settings.anthropic_base_url == "https://api.anthropic.com"
+    model = _build_anthropic_model(settings)
+    base_url = str(model._provider.client.base_url)  # pyright: ignore[reportPrivateUsage]
+    assert "api.anthropic.com" in base_url
+
+
+def test_build_anthropic_model_threads_base_url_override() -> None:
+    """A set anthropic_base_url routes the workflow agent to the override endpoint.
+
+    Threading ``settings.anthropic_base_url`` into ``AnthropicProvider``
+    re-targets the wire endpoint, which is the Novita switch (§I config).
+    """
+    settings = make_test_settings(
+        anthropic_api_key="sk-test",
+        anthropic_model="minimax/minimax-m3",
+        anthropic_base_url="https://api.novita.ai/anthropic",
+    )
+    model = _build_anthropic_model(settings)
+    base_url = str(model._provider.client.base_url)  # pyright: ignore[reportPrivateUsage]
+    assert "api.novita.ai/anthropic" in base_url
+
+
 def test_invoke_span_has_cache_token_attributes(
     database_connection: psycopg.Connection[dict[str, Any]],
     capfire: CaptureLogfire,

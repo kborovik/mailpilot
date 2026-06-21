@@ -54,8 +54,8 @@ _AGENT: Agent[None, ClassificationResult] = Agent(
 
 
 @lru_cache(maxsize=4)
-def _get_model(api_key: str, model_name: str) -> AnthropicModel:
-    """Cache the AnthropicModel/AnthropicProvider pair by (api_key, model_name).
+def _get_model(api_key: str, model_name: str, base_url: str) -> AnthropicModel:
+    """Cache the AnthropicModel/AnthropicProvider by api_key, model_name, base_url.
 
     §V.47: cache_control breakpoints on the system prompt and tool
     definitions let repeated classifier calls re-bill the stable prefix as
@@ -64,11 +64,17 @@ def _get_model(api_key: str, model_name: str) -> AnthropicModel:
     §V.48: 240s read-timeout on the HTTP client (4x the httpx default of
     60s) so long-context classifier calls do not surface ``TimeoutError``.
     See SPEC.md §V.48, §B.16.
+
+    ``base_url`` is the wire endpoint and rides the cache key, so a base-URL
+    change rebuilds the cached model. It defaults to ``api.anthropic.com``;
+    an Anthropic-compatible endpoint (e.g. ``https://api.novita.ai/anthropic``)
+    routes the same call to that vendor.
     """
     return AnthropicModel(
         model_name,
         provider=AnthropicProvider(
             api_key=api_key,
+            base_url=base_url,
             http_client=httpx.AsyncClient(timeout=httpx.Timeout(240.0)),
         ),
         settings=AnthropicModelSettings(
@@ -102,8 +108,8 @@ def classify_email(
         body: Email body (plain text).
         sender: Sender email address.
         active_workflows: Active workflows for the account (name, objective).
-        settings: Application settings; supplies ``anthropic_api_key`` and
-            ``anthropic_model``.
+        settings: Application settings; supplies ``anthropic_api_key``,
+            ``anthropic_model``, and ``anthropic_base_url``.
 
     Returns:
         Workflow ID if classified, None if unrouted.
@@ -126,7 +132,11 @@ def classify_email(
                 "set it via `mailpilot config set anthropic_api_key ...`",
             )
 
-        model = _get_model(settings.anthropic_api_key, settings.anthropic_model)
+        model = _get_model(
+            settings.anthropic_api_key,
+            settings.anthropic_model,
+            settings.anthropic_base_url,
+        )
         prompt = _format_prompt(subject, body, sender, active_workflows)
         result = _AGENT.run_sync(prompt, model=model)
         usage = result.usage
