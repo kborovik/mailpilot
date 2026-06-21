@@ -24,10 +24,10 @@ citing skill supplies inline (their counter keys differ).
 
 - `len(<rows>) == 0` -> emit the skill's empty-set run summary (every counter `0`, `"results": [], "ok": true`) and stop.
 - `--limit N` given -> cap to first N, no question.
-- `len(<rows>) > 9` and no `--limit` -> invoke `AskUserQuestion` (sole interaction gate) with the skill's `question` + `header` and these options:
-  - `"First 9 (Recommended)"` -- cap to first 9 (three full waves at the concurrency-3 enrich/discover budget, no straggler wave of 1)
-  - `"First 25"` -- cap to first 25
-  - `"All <N>"` -- every stale row
+- `len(<rows>) > 9` and no `--limit` -> invoke `AskUserQuestion` (sole interaction gate) with the skill's `question` + `header`. Build the option list so every option maps to a distinct batch at the current stale-count (the distinct-batch rule, §V.117): a fixed-cap option MUST be suppressed once its cap reaches the stale-count, because there the cap equals `All <N>` and the two options would dispatch one identical batch (§B.98). Options:
+  - `"First 9 (Recommended)"` -- cap to first 9 (three full waves at the concurrency-3 enrich/discover budget, no straggler wave of 1). Always offered: the gate fires only at stale-count > 9, so 9 is always below the stale-count and stays distinct from `All <N>`.
+  - `"First 25"` -- cap to first 25. Offer this option only when stale-count > 25. Drop it when stale-count <= 25: there `First 25` equals `All <N>`, so the two collapse to one batch (§B.98).
+  - `"All <N>"` -- every stale row.
 - Else (1-9 rows) -> proceed w/ all, no question.
 
 ## OUTPUT -- "Next" block

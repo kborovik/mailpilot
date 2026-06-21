@@ -81,7 +81,7 @@ Scoped runs (UUID/domain args): run the same idempotent `tag create` preamble, t
 
 ## Stage: batch gate
 
-Shared gate mechanics (`--limit`, the `>9` `AskUserQuestion`, the First-9 / First-25 / All-N options, the 1-9 proceed rule) -> see `.claude/skills/lead-companies/references/lead-pipeline-conventions.md` (Batch gate). `<rows>` = the `stale[]` array from the stale query. This skill's per-skill gate parameters:
+Shared gate mechanics (`--limit`, the `>9` `AskUserQuestion`, the First-9 / First-25 / All-N options with the distinct-batch suppression rule, the 1-9 proceed rule) -> see `.claude/skills/lead-companies/references/lead-pipeline-conventions.md` (Batch gate). `<rows>` = the `stale[]` array from the stale query. This skill's per-skill gate parameters:
 
 - empty-set run summary (`len(stale) == 0`): `{"seeded": 0, "skipped": 0, "failed": 0, "results": [], "ok": true}`.
 - **question**: `"<N> enriched companies need contacts. How many should the finder process this run?"`

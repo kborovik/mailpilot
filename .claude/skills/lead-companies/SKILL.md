@@ -95,7 +95,7 @@ Envelope unwrap -> `companies[]` (`CompanySummary` w/ `has_profile=false`). Doma
 
 ## Stage: batch gate
 
-Shared gate mechanics (`--limit`, the `>9` `AskUserQuestion`, the First-9 / First-25 / All-N options, the 1-9 proceed rule) -> see `.claude/skills/lead-companies/references/lead-pipeline-conventions.md` (Batch gate). `<rows>` = the `companies[]` from the stale query. This skill's per-skill gate parameters:
+Shared gate mechanics (`--limit`, the `>9` `AskUserQuestion`, the First-9 / First-25 / All-N options with the distinct-batch suppression rule, the 1-9 proceed rule) -> see `.claude/skills/lead-companies/references/lead-pipeline-conventions.md` (Batch gate). `<rows>` = the `companies[]` from the stale query. This skill's per-skill gate parameters:
 
 - empty-set run summary (`len(companies) == 0`): `{"enriched": 0, "skipped": 0, "failed": 0, "results": [], "ok": true}`.
 - **question**: `"<N> companies need enrichment. How many should the enricher process this run?"`
