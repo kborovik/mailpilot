@@ -897,6 +897,78 @@ def test_company_disable_empty_reason(runner: CliRunner) -> None:
     assert data["error"] == "validation_error"
 
 
+def test_company_enable_happy_path(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.114: company enable clears disabled_reason; §V.54 changed=['disabled_reason']."""
+    before = _make_company(disabled_reason="no_contacts_found:2026-06-18")
+    after = _make_company(disabled_reason=None)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=before),
+        patch("mailpilot.database.enable_company", return_value=after) as mock_enable,
+        patch("mailpilot.operator_log.operator_event") as mock_event,
+    ):
+        result = runner.invoke(main, ["company", "enable", before.id])
+
+    assert result.exit_code == 0, result.output
+    mock_enable.assert_called_once_with(mock_connection, before.id)
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["company"]["disabled_reason"] is None
+    enable_events = [
+        call
+        for call in mock_event.call_args_list
+        if call.args[:1] == ("company.enable",)
+    ]
+    assert len(enable_events) == 1
+    assert enable_events[0].kwargs == {
+        "entity_id": before.id,
+        "changed": ["disabled_reason"],
+    }
+
+
+def test_company_enable_not_disabled(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.114: enabling an active company is rejected before any write."""
+    before = _make_company(disabled_reason=None)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=before),
+        patch("mailpilot.database.enable_company") as mock_enable,
+    ):
+        result = runner.invoke(main, ["company", "enable", before.id])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "not disabled" in data["message"]
+    mock_enable.assert_not_called()
+
+
+def test_company_enable_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.114: enabling a missing company yields a not_found envelope."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=None),
+        patch("mailpilot.database.enable_company") as mock_enable,
+    ):
+        result = runner.invoke(
+            main, ["company", "enable", "01234567-0000-7000-0000-0000000000fd"]
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+    mock_enable.assert_not_called()
+
+
 # -- company view --------------------------------------------------------------
 
 
@@ -1699,8 +1771,80 @@ def test_contact_disable_not_found(
 def test_contact_disable_help_lists_verb(runner: CliRunner) -> None:
     result = runner.invoke(main, ["contact", "--help"])
     assert result.exit_code == 0
-    for verb in ("create", "update", "disable", "search", "list", "view"):
+    for verb in ("create", "update", "disable", "enable", "search", "list", "view"):
         assert verb in result.output
+
+
+def test_contact_enable_happy_path(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.80: contact enable clears any reason, including an unsubscribe block."""
+    before = _make_contact(disabled_reason="unsubscribed: opt-out")
+    after = _make_contact(disabled_reason=None)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_contact", return_value=before),
+        patch("mailpilot.database.enable_contact", return_value=after) as mock_enable,
+        patch("mailpilot.operator_log.operator_event") as mock_event,
+    ):
+        result = runner.invoke(main, ["contact", "enable", before.id])
+
+    assert result.exit_code == 0, result.output
+    mock_enable.assert_called_once_with(mock_connection, before.id)
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["contact"]["disabled_reason"] is None
+    enable_events = [
+        call
+        for call in mock_event.call_args_list
+        if call.args[:1] == ("contact.enable",)
+    ]
+    assert len(enable_events) == 1
+    assert enable_events[0].kwargs == {
+        "entity_id": before.id,
+        "changed": ["disabled_reason"],
+    }
+
+
+def test_contact_enable_not_disabled(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.80: enabling an active contact is rejected before any write."""
+    before = _make_contact(disabled_reason=None)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_contact", return_value=before),
+        patch("mailpilot.database.enable_contact") as mock_enable,
+    ):
+        result = runner.invoke(main, ["contact", "enable", before.id])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "not disabled" in data["message"]
+    mock_enable.assert_not_called()
+
+
+def test_contact_enable_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.80: enabling a missing contact yields a not_found envelope."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_contact", return_value=None),
+        patch("mailpilot.database.enable_contact") as mock_enable,
+    ):
+        result = runner.invoke(
+            main, ["contact", "enable", "01234567-0000-7000-0000-0000000000ff"]
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+    mock_enable.assert_not_called()
 
 
 # -- contact search ------------------------------------------------------------
@@ -5816,6 +5960,68 @@ def test_tag_disable_empty_reason(
     assert "reason" in data["message"]
 
 
+def test_tag_enable(runner: CliRunner, mock_connection: MagicMock) -> None:
+    """§V.10: tag enable clears disabled_reason; §V.54 changed=['disabled_reason']."""
+    disabled = _make_tag(name="prospect", disabled_reason="stale")
+    active = _make_tag(name="prospect", disabled_reason=None)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_tag_by_name", return_value=disabled),
+        patch("mailpilot.database.enable_tag", return_value=active) as mock_enable,
+        patch("mailpilot.operator_log.operator_event") as mock_event,
+    ):
+        result = runner.invoke(main, ["tag", "enable", "prospect"])
+
+    assert result.exit_code == 0, result.output
+    mock_enable.assert_called_once_with(mock_connection, name="prospect")
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["tag"]["name"] == "prospect"
+    assert data["tag"]["disabled_reason"] is None
+    enable_events = [
+        call for call in mock_event.call_args_list if call.args[:1] == ("tag.enable",)
+    ]
+    assert len(enable_events) == 1
+    assert enable_events[0].kwargs == {
+        "entity_id": "prospect",
+        "changed": ["disabled_reason"],
+    }
+
+
+def test_tag_enable_undefined_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_tag_by_name", return_value=None),
+    ):
+        result = runner.invoke(main, ["tag", "enable", "ghost"])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+
+
+def test_tag_enable_not_disabled(runner: CliRunner, mock_connection: MagicMock) -> None:
+    """§V.10: enabling an active tag is rejected before any write."""
+    active = _make_tag(name="prospect", disabled_reason=None)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_tag_by_name", return_value=active),
+        patch("mailpilot.database.enable_tag") as mock_enable,
+    ):
+        result = runner.invoke(main, ["tag", "enable", "prospect"])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "not disabled" in data["message"]
+    mock_enable.assert_not_called()
+
+
 # -- tag list ------------------------------------------------------------------
 
 
@@ -6963,6 +7169,77 @@ def test_enrollment_disable_not_found(
     data = json.loads(result.output)
     assert data["error"] == "not_found"
     assert "enrollment" in data["message"]
+
+
+def test_enrollment_enable(runner: CliRunner, mock_connection: MagicMock) -> None:
+    """§V.15: enrollment enable flips status disabled->active + clears reason.
+
+    §V.54: `changed` = ['status', 'disabled_reason'].
+    """
+    before = _make_enrollment(status="disabled", disabled_reason="left company")
+    after = _make_enrollment(status="active", disabled_reason=None)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_enrollment_by_id", return_value=before),
+        patch(
+            "mailpilot.database.enable_enrollment", return_value=after
+        ) as mock_enable,
+        patch("mailpilot.operator_log.operator_event") as mock_event,
+    ):
+        result = runner.invoke(main, ["enrollment", "enable", _ENROLLMENT_ID])
+
+    assert result.exit_code == 0, result.output
+    mock_enable.assert_called_once_with(mock_connection, _ENROLLMENT_ID)
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["enrollment"]["status"] == "active"
+    assert data["enrollment"]["disabled_reason"] is None
+    enable_events = [
+        call
+        for call in mock_event.call_args_list
+        if call.args[:1] == ("enrollment.enable",)
+    ]
+    assert len(enable_events) == 1
+    assert enable_events[0].kwargs == {
+        "entity_id": _ENROLLMENT_ID,
+        "changed": ["status", "disabled_reason"],
+    }
+
+
+def test_enrollment_enable_not_disabled(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.15: enabling a live (active) enrollment is rejected before any write."""
+    before = _make_enrollment(status="active", disabled_reason=None)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_enrollment_by_id", return_value=before),
+        patch("mailpilot.database.enable_enrollment") as mock_enable,
+    ):
+        result = runner.invoke(main, ["enrollment", "enable", _ENROLLMENT_ID])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "not disabled" in data["message"]
+    mock_enable.assert_not_called()
+
+
+def test_enrollment_enable_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_enrollment_by_id", return_value=None),
+    ):
+        result = runner.invoke(main, ["enrollment", "enable", _ENROLLMENT_ID])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
 
 
 # -- enrollment view -----------------------------------------------------------

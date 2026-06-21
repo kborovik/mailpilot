@@ -881,8 +881,8 @@ def company_disable(company_ref: str, reason: str) -> None:
     """Soft-disable a company by writing disabled_reason.
 
     A disabled company is hidden from `company list` unless `--include-disabled`
-    is passed. Disable is reversible -- re-enable by clearing disabled_reason
-    via `company update`. Disabling an already-disabled company is rejected.
+    is passed. Disable is reversible -- re-enable with `company enable`.
+    Disabling an already-disabled company is rejected.
     """
     from mailpilot.database import disable_company, initialize_database
     from mailpilot.operator_log import cli_mutation, operator_event
@@ -908,6 +908,43 @@ def company_disable(company_ref: str, reason: str) -> None:
                 )
             operator_event(
                 "company.disable",
+                entity_id=company_id,
+                changed=["disabled_reason"],
+            )
+            output_entity("company", updated)
+    finally:
+        connection.close()
+
+
+@company.command("enable")
+@click.argument("company_ref")
+def company_enable(company_ref: str) -> None:
+    """Re-enable a soft-disabled company by clearing disabled_reason.
+
+    The company reappears in the default `company list`. Enabling a company
+    that is not disabled is rejected.
+    """
+    from mailpilot.database import enable_company, initialize_database
+    from mailpilot.operator_log import cli_mutation, operator_event
+
+    connection = initialize_database(_database_url(), require_current_schema=True)
+    try:
+        before = _resolve_company(connection, company_ref)
+        company_id = before.id
+        if before.disabled_reason is None:
+            output_error(
+                f"company {company_id} is not disabled",
+                "validation_error",
+            )
+        with cli_mutation("company", "enable", entity_id=company_id):
+            updated = enable_company(connection, company_id)
+            if updated is None:
+                output_error(
+                    f"company {company_id} is not disabled",
+                    "validation_error",
+                )
+            operator_event(
+                "company.enable",
                 entity_id=company_id,
                 changed=["disabled_reason"],
             )
@@ -1311,6 +1348,44 @@ def contact_disable(contact_ref: str, reason: str) -> None:
                 "contact.disable",
                 entity_id=contact_id,
                 changed=changed,
+            )
+            output_entity("contact", updated)
+    finally:
+        connection.close()
+
+
+@contact.command("enable")
+@click.argument("contact_ref")
+def contact_enable(contact_ref: str) -> None:
+    """Re-enable a disabled contact by clearing disabled_reason.
+
+    Clears any reason, including a `bounced:` or `unsubscribed:` block -- the
+    operator owns consent. Enabling a contact that is not disabled is rejected.
+    Addressed by email or ID.
+    """
+    from mailpilot.database import enable_contact, initialize_database
+    from mailpilot.operator_log import cli_mutation, operator_event
+
+    connection = initialize_database(_database_url(), require_current_schema=True)
+    try:
+        before = _resolve_contact(connection, contact_ref)
+        contact_id = before.id
+        if before.disabled_reason is None:
+            output_error(
+                f"contact {contact_id} is not disabled",
+                "validation_error",
+            )
+        with cli_mutation("contact", "enable", entity_id=contact_id):
+            updated = enable_contact(connection, contact_id)
+            if updated is None:
+                output_error(
+                    f"contact {contact_id} is not disabled",
+                    "validation_error",
+                )
+            operator_event(
+                "contact.enable",
+                entity_id=contact_id,
+                changed=["disabled_reason"],
             )
             output_entity("contact", updated)
     finally:
@@ -2024,6 +2099,42 @@ def tag_disable(name: str, reason: str) -> None:
                 )
             operator_event(
                 "tag.disable",
+                entity_id=updated.name,
+                changed=["disabled_reason"],
+            )
+            output_entity("tag", updated)
+    finally:
+        connection.close()
+
+
+@tag.command("enable")
+@click.argument("name")
+def tag_enable(name: str) -> None:
+    """Re-enable a retired tag by clearing disabled_reason.
+
+    The tag reappears in the default `tag list`. Enabling a tag that is not
+    disabled is rejected.
+    """
+    from mailpilot.database import enable_tag, initialize_database
+    from mailpilot.operator_log import cli_mutation, operator_event
+
+    connection = initialize_database(_database_url(), require_current_schema=True)
+    try:
+        before = _resolve_tag(connection, name)
+        if before.disabled_reason is None:
+            output_error(
+                f"tag '{before.name}' is not disabled",
+                "validation_error",
+            )
+        with cli_mutation("tag", "enable", entity_id=before.name):
+            updated = enable_tag(connection, name=before.name)
+            if updated is None:
+                output_error(
+                    f"tag '{before.name}' is not disabled",
+                    "validation_error",
+                )
+            operator_event(
+                "tag.enable",
                 entity_id=updated.name,
                 changed=["disabled_reason"],
             )
@@ -3431,6 +3542,53 @@ def enrollment_disable(enrollment_id: str, reason: str) -> None:
             ]
             operator_event(
                 "enrollment.disable",
+                entity_id=enrollment_id,
+                changed=changed,
+            )
+            output_entity("enrollment", updated)
+    finally:
+        connection.close()
+
+
+@enrollment.command("enable")
+@click.argument("enrollment_id")
+def enrollment_enable(enrollment_id: str) -> None:
+    """Re-enable a disabled enrollment by flipping status back to active.
+
+    Clears disabled_reason and resumes the enrollment. Enabling an enrollment
+    that is not disabled is rejected.
+    """
+    from mailpilot.database import (
+        enable_enrollment,
+        get_enrollment_by_id,
+        initialize_database,
+    )
+    from mailpilot.operator_log import cli_mutation, operator_event
+
+    connection = initialize_database(_database_url(), require_current_schema=True)
+    try:
+        before = get_enrollment_by_id(connection, enrollment_id)
+        if before is None:
+            output_error(f"enrollment not found: {enrollment_id}", "not_found")
+        if before.status != "disabled":
+            output_error(
+                f"enrollment {enrollment_id} is not disabled",
+                "validation_error",
+            )
+        with cli_mutation("enrollment", "enable", entity_id=enrollment_id):
+            updated = enable_enrollment(connection, enrollment_id)
+            if updated is None:
+                output_error(
+                    f"enrollment {enrollment_id} is not disabled",
+                    "validation_error",
+                )
+            changed = [
+                field
+                for field in ("status", "disabled_reason")
+                if getattr(before, field) != getattr(updated, field)
+            ]
+            operator_event(
+                "enrollment.enable",
                 entity_id=enrollment_id,
                 changed=changed,
             )

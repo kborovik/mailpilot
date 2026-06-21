@@ -1166,9 +1166,9 @@ def disable_company(
 
     A ``disabled_reason IS NULL`` gate blocks double-disable: an already
     disabled company does not match, so the call returns ``None`` without
-    overwriting an earlier reason. Disable is reversible -- clear
-    ``disabled_reason`` via ``update_company`` to re-enable the company (a
-    company with no discoverable contacts this cycle may have some next).
+    overwriting an earlier reason. Disable is reversible -- ``enable_company``
+    clears ``disabled_reason`` to re-enable the company (a company with no
+    discoverable contacts this cycle may have some next).
 
     Args:
         connection: Open database connection.
@@ -1191,6 +1191,42 @@ def disable_company(
         RETURNING *
         """,
         {"id": company_id, "reason": reason},
+    ).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Company.model_validate(row)
+
+
+def enable_company(
+    connection: psycopg.Connection[dict[str, Any]],
+    company_id: str,
+) -> Company | None:
+    """Re-enable a soft-disabled company by clearing ``disabled_reason``.
+
+    Mirror of ``disable_company``. A ``disabled_reason IS NOT NULL`` gate
+    blocks enabling an already-active company: an active company does not
+    match, so the call returns ``None``. A re-enabled company reappears in the
+    default ``company list``.
+
+    Args:
+        connection: Open database connection.
+        company_id: Company ID.
+
+    Returns:
+        Updated company, or ``None`` when no disabled company with that id
+        exists -- i.e. missing or already active.
+    """
+    row = connection.execute(
+        """\
+        UPDATE company
+        SET disabled_reason = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = %(id)s
+          AND disabled_reason IS NOT NULL
+        RETURNING *
+        """,
+        {"id": company_id},
     ).fetchone()
     connection.commit()
     if row is None:
@@ -1627,6 +1663,44 @@ def disable_contact(
         RETURNING *
         """,
         {"id": contact_id, "reason": reason},
+    ).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Contact.model_validate(row)
+
+
+def enable_contact(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact_id: str,
+) -> Contact | None:
+    """Clear a contact's global block by clearing ``disabled_reason``.
+
+    Clears any reason regardless of prefix -- the operator owns consent, so a
+    ``"bounced:"`` or ``"unsubscribed:"`` block re-enables the same way (no
+    unsubscribe carve-out). This is operator-only; the agent disables a contact
+    on bounce or unsubscribe but never re-enables it. A ``disabled_reason IS
+    NOT NULL`` gate blocks enabling an already-active contact (returns
+    ``None``).
+
+    Args:
+        connection: Open database connection.
+        contact_id: Contact ID.
+
+    Returns:
+        Updated contact, or ``None`` when no disabled contact with that id
+        exists -- i.e. missing or already active.
+    """
+    row = connection.execute(
+        """\
+        UPDATE contact
+        SET disabled_reason = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = %(id)s
+          AND disabled_reason IS NOT NULL
+        RETURNING *
+        """,
+        {"id": contact_id},
     ).fetchone()
     connection.commit()
     if row is None:
@@ -2300,6 +2374,63 @@ def disable_enrollment(
     )
     connection.commit()
     row.pop("contact_company_id", None)
+    return Enrollment.model_validate(row)
+
+
+def enable_enrollment(
+    connection: psycopg.Connection[dict[str, Any]],
+    enrollment_id: str,
+) -> Enrollment | None:
+    """Re-enable a disabled enrollment: flip ``status`` to ``active``.
+
+    Mirror of ``disable_enrollment``: flips ``status='active'`` and clears
+    ``disabled_reason``. A ``status='disabled'`` gate blocks enabling a live
+    enrollment -- an already-active row does not match, so the call returns
+    ``None``. Writes no activity row; the ``enrollment_enabled`` activity is
+    deferred to the enrollment status-collapse task that owns the activity-type
+    enum.
+
+    Returns the updated row with denormalised parent identifiers (workflow
+    name, contact email/name) so the CLI envelope can ship the full Enrollment
+    model unchanged.
+
+    Args:
+        connection: Open database connection.
+        enrollment_id: Enrollment ID.
+
+    Returns:
+        Updated ``Enrollment`` (status='active'), or ``None`` when no disabled
+        enrollment with that id exists -- i.e. missing or already active.
+    """
+    row = connection.execute(
+        """\
+        WITH updated AS (
+            UPDATE enrollment
+            SET status = 'active',
+                disabled_reason = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = %(id)s
+              AND status = 'disabled'
+            RETURNING *
+        )
+        SELECT
+            updated.*,
+            workflow.name AS workflow_name,
+            contact.email AS contact_email,
+            TRIM(
+                COALESCE(contact.first_name, '')
+                || ' '
+                || COALESCE(contact.last_name, '')
+            ) AS contact_name
+        FROM updated
+        JOIN workflow ON workflow.id = updated.workflow_id
+        JOIN contact ON contact.id = updated.contact_id
+        """,
+        {"id": enrollment_id},
+    ).fetchone()
+    connection.commit()
+    if row is None:
+        return None
     return Enrollment.model_validate(row)
 
 
@@ -3677,6 +3808,37 @@ def disable_tag(
         RETURNING *
         """,
         {"name": normalized, "reason": reason},
+    ).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Tag.model_validate(row)
+
+
+def enable_tag(
+    connection: psycopg.Connection[dict[str, Any]],
+    name: str,
+) -> Tag | None:
+    """Re-enable a retired vocabulary tag by clearing ``disabled_reason``.
+
+    Mirror of ``disable_tag``. A ``disabled_reason IS NOT NULL`` gate blocks
+    enabling an already-active tag, so the call returns ``None`` when no
+    disabled tag with the name exists (undefined or already active) -- the
+    caller distinguishes the two. Being owner-free, the vocabulary lifecycle
+    writes no activity (an activity needs a contact or company owner).
+
+    Raises:
+        ValueError: If the tag name fails normalization.
+    """
+    normalized = _normalize_tag_name(name)
+    row = connection.execute(
+        """\
+        UPDATE tag
+        SET disabled_reason = NULL
+        WHERE name = %(name)s AND disabled_reason IS NOT NULL
+        RETURNING *
+        """,
+        {"name": normalized},
     ).fetchone()
     connection.commit()
     if row is None:
