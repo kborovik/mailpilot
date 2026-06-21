@@ -868,33 +868,6 @@ def test_enrollment_disable_emits_span_and_event(
     assert "'disabled_reason'" in err
 
 
-def test_enrollment_update_changed_diff(
-    runner: CliRunner,
-    mock_connection: MagicMock,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    before = _make_enrollment(status="active")
-    after = _make_enrollment(status="paused")
-    contact = _make_contact()
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_enrollment_by_id", return_value=before),
-        patch("mailpilot.database.update_enrollment", return_value=after),
-        patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.create_activity"),
-    ):
-        result = runner.invoke(
-            main,
-            ["enrollment", "update", _ENROLLMENT_ID, "--status", "paused"],
-        )
-
-    assert result.exit_code == 0, result.output
-    err = result.stderr
-    assert "event=enrollment.update" in err
-    assert "changed=['status']" in err
-
-
 # -- tag.add / remove ----------------------------------------------------------
 
 

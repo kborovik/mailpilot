@@ -3309,8 +3309,8 @@ def test_enable_enrollment(
 ):
     """§V.15: enable_enrollment flips status disabled->active + clears reason.
 
-    Writes no activity row -- the enrollment_enabled activity is deferred to
-    the status-collapse task that owns the activity-type enum.
+    Emits an ``enrollment_enabled`` activity -- the mirror of the
+    ``enrollment_disabled`` row written on disable.
     """
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
@@ -3326,7 +3326,10 @@ def test_enable_enrollment(
     assert same is not None
     assert same.status == "active"
     activities = list_activities(database_connection, contact_id=contact.id)
-    assert "enrollment_enabled" not in [a.type for a in activities]
+    enabled_rows = [a for a in activities if a.type == "enrollment_enabled"]
+    assert len(enabled_rows) == 1
+    assert enabled_rows[0].enrollment_id == enrollment.id
+    assert enabled_rows[0].workflow_id == workflow.id
 
 
 def test_enable_enrollment_gate_blocks_active(
@@ -3435,17 +3438,15 @@ def test_list_enrollments_detailed(
 def test_list_enrollments_detailed_status_filter(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    from mailpilot.database import update_enrollment
-
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     c1 = make_test_contact(database_connection, email="a@example.com")
     c2 = make_test_contact(database_connection, email="b@example.com")
     e1 = make_test_enrollment(database_connection, workflow.id, c1.id)
     make_test_enrollment(database_connection, workflow.id, c2.id)
-    update_enrollment(database_connection, e1.id, status="paused")
+    disable_enrollment(database_connection, e1.id, "left company")
     results = list_enrollments_detailed(
-        database_connection, workflow_id=workflow.id, status="paused"
+        database_connection, workflow_id=workflow.id, status="disabled"
     )
     assert len(results) == 1
     assert results[0].contact_id == c1.id
@@ -3471,15 +3472,14 @@ def test_enrollment_row_carries_parent_denorm_fields(
 ) -> None:
     """§V.5: Enrollment row gains workflow_name, contact_email, contact_name via JOIN.
 
-    Asserts every getter (create, get_by_id, get composite, list, update,
-    delete) returns the denormalised parent identifiers so all CLI surfaces
-    inherit them symmetrically (mirrors ``Workflow.account_email``).
+    Asserts every getter (create, get_by_id, get composite, list, disable)
+    returns the denormalised parent identifiers so all CLI surfaces inherit
+    them symmetrically (mirrors ``Workflow.account_email``).
     """
     from mailpilot.database import (
         get_enrollment,
         get_enrollment_by_id,
         list_enrollments,
-        update_enrollment,
     )
 
     account = make_test_account(database_connection)
@@ -3517,15 +3517,6 @@ def test_enrollment_row_carries_parent_denorm_fields(
     assert listed[0].contact_email == "alice@example.com"
     assert listed[0].contact_name == "Alice Smith"
 
-    updated = update_enrollment(
-        database_connection, created.id, status="paused", reason="hold"
-    )
-    assert updated is not None
-    assert updated.status == "paused"
-    assert updated.workflow_name == "Outbound Campaign"
-    assert updated.contact_email == "alice@example.com"
-    assert updated.contact_name == "Alice Smith"
-
     disabled = disable_enrollment(database_connection, created.id, "wrap-up")
     assert disabled is not None
     assert disabled.workflow_name == "Outbound Campaign"
@@ -3533,22 +3524,23 @@ def test_enrollment_row_carries_parent_denorm_fields(
     assert disabled.contact_name == "Alice Smith"
 
 
-def test_update_enrollment_rejects_legacy_statuses(
+def test_enrollment_status_check_rejects_paused(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """`completed`/`failed`/`pending` are no longer valid enrollment statuses."""
-    from mailpilot.database import update_enrollment
+    """§V.15/§V.88: status CHECK admits only {active, disabled}.
 
+    `paused` is collapsed into `disabled`; it (and the never-valid lifecycle
+    labels) are rejected at the schema level.
+    """
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
     enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
-    for bad in ("pending", "completed", "failed"):
-        with pytest.raises((psycopg.errors.CheckViolation, ValueError)):
-            update_enrollment(
-                database_connection,
-                enrollment.id,
-                status=bad,
+    for bad in ("paused", "pending", "completed", "failed"):
+        with pytest.raises(psycopg.errors.CheckViolation):
+            database_connection.execute(
+                "UPDATE enrollment SET status = %s WHERE id = %s",
+                (bad, enrollment.id),
             )
         database_connection.rollback()
 

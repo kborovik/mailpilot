@@ -5067,10 +5067,10 @@ def test_enrollment_run_contact_not_found(
     assert data["error"] == "not_found"
 
 
-def test_enrollment_run_paused_enrollment(
+def test_enrollment_run_disabled_enrollment(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    """Manual run is rejected when the enrollment is paused."""
+    """Manual run is rejected when the enrollment is not active (§V.15/§V.83)."""
     workflow = _make_workflow(status="active")
     contact = Contact(
         id=_CONTACT_ID,
@@ -5078,13 +5078,13 @@ def test_enrollment_run_paused_enrollment(
         created_at=_NOW,
         updated_at=_NOW,
     )
-    paused = _make_enrollment(status="paused", reason="operator hold")
+    disabled = _make_enrollment(status="disabled", disabled_reason="operator hold")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=workflow),
         patch("mailpilot.database.get_contact", return_value=contact),
-        patch("mailpilot.database.get_enrollment_by_id", return_value=paused),
+        patch("mailpilot.database.get_enrollment_by_id", return_value=disabled),
         patch("mailpilot.agent.invoke_workflow_agent") as mock_invoke,
     ):
         result = runner.invoke(main, ["enrollment", "run", _ENROLLMENT_ID])
@@ -5092,7 +5092,7 @@ def test_enrollment_run_paused_enrollment(
     mock_invoke.assert_not_called()
     data = json.loads(result.output)
     assert data["error"] == "invalid_state"
-    assert "paused" in data["message"]
+    assert "disabled" in data["message"]
 
 
 def test_enrollment_run_agent_failed(
@@ -7383,7 +7383,7 @@ def test_enrollment_list_with_status(
                 "--workflow-id",
                 _WORKFLOW_ID,
                 "--status",
-                "paused",
+                "disabled",
             ],
         )
 
@@ -7392,7 +7392,7 @@ def test_enrollment_list_with_status(
         mock_connection,
         workflow_id=_WORKFLOW_ID,
         contact_id=None,
-        status="paused",
+        status="disabled",
         limit=100,
         since=None,
         until=None,
@@ -7484,128 +7484,24 @@ def test_enrollment_list_workflow_not_found(
     assert "workflow" in data["message"]
 
 
-# -- enrollment update ---------------------------------------------------------
+# -- enrollment update removed (§V.15) -----------------------------------------
 
 
-def test_enrollment_update_paused_emits_activity(
+def test_enrollment_update_command_removed(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    before = _make_enrollment(status="active")
-    updated = _make_enrollment(status="paused", reason="vacation")
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_enrollment_by_id", return_value=before),
-        patch(
-            "mailpilot.database.update_enrollment", return_value=updated
-        ) as mock_update,
-        patch("mailpilot.database.get_contact", return_value=_make_contact()),
-        patch("mailpilot.database.create_activity") as mock_activity,
-    ):
-        result = runner.invoke(
-            main,
-            [
-                "enrollment",
-                "update",
-                _ENROLLMENT_ID,
-                "--status",
-                "paused",
-                "--reason",
-                "vacation",
-            ],
-        )
-
-    assert result.exit_code == 0
-    mock_update.assert_called_once_with(
-        mock_connection,
-        _ENROLLMENT_ID,
-        status="paused",
-        reason="vacation",
-    )
-    activity_kwargs = mock_activity.call_args.kwargs
-    assert activity_kwargs["activity_type"] == "enrollment_paused"
-    assert activity_kwargs["summary"] == "vacation"
-    assert activity_kwargs["workflow_id"] == _WORKFLOW_ID
-    assert activity_kwargs["enrollment_id"] == _ENROLLMENT_ID
-
-
-def test_enrollment_update_active_emits_resumed_activity(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
-    """paused -> active transition emits enrollment_resumed."""
-    before = _make_enrollment(status="paused")
-    updated = _make_enrollment(status="active")
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_enrollment_by_id", return_value=before),
-        patch("mailpilot.database.update_enrollment", return_value=updated),
-        patch("mailpilot.database.get_contact", return_value=_make_contact()),
-        patch("mailpilot.database.create_activity") as mock_activity,
-    ):
-        result = runner.invoke(
-            main,
-            ["enrollment", "update", _ENROLLMENT_ID, "--status", "active"],
-        )
-
-    assert result.exit_code == 0
-    assert mock_activity.call_args.kwargs["activity_type"] == "enrollment_resumed"
-
-
-def test_enrollment_update_unchanged_status_does_not_emit_activity(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
-    """No status change -- no activity."""
-    before = _make_enrollment(status="active")
-    updated = _make_enrollment(status="active")
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_enrollment_by_id", return_value=before),
-        patch("mailpilot.database.update_enrollment", return_value=updated),
-        patch("mailpilot.database.create_activity") as mock_activity,
-    ):
-        result = runner.invoke(
-            main,
-            ["enrollment", "update", _ENROLLMENT_ID, "--status", "active"],
-        )
-
-    assert result.exit_code == 0
-    mock_activity.assert_not_called()
-
-
-def test_enrollment_update_rejects_legacy_status(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
-    """`completed`/`failed`/`pending` are no longer valid CLI statuses."""
+    """§V.15: `enrollment update` is gone; disable/enable are the sole surface."""
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
     ):
         result = runner.invoke(
             main,
-            ["enrollment", "update", _ENROLLMENT_ID, "--status", "completed"],
+            ["enrollment", "update", _ENROLLMENT_ID, "--status", "disabled"],
         )
 
-    assert result.exit_code != 0
-
-
-def test_enrollment_update_not_found(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_enrollment_by_id", return_value=None),
-    ):
-        result = runner.invoke(
-            main,
-            ["enrollment", "update", _ENROLLMENT_ID, "--status", "active"],
-        )
-
-    assert result.exit_code == 1
-    data = json.loads(result.output)
-    assert data["error"] == "not_found"
+    # Click rejects an unknown subcommand at parse time (usage error, exit 2).
+    assert result.exit_code == 2
 
 
 # -- Task CLI ------------------------------------------------------------------

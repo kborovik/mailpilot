@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS enrollment (
     workflow_id     TEXT NOT NULL REFERENCES workflow(id),
     contact_id      TEXT NOT NULL REFERENCES contact(id),
     status          TEXT NOT NULL DEFAULT 'active'
-                    CHECK (status IN ('active', 'paused', 'disabled')),
+                    CHECK (status IN ('active', 'disabled')),
     reason          TEXT NOT NULL DEFAULT '',
     disabled_reason TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -173,7 +173,7 @@ CREATE TABLE IF NOT EXISTS activity (
                         'enrollment_added',
                         'enrollment_completed', 'enrollment_failed',
                         'enrollment_paused', 'enrollment_resumed',
-                        'enrollment_disabled'
+                        'enrollment_disabled', 'enrollment_enabled'
                     )),
     summary         TEXT NOT NULL DEFAULT '',
     detail          JSONB NOT NULL DEFAULT '{}',

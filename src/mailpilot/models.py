@@ -185,16 +185,16 @@ class WorkflowTemplateRecord(BaseModel):
     protocol: str
 
 
-EnrollmentStatus = Literal["active", "paused", "disabled"]
+EnrollmentStatus = Literal["active", "disabled"]
 
 
 class Enrollment(BaseModel):
     """A contact's binding to a workflow.
 
-    Status is the single live-state signal. ``active`` (agent considers this
-    contact when the workflow runs) and ``paused`` (operator/agent has
-    suspended) are operational; ``disabled`` is the terminal operator-killed
-    lifecycle exit (§V.15). Outcomes (completed/failed) live in the activity
+    Status is the single live-state signal, collapsed to two values (§V.15):
+    ``active`` (agent considers this contact when the workflow runs) is the
+    only running state, and ``disabled`` is the operator halt -- reversible via
+    ``enrollment enable``. Outcomes (completed/failed) live in the activity
     timeline, not in this row.
 
     ``disabled_reason`` is coupled to ``status='disabled'`` at the schema
@@ -204,7 +204,7 @@ class Enrollment(BaseModel):
     ``workflow_name``, ``contact_email``, ``contact_name`` are
     denormalised parent identifiers loaded via JOIN at fetch (§V.5 parent-NI
     rule, ``Workflow.account_email`` precedent). They keep every CLI surface
-    (``enrollment add/view/list/update/disable/run``) symmetric on parent
+    (``enrollment add/view/list/disable/enable/run``) symmetric on parent
     context.
     """
 
@@ -354,6 +354,7 @@ ActivityType = Literal[
     "enrollment_paused",
     "enrollment_resumed",
     "enrollment_disabled",
+    "enrollment_enabled",
 ]
 
 

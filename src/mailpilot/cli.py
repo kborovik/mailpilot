@@ -51,6 +51,7 @@ _ACTIVITY_TYPES = [
     "enrollment_paused",
     "enrollment_resumed",
     "enrollment_disabled",
+    "enrollment_enabled",
 ]
 
 # Persisted email.route_method values; mirrors the schema CHECK set and the
@@ -70,7 +71,7 @@ _ROUTE_METHODS = [
 _WORKFLOW_STATUSES = ["draft", "active", "paused"]
 _WORKFLOW_TEMPLATES = ["outbound-general", "inbound-general", "inbound-google-drive"]
 _EMAIL_STATUSES = ["sent", "received", "bounced"]
-_ENROLLMENT_STATUSES = ["active", "paused", "disabled"]
+_ENROLLMENT_STATUSES = ["active", "disabled"]
 _TASK_STATUSES = ["pending", "completed", "failed", "cancelled"]
 
 
@@ -3653,72 +3654,6 @@ def enrollment_list(
             until=until,
         )
         output({"enrollments": [r.model_dump(mode="json") for r in rows]})
-    finally:
-        connection.close()
-
-
-@enrollment.command("update")
-@click.argument("enrollment_id")
-@click.option(
-    "--status",
-    required=True,
-    type=click.Choice(["active", "paused"]),
-    help="New enrollment status (active or paused).",
-)
-@click.option("--reason", default=None, help="Status reason.")
-def enrollment_update(enrollment_id: str, status: str, reason: str | None) -> None:
-    """Update enrollment operational status (active or paused).
-
-    Outcomes (completed, failed) are recorded as activity by the agent
-    via record_enrollment_outcome -- not via this command.
-    """
-    from mailpilot.database import (
-        create_activity,
-        get_contact,
-        get_enrollment_by_id,
-        initialize_database,
-        update_enrollment,
-    )
-    from mailpilot.operator_log import cli_mutation, operator_event
-
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
-        before = get_enrollment_by_id(connection, enrollment_id)
-        if before is None:
-            output_error("enrollment not found", "not_found")
-        fields: dict[str, object] = {"status": status}
-        if reason is not None:
-            fields["reason"] = reason
-        with cli_mutation("enrollment", "update", entity_id=enrollment_id):
-            updated = update_enrollment(connection, enrollment_id, **fields)
-            if updated is None:
-                output_error("enrollment not found", "not_found")
-            if before.status != status:
-                contact = get_contact(connection, before.contact_id)
-                activity_type = (
-                    "enrollment_paused" if status == "paused" else "enrollment_resumed"
-                )
-                create_activity(
-                    connection,
-                    contact_id=before.contact_id,
-                    activity_type=activity_type,
-                    summary=reason or f"Enrollment {status}",
-                    detail={"reason": reason or ""},
-                    company_id=contact.company_id if contact is not None else None,
-                    workflow_id=before.workflow_id,
-                    enrollment_id=before.id,
-                )
-            changed = [
-                field
-                for field in ("status", "reason")
-                if getattr(before, field) != getattr(updated, field)
-            ]
-            operator_event(
-                "enrollment.update",
-                entity_id=enrollment_id,
-                changed=changed,
-            )
-            output_entity("enrollment", updated)
     finally:
         connection.close()
 

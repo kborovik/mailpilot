@@ -2099,35 +2099,6 @@ def create_enrollment(
     return Enrollment.model_validate(row)
 
 
-def update_enrollment(
-    connection: psycopg.Connection[dict[str, Any]],
-    enrollment_id: str,
-    **fields: object,
-) -> Enrollment | None:
-    """Update an enrollment by scalar id.
-
-    Args:
-        connection: Open database connection.
-        enrollment_id: Enrollment ID.
-        **fields: Fields to update (status, reason).
-
-    Returns:
-        Updated enrollment, or None if not found.
-    """
-    allowed = {"status", "reason"}
-    updates = {k: v for k, v in fields.items() if k in allowed}
-    if not updates:
-        return get_enrollment_by_id(connection, enrollment_id)
-    updates["id"] = enrollment_id
-    where = SQL("id = %(id)s")
-    query = _build_update("enrollment", updates, where)
-    row = connection.execute(query, updates).fetchone()
-    connection.commit()
-    if row is None:
-        return None
-    return get_enrollment_by_id(connection, enrollment_id)
-
-
 def get_enrollment(
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str,
@@ -2383,12 +2354,11 @@ def enable_enrollment(
 ) -> Enrollment | None:
     """Re-enable a disabled enrollment: flip ``status`` to ``active``.
 
-    Mirror of ``disable_enrollment``: flips ``status='active'`` and clears
-    ``disabled_reason``. A ``status='disabled'`` gate blocks enabling a live
-    enrollment -- an already-active row does not match, so the call returns
-    ``None``. Writes no activity row; the ``enrollment_enabled`` activity is
-    deferred to the enrollment status-collapse task that owns the activity-type
-    enum.
+    Mirror of ``disable_enrollment`` (§V.15): single transaction flips
+    ``status='active'`` + clears ``disabled_reason``, then appends an
+    ``enrollment_enabled`` activity. A ``status='disabled'`` gate blocks
+    enabling a live enrollment -- an already-active row does not match, so the
+    call returns ``None`` and writes no activity.
 
     Returns the updated row with denormalised parent identifiers (workflow
     name, contact email/name) so the CLI envelope can ship the full Enrollment
@@ -2417,6 +2387,7 @@ def enable_enrollment(
             updated.*,
             workflow.name AS workflow_name,
             contact.email AS contact_email,
+            contact.company_id AS contact_company_id,
             TRIM(
                 COALESCE(contact.first_name, '')
                 || ' '
@@ -2428,9 +2399,32 @@ def enable_enrollment(
         """,
         {"id": enrollment_id},
     ).fetchone()
-    connection.commit()
     if row is None:
+        connection.commit()
         return None
+    connection.execute(
+        """\
+        INSERT INTO activity (
+            id, contact_id, company_id, workflow_id, enrollment_id,
+            type, summary, detail
+        )
+        VALUES (
+            %(id)s, %(contact_id)s, %(company_id)s, %(workflow_id)s,
+            %(enrollment_id)s, 'enrollment_enabled', %(summary)s, %(detail)s
+        )
+        """,
+        {
+            "id": _new_id(),
+            "contact_id": row["contact_id"],
+            "company_id": row["contact_company_id"],
+            "workflow_id": row["workflow_id"],
+            "enrollment_id": row["id"],
+            "summary": "Enrollment re-enabled",
+            "detail": Json({}),
+        },
+    )
+    connection.commit()
+    row.pop("contact_company_id", None)
     return Enrollment.model_validate(row)
 
 

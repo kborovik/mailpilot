@@ -359,6 +359,69 @@ def test_migration_003_folds_legacy_tags_into_vocabulary(
     assert len({r["id"] for r in all_ids}) == 5  # 2 vocab + 3 assignments
 
 
+# -- migration 004: collapse enrollment.status paused -> disabled (§V.15) ------
+
+
+def test_migration_004_folds_paused_enrollments_to_disabled(
+    migration_schema: psycopg.Connection[dict[str, Any]],
+):
+    """§V.15: migration 004 folds existing ``paused`` enrollments into
+    ``disabled`` (carrying a literal reason so the coupling CHECK holds), then
+    tightens the status CHECK to {active, disabled} and admits the new
+    ``enrollment_enabled`` activity type."""
+    conn = migration_schema
+    # Build the pre-004 world: every shipped migration up to 003.
+    conn.execute(_read_shipped_migration("001"))  # type: ignore[arg-type]
+    conn.execute(_read_shipped_migration("002"))  # type: ignore[arg-type]
+    conn.execute(_read_shipped_migration("003"))  # type: ignore[arg-type]
+    conn.commit()
+
+    # Seed a paused enrollment (valid under the pre-004 three-value CHECK).
+    conn.execute(
+        "INSERT INTO account (id, email) VALUES (%s, %s)", ("ac1", "a@example.com")
+    )
+    conn.execute(
+        "INSERT INTO workflow (id, account_id, template, type, name) "
+        "VALUES (%s, %s, %s, %s, %s)",
+        ("wf1", "ac1", "outbound-general", "outbound", "W"),
+    )
+    conn.execute(
+        "INSERT INTO contact (id, email) VALUES (%s, %s)", ("ct1", "c@example.com")
+    )
+    conn.execute(
+        "INSERT INTO enrollment (id, workflow_id, contact_id, status) "
+        "VALUES (%s, %s, %s, %s)",
+        ("en1", "wf1", "ct1", "paused"),
+    )
+    conn.commit()
+
+    # Apply the collapse.
+    conn.execute(_read_shipped_migration("004"))  # type: ignore[arg-type]
+    conn.commit()
+
+    folded = conn.execute(
+        "SELECT status, disabled_reason FROM enrollment WHERE id = 'en1'"
+    ).fetchone()
+    assert folded is not None
+    assert folded["status"] == "disabled"
+    assert folded["disabled_reason"] == "paused: collapsed to disabled"
+
+    # The tightened status CHECK now rejects `paused`.
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute("UPDATE enrollment SET status = 'paused' WHERE id = 'en1'")
+    conn.rollback()
+
+    # The activity CHECK now admits `enrollment_enabled`.
+    conn.execute(
+        "INSERT INTO activity (id, contact_id, type) VALUES (%s, %s, %s)",
+        ("av1", "ct1", "enrollment_enabled"),
+    )
+    conn.commit()
+    admitted = conn.execute("SELECT type FROM activity WHERE id = 'av1'").fetchone()
+    assert admitted is not None
+    assert admitted["type"] == "enrollment_enabled"
+
+
 # -- identity invariant: schema.sql == apply-all-migrations-from-zero (§V.108) -
 
 
