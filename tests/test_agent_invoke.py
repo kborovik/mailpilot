@@ -39,7 +39,10 @@ from mailpilot.database import (
     create_enrollment,
     update_workflow,
 )
-from mailpilot.exceptions import AgentDidNotUseToolsError
+from mailpilot.exceptions import (
+    AgentCompletedWithoutReplyError,
+    AgentDidNotUseToolsError,
+)
 
 # -- Helpers -------------------------------------------------------------------
 
@@ -1079,6 +1082,232 @@ def test_agent_calls_reply_email(
     assert call_kwargs["to"] == contact.email
     assert call_kwargs["subject"] == "Re: Need help"
     assert call_kwargs["thread_id"] == "thread-reply-invoke"
+
+
+# -- Tests: §V.120 inbound-trigger reply guard --------------------------------
+
+
+def _make_inbound_email(
+    connection: psycopg.Connection[dict[str, Any]],
+    account_id: str,
+    contact_id: str,
+    workflow_id: str,
+) -> Any:
+    """Persist an inbound email to drive the §V.120 reply-guard tests."""
+    from mailpilot.database import create_email
+
+    email = create_email(
+        connection,
+        gmail_message_id="msg-reply-guard",
+        gmail_thread_id="thread-reply-guard",
+        account_id=account_id,
+        contact_id=contact_id,
+        workflow_id=workflow_id,
+        direction="inbound",
+        subject="Need an answer",
+        body_text="Please reply to this.",
+    )
+    assert email is not None
+    return email
+
+
+def test_inbound_email_run_without_reply_raises(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.120: inbound trigger that calls read tools but never replies fails.
+
+    The model satisfies §V.81 (one tool call -- ``read_contact``) yet sends
+    nothing. The guard must convert that silent non-reply into a raised
+    ``AgentCompletedWithoutReplyError`` instead of a success.
+    """
+    account, contact, workflow = _setup(database_connection, workflow_type="inbound")
+    email = _make_inbound_email(
+        database_connection, account.id, contact.id, workflow.id
+    )
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    model = _model_that_calls_tool("read_contact", {"email": contact.email})
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+        pytest.raises(AgentCompletedWithoutReplyError, match=workflow.id),
+    ):
+        invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            email=email,
+            trigger="email",
+            model_override=model,
+        )
+
+
+def test_inbound_task_run_without_reply_raises(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.120: a drained task carrying an inbound email is held to the same
+    reply obligation as the direct ``email`` trigger."""
+    account, contact, workflow = _setup(database_connection, workflow_type="inbound")
+    email = _make_inbound_email(
+        database_connection, account.id, contact.id, workflow.id
+    )
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    model = _model_that_calls_tool("read_contact", {"email": contact.email})
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+        pytest.raises(AgentCompletedWithoutReplyError),
+    ):
+        invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            email=email,
+            trigger="task",
+            model_override=model,
+        )
+
+
+def test_inbound_email_run_with_reply_passes(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.120: a run that calls reply_email satisfies the guard (no raise)."""
+    account, contact, workflow = _setup(database_connection, workflow_type="inbound")
+    email = _make_inbound_email(
+        database_connection, account.id, contact.id, workflow.id
+    )
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    model = _model_that_calls_tool(
+        "reply_email", {"email_id": email.id, "body": "Here is your answer."}
+    )
+    with (
+        patch("mailpilot.agent.invoke.GmailClient") as mock_cls,
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
+        mock_client = MagicMock()
+        mock_client.send_message.return_value = {
+            "id": "sent-reply-guard",
+            "threadId": "thread-reply-guard",
+            "labelIds": ["SENT"],
+        }
+        mock_cls.return_value = mock_client
+        result = invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            email=email,
+            trigger="email",
+            model_override=model,
+        )
+
+    assert result is not None
+    assert result["status"] == "completed"
+
+
+def test_inbound_email_run_with_noop_is_explicit_decline(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.120: a successful noop counts as an explicit decline (no raise).
+
+    Decline is a valid terminal action for an inbound trigger -- only a
+    dropped reply (neither send nor noop) is the failure.
+    """
+    account, contact, workflow = _setup(database_connection, workflow_type="inbound")
+    email = _make_inbound_email(
+        database_connection, account.id, contact.id, workflow.id
+    )
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
+        result = invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            email=email,
+            trigger="email",
+            model_override=FunctionModel(_model_that_calls_noop),
+        )
+
+    assert result is not None
+    assert result["status"] == "completed"
+
+
+def test_outbound_run_without_reply_does_not_raise(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.120: the guard is scoped to inbound triggers. An outbound run
+    (no triggering email) that calls only a read tool is unaffected."""
+    _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    model = _model_that_calls_tool("read_contact", {"email": contact.email})
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
+        result = invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            trigger="enrollment_run",
+            model_override=model,
+        )
+
+    assert result is not None
+    assert result["status"] == "completed"
+
+
+def test_invoke_span_failed_when_completed_without_reply(
+    database_connection: psycopg.Connection[dict[str, Any]],
+    capfire: CaptureLogfire,
+) -> None:
+    """§V.120: the dropped-reply failure annotates the span status=failed,
+    mirroring the AgentDidNotUseToolsError path so Logfire flags the run."""
+    account, contact, workflow = _setup(database_connection, workflow_type="inbound")
+    email = _make_inbound_email(
+        database_connection, account.id, contact.id, workflow.id
+    )
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    model = _model_that_calls_tool("read_contact", {"email": contact.email})
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+        pytest.raises(AgentCompletedWithoutReplyError),
+    ):
+        invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            email=email,
+            trigger="email",
+            model_override=model,
+        )
+
+    invoke_spans = [
+        s
+        for s in capfire.exporter.exported_spans_as_dict()
+        if s["name"] == "agent.invoke"
+    ]
+    assert len(invoke_spans) == 1
+    assert invoke_spans[0]["attributes"]["status"] == "failed"
 
 
 def test_workflow_agent_has_explicit_name_for_otel_traces() -> None:

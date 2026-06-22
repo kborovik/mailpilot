@@ -81,3 +81,15 @@ def test_httpx_read_timeout_not_transient_v43_exclusion() -> None:
 def test_arbitrary_exception_not_transient() -> None:
     assert is_transient(RuntimeError("oh no")) is False
     assert is_transient(ValueError("bad")) is False
+
+
+def test_agent_completed_without_reply_not_transient() -> None:
+    """§V.120: a dropped inbound reply is terminal, never retried.
+
+    The class is unrecognised by ``is_transient`` -- it falls through to the
+    default ``False`` so ``_handle_agent_failure`` takes the task terminal
+    ``failed`` with an operator error rather than re-driving a run whose
+    tool side-effects may already have fired."""
+    from mailpilot.exceptions import AgentCompletedWithoutReplyError
+
+    assert is_transient(AgentCompletedWithoutReplyError("no reply")) is False
