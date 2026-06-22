@@ -6,6 +6,7 @@
 .skill-eval/
 .env
 .firecrawl/
+.campaign-test/
 .mptest/
 .pytest_cache/
 .ruff_cache/
