@@ -24,6 +24,8 @@ Agent-operated CRM. Gmail is the comms layer. Two layers of intelligence:
 - TDD for all changes.
 - Background loops wake on events, not timers. Canonical: `start_sync_loop` in
   `src/mailpilot/sync.py` (§V.21).
+- Company and contact rows are live, paid data (discovery credits). Never drop
+  or recreate the database without backing them up first (§V.119).
 
 ## Code style
 
