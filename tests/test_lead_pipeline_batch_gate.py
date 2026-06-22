@@ -1,11 +1,12 @@
 """§V.117 guard -- the shared Batch-gate convention states the distinct-batch
-option rule and suppresses the fixed `First 25` cap when stale-count <= 25.
+option rule and suppresses the fixed `First 24` cap when stale-count <= 24.
 
-`§B.98`: at stale-count 10-25 the unconditional `First 25` option capped to all
-rows, so `First 25` and `All <N>` dispatched one identical batch -- two options,
-one outcome. §V.117 fixes this pre-cap (during option construction): every gate
-option MUST map to a distinct batch at the current stale-count, so a fixed-cap
-option is dropped once its cap reaches the stale-count.
+`§B.98`: a fixed-cap option that equals `All <N>` at the current stale-count
+dispatches one identical batch as `All <N>` -- two options, one outcome. §V.117
+fixes this pre-cap (during option construction): every gate option MUST map to a
+distinct batch at the current stale-count, so a fixed-cap option is dropped once
+its cap reaches the stale-count (`First 24` dropped at stale-count <= 24, ==
+`All <N>` there).
 
 Per §V.100 the rule lives once in `references/lead-pipeline-conventions.md`
 (both sibling skills cite it, neither copies it). This test mechanizes the
@@ -43,19 +44,19 @@ def _batch_gate_section(conventions_markdown: str) -> str:
 
 def test_batch_gate_states_distinct_batch_rule() -> None:
     """§V.117: the Batch-gate § states each option maps to a distinct batch and
-    suppresses `First 25` at stale-count <= 25 (== `All <N>` there)."""
+    suppresses `First 24` at stale-count <= 24 (== `All <N>` there)."""
     section = _batch_gate_section(_CONVENTIONS.read_text())
 
     assert "distinct batch" in section, (
         "Batch-gate § must state the distinct-batch option rule (§V.117)"
     )
-    assert "First 25" in section, "Batch-gate § must list the `First 25` cap option"
-    # The suppression condition: offer `First 25` only above its cap, drop it at/below.
-    assert "stale-count > 25" in section, (
-        "Batch-gate § must offer `First 25` only when stale-count > 25 (§V.117)"
+    assert "First 24" in section, "Batch-gate § must list the `First 24` cap option"
+    # The suppression condition: offer `First 24` only above its cap, drop it at/below.
+    assert "stale-count > 24" in section, (
+        "Batch-gate § must offer `First 24` only when stale-count > 24 (§V.117)"
     )
-    assert "stale-count <= 25" in section, (
-        "Batch-gate § must drop `First 25` when stale-count <= 25 (== `All <N>`, §V.117)"
+    assert "stale-count <= 24" in section, (
+        "Batch-gate § must drop `First 24` when stale-count <= 24 (== `All <N>`, §V.117)"
     )
     assert "V117" in section.replace(".", ""), (
         "Batch-gate § must cite §V.117 for the distinct-batch rule"
@@ -77,7 +78,7 @@ def test_suppression_rule_not_duplicated_into_skill_bodies() -> None:
     sibling SKILL bodies cite it, they do not restate the suppression mechanics."""
     for skill_body in _SIBLING_SKILL_BODIES:
         text = skill_body.read_text()
-        assert "stale-count <= 25" not in text, (
+        assert "stale-count <= 24" not in text, (
             f"{skill_body.relative_to(_REPO_ROOT)} restates the §V.117 suppression "
             "mechanics; the rule must live once in lead-pipeline-conventions.md (§V.100)"
         )
@@ -90,9 +91,9 @@ def test_assertion_is_non_vacuous() -> None:
         "## Batch gate\n\n"
         "- `len(<rows>) > 9` -> invoke `AskUserQuestion` with these options:\n"
         '  - `"First 9 (Recommended)"` -- cap to first 9\n'
-        '  - `"First 25"` -- cap to first 25\n'
+        '  - `"First 24"` -- cap to first 24\n'
         '  - `"All <N>"` -- every stale row\n'
     )
     section = _batch_gate_section(pre_v117_section)
     assert "distinct batch" not in section
-    assert "stale-count <= 25" not in section
+    assert "stale-count <= 24" not in section
