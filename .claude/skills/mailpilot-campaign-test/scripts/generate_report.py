@@ -35,11 +35,12 @@ def main() -> int:
     lines = [
         f"# Campaign test report -- run {args.run_id}",
         "",
-        "Discovered contacts supplied personalization data only. Every message "
-        "was sent to the sink mailbox, never to a contact's own address.",
+        "Real contacts supplied personalization data only. Each message was sent "
+        "to the contact's assigned inbound alias, never to the contact's own "
+        "address.",
         "",
-        "| # | Contact | Gaps | Lint | Send | Delivered |",
-        "|---|---|---|---|---|---|",
+        "| # | Contact | Alias | Gaps | Lint | Send | Delivered |",
+        "|---|---|---|---|---|---|---|",
     ]
     lint_failures = send_failures = 0
     for entry in rendered:
@@ -54,8 +55,8 @@ def main() -> int:
             delivered_cell = "yes" if seq in delivered else "no"
         gaps = "; ".join(entry["gaps"]) if entry["gaps"] else "none"
         lines.append(
-            f"| {seq} | {entry['contact_email']} | {gaps} | {entry['lint']} | "
-            f"{send.get('status', 'n/a')} | {delivered_cell} |"
+            f"| {seq} | {entry['contact_email']} | {entry['alias']} | {gaps} | "
+            f"{entry['lint']} | {send.get('status', 'n/a')} | {delivered_cell} |"
         )
 
     missing = delivery["missing"] if delivery_ran else []

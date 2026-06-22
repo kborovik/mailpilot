@@ -1,9 +1,10 @@
-"""Confirm each sent test message actually landed in the sink mailbox.
+"""Confirm each sent test message landed in the alias mailbox.
 
-Syncs the sink account from Gmail, then lists its inbound mail since the send
-window and matches each sent message by its ``[CAMPAIGN-TEST <run_id> <seq>]``
-subject tag. A live arrival proves the full send path -- account auth, Gmail
-accept, threading, and render -- worked end to end. Writes ``delivery.json``.
+Syncs the alias mailbox (inbound@lab5.ca, which receives every inbound{1-9}
+alias) from Gmail, then lists its inbound mail since the send window and matches
+each sent message by its ``[CAMPAIGN-TEST <run_id> <seq>]`` subject tag. A live
+arrival proves the full send path -- account auth, Gmail accept, alias routing,
+and render -- worked end to end. Writes ``delivery.json``.
 
 Usage:
     uv run python scripts/verify_delivery.py --run-id <id>
@@ -31,17 +32,17 @@ def main() -> int:
 
     directory = run_dir(args.run_id)
     sends = read_json(directory / "sends.json")
-    sink_email = sends["sink_email"]
+    alias_mailbox = sends["alias_mailbox"]
     window_start = sends["window_start"]
     expected = {s["sequence"] for s in sends["sends"] if s["status"] == "sent"}
 
-    mp(["account", "sync", "--account-email", sink_email], check=False)
+    mp(["account", "sync", "--account-email", alias_mailbox], check=False)
     listing = mp(
         [
             "email",
             "list",
             "--account-email",
-            sink_email,
+            alias_mailbox,
             "--from",
             SENDER_EMAIL,
             "--since",
@@ -61,7 +62,7 @@ def main() -> int:
     delivered = sorted(expected & arrived)
     missing = sorted(expected - arrived)
     result = {
-        "sink_email": sink_email,
+        "alias_mailbox": alias_mailbox,
         "expected": sorted(expected),
         "delivered": delivered,
         "missing": missing,

@@ -58,6 +58,7 @@ def main() -> int:
             "sequence": contact["sequence"],
             "contact_id": contact["id"],
             "contact_email": contact["email"],
+            "alias": contact["alias"],
             "subject": tagged_subject,
             "body": body,
             "gaps": gaps,
@@ -69,8 +70,8 @@ def main() -> int:
         preview = directory / f"preview_{contact['sequence']:02d}.md"
         preview.write_text(
             f"# {tagged_subject}\n\n"
-            f"_contact: {contact['email']} | gaps: {gaps or 'none'} | "
-            f"lint: {entry['lint']}_\n\n{body}\n"
+            f"_contact: {contact['email']} -> alias: {contact['alias']} | "
+            f"gaps: {gaps or 'none'} | lint: {entry['lint']}_\n\n{body}\n"
         )
 
     write_json(directory / "personalized.json", {"rendered": rendered})

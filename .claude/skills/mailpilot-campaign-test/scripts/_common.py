@@ -17,12 +17,19 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-# Sending account and the safe sink. Discovered contacts are the personalization
-# DATA source only -- the real outbound recipient is ALWAYS the sink, never a
-# discovered external address. The sink carries no active workflow, so even if
-# ``mailpilot run`` were up no auto-reply would fire.
+# Source account for every send.
 SENDER_EMAIL = "outbound@lab5.ca"
-SINK_EMAIL = "hello@lab5.ca"
+
+# Target addresses. Each real contact is simulated against one of nine aliases
+# that all deliver into the inbound@lab5.ca mailbox, so a send carries real
+# contact data (name, title, company) while its envelope recipient is a
+# controlled alias -- never the contact's own address. ALIAS_MAILBOX is the
+# account synced to confirm delivery; it receives every alias. The skill never
+# starts ``mailpilot run``, so no auto-reply fires even though this mailbox
+# carries an inbound workflow.
+ALIAS_MAILBOX = "inbound@lab5.ca"
+ALIASES = [f"inbound{number}@lab5.ca" for number in range(1, 10)]
+MAX_ALIASES = len(ALIASES)
 
 # Subject tag that correlates a sent test message with its delivered copy.
 SUBJECT_TAG_PREFIX = "CAMPAIGN-TEST"
@@ -136,6 +143,11 @@ def personalize(template: str, contact: dict[str, Any]) -> tuple[str, list[str]]
 def make_subject(run_id: str, sequence: int, rendered_subject: str) -> str:
     """Prefix a rendered subject with the run/sequence correlation tag."""
     return f"[{SUBJECT_TAG_PREFIX} {run_id} {sequence}] {rendered_subject}"
+
+
+def alias_for(sequence: int) -> str:
+    """Map a 1-based contact sequence to its inbound alias (wraps past nine)."""
+    return ALIASES[(sequence - 1) % MAX_ALIASES]
 
 
 def mp(args: list[str], *, check: bool = True) -> dict[str, Any]:

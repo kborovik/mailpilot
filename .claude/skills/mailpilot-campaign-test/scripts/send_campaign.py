@@ -1,6 +1,6 @@
-"""Live-send each personalized campaign message to the sink mailbox.
+"""Live-send each personalized campaign message to its assigned alias.
 
-Sends FROM the sender account TO the sink mailbox -- never to the discovered
+Sends FROM the sender account TO the contact's inbound alias -- never to the
 contact's own address. Lint failures (§V.42) are skipped by default so a
 malformed body never goes out; pass ``--include-lint-failures`` to send them
 anyway. Records ``window_start`` (captured before the first send) as the
@@ -29,7 +29,7 @@ def main() -> int:
     manifest = read_json(directory / "run_manifest.json")
     rendered = read_json(directory / "personalized.json")["rendered"]
     sender_id = manifest["sender_account_id"]
-    sink_email = manifest["sink_email"]
+    alias_mailbox = manifest["alias_mailbox"]
 
     window_start = datetime.now().astimezone().isoformat()
     sends = []
@@ -40,6 +40,7 @@ def main() -> int:
                     "sequence": entry["sequence"],
                     "status": "skipped",
                     "reason": "lint_failure",
+                    "alias": entry["alias"],
                     "subject": entry["subject"],
                 }
             )
@@ -51,7 +52,7 @@ def main() -> int:
                 "--account-email",
                 sender_id,
                 "--to",
-                sink_email,
+                entry["alias"],
                 "--subject",
                 entry["subject"],
                 "--body",
@@ -64,13 +65,18 @@ def main() -> int:
             {
                 "sequence": entry["sequence"],
                 "status": "sent" if payload.get("ok") else "failed",
+                "alias": entry["alias"],
                 "subject": entry["subject"],
                 "outbound_email_id": email.get("id"),
                 "error": payload.get("error"),
             }
         )
 
-    result = {"window_start": window_start, "sink_email": sink_email, "sends": sends}
+    result = {
+        "window_start": window_start,
+        "alias_mailbox": alias_mailbox,
+        "sends": sends,
+    }
     write_json(directory / "sends.json", result)
 
     sent = sum(1 for s in sends if s["status"] == "sent")

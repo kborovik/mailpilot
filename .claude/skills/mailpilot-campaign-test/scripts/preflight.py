@@ -1,11 +1,12 @@
 """Preflight: verify the environment can run the live campaign test.
 
-Parses the campaign Markdown file, resolves the sender and sink account ids,
-confirms Google credentials are configured (the live send needs them), confirms
-the sink mailbox carries no active workflow (so no auto-reply fires), and counts
-the discovered contacts available as personalization data. Writes
-``preflight.json`` (the single source of resolved state for later scripts) and
-exits non-zero on a blocking issue.
+Parses the campaign Markdown file, resolves the sender (outbound@lab5.ca) and
+the alias mailbox (inbound@lab5.ca, which receives every inbound{1-9} alias),
+confirms Google credentials are configured (the live send needs them), notes
+whether the alias mailbox carries an active workflow, and counts the discovered
+contacts available as personalization data. Writes ``preflight.json`` (the
+single source of resolved state for later scripts) and exits non-zero on a
+blocking issue.
 
 Usage:
     uv run python scripts/preflight.py --run-id <id> --campaign <path>
@@ -19,8 +20,9 @@ import sys
 from pathlib import Path
 
 from _common import (
+    ALIAS_MAILBOX,
+    ALIASES,
     SENDER_EMAIL,
-    SINK_EMAIL,
     mp,
     parse_campaign,
     repo_root,
@@ -49,31 +51,36 @@ def _resolve_campaign(
 
 def _resolve_accounts(result: dict[str, object], issues: list[str]) -> None:
     sender_id = resolve_account_id(SENDER_EMAIL)
-    sink_id = resolve_account_id(SINK_EMAIL)
+    mailbox_id = resolve_account_id(ALIAS_MAILBOX)
     result["sender_account_id"] = sender_id
-    result["sink_account_id"] = sink_id
+    result["alias_mailbox_account_id"] = mailbox_id
     if not sender_id:
         issues.append(
             f"sending account {SENDER_EMAIL} not found (run `mailpilot account create`)"
         )
-    if not sink_id:
+    if not mailbox_id:
         issues.append(
-            f"sink account {SINK_EMAIL} not found (run `mailpilot account create`)"
+            f"alias mailbox {ALIAS_MAILBOX} not found (run `mailpilot account create`)"
         )
 
 
-def _check_sink_quiet(result: dict[str, object], issues: list[str]) -> None:
-    """Confirm the sink carries no active workflow (no auto-reply on delivery)."""
-    sink_id = result.get("sink_account_id")
-    if not isinstance(sink_id, str):
+def _note_mailbox_workflows(result: dict[str, object], issues: list[str]) -> None:
+    """Note active workflows on the alias mailbox; never blocking.
+
+    The alias mailbox normally carries the inbound demo workflow. No auto-reply
+    fires because the skill never starts ``mailpilot run``.
+    """
+    mailbox_id = result.get("alias_mailbox_account_id")
+    if not isinstance(mailbox_id, str):
         return
-    data = mp(["workflow", "list", "--account-email", sink_id], check=False)
+    data = mp(["workflow", "list", "--account-email", mailbox_id], check=False)
     active = [w for w in data.get("workflows", []) if w.get("status") == "active"]
-    result["sink_active_workflows"] = len(active)
+    result["alias_mailbox_active_workflows"] = len(active)
     if active:
         issues.append(
-            f"WARNING sink {SINK_EMAIL} has {len(active)} active workflow(s); a live "
-            "`mailpilot run` could auto-reply to the test message"
+            f"WARNING alias mailbox {ALIAS_MAILBOX} has {len(active)} active "
+            "workflow(s); the skill does not start `mailpilot run`, so no "
+            "auto-reply fires -- do not start the run loop during the test"
         )
 
 
@@ -114,12 +121,13 @@ def main() -> int:
     issues: list[str] = []
     result: dict[str, object] = {
         "sender_email": SENDER_EMAIL,
-        "sink_email": SINK_EMAIL,
+        "alias_mailbox": ALIAS_MAILBOX,
+        "aliases": ALIASES,
     }
 
     _resolve_campaign(args.campaign, result, issues)
     _resolve_accounts(result, issues)
-    _check_sink_quiet(result, issues)
+    _note_mailbox_workflows(result, issues)
     _count_contacts(result, issues)
     _check_settings(result, issues)
 
