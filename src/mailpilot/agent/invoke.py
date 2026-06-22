@@ -39,7 +39,10 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 from mailpilot import database
 from mailpilot.agent import tools as agent_tools
 from mailpilot.drive import DriveClient
-from mailpilot.exceptions import AgentDidNotUseToolsError
+from mailpilot.exceptions import (
+    AgentCompletedWithoutReplyError,
+    AgentDidNotUseToolsError,
+)
 from mailpilot.gmail import GmailClient
 from mailpilot.models import Account, Contact, Email, Workflow
 from mailpilot.operator_log import operator_event
@@ -394,6 +397,11 @@ def _build_anthropic_model(settings: Settings) -> AnthropicModel:
     mid-conversation, which would bubble to ``run.task.agent_failed``
     with no retry (idempotency: tool-call mid-turn cannot be safely
     re-driven). See SPEC.md §V.48, §B.16.
+
+    ``anthropic_base_url`` is the wire endpoint. It defaults to
+    ``api.anthropic.com``; pointing it at an Anthropic-compatible endpoint
+    (e.g. ``https://api.novita.ai/anthropic``) routes the same Messages-API
+    call to that vendor with no code change.
     """
     if not settings.anthropic_api_key:
         raise ValueError(
@@ -404,6 +412,7 @@ def _build_anthropic_model(settings: Settings) -> AnthropicModel:
         settings.anthropic_model,
         provider=AnthropicProvider(
             api_key=settings.anthropic_api_key,
+            base_url=settings.anthropic_base_url,
             http_client=httpx.AsyncClient(timeout=httpx.Timeout(240.0)),
         ),
         settings=AnthropicModelSettings(
@@ -530,6 +539,30 @@ def _extract_tool_errors(result: Any) -> list[dict[str, str]]:
                     }
                 )
     return errors
+
+
+def _sent_reply(result: Any) -> bool:
+    """Return True if the run answered or explicitly declined (§V.120).
+
+    Walks the message ledger (mirrors :func:`_extract_tool_errors`) for a
+    ``reply_email`` or ``send_email`` ToolReturnPart that carries no
+    ``error`` key -- the reply reached Gmail -- or a ``noop`` return, the
+    explicit decline. Either satisfies the inbound-reply obligation;
+    neither means the inbound email was left unanswered while the run
+    reported success.
+    """
+    for message in result.all_messages():
+        if not isinstance(message, ModelRequest):
+            continue
+        for part in message.parts:
+            if not isinstance(part, ToolReturnPart):
+                continue
+            errored = isinstance(part.content, dict) and "error" in part.content
+            if errored:
+                continue
+            if part.tool_name in ("reply_email", "send_email", "noop"):
+                return True
+    return False
 
 
 # -- Main entry point ----------------------------------------------------------
@@ -725,6 +758,28 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
                 )
                 raise AgentDidNotUseToolsError(
                     f"agent completed without calling any tools: "
+                    f"workflow={workflow.id}, contact={contact.id}"
+                )
+
+            # §V.120: an inbound-trigger run must answer -- either send a
+            # reply or take an explicit noop. The tool-count check above
+            # passes when the model called only search/read tools and then
+            # narrated a reply it never sent, which leaves the inbound email
+            # unanswered while reporting success. Hold inbound triggers
+            # (email present, trigger in {email, task}) to the stronger bar.
+            if (
+                email is not None
+                and trigger in ("email", "task")
+                and not _sent_reply(result)
+            ):
+                logfire.warn(
+                    "agent.completed_without_reply",
+                    workflow_id=workflow.id,
+                    contact_id=contact.id,
+                    agent_output=result.output,
+                )
+                raise AgentCompletedWithoutReplyError(
+                    f"inbound-trigger run completed without a reply or noop: "
                     f"workflow={workflow.id}, contact={contact.id}"
                 )
 

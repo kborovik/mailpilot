@@ -24,6 +24,7 @@ CONFIG_PATH = MAILPILOT_DIR / "config.json"
 
 DEFAULT_DATABASE_URL = "postgresql://localhost/mailpilot"
 DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6"
+DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 
 LogfireEnvironment = Literal["development", "production"]
 
@@ -58,6 +59,7 @@ class Settings(BaseSettings):
     logfire_environment: LogfireEnvironment = "development"
     anthropic_api_key: str = ""
     anthropic_model: str = DEFAULT_ANTHROPIC_MODEL
+    anthropic_base_url: str = DEFAULT_ANTHROPIC_BASE_URL
     google_pubsub_topic: str = "mailpilot-topic-dev"
     google_pubsub_subscription: str = "mailpilot-sub-dev"
     google_application_credentials: str = ""

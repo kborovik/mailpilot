@@ -53,6 +53,23 @@ def make_test_settings(**overrides: Any) -> Settings:
 
 
 @pytest.fixture(autouse=True)
+def _isolate_config_file(  # pyright: ignore[reportUnusedFunction]
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Point ``CONFIG_PATH`` at a nonexistent temp file.
+
+    ``Settings`` reads ``~/.mailpilot/config.json`` through ``JsonConfigSource``.
+    Without isolation the operator's real config (for example a Novita
+    ``anthropic_base_url``) leaks into every test that constructs ``Settings``
+    or calls ``make_test_settings``, overriding the field defaults under test.
+    A nonexistent path makes ``JsonConfigSource`` return an empty dict, so tests
+    see field defaults unless they override explicitly.
+    """
+    config_path = tmp_path_factory.mktemp("mailpilot_config") / "config.json"
+    monkeypatch.setattr("mailpilot.settings.CONFIG_PATH", config_path)
+
+
+@pytest.fixture(autouse=True)
 def _disable_logfire_export(monkeypatch: pytest.MonkeyPatch) -> None:  # pyright: ignore[reportUnusedFunction]
     real_configure = logfire.configure
 

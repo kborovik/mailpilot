@@ -8,6 +8,8 @@ than imported as a package.
 from __future__ import annotations
 
 import importlib.util
+import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -19,6 +21,22 @@ _SCRIPTS = (
     / "mailpilot-reply-test"
     / "scripts"
 )
+
+_QA_PAIRS = _SCRIPTS.parent / "assets" / "QA-Pairs.json"
+
+# A brittle in-scope token has the header-plus-qualifier shape ``Label
+# (Qualifier)``: an alphabetic label word followed by a parenthesized clause
+# (e.g. ``Maximum (15 ppm RO Feed)``). The reply renders such a fact across two
+# table cells, so the contiguous-substring match in ``_grade_inscope`` never
+# hits and a correct grounded reply false-FAILs (§B.102). An atomic token is a
+# single contiguous value -- model id, bare number, or number plus short unit --
+# the reply cannot restructure away (§V.105).
+_BRITTLE_INSCOPE_TOKEN = re.compile(r"[A-Za-z][\w-]*\s+\([^)]*\)")
+
+
+def _is_brittle_inscope_token(token: str) -> bool:
+    """True when ``token`` has the layout-dependent ``Label (Qualifier)`` shape."""
+    return _BRITTLE_INSCOPE_TOKEN.search(token) is not None
 
 
 def _load(module_name: str) -> Any:
@@ -154,3 +172,33 @@ def test_apply_judgments_unresolved_judge_stays_pending_and_fails():
     updated = apply_judgments.apply(scoring, {})
     assert updated["summary"] == {"PASS": 0, "FAIL": 0, "NO_REPLY": 0}
     assert updated["failed"] is True
+
+
+# --- atomic in-scope tokens guard (§V.105, closes §B.102) ---------------------
+
+
+def test_brittle_inscope_token_predicate():
+    # The §B.102 offender: a header label plus a parenthesized qualifier.
+    assert _is_brittle_inscope_token("Maximum (15 ppm RO Feed)") is True
+    # Atomic values the reply cannot restructure away pass: the split-out fact,
+    # a model id, a bare number, a number plus short unit, and a count-prefixed
+    # value whose only parenthesis leads (not a trailing qualifier).
+    assert _is_brittle_inscope_token("15 ppm RO Feed") is False
+    assert _is_brittle_inscope_token("EDI-220") is False
+    assert _is_brittle_inscope_token("28") is False
+    assert _is_brittle_inscope_token("0.48 mm") is False
+    assert _is_brittle_inscope_token('(20) 8"x40"') is False
+
+
+def test_inscope_expected_tokens_are_atomic():
+    # Every in-scope rubric token must be atomic; a layout-dependent token
+    # false-FAILs a grounded reply, breaking the false-PASS-at-worst contract.
+    pairs = json.loads(_QA_PAIRS.read_text())
+    brittle = [
+        (pair["id"], token)
+        for pair in pairs
+        if pair.get("type") == "inscope"
+        for token in pair.get("expected_tokens", [])
+        if _is_brittle_inscope_token(token)
+    ]
+    assert brittle == [], f"non-atomic in-scope expected_tokens: {brittle}"
