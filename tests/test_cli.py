@@ -804,7 +804,7 @@ def test_company_list_with_limit(runner: CliRunner, mock_connection: MagicMock) 
         min_contacts=None,
         include_disabled=False,
         tag=None,
-        exclude_tag=None,
+        exclude_tags=[],
     )
 
 
@@ -829,7 +829,7 @@ def test_company_list_with_since(runner: CliRunner, mock_connection: MagicMock) 
         min_contacts=None,
         include_disabled=False,
         tag=None,
-        exclude_tag=None,
+        exclude_tags=[],
     )
 
 
@@ -854,7 +854,7 @@ def test_company_list_has_profile_flag(
         min_contacts=None,
         include_disabled=False,
         tag=None,
-        exclude_tag=None,
+        exclude_tags=[],
     )
 
 
@@ -879,7 +879,7 @@ def test_company_list_no_profile_flag(
         min_contacts=None,
         include_disabled=False,
         tag=None,
-        exclude_tag=None,
+        exclude_tags=[],
     )
 
 
@@ -928,7 +928,7 @@ def test_company_list_max_contacts_flag(
         min_contacts=None,
         include_disabled=False,
         tag=None,
-        exclude_tag=None,
+        exclude_tags=[],
     )
 
 
@@ -954,7 +954,7 @@ def test_company_list_min_contacts_flag(
         min_contacts=1,
         include_disabled=False,
         tag=None,
-        exclude_tag=None,
+        exclude_tags=[],
     )
 
 
@@ -980,7 +980,7 @@ def test_company_list_include_disabled_flag(
         min_contacts=None,
         include_disabled=True,
         tag=None,
-        exclude_tag=None,
+        exclude_tags=[],
     )
 
 
@@ -2138,7 +2138,7 @@ def test_contact_list_with_filters(
         min_email_confidence=None,
         title=None,
         tag=None,
-        exclude_tag=None,
+        exclude_tags=[],
     )
 
 
@@ -2164,7 +2164,7 @@ def test_contact_list_include_disabled(
         min_email_confidence=None,
         title=None,
         tag=None,
-        exclude_tag=None,
+        exclude_tags=[],
     )
 
 
@@ -2193,7 +2193,7 @@ def test_contact_list_max_email_confidence(
         min_email_confidence=None,
         title=None,
         tag=None,
-        exclude_tag=None,
+        exclude_tags=[],
     )
 
 
@@ -2222,7 +2222,7 @@ def test_contact_list_min_email_confidence(
         min_email_confidence=60,
         title=None,
         tag=None,
-        exclude_tag=None,
+        exclude_tags=[],
     )
 
 
@@ -2256,7 +2256,7 @@ def test_contact_list_company_domain(
         min_email_confidence=None,
         title=None,
         tag=None,
-        exclude_tag=None,
+        exclude_tags=[],
     )
 
 
@@ -2306,7 +2306,7 @@ def test_contact_list_title(runner: CliRunner, mock_connection: MagicMock) -> No
         min_email_confidence=None,
         title="VP",
         tag=None,
-        exclude_tag=None,
+        exclude_tags=[],
     )
 
 
@@ -2332,7 +2332,7 @@ def test_contact_list_with_since(runner: CliRunner, mock_connection: MagicMock) 
         min_email_confidence=None,
         title=None,
         tag=None,
-        exclude_tag=None,
+        exclude_tags=[],
     )
 
 
@@ -6382,7 +6382,7 @@ def test_company_list_filter_by_tag(
     assert result.exit_code == 0
     _, kwargs = mock_list.call_args
     assert kwargs["tag"] == _TAG_ID
-    assert kwargs["exclude_tag"] is None
+    assert kwargs["exclude_tags"] == []
 
 
 def test_company_list_no_tag_filter(
@@ -6402,7 +6402,42 @@ def test_company_list_no_tag_filter(
     assert result.exit_code == 0
     _, kwargs = mock_list.call_args
     assert kwargs["tag"] is None
-    assert kwargs["exclude_tag"] == _TAG_ID
+    assert kwargs["exclude_tags"] == [_TAG_ID]
+
+
+def test_company_list_repeatable_no_tag(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.116: --no-tag is repeatable -> one resolved id per occurrence."""
+    no_dm = _make_tag(name="no-contacts-found", id=_TAG_ID)
+    exhausted = _make_tag(
+        name="contacts-exhausted", id="01234567-0000-7000-0000-0000000000ee"
+    )
+    by_name = {"no-contacts-found": no_dm, "contacts-exhausted": exhausted}
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.get_tag_by_name",
+            side_effect=lambda _conn, name: by_name[name],
+        ),
+        patch("mailpilot.database.list_companies", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "list",
+                "--no-tag",
+                "no-contacts-found",
+                "--no-tag",
+                "contacts-exhausted",
+            ],
+        )
+
+    assert result.exit_code == 0
+    _, kwargs = mock_list.call_args
+    assert kwargs["exclude_tags"] == [no_dm.id, exhausted.id]
 
 
 def test_company_list_tag_undefined_not_found(
@@ -6435,7 +6470,7 @@ def test_contact_list_filter_by_tag(
     assert result.exit_code == 0
     _, kwargs = mock_list.call_args
     assert kwargs["tag"] == _TAG_ID
-    assert kwargs["exclude_tag"] is None
+    assert kwargs["exclude_tags"] == []
 
 
 # -- note helpers --------------------------------------------------------------

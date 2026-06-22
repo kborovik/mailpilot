@@ -85,8 +85,8 @@ Constraints:
 - ASCII only in every persisted field.
 - Never seed an email that Hunter/TheOrg did not produce. No guessed addresses beyond Hunter Email Finder output.
 - Budget: ONE Domain Search, ONE TheOrg call, `<= 5` Bouncer single-verify calls (one per email). Email Finder only for TheOrg-only picks.
-- A single vendor 4xx/5xx or empty result is not fatal: proceed with what you have. Reserve `status="failed"` for a TRANSIENT fault that blocked the search -- every critical vendor call erroring or timing out, so you cannot tell whether decision-makers exist. A `failed` verdict is RETRIED next run, so never use it for a clean finding.
-- A run that completes but surfaces NO reachable decision-makers is `status="skipped"` with a definitive no-decision-makers reason -- NOT `failed`. The skill memoizes a skipped no-DM verdict by tagging the company `no-contacts-found` so it stops re-burning vendor credits; a transient error must never masquerade as "no contacts".
+- A single vendor 4xx/5xx or empty result is not fatal: proceed with what you have. Reserve `status="failed"` (`reason_code="transient"`) for a TRANSIENT fault that blocked the search -- every critical vendor call erroring or timing out, so you cannot tell whether decision-makers exist. A `failed` verdict is RETRIED next run, so never use it for a clean finding.
+- A run that completes but surfaces NO reachable decision-makers is `status="skipped"` with `reason_code="no_decision_makers"` -- NOT `failed`. The skill memoizes that verdict by tagging the company `no-contacts-found` so it stops re-burning vendor credits; a transient error must never masquerade as "no contacts".
 - Your final message is the JSON verdict only, no prose:
   ```
   {
@@ -95,7 +95,12 @@ Constraints:
     "status": "seeded" | "skipped" | "failed",
     "contacts_created": <int>,
     "flagged": <int>,
-    "reason": "<short text>"
+    "reason": "<short text>",
+    "reason_code": "no_decision_makers" | "all_already_seeded" | "transient"
   }
   ```
-  `status="seeded"` after `>= 1` contact create returned `{"contact": {...}, "ok": true}` (or duplicate_key = already seeded). `status="skipped"` when the run seeded no NEW contact, in one of two cases the `reason` MUST disambiguate: every discovered email already existed (`reason` like "all 3 discovered emails already seeded") OR no reachable decision-makers were discoverable -- for that genuine-empty case begin `reason` with "no decision-makers" (the definitive no-DM verdict the skill memoizes by tagging the company `no-contacts-found`). `status="failed"` ONLY for a transient vendor/transport fault that blocked the search (retryable); never for a clean no-DM finding.
+  `status="seeded"` after `>= 1` contact create returned `{"contact": {...}, "ok": true}` (or duplicate_key = already seeded); omit `reason_code` (no memoization applies). `status="skipped"` when the run seeded no NEW contact -- the typed `reason_code` (NOT the free-text `reason`) disambiguates which memoization tag the skill applies, so it MUST be set:
+    - `reason_code="all_already_seeded"` -- the finder re-found people but every discovered email already existed as a `contact` row (`contacts_created` is 0); the skill tags the company `contacts-exhausted`. Put the human detail in `reason` (e.g. "all 3 discovered emails already seeded").
+    - `reason_code="no_decision_makers"` -- no reachable decision-makers were discoverable at all; the skill tags the company `no-contacts-found`.
+
+  `status="failed"` with `reason_code="transient"` ONLY for a transient vendor/transport fault that blocked the search (retryable, NEVER tagged); never for a clean no-DM finding. The free-text `reason` stays human-readable detail; the skill branches on `reason_code` alone.

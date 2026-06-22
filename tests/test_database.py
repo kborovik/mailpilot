@@ -3174,7 +3174,7 @@ def test_list_companies_filter_by_tag(
 def test_list_companies_exclude_by_no_tag(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """§V.116: list_companies exclude_tag keeps only companies NOT carrying it."""
+    """§V.116: list_companies exclude_tags keeps only companies NOT carrying it."""
     a = make_test_company(database_connection, name="A", domain="a.test")
     make_test_company(database_connection, name="B", domain="b.test")
     tag = create_tag(database_connection, name="no-contacts-found")
@@ -3182,8 +3182,34 @@ def test_list_companies_exclude_by_no_tag(
     make_test_tag_assignment(
         database_connection, company_id=a.id, name="no-contacts-found"
     )
-    rows = list_companies(database_connection, exclude_tag=tag.id)
+    rows = list_companies(database_connection, exclude_tags=[tag.id])
     assert [c.domain for c in rows] == ["b.test"]
+
+
+def test_list_companies_exclude_by_multiple_no_tags(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.96/§V.116: repeatable exclude_tags drops every memoization class.
+
+    One NOT EXISTS per tag, all intersected -- a company tagged either
+    ``no-contacts-found`` or ``contacts-exhausted`` leaves the discover set.
+    """
+    a = make_test_company(database_connection, name="A", domain="a.test")
+    b = make_test_company(database_connection, name="B", domain="b.test")
+    c = make_test_company(database_connection, name="C", domain="c.test")
+    no_dm = create_tag(database_connection, name="no-contacts-found")
+    exhausted = create_tag(database_connection, name="contacts-exhausted")
+    assert no_dm is not None
+    assert exhausted is not None
+    make_test_tag_assignment(
+        database_connection, company_id=a.id, name="no-contacts-found"
+    )
+    make_test_tag_assignment(
+        database_connection, company_id=b.id, name="contacts-exhausted"
+    )
+    rows = list_companies(database_connection, exclude_tags=[no_dm.id, exhausted.id])
+    assert [row.domain for row in rows] == ["c.test"]
+    assert c.domain == "c.test"
 
 
 def test_list_companies_tag_and_no_tag_intersection(
@@ -3201,14 +3227,14 @@ def test_list_companies_tag_and_no_tag_intersection(
     make_test_tag_assignment(
         database_connection, company_id=b.id, name="no-contacts-found"
     )
-    rows = list_companies(database_connection, tag=profiled.id, exclude_tag=skip.id)
+    rows = list_companies(database_connection, tag=profiled.id, exclude_tags=[skip.id])
     assert [c.domain for c in rows] == ["a.test"]
 
 
 def test_list_contacts_filter_by_tag(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """§V.116: list_contacts tag= / exclude_tag= over the assignment join."""
+    """§V.116: list_contacts tag= / exclude_tags= over the assignment join."""
     a = make_test_contact(database_connection, email="x1@acme.test")
     b = make_test_contact(database_connection, email="x2@acme.test")
     tag = create_tag(database_connection, name="vip")
@@ -3218,9 +3244,27 @@ def test_list_contacts_filter_by_tag(
         "x1@acme.test"
     ]
     assert [
-        c.email for c in list_contacts(database_connection, exclude_tag=tag.id)
+        c.email for c in list_contacts(database_connection, exclude_tags=[tag.id])
     ] == ["x2@acme.test"]
     assert b.email == "x2@acme.test"
+
+
+def test_list_contacts_exclude_by_multiple_no_tags(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.116: repeatable exclude_tags drops contacts carrying any named tag."""
+    a = make_test_contact(database_connection, email="a@acme.test")
+    b = make_test_contact(database_connection, email="b@acme.test")
+    c = make_test_contact(database_connection, email="c@acme.test")
+    vip = create_tag(database_connection, name="vip")
+    cold = create_tag(database_connection, name="cold")
+    assert vip is not None
+    assert cold is not None
+    make_test_tag_assignment(database_connection, contact_id=a.id, name="vip")
+    make_test_tag_assignment(database_connection, contact_id=b.id, name="cold")
+    rows = list_contacts(database_connection, exclude_tags=[vip.id, cold.id])
+    assert [row.email for row in rows] == ["c@acme.test"]
+    assert c.email == "c@acme.test"
 
 
 def test_add_contact_note_emits_activity_atomically(

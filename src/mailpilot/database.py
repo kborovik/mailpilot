@@ -14,7 +14,7 @@ import hashlib
 import re
 import urllib.parse
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
@@ -1050,6 +1050,43 @@ def get_company(
     return Company.model_validate(row)
 
 
+def _exclude_tags_conditions(
+    exclude_tags: Sequence[str] | None,
+    owner_column: str,
+    params: dict[str, object],
+) -> list[Composed]:
+    """Build one ``NOT EXISTS`` predicate per excluded tag (§V.116).
+
+    ``--no-tag`` is repeatable, so the discover set can exclude several
+    memoization classes at once (``no-contacts-found`` and
+    ``contacts-exhausted``, §V.96). Each tag becomes its own intersected
+    ``NOT EXISTS`` over ``tag_assignment`` on ``owner_column``
+    (``company_id`` or ``contact_id``); the caller appends the predicates and
+    this fn mutates ``params`` with a uniquely-named placeholder per tag.
+
+    Args:
+        exclude_tags: Resolved tag ids to exclude (empty/None -> no predicate).
+        owner_column: ``tag_assignment`` owner FK column to join on.
+        params: Query parameter map, mutated in place with one entry per tag.
+
+    Returns:
+        One ``NOT EXISTS`` predicate per excluded tag.
+    """
+    conditions: list[Composed] = []
+    if not exclude_tags:
+        return conditions
+    for index, exclude_tag_id in enumerate(exclude_tags):
+        param_name = f"exclude_tag_id_{index}"
+        conditions.append(
+            SQL(
+                "NOT EXISTS (SELECT 1 FROM tag_assignment ta "
+                "WHERE ta.{} = c.id AND ta.tag_id = {})"
+            ).format(Identifier(owner_column), Placeholder(param_name))
+        )
+        params[param_name] = exclude_tag_id
+    return conditions
+
+
 def list_companies(
     connection: psycopg.Connection[dict[str, Any]],
     limit: int = 100,
@@ -1060,7 +1097,7 @@ def list_companies(
     min_contacts: int | None = None,
     include_disabled: bool = False,
     tag: str | None = None,
-    exclude_tag: str | None = None,
+    exclude_tags: Sequence[str] | None = None,
 ) -> list[CompanySummary]:
     """List companies as summaries.
 
@@ -1093,11 +1130,14 @@ def list_companies(
             default (``False``) hides them (§V.114).
         tag: When set (a resolved tag id), returns only companies carrying that
             tag -- an Enum-family membership filter over ``tag_assignment``
-            (§V.116). Composes with ``exclude_tag`` as an intersection.
-        exclude_tag: When set (a resolved tag id), returns only companies NOT
-            carrying that tag -- the single negated membership filter (§V.116),
-            for memoization (drop a memoized company from the discover set
-            without ``company disable``).
+            (§V.116). Composes with ``exclude_tags`` as an intersection.
+        exclude_tags: When set (resolved tag ids), returns only companies
+            carrying NONE of the given tags -- one ``NOT EXISTS`` predicate per
+            tag, all intersected (§V.116). The repeatable negated membership
+            filter, for memoization (drop a memoized company from the discover
+            set without ``company disable``); the lead-contacts discover set
+            excludes both ``no-contacts-found`` and ``contacts-exhausted``
+            (§V.96).
 
     Returns:
         List of company summaries ordered by name.
@@ -1131,14 +1171,7 @@ def list_companies(
             )
         )
         params["tag_id"] = tag
-    if exclude_tag is not None:
-        conditions.append(
-            SQL(
-                "NOT EXISTS (SELECT 1 FROM tag_assignment ta "
-                "WHERE ta.company_id = c.id AND ta.tag_id = %(exclude_tag_id)s)"
-            )
-        )
-        params["exclude_tag_id"] = exclude_tag
+    conditions.extend(_exclude_tags_conditions(exclude_tags, "company_id", params))
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     having_clause = SQL("HAVING ") + SQL(" AND ").join(having) if having else SQL("")
     query = SQL(
@@ -1261,8 +1294,10 @@ def disable_company(
         connection: Open database connection.
         company_id: Company ID.
         reason: Explanation written to ``disabled_reason`` (stored verbatim);
-            the lead-contacts memoization path writes
-            ``no_contacts_found:<YYYY-MM-DD>``.
+            operator-facing (out-of-business / not-a-fit). The lead-contacts
+            negative-verdict memoization no longer disables a company -- it
+            tags it ``no-contacts-found`` or ``contacts-exhausted`` instead
+            (§V.96, §V.116).
 
     Returns:
         Updated company, or ``None`` when no active (not-yet-disabled) company
@@ -1560,7 +1595,7 @@ def list_contacts(
     min_email_confidence: int | None = None,
     title: str | None = None,
     tag: str | None = None,
-    exclude_tag: str | None = None,
+    exclude_tags: Sequence[str] | None = None,
 ) -> list[ContactSummary]:
     """List contacts as summaries with optional filters.
 
@@ -1591,14 +1626,15 @@ def list_contacts(
             job, never the ``list`` filter (§V.115 family 5).
         tag: When set (a resolved tag id), returns only contacts carrying that
             tag -- an Enum-family membership filter over ``tag_assignment``
-            (§V.116). Composes with ``exclude_tag`` as an intersection.
-        exclude_tag: When set (a resolved tag id), returns only contacts NOT
-            carrying that tag -- the single negated membership filter (§V.116).
+            (§V.116). Composes with ``exclude_tags`` as an intersection.
+        exclude_tags: When set (resolved tag ids), returns only contacts
+            carrying NONE of the given tags -- one ``NOT EXISTS`` predicate per
+            tag, all intersected (§V.116).
 
     Returns:
         List of contact summaries ordered by email.
     """
-    conditions: list[SQL] = []
+    conditions: list[Composed | SQL] = []
     params: dict[str, object] = {"limit": limit}
     if company_id is not None:
         conditions.append(SQL("c.company_id = %(company_id)s"))
@@ -1633,14 +1669,7 @@ def list_contacts(
             )
         )
         params["tag_id"] = tag
-    if exclude_tag is not None:
-        conditions.append(
-            SQL(
-                "NOT EXISTS (SELECT 1 FROM tag_assignment ta "
-                "WHERE ta.contact_id = c.id AND ta.tag_id = %(exclude_tag_id)s)"
-            )
-        )
-        params["exclude_tag_id"] = exclude_tag
+    conditions.extend(_exclude_tags_conditions(exclude_tags, "contact_id", params))
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
         "SELECT c.id, c.email, c.first_name, c.last_name, c.title, "

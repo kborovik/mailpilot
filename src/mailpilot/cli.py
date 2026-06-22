@@ -1082,7 +1082,7 @@ def company_list(
     min_contacts: int | None,
     include_disabled: bool,
     tag: str | None,
-    no_tag: str | None,
+    no_tag: tuple[str, ...],
 ) -> None:
     """List companies as summaries."""
     from mailpilot.database import initialize_database, list_companies
@@ -1090,9 +1090,7 @@ def company_list(
     connection = initialize_database(_database_url())
     try:
         tag_id = _resolve_tag(connection, tag).id if tag is not None else None
-        exclude_tag_id = (
-            _resolve_tag(connection, no_tag).id if no_tag is not None else None
-        )
+        exclude_tag_ids = [_resolve_tag(connection, name).id for name in no_tag]
         companies = list_companies(
             connection,
             limit=limit,
@@ -1103,7 +1101,7 @@ def company_list(
             min_contacts=min_contacts,
             include_disabled=include_disabled,
             tag=tag_id,
-            exclude_tag=exclude_tag_id,
+            exclude_tags=exclude_tag_ids,
         )
         output({"companies": [c.model_dump(mode="json") for c in companies]})
     finally:
@@ -1531,7 +1529,7 @@ def contact_list(
     min_email_confidence: int | None,
     title: str | None,
     tag: str | None,
-    no_tag: str | None,
+    no_tag: tuple[str, ...],
 ) -> None:
     """List contacts as summaries."""
     from mailpilot.database import initialize_database, list_contacts
@@ -1544,9 +1542,7 @@ def contact_list(
             else None
         )
         tag_id = _resolve_tag(connection, tag).id if tag is not None else None
-        exclude_tag_id = (
-            _resolve_tag(connection, no_tag).id if no_tag is not None else None
-        )
+        exclude_tag_ids = [_resolve_tag(connection, name).id for name in no_tag]
         contacts = list_contacts(
             connection,
             limit=limit,
@@ -1558,7 +1554,7 @@ def contact_list(
             min_email_confidence=min_email_confidence,
             title=title,
             tag=tag_id,
-            exclude_tag=exclude_tag_id,
+            exclude_tags=exclude_tag_ids,
         )
         output({"contacts": [c.model_dump(mode="json") for c in contacts]})
     finally:
