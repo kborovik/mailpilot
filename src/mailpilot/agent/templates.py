@@ -52,8 +52,9 @@ class WorkflowTemplate:
     _DEFERRED_TASK_INITIAL (initial-send-only instruction; prevents
     premature ``record_enrollment_outcome`` on first reach-out).
     Canonical fragment order per §V.45: _BASE -> _DEFERRED_TASK_<branch> ->
-    _DECLINE -> _NO_FABRICATION. Per §V.41 there is no workflow-specific
-    overlay fragment; KB-grounding discipline lives in workflow.instructions.
+    _MUST_SEND -> _DECLINE -> _NO_FABRICATION. Per §V.41 there is no
+    workflow-specific overlay fragment; KB-grounding discipline lives in
+    workflow.instructions.
     """
 
     name: WorkflowTemplateName
@@ -115,6 +116,25 @@ _DEFERRED_TASK_INITIAL = (
     "or when a follow-up task drains. If the initial send is not appropriate "
     "right now but should resume later, schedule a deferred task via "
     "create_task with a future scheduled_at.\n"
+)
+
+# _MUST_SEND is the email-universal prompt-side mirror of the §V.120 runtime
+# reply guard (_sent_reply in invoke.py). A trigger turn reaches the recipient
+# only through a reply_email / send_email tool call -- drafting the body in
+# reasoning sends nothing -- so the model is told to end every trigger turn in a
+# real send or an explicit noop. Per §V.45 the fragment lives in the template
+# (must-send is direction-universal mechanics, not workflow-specific policy) and
+# the model-visible string carries no §-cite; the governing invariant is named
+# here in the comment. Names three tools, satisfying the >=2-distinct-tool rule
+# (§V.40).
+_MUST_SEND = (
+    "End every trigger turn by actually sending the message: call reply_email "
+    "to answer an inbound thread, or send_email to open an outbound one. "
+    "Drafting the message text in your reasoning is not sending it -- the "
+    "message reaches the recipient only through a reply_email or send_email "
+    "tool call. If no message is appropriate, call noop to decline explicitly. "
+    "Never finish a turn having drafted a message without calling one of these "
+    "tools.\n"
 )
 
 _DECLINE = (
@@ -187,7 +207,7 @@ TEMPLATES: dict[WorkflowTemplateName, WorkflowTemplate] = {
         direction="outbound",
         description="Outbound email/CRM workflow without external knowledge base.",
         protocol_pre=_BASE,
-        protocol_post=_DECLINE + _NO_FABRICATION,
+        protocol_post=_MUST_SEND + _DECLINE + _NO_FABRICATION,
         tools=_CORE,
     ),
     "inbound-general": WorkflowTemplate(
@@ -195,7 +215,7 @@ TEMPLATES: dict[WorkflowTemplateName, WorkflowTemplate] = {
         direction="inbound",
         description="Inbound auto-reply workflow without external knowledge base.",
         protocol_pre=_BASE,
-        protocol_post=_DECLINE + _NO_FABRICATION,
+        protocol_post=_MUST_SEND + _DECLINE + _NO_FABRICATION,
         tools=_CORE,
     ),
     "inbound-google-drive": WorkflowTemplate(
@@ -205,7 +225,7 @@ TEMPLATES: dict[WorkflowTemplateName, WorkflowTemplate] = {
             "Inbound auto-reply grounded in a Google Drive Markdown knowledge base."
         ),
         protocol_pre=_BASE,
-        protocol_post=_DECLINE + _NO_FABRICATION,
+        protocol_post=_MUST_SEND + _DECLINE + _NO_FABRICATION,
         tools=_CORE + _DRIVE,
     ),
 }
