@@ -220,3 +220,75 @@ def test_fetch_owner_name_not_found_returns_empty(
     monkeypatch.setattr(seed_module.subprocess, "run", lambda *_a, **_k: _Proc())
 
     assert seed_module.fetch_owner_name("nope.com") == ""
+
+
+def test_create_company_duplicate_key_envelope_on_stderr_returns_existing(
+    seed_module: types.ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # §B.99 regression: a race-safe duplicate makes `company create` exit 1 with
+    # the `duplicate_key` envelope on STDERR per §V.3 (errors -> stderr); stdout
+    # is empty. The classifier must read the stderr envelope and return
+    # `existing`, never misparse empty stdout into a bogus `error`.
+    class _Proc:
+        returncode = 1
+        stdout = ""
+        stderr = (
+            "12:00:00 event=company.create domain=whitecapsupply.com\n"
+            "{\n"
+            '  "error": "duplicate_key",\n'
+            '  "message": "company with domain=\'whitecapsupply.com\' already'
+            ' exists",\n'
+            '  "ok": false\n'
+            "}\n"
+        )
+
+    monkeypatch.setattr(seed_module.subprocess, "run", lambda *_a, **_k: _Proc())
+
+    status, payload = seed_module.create_company(
+        "whitecapsupply.com", "White Cap", dry_run=False
+    )
+
+    assert status == "existing"
+    assert payload == {"domain": "whitecapsupply.com"}
+
+
+def test_create_company_success_envelope_on_stdout_returns_created(
+    seed_module: types.ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A successful create exits 0 with the `{"company": {...}, "ok": true}`
+    # envelope on stdout; stderr carries only the operator-log line.
+    class _Proc:
+        returncode = 0
+        stdout = '{"company": {"id": "id-1", "domain": "acme.com"}, "ok": true}'
+        stderr = "12:00:00 event=company.create domain=acme.com\n"
+
+    monkeypatch.setattr(seed_module.subprocess, "run", lambda *_a, **_k: _Proc())
+
+    status, payload = seed_module.create_company("acme.com", "Acme", dry_run=False)
+
+    assert status == "created"
+    assert payload == {"id": "id-1", "domain": "acme.com"}
+
+
+def test_create_company_other_error_on_stderr_returns_error(
+    seed_module: types.ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A non-duplicate failure (exit 1, stderr envelope) is classified `error`
+    # carrying the envelope's `error` code, not a swallowed duplicate.
+    class _Proc:
+        returncode = 1
+        stdout = ""
+        stderr = (
+            "{\n"
+            '  "error": "validation_error",\n'
+            '  "message": "domain cannot be empty",\n'
+            '  "ok": false\n'
+            "}\n"
+        )
+
+    monkeypatch.setattr(seed_module.subprocess, "run", lambda *_a, **_k: _Proc())
+
+    status, payload = seed_module.create_company("", "Acme", dry_run=False)
+
+    assert status == "error"
+    assert payload["reason"] == "validation_error"

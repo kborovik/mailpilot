@@ -13,7 +13,7 @@ each skill body.
 - All `mailpilot` commands run via `uv run mailpilot`.
 - Envelope shape per §V.4: `list|search|...` -> `{"<plural>": [...], "ok": true}`; `view|create|update|...` -> `{"<singular>": {...}, "ok": true}`. Extract through the wrap.
 - Parse JSON via `python3 -c '...'`; use `printf '%s' "$VAR"` over `echo "$VAR"` when piping captured JSON (`echo` mangles `\n` inside string fields).
-- Capture stdout only (`2>/dev/null`) before any JSON parse. Every `uv run mailpilot` command writes an always-on operator-log line to stderr (`HH:MM:SS event=... k=v`); the JSON envelope -- including the `{"error":"duplicate_key", ...}` failure case from a `create` (`company create` / `contact create`) -- is on stdout. Do not `2>&1` into a JSON parser: the leading stderr line corrupts the parse (`Extra data: line 1 column N`) while the command actually succeeded.
+- Split capture by outcome per §V.3. A SUCCESS exits 0 and writes its `{"<singular>": {...}, "ok": true}` envelope to stdout -- capture stdout (`2>/dev/null`) for it. An ERROR exits 1 and writes its `{"error": ..., "ok": false}` envelope to stderr (errors go to stderr per §V.3), beside the always-on operator-log line (`HH:MM:SS event=... k=v`). The `{"error":"duplicate_key", ...}` duplicate from a `create` (`company create` / `contact create`) lands on stderr, NOT stdout -- stdout is empty on a duplicate; classify it by exit code 1 plus the stderr `duplicate_key` envelope. Do not `2>&1` a successful command into a JSON parser: the leading stderr operator-log line corrupts the parse (`Extra data: line 1 column N`).
 
 ## Batch gate
 
@@ -24,11 +24,11 @@ citing skill supplies inline (their counter keys differ).
 
 - `len(<rows>) == 0` -> emit the skill's empty-set run summary (every counter `0`, `"results": [], "ok": true`) and stop.
 - `--limit N` given -> cap to first N, no question.
-- `len(<rows>) > 10` and no `--limit` -> invoke `AskUserQuestion` (sole interaction gate) with the skill's `question` + `header` and these options:
-  - `"First 10 (Recommended)"` -- cap to first 10
-  - `"First 25"` -- cap to first 25
-  - `"All <N>"` -- every stale row
-- Else (1-10 rows) -> proceed w/ all, no question.
+- `len(<rows>) > 9` and no `--limit` -> invoke `AskUserQuestion` (sole interaction gate) with the skill's `question` + `header`. Build the option list so every option maps to a distinct batch at the current stale-count (the distinct-batch rule, §V.117): a fixed-cap option MUST be suppressed once its cap reaches the stale-count, because there the cap equals `All <N>` and the two options would dispatch one identical batch (§B.98). Options:
+  - `"First 9 (Recommended)"` -- cap to first 9 (three full waves at the concurrency-3 enrich/discover budget, no straggler wave of 1). Always offered: the gate fires only at stale-count > 9, so 9 is always below the stale-count and stays distinct from `All <N>`.
+  - `"First 24"` -- cap to first 24 (eight full waves at the concurrency-3 enrich/discover budget, no straggler wave). Offer this option only when stale-count > 24. Drop it when stale-count <= 24: there `First 24` equals `All <N>`, so the two collapse to one batch (§B.98).
+  - `"All <N>"` -- every stale row.
+- Else (1-9 rows) -> proceed w/ all, no question.
 
 ## OUTPUT -- "Next" block
 

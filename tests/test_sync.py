@@ -502,6 +502,43 @@ def test_run_periodic_iteration_full_sweep_skips_already_synced(
     assert sorted(synced_emails) == sorted([notified.email, other.email])
 
 
+def test_drain_sync_queue_skips_disabled_account(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.118: a Pub/Sub notify for a disabled account does not sync it.
+
+    The full-sweep path skips disabled accounts via list_accounts
+    default-exclude; the notify path resolves by email, so the drain skips
+    them explicitly. The email stays out of ``synced``.
+    """
+    import queue as _queue
+
+    from mailpilot.database import disable_account
+    from mailpilot.sync import (
+        _drain_sync_queue,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    account = make_test_account(
+        database_connection, email="disabled@example.com", display_name="Disabled"
+    )
+    disable_account(database_connection, account.id, "out of business")
+
+    settings = make_test_settings()
+    sync_queue: _queue.Queue[str] = _queue.Queue()
+    sync_queue.put(account.email)
+    synced: set[str] = set()
+
+    with (
+        patch("mailpilot.sync.GmailClient") as mock_client,
+        patch("mailpilot.sync.sync_account") as mock_sync_account,
+    ):
+        _drain_sync_queue(database_connection, settings, sync_queue, synced)
+
+    mock_sync_account.assert_not_called()
+    mock_client.assert_not_called()
+    assert synced == set()
+
+
 def test_start_sync_loop_time_gates_full_sweep(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):

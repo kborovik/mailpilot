@@ -43,7 +43,6 @@ _ACTIVITY_TYPES = [
     "note_added",
     "tag_added",
     "tag_removed",
-    "tag_disabled",
     "status_changed",
     "enrollment_added",
     "enrollment_completed",
@@ -51,6 +50,7 @@ _ACTIVITY_TYPES = [
     "enrollment_paused",
     "enrollment_resumed",
     "enrollment_disabled",
+    "enrollment_enabled",
 ]
 
 # Persisted email.route_method values; mirrors the schema CHECK set and the
@@ -70,7 +70,7 @@ _ROUTE_METHODS = [
 _WORKFLOW_STATUSES = ["draft", "active", "paused"]
 _WORKFLOW_TEMPLATES = ["outbound-general", "inbound-general", "inbound-google-drive"]
 _EMAIL_STATUSES = ["sent", "received", "bounced"]
-_ENROLLMENT_STATUSES = ["active", "paused", "disabled"]
+_ENROLLMENT_STATUSES = ["active", "disabled"]
 _TASK_STATUSES = ["pending", "completed", "failed", "cancelled"]
 
 
@@ -623,15 +623,24 @@ def account_create(email: str, display_name: str) -> None:
 
 
 @account.command("list")
+@include_disabled_option
 @time_window_options("created_at")
 @limit_option
-def account_list(limit: int, since: str | None, until: str | None) -> None:
+def account_list(
+    limit: int, since: str | None, until: str | None, include_disabled: bool
+) -> None:
     """List Gmail accounts as summaries."""
     from mailpilot.database import initialize_database, list_accounts
 
     connection = initialize_database(_database_url())
     try:
-        accounts = list_accounts(connection, limit=limit, since=since, until=until)
+        accounts = list_accounts(
+            connection,
+            limit=limit,
+            since=since,
+            until=until,
+            include_disabled=include_disabled,
+        )
         output({"accounts": [a.model_dump(mode="json") for a in accounts]})
     finally:
         connection.close()
@@ -678,6 +687,91 @@ def account_update(account_ref: str, display_name: str | None) -> None:
                 "account.update",
                 entity_id=account_id,
                 changed=changed,
+            )
+            output_entity("account", updated)
+    finally:
+        connection.close()
+
+
+@account.command("disable")
+@click.argument("account_ref")
+@click.option(
+    "--reason",
+    required=True,
+    help="Explanation written to disabled_reason.",
+)
+def account_disable(account_ref: str, reason: str) -> None:
+    """Soft-disable a Gmail account by writing disabled_reason.
+
+    A disabled account is hidden from `account list` unless `--include-disabled`
+    is passed, and is gated out of every Gmail-touching path: the sync loop,
+    `account sync` all-accounts mode, watch renewal, and send/reply. Disable is
+    reversible -- re-enable with `account enable`. Disabling an already-disabled
+    account is rejected.
+    """
+    from mailpilot.database import disable_account, initialize_database
+    from mailpilot.operator_log import cli_mutation, operator_event
+
+    if reason.strip() == "":
+        output_error("reason cannot be empty", "validation_error")
+    connection = initialize_database(_database_url(), require_current_schema=True)
+    try:
+        before = _resolve_account(connection, account_ref)
+        account_id = before.id
+        if before.disabled_reason is not None:
+            output_error(
+                f"account {account_id} is already disabled "
+                f"(reason: {before.disabled_reason})",
+                "validation_error",
+            )
+        with cli_mutation("account", "disable", entity_id=account_id):
+            updated = disable_account(connection, account_id, reason)
+            if updated is None:
+                output_error(
+                    f"account {account_id} is already disabled",
+                    "validation_error",
+                )
+            operator_event(
+                "account.disable",
+                entity_id=account_id,
+                changed=["disabled_reason"],
+            )
+            output_entity("account", updated)
+    finally:
+        connection.close()
+
+
+@account.command("enable")
+@click.argument("account_ref")
+def account_enable(account_ref: str) -> None:
+    """Re-enable a soft-disabled Gmail account by clearing disabled_reason.
+
+    The account reappears in the default `account list` and resumes syncing.
+    Enabling an account that is not disabled is rejected.
+    """
+    from mailpilot.database import enable_account, initialize_database
+    from mailpilot.operator_log import cli_mutation, operator_event
+
+    connection = initialize_database(_database_url(), require_current_schema=True)
+    try:
+        before = _resolve_account(connection, account_ref)
+        account_id = before.id
+        if before.disabled_reason is None:
+            output_error(
+                f"account {account_id} is not disabled",
+                "validation_error",
+            )
+        with cli_mutation("account", "enable", entity_id=account_id):
+            updated = enable_account(connection, account_id)
+            if updated is None:
+                output_error(
+                    f"account {account_id} is not disabled",
+                    "validation_error",
+                )
+            operator_event(
+                "account.enable",
+                entity_id=account_id,
+                changed=["disabled_reason"],
             )
             output_entity("account", updated)
     finally:
@@ -881,8 +975,8 @@ def company_disable(company_ref: str, reason: str) -> None:
     """Soft-disable a company by writing disabled_reason.
 
     A disabled company is hidden from `company list` unless `--include-disabled`
-    is passed. Disable is reversible -- re-enable by clearing disabled_reason
-    via `company update`. Disabling an already-disabled company is rejected.
+    is passed. Disable is reversible -- re-enable with `company enable`.
+    Disabling an already-disabled company is rejected.
     """
     from mailpilot.database import disable_company, initialize_database
     from mailpilot.operator_log import cli_mutation, operator_event
@@ -908,6 +1002,43 @@ def company_disable(company_ref: str, reason: str) -> None:
                 )
             operator_event(
                 "company.disable",
+                entity_id=company_id,
+                changed=["disabled_reason"],
+            )
+            output_entity("company", updated)
+    finally:
+        connection.close()
+
+
+@company.command("enable")
+@click.argument("company_ref")
+def company_enable(company_ref: str) -> None:
+    """Re-enable a soft-disabled company by clearing disabled_reason.
+
+    The company reappears in the default `company list`. Enabling a company
+    that is not disabled is rejected.
+    """
+    from mailpilot.database import enable_company, initialize_database
+    from mailpilot.operator_log import cli_mutation, operator_event
+
+    connection = initialize_database(_database_url(), require_current_schema=True)
+    try:
+        before = _resolve_company(connection, company_ref)
+        company_id = before.id
+        if before.disabled_reason is None:
+            output_error(
+                f"company {company_id} is not disabled",
+                "validation_error",
+            )
+        with cli_mutation("company", "enable", entity_id=company_id):
+            updated = enable_company(connection, company_id)
+            if updated is None:
+                output_error(
+                    f"company {company_id} is not disabled",
+                    "validation_error",
+                )
+            operator_event(
+                "company.enable",
                 entity_id=company_id,
                 changed=["disabled_reason"],
             )
@@ -951,7 +1082,7 @@ def company_list(
     min_contacts: int | None,
     include_disabled: bool,
     tag: str | None,
-    no_tag: str | None,
+    no_tag: tuple[str, ...],
 ) -> None:
     """List companies as summaries."""
     from mailpilot.database import initialize_database, list_companies
@@ -959,9 +1090,7 @@ def company_list(
     connection = initialize_database(_database_url())
     try:
         tag_id = _resolve_tag(connection, tag).id if tag is not None else None
-        exclude_tag_id = (
-            _resolve_tag(connection, no_tag).id if no_tag is not None else None
-        )
+        exclude_tag_ids = [_resolve_tag(connection, name).id for name in no_tag]
         companies = list_companies(
             connection,
             limit=limit,
@@ -972,7 +1101,7 @@ def company_list(
             min_contacts=min_contacts,
             include_disabled=include_disabled,
             tag=tag_id,
-            exclude_tag=exclude_tag_id,
+            exclude_tags=exclude_tag_ids,
         )
         output({"companies": [c.model_dump(mode="json") for c in companies]})
     finally:
@@ -1317,6 +1446,44 @@ def contact_disable(contact_ref: str, reason: str) -> None:
         connection.close()
 
 
+@contact.command("enable")
+@click.argument("contact_ref")
+def contact_enable(contact_ref: str) -> None:
+    """Re-enable a disabled contact by clearing disabled_reason.
+
+    Clears any reason, including a `bounced:` or `unsubscribed:` block -- the
+    operator owns consent. Enabling a contact that is not disabled is rejected.
+    Addressed by email or ID.
+    """
+    from mailpilot.database import enable_contact, initialize_database
+    from mailpilot.operator_log import cli_mutation, operator_event
+
+    connection = initialize_database(_database_url(), require_current_schema=True)
+    try:
+        before = _resolve_contact(connection, contact_ref)
+        contact_id = before.id
+        if before.disabled_reason is None:
+            output_error(
+                f"contact {contact_id} is not disabled",
+                "validation_error",
+            )
+        with cli_mutation("contact", "enable", entity_id=contact_id):
+            updated = enable_contact(connection, contact_id)
+            if updated is None:
+                output_error(
+                    f"contact {contact_id} is not disabled",
+                    "validation_error",
+                )
+            operator_event(
+                "contact.enable",
+                entity_id=contact_id,
+                changed=["disabled_reason"],
+            )
+            output_entity("contact", updated)
+    finally:
+        connection.close()
+
+
 @contact.command("search")
 @click.argument("query")
 @click.option("--limit", default=100, help="Maximum results.")
@@ -1362,7 +1529,7 @@ def contact_list(
     min_email_confidence: int | None,
     title: str | None,
     tag: str | None,
-    no_tag: str | None,
+    no_tag: tuple[str, ...],
 ) -> None:
     """List contacts as summaries."""
     from mailpilot.database import initialize_database, list_contacts
@@ -1375,9 +1542,7 @@ def contact_list(
             else None
         )
         tag_id = _resolve_tag(connection, tag).id if tag is not None else None
-        exclude_tag_id = (
-            _resolve_tag(connection, no_tag).id if no_tag is not None else None
-        )
+        exclude_tag_ids = [_resolve_tag(connection, name).id for name in no_tag]
         contacts = list_contacts(
             connection,
             limit=limit,
@@ -1389,7 +1554,7 @@ def contact_list(
             min_email_confidence=min_email_confidence,
             title=title,
             tag=tag_id,
-            exclude_tag=exclude_tag_id,
+            exclude_tags=exclude_tag_ids,
         )
         output({"contacts": [c.model_dump(mode="json") for c in contacts]})
     finally:
@@ -2024,6 +2189,42 @@ def tag_disable(name: str, reason: str) -> None:
                 )
             operator_event(
                 "tag.disable",
+                entity_id=updated.name,
+                changed=["disabled_reason"],
+            )
+            output_entity("tag", updated)
+    finally:
+        connection.close()
+
+
+@tag.command("enable")
+@click.argument("name")
+def tag_enable(name: str) -> None:
+    """Re-enable a retired tag by clearing disabled_reason.
+
+    The tag reappears in the default `tag list`. Enabling a tag that is not
+    disabled is rejected.
+    """
+    from mailpilot.database import enable_tag, initialize_database
+    from mailpilot.operator_log import cli_mutation, operator_event
+
+    connection = initialize_database(_database_url(), require_current_schema=True)
+    try:
+        before = _resolve_tag(connection, name)
+        if before.disabled_reason is None:
+            output_error(
+                f"tag '{before.name}' is not disabled",
+                "validation_error",
+            )
+        with cli_mutation("tag", "enable", entity_id=before.name):
+            updated = enable_tag(connection, name=before.name)
+            if updated is None:
+                output_error(
+                    f"tag '{before.name}' is not disabled",
+                    "validation_error",
+                )
+            operator_event(
+                "tag.enable",
                 entity_id=updated.name,
                 changed=["disabled_reason"],
             )
@@ -3439,6 +3640,53 @@ def enrollment_disable(enrollment_id: str, reason: str) -> None:
         connection.close()
 
 
+@enrollment.command("enable")
+@click.argument("enrollment_id")
+def enrollment_enable(enrollment_id: str) -> None:
+    """Re-enable a disabled enrollment by flipping status back to active.
+
+    Clears disabled_reason and resumes the enrollment. Enabling an enrollment
+    that is not disabled is rejected.
+    """
+    from mailpilot.database import (
+        enable_enrollment,
+        get_enrollment_by_id,
+        initialize_database,
+    )
+    from mailpilot.operator_log import cli_mutation, operator_event
+
+    connection = initialize_database(_database_url(), require_current_schema=True)
+    try:
+        before = get_enrollment_by_id(connection, enrollment_id)
+        if before is None:
+            output_error(f"enrollment not found: {enrollment_id}", "not_found")
+        if before.status != "disabled":
+            output_error(
+                f"enrollment {enrollment_id} is not disabled",
+                "validation_error",
+            )
+        with cli_mutation("enrollment", "enable", entity_id=enrollment_id):
+            updated = enable_enrollment(connection, enrollment_id)
+            if updated is None:
+                output_error(
+                    f"enrollment {enrollment_id} is not disabled",
+                    "validation_error",
+                )
+            changed = [
+                field
+                for field in ("status", "disabled_reason")
+                if getattr(before, field) != getattr(updated, field)
+            ]
+            operator_event(
+                "enrollment.enable",
+                entity_id=enrollment_id,
+                changed=changed,
+            )
+            output_entity("enrollment", updated)
+    finally:
+        connection.close()
+
+
 @enrollment.command("view")
 @click.argument("enrollment_id")
 def enrollment_view(enrollment_id: str) -> None:
@@ -3495,72 +3743,6 @@ def enrollment_list(
             until=until,
         )
         output({"enrollments": [r.model_dump(mode="json") for r in rows]})
-    finally:
-        connection.close()
-
-
-@enrollment.command("update")
-@click.argument("enrollment_id")
-@click.option(
-    "--status",
-    required=True,
-    type=click.Choice(["active", "paused"]),
-    help="New enrollment status (active or paused).",
-)
-@click.option("--reason", default=None, help="Status reason.")
-def enrollment_update(enrollment_id: str, status: str, reason: str | None) -> None:
-    """Update enrollment operational status (active or paused).
-
-    Outcomes (completed, failed) are recorded as activity by the agent
-    via record_enrollment_outcome -- not via this command.
-    """
-    from mailpilot.database import (
-        create_activity,
-        get_contact,
-        get_enrollment_by_id,
-        initialize_database,
-        update_enrollment,
-    )
-    from mailpilot.operator_log import cli_mutation, operator_event
-
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
-        before = get_enrollment_by_id(connection, enrollment_id)
-        if before is None:
-            output_error("enrollment not found", "not_found")
-        fields: dict[str, object] = {"status": status}
-        if reason is not None:
-            fields["reason"] = reason
-        with cli_mutation("enrollment", "update", entity_id=enrollment_id):
-            updated = update_enrollment(connection, enrollment_id, **fields)
-            if updated is None:
-                output_error("enrollment not found", "not_found")
-            if before.status != status:
-                contact = get_contact(connection, before.contact_id)
-                activity_type = (
-                    "enrollment_paused" if status == "paused" else "enrollment_resumed"
-                )
-                create_activity(
-                    connection,
-                    contact_id=before.contact_id,
-                    activity_type=activity_type,
-                    summary=reason or f"Enrollment {status}",
-                    detail={"reason": reason or ""},
-                    company_id=contact.company_id if contact is not None else None,
-                    workflow_id=before.workflow_id,
-                    enrollment_id=before.id,
-                )
-            changed = [
-                field
-                for field in ("status", "reason")
-                if getattr(before, field) != getattr(updated, field)
-            ]
-            operator_event(
-                "enrollment.update",
-                entity_id=enrollment_id,
-                changed=changed,
-            )
-            output_entity("enrollment", updated)
     finally:
         connection.close()
 

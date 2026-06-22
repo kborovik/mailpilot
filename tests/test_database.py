@@ -36,8 +36,12 @@ from mailpilot.database import (
     create_task,
     create_tasks_for_routed_emails,
     create_workflow,
+    disable_account,
     disable_company,
     disable_enrollment,
+    enable_account,
+    enable_company,
+    enable_enrollment,
     find_pending_first_touch_task,
     get_account,
     get_account_by_email,
@@ -108,6 +112,96 @@ def test_list_accounts(database_connection: psycopg.Connection[dict[str, Any]]):
     make_test_account(database_connection, email="b@test.com")
     accounts = list_accounts(database_connection)
     assert len(accounts) == 2
+
+
+def test_disable_account_sets_reason(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.118: disable_account writes disabled_reason verbatim."""
+    account = make_test_account(database_connection)
+    updated = disable_account(database_connection, account.id, "out of business")
+    assert updated is not None
+    assert updated.disabled_reason == "out of business"
+    fetched = get_account(database_connection, account.id)
+    assert fetched is not None
+    assert fetched.disabled_reason == "out of business"
+
+
+def test_disable_account_double_disable_gate_returns_none(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.118: the disabled_reason IS NULL gate blocks double-disable.
+
+    A second disable does not match the already-disabled row, returns None,
+    and leaves the first reason intact (mirror of §V.114 company disable).
+    """
+    account = make_test_account(database_connection)
+    assert disable_account(database_connection, account.id, "first") is not None
+    second = disable_account(database_connection, account.id, "second")
+    assert second is None
+    fetched = get_account(database_connection, account.id)
+    assert fetched is not None
+    assert fetched.disabled_reason == "first"
+
+
+def test_disable_account_not_found_returns_none(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.118: disabling a missing account returns None."""
+    assert disable_account(database_connection, "nonexistent", "reason") is None
+
+
+def test_list_accounts_excludes_disabled_by_default(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.118: disabled accounts drop out of `account list` by default.
+
+    A disabled account is gated out of the sync loop / watch renewal (which
+    read this listing); include_disabled=True surfaces it with its reason.
+    """
+    active = make_test_account(database_connection, email="active@test.com")
+    disabled = make_test_account(database_connection, email="disabled@test.com")
+    disable_account(database_connection, disabled.id, "out of business")
+
+    default = list_accounts(database_connection)
+    assert {a.id for a in default} == {active.id}
+
+    everyone = list_accounts(database_connection, include_disabled=True)
+    by_id = {a.id: a for a in everyone}
+    assert set(by_id) == {active.id, disabled.id}
+    assert by_id[disabled.id].disabled_reason == "out of business"
+    assert by_id[active.id].disabled_reason is None
+
+
+def test_enable_account_clears_reason(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.118: enable_account clears disabled_reason; the account relists."""
+    account = make_test_account(database_connection)
+    disable_account(database_connection, account.id, "out of business")
+    reenabled = enable_account(database_connection, account.id)
+    assert reenabled is not None
+    assert reenabled.disabled_reason is None
+    fetched = get_account(database_connection, account.id)
+    assert fetched is not None
+    assert fetched.disabled_reason is None
+    assert {a.id for a in list_accounts(database_connection)} == {account.id}
+
+
+def test_enable_account_gate_blocks_active(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.118: the disabled_reason IS NOT NULL gate blocks enabling an active
+    account (mirror of the double-disable gate)."""
+    account = make_test_account(database_connection)
+    assert enable_account(database_connection, account.id) is None
+
+
+def test_enable_account_not_found_returns_none(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.118: enabling a missing account returns None."""
+    assert enable_account(database_connection, "nonexistent") is None
 
 
 def test_update_account(database_connection: psycopg.Connection[dict[str, Any]]):
@@ -470,6 +564,37 @@ def test_disable_company_reenable_via_update(
     assert {c.id for c in list_companies(database_connection)} == {company.id}
 
 
+def test_enable_company_clears_reason(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.114: enable_company clears disabled_reason; the company relists."""
+    company = make_test_company(database_connection)
+    disable_company(database_connection, company.id, "no_contacts_found:2026-06-18")
+    reenabled = enable_company(database_connection, company.id)
+    assert reenabled is not None
+    assert reenabled.disabled_reason is None
+    fetched = get_company(database_connection, company.id)
+    assert fetched is not None
+    assert fetched.disabled_reason is None
+    assert {c.id for c in list_companies(database_connection)} == {company.id}
+
+
+def test_enable_company_gate_blocks_active(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.114: the disabled_reason IS NOT NULL gate blocks enabling an active
+    company (mirror of the double-disable gate)."""
+    company = make_test_company(database_connection)
+    assert enable_company(database_connection, company.id) is None
+
+
+def test_enable_company_not_found_returns_none(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.114: enabling a missing company returns None."""
+    assert enable_company(database_connection, "nonexistent") is None
+
+
 def test_company_view_field_set_superset_of_base_and_summary() -> None:
     """§V.8: CompanyView field set ⊇ Company columns + CompanySummary projection.
 
@@ -689,6 +814,44 @@ def test_list_contacts_excludes_disabled_by_default(
     assert {c.id for c in everyone} == {c1.id, c2.id}
     disabled_row = next(c for c in everyone if c.id == c2.id)
     assert disabled_row.disabled_reason == "bounced: hard bounce"
+
+
+def test_enable_contact_clears_any_reason(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.80: enable_contact clears any reason, including an unsubscribe block.
+
+    The operator owns consent -- there is no unsubscribe carve-out, so an
+    ``unsubscribed:`` block re-enables the same way a bounce does.
+    """
+    from mailpilot.database import disable_contact, enable_contact
+
+    contact = make_test_contact(database_connection)
+    disable_contact(database_connection, contact.id, reason="unsubscribed: opt-out")
+    reenabled = enable_contact(database_connection, contact.id)
+    assert reenabled is not None
+    assert reenabled.disabled_reason is None
+    assert {c.id for c in list_contacts(database_connection)} == {contact.id}
+
+
+def test_enable_contact_gate_blocks_active(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.80: the disabled_reason IS NOT NULL gate blocks enabling an active
+    contact."""
+    from mailpilot.database import enable_contact
+
+    contact = make_test_contact(database_connection)
+    assert enable_contact(database_connection, contact.id) is None
+
+
+def test_enable_contact_not_found_returns_none(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.80: enabling a missing contact returns None."""
+    from mailpilot.database import enable_contact
+
+    assert enable_contact(database_connection, "nonexistent") is None
 
 
 def test_search_contacts(database_connection: psycopg.Connection[dict[str, Any]]):
@@ -2796,6 +2959,45 @@ def test_disable_tag_undefined_returns_none(
     assert disable_tag(database_connection, name="ghost", reason="x") is None
 
 
+def test_enable_tag_clears_reason_and_writes_no_activity(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.10/§V.17: enable_tag clears disabled_reason and -- being owner-free --
+    writes no activity. The tag returns to the default list."""
+    from mailpilot.database import disable_tag, enable_tag
+
+    contact = make_test_contact(database_connection)
+    make_test_tag_assignment(database_connection, contact_id=contact.id, name="cold")
+    disable_tag(database_connection, name="cold", reason="stale")
+    enabled = enable_tag(database_connection, name="cold")
+    assert enabled is not None
+    assert enabled.name == "cold"
+    assert enabled.disabled_reason is None
+    assert {t.name for t in list_tags(database_connection)} == {"cold"}
+    activities = list_activities(database_connection, contact_id=contact.id)
+    assert "tag_enabled" not in [a.type for a in activities]
+
+
+def test_enable_tag_gate_blocks_active(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.10: the disabled_reason IS NOT NULL gate blocks enabling an active
+    tag (returns None)."""
+    from mailpilot.database import create_tag, enable_tag
+
+    create_tag(database_connection, name="cold")
+    assert enable_tag(database_connection, name="cold") is None
+
+
+def test_enable_tag_undefined_returns_none(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.10: enabling an undefined tag returns None."""
+    from mailpilot.database import enable_tag
+
+    assert enable_tag(database_connection, name="ghost") is None
+
+
 def test_disabled_tag_hidden_from_default_list(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
@@ -2972,7 +3174,7 @@ def test_list_companies_filter_by_tag(
 def test_list_companies_exclude_by_no_tag(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """§V.116: list_companies exclude_tag keeps only companies NOT carrying it."""
+    """§V.116: list_companies exclude_tags keeps only companies NOT carrying it."""
     a = make_test_company(database_connection, name="A", domain="a.test")
     make_test_company(database_connection, name="B", domain="b.test")
     tag = create_tag(database_connection, name="no-contacts-found")
@@ -2980,8 +3182,34 @@ def test_list_companies_exclude_by_no_tag(
     make_test_tag_assignment(
         database_connection, company_id=a.id, name="no-contacts-found"
     )
-    rows = list_companies(database_connection, exclude_tag=tag.id)
+    rows = list_companies(database_connection, exclude_tags=[tag.id])
     assert [c.domain for c in rows] == ["b.test"]
+
+
+def test_list_companies_exclude_by_multiple_no_tags(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.96/§V.116: repeatable exclude_tags drops every memoization class.
+
+    One NOT EXISTS per tag, all intersected -- a company tagged either
+    ``no-contacts-found`` or ``contacts-exhausted`` leaves the discover set.
+    """
+    a = make_test_company(database_connection, name="A", domain="a.test")
+    b = make_test_company(database_connection, name="B", domain="b.test")
+    c = make_test_company(database_connection, name="C", domain="c.test")
+    no_dm = create_tag(database_connection, name="no-contacts-found")
+    exhausted = create_tag(database_connection, name="contacts-exhausted")
+    assert no_dm is not None
+    assert exhausted is not None
+    make_test_tag_assignment(
+        database_connection, company_id=a.id, name="no-contacts-found"
+    )
+    make_test_tag_assignment(
+        database_connection, company_id=b.id, name="contacts-exhausted"
+    )
+    rows = list_companies(database_connection, exclude_tags=[no_dm.id, exhausted.id])
+    assert [row.domain for row in rows] == ["c.test"]
+    assert c.domain == "c.test"
 
 
 def test_list_companies_tag_and_no_tag_intersection(
@@ -2999,14 +3227,14 @@ def test_list_companies_tag_and_no_tag_intersection(
     make_test_tag_assignment(
         database_connection, company_id=b.id, name="no-contacts-found"
     )
-    rows = list_companies(database_connection, tag=profiled.id, exclude_tag=skip.id)
+    rows = list_companies(database_connection, tag=profiled.id, exclude_tags=[skip.id])
     assert [c.domain for c in rows] == ["a.test"]
 
 
 def test_list_contacts_filter_by_tag(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """§V.116: list_contacts tag= / exclude_tag= over the assignment join."""
+    """§V.116: list_contacts tag= / exclude_tags= over the assignment join."""
     a = make_test_contact(database_connection, email="x1@acme.test")
     b = make_test_contact(database_connection, email="x2@acme.test")
     tag = create_tag(database_connection, name="vip")
@@ -3016,9 +3244,27 @@ def test_list_contacts_filter_by_tag(
         "x1@acme.test"
     ]
     assert [
-        c.email for c in list_contacts(database_connection, exclude_tag=tag.id)
+        c.email for c in list_contacts(database_connection, exclude_tags=[tag.id])
     ] == ["x2@acme.test"]
     assert b.email == "x2@acme.test"
+
+
+def test_list_contacts_exclude_by_multiple_no_tags(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.116: repeatable exclude_tags drops contacts carrying any named tag."""
+    a = make_test_contact(database_connection, email="a@acme.test")
+    b = make_test_contact(database_connection, email="b@acme.test")
+    c = make_test_contact(database_connection, email="c@acme.test")
+    vip = create_tag(database_connection, name="vip")
+    cold = create_tag(database_connection, name="cold")
+    assert vip is not None
+    assert cold is not None
+    make_test_tag_assignment(database_connection, contact_id=a.id, name="vip")
+    make_test_tag_assignment(database_connection, contact_id=b.id, name="cold")
+    rows = list_contacts(database_connection, exclude_tags=[vip.id, cold.id])
+    assert [row.email for row in rows] == ["c@acme.test"]
+    assert c.email == "c@acme.test"
 
 
 def test_add_contact_note_emits_activity_atomically(
@@ -3194,6 +3440,51 @@ def test_disable_enrollment(
     assert disabled_rows[0].workflow_id == workflow.id
 
 
+def test_enable_enrollment(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.15: enable_enrollment flips status disabled->active + clears reason.
+
+    Emits an ``enrollment_enabled`` activity -- the mirror of the
+    ``enrollment_disabled`` row written on disable.
+    """
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    disable_enrollment(database_connection, enrollment.id, "left company")
+    updated = enable_enrollment(database_connection, enrollment.id)
+    assert updated is not None
+    assert updated.id == enrollment.id
+    assert updated.status == "active"
+    assert updated.disabled_reason is None
+    same = get_enrollment(database_connection, workflow.id, contact.id)
+    assert same is not None
+    assert same.status == "active"
+    activities = list_activities(database_connection, contact_id=contact.id)
+    enabled_rows = [a for a in activities if a.type == "enrollment_enabled"]
+    assert len(enabled_rows) == 1
+    assert enabled_rows[0].enrollment_id == enrollment.id
+    assert enabled_rows[0].workflow_id == workflow.id
+
+
+def test_enable_enrollment_gate_blocks_active(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.15: the status='disabled' gate blocks enabling a live enrollment."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    assert enable_enrollment(database_connection, enrollment.id) is None
+
+
+def test_enable_enrollment_not_found(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    assert enable_enrollment(database_connection, "nonexistent") is None
+
+
 def test_disable_enrollment_not_found(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
@@ -3283,17 +3574,15 @@ def test_list_enrollments_detailed(
 def test_list_enrollments_detailed_status_filter(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    from mailpilot.database import update_enrollment
-
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     c1 = make_test_contact(database_connection, email="a@example.com")
     c2 = make_test_contact(database_connection, email="b@example.com")
     e1 = make_test_enrollment(database_connection, workflow.id, c1.id)
     make_test_enrollment(database_connection, workflow.id, c2.id)
-    update_enrollment(database_connection, e1.id, status="paused")
+    disable_enrollment(database_connection, e1.id, "left company")
     results = list_enrollments_detailed(
-        database_connection, workflow_id=workflow.id, status="paused"
+        database_connection, workflow_id=workflow.id, status="disabled"
     )
     assert len(results) == 1
     assert results[0].contact_id == c1.id
@@ -3319,15 +3608,14 @@ def test_enrollment_row_carries_parent_denorm_fields(
 ) -> None:
     """§V.5: Enrollment row gains workflow_name, contact_email, contact_name via JOIN.
 
-    Asserts every getter (create, get_by_id, get composite, list, update,
-    delete) returns the denormalised parent identifiers so all CLI surfaces
-    inherit them symmetrically (mirrors ``Workflow.account_email``).
+    Asserts every getter (create, get_by_id, get composite, list, disable)
+    returns the denormalised parent identifiers so all CLI surfaces inherit
+    them symmetrically (mirrors ``Workflow.account_email``).
     """
     from mailpilot.database import (
         get_enrollment,
         get_enrollment_by_id,
         list_enrollments,
-        update_enrollment,
     )
 
     account = make_test_account(database_connection)
@@ -3365,15 +3653,6 @@ def test_enrollment_row_carries_parent_denorm_fields(
     assert listed[0].contact_email == "alice@example.com"
     assert listed[0].contact_name == "Alice Smith"
 
-    updated = update_enrollment(
-        database_connection, created.id, status="paused", reason="hold"
-    )
-    assert updated is not None
-    assert updated.status == "paused"
-    assert updated.workflow_name == "Outbound Campaign"
-    assert updated.contact_email == "alice@example.com"
-    assert updated.contact_name == "Alice Smith"
-
     disabled = disable_enrollment(database_connection, created.id, "wrap-up")
     assert disabled is not None
     assert disabled.workflow_name == "Outbound Campaign"
@@ -3381,22 +3660,23 @@ def test_enrollment_row_carries_parent_denorm_fields(
     assert disabled.contact_name == "Alice Smith"
 
 
-def test_update_enrollment_rejects_legacy_statuses(
+def test_enrollment_status_check_rejects_paused(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """`completed`/`failed`/`pending` are no longer valid enrollment statuses."""
-    from mailpilot.database import update_enrollment
+    """§V.15/§V.88: status CHECK admits only {active, disabled}.
 
+    `paused` is collapsed into `disabled`; it (and the never-valid lifecycle
+    labels) are rejected at the schema level.
+    """
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
     enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
-    for bad in ("pending", "completed", "failed"):
-        with pytest.raises((psycopg.errors.CheckViolation, ValueError)):
-            update_enrollment(
-                database_connection,
-                enrollment.id,
-                status=bad,
+    for bad in ("paused", "pending", "completed", "failed"):
+        with pytest.raises(psycopg.errors.CheckViolation):
+            database_connection.execute(
+                "UPDATE enrollment SET status = %s WHERE id = %s",
+                (bad, enrollment.id),
             )
         database_connection.rollback()
 

@@ -43,6 +43,12 @@ class ContactDisabledError(EmailOpsError):
     code = "contact_disabled"
 
 
+class AccountDisabledError(EmailOpsError):
+    """Sending account is soft-disabled; send and reply blocked (§V.79)."""
+
+    code = "account_disabled"
+
+
 class CooldownError(EmailOpsError):
     """Prior unsolicited cold outbound is within the cooldown window."""
 
@@ -112,9 +118,12 @@ def send_email(  # noqa: PLR0913
     (ad-hoc CLI sends without a workflow have no cooldown context).
 
     Raises:
+        AccountDisabledError: sending account is soft-disabled (§V.79).
         ContactDisabledError: contact is bounced/unsubscribed.
         CooldownError: prior unsolicited send within 30 days.
     """
+    if account.disabled_reason is not None:
+        raise AccountDisabledError(f"account is disabled: {account.disabled_reason}")
     contact = database.get_contact_by_email(connection, to)
     contact_id: str | None = None
     if contact is not None:
@@ -174,12 +183,15 @@ def reply_email(  # noqa: PLR0913
     original. No cooldown -- replies are always allowed.
 
     Raises:
+        AccountDisabledError: sending account is soft-disabled (§V.79).
         OriginalNotFoundError: ``email_id`` does not exist.
         OriginalMissingThreadError: original has no ``gmail_thread_id``.
         OriginalMissingContactError: original has no ``contact_id``.
         ContactMissingError: ``original.contact_id`` does not resolve.
         ContactDisabledError: contact is bounced/unsubscribed.
     """
+    if account.disabled_reason is not None:
+        raise AccountDisabledError(f"account is disabled: {account.disabled_reason}")
     original = database.get_email(connection, email_id)
     if original is None:
         raise OriginalNotFoundError(f"email not found: {email_id}")

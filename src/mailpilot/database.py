@@ -14,7 +14,7 @@ import hashlib
 import re
 import urllib.parse
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
@@ -821,17 +821,26 @@ def list_accounts(
     limit: int = 100,
     since: str | None = None,
     until: str | None = None,
+    include_disabled: bool = False,
 ) -> list[AccountSummary]:
     """List accounts as summaries (identify/filter/order fields only).
 
     Internal callers needing the full record (e.g. ``gmail_history_id``,
     ``watch_expiration``) must hydrate via ``get_account()`` per id.
 
+    Disabled accounts (``disabled_reason IS NOT NULL``) are hidden by default
+    (§V.118) -- the sync loop full sweep, ``account sync`` all-accounts mode,
+    and ``renew_watches`` all read this default-excluding listing, so a
+    disabled account drops out of every Gmail-touching path at once. Pass
+    ``include_disabled=True`` to surface them.
+
     Args:
         connection: Open database connection.
         limit: Maximum results.
         since: ISO datetime inclusive lower bound on ``created_at``.
         until: ISO datetime inclusive upper bound on ``created_at``.
+        include_disabled: When ``True``, includes disabled accounts; the
+            default (``False``) hides them (§V.118).
 
     Returns:
         List of account summaries ordered by creation time.
@@ -844,10 +853,12 @@ def list_accounts(
     if until is not None:
         conditions.append(SQL("created_at <= %(until)s"))
         params["until"] = until
+    if not include_disabled:
+        conditions.append(SQL("disabled_reason IS NULL"))
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
-        "SELECT id, email, display_name, last_synced_at, created_at "
-        "FROM account {where} ORDER BY created_at LIMIT %(limit)s"
+        "SELECT id, email, display_name, last_synced_at, disabled_reason, "
+        "created_at FROM account {where} ORDER BY created_at LIMIT %(limit)s"
     ).format(where=where)
     rows = connection.execute(query, params).fetchall()
     return [AccountSummary.model_validate(row) for row in rows]
@@ -897,6 +908,82 @@ def update_account(
     updates["id"] = account_id
     query = _build_update("account", updates, SQL("id = %(id)s"))
     row = connection.execute(query, updates).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Account.model_validate(row)
+
+
+def disable_account(
+    connection: psycopg.Connection[dict[str, Any]],
+    account_id: str,
+    reason: str,
+) -> Account | None:
+    """Soft-disable an account by writing ``disabled_reason``.
+
+    A ``disabled_reason IS NULL`` gate blocks double-disable: an already
+    disabled account does not match, so the call returns ``None`` without
+    overwriting an earlier reason (mirror of ``disable_company`` per §V.118).
+    A disabled account is gated out of every Gmail-touching path -- the sync
+    loop, ``account sync`` all-accounts mode, ``renew_watches``, and send/reply
+    (§V.79). Disable is reversible via ``enable_account``.
+
+    Args:
+        connection: Open database connection.
+        account_id: Account ID.
+        reason: Explanation written to ``disabled_reason`` (stored verbatim).
+
+    Returns:
+        Updated account, or ``None`` when no active (not-yet-disabled) account
+        with that id exists -- i.e. missing or already disabled.
+    """
+    row = connection.execute(
+        """\
+        UPDATE account
+        SET disabled_reason = %(reason)s,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = %(id)s
+          AND disabled_reason IS NULL
+        RETURNING *
+        """,
+        {"id": account_id, "reason": reason},
+    ).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Account.model_validate(row)
+
+
+def enable_account(
+    connection: psycopg.Connection[dict[str, Any]],
+    account_id: str,
+) -> Account | None:
+    """Re-enable a soft-disabled account by clearing ``disabled_reason``.
+
+    Mirror of ``disable_account``. A ``disabled_reason IS NOT NULL`` gate
+    blocks enabling an already-active account: an active account does not
+    match, so the call returns ``None``. A re-enabled account reappears in the
+    default ``account list`` and resumes syncing (§V.118).
+
+    Args:
+        connection: Open database connection.
+        account_id: Account ID.
+
+    Returns:
+        Updated account, or ``None`` when no disabled account with that id
+        exists -- i.e. missing or already active.
+    """
+    row = connection.execute(
+        """\
+        UPDATE account
+        SET disabled_reason = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = %(id)s
+          AND disabled_reason IS NOT NULL
+        RETURNING *
+        """,
+        {"id": account_id},
+    ).fetchone()
     connection.commit()
     if row is None:
         return None
@@ -963,6 +1050,43 @@ def get_company(
     return Company.model_validate(row)
 
 
+def _exclude_tags_conditions(
+    exclude_tags: Sequence[str] | None,
+    owner_column: str,
+    params: dict[str, object],
+) -> list[Composed]:
+    """Build one ``NOT EXISTS`` predicate per excluded tag (§V.116).
+
+    ``--no-tag`` is repeatable, so the discover set can exclude several
+    memoization classes at once (``no-contacts-found`` and
+    ``contacts-exhausted``, §V.96). Each tag becomes its own intersected
+    ``NOT EXISTS`` over ``tag_assignment`` on ``owner_column``
+    (``company_id`` or ``contact_id``); the caller appends the predicates and
+    this fn mutates ``params`` with a uniquely-named placeholder per tag.
+
+    Args:
+        exclude_tags: Resolved tag ids to exclude (empty/None -> no predicate).
+        owner_column: ``tag_assignment`` owner FK column to join on.
+        params: Query parameter map, mutated in place with one entry per tag.
+
+    Returns:
+        One ``NOT EXISTS`` predicate per excluded tag.
+    """
+    conditions: list[Composed] = []
+    if not exclude_tags:
+        return conditions
+    for index, exclude_tag_id in enumerate(exclude_tags):
+        param_name = f"exclude_tag_id_{index}"
+        conditions.append(
+            SQL(
+                "NOT EXISTS (SELECT 1 FROM tag_assignment ta "
+                "WHERE ta.{} = c.id AND ta.tag_id = {})"
+            ).format(Identifier(owner_column), Placeholder(param_name))
+        )
+        params[param_name] = exclude_tag_id
+    return conditions
+
+
 def list_companies(
     connection: psycopg.Connection[dict[str, Any]],
     limit: int = 100,
@@ -973,7 +1097,7 @@ def list_companies(
     min_contacts: int | None = None,
     include_disabled: bool = False,
     tag: str | None = None,
-    exclude_tag: str | None = None,
+    exclude_tags: Sequence[str] | None = None,
 ) -> list[CompanySummary]:
     """List companies as summaries.
 
@@ -1006,11 +1130,14 @@ def list_companies(
             default (``False``) hides them (§V.114).
         tag: When set (a resolved tag id), returns only companies carrying that
             tag -- an Enum-family membership filter over ``tag_assignment``
-            (§V.116). Composes with ``exclude_tag`` as an intersection.
-        exclude_tag: When set (a resolved tag id), returns only companies NOT
-            carrying that tag -- the single negated membership filter (§V.116),
-            for memoization (drop a memoized company from the discover set
-            without ``company disable``).
+            (§V.116). Composes with ``exclude_tags`` as an intersection.
+        exclude_tags: When set (resolved tag ids), returns only companies
+            carrying NONE of the given tags -- one ``NOT EXISTS`` predicate per
+            tag, all intersected (§V.116). The repeatable negated membership
+            filter, for memoization (drop a memoized company from the discover
+            set without ``company disable``); the lead-contacts discover set
+            excludes both ``no-contacts-found`` and ``contacts-exhausted``
+            (§V.96).
 
     Returns:
         List of company summaries ordered by name.
@@ -1044,14 +1171,7 @@ def list_companies(
             )
         )
         params["tag_id"] = tag
-    if exclude_tag is not None:
-        conditions.append(
-            SQL(
-                "NOT EXISTS (SELECT 1 FROM tag_assignment ta "
-                "WHERE ta.company_id = c.id AND ta.tag_id = %(exclude_tag_id)s)"
-            )
-        )
-        params["exclude_tag_id"] = exclude_tag
+    conditions.extend(_exclude_tags_conditions(exclude_tags, "company_id", params))
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     having_clause = SQL("HAVING ") + SQL(" AND ").join(having) if having else SQL("")
     query = SQL(
@@ -1166,16 +1286,18 @@ def disable_company(
 
     A ``disabled_reason IS NULL`` gate blocks double-disable: an already
     disabled company does not match, so the call returns ``None`` without
-    overwriting an earlier reason. Disable is reversible -- clear
-    ``disabled_reason`` via ``update_company`` to re-enable the company (a
-    company with no discoverable contacts this cycle may have some next).
+    overwriting an earlier reason. Disable is reversible -- ``enable_company``
+    clears ``disabled_reason`` to re-enable the company (a company with no
+    discoverable contacts this cycle may have some next).
 
     Args:
         connection: Open database connection.
         company_id: Company ID.
         reason: Explanation written to ``disabled_reason`` (stored verbatim);
-            the lead-contacts memoization path writes
-            ``no_contacts_found:<YYYY-MM-DD>``.
+            operator-facing (out-of-business / not-a-fit). The lead-contacts
+            negative-verdict memoization no longer disables a company -- it
+            tags it ``no-contacts-found`` or ``contacts-exhausted`` instead
+            (§V.96, §V.116).
 
     Returns:
         Updated company, or ``None`` when no active (not-yet-disabled) company
@@ -1191,6 +1313,42 @@ def disable_company(
         RETURNING *
         """,
         {"id": company_id, "reason": reason},
+    ).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Company.model_validate(row)
+
+
+def enable_company(
+    connection: psycopg.Connection[dict[str, Any]],
+    company_id: str,
+) -> Company | None:
+    """Re-enable a soft-disabled company by clearing ``disabled_reason``.
+
+    Mirror of ``disable_company``. A ``disabled_reason IS NOT NULL`` gate
+    blocks enabling an already-active company: an active company does not
+    match, so the call returns ``None``. A re-enabled company reappears in the
+    default ``company list``.
+
+    Args:
+        connection: Open database connection.
+        company_id: Company ID.
+
+    Returns:
+        Updated company, or ``None`` when no disabled company with that id
+        exists -- i.e. missing or already active.
+    """
+    row = connection.execute(
+        """\
+        UPDATE company
+        SET disabled_reason = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = %(id)s
+          AND disabled_reason IS NOT NULL
+        RETURNING *
+        """,
+        {"id": company_id},
     ).fetchone()
     connection.commit()
     if row is None:
@@ -1437,7 +1595,7 @@ def list_contacts(
     min_email_confidence: int | None = None,
     title: str | None = None,
     tag: str | None = None,
-    exclude_tag: str | None = None,
+    exclude_tags: Sequence[str] | None = None,
 ) -> list[ContactSummary]:
     """List contacts as summaries with optional filters.
 
@@ -1468,14 +1626,15 @@ def list_contacts(
             job, never the ``list`` filter (§V.115 family 5).
         tag: When set (a resolved tag id), returns only contacts carrying that
             tag -- an Enum-family membership filter over ``tag_assignment``
-            (§V.116). Composes with ``exclude_tag`` as an intersection.
-        exclude_tag: When set (a resolved tag id), returns only contacts NOT
-            carrying that tag -- the single negated membership filter (§V.116).
+            (§V.116). Composes with ``exclude_tags`` as an intersection.
+        exclude_tags: When set (resolved tag ids), returns only contacts
+            carrying NONE of the given tags -- one ``NOT EXISTS`` predicate per
+            tag, all intersected (§V.116).
 
     Returns:
         List of contact summaries ordered by email.
     """
-    conditions: list[SQL] = []
+    conditions: list[Composed | SQL] = []
     params: dict[str, object] = {"limit": limit}
     if company_id is not None:
         conditions.append(SQL("c.company_id = %(company_id)s"))
@@ -1510,14 +1669,7 @@ def list_contacts(
             )
         )
         params["tag_id"] = tag
-    if exclude_tag is not None:
-        conditions.append(
-            SQL(
-                "NOT EXISTS (SELECT 1 FROM tag_assignment ta "
-                "WHERE ta.contact_id = c.id AND ta.tag_id = %(exclude_tag_id)s)"
-            )
-        )
-        params["exclude_tag_id"] = exclude_tag
+    conditions.extend(_exclude_tags_conditions(exclude_tags, "contact_id", params))
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
         "SELECT c.id, c.email, c.first_name, c.last_name, c.title, "
@@ -1627,6 +1779,44 @@ def disable_contact(
         RETURNING *
         """,
         {"id": contact_id, "reason": reason},
+    ).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Contact.model_validate(row)
+
+
+def enable_contact(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact_id: str,
+) -> Contact | None:
+    """Clear a contact's global block by clearing ``disabled_reason``.
+
+    Clears any reason regardless of prefix -- the operator owns consent, so a
+    ``"bounced:"`` or ``"unsubscribed:"`` block re-enables the same way (no
+    unsubscribe carve-out). This is operator-only; the agent disables a contact
+    on bounce or unsubscribe but never re-enables it. A ``disabled_reason IS
+    NOT NULL`` gate blocks enabling an already-active contact (returns
+    ``None``).
+
+    Args:
+        connection: Open database connection.
+        contact_id: Contact ID.
+
+    Returns:
+        Updated contact, or ``None`` when no disabled contact with that id
+        exists -- i.e. missing or already active.
+    """
+    row = connection.execute(
+        """\
+        UPDATE contact
+        SET disabled_reason = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = %(id)s
+          AND disabled_reason IS NOT NULL
+        RETURNING *
+        """,
+        {"id": contact_id},
     ).fetchone()
     connection.commit()
     if row is None:
@@ -2025,35 +2215,6 @@ def create_enrollment(
     return Enrollment.model_validate(row)
 
 
-def update_enrollment(
-    connection: psycopg.Connection[dict[str, Any]],
-    enrollment_id: str,
-    **fields: object,
-) -> Enrollment | None:
-    """Update an enrollment by scalar id.
-
-    Args:
-        connection: Open database connection.
-        enrollment_id: Enrollment ID.
-        **fields: Fields to update (status, reason).
-
-    Returns:
-        Updated enrollment, or None if not found.
-    """
-    allowed = {"status", "reason"}
-    updates = {k: v for k, v in fields.items() if k in allowed}
-    if not updates:
-        return get_enrollment_by_id(connection, enrollment_id)
-    updates["id"] = enrollment_id
-    where = SQL("id = %(id)s")
-    query = _build_update("enrollment", updates, where)
-    row = connection.execute(query, updates).fetchone()
-    connection.commit()
-    if row is None:
-        return None
-    return get_enrollment_by_id(connection, enrollment_id)
-
-
 def get_enrollment(
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str,
@@ -2296,6 +2457,86 @@ def disable_enrollment(
             "enrollment_id": row["id"],
             "summary": reason,
             "detail": Json({"reason": reason}),
+        },
+    )
+    connection.commit()
+    row.pop("contact_company_id", None)
+    return Enrollment.model_validate(row)
+
+
+def enable_enrollment(
+    connection: psycopg.Connection[dict[str, Any]],
+    enrollment_id: str,
+) -> Enrollment | None:
+    """Re-enable a disabled enrollment: flip ``status`` to ``active``.
+
+    Mirror of ``disable_enrollment`` (§V.15): single transaction flips
+    ``status='active'`` + clears ``disabled_reason``, then appends an
+    ``enrollment_enabled`` activity. A ``status='disabled'`` gate blocks
+    enabling a live enrollment -- an already-active row does not match, so the
+    call returns ``None`` and writes no activity.
+
+    Returns the updated row with denormalised parent identifiers (workflow
+    name, contact email/name) so the CLI envelope can ship the full Enrollment
+    model unchanged.
+
+    Args:
+        connection: Open database connection.
+        enrollment_id: Enrollment ID.
+
+    Returns:
+        Updated ``Enrollment`` (status='active'), or ``None`` when no disabled
+        enrollment with that id exists -- i.e. missing or already active.
+    """
+    row = connection.execute(
+        """\
+        WITH updated AS (
+            UPDATE enrollment
+            SET status = 'active',
+                disabled_reason = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = %(id)s
+              AND status = 'disabled'
+            RETURNING *
+        )
+        SELECT
+            updated.*,
+            workflow.name AS workflow_name,
+            contact.email AS contact_email,
+            contact.company_id AS contact_company_id,
+            TRIM(
+                COALESCE(contact.first_name, '')
+                || ' '
+                || COALESCE(contact.last_name, '')
+            ) AS contact_name
+        FROM updated
+        JOIN workflow ON workflow.id = updated.workflow_id
+        JOIN contact ON contact.id = updated.contact_id
+        """,
+        {"id": enrollment_id},
+    ).fetchone()
+    if row is None:
+        connection.commit()
+        return None
+    connection.execute(
+        """\
+        INSERT INTO activity (
+            id, contact_id, company_id, workflow_id, enrollment_id,
+            type, summary, detail
+        )
+        VALUES (
+            %(id)s, %(contact_id)s, %(company_id)s, %(workflow_id)s,
+            %(enrollment_id)s, 'enrollment_enabled', %(summary)s, %(detail)s
+        )
+        """,
+        {
+            "id": _new_id(),
+            "contact_id": row["contact_id"],
+            "company_id": row["contact_company_id"],
+            "workflow_id": row["workflow_id"],
+            "enrollment_id": row["id"],
+            "summary": "Enrollment re-enabled",
+            "detail": Json({}),
         },
     )
     connection.commit()
@@ -3677,6 +3918,37 @@ def disable_tag(
         RETURNING *
         """,
         {"name": normalized, "reason": reason},
+    ).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Tag.model_validate(row)
+
+
+def enable_tag(
+    connection: psycopg.Connection[dict[str, Any]],
+    name: str,
+) -> Tag | None:
+    """Re-enable a retired vocabulary tag by clearing ``disabled_reason``.
+
+    Mirror of ``disable_tag``. A ``disabled_reason IS NOT NULL`` gate blocks
+    enabling an already-active tag, so the call returns ``None`` when no
+    disabled tag with the name exists (undefined or already active) -- the
+    caller distinguishes the two. Being owner-free, the vocabulary lifecycle
+    writes no activity (an activity needs a contact or company owner).
+
+    Raises:
+        ValueError: If the tag name fails normalization.
+    """
+    normalized = _normalize_tag_name(name)
+    row = connection.execute(
+        """\
+        UPDATE tag
+        SET disabled_reason = NULL
+        WHERE name = %(name)s AND disabled_reason IS NOT NULL
+        RETURNING *
+        """,
+        {"name": normalized},
     ).fetchone()
     connection.commit()
     if row is None:
