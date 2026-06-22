@@ -1,10 +1,11 @@
 """Fold every phase into one Markdown report and an overall verdict.
 
-Joins the personalization, lint, send, and (when present) delivery artifacts
-into a per-contact table plus a PASS/FAIL verdict. PASS requires zero lint
-failures, zero send failures, and -- when the delivery check ran -- zero missing
-deliveries. Personalization gaps are surfaced as warnings, not failures. Writes
-``report.md`` and prints it.
+Joins the personalization, lint, send, and (when present) delivery and critique
+artifacts into a per-contact table plus a PASS/FAIL verdict. PASS requires zero
+lint failures, zero send failures, and -- when the delivery check ran -- zero
+missing deliveries. Personalization gaps are warnings, not failures. The
+marketing critique is advisory: it adds a score column and a critique section but
+never changes the verdict. Writes ``report.md`` and prints it.
 
 Usage:
     uv run python scripts/generate_report.py --run-id <id>
@@ -32,6 +33,12 @@ def main() -> int:
     delivered = set(delivery["delivered"]) if delivery else set()
     delivery_ran = delivery is not None
 
+    critique_path = directory / "critiques.json"
+    critique_doc = read_json(critique_path) if critique_path.exists() else None
+    critiques = critique_doc.get("critiques", []) if critique_doc else []
+    critique_by_seq = {c["sequence"]: c for c in critiques}
+    critique_ran = critique_doc is not None
+
     lines = [
         f"# Campaign test report -- run {args.run_id}",
         "",
@@ -39,8 +46,8 @@ def main() -> int:
         "to the contact's assigned inbound alias, never to the contact's own "
         "address.",
         "",
-        "| # | Contact | Alias | Gaps | Lint | Send | Delivered |",
-        "|---|---|---|---|---|---|---|",
+        "| # | Contact | Alias | Gaps | Lint | Send | Delivered | Critique |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     lint_failures = send_failures = 0
     for entry in rendered:
@@ -53,10 +60,13 @@ def main() -> int:
         delivered_cell = "n/a"
         if delivery_ran:
             delivered_cell = "yes" if seq in delivered else "no"
+        critique = critique_by_seq.get(seq)
+        critique_cell = f"{critique['overall_score']}/5" if critique else "n/a"
         gaps = "; ".join(entry["gaps"]) if entry["gaps"] else "none"
         lines.append(
             f"| {seq} | {entry['contact_email']} | {entry['alias']} | {gaps} | "
-            f"{entry['lint']} | {send.get('status', 'n/a')} | {delivered_cell} |"
+            f"{entry['lint']} | {send.get('status', 'n/a')} | {delivered_cell} | "
+            f"{critique_cell} |"
         )
 
     missing = delivery["missing"] if delivery_ran else []
@@ -74,6 +84,32 @@ def main() -> int:
         f"- delivery check: {'ran' if delivery_ran else 'skipped'}"
         + (f", missing {missing}" if delivery_ran and missing else ""),
     ]
+
+    if critique_ran and critiques:
+        scores = [c["overall_score"] for c in critiques]
+        average = sum(scores) / len(scores)
+        lines += [
+            f"- critique: ran, average score {average:.1f}/5 over {len(scores)} emails",
+            "",
+            "## Marketing critique",
+            "",
+            critique_doc.get("summary", ""),
+        ]
+        for critique in sorted(critiques, key=lambda c: c["sequence"]):
+            send = send_by_seq.get(critique["sequence"], {})
+            suggestions = critique.get("suggestions") or []
+            top = suggestions[0] if suggestions else "(no suggestion)"
+            lines += [
+                "",
+                f"### Email {critique['sequence']} -- {send.get('alias', '?')} "
+                f"(score {critique['overall_score']}/5)",
+                f"- top fix: {top}",
+            ]
+    elif critique_ran:
+        lines.append("- critique: ran, no emails critiqued")
+    else:
+        lines.append("- critique: skipped")
+
     report = "\n".join(lines) + "\n"
     (directory / "report.md").write_text(report)
     print(report)

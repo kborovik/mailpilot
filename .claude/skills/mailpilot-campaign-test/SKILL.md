@@ -8,14 +8,16 @@ description: >-
   pipe-table check the send path enforces), then live-sends each rendered message
   from outbound@lab5.ca -- but rewrites every recipient to a controlled inbound
   alias (inbound1@lab5.ca through inbound9@lab5.ca) so the real contact address
-  is never emailed -- and confirms delivery from Gmail. Use this whenever the
-  user wants to test, smoke-test, dry-run, preview, simulate, or validate an
-  outbound campaign, cold-email blast, or outreach template against real or
-  discovered leads -- even when they only say "test the campaign", "test my cold
-  email", or "check the outreach message before I send it". This sends LIVE
-  Gmail traffic to the alias mailbox; it never emails the real contacts.
+  is never emailed -- confirms delivery from Gmail -- and runs an Opus sub-agent
+  that critiques each sent email against the contact context and cold-email
+  marketing best practices. Use this whenever the user wants to test,
+  smoke-test, dry-run, preview, simulate, critique, or validate an outbound
+  campaign, cold-email blast, or outreach template against real or discovered
+  leads -- even when they only say "test the campaign", "test my cold email", or
+  "check the outreach message before I send it". This sends LIVE Gmail traffic to
+  the alias mailbox; it never emails the real contacts.
 argument-hint: <campaign-file> [--limit N] [--company-domain <domain>] [--min-confidence N]
-allowed-tools: Bash(uv run *), Read, AskUserQuestion
+allowed-tools: Bash(uv run *), Read, Agent, AskUserQuestion
 ---
 
 # mailpilot-campaign-test
@@ -60,7 +62,14 @@ This is why the run is capped at nine messages: one per alias.
   by default.
 - **Verify.** Syncs `inbound@lab5.ca` and confirms each sent copy arrived,
   matched by its subject tag.
-- **Report.** Writes a per-contact table and a PASS or FAIL verdict.
+- **Critique.** An Opus sub-agent reads each sent email with its contact and
+  company context and scores it against the cold-email marketing rubric
+  (`references/marketing-rubric.md`): relevance, subject, value proposition,
+  credibility, call to action, concision, tone, and spam risk. It returns
+  per-email strengths, weaknesses, and the single highest-impact fix. Advisory
+  only -- it never changes the PASS or FAIL verdict.
+- **Report.** Writes a per-contact table (including the critique score) and a
+  PASS or FAIL verdict.
 
 ## Safety -- read before running
 
@@ -106,8 +115,10 @@ before running. Do not invent one.
 
 ## Procedure
 
-The orchestrator runs every step directly. The work is deterministic, so no
-sub-agents are needed.
+The orchestrator runs every step directly. Steps 0 through 5 are deterministic
+scripts. Step 6 (critique) is the one sub-agent phase: spawn it with the Agent
+tool and `model: opus`. The heavy reading -- the email bodies, contact context,
+and rubric -- stays inside that sub-agent; it returns only a short summary.
 
 ### 0. Mint a run id
 ```bash
@@ -157,19 +168,47 @@ uv run python .claude/skills/mailpilot-campaign-test/scripts/verify_delivery.py 
 Syncs `inbound@lab5.ca` and confirms each sent copy arrived. Reports `delivered`
 and any `missing`.
 
-### 6. Report
+### 6. Critique -- Opus sub-agent
+First bundle each sent email with its contact and company context:
+```bash
+uv run python .claude/skills/mailpilot-campaign-test/scripts/critique_prep.py --run-id $RUN_ID
+```
+This writes `.campaign-test/$RUN_ID/critique_input.json`. If `prepared` is 0
+(nothing was sent), skip the sub-agent and note it. Otherwise spawn ONE sub-agent
+with the Agent tool and `model: opus`. Give it only the two paths and the output
+contract below -- it does its own reading, so the bodies never enter your window:
+
+> You are a cold-email marketing critic. Read
+> `.campaign-test/<RUN_ID>/critique_input.json` (one record per sent email, each
+> with the recipient's contact and company context, the subject, and the body)
+> and `.claude/skills/mailpilot-campaign-test/references/marketing-rubric.md`.
+> Critique each email against the rubric, grounded in that recipient's context.
+> Write `.campaign-test/<RUN_ID>/critiques.json` as
+> `{"critiques": [{"sequence": <int>, "overall_score": <1-5>, "dimension_scores":
+> {...}, "strengths": [...], "weaknesses": [...], "suggestions": [...]}],
+> "summary": "<one paragraph across all emails>"}` -- the first suggestion per
+> email must be the single highest-impact fix. Also write a readable
+> `.campaign-test/<RUN_ID>/critiques.md`. Return only a two-line summary: the
+> average score and the most common weakness. Do not return the bodies.
+
+Substitute the literal run id for `<RUN_ID>`. The score does not gate the
+verdict; it is advisory marketing feedback for the operator.
+
+### 7. Report
 ```bash
 uv run python .claude/skills/mailpilot-campaign-test/scripts/generate_report.py --run-id $RUN_ID
 ```
-Reads `.campaign-test/$RUN_ID/report.md` and presents its summary. The verdict
-is PASS only when there are zero lint failures, zero send failures, and zero
-missing deliveries.
+Reads `.campaign-test/$RUN_ID/report.md` and presents its summary. The report
+folds in the critique score per email plus the critique section. The verdict is
+PASS only when there are zero lint failures, zero send failures, and zero missing
+deliveries; the critique never changes it.
 
 ## Artifacts
 
 Everything for a run is under `.campaign-test/$RUN_ID/` (git-ignored):
 `preflight.json`, `run_manifest.json`, `personalized.json`, `preview_NN.md`,
-`sends.json`, `delivery.json`, and `report.md`.
+`sends.json`, `delivery.json`, `critique_input.json`, `critiques.json`,
+`critiques.md`, and `report.md`.
 
 ## OUTPUT -- "Next" block
 
