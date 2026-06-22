@@ -20,8 +20,10 @@ from mailpilot.database import (
     create_email,
     update_workflow,
 )
+from mailpilot.database import disable_account as db_disable_account
 from mailpilot.database import disable_contact as db_disable_contact
 from mailpilot.email_ops import (
+    AccountDisabledError,
     ContactDisabledError,
     ContactMissingError,
     CooldownError,
@@ -163,6 +165,34 @@ def test_send_email_raises_contact_disabled_when_bounced(
             workflow_id=workflow.id,
         )
     assert "bounced" in str(excinfo.value)
+    gmail_client.send_message.assert_not_called()
+
+
+def test_send_email_raises_account_disabled(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.79/§V.118: a disabled sending account blocks send before Gmail."""
+    account = make_test_account(database_connection)
+    make_test_contact(database_connection, email="recipient@example.com")
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    disabled = db_disable_account(database_connection, account.id, "out of business")
+    assert disabled is not None
+    gmail_client = _make_gmail_client(account)
+
+    with pytest.raises(AccountDisabledError) as excinfo:
+        send_email(
+            connection=database_connection,
+            account=disabled,
+            gmail_client=gmail_client,
+            settings=make_test_settings(),
+            to="recipient@example.com",
+            subject="Hello",
+            body="Hi",
+            workflow_id=workflow.id,
+        )
+    assert "out of business" in str(excinfo.value)
+    assert AccountDisabledError.code == "account_disabled"
     gmail_client.send_message.assert_not_called()
 
 
@@ -399,6 +429,33 @@ def test_reply_email_raises_contact_disabled(
             body="hi",
             workflow_id=workflow.id,
         )
+
+
+def test_reply_email_raises_account_disabled(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.79/§V.118: a disabled sending account blocks reply before Gmail."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection, email="sender@example.com")
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    inbound = _make_inbound(database_connection, account.id, contact.id, workflow.id)
+    disabled = db_disable_account(database_connection, account.id, "out of business")
+    assert disabled is not None
+    gmail_client = _make_gmail_client(account)
+
+    with pytest.raises(AccountDisabledError) as excinfo:
+        reply_email(
+            connection=database_connection,
+            account=disabled,
+            gmail_client=gmail_client,
+            settings=make_test_settings(),
+            email_id=inbound.id,
+            body="hi",
+            workflow_id=workflow.id,
+        )
+    assert "out of business" in str(excinfo.value)
+    gmail_client.send_message.assert_not_called()
 
 
 def test_reply_email_passes_in_reply_to_kwarg(

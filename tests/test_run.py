@@ -272,9 +272,10 @@ def test_execute_task_disabled_contact(
     )
 
 
-def test_execute_task_paused_enrollment(
+def test_execute_task_disabled_enrollment(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
+    """§V.83: pre-flight cancels the task when the enrollment is not active."""
     from conftest import make_test_settings
     from mailpilot.run import execute_task
 
@@ -282,7 +283,7 @@ def test_execute_task_paused_enrollment(
     task = _make_task()
     workflow = _make_workflow()
     contact = _make_contact()
-    enrollment = _make_enrollment(status="paused", reason="operator hold")
+    enrollment = _make_enrollment(status="disabled", disabled_reason="operator hold")
 
     with (
         patch("mailpilot.run.get_workflow", return_value=workflow),
@@ -298,7 +299,7 @@ def test_execute_task_paused_enrollment(
         database_connection,
         _TASK_ID,
         status="cancelled",
-        result={"reason": "enrollment paused"},
+        result={"reason": "enrollment disabled"},
     )
 
 

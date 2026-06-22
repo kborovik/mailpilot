@@ -94,17 +94,21 @@ def test_enrollment_defaults():
     assert enrollment.reason == ""
 
 
-def test_enrollment_status_literal_admits_disabled() -> None:
-    """EnrollmentStatus enum: active/paused operational + disabled terminal (§V.15)."""
+def test_enrollment_status_literal_collapsed_to_active_disabled() -> None:
+    """EnrollmentStatus collapsed to {active, disabled}; `paused` dropped (§V.15)."""
     from typing import get_args
 
     from mailpilot.models import EnrollmentStatus
 
-    assert set(get_args(EnrollmentStatus)) == {"active", "paused", "disabled"}
+    assert set(get_args(EnrollmentStatus)) == {"active", "disabled"}
 
 
 def test_activity_type_literal_uses_enrollment_vocabulary() -> None:
-    """workflow_* renamed to enrollment_*; pause/resume/disabled added."""
+    """enrollment_enabled added; paused/resumed retained for historical rows.
+
+    `tag_disabled` is gone -- vocabulary-tag disable/enable write no activity
+    (a tag row owns no contact/company, so an activity cannot target it), so
+    the value was never emitted and carries no historical row (T170)."""
     from typing import get_args
 
     from mailpilot.models import ActivityType
@@ -115,7 +119,6 @@ def test_activity_type_literal_uses_enrollment_vocabulary() -> None:
         "note_added",
         "tag_added",
         "tag_removed",
-        "tag_disabled",
         "status_changed",
         "enrollment_added",
         "enrollment_completed",
@@ -123,6 +126,7 @@ def test_activity_type_literal_uses_enrollment_vocabulary() -> None:
         "enrollment_paused",
         "enrollment_resumed",
         "enrollment_disabled",
+        "enrollment_enabled",
     }
 
 

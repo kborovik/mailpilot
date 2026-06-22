@@ -23,6 +23,7 @@ const CONTACT_RESULT_SCHEMA = {
     contacts_created: {type: 'integer'},
     flagged: {type: 'integer'},
     reason: {type: 'string'},
+    reason_code: {enum: ['no_decision_makers', 'all_already_seeded', 'transient']},
   },
 }
 

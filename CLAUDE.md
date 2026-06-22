@@ -160,6 +160,13 @@ Invariants in §V.51-55.
 - **Cloud project** — `mailpilot` (token-scoped). MCP queries set
   `project='mailpilot'` and filter by `deployment_environment` (§V.52).
 
+## Operating friction
+
+File a GitHub issue in this repo for every friction or error you hit operating
+the mailpilot application. Capture the command, the error output, and what you
+expected. One issue per distinct problem. Follow the steno register for the title
+and body.
+
 ## Help
 
 - `/help` — Claude Code help.
