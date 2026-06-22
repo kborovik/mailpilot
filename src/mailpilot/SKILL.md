@@ -16,10 +16,10 @@ mailpilot --version | --help | --completion <shell> | --skill | --debug
 Nouns: `account`, `company`, `contact`, `workflow`, `enrollment`, `task`,
 `email`, `activity`, `tag`, `note`, `template`, `db`.
 
-Verbs: `list`, `search`, `view`, `create`, `update`, `disable`, `add`,
-`reply`, `send`, `start`, `stop`, `cancel`, `retry`, `run`, `sync`,
-`export`, `import`, `init`, `migrate`, `check`. Not every verb applies to every
-noun -- use
+Verbs: `list`, `search`, `view`, `create`, `update`, `disable`, `enable`,
+`add`, `remove`, `reply`, `send`, `start`, `stop`, `cancel`, `retry`, `run`,
+`sync`, `export`, `import`, `init`, `migrate`, `check`. Not every verb applies
+to every noun -- use
 `mailpilot <noun> --help` to enumerate. `config` exposes the `get` and `set`
 subverbs for reading and writing persistent configuration.
 
@@ -30,8 +30,9 @@ diagnostics go to stderr and never to stdout.
 
 - `list`, `search`, `sync`, `export`, `import`:
   `{"<plural>": [...], "ok": true}`
-- `view`, `create`, `update`, `disable`, `add`, `reply`, `send`,
-  `start`, `stop`, `cancel`, `retry`, `init`, `migrate`, `check`:
+- `view`, `create`, `update`, `disable`, `enable`, `add`, `remove`,
+  `reply`, `send`, `start`, `stop`, `cancel`, `retry`, `init`, `migrate`,
+  `check`:
   `{"<singular>": {...}, "ok": true}`
 - error: `{"error": "<code>", "message": "<text>", "ok": false}`
 
