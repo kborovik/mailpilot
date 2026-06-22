@@ -7,6 +7,7 @@ SHELL := /bin/bash
 MAKEFLAGS += --no-builtin-rules --no-builtin-variables
 export PATH := $(abspath .venv)/bin:/opt/homebrew/opt/postgresql@18/bin:$(PATH)
 DATA_DIR := $(HOME)/.mailpilot
+DOCUMENTS_DIR := $(HOME)/Documents/MailPilot
 
 default: submodules .venv help
 
@@ -33,11 +34,14 @@ py-lint:
 	$(call header,Running Ruff lint)
 	uv run ruff check --fix
 
-clean: ## Export data, re-create database
+db-backup: ## Back up companies and contacts to ~/Documents/MailPilot/ (timestamped JSON)
 	$(eval TS := $(shell date +%Y%m%d-%H%M%S))
-	$(call header,Exporting companies and contacts)
-	mailpilot company export --file $(DATA_DIR)/companies-$(TS).json > /dev/null || true
-	mailpilot contact export --file $(DATA_DIR)/contacts-$(TS).json > /dev/null || true
+	$(call header,Backing up companies and contacts to $(DOCUMENTS_DIR))
+	mkdir -p $(DOCUMENTS_DIR)
+	mailpilot company export --file $(DOCUMENTS_DIR)/companies-$(TS).json > /dev/null
+	mailpilot contact export --file $(DOCUMENTS_DIR)/contacts-$(TS).json > /dev/null
+
+clean: db-backup ## Back up data, re-create database
 	$(call header,Re-creating database)
 	dropdb --if-exists mailpilot
 	createdb mailpilot
