@@ -286,7 +286,7 @@ def test_account_update_idempotent_pre_equals_post(
     assert "changed=[]" in err
 
 
-# -- company.create / update / import ------------------------------------------
+# -- company.create / update --------------------------------------------------
 
 
 def test_company_create_emits_span_and_event(
@@ -330,29 +330,6 @@ def test_company_update_changed_diff(
     assert result.exit_code == 0, result.output
     err = result.stderr
     assert "changed=['name']" in err
-
-
-def test_company_import_idempotent_on_duplicate_rows(
-    runner: CliRunner,
-    mock_connection: MagicMock,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Re-run import on already-present rows -> every row event has changed=[]."""
-    existing = [_make_company(name="Acme", domain="acme.test")]
-    payload = json.dumps([{"name": "Acme", "domain": "acme.test"}])
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.list_companies", return_value=existing),
-        patch("mailpilot.database.create_company") as mock_create,
-    ):
-        result = runner.invoke(main, ["company", "import"], input=payload)
-
-    assert result.exit_code == 0, result.output
-    mock_create.assert_not_called()
-    err = result.stderr
-    assert "event=company.import" in err
-    assert err.count("changed=[]") >= 1
 
 
 def test_company_create_with_note_includes_note_in_changed(
@@ -422,28 +399,7 @@ def test_contact_create_with_note_includes_note_in_changed(
     assert "'note'" in err
 
 
-def test_company_import_emits_changed_on_created_row(
-    runner: CliRunner,
-    mock_connection: MagicMock,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    payload = json.dumps([{"name": "Acme", "domain": "acme.test"}])
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.list_companies", return_value=[]),
-        patch("mailpilot.database.create_company", return_value=_make_company()),
-    ):
-        result = runner.invoke(main, ["company", "import"], input=payload)
-
-    assert result.exit_code == 0, result.output
-    err = result.stderr
-    assert "event=company.import" in err
-    # operator_event quotes values that contain whitespace (lists render with spaces).
-    assert "changed=\"['name', 'domain']\"" in err
-
-
-# -- contact.create / update / import ------------------------------------------
+# -- contact.create / update --------------------------------------------------
 
 
 def test_contact_create_emits_span_and_event(
@@ -587,27 +543,6 @@ def test_contact_disable_emits_error_on_db_raise(
     failed = _spans_named(capfire, "contact.disable.failed")
     assert failed
     assert failed[0]["attributes"]["logfire.level_num"] >= 17
-
-
-def test_contact_import_idempotent_on_duplicate_rows(
-    runner: CliRunner,
-    mock_connection: MagicMock,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    existing = [_make_contact(email="lead@acme.test")]
-    payload = json.dumps([{"email": "lead@acme.test"}])
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.list_contacts", return_value=existing),
-        patch("mailpilot.database.create_contact") as mock_create,
-    ):
-        result = runner.invoke(main, ["contact", "import"], input=payload)
-
-    assert result.exit_code == 0, result.output
-    mock_create.assert_not_called()
-    err = result.stderr
-    assert err.count("changed=[]") >= 1
 
 
 # -- workflow.create / update / start / stop / import --------------------------

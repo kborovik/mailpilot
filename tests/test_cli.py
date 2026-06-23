@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import pathlib
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, NoReturn
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -17,10 +17,8 @@ from mailpilot.models import (
     Account,
     Activity,
     Company,
-    CompanySummary,
     CompanyView,
     Contact,
-    ContactSummary,
     ContactView,
     Email,
     Enrollment,
@@ -1421,167 +1419,6 @@ def test_company_update_profile_validation_error_envelope(
     assert '"ok": false' in result.output
 
 
-# -- company export ------------------------------------------------------------
-
-
-def test_company_export_envelope_and_file(
-    runner: CliRunner, mock_connection: MagicMock, tmp_path: Any
-) -> None:
-    company_a = _make_company(id="id-1", domain="acme.com")
-    company_b = _make_company(id="id-2", domain="beta.com")
-    summaries = [
-        CompanySummary.model_validate(
-            {**c.model_dump(), "has_profile": False, "contact_count": 0}
-        )
-        for c in (company_a, company_b)
-    ]
-    export_file = str(tmp_path / "companies.json")
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.list_companies", return_value=summaries),
-        patch("mailpilot.database.get_company", side_effect=[company_a, company_b]),
-    ):
-        result = runner.invoke(main, ["company", "export", "--file", export_file])
-
-    assert result.exit_code == 0
-    data = json.loads(result.output)
-    assert data["ok"] is True
-    assert isinstance(data["companies"], list)
-    assert len(data["companies"]) == 2
-    assert data["companies"][0]["id"] == "id-1"
-    assert "profile_summary" not in data["companies"][0]
-    assert data["companies"][0]["domain"] == "acme.com"
-    on_disk = json.loads(pathlib.Path(export_file).read_text())
-    assert on_disk == data["companies"]
-
-
-def test_company_export_stdout_only(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
-    company = _make_company(id="id-1", domain="acme.com")
-    summaries = [
-        CompanySummary.model_validate(
-            {**company.model_dump(), "has_profile": False, "contact_count": 0}
-        )
-    ]
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.list_companies", return_value=summaries),
-        patch("mailpilot.database.get_company", return_value=company),
-    ):
-        result = runner.invoke(main, ["company", "export"])
-
-    assert result.exit_code == 0
-    data = json.loads(result.output)
-    assert data["ok"] is True
-    assert len(data["companies"]) == 1
-
-
-# -- company import ------------------------------------------------------------
-
-
-def test_company_import_creates_via_file(
-    runner: CliRunner, mock_connection: MagicMock, tmp_path: Any
-) -> None:
-    entries = [
-        {"name": "Acme Corp", "domain": "acme.com"},
-        {"name": "Beta Inc", "domain": "beta.com"},
-    ]
-    import_file = tmp_path / "companies.json"
-    import_file.write_text(json.dumps(entries))
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.list_companies", return_value=[]),
-        patch(
-            "mailpilot.database.create_company",
-            side_effect=[_make_company(domain=e["domain"]) for e in entries],
-        ) as mock_create,
-    ):
-        result = runner.invoke(main, ["company", "import", "--file", str(import_file)])
-
-    assert result.exit_code == 0
-    assert mock_create.call_count == 2
-    mock_create.assert_any_call(mock_connection, name="Acme Corp", domain="acme.com")
-    mock_create.assert_any_call(mock_connection, name="Beta Inc", domain="beta.com")
-    data = json.loads(result.output)
-    assert data["ok"] is True
-    assert data["companies"] == [
-        {"name": "Acme Corp", "action": "created"},
-        {"name": "Beta Inc", "action": "created"},
-    ]
-
-
-def test_company_import_via_stdin(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
-    entries = [{"name": "Acme Corp", "domain": "acme.com"}]
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.list_companies", return_value=[]),
-        patch(
-            "mailpilot.database.create_company",
-            return_value=_make_company(domain="acme.com"),
-        ),
-    ):
-        result = runner.invoke(main, ["company", "import"], input=json.dumps(entries))
-
-    assert result.exit_code == 0
-    data = json.loads(result.output)
-    assert data["ok"] is True
-    assert data["companies"] == [{"name": "Acme Corp", "action": "created"}]
-
-
-def test_company_import_per_row_error_continues_batch(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
-    """Duplicate domain on row 1 must not block create on row 2 (§V.63)."""
-    existing = [_make_company(id="id-existing", domain="acme.com")]
-    existing_summaries = [
-        CompanySummary.model_validate(
-            {**c.model_dump(), "has_profile": False, "contact_count": 0}
-        )
-        for c in existing
-    ]
-    entries = [
-        {"name": "Acme Corp", "domain": "acme.com"},
-        {"name": "Beta Inc", "domain": "beta.com"},
-    ]
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.list_companies", return_value=existing_summaries),
-        patch(
-            "mailpilot.database.create_company",
-            return_value=_make_company(domain="beta.com"),
-        ) as mock_create,
-    ):
-        result = runner.invoke(main, ["company", "import"], input=json.dumps(entries))
-
-    assert result.exit_code == 0
-    mock_create.assert_called_once_with(
-        mock_connection, name="Beta Inc", domain="beta.com"
-    )
-    data = json.loads(result.output)
-    assert data["ok"] is True
-    assert data["companies"][0]["error"] == "duplicate"
-    assert data["companies"][0]["name"] == "Acme Corp"
-    assert data["companies"][1] == {"name": "Beta Inc", "action": "created"}
-
-
-def test_company_import_malformed_json(runner: CliRunner) -> None:
-    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
-        result = runner.invoke(main, ["company", "import"], input="not json")
-
-    assert result.exit_code == 1
-    err = json.loads(result.output)
-    assert err["ok"] is False
-    assert err["error"] == "validation_error"
-
-
 # -- contact helpers -----------------------------------------------------------
 
 
@@ -2411,177 +2248,6 @@ def test_contact_view_not_found(runner: CliRunner, mock_connection: MagicMock) -
     data = json.loads(result.output)
     assert data["ok"] is False
     assert data["error"] == "not_found"
-
-
-# -- contact export ------------------------------------------------------------
-
-
-def test_contact_export_envelope_and_file(
-    runner: CliRunner, mock_connection: MagicMock, tmp_path: Any
-) -> None:
-    contact_a = _make_contact(id="id-1", email="alice@acme.com")
-    contact_b = _make_contact(id="id-2", email="bob@beta.com")
-    summaries = [
-        ContactSummary.model_validate({**c.model_dump(), "company_domain": None})
-        for c in (contact_a, contact_b)
-    ]
-    export_file = str(tmp_path / "contacts.json")
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.list_contacts", return_value=summaries),
-        patch("mailpilot.database.get_contact", side_effect=[contact_a, contact_b]),
-    ):
-        result = runner.invoke(main, ["contact", "export", "--file", export_file])
-
-    assert result.exit_code == 0
-    data = json.loads(result.output)
-    assert data["ok"] is True
-    assert isinstance(data["contacts"], list)
-    assert len(data["contacts"]) == 2
-    assert data["contacts"][0]["id"] == "id-1"
-    assert "domain" not in data["contacts"][0]
-    assert "disabled_reason" in data["contacts"][0]
-    on_disk = json.loads(pathlib.Path(export_file).read_text())
-    assert on_disk == data["contacts"]
-
-
-def test_contact_export_stdout_only(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
-    contact = _make_contact(id="id-1", email="alice@acme.com")
-    summaries = [
-        ContactSummary.model_validate({**contact.model_dump(), "company_domain": None})
-    ]
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.list_contacts", return_value=summaries),
-        patch("mailpilot.database.get_contact", return_value=contact),
-    ):
-        result = runner.invoke(main, ["contact", "export"])
-
-    assert result.exit_code == 0
-    data = json.loads(result.output)
-    assert data["ok"] is True
-    assert len(data["contacts"]) == 1
-
-
-# -- contact import ------------------------------------------------------------
-
-
-def test_contact_import_creates_via_file(
-    runner: CliRunner, mock_connection: MagicMock, tmp_path: Any
-) -> None:
-    entries = [
-        {"email": "alice@acme.com", "first_name": "Alice", "last_name": "Smith"},
-        {"email": "bob@beta.com"},
-    ]
-    import_file = tmp_path / "contacts.json"
-    import_file.write_text(json.dumps(entries))
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.list_contacts", return_value=[]),
-        patch(
-            "mailpilot.database.create_contact",
-            side_effect=[_make_contact(email=e["email"]) for e in entries],
-        ) as mock_create,
-    ):
-        result = runner.invoke(main, ["contact", "import", "--file", str(import_file)])
-
-    assert result.exit_code == 0
-    assert mock_create.call_count == 2
-    mock_create.assert_any_call(
-        mock_connection,
-        email="alice@acme.com",
-        first_name="Alice",
-        last_name="Smith",
-        company_id=None,
-    )
-    mock_create.assert_any_call(
-        mock_connection,
-        email="bob@beta.com",
-        first_name=None,
-        last_name=None,
-        company_id=None,
-    )
-    data = json.loads(result.output)
-    assert data["ok"] is True
-    assert data["contacts"] == [
-        {"email": "alice@acme.com", "action": "created"},
-        {"email": "bob@beta.com", "action": "created"},
-    ]
-
-
-def test_contact_import_via_stdin(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
-    entries = [{"email": "alice@acme.com"}]
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.list_contacts", return_value=[]),
-        patch(
-            "mailpilot.database.create_contact",
-            return_value=_make_contact(email="alice@acme.com"),
-        ),
-    ):
-        result = runner.invoke(main, ["contact", "import"], input=json.dumps(entries))
-
-    assert result.exit_code == 0
-    data = json.loads(result.output)
-    assert data["ok"] is True
-    assert data["contacts"] == [{"email": "alice@acme.com", "action": "created"}]
-
-
-def test_contact_import_per_row_error_continues_batch(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
-    """Duplicate email on row 1 must not block create on row 2 (§V.63)."""
-    existing = [_make_contact(id="id-existing", email="alice@acme.com")]
-    existing_summaries = [
-        ContactSummary.model_validate({**c.model_dump(), "company_domain": None})
-        for c in existing
-    ]
-    entries = [
-        {"email": "alice@acme.com"},
-        {"email": "bob@beta.com"},
-    ]
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.list_contacts", return_value=existing_summaries),
-        patch(
-            "mailpilot.database.create_contact",
-            return_value=_make_contact(email="bob@beta.com"),
-        ) as mock_create,
-    ):
-        result = runner.invoke(main, ["contact", "import"], input=json.dumps(entries))
-
-    assert result.exit_code == 0
-    mock_create.assert_called_once_with(
-        mock_connection,
-        email="bob@beta.com",
-        first_name=None,
-        last_name=None,
-        company_id=None,
-    )
-    data = json.loads(result.output)
-    assert data["ok"] is True
-    assert data["contacts"][0]["error"] == "duplicate"
-    assert data["contacts"][0]["email"] == "alice@acme.com"
-    assert data["contacts"][1] == {"email": "bob@beta.com", "action": "created"}
-
-
-def test_contact_import_malformed_json(runner: CliRunner) -> None:
-    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
-        result = runner.invoke(main, ["contact", "import"], input="not json")
-
-    assert result.exit_code == 1
-    err = json.loads(result.output)
-    assert err["ok"] is False
-    assert err["error"] == "validation_error"
 
 
 # -- Email ---------------------------------------------------------------------
@@ -5007,49 +4673,6 @@ def test_workflow_import_toml_missing_required_field(
     assert rows[0]["name"] == "No template"
     assert rows[0]["error"] == "validation_error"
     mock_create.assert_not_called()
-
-
-# -- §V.63 stdin TTY guard ----------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        ("company", "import"),
-        ("contact", "import"),
-    ],
-    ids=["company", "contact"],
-)
-def test_import_tty_stdin_errors_without_read(
-    runner: CliRunner, command: tuple[str, ...]
-) -> None:
-    """§V.63: TTY stdin (no --file, no pipe) -> validation_error, no read().
-
-    Company/contact import still read JSON from stdin; workflow import is
-    TOML-only and never touches stdin (see ``test_workflow_import_requires_file``).
-    """
-    from click.testing import _NamedTextIOWrapper  # pyright: ignore[reportPrivateUsage]
-
-    read_mock = MagicMock(
-        side_effect=AssertionError(
-            "sys.stdin.read() must not be called when isatty()==True"
-        )
-    )
-
-    with (
-        patch.object(_NamedTextIOWrapper, "isatty", return_value=True),
-        patch.object(_NamedTextIOWrapper, "read", read_mock),
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-    ):
-        result = runner.invoke(main, list(command))
-
-    assert result.exit_code == 1, result.output
-    assert read_mock.call_count == 0
-    err = json.loads(result.stderr)
-    assert err["ok"] is False
-    assert err["error"] == "validation_error"
-    assert "no input" in err["message"]
-    assert "--file" in err["message"]
 
 
 # -- enrollment run ------------------------------------------------------------
@@ -8648,6 +8271,181 @@ def test_db_check_drift_exits_one_with_report(
     data = json.loads(result.output)
     assert data["error"] == "schema_drift"
     assert data["report"]["verdict"] == "drift"
+
+
+# -- db noun: export / import snapshot bundle (§V.121, §V.119, §B.104) ----------
+
+
+def test_db_export_writes_bundle_and_status(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: Any
+) -> None:
+    """`db export` writes the bundle to disk + a `{"db":{...}}` status (§V.121)."""
+    bundle = {
+        "schema_version": 1,
+        "exported_at": "2026-06-22T00:00:00+00:00",
+        "tags": [{"name": "lead", "disabled_reason": None}],
+        "companies": [
+            {
+                "name": "Acme",
+                "domain": "acme.com",
+                "profile": None,
+                "disabled_reason": None,
+                "tags": ["lead"],
+            }
+        ],
+        "contacts": [
+            {
+                "email": "a@acme.com",
+                "first_name": "Ann",
+                "last_name": None,
+                "title": None,
+                "email_confidence": None,
+                "disabled_reason": None,
+                "company_domain": "acme.com",
+                "tags": [],
+            }
+        ],
+    }
+    export_file = str(tmp_path / "snap.json")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.export_snapshot", return_value=bundle),
+    ):
+        result = runner.invoke(main, ["db", "export", "--file", export_file])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["db"]["path"] == export_file
+    assert data["db"]["companies"] == 1
+    assert data["db"]["contacts"] == 1
+    assert data["db"]["tags"] == 1
+    on_disk = json.loads(pathlib.Path(export_file).read_text())
+    assert on_disk == bundle
+
+
+def test_db_export_requires_file(runner: CliRunner) -> None:
+    """`db export` has no stdout-bundle path: --file is required (§V.121)."""
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(main, ["db", "export"])
+
+    assert result.exit_code != 0
+    assert "--file" in result.output
+
+
+def test_db_import_restores_and_reports_status(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: Any
+) -> None:
+    """`db import` reports restored counts under the `db` key (§V.121)."""
+    bundle = {
+        "schema_version": 1,
+        "tags": [{"name": "lead", "disabled_reason": None}],
+        "companies": [
+            {
+                "name": "Acme",
+                "domain": "acme.com",
+                "profile": None,
+                "disabled_reason": None,
+                "tags": ["lead"],
+            }
+        ],
+        "contacts": [],
+    }
+    import_file = tmp_path / "snap.json"
+    import_file.write_text(json.dumps(bundle))
+    restore_result = {"tags": 1, "companies": 1, "contacts": 0, "errors": []}
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.import_snapshot", return_value=restore_result
+        ) as mock_import,
+    ):
+        result = runner.invoke(main, ["db", "import", "--file", str(import_file)])
+
+    assert result.exit_code == 0, result.output
+    mock_import.assert_called_once_with(mock_connection, bundle)
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["db"]["path"] == str(import_file)
+    assert data["db"]["tags"] == 1
+    assert data["db"]["companies"] == 1
+    assert data["db"]["contacts"] == 0
+    assert data["db"]["errors"] == []
+
+
+def test_db_import_surfaces_per_row_errors(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: Any
+) -> None:
+    """Per-row errors ride the status envelope, batch still exits 0 (§V.121)."""
+    bundle = {"schema_version": 1, "tags": [], "companies": [], "contacts": []}
+    import_file = tmp_path / "snap.json"
+    import_file.write_text(json.dumps(bundle))
+    restore_result = {
+        "tags": 0,
+        "companies": 0,
+        "contacts": 1,
+        "errors": [
+            {
+                "entity": "contact",
+                "key": "orphan@nowhere.com",
+                "error": "foreign_key_violation",
+                "message": "company domain 'gone.com' not found",
+            }
+        ],
+    }
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.import_snapshot", return_value=restore_result),
+    ):
+        result = runner.invoke(main, ["db", "import", "--file", str(import_file)])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert len(data["db"]["errors"]) == 1
+    assert data["db"]["errors"][0]["error"] == "foreign_key_violation"
+
+
+def test_db_import_malformed_json(runner: CliRunner, tmp_path: Any) -> None:
+    """A malformed bundle exits validation_error before any DB touch (§V.3)."""
+    import_file = tmp_path / "snap.json"
+    import_file.write_text("not json")
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(main, ["db", "import", "--file", str(import_file)])
+
+    assert result.exit_code == 1
+    err = json.loads(result.output)
+    assert err["ok"] is False
+    assert err["error"] == "validation_error"
+
+
+def test_db_import_requests_write_path_schema_gate(
+    runner: CliRunner, tmp_path: Any
+) -> None:
+    """`db import` is a mutation: it requests the §V.109 gate, and a dead-stop
+    leaves the restore unreached (no partial write)."""
+    bundle = {"schema_version": 1, "tags": [], "companies": [], "contacts": []}
+    import_file = tmp_path / "snap.json"
+    import_file.write_text(json.dumps(bundle))
+    captured: dict[str, Any] = {}
+
+    def fake_init(_url: str, *, require_current_schema: bool = False) -> NoReturn:
+        captured["require_current_schema"] = require_current_schema
+        raise SystemExit(1)
+
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", side_effect=fake_init),
+        patch("mailpilot.database.import_snapshot") as mock_import,
+    ):
+        result = runner.invoke(main, ["db", "import", "--file", str(import_file)])
+
+    assert result.exit_code == 1
+    assert captured["require_current_schema"] is True
+    assert mock_import.call_count == 0
 
 
 # -- §V.115 six-family filter taxonomy -----------------------------------------
