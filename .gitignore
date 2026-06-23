@@ -14,3 +14,6 @@
 .venv/
 build/
 dist/
+# workflows/ is a gitignored symlink to the independent kborovik/workflows repo
+# at /Users/kb/github/workflows (root-anchored so .claude/workflows/ stays tracked)
+/workflows

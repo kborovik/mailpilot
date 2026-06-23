@@ -121,8 +121,10 @@ the run is capped at nine messages (one per alias).
   N.
 
 The workflow file must exist and be valid TOML with `name`, `template`,
-`objective`, and `instructions`. If `--workflow-file` points at a path under the
-`workflows/` submodule that is absent, run `git submodule update --init` first.
+`objective`, and `instructions`. The default lives under `workflows/`, a
+gitignored symlink to the independent repo at `/Users/kb/github/workflows`. If
+that path is absent, restore the symlink (`ln -s ../workflows workflows`) or pass
+`--workflow-file` with an explicit path.
 
 ## Procedure
 
@@ -331,8 +333,9 @@ After a failing run:
 - The nine aliases `inbound1@lab5.ca` through `inbound9@lab5.ca` configured on
   the `inbound@lab5.ca` mailbox in Google Workspace.
 - `google_application_credentials` set (the live send needs Gmail auth).
-- The workflow file checked out (`git submodule update --init` if it lives under
-  `workflows/`).
+- The workflow file present (the `workflows/` symlink points at
+  `/Users/kb/github/workflows`; restore it with `ln -s ../workflows workflows` if
+  absent).
 - At least one real contact in the database (run `/lead-contacts` first).
 
 ## Why this skill exists

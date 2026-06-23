@@ -9,13 +9,9 @@ export PATH := $(abspath .venv)/bin:/opt/homebrew/opt/postgresql@18/bin:$(PATH)
 DATA_DIR := $(HOME)/.mailpilot
 DOCUMENTS_DIR := $(HOME)/Documents/MailPilot
 
-default: submodules .venv help
+default: .venv help
 
-check: submodules lint py-test ## Run lint and tests
-
-submodules: ## Initialize the workflows/ catalog git submodule
-	$(call header,Updating git submodules)
-	git submodule update --init
+check: lint py-test ## Run lint and tests
 
 lint: py-format py-lint py-types ## Lint Python code
 

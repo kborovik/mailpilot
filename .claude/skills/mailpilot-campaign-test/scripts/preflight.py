@@ -45,7 +45,7 @@ def _resolve_workflow(
     if not path.is_file():
         issues.append(
             f"workflow file not found: {workflow_file} "
-            "(is the workflows/ submodule checked out? `git submodule update --init`)"
+            "(is the workflows/ symlink present? `ln -s ../workflows workflows`)"
         )
         return
     try:
