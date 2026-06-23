@@ -1,10 +1,11 @@
-"""Bundle each sent email with its contact and company context for critique.
+"""Bundle each agent-sent email with its contact and company context.
 
-For every email that actually went out, joins the rendered subject and body with
-the recipient's contact fields and their company profile (fetched once per
-domain via ``mailpilot company view``). Writes ``critique_input.json`` -- one
-tidy record per sent email -- so the Opus critique sub-agent reads a single file
-instead of running many CLI queries. Deterministic data plumbing, no LLM.
+For every email the agent actually sent, joins the agent-written subject and
+body with the real contact's fields (mirrored onto the alias-contact) and the
+real company's profile (fetched once per domain via ``mailpilot company view``).
+Writes ``critique_input.json`` -- one record per sent email -- so the Opus
+critique sub-agent reads a single file instead of running many CLI queries.
+Deterministic data plumbing, no LLM.
 
 Usage:
     uv run python scripts/critique_prep.py --run-id <id>
@@ -46,9 +47,6 @@ def main() -> int:
 
     directory = run_dir(args.run_id)
     manifest = read_json(directory / "run_manifest.json")
-    rendered = {
-        e["sequence"]: e for e in read_json(directory / "personalized.json")["rendered"]
-    }
     contact_by_seq = {c["sequence"]: c for c in manifest["contacts"]}
     sends = read_json(directory / "sends.json")["sends"]
 
@@ -59,7 +57,6 @@ def main() -> int:
             continue
         seq = send["sequence"]
         contact = contact_by_seq.get(seq, {})
-        entry = rendered.get(seq, {})
         domain = contact.get("company_domain")
         company = _company_context(domain, cache) if domain else None
         records.append(
@@ -74,8 +71,8 @@ def main() -> int:
                     "company_domain": domain,
                 },
                 "company": company,
-                "subject": entry.get("subject"),
-                "body": entry.get("body"),
+                "subject": send.get("subject"),
+                "body": send.get("body"),
             }
         )
 

@@ -1,9 +1,17 @@
 """Shared helpers for the campaign-test skill scripts.
 
 Deterministic, no-LLM utilities: locate the repo and per-run artifact dir,
-shell out to the ``mailpilot`` CLI and parse its JSON envelopes, parse a
-campaign Markdown file into a subject template plus a body template, and
-substitute per-contact personalization placeholders.
+shell out to the ``mailpilot`` CLI and parse its JSON envelopes, and name the
+reusable test scaffolding the agentic run depends on.
+
+The skill tests the real outbound workflow agent
+(``workflows/outbound-lab5-llm-lookup-work.toml``) against real contact data
+without ever emailing a real contact. It does this by mirroring each selected
+real contact's name/title/company onto a persistent alias-contact whose own
+email is one of the nine inbound aliases, enrolling that alias-contact in an
+ephemeral copy of the workflow, and letting the live agent draft and send to
+the alias. Because the agent sends to the contact's stored email, and that
+stored email is the alias, the real address is never a recipient.
 
 Run every script via ``uv run python`` so the project venv (and the
 ``mailpilot`` console script + importable package) is on PATH.
@@ -12,7 +20,6 @@ Run every script via ``uv run python`` so the project venv (and the
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -20,33 +27,29 @@ from typing import Any
 # Source account for every send.
 SENDER_EMAIL = "outbound@lab5.ca"
 
-# Target addresses. Each real contact is simulated against one of nine aliases
-# that all deliver into the inbound@lab5.ca mailbox, so a send carries real
-# contact data (name, title, company) while its envelope recipient is a
-# controlled alias -- never the contact's own address. ALIAS_MAILBOX is the
-# account synced to confirm delivery; it receives every alias. The skill never
-# starts ``mailpilot run``, so no auto-reply fires even though this mailbox
-# carries an inbound workflow.
+# Target addresses. Each selected real contact is mirrored onto one of nine
+# persistent alias-contacts whose own email is an ``inbound{1-9}@lab5.ca``
+# alias; all nine aliases deliver into the ALIAS_MAILBOX account, which the
+# skill syncs to confirm delivery. The contact's stored email IS the alias, so
+# the agent -- which sends to the contact's email -- can only ever reach the
+# alias, never the real address. The skill never starts ``mailpilot run``, so
+# no auto-reply fires even though this mailbox carries an inbound workflow.
 ALIAS_MAILBOX = "inbound@lab5.ca"
 ALIASES = [f"inbound{number}@lab5.ca" for number in range(1, 10)]
 MAX_ALIASES = len(ALIASES)
 
-# Subject tag that correlates a sent test message with its delivered copy.
-SUBJECT_TAG_PREFIX = "CAMPAIGN-TEST"
-SUBJECT_TAG_RE = re.compile(r"\[CAMPAIGN-TEST (?P<run_id>[0-9a-f]+) (?P<seq>\d+)\]")
+# Neutral parking company for the alias-contacts. Disabled so it stays out of
+# ``company list`` and the lead-contacts discovery set (§V.96 / §V.114), and a
+# ``.invalid`` domain so it can never collide with a real company (§V.90).
+# Alias-contacts park here at rest; a run links them to the real company only
+# for the duration of the run, then cleanup re-parks them here so the real
+# company's contact_count is untouched between runs.
+NEUTRAL_COMPANY_DOMAIN = "campaign-test.invalid"
+NEUTRAL_COMPANY_NAME = "MailPilot Campaign Test"
 
-# Placeholder tokens the campaign body/subject may use. Each maps to a
-# ``ContactSummary`` field (``company`` -> ``company_domain``); a NULL field
-# substitutes the listed fallback and is recorded as a personalization gap.
-PLACEHOLDER_FALLBACKS = {
-    "first_name": "there",
-    "last_name": "",
-    "full_name": "there",
-    "title": "",
-    "company": "your company",
-    "email": "",
-}
-PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
+# The outbound workflow whose agent this skill exercises. The default is the
+# committed lab5.ca cold-outreach definition; ``--workflow-file`` overrides it.
+DEFAULT_WORKFLOW_FILE = "workflows/outbound-lab5-llm-lookup-work.toml"
 
 
 def repo_root() -> Path:
@@ -75,79 +78,20 @@ def write_json(path: Path, obj: Any) -> None:
     path.write_text(json.dumps(obj, indent=2, default=str))
 
 
-def parse_campaign(path: Path) -> dict[str, str]:
-    """Parse a campaign Markdown file into subject and body templates.
-
-    Format: the first non-blank line must be ``Subject: <text>``; everything
-    after the following blank line is the Markdown body. Both may carry
-    ``{placeholder}`` tokens. Raises ``ValueError`` when the subject line is
-    missing or the body is empty.
-    """
-    text = path.read_text()
-    lines = text.splitlines()
-    subject: str | None = None
-    body_start = 0
-    for index, line in enumerate(lines):
-        if not line.strip():
-            continue
-        match = re.match(r"^subject:\s*(.*)$", line, re.IGNORECASE)
-        if match is None:
-            raise ValueError("campaign file must open with a 'Subject: <text>' line")
-        subject = match.group(1).strip()
-        body_start = index + 1
-        break
-    if subject is None:
-        raise ValueError("campaign file is empty")
-    if not subject:
-        raise ValueError("campaign subject is empty")
-    body = "\n".join(lines[body_start:]).strip()
-    if not body:
-        raise ValueError("campaign body is empty")
-    return {"subject_template": subject, "body_template": body}
-
-
-def personalize(template: str, contact: dict[str, Any]) -> tuple[str, list[str]]:
-    """Substitute ``{placeholder}`` tokens in ``template`` from a contact.
-
-    Returns the rendered text plus the list of personalization gaps -- one
-    entry per token whose contact field was NULL (the fallback was used) or
-    per token with no known mapping (left verbatim). ``{company}`` reads the
-    contact's ``company_domain``.
-    """
-    gaps: list[str] = []
-
-    def field_for(token: str) -> str | None:
-        if token == "company":
-            return contact.get("company_domain")
-        if token == "full_name":
-            parts = [contact.get("first_name"), contact.get("last_name")]
-            joined = " ".join(p for p in parts if p)
-            return joined or None
-        return contact.get(token)
-
-    def replace(match: re.Match[str]) -> str:
-        token = match.group(1)
-        if token not in PLACEHOLDER_FALLBACKS:
-            gaps.append(f"unknown placeholder {{{token}}}")
-            return match.group(0)
-        value = field_for(token)
-        if value is None or str(value).strip() == "":
-            gaps.append(f"missing {token}")
-            return PLACEHOLDER_FALLBACKS[token]
-        return str(value)
-
-    rendered = PLACEHOLDER_RE.sub(replace, template)
-    return rendered, gaps
-
-
-def make_subject(run_id: str, sequence: int, rendered_subject: str) -> str:
-    """Prefix a rendered subject with the run/sequence correlation tag."""
-    return f"[{SUBJECT_TAG_PREFIX} {run_id} {sequence}] {rendered_subject}"
-
-
 def alias_for(sequence: int) -> str:
     """Map a 1-based contact sequence to its inbound alias (wraps past nine)."""
     return ALIASES[(sequence - 1) % MAX_ALIASES]
+
+
+def ephemeral_workflow_name(run_id: str) -> str:
+    """Name the per-run ephemeral workflow.
+
+    Each run imports a fresh workflow under a unique name so the 30-day
+    cold-send cooldown (§V.79, keyed on account+contact+workflow) never blocks
+    a re-run: a fresh workflow id has no prior cold outbound. Named so an
+    operator can spot and stop leftover test workflows in ``workflow list``.
+    """
+    return f"[campaign-test {run_id}]"
 
 
 def mp(args: list[str], *, check: bool = True) -> dict[str, Any]:
@@ -159,7 +103,8 @@ def mp(args: list[str], *, check: bool = True) -> dict[str, Any]:
 
     Returns:
         Parsed JSON dict (the CLI's single-line JSON envelope, §V.4). On error
-        with ``check=False`` returns the error envelope when parseable.
+        with ``check=False`` returns the error envelope when parseable (the
+        error envelope rides stderr per §V.3, so stderr is parsed on failure).
     """
     proc = subprocess.run(
         ["mailpilot", *args], capture_output=True, text=True, check=False
@@ -185,10 +130,16 @@ def mp(args: list[str], *, check: bool = True) -> dict[str, Any]:
     return payload
 
 
-def resolve_account_id(email: str) -> str | None:
-    """Return the UUIDv7 account id for an email address, or None if absent."""
-    data = mp(["account", "list", "--limit", "100"], check=False)
+def resolve_account(email: str) -> dict[str, Any] | None:
+    """Return the account row for an email address, or None if absent."""
+    data = mp(["account", "list", "--include-disabled", "--limit", "100"], check=False)
     for account in data.get("accounts", []):
         if str(account.get("email", "")).lower() == email.lower():
-            return account.get("id")
+            return account
     return None
+
+
+def resolve_account_id(email: str) -> str | None:
+    """Return the UUIDv7 account id for an email address, or None if absent."""
+    account = resolve_account(email)
+    return account.get("id") if account else None
