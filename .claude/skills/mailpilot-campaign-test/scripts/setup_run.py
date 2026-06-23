@@ -45,15 +45,26 @@ def _ensure_neutral_company() -> None:
     existing = mp(["company", "view", NEUTRAL_COMPANY_DOMAIN], check=False)
     if not existing.get("ok"):
         mp(
-            ["company", "create", "--domain", NEUTRAL_COMPANY_DOMAIN, "--name",
-             NEUTRAL_COMPANY_NAME],
+            [
+                "company",
+                "create",
+                "--domain",
+                NEUTRAL_COMPANY_DOMAIN,
+                "--name",
+                NEUTRAL_COMPANY_NAME,
+            ],
             check=False,
         )
     # Disable so it stays out of company list / discovery (§V.114). A
     # double-disable is a no-op error we ignore.
     mp(
-        ["company", "disable", NEUTRAL_COMPANY_DOMAIN, "--reason",
-         "campaign-test scaffolding"],
+        [
+            "company",
+            "disable",
+            NEUTRAL_COMPANY_DOMAIN,
+            "--reason",
+            "campaign-test scaffolding",
+        ],
         check=False,
     )
 
@@ -67,8 +78,14 @@ def _ensure_alias_contact(alias_email: str) -> str:
     if existing.get("ok"):
         return existing["contact"]["id"]
     created = mp(
-        ["contact", "create", "--email", alias_email, "--company-domain",
-         NEUTRAL_COMPANY_DOMAIN],
+        [
+            "contact",
+            "create",
+            "--email",
+            alias_email,
+            "--company-domain",
+            NEUTRAL_COMPANY_DOMAIN,
+        ],
         check=False,
     )
     contact = created.get("contact") or {}
@@ -88,11 +105,17 @@ def _mirror(alias_email: str, real: dict) -> str:
     """
     company_domain = real.get("company_domain") or NEUTRAL_COMPANY_DOMAIN
     update_args = [
-        "contact", "update", alias_email,
-        "--first-name", real.get("first_name") or "",
-        "--last-name", real.get("last_name") or "",
-        "--title", real.get("title") or "",
-        "--company-domain", company_domain,
+        "contact",
+        "update",
+        alias_email,
+        "--first-name",
+        real.get("first_name") or "",
+        "--last-name",
+        real.get("last_name") or "",
+        "--title",
+        real.get("title") or "",
+        "--company-domain",
+        company_domain,
     ]
     mp(update_args, check=True)
     return company_domain
@@ -108,8 +131,14 @@ def _import_ephemeral_workflow(workflow_file: str, run_id: str, directory: Path)
     ephemeral_path = directory / "ephemeral_workflow.toml"
     ephemeral_path.write_text(renamed)
     mp(
-        ["workflow", "import", "--account-email", SENDER_EMAIL, "--file",
-         str(ephemeral_path)],
+        [
+            "workflow",
+            "import",
+            "--account-email",
+            SENDER_EMAIL,
+            "--file",
+            str(ephemeral_path),
+        ],
         check=True,
     )
     listing = mp(
@@ -125,16 +154,30 @@ def _import_ephemeral_workflow(workflow_file: str, run_id: str, directory: Path)
 def _enroll(workflow_id: str, alias_email: str) -> str:
     """Enroll the alias-contact in the ephemeral workflow. Return enrollment id."""
     added = mp(
-        ["enrollment", "add", "--workflow-id", workflow_id, "--contact-email",
-         alias_email],
+        [
+            "enrollment",
+            "add",
+            "--workflow-id",
+            workflow_id,
+            "--contact-email",
+            alias_email,
+        ],
         check=False,
     )
     enrollment = added.get("enrollment") or {}
     if enrollment.get("id"):
         return enrollment["id"]
     listing = mp(
-        ["enrollment", "list", "--workflow-id", workflow_id, "--contact-email",
-         alias_email, "--limit", "5"],
+        [
+            "enrollment",
+            "list",
+            "--workflow-id",
+            workflow_id,
+            "--contact-email",
+            alias_email,
+            "--limit",
+            "5",
+        ],
         check=True,
     )
     rows = listing.get("enrollments", [])

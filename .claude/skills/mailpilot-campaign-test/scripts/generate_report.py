@@ -19,6 +19,51 @@ import argparse
 from _common import read_json, run_dir
 
 
+def critique_section(
+    critique_ran: bool,
+    critiques: list[dict[str, object]],
+    critique_doc: dict[str, object] | None,
+    sends: list[dict[str, object]],
+) -> list[str]:
+    """Build the Markdown lines for the advisory marketing-critique section.
+
+    Args:
+        critique_ran: Whether the critique phase produced an artifact.
+        critiques: Per-contact critique records.
+        critique_doc: The full critique document, or None when skipped.
+        sends: Per-contact send records, used to label each email by alias.
+
+    Returns:
+        The Markdown lines for the critique section.
+    """
+    if not critique_ran:
+        return ["- critique: skipped"]
+    if not critiques:
+        return ["- critique: ran, no emails critiqued"]
+
+    scores = [c["overall_score"] for c in critiques]
+    average = sum(scores) / len(scores)
+    summary = critique_doc.get("summary", "") if critique_doc else ""
+    lines = [
+        f"- critique: ran, average score {average:.1f}/5 over {len(scores)} emails",
+        "",
+        "## Marketing critique",
+        "",
+        summary,
+    ]
+    for critique in sorted(critiques, key=lambda c: c["sequence"]):
+        send = next((s for s in sends if s["sequence"] == critique["sequence"]), {})
+        suggestions = critique.get("suggestions") or []
+        top = suggestions[0] if suggestions else "(no suggestion)"
+        lines += [
+            "",
+            f"### Email {critique['sequence']} -- {send.get('alias', '?')} "
+            f"(score {critique['overall_score']}/5)",
+            f"- top fix: {top}",
+        ]
+    return lines
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-id", required=True)
@@ -91,32 +136,7 @@ def main() -> int:
         for send in sorted(failures, key=lambda s: s["sequence"]):
             lines.append(f"- #{send['sequence']} ({send['alias']}): {send['error']}")
 
-    if critique_ran and critiques:
-        scores = [c["overall_score"] for c in critiques]
-        average = sum(scores) / len(scores)
-        lines += [
-            f"- critique: ran, average score {average:.1f}/5 over {len(scores)} emails",
-            "",
-            "## Marketing critique",
-            "",
-            critique_doc.get("summary", ""),
-        ]
-        for critique in sorted(critiques, key=lambda c: c["sequence"]):
-            send = next(
-                (s for s in sends if s["sequence"] == critique["sequence"]), {}
-            )
-            suggestions = critique.get("suggestions") or []
-            top = suggestions[0] if suggestions else "(no suggestion)"
-            lines += [
-                "",
-                f"### Email {critique['sequence']} -- {send.get('alias', '?')} "
-                f"(score {critique['overall_score']}/5)",
-                f"- top fix: {top}",
-            ]
-    elif critique_ran:
-        lines.append("- critique: ran, no emails critiqued")
-    else:
-        lines.append("- critique: skipped")
+    lines += critique_section(critique_ran, critiques, critique_doc, sends)
 
     report = "\n".join(lines) + "\n"
     (directory / "report.md").write_text(report)

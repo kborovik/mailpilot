@@ -60,7 +60,9 @@ def main() -> int:
 
     # Infrastructure addresses are never prospects: the system's own accounts
     # (outbound@/inbound@/hello@lab5.ca) and the nine alias-contacts.
-    accounts = mp(["account", "list", "--include-disabled", "--limit", "100"], check=False)
+    accounts = mp(
+        ["account", "list", "--include-disabled", "--limit", "100"], check=False
+    )
     excluded = {str(a.get("email", "")).lower() for a in accounts.get("accounts", [])}
     excluded.update(a.lower() for a in ALIASES)
 

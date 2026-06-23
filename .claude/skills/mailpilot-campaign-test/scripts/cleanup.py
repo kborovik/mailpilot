@@ -37,8 +37,13 @@ def main() -> int:
         if entry["linked_company_domain"] == NEUTRAL_COMPANY_DOMAIN:
             continue
         mp(
-            ["contact", "update", entry["alias"], "--company-domain",
-             NEUTRAL_COMPANY_DOMAIN],
+            [
+                "contact",
+                "update",
+                entry["alias"],
+                "--company-domain",
+                NEUTRAL_COMPANY_DOMAIN,
+            ],
             check=False,
         )
         reparked.append(entry["alias"])

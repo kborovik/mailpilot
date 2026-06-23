@@ -42,11 +42,16 @@ def main() -> int:
     mp(["account", "sync", "--account-email", alias_mailbox], check=False)
     listing = mp(
         [
-            "email", "list",
-            "--account-email", alias_mailbox,
-            "--from", sender_email,
-            "--since", window_start,
-            "--limit", "100",
+            "email",
+            "list",
+            "--account-email",
+            alias_mailbox,
+            "--from",
+            sender_email,
+            "--since",
+            window_start,
+            "--limit",
+            "100",
         ],
         check=False,
     )

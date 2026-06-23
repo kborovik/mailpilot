@@ -104,7 +104,8 @@ def _count_contacts(result: dict[str, object], issues: list[str]) -> None:
     excluded.update(a.lower() for a in ALIASES)
     data = mp(["contact", "list", "--limit", "200"], check=False)
     real = [
-        c for c in data.get("contacts", [])
+        c
+        for c in data.get("contacts", [])
         if str(c.get("email", "")).lower() not in excluded
     ]
     result["discovered_contact_count"] = len(real)

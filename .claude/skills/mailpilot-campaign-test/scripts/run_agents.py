@@ -47,15 +47,28 @@ def main() -> int:
             "status": payload.get("status", "failed"),
             "reasoning": result.get("reasoning", ""),
             "tool_calls": result.get("tool_calls", 0),
-            "error": (result.get("reason") if payload.get("status") == "failed"
-                      else payload.get("error")),
+            "error": (
+                result.get("reason")
+                if payload.get("status") == "failed"
+                else payload.get("error")
+            ),
         }
 
     # 2. Read back what the agent actually sent (outbound rows for this run's
     #    ephemeral workflow), then fetch each body via ``email view``.
     listing = mp(
-        ["email", "list", "--account-email", SENDER_EMAIL, "--workflow-id",
-         workflow_id, "--direction", "outbound", "--limit", "50"],
+        [
+            "email",
+            "list",
+            "--account-email",
+            SENDER_EMAIL,
+            "--workflow-id",
+            workflow_id,
+            "--direction",
+            "outbound",
+            "--limit",
+            "50",
+        ],
         check=False,
     )
     email_by_seq: dict[int, dict] = {}
