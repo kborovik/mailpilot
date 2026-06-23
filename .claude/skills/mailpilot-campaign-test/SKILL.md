@@ -135,6 +135,22 @@ Reuse the printed value (e.g. `746e35cd`) as a **literal** wherever `$RUN_ID`
 appears below. Separate tool calls do not share shell state, so do not rely on a
 shell variable. Artifacts go to `.campaign-test/<run_id>/` (git-ignored).
 
+### 0b. Ensure the test accounts exist -- create if missing
+Preflight (step 1) fails when `outbound@lab5.ca` or `inbound@lab5.ca` is absent,
+which is the state right after `make clean` wipes them. Create each account only
+if it is missing:
+```bash
+uv run mailpilot account view --email outbound@lab5.ca >/dev/null 2>&1 || uv run mailpilot account create --email outbound@lab5.ca --display-name "MailPilot Outbound"
+uv run mailpilot account view --email inbound@lab5.ca  >/dev/null 2>&1 || uv run mailpilot account create --email inbound@lab5.ca  --display-name "MailPilot Inbound"
+```
+The `account view` guard makes this idempotent: `account create` errors with
+`duplicate_key` on an existing email, so the create runs only when `view` reports
+the account is missing. Never run `make clean` here -- this skill tests against
+the live CRM database, and `make clean` would drop real company and contact rows
+(§V.119). Creating an absent account adds only that account row, so this step is
+data-loss-free. The guard cannot re-enable a disabled account; if preflight still
+reports an account disabled, re-enable it with `mailpilot account enable`.
+
 ### 1. Preflight
 ```bash
 uv run python .claude/skills/mailpilot-campaign-test/scripts/preflight.py --run-id $RUN_ID [--workflow-file <path>]
@@ -259,8 +275,10 @@ After a failing run:
 
 - `mailpilot` installed locally with a working DB (`mailpilot config get
   database_url`).
-- The `outbound@lab5.ca` and `inbound@lab5.ca` accounts created (`mailpilot
-  account create`), neither disabled. Re-create them after `make clean`.
+- The `outbound@lab5.ca` and `inbound@lab5.ca` accounts present and neither
+  disabled. Step 0b creates either account if it is missing (for example after
+  `make clean`), but cannot re-enable a disabled one -- use `mailpilot account
+  enable` for that.
 - The nine aliases `inbound1@lab5.ca` through `inbound9@lab5.ca` configured on
   the `inbound@lab5.ca` mailbox in Google Workspace.
 - `google_application_credentials` set (the live send needs Gmail auth).
