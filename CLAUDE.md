@@ -162,6 +162,17 @@ Invariants in §V.51-55.
 - **Cloud project** — `mailpilot` (token-scoped). MCP queries set
   `project='mailpilot'` and filter by `deployment_environment` (§V.52).
 
+## Sub-repos (submodules)
+
+When you edit a file inside a git submodule, commit and push the change in that
+submodule automatically. Do not wait for a separate request. The `workflows/`
+directory is the private `kborovik/workflows` submodule (§V.103). This overrides
+the default of committing or pushing only when asked.
+
+After pushing the submodule, commit the updated submodule reference in the parent
+repo automatically. The submodule commit moves the parent's recorded pointer, so
+stage and commit that pointer change in the same pass.
+
 ## Operating friction
 
 File a GitHub issue in this repo for every friction or error you hit operating
