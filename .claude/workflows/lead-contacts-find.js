@@ -5,7 +5,7 @@ export const meta = {
   phases: [{title: 'Discover', detail: 'contact-finder agents, 3 in flight'}],
 }
 
-// `stale` source: the discover set per V.96 -- companies w/ profile IS NOT NULL
+// `stale` source: the discover set -- companies w/ profile IS NOT NULL
 // and < 5 existing contacts (count includes disabled rows so memoization holds),
 // captured by the skill's stale-query and handed in via Workflow `args`. The
 // runtime delivers `args` as a JSON string, so parse it (guard the already-parsed
@@ -41,7 +41,7 @@ function buildPrompt(c) {
 phase('Discover')
 
 // Chunk into batches of 3 so at most 3 contact-finder agents run at once -- this
-// (not the runtime cap) is what honors the concurrency-3 budget (V.96/V.73). A
+// (not the runtime cap) is what honors the concurrency-3 budget. A
 // bare parallel(stale.map(...)) would submit all stale.length at once, bounded
 // only by the runtime cap min(16, cores-2).
 const results = []

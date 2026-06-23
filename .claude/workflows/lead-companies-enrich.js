@@ -37,7 +37,7 @@ function buildPrompt(c) {
 phase('Enrich')
 
 // Chunk into batches of 3 so at most 3 enricher agents run at once -- this
-// (not the runtime cap) is what honors the concurrency-3 budget (V.72/V.73). A
+// (not the runtime cap) is what honors the concurrency-3 budget. A
 // bare parallel(stale.map(...)) would submit all stale.length at once, bounded
 // only by the runtime cap min(16, cores-2).
 const results = []
