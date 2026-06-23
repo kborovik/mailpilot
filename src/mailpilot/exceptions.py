@@ -26,6 +26,18 @@ class SyncError(MailPilotError):
     """Gmail sync operation failed."""
 
 
+class GmailBatchFetchError(SyncError):
+    """Batch message fetch left messages unretrieved after retries.
+
+    Raised by ``GmailClient.get_messages_batch`` when transient per-message
+    failures (Gmail 429 "Too many concurrent requests" or 5xx) survive the
+    bounded-backoff retry budget. Propagating rather than returning a partial
+    list keeps ``sync_account`` from advancing ``gmail_history_id`` past mail
+    that was never stored, so the next incremental sync re-collects it
+    (`§V.75`, `§B.105`).
+    """
+
+
 class AgentDidNotUseToolsError(MailPilotError):
     """Agent completed a run without calling any tools."""
 

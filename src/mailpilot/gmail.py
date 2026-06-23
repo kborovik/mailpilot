@@ -32,6 +32,8 @@ from typing import Any
 
 import logfire
 
+from mailpilot.exceptions import GmailBatchFetchError
+
 # Translation table that drops every C0 control byte except \t (0x09) and \n
 # (0x0A). Strict JSON parsers (RFC 8259) reject bare C0 controls in strings;
 # \t and \n are kept because Python's json module escapes them correctly and
@@ -579,36 +581,35 @@ class GmailClient:
         """
         self._service.users().stop(userId=user_id).execute()
 
-    _BATCH_SIZE = 100
-    """Maximum messages per ``new_batch_http_request()`` call."""
+    _BATCH_SIZE = 25
+    """Maximum messages per ``new_batch_http_request()`` call.
 
-    @_retry_on_transient
-    def get_messages_batch(
+    Kept well below Gmail's per-user concurrent-request cap: every sub-request
+    in a batch counts as a concurrent call against the same user, so a large
+    batch trips "Too many concurrent requests for user" (HTTP 429) (`§V.75`,
+    `§B.105`).
+    """
+
+    def _fetch_batch_once(
         self,
         message_ids: list[str],
-        user_id: str = "me",
-        format_: str = "full",
-    ) -> list[dict[str, Any]]:
-        """Fetch multiple messages in batched HTTP requests.
+        user_id: str,
+        format_: str,
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        """Run one batched fetch pass over ``message_ids``.
 
-        Uses ``new_batch_http_request()`` to multiplex up to 100 individual
-        gets into a single HTTP round-trip.  Deleted/404 messages are
-        silently skipped (same semantics as ``get_message`` returning None).
-
-        Args:
-            message_ids: Gmail message IDs to fetch.
-            user_id: Gmail user ID.
-            format_: Message format (full, metadata, minimal, raw).
+        Classifies each per-message callback outcome: a 404 is skipped
+        (deleted), a transient failure (429 / 5xx) is collected for retry, and
+        any other error is logged and skipped.
 
         Returns:
-            List of successfully fetched message dicts (order not guaranteed).
+            Tuple of (fetched message dicts, message ids that failed
+            transiently and should be retried).
         """
-        if not message_ids:
-            return []
+        from googleapiclient.errors import HttpError
 
-        results: list[dict[str, Any]] = []
-        failed_ids: list[str] = []
-        total_batches = (len(message_ids) + self._BATCH_SIZE - 1) // self._BATCH_SIZE
+        fetched: list[dict[str, Any]] = []
+        transient_failed: list[str] = []
 
         def _callback(
             request_id: str,
@@ -616,24 +617,28 @@ class GmailClient:
             exception: Exception | None,
         ) -> None:
             if exception is not None:
-                from googleapiclient.errors import HttpError
-
-                if isinstance(exception, HttpError) and exception.resp.status == 404:
+                status = (
+                    exception.resp.status if isinstance(exception, HttpError) else None
+                )
+                if status == 404:
                     logfire.debug(
                         "gmail message not found (deleted)",
                         message_id=request_id,
                     )
+                    return
+                if status in _TRANSIENT_STATUS_CODES:
+                    transient_failed.append(request_id)
                     return
                 logfire.warn(
                     "gmail batch message error",
                     message_id=request_id,
                     error=str(exception),
                 )
-                failed_ids.append(request_id)
                 return
             if response is not None:
-                results.append(response)
+                fetched.append(response)
 
+        total_batches = (len(message_ids) + self._BATCH_SIZE - 1) // self._BATCH_SIZE
         for batch_index, start in enumerate(
             range(0, len(message_ids), self._BATCH_SIZE)
         ):
@@ -654,9 +659,73 @@ class GmailClient:
                     )
                     batch.add(request, callback=_callback, request_id=msg_id)
                 batch.execute()
-                span.set_attribute("failed_count", len(failed_ids))
+                span.set_attribute("transient_failed_count", len(transient_failed))
 
-        return results
+        return fetched, transient_failed
+
+    @_retry_on_transient
+    def get_messages_batch(
+        self,
+        message_ids: list[str],
+        user_id: str = "me",
+        format_: str = "full",
+    ) -> list[dict[str, Any]]:
+        """Fetch multiple messages in batched HTTP requests.
+
+        Uses ``new_batch_http_request()`` to multiplex individual gets into
+        batched HTTP round-trips. A deleted/404 message is skipped (same
+        semantics as ``get_message`` returning None). A transient per-message
+        failure (Gmail 429 "Too many concurrent requests" or 5xx) is retried
+        with bounded backoff; if it survives the retry budget the call raises
+        ``GmailBatchFetchError`` rather than returning a partial list, so a
+        caller never advances its sync checkpoint past unfetched mail
+        (`§V.75`, `§B.105`).
+
+        Args:
+            message_ids: Gmail message IDs to fetch.
+            user_id: Gmail user ID.
+            format_: Message format (full, metadata, minimal, raw).
+
+        Returns:
+            List of successfully fetched message dicts (order not guaranteed).
+
+        Raises:
+            GmailBatchFetchError: transient failures survived all retries.
+        """
+        if not message_ids:
+            return []
+
+        results: list[dict[str, Any]] = []
+        pending: list[str] = list(message_ids)
+
+        for attempt in range(_MAX_RETRIES):
+            fetched, transient_failed = self._fetch_batch_once(
+                pending, user_id, format_
+            )
+            results.extend(fetched)
+            if not transient_failed:
+                return results
+
+            pending = transient_failed
+            if attempt + 1 < _MAX_RETRIES:
+                backoff = min(2**attempt, _MAX_BACKOFF)
+                logfire.warn(
+                    "gmail batch transient errors, retrying",
+                    count=len(pending),
+                    attempt=attempt + 1,
+                    backoff=backoff,
+                )
+                time.sleep(backoff)
+
+        logfire.error(
+            "gmail.get_messages_batch.retry.exhausted",
+            unfetched=len(pending),
+            attempts=_MAX_RETRIES,
+        )
+        raise GmailBatchFetchError(
+            f"{len(pending)} message(s) unfetched after {_MAX_RETRIES} "
+            "attempts (Gmail rate limit)"
+        )
 
     def create_label_if_not_exists(
         self,
