@@ -15,7 +15,7 @@ description: >-
   workflow before I send it". This sends LIVE Gmail traffic to the alias mailbox;
   it never emails the real contacts.
 argument-hint: "[--workflow-file <path>] [--limit N] [--company-domain <domain>] [--min-confidence N]"
-allowed-tools: Bash(uv run *), Read, Agent, AskUserQuestion
+allowed-tools: Bash(uv run *), Read, Agent, AskUserQuestion, mcp__claude_ai_logfire__query_run, mcp__claude_ai_logfire__query_schema_reference
 ---
 
 # mailpilot-campaign-test
@@ -81,6 +81,11 @@ the run is capped at nine messages (one per alias).
   PASS or FAIL verdict.
 - **Clean up.** Re-parks the alias-contacts off the real companies and stops the
   ephemeral workflow.
+- **Analyze telemetry.** Queries the run's Logfire spans and saves
+  `logfire_report.md`: which model the agent ran on, token use and latency per
+  email, agent tool errors, send results, and any Gmail 429 rate-limit errors
+  during the verify sync. A missing delivery paired with verify-sync 429s points
+  to a rate-limited sync, not a workflow failure.
 
 ## Safety -- read before running
 
@@ -122,10 +127,10 @@ The workflow file must exist and be valid TOML with `name`, `template`,
 ## Procedure
 
 The orchestrator runs every step directly. Steps 0 through 5, 7, and 8 are
-deterministic scripts. Step 6 (critique) is the one sub-agent phase: spawn it
-with the Agent tool and `model: opus`. The heavy reading -- the email bodies,
-contact context, and rubric -- stays inside that sub-agent; it returns only a
-short summary.
+deterministic scripts. Step 6 (critique) is a sub-agent phase: spawn it with the
+Agent tool and `model: opus`. Step 9 (telemetry) queries Logfire through the MCP.
+The heavy reading -- the email bodies, contact context, and rubric -- stays
+inside the critique sub-agent; it returns only a short summary.
 
 ### 0. Mint a run id
 ```bash
@@ -195,7 +200,12 @@ failures.
 uv run python .claude/skills/mailpilot-campaign-test/scripts/verify_delivery.py --run-id $RUN_ID
 ```
 Syncs `inbound@lab5.ca` and confirms each sent email arrived, matched by the
-agent-written subject. Reports `delivered` and any `missing`.
+agent-written subject. Reports `delivered` and any `missing`. If a delivery is
+missing, do not conclude non-delivery yet: the inbound sync can drop fetched
+messages when Gmail returns HTTP 429 ("Too many concurrent requests for user"),
+so the message reached the mailbox but never landed in the local store. The
+Logfire analysis (step 9) confirms whether that happened before you blame the
+workflow or the aliases.
 
 ### 6. Critique -- Opus sub-agent
 First bundle each sent email with its contact and company context:
@@ -241,12 +251,50 @@ real-company link) and stops the ephemeral workflow. **Always run this**, even i
 an earlier step failed, so the run leaves no real-company contact_count skew and
 no active test workflow. It is idempotent and safe to re-run.
 
+### 9. Analyze Logfire telemetry
+Query the run's spans through the Logfire MCP (`mcp__claude_ai_logfire__query_run`,
+`project: mailpilot`) and save `.campaign-test/$RUN_ID/logfire_report.md`. The
+run's spans are in the `development` environment. Scope the time range to the run
+window: `sends.json` holds `window_start`; query from a minute before it to a few
+minutes after the last verify sync. Pull these five facts and write them up:
+
+- **Model and token use** -- `span_name = 'agent run'` gives per-run latency and
+  `gen_ai.usage.input_tokens` / `gen_ai.usage.output_tokens`. The `chat <model>`
+  spans (e.g. `chat zai-org/glm-5.2`) give the model name and the call total.
+  Report which model the workflow actually ran on; it is not always a Claude
+  model.
+- **Agent tool errors** -- `span_name = 'agent.tool_errors'`. The `tool_errors`
+  attribute names the tool and error. A repeated `read_company` `not_found`, for
+  example, is a wasted model turn worth flagging.
+- **Send results** -- `span_name = 'gmail.send_message'`. Confirm one per email
+  and no failures.
+- **Inbound-sync rate limiting** -- `span_name = 'gmail batch message error'`.
+  Each row's `error` attribute carries the HTTP status. HTTP 429 ("Too many
+  concurrent requests for user") in the verify window means the sync was rate
+  limited and dropped fetched messages. **A missing delivery plus a 429 burst in
+  the same minute means the email reached the mailbox but the sync lost it -- not
+  a workflow failure and not an alias gap.**
+- **Exceptions** -- any row with `is_exception = true` in the window.
+
+Example aggregation:
+```sql
+SELECT span_name, count(*) AS n,
+       sum(CASE WHEN is_exception THEN 1 ELSE 0 END) AS exceptions
+FROM records
+WHERE start_timestamp >= '<window_start_utc>'
+  AND deployment_environment = 'development'
+GROUP BY span_name ORDER BY n DESC LIMIT 50
+```
+Present a three-line summary: model and total tokens, any tool-error pattern, and
+whether any 429s hit the verify sync. If the Logfire MCP or token is unavailable,
+note that and skip this step -- it is read-only and never gates the verdict.
+
 ## Artifacts
 
 Everything for a run is under `.campaign-test/$RUN_ID/` (git-ignored):
 `preflight.json`, `run_manifest.json`, `scaffold.json`, `ephemeral_workflow.toml`,
 `sends.json`, `delivery.json`, `critique_input.json`, `critiques.json`,
-`critiques.md`, `report.md`, and `cleanup.json`.
+`critiques.md`, `report.md`, `cleanup.json`, and `logfire_report.md`.
 
 ## OUTPUT -- "Next" block
 
@@ -266,9 +314,10 @@ After a failing run:
 ```
 ## Next
 
-1. open .campaign-test/<run_id>/report.md -- read the per-contact send failures
-2. edit the workflow instructions -- fix what made the agent's send fail (e.g. a spec block that must be a |---| pipe table)
-3. /mailpilot-campaign-test -- re-run after the edit
+1. open .campaign-test/<run_id>/logfire_report.md -- check whether missing deliveries were verify-sync 429s, not send failures
+2. open .campaign-test/<run_id>/report.md -- read the per-contact send failures
+3. edit the workflow instructions -- fix what made the agent's send fail (e.g. a spec block that must be a |---| pipe table)
+4. /mailpilot-campaign-test -- re-run after the edit
 ```
 
 ## Prerequisites
