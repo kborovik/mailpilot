@@ -1,3 +1,0 @@
-[submodule "workflows"]
-	path = workflows
-	url = git@github.com:kborovik/workflows.git

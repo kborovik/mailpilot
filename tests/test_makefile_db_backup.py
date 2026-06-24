@@ -1,15 +1,16 @@
-"""§V.119 guard: a destructive DB op backs up company + contact first.
+"""§V.119 guard: a destructive DB op backs up the database snapshot first.
 
-§V.119 requires ``make db-backup`` run ``mailpilot company export`` plus
-``mailpilot contact export`` to ``~/Documents/MailPilot/`` as timestamped JSON
-(§V.63), each export writing its file and exiting 0 *before* any ``dropdb``. A
-failed export must abort the drop (fail-closed, no ``|| true`` swallow), so the
-paid live company + contact rows (discovery credits, §V.96/§V.113) are never
-wiped without a durable backup that lives outside the dropped database.
+§V.119 requires ``make db-backup`` run one ``mailpilot db export`` to
+``~/Documents/MailPilot/`` as a timestamped JSON snapshot (§V.121), writing its
+file and exiting 0 *before* any ``dropdb``. A failed export must abort the drop
+(fail-closed, no ``|| true`` swallow), so the paid live company + contact rows
+(discovery credits, §V.96/§V.113) are never wiped without a durable backup that
+lives outside the dropped database.
 
 These tests mechanize that invariant over the ``Makefile``:
 
-- ``db-backup`` exists and exports both entities to ``$(DOCUMENTS_DIR)`` =
+- ``db-backup`` exists and runs one ``mailpilot db export`` (not the removed
+  per-entity ``company``/``contact export``) to ``$(DOCUMENTS_DIR)`` =
   ``$(HOME)/Documents/MailPilot`` as timestamped ``.json``.
 - the backup path carries no ``|| true`` (fail-closed).
 - ``clean`` depends on ``db-backup`` and its own recipe carries no export, so
@@ -22,7 +23,10 @@ import re
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).parent.parent
-_MAKEFILE = _REPO_ROOT / "Makefile"
+# The tracked file is lowercase ``makefile`` (GNU make resolves it). A
+# case-insensitive macOS filesystem aliases ``Makefile``, but a case-sensitive
+# Linux CI checkout does not, so the literal must match the tracked case.
+_MAKEFILE = _REPO_ROOT / "makefile"
 
 
 def _target_recipe(makefile_text: str, target: str) -> str:
@@ -58,16 +62,19 @@ def _prerequisites(makefile_text: str, target: str) -> list[str]:
     return []
 
 
-def test_db_backup_target_exists_and_exports_both_entities() -> None:
-    """§V.119: ``db-backup`` exports company + contact via the JSON verbs."""
+def test_db_backup_target_exists_and_exports_db_snapshot() -> None:
+    """§V.119/§V.121: ``db-backup`` runs one ``db export`` snapshot."""
     text = _MAKEFILE.read_text()
     recipe = _target_recipe(text, "db-backup")
     assert recipe, "Makefile must define a `db-backup` target (§V.119)"
-    assert "company export" in recipe, (
-        "db-backup must run `mailpilot company export` (§V.119)"
+    assert "db export" in recipe, (
+        "db-backup must run `mailpilot db export` (§V.119/§V.121)"
     )
-    assert "contact export" in recipe, (
-        "db-backup must run `mailpilot contact export` (§V.119)"
+    assert "company export" not in recipe, (
+        "per-entity `company export` is removed -- the snapshot is `db export` (§V.121)"
+    )
+    assert "contact export" not in recipe, (
+        "per-entity `contact export` is removed -- the snapshot is `db export` (§V.121)"
     )
 
 
@@ -99,7 +106,7 @@ def test_db_backup_is_fail_closed() -> None:
 def test_fail_closed_detector_is_non_vacuous() -> None:
     """Guard against a tautological check -- reintroducing `|| true` must trip
     the fail-closed assertion."""
-    regressed = "\tmailpilot company export --file x.json || true"
+    regressed = "\tmailpilot db export --file x.json || true"
     assert "|| true" in regressed, "detector must catch a reintroduced `|| true`"
 
 
@@ -113,13 +120,9 @@ def test_clean_depends_on_db_backup_before_dropdb() -> None:
     )
     clean_recipe = _target_recipe(text, "clean")
     assert "dropdb" in clean_recipe, "clean must still re-create the database"
-    assert "company export" not in clean_recipe, (
+    assert "db export" not in clean_recipe, (
         "clean must not export inline -- the only export path is the db-backup "
         "prerequisite, so a failed backup aborts the drop (§V.119)"
-    )
-    assert "contact export" not in clean_recipe, (
-        "clean must not export inline -- the only export path is the db-backup "
-        "prerequisite (§V.119)"
     )
     backup_recipe = _target_recipe(text, "db-backup")
     assert "dropdb" not in backup_recipe, (

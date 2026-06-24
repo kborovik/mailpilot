@@ -96,9 +96,10 @@ Concrete shape lives in code; spec invariants govern behaviour.
 - **Drive KB** (`drive.py`, `DriveClient`) — `drive.readonly` only. Folder ID in
   `workflow.instructions`. Isolation per §V.34-35.
 - **Workflows** — agent shape owned by template registry (`agent/templates.py`),
-  §V.44-46. File-based workflow *definitions* live in `workflows/*.toml` (private
-  `kborovik/workflows` submodule, §V.103) — distinct from `.claude/workflows/*.js`
-  Claude Code orchestration *scripts* (§V.73-74).
+  §V.44-46. File-based workflow *definitions* live in `workflows/*.toml` (the
+  independent `kborovik/workflows` repo, reached through the gitignored
+  `workflows/` symlink, §V.103) — distinct from `.claude/workflows/*.js` Claude
+  Code orchestration *scripts* (§V.73-74).
 - **Email rendering** (`email_renderer.py`) — Markdown to HTML, inline styles.
   Themes per §V.92.
 - **CLI** (`cli.py`) — thin dispatcher, JSON-only stdout. §V.1-5; full surface
@@ -161,6 +162,18 @@ Invariants in §V.51-55.
   `mailpilot run` needs a paired `operator_event("error", ...)` (§V.51).
 - **Cloud project** — `mailpilot` (token-scoped). MCP queries set
   `project='mailpilot'` and filter by `deployment_environment` (§V.52).
+
+## Workflows repo (detached)
+
+The `workflows/` directory is a gitignored symlink to the independent
+`kborovik/workflows` repo at `/Users/kb/github/workflows` (§V.103). It is no
+longer a git submodule, so mailpilot records no submodule pointer and does not
+track the symlink.
+
+When you edit a workflow `.toml` file through `workflows/`, commit and push the
+change in the `/Users/kb/github/workflows` repo automatically. Do not wait for a
+separate request. This overrides the default of committing or pushing only when
+asked. There is no parent pointer to update.
 
 ## Operating friction
 

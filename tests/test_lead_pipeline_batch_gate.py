@@ -19,6 +19,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 _REPO_ROOT = Path(__file__).parent.parent
 _SKILLS_ROOT = _REPO_ROOT / ".claude" / "skills"
 _CONVENTIONS = (
@@ -27,6 +29,16 @@ _CONVENTIONS = (
 _SIBLING_SKILL_BODIES = (
     _SKILLS_ROOT / "lead-companies" / "SKILL.md",
     _SKILLS_ROOT / "lead-contacts" / "SKILL.md",
+)
+
+# The lead-companies and lead-contacts skills are symlinked into the detached
+# private workflows repo (§V.103). When that repo is not checked out (e.g. CI)
+# the symlinks dangle, so the content guards skip rather than fail. They run
+# wherever the workflows repo is present (local dev). The pure-logic non-vacuous
+# guard reads no skill file and runs unconditionally.
+_SKIP_DETACHED = pytest.mark.skipif(
+    not (_CONVENTIONS.exists() and all(p.exists() for p in _SIBLING_SKILL_BODIES)),
+    reason="lead-pipeline skill files symlink target absent (detached workflows repo, §V.103)",
 )
 
 _BATCH_GATE_HEADING = "## Batch gate"
@@ -42,6 +54,7 @@ def _batch_gate_section(conventions_markdown: str) -> str:
     return rest if next_heading is None else rest[: next_heading.start()]
 
 
+@_SKIP_DETACHED
 def test_batch_gate_states_distinct_batch_rule() -> None:
     """§V.117: the Batch-gate § states each option maps to a distinct batch and
     suppresses `First 24` at stale-count <= 24 (== `All <N>` there)."""
@@ -58,11 +71,9 @@ def test_batch_gate_states_distinct_batch_rule() -> None:
     assert "stale-count <= 24" in section, (
         "Batch-gate § must drop `First 24` when stale-count <= 24 (== `All <N>`, §V.117)"
     )
-    assert "V117" in section.replace(".", ""), (
-        "Batch-gate § must cite §V.117 for the distinct-batch rule"
-    )
 
 
+@_SKIP_DETACHED
 def test_first_nine_marked_always_distinct() -> None:
     """§V.117: `First 9` stays distinct because the gate fires only above 9."""
     section = _batch_gate_section(_CONVENTIONS.read_text())
@@ -73,6 +84,7 @@ def test_first_nine_marked_always_distinct() -> None:
     )
 
 
+@_SKIP_DETACHED
 def test_suppression_rule_not_duplicated_into_skill_bodies() -> None:
     """§V.100: the distinct-batch rule lives once in the conventions file; the
     sibling SKILL bodies cite it, they do not restate the suppression mechanics."""

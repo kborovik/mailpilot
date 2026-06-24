@@ -1,0 +1,164 @@
+"""Preflight: verify the environment can run the live agentic campaign test.
+
+Validates the outbound workflow TOML (the agent definition under test),
+resolves the sender (outbound@lab5.ca) and the alias mailbox (inbound@lab5.ca,
+which receives every inbound{1-9} alias), confirms neither account is disabled,
+confirms Google credentials are configured (the live send needs them), and
+counts the real contacts available as personalization data. Writes
+``preflight.json`` (the single source of resolved state for later scripts) and
+exits non-zero on a blocking issue.
+
+Usage:
+    uv run python scripts/preflight.py --run-id <id> [--workflow-file <path>]
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import tomllib
+from pathlib import Path
+
+from _common import (
+    ALIAS_MAILBOX,
+    ALIASES,
+    DEFAULT_WORKFLOW_FILE,
+    SENDER_EMAIL,
+    mp,
+    repo_root,
+    resolve_account,
+    run_dir,
+    write_json,
+)
+
+_REQUIRED_WORKFLOW_FIELDS = ("name", "template", "objective", "instructions")
+
+
+def _resolve_workflow(
+    workflow_file: str, result: dict[str, object], issues: list[str]
+) -> None:
+    path = Path(workflow_file)
+    if not path.is_absolute():
+        path = repo_root() / workflow_file
+    result["workflow_file"] = str(path)
+    if not path.is_file():
+        issues.append(
+            f"workflow file not found: {workflow_file} "
+            "(is the workflows/ symlink present? `ln -s ../workflows workflows`)"
+        )
+        return
+    try:
+        parsed = tomllib.loads(path.read_text())
+    except tomllib.TOMLDecodeError as exc:
+        issues.append(f"workflow file is not valid TOML: {exc}")
+        return
+    missing = [f for f in _REQUIRED_WORKFLOW_FIELDS if not parsed.get(f)]
+    if missing:
+        issues.append(f"workflow file missing required field(s): {', '.join(missing)}")
+        return
+    result["workflow_name"] = parsed["name"]
+    result["workflow_template"] = parsed["template"]
+    if not str(parsed["template"]).startswith("outbound"):
+        issues.append(
+            f"WARNING workflow template {parsed['template']!r} is not an outbound "
+            "template; the campaign test drives an outbound reach-out"
+        )
+
+
+def _resolve_accounts(result: dict[str, object], issues: list[str]) -> None:
+    sender = resolve_account(SENDER_EMAIL)
+    mailbox = resolve_account(ALIAS_MAILBOX)
+    result["sender_account_id"] = sender.get("id") if sender else None
+    result["alias_mailbox_account_id"] = mailbox.get("id") if mailbox else None
+    if not sender:
+        issues.append(
+            f"sending account {SENDER_EMAIL} not found (run `mailpilot account create`)"
+        )
+    elif sender.get("disabled_reason"):
+        issues.append(
+            f"sending account {SENDER_EMAIL} is disabled "
+            f"({sender['disabled_reason']}); send and reply are blocked (§V.79)"
+        )
+    if not mailbox:
+        issues.append(
+            f"alias mailbox {ALIAS_MAILBOX} not found (run `mailpilot account create`)"
+        )
+    elif mailbox.get("disabled_reason"):
+        issues.append(
+            f"alias mailbox {ALIAS_MAILBOX} is disabled "
+            f"({mailbox['disabled_reason']}); delivery cannot be confirmed"
+        )
+
+
+def _count_contacts(result: dict[str, object], issues: list[str]) -> None:
+    """Count real contacts available, excluding infrastructure addresses.
+
+    Infrastructure = the system's own accounts and the nine alias-contacts;
+    none of those is a prospect.
+    """
+    accounts = mp(
+        ["account", "list", "--include-disabled", "--limit", "100"], check=False
+    )
+    excluded = {str(a.get("email", "")).lower() for a in accounts.get("accounts", [])}
+    excluded.update(a.lower() for a in ALIASES)
+    data = mp(["contact", "list", "--limit", "200"], check=False)
+    real = [
+        c
+        for c in data.get("contacts", [])
+        if str(c.get("email", "")).lower() not in excluded
+    ]
+    result["discovered_contact_count"] = len(real)
+    if not real:
+        issues.append(
+            "no real contacts found (run `/lead-contacts` first to seed verified "
+            "contact rows)"
+        )
+
+
+def _check_settings(result: dict[str, object], issues: list[str]) -> None:
+    try:
+        sys.path.insert(0, str(repo_root() / "src"))
+        from mailpilot.settings import get_settings
+
+        settings = get_settings()
+        google_creds = bool(settings.google_application_credentials)
+    except Exception as exc:
+        google_creds = False
+        issues.append(f"could not load settings: {exc}")
+    result["google_credentials_configured"] = google_creds
+    if not google_creds:
+        issues.append(
+            "google_application_credentials not set (live Gmail send cannot run)"
+        )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--workflow-file", default=DEFAULT_WORKFLOW_FILE)
+    args = parser.parse_args()
+
+    issues: list[str] = []
+    result: dict[str, object] = {
+        "sender_email": SENDER_EMAIL,
+        "alias_mailbox": ALIAS_MAILBOX,
+        "aliases": ALIASES,
+    }
+
+    _resolve_workflow(args.workflow_file, result, issues)
+    _resolve_accounts(result, issues)
+    _count_contacts(result, issues)
+    _check_settings(result, issues)
+
+    blocking = [i for i in issues if "WARNING" not in i]
+    result["issues"] = issues
+    result["verdict"] = "ok" if not blocking else "fail"
+
+    write_json(run_dir(args.run_id) / "preflight.json", result)
+    print(json.dumps({"verdict": result["verdict"], "issues": issues}, indent=2))
+    return 0 if not blocking else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

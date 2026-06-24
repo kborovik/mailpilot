@@ -23,8 +23,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 _REPO_ROOT = Path(__file__).parent.parent
 _CONTACT_FINDER = _REPO_ROOT / ".claude" / "agents" / "contact-finder.md"
+
+# contact-finder.md is symlinked into the detached private workflows repo
+# (§V.103). When that repo is not checked out (e.g. CI) the symlink dangles, so
+# these content guards skip rather than fail. They run wherever the workflows
+# repo is present (local dev); the guard belongs to that repo's own CI.
+_SKIP_DETACHED = pytest.mark.skipif(
+    not _CONTACT_FINDER.exists(),
+    reason="contact-finder.md symlink target absent (detached workflows repo, §V.103)",
+)
 
 # The real-time single-verify GET endpoint (per-email) -- the §V.113 mandate.
 _SINGLE_VERIFY_GET = '-G "https://api.usebouncer.com/v1.1/email/verify"'
@@ -48,6 +59,7 @@ def _invokes_batch_sync(markdown: str) -> bool:
     )
 
 
+@_SKIP_DETACHED
 def test_contact_finder_uses_single_verify_get() -> None:
     """§V.113: the verify step calls the real-time single GET endpoint, one
     email per call (per-email ``email=`` query param)."""
@@ -62,6 +74,7 @@ def test_contact_finder_uses_single_verify_get() -> None:
     )
 
 
+@_SKIP_DETACHED
 def test_contact_finder_does_not_invoke_batch_sync() -> None:
     """§V.113 / §B.93: the verify step never *invokes* the POST batch/sync
     endpoint (the empty-``[]``-for-cold-emails trap). A host-less cautionary
@@ -75,6 +88,7 @@ def test_contact_finder_does_not_invoke_batch_sync() -> None:
     )
 
 
+@_SKIP_DETACHED
 def test_batch_sync_detector_is_non_vacuous() -> None:
     """Guard against a tautological absence check -- restoring the batch/sync
     curl invocation must trip the detector, while the host-less cautionary

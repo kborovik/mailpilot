@@ -493,8 +493,8 @@ def test_get_messages_batch_chunks_large_lists():
     service = MagicMock()
     client = GmailClient.from_service("test@example.com", service)
 
-    # 150 message IDs -> should produce 2 batches (100 + 50).
-    message_ids = [f"m{i}" for i in range(150)]
+    # 51 message IDs at _BATCH_SIZE=25 -> 3 batches (25 + 25 + 1).
+    message_ids = [f"m{i}" for i in range(51)]
 
     batch_execute_count = 0
 
@@ -515,12 +515,98 @@ def test_get_messages_batch_chunks_large_lists():
         batch.execute = fake_execute
         return batch
 
-    service.new_batch_http_request.side_effect = [make_batch(), make_batch()]
+    service.new_batch_http_request.side_effect = make_batch
 
     results = client.get_messages_batch(message_ids)
 
-    assert len(results) == 150
-    assert batch_execute_count == 2
+    assert len(results) == 51
+    assert batch_execute_count == 3
+
+
+def test_get_messages_batch_retries_transient_429_then_succeeds():
+    """A per-message 429 is retried, never dropped (§V.75, §B.105)."""
+    from unittest.mock import MagicMock, patch
+
+    from googleapiclient.errors import HttpError
+
+    from mailpilot.gmail import GmailClient
+
+    service = MagicMock()
+    client = GmailClient.from_service("test@example.com", service)
+
+    msg1 = {"id": "m1", "threadId": "t1", "payload": {}}
+    msg2 = {"id": "m2", "threadId": "t2", "payload": {}}
+    resp_429 = MagicMock()
+    resp_429.status = 429
+    error_429 = HttpError(resp=resp_429, content=b"Too many concurrent requests")
+
+    pass_count = {"n": 0}
+
+    def make_batch() -> MagicMock:
+        callbacks: list[tuple[str, object, object]] = []
+
+        def fake_add(request: object, callback: object, request_id: str) -> None:
+            callbacks.append((request_id, request, callback))
+
+        def fake_execute() -> None:
+            pass_count["n"] += 1
+            for request_id, _request, callback in callbacks:
+                # m2 rate-limits on the first pass, succeeds on the retry.
+                if request_id == "m2" and pass_count["n"] == 1:
+                    callback(request_id, None, error_429)  # type: ignore[operator]
+                else:
+                    data = msg1 if request_id == "m1" else msg2
+                    callback(request_id, data, None)  # type: ignore[operator]
+
+        batch = MagicMock()
+        batch.add = fake_add
+        batch.execute = fake_execute
+        return batch
+
+    service.new_batch_http_request.side_effect = make_batch
+
+    with patch("mailpilot.gmail.time.sleep"):
+        results = client.get_messages_batch(["m1", "m2"])
+
+    fetched_ids = {m["id"] for m in results}
+    assert fetched_ids == {"m1", "m2"}
+
+
+def test_get_messages_batch_raises_when_transient_persists():
+    """Exhausted transient retries raise so the caller holds its checkpoint (§V.75, §B.105)."""
+    from unittest.mock import MagicMock, patch
+
+    from googleapiclient.errors import HttpError
+
+    from mailpilot.exceptions import GmailBatchFetchError
+    from mailpilot.gmail import GmailClient
+
+    service = MagicMock()
+    client = GmailClient.from_service("test@example.com", service)
+
+    resp_429 = MagicMock()
+    resp_429.status = 429
+    error_429 = HttpError(resp=resp_429, content=b"Too many concurrent requests")
+
+    def make_batch() -> MagicMock:
+        callbacks: list[tuple[str, object, object]] = []
+
+        def fake_add(request: object, callback: object, request_id: str) -> None:
+            callbacks.append((request_id, request, callback))
+
+        def fake_execute() -> None:
+            for request_id, _request, callback in callbacks:
+                callback(request_id, None, error_429)  # type: ignore[operator]
+
+        batch = MagicMock()
+        batch.add = fake_add
+        batch.execute = fake_execute
+        return batch
+
+    service.new_batch_http_request.side_effect = make_batch
+
+    with patch("mailpilot.gmail.time.sleep"), pytest.raises(GmailBatchFetchError):
+        client.get_messages_batch(["m1"])
 
 
 # -- stop_watch ----------------------------------------------------------------

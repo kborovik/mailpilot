@@ -437,6 +437,49 @@ def test_execute_task_agent_error_non_transient_terminal(
     )
 
 
+def test_execute_task_completed_without_reply_terminal(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.120 (per §B.106): an outbound first reach-out that drops the send
+    fails the run with ``AgentCompletedWithoutReplyError``; the class is
+    non-transient (§V.49), so ``_handle_agent_failure`` takes the task
+    terminal ``failed`` with no retry rather than a silent ``completed``."""
+    from conftest import make_test_settings
+    from mailpilot.exceptions import AgentCompletedWithoutReplyError
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings()
+    task = _make_task(context={"trigger": "enrollment_schedule"})
+    workflow = _make_workflow()
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch(
+            "mailpilot.run.invoke_workflow_agent",
+            side_effect=AgentCompletedWithoutReplyError("no send on reach-out"),
+        ),
+        patch("mailpilot.run.complete_task") as mock_complete,
+        patch("mailpilot.run.reschedule_task_for_retry") as mock_reschedule,
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_reschedule.assert_not_called()
+    mock_complete.assert_called_once_with(
+        database_connection,
+        _TASK_ID,
+        status="failed",
+        result={
+            "reason": "no send on reach-out",
+            "attempt_count": 1,
+            "terminal": "non_transient",
+        },
+    )
+
+
 def test_execute_task_transient_error_reschedules(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:

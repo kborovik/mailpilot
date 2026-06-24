@@ -1095,6 +1095,61 @@ def test_sync_account_updates_account_history_and_last_synced(
     assert refreshed.last_synced_at >= before
 
 
+def test_sync_account_preserves_checkpoint_on_persistent_fetch_failure(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """A rate-limited batch fetch must not advance gmail_history_id (§V.75, §B.105)."""
+    from mailpilot.database import get_account
+    from mailpilot.exceptions import GmailBatchFetchError
+
+    account = make_test_account(database_connection, email="ratelimited@example.com")
+    account = update_account(
+        database_connection,
+        account.id,
+        gmail_history_id="500",
+        last_synced_at=datetime.now(UTC),
+    )
+    assert account is not None
+    client, service = _make_mock_client(account.email)
+    _set_history(
+        service,
+        history_records=[
+            {
+                "id": "600",
+                "messagesAdded": [{"message": {"id": "mA", "threadId": "tA"}}],
+            }
+        ],
+    )
+
+    resp_429 = MagicMock()
+    resp_429.status = 429
+    error_429 = HttpError(resp=resp_429, content=b"Too many concurrent requests")
+
+    def _make_batch() -> MagicMock:
+        callbacks: list[tuple[str, object, object]] = []
+
+        def fake_add(request: object, callback: object, request_id: str) -> None:
+            callbacks.append((request_id, request, callback))
+
+        def fake_execute() -> None:
+            for request_id, _request, callback in callbacks:
+                callback(request_id, None, error_429)  # type: ignore[operator]
+
+        batch = MagicMock()
+        batch.add = fake_add
+        batch.execute = fake_execute
+        return batch
+
+    service.new_batch_http_request.side_effect = _make_batch
+
+    with patch("mailpilot.gmail.time.sleep"), pytest.raises(GmailBatchFetchError):
+        sync_account(database_connection, account, client, make_test_settings())
+
+    refreshed = get_account(database_connection, account.id)
+    assert refreshed is not None
+    assert refreshed.gmail_history_id == "500"
+
+
 # -- send_email ---------------------------------------------------------------
 
 

@@ -9,13 +9,9 @@ export PATH := $(abspath .venv)/bin:/opt/homebrew/opt/postgresql@18/bin:$(PATH)
 DATA_DIR := $(HOME)/.mailpilot
 DOCUMENTS_DIR := $(HOME)/Documents/MailPilot
 
-default: submodules .venv help
+default: .venv help
 
-check: submodules lint py-test ## Run lint and tests
-
-submodules: ## Initialize the workflows/ catalog git submodule
-	$(call header,Updating git submodules)
-	git submodule update --init
+check: lint py-test ## Run lint and tests
 
 lint: py-format py-lint py-types ## Lint Python code
 
@@ -34,12 +30,11 @@ py-lint:
 	$(call header,Running Ruff lint)
 	uv run ruff check --fix
 
-db-backup: ## Back up companies and contacts to ~/Documents/MailPilot/ (timestamped JSON)
+db-backup: ## Back up tags, companies and contacts to ~/Documents/MailPilot/ (timestamped JSON snapshot)
 	$(eval TS := $(shell date +%Y%m%d-%H%M%S))
-	$(call header,Backing up companies and contacts to $(DOCUMENTS_DIR))
+	$(call header,Backing up the database snapshot to $(DOCUMENTS_DIR))
 	mkdir -p $(DOCUMENTS_DIR)
-	mailpilot company export --file $(DOCUMENTS_DIR)/companies-$(TS).json > /dev/null
-	mailpilot contact export --file $(DOCUMENTS_DIR)/contacts-$(TS).json > /dev/null
+	mailpilot db export --file $(DOCUMENTS_DIR)/snap-$(TS).json > /dev/null
 
 clean: db-backup ## Back up data, re-create database
 	$(call header,Re-creating database)

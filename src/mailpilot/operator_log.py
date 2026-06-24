@@ -76,9 +76,20 @@ def cli_mutation(noun: str, verb: str, /, **attrs: Any) -> Generator[None]:
 
     span_name = f"{noun}.{verb}"
     failure_name = span_name + ".failed"
+    # The controlled ``output_error`` exit (``SystemExit``) is a business
+    # outcome, not a span error. Absorb it inside the span so the span closes
+    # clean, then re-raise past the ``with`` block -- exit 1 + stderr envelope
+    # + empty stdout still hold, but the span carries no escaping exception
+    # (§V.54, closes §B.107). ``SystemExit`` is a ``BaseException``, so the
+    # ``except Exception`` arm never sees it.
+    pending_exit: SystemExit | None = None
     with logfire.span(span_name, **attrs):
         try:
             yield
+        except SystemExit as controlled_exit:
+            # Command-body envelope path (e.g. a duplicate_key pre-check
+            # calling output_error directly).
+            pending_exit = controlled_exit
         except Exception as exc:
             logfire.exception(failure_name, **attrs)
             operator_event("error", source=span_name, message=str(exc))
@@ -87,14 +98,24 @@ def cli_mutation(noun: str, verb: str, /, **attrs: Any) -> Generator[None]:
 
             from mailpilot.cli import output_error
 
-            if isinstance(exc, ValidationError):
-                output_error(str(exc), "validation_error")
-            if isinstance(exc, psycopg.Error):
-                code = "database_error"
-                for class_name, mapped in _PSYCOPG_ERROR_CODES:
-                    subclass = getattr(psycopg.errors, class_name, None)
-                    if subclass is not None and isinstance(exc, subclass):
-                        code = mapped
-                        break
-                output_error(str(exc), code)
-            raise
+            try:
+                if isinstance(exc, ValidationError):
+                    output_error(str(exc), "validation_error")
+                if isinstance(exc, psycopg.Error):
+                    code = "database_error"
+                    for class_name, mapped in _PSYCOPG_ERROR_CODES:
+                        subclass = getattr(psycopg.errors, class_name, None)
+                        if subclass is not None and isinstance(exc, subclass):
+                            code = mapped
+                            break
+                    output_error(str(exc), code)
+            except SystemExit as controlled_exit:
+                # psycopg/ValidationError translation branch: output_error
+                # exits the same way; give it the same clean-close handling.
+                pending_exit = controlled_exit
+            else:
+                # Genuine non-SystemExit exception with no envelope (e.g. a
+                # non-psycopg error) -- re-raise so it marks the span.
+                raise
+    if pending_exit is not None:
+        raise pending_exit

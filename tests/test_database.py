@@ -38,10 +38,13 @@ from mailpilot.database import (
     create_workflow,
     disable_account,
     disable_company,
+    disable_contact,
     disable_enrollment,
+    disable_tag,
     enable_account,
     enable_company,
     enable_enrollment,
+    export_snapshot,
     find_pending_first_touch_task,
     get_account,
     get_account_by_email,
@@ -60,6 +63,7 @@ from mailpilot.database import (
     get_status_payload,
     get_unprocessed_inbound_email,
     get_workflow,
+    import_snapshot,
     list_accounts,
     list_activities,
     list_companies,
@@ -5105,3 +5109,213 @@ def test_create_or_get_contact_by_email_concurrent_is_safe(
     ).fetchone()
     assert row is not None
     assert row["n"] == 1
+
+
+# -- Snapshot export / import (§V.121, §B.104) ---------------------------------
+
+
+_FULL_PROFILE: dict[str, Any] = {
+    "summary": "Industrial water treatment chemicals.",
+    "products": ["coagulants", "antiscalants"],
+    "target_customers": "Municipal water utilities.",
+    "timezone": "America/Toronto",
+    "sources": ["https://acme.example/about"],
+}
+
+
+def _populate_snapshot_fixture(
+    connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Seed a fully-populated company + contact + tags graph for round-trips.
+
+    Carries a company with a profile and two tags, a contact with title +
+    email_confidence + one tag, plus a disabled, unassigned vocabulary tag so
+    the round-trip exercises vocabulary survival (§V.121).
+    """
+    company = make_test_company(connection, name="Acme Water", domain="acme.com")
+    update_company(connection, company.id, profile=_FULL_PROFILE)
+    contact = create_contact(
+        connection,
+        email="lead@acme.com",
+        first_name="Lee",
+        last_name="Diaz",
+        company_id=company.id,
+        title="Plant Manager",
+        email_confidence=92,
+    )
+    assert contact is not None
+    make_test_tag_assignment(connection, company_id=company.id, name="customer")
+    make_test_tag_assignment(connection, company_id=company.id, name="lead")
+    make_test_tag_assignment(connection, contact_id=contact.id, name="decision-maker")
+    # A disabled, unassigned vocabulary tag must survive its own `tags` section.
+    make_test_tag(connection, name="retired")
+    disable_tag(connection, "retired", "deprecated category")
+
+
+def test_export_snapshot_bundle_shape(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.121: the bundle carries natural keys, embedded tags, no source id."""
+    _populate_snapshot_fixture(database_connection)
+    bundle = export_snapshot(database_connection)
+
+    assert bundle["schema_version"] == 1
+    assert "exported_at" in bundle
+
+    # Vocabulary section carries every tag, including the disabled/unassigned one.
+    tag_names = {t["name"] for t in bundle["tags"]}
+    assert {"customer", "lead", "decision-maker", "retired"} <= tag_names
+    retired = next(t for t in bundle["tags"] if t["name"] == "retired")
+    assert retired["disabled_reason"] == "deprecated category"
+
+    assert len(bundle["companies"]) == 1
+    company_entry = bundle["companies"][0]
+    assert company_entry["domain"] == "acme.com"
+    assert company_entry["profile"]["summary"] == _FULL_PROFILE["summary"]
+    assert set(company_entry["tags"]) == {"customer", "lead"}
+    # No source-DB UUID is forwarded (§B.104).
+    assert "id" not in company_entry
+    assert "company_id" not in company_entry
+
+    assert len(bundle["contacts"]) == 1
+    contact_entry = bundle["contacts"][0]
+    assert contact_entry["email"] == "lead@acme.com"
+    assert contact_entry["title"] == "Plant Manager"
+    assert contact_entry["email_confidence"] == 92
+    assert contact_entry["company_domain"] == "acme.com"
+    assert contact_entry["tags"] == ["decision-maker"]
+    assert "id" not in contact_entry
+    assert "company_id" not in contact_entry
+
+
+def test_export_import_round_trip_field_identical(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.121 success criterion: export -> fresh import is field-identical."""
+    _populate_snapshot_fixture(database_connection)
+    bundle = export_snapshot(database_connection)
+
+    # Fresh DB: wipe the company + contact + tag graph, then restore.
+    database_connection.execute(
+        "TRUNCATE TABLE note, tag_assignment, tag, activity, contact, company CASCADE"
+    )
+    database_connection.commit()
+
+    result = import_snapshot(database_connection, bundle)
+    assert result["errors"] == [], result["errors"]
+    assert result["companies"] == 1
+    assert result["contacts"] == 1
+    assert result["tags"] >= 4
+
+    # Restored company carries its profile (§B.104 fix) and tags.
+    company = get_company_by_domain(database_connection, "acme.com")
+    assert company is not None
+    assert company.profile is not None
+    assert company.profile["summary"] == _FULL_PROFILE["summary"]
+    company_tags = {
+        t.name for t in list_tags(database_connection, company_id=company.id)
+    }
+    assert company_tags == {"customer", "lead"}
+
+    # Restored contact re-links to the company by domain, carries lead metadata.
+    contact = get_contact_by_email(database_connection, "lead@acme.com")
+    assert contact is not None
+    assert contact.company_id == company.id
+    assert contact.title == "Plant Manager"
+    assert contact.email_confidence == 92
+    contact_tags = {
+        t.name for t in list_tags(database_connection, contact_id=contact.id)
+    }
+    assert contact_tags == {"decision-maker"}
+
+    # The disabled, unassigned vocabulary tag survived the round-trip.
+    vocabulary = {
+        t.name: t.disabled_reason
+        for t in list_tags(database_connection, include_disabled=True)
+    }
+    assert vocabulary["retired"] == "deprecated category"
+
+    # A second export is byte-identical modulo the timestamp.
+    again = export_snapshot(database_connection)
+    assert again["companies"] == bundle["companies"]
+    assert again["contacts"] == bundle["contacts"]
+    assert again["tags"] == bundle["tags"]
+
+
+def test_import_snapshot_disabled_rows_restore_reason(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.121: a disabled company / contact restores its disabled_reason."""
+    company = make_test_company(database_connection, name="Gone Inc", domain="gone.com")
+    contact = create_contact(
+        database_connection, email="x@gone.com", company_id=company.id
+    )
+    assert contact is not None
+    disable_company(database_connection, company.id, "out of business")
+    disable_contact(database_connection, contact.id, "bounced: hard bounce")
+    bundle = export_snapshot(database_connection)
+
+    database_connection.execute(
+        "TRUNCATE TABLE note, tag_assignment, tag, activity, contact, company CASCADE"
+    )
+    database_connection.commit()
+    import_snapshot(database_connection, bundle)
+
+    restored_company = get_company_by_domain(database_connection, "gone.com")
+    assert restored_company is not None
+    assert restored_company.disabled_reason == "out of business"
+    restored_contact = get_contact_by_email(database_connection, "x@gone.com")
+    assert restored_contact is not None
+    assert restored_contact.disabled_reason == "bounced: hard bounce"
+
+
+def test_import_snapshot_unresolvable_fk_is_per_row_error(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.121/§B.104: an FK-unresolvable contact yields a per-row error; the
+    batch completes and every resolvable row persists."""
+    bundle: dict[str, Any] = {
+        "schema_version": 1,
+        "tags": [],
+        "companies": [
+            {
+                "name": "Acme",
+                "domain": "acme.com",
+                "profile": None,
+                "disabled_reason": None,
+                "tags": [],
+            }
+        ],
+        "contacts": [
+            {
+                "email": "orphan@nowhere.com",
+                "first_name": None,
+                "last_name": None,
+                "title": None,
+                "email_confidence": None,
+                "disabled_reason": None,
+                "company_domain": "missing.com",
+                "tags": [],
+            },
+            {
+                "email": "good@acme.com",
+                "first_name": None,
+                "last_name": None,
+                "title": None,
+                "email_confidence": None,
+                "disabled_reason": None,
+                "company_domain": "acme.com",
+                "tags": [],
+            },
+        ],
+    }
+    result = import_snapshot(database_connection, bundle)
+
+    # The orphan records an error; the resolvable contact still lands.
+    assert result["companies"] == 1
+    assert result["contacts"] == 1
+    assert len(result["errors"]) == 1
+    assert result["errors"][0]["error"] == "foreign_key_violation"
+    assert result["errors"][0]["key"] == "orphan@nowhere.com"
+    assert get_contact_by_email(database_connection, "good@acme.com") is not None
+    assert get_contact_by_email(database_connection, "orphan@nowhere.com") is None

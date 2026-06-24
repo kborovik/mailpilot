@@ -152,6 +152,17 @@ def _spans_named(capfire: CaptureLogfire, span_name: str) -> list[dict[str, Any]
     ]
 
 
+def _exception_events(span: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the OTel ``exception`` events recorded on a span dict.
+
+    ``logfire`` span ``__exit__`` records an escaping ``BaseException`` via
+    ``record_exception(..., escaped=True)``, which surfaces as a span event
+    named ``exception``. A business-outcome envelope (duplicate_key etc.)
+    must leave the ``<noun>.<verb>`` span clean of these per §V.54.
+    """
+    return [event for event in span.get("events", []) if event["name"] == "exception"]
+
+
 def _err_event(stderr: str, source: str) -> str | None:
     """Return the first stderr operator_event line with `event=error` for source."""
     for line in stderr.splitlines():
@@ -286,7 +297,7 @@ def test_account_update_idempotent_pre_equals_post(
     assert "changed=[]" in err
 
 
-# -- company.create / update / import ------------------------------------------
+# -- company.create / update --------------------------------------------------
 
 
 def test_company_create_emits_span_and_event(
@@ -330,29 +341,6 @@ def test_company_update_changed_diff(
     assert result.exit_code == 0, result.output
     err = result.stderr
     assert "changed=['name']" in err
-
-
-def test_company_import_idempotent_on_duplicate_rows(
-    runner: CliRunner,
-    mock_connection: MagicMock,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Re-run import on already-present rows -> every row event has changed=[]."""
-    existing = [_make_company(name="Acme", domain="acme.test")]
-    payload = json.dumps([{"name": "Acme", "domain": "acme.test"}])
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.list_companies", return_value=existing),
-        patch("mailpilot.database.create_company") as mock_create,
-    ):
-        result = runner.invoke(main, ["company", "import"], input=payload)
-
-    assert result.exit_code == 0, result.output
-    mock_create.assert_not_called()
-    err = result.stderr
-    assert "event=company.import" in err
-    assert err.count("changed=[]") >= 1
 
 
 def test_company_create_with_note_includes_note_in_changed(
@@ -422,28 +410,7 @@ def test_contact_create_with_note_includes_note_in_changed(
     assert "'note'" in err
 
 
-def test_company_import_emits_changed_on_created_row(
-    runner: CliRunner,
-    mock_connection: MagicMock,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    payload = json.dumps([{"name": "Acme", "domain": "acme.test"}])
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.list_companies", return_value=[]),
-        patch("mailpilot.database.create_company", return_value=_make_company()),
-    ):
-        result = runner.invoke(main, ["company", "import"], input=payload)
-
-    assert result.exit_code == 0, result.output
-    err = result.stderr
-    assert "event=company.import" in err
-    # operator_event quotes values that contain whitespace (lists render with spaces).
-    assert "changed=\"['name', 'domain']\"" in err
-
-
-# -- contact.create / update / import ------------------------------------------
+# -- contact.create / update --------------------------------------------------
 
 
 def test_contact_create_emits_span_and_event(
@@ -587,27 +554,6 @@ def test_contact_disable_emits_error_on_db_raise(
     failed = _spans_named(capfire, "contact.disable.failed")
     assert failed
     assert failed[0]["attributes"]["logfire.level_num"] >= 17
-
-
-def test_contact_import_idempotent_on_duplicate_rows(
-    runner: CliRunner,
-    mock_connection: MagicMock,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    existing = [_make_contact(email="lead@acme.test")]
-    payload = json.dumps([{"email": "lead@acme.test"}])
-    with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
-        patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.list_contacts", return_value=existing),
-        patch("mailpilot.database.create_contact") as mock_create,
-    ):
-        result = runner.invoke(main, ["contact", "import"], input=payload)
-
-    assert result.exit_code == 0, result.output
-    mock_create.assert_not_called()
-    err = result.stderr
-    assert err.count("changed=[]") >= 1
 
 
 # -- workflow.create / update / start / stop / import --------------------------
@@ -1006,8 +952,13 @@ def test_account_create_duplicate_emits_duplicate_key_envelope(
     assert envelope["error"] == "duplicate_key"
     assert envelope["message"] == "account with email='dup@example.com' already exists"
     assert envelope["ok"] is False
-    assert _spans_named(capfire, "account.create")
+    parent = _spans_named(capfire, "account.create")
+    assert parent
     assert not _spans_named(capfire, "account.create.failed")
+    # §V.54 / §B.107: the controlled ``output_error`` SystemExit must not
+    # escape the span -- the parent ``account.create`` span carries no
+    # exception event, not merely no ``.failed`` child.
+    assert not _exception_events(parent[0])
     assert "event=account.create" not in err
     assert "Traceback" not in err
 

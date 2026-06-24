@@ -268,6 +268,57 @@ def test_build_protocol_preserves_v33_fragment_order(
     )
 
 
+# -- §V.45 / §V.120: _MUST_SEND terminal-reply fragment ------------------------
+
+
+def test_must_send_fragment_present_in_every_template() -> None:
+    """§V.45 / §V.120: _MUST_SEND is the prompt-side mirror of the §V.120
+    runtime reply guard. It instructs the model to end every trigger turn in a
+    real reply_email / send_email tool call or an explicit noop -- drafting the
+    reply in reasoning is not sending. It composes into every template's
+    protocol across every trigger, and it lives as a template fragment (not
+    workflow.instructions) because must-send is direction-universal mechanics,
+    not workflow-specific policy."""
+    must_send = templates_module._MUST_SEND  # pyright: ignore[reportPrivateUsage]
+    # Names both send paths + the explicit-decline escape (>=2 tools per §V.40).
+    assert "reply_email" in must_send
+    assert "send_email" in must_send
+    assert "noop" in must_send
+    for template in TEMPLATES.values():
+        for trigger in _ALL_TRIGGERS:
+            assert must_send in template.build_protocol(trigger), (
+                f"template {template.name!r} trigger={trigger!r}: _MUST_SEND "
+                f"fragment missing from composed protocol"
+            )
+
+
+@pytest.mark.parametrize(
+    "trigger", ["task", "enrollment_run", "enrollment_schedule", "manual", "email"]
+)
+@pytest.mark.parametrize("template", list(TEMPLATES.values()), ids=lambda t: t.name)
+def test_must_send_ordered_after_trigger_branch_before_decline(
+    template: WorkflowTemplate, trigger: str
+) -> None:
+    """§V.45: canonical fragment order _BASE -> trigger branch -> _MUST_SEND ->
+    _DECLINE -> _NO_FABRICATION. _MUST_SEND sits after the deferred-task branch
+    and before _DECLINE in the composed protocol."""
+    protocol = template.build_protocol(trigger)
+    must_send = templates_module._MUST_SEND  # pyright: ignore[reportPrivateUsage]
+    deferred_marker = (
+        _RECORD_OUTCOME_INSTRUCTION if trigger == "task" else _INITIAL_INSTRUCTION
+    )
+    base_idx = protocol.find("Keep your final summary brief")
+    deferred_idx = protocol.find(deferred_marker)
+    must_send_idx = protocol.find(must_send)
+    decline_idx = protocol.find("polite decline")
+    nofab_idx = protocol.find("Never fabricate")
+    assert 0 <= base_idx < deferred_idx < must_send_idx < decline_idx < nofab_idx, (
+        f"template {template.name!r} trigger={trigger!r}: §V.45 order broken "
+        f"(base={base_idx}, deferred={deferred_idx}, must_send={must_send_idx}, "
+        f"decline={decline_idx}, nofab={nofab_idx})"
+    )
+
+
 def test_protocol_property_returns_task_branch() -> None:
     """``WorkflowTemplate.protocol`` property mirrors ``build_protocol('task')``
     so ``mailpilot template view`` and existing CLI consumers stay on the

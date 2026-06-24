@@ -26,16 +26,30 @@ class SyncError(MailPilotError):
     """Gmail sync operation failed."""
 
 
+class GmailBatchFetchError(SyncError):
+    """Batch message fetch left messages unretrieved after retries.
+
+    Raised by ``GmailClient.get_messages_batch`` when transient per-message
+    failures (Gmail 429 "Too many concurrent requests" or 5xx) survive the
+    bounded-backoff retry budget. Propagating rather than returning a partial
+    list keeps ``sync_account`` from advancing ``gmail_history_id`` past mail
+    that was never stored, so the next incremental sync re-collects it
+    (`§V.75`, `§B.105`).
+    """
+
+
 class AgentDidNotUseToolsError(MailPilotError):
     """Agent completed a run without calling any tools."""
 
 
 class AgentCompletedWithoutReplyError(MailPilotError):
-    """Inbound-trigger run ended without a reply or an explicit noop.
+    """Send-obligated run ended without a send or an explicit noop.
 
     Strengthens ``AgentDidNotUseToolsError`` (`§V.81`): a run may call
     search and read tools, satisfy the tool-count check, then narrate its
     intent to reply without ever calling ``reply_email`` / ``send_email``.
-    For an inbound trigger that leaves the email unanswered, which is a
-    failure -- not a silent ``completed`` (`§V.120`, `§B.103`).
+    Two trigger classes are send-obligated -- an inbound trigger that must
+    answer (`§B.103`) and an outbound first reach-out that must open
+    (`§B.106`). Leaving the message unsent is a failure, not a silent
+    ``completed`` (`§V.120`).
     """

@@ -1245,11 +1245,16 @@ def test_inbound_email_run_with_noop_is_explicit_decline(
     assert result["status"] == "completed"
 
 
-def test_outbound_run_without_reply_does_not_raise(
+def test_outbound_enrollment_run_without_send_raises(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.120: the guard is scoped to inbound triggers. An outbound run
-    (no triggering email) that calls only a read tool is unaffected."""
+    """§V.120 (per §B.106): an outbound first reach-out that never sends fails.
+
+    An ``enrollment_run`` run with no triggering email is send-obligated.
+    The model calls only ``read_contact`` -- it satisfies §V.81 yet opens
+    no message. The widened guard must raise instead of reporting success,
+    so the cold email is never silently dropped.
+    """
     _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
     settings = make_test_settings(
         anthropic_api_key="sk-test", anthropic_model="test-model"
@@ -1258,7 +1263,70 @@ def test_outbound_run_without_reply_does_not_raise(
     with (
         patch("mailpilot.agent.invoke.GmailClient"),
         patch("mailpilot.agent.invoke.DriveClient"),
+        pytest.raises(AgentCompletedWithoutReplyError, match=workflow.id),
     ):
+        invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            trigger="enrollment_run",
+            model_override=model,
+        )
+
+
+def test_outbound_enrollment_schedule_without_send_raises(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.120 (per §B.106): the scheduled first-touch trigger is held to the
+    same send obligation as ``enrollment_run`` (both are outbound openers)."""
+    _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    model = _model_that_calls_tool("read_contact", {"email": contact.email})
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+        pytest.raises(AgentCompletedWithoutReplyError),
+    ):
+        invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            trigger="enrollment_schedule",
+            model_override=model,
+        )
+
+
+def test_outbound_enrollment_run_with_send_passes(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.120: an outbound run that calls send_email satisfies the guard.
+
+    Control for the raise cases above -- the widened gate must not flag a
+    first reach-out that actually opens the message.
+    """
+    _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    model = _model_that_calls_tool(
+        "send_email",
+        {"to": contact.email, "subject": "Hello", "body": "Opening reach-out."},
+    )
+    with (
+        patch("mailpilot.agent.invoke.GmailClient") as mock_cls,
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
+        mock_client = MagicMock()
+        mock_client.send_message.return_value = {
+            "id": "sent-outbound-guard",
+            "threadId": "thread-outbound-guard",
+            "labelIds": ["SENT"],
+        }
+        mock_cls.return_value = mock_client
         result = invoke_workflow_agent(
             database_connection,
             settings,
