@@ -152,6 +152,17 @@ def _spans_named(capfire: CaptureLogfire, span_name: str) -> list[dict[str, Any]
     ]
 
 
+def _exception_events(span: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the OTel ``exception`` events recorded on a span dict.
+
+    ``logfire`` span ``__exit__`` records an escaping ``BaseException`` via
+    ``record_exception(..., escaped=True)``, which surfaces as a span event
+    named ``exception``. A business-outcome envelope (duplicate_key etc.)
+    must leave the ``<noun>.<verb>`` span clean of these per §V.54.
+    """
+    return [event for event in span.get("events", []) if event["name"] == "exception"]
+
+
 def _err_event(stderr: str, source: str) -> str | None:
     """Return the first stderr operator_event line with `event=error` for source."""
     for line in stderr.splitlines():
@@ -941,8 +952,13 @@ def test_account_create_duplicate_emits_duplicate_key_envelope(
     assert envelope["error"] == "duplicate_key"
     assert envelope["message"] == "account with email='dup@example.com' already exists"
     assert envelope["ok"] is False
-    assert _spans_named(capfire, "account.create")
+    parent = _spans_named(capfire, "account.create")
+    assert parent
     assert not _spans_named(capfire, "account.create.failed")
+    # §V.54 / §B.107: the controlled ``output_error`` SystemExit must not
+    # escape the span -- the parent ``account.create`` span carries no
+    # exception event, not merely no ``.failed`` child.
+    assert not _exception_events(parent[0])
     assert "event=account.create" not in err
     assert "Traceback" not in err
 
