@@ -1,11 +1,14 @@
-"""Bundle each agent-sent email with its contact and company context.
+"""Bundle the workflow wording with the emails it produced for critique.
 
-For every email the agent actually sent, joins the agent-written subject and
-body with the real contact's fields (mirrored onto the alias-contact) and the
-real company's profile (fetched once per domain via ``mailpilot company view``).
-Writes ``critique_input.json`` -- one record per sent email -- so the Opus
-critique sub-agent reads a single file instead of running many CLI queries.
-Deterministic data plumbing, no LLM.
+The critique judges the workflow's ``objective`` and ``instructions`` -- the
+wording that drove the agent -- and the sent emails are evidence of what that
+wording produces. This script writes ``critique_input.json`` with two parts: the
+``workflow`` block (name, objective, instructions, read from the ephemeral
+workflow TOML the run actually ran on) and the ``emails`` list (one record per
+sent email, joining the agent-written subject and body with the real contact's
+mirrored fields and the real company's profile, fetched once per domain via
+``mailpilot company view``). The Opus critique sub-agent reads this single file
+instead of running many CLI queries. Deterministic data plumbing, no LLM.
 
 Usage:
     uv run python scripts/critique_prep.py --run-id <id>
@@ -15,6 +18,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import tomllib
+from pathlib import Path
 
 from _common import mp, read_json, run_dir, write_json
 
@@ -38,6 +43,28 @@ def _company_context(domain: str, cache: dict[str, dict]) -> dict:
                 context[field] = profile.get(field)
     cache[domain] = context
     return context
+
+
+def _workflow_wording(directory: Path) -> dict[str, object]:
+    """Return the run's workflow wording: name, objective, instructions.
+
+    Reads the ephemeral workflow TOML the run actually imported, so the critic
+    judges the exact wording the agent ran on (the ephemeral copy differs from
+    the source only in its name line). Missing or unparseable TOML yields a
+    sparse block so the critique still runs against the email evidence.
+    """
+    toml_path = directory / "ephemeral_workflow.toml"
+    if not toml_path.exists():
+        return {}
+    try:
+        data = tomllib.loads(toml_path.read_text())
+    except tomllib.TOMLDecodeError:
+        return {}
+    return {
+        "name": data.get("name"),
+        "objective": data.get("objective"),
+        "instructions": data.get("instructions"),
+    }
 
 
 def main() -> int:
@@ -76,7 +103,8 @@ def main() -> int:
             }
         )
 
-    write_json(directory / "critique_input.json", {"emails": records})
+    bundle = {"workflow": _workflow_wording(directory), "emails": records}
+    write_json(directory / "critique_input.json", bundle)
     print(json.dumps({"prepared": len(records)}, indent=2))
     return 0 if records else 1
 

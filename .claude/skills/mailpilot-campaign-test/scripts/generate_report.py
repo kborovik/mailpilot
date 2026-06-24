@@ -4,9 +4,10 @@ Joins the send (agent-run), delivery, and critique artifacts into a per-contact
 table plus a PASS/FAIL verdict. PASS requires zero send failures and -- when the
 delivery check ran -- zero missing deliveries. A send failure here means the live
 agent did not produce a deliverable email (an agent error, or a body that never
-cleared the §V.42 lint inside the send path). The marketing critique is advisory:
-it adds a score column and a critique section but never changes the verdict.
-Writes ``report.md`` and prints it.
+cleared the §V.42 lint inside the send path). The workflow-wording critique is
+advisory: it adds a wording-score line and a critique section that suggests edits
+to the workflow, but never changes the verdict. Writes ``report.md`` and prints
+it.
 
 Usage:
     uv run python scripts/generate_report.py --run-id <id>
@@ -21,46 +22,48 @@ from _common import read_json, run_dir
 
 def critique_section(
     critique_ran: bool,
-    critiques: list[dict[str, object]],
     critique_doc: dict[str, object] | None,
-    sends: list[dict[str, object]],
 ) -> list[str]:
-    """Build the Markdown lines for the advisory marketing-critique section.
+    """Build the Markdown lines for the advisory workflow-wording critique.
+
+    The critique judges the workflow's ``objective`` and ``instructions`` -- the
+    wording that drove the agent -- using the sent emails as evidence, and
+    suggests edits to that wording. It is advisory and never changes the verdict.
 
     Args:
         critique_ran: Whether the critique phase produced an artifact.
-        critiques: Per-contact critique records.
-        critique_doc: The full critique document, or None when skipped.
-        sends: Per-contact send records, used to label each email by alias.
+        critique_doc: The workflow-wording critique document, or None when
+            skipped.
 
     Returns:
         The Markdown lines for the critique section.
     """
-    if not critique_ran:
+    if not critique_ran or not critique_doc:
         return ["- critique: skipped"]
-    if not critiques:
-        return ["- critique: ran, no emails critiqued"]
 
-    scores = [c["overall_score"] for c in critiques]
-    average = sum(scores) / len(scores)
-    summary = critique_doc.get("summary", "") if critique_doc else ""
+    score = critique_doc.get("overall_score")
+    score_text = f"{score}/5" if score is not None else "n/a"
+    summary = critique_doc.get("summary", "")
+    patterns = critique_doc.get("patterns") or []
+    weaknesses = critique_doc.get("weaknesses") or []
+    edits = critique_doc.get("edits") or []
+
     lines = [
-        f"- critique: ran, average score {average:.1f}/5 over {len(scores)} emails",
+        f"- critique: ran, workflow-wording score {score_text}",
         "",
-        "## Marketing critique",
+        "## Workflow-wording critique",
         "",
         summary,
     ]
-    for critique in sorted(critiques, key=lambda c: c["sequence"]):
-        send = next((s for s in sends if s["sequence"] == critique["sequence"]), {})
-        suggestions = critique.get("suggestions") or []
-        top = suggestions[0] if suggestions else "(no suggestion)"
-        lines += [
-            "",
-            f"### Email {critique['sequence']} -- {send.get('alias', '?')} "
-            f"(score {critique['overall_score']}/5)",
-            f"- top fix: {top}",
-        ]
+    if patterns:
+        lines += ["", "### Patterns across the emails"]
+        lines += [f"- {pattern}" for pattern in patterns]
+    if weaknesses:
+        lines += ["", "### Wording weaknesses"]
+        lines += [f"- {weakness}" for weakness in weaknesses]
+    if edits:
+        lines += ["", "### Suggested workflow edits (highest impact first)"]
+        lines += [f"{index}. {edit}" for index, edit in enumerate(edits, start=1)]
     return lines
 
 
@@ -81,8 +84,6 @@ def main() -> int:
 
     critique_path = directory / "critiques.json"
     critique_doc = read_json(critique_path) if critique_path.exists() else None
-    critiques = critique_doc.get("critiques", []) if critique_doc else []
-    critique_by_seq = {c["sequence"]: c for c in critiques}
     critique_ran = critique_doc is not None
 
     lines = [
@@ -94,8 +95,8 @@ def main() -> int:
         "supplied personalization data (mirrored onto an alias-contact); every "
         "message was sent to an inbound alias, never to the real address.",
         "",
-        "| # | Contact | Sent to | Agent run | Send | Delivered | Critique |",
-        "|---|---|---|---|---|---|---|",
+        "| # | Contact | Sent to | Agent run | Send | Delivered |",
+        "|---|---|---|---|---|---|",
     ]
     send_failures = 0
     for send in sorted(sends, key=lambda s: s["sequence"]):
@@ -106,12 +107,10 @@ def main() -> int:
         delivered_cell = "n/a"
         if delivery_ran:
             delivered_cell = "yes" if seq in delivered else "no"
-        critique = critique_by_seq.get(seq)
-        critique_cell = f"{critique['overall_score']}/5" if critique else "n/a"
         lines.append(
             f"| {seq} | {contact.get('email', '?')} | {send.get('alias', '?')} | "
             f"{send.get('agent_run_status', 'n/a')} | {send.get('status', 'n/a')} | "
-            f"{delivered_cell} | {critique_cell} |"
+            f"{delivered_cell} |"
         )
 
     missing = delivery["missing"] if delivery_ran else []
@@ -136,7 +135,7 @@ def main() -> int:
         for send in sorted(failures, key=lambda s: s["sequence"]):
             lines.append(f"- #{send['sequence']} ({send['alias']}): {send['error']}")
 
-    lines += critique_section(critique_ran, critiques, critique_doc, sends)
+    lines += critique_section(critique_ran, critique_doc)
 
     report = "\n".join(lines) + "\n"
     (directory / "report.md").write_text(report)

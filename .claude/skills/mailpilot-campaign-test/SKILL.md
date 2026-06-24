@@ -7,8 +7,9 @@ description: >-
   genuinely personalized email per contact, but mirrors each real contact onto a
   controlled inbound alias (inbound1@lab5.ca through inbound9@lab5.ca) so the
   real contact address is never emailed, confirms delivery from Gmail, and runs
-  an Opus sub-agent that critiques each sent email against cold-email marketing
-  best practices. Use this whenever the user wants to test, smoke-test, dry-run,
+  an Opus sub-agent that critiques the workflow's own wording (its objective and
+  instructions) using the sent emails as evidence and suggests edits to improve
+  it. Use this whenever the user wants to test, smoke-test, dry-run,
   preview, simulate, critique, or validate an outbound campaign, cold-email
   blast, or outreach workflow against real or discovered leads -- even when they
   only say "test the campaign", "test my cold email", or "check the outreach
@@ -71,14 +72,17 @@ the run is capped at nine messages (one per alias).
   actually sent (subject and body).
 - **Verify.** Syncs `inbound@lab5.ca` and confirms each sent email arrived,
   matched by the agent-written subject.
-- **Critique.** An Opus sub-agent reads each sent email with its contact and
-  company context and scores it against the cold-email marketing rubric
-  (`references/marketing-rubric.md`): relevance, subject, value proposition,
-  credibility, call to action, concision, tone, and spam risk. It returns
-  per-email strengths, weaknesses, and the single highest-impact fix. Advisory
-  only -- it never changes the PASS or FAIL verdict.
-- **Report.** Writes a per-contact table (including the critique score) and a
-  PASS or FAIL verdict.
+- **Critique.** An Opus sub-agent reads the workflow's own wording (its
+  `objective` and `instructions`) and the sent emails as evidence, then scores
+  the wording against the rubric (`references/marketing-rubric.md`): message
+  clarity, personalization directives, value-proposition framing, structure and
+  length, subject directives, tone constraints, and deliverability guardrails. It
+  returns the patterns the emails share, the wording gaps that cause them, and
+  concrete edits to the workflow -- highest-impact first -- so the operator can
+  improve the wording and re-run. Advisory only; it never changes the PASS or
+  FAIL verdict.
+- **Report.** Writes a per-contact table and a PASS or FAIL verdict, plus the
+  workflow-wording critique with its suggested edits.
 - **Clean up.** Re-parks the alias-contacts off the real companies and stops the
   ephemeral workflow.
 - **Analyze telemetry.** Queries the run's Logfire spans and saves
@@ -131,8 +135,9 @@ that path is absent, restore the symlink (`ln -s ../workflows workflows`) or pas
 The orchestrator runs every step directly. Steps 0 through 5, 7, and 8 are
 deterministic scripts. Step 6 (critique) is a sub-agent phase: spawn it with the
 Agent tool and `model: opus`. Step 9 (telemetry) queries Logfire through the MCP.
-The heavy reading -- the email bodies, contact context, and rubric -- stays
-inside the critique sub-agent; it returns only a short summary.
+The heavy reading -- the workflow wording, the email bodies, the contact context,
+and the rubric -- stays inside the critique sub-agent; it returns only a short
+summary.
 
 ### 0. Mint a run id
 ```bash
@@ -210,39 +215,50 @@ Logfire analysis (step 9) confirms whether that happened before you blame the
 workflow or the aliases.
 
 ### 6. Critique -- Opus sub-agent
-First bundle each sent email with its contact and company context:
+The objective of this step is to **suggest changes and improvements to the
+workflow wording**, not to grade individual emails. First bundle the workflow
+wording with the emails it produced:
 ```bash
 uv run python .claude/skills/mailpilot-campaign-test/scripts/critique_prep.py --run-id $RUN_ID
 ```
-This writes `.campaign-test/$RUN_ID/critique_input.json`. If `prepared` is 0
-(nothing was sent), skip the sub-agent and note it. Otherwise spawn ONE sub-agent
-with the Agent tool and `model: opus`. Give it only the two paths and the output
-contract below -- it does its own reading, so the bodies never enter your window:
+This writes `.campaign-test/$RUN_ID/critique_input.json` with a `workflow` block
+(name, objective, instructions) and an `emails` list (each with contact and
+company context, subject, and body). If `prepared` is 0 (nothing was sent), skip
+the sub-agent and note it -- with no emails there is no evidence to judge the
+wording against. Otherwise spawn ONE sub-agent with the Agent tool and
+`model: opus`. Give it only the two paths and the output contract below -- it does
+its own reading, so the bodies never enter your window:
 
-> You are a cold-email marketing critic. Read
-> `.campaign-test/<RUN_ID>/critique_input.json` (one record per sent email, each
-> with the recipient's contact and company context, the subject, and the body)
-> and `.claude/skills/mailpilot-campaign-test/references/marketing-rubric.md`.
-> Critique each email against the rubric, grounded in that recipient's context.
-> Write `.campaign-test/<RUN_ID>/critiques.json` as
-> `{"critiques": [{"sequence": <int>, "overall_score": <1-5>, "dimension_scores":
-> {...}, "strengths": [...], "weaknesses": [...], "suggestions": [...]}],
-> "summary": "<one paragraph across all emails>"}` -- the first suggestion per
-> email must be the single highest-impact fix. Also write a readable
+> You are a cold-email workflow critic. The unit of critique is the workflow
+> wording, not the individual emails. Read
+> `.campaign-test/<RUN_ID>/critique_input.json` -- its `workflow` block holds the
+> `objective` and `instructions` that drove the agent, and its `emails` list is
+> evidence of what that wording produced (each with the recipient's contact and
+> company context, the subject, and the body). Also read
+> `.claude/skills/mailpilot-campaign-test/references/marketing-rubric.md`.
+> Critique the workflow wording against the rubric, using the emails as evidence
+> across the set, and suggest concrete edits to the `objective` and
+> `instructions`. Write `.campaign-test/<RUN_ID>/critiques.json` as
+> `{"workflow_name": <str>, "overall_score": <1-5>, "dimension_scores": {...},
+> "strengths": [...], "patterns": [...], "weaknesses": [...], "edits": [...],
+> "summary": "<one paragraph>"}` -- each `edits` entry names the line to change
+> and gives the replacement wording, and the first `edits` entry is the single
+> highest-impact change. Also write a readable
 > `.campaign-test/<RUN_ID>/critiques.md`. Return only a two-line summary: the
-> average score and the most common weakness. Do not return the bodies.
+> workflow-wording score and the highest-impact edit. Do not return the bodies,
+> and do not rewrite individual emails.
 
 Substitute the literal run id for `<RUN_ID>`. The score does not gate the
-verdict; it is advisory marketing feedback for the operator.
+verdict; it is advisory feedback on the workflow wording for the operator.
 
 ### 7. Report
 ```bash
 uv run python .claude/skills/mailpilot-campaign-test/scripts/generate_report.py --run-id $RUN_ID
 ```
 Reads `.campaign-test/$RUN_ID/report.md` and presents its summary. The report
-folds in the critique score per email plus the critique section. The verdict is
-PASS only when there are zero send failures and zero missing deliveries; the
-critique never changes it.
+folds in the workflow-wording score and the critique section with its suggested
+edits. The verdict is PASS only when there are zero send failures and zero
+missing deliveries; the critique never changes it.
 
 ### 8. Clean up
 ```bash
@@ -345,5 +361,8 @@ outreach. Before a workflow goes to those real people, its agent must read the
 contact and company, draft a personalized email that renders correctly and clears
 the outbound body lint, and stay on message. This skill runs that real agent
 against real contact data while keeping every recipient on a controlled alias, so
-a broken workflow is caught before it reaches a prospect. The default workflow
-definition lives at `workflows/ai-engineering.toml`.
+a broken workflow is caught before it reaches a prospect. The critique then reads
+the emails as a set and points back at the workflow wording: it suggests the edits
+to the `objective` and `instructions` that would lift the next batch, since the
+wording is what the operator actually changes. The default workflow definition
+lives at `workflows/ai-engineering.toml`.
