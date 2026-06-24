@@ -152,8 +152,8 @@ Preflight (step 1) fails when `outbound@lab5.ca` or `inbound@lab5.ca` is absent,
 which is the state right after `make clean` wipes them. Create each account only
 if it is missing:
 ```bash
-uv run mailpilot account view --email outbound@lab5.ca >/dev/null 2>&1 || uv run mailpilot account create --email outbound@lab5.ca --display-name "MailPilot Outbound"
-uv run mailpilot account view --email inbound@lab5.ca  >/dev/null 2>&1 || uv run mailpilot account create --email inbound@lab5.ca  --display-name "MailPilot Inbound"
+uv run mailpilot account view outbound@lab5.ca >/dev/null 2>&1 || uv run mailpilot account create --email outbound@lab5.ca --display-name "MailPilot Outbound"
+uv run mailpilot account view inbound@lab5.ca  >/dev/null 2>&1 || uv run mailpilot account create --email inbound@lab5.ca  --display-name "MailPilot Inbound"
 ```
 The `account view` guard makes this idempotent: `account create` errors with
 `duplicate_key` on an existing email, so the create runs only when `view` reports
