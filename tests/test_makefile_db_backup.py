@@ -23,7 +23,10 @@ import re
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).parent.parent
-_MAKEFILE = _REPO_ROOT / "Makefile"
+# The tracked file is lowercase ``makefile`` (GNU make resolves it). A
+# case-insensitive macOS filesystem aliases ``Makefile``, but a case-sensitive
+# Linux CI checkout does not, so the literal must match the tracked case.
+_MAKEFILE = _REPO_ROOT / "makefile"
 
 
 def _target_recipe(makefile_text: str, target: str) -> str:
