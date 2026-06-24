@@ -542,14 +542,14 @@ def _extract_tool_errors(result: Any) -> list[dict[str, str]]:
 
 
 def _sent_reply(result: Any) -> bool:
-    """Return True if the run answered or explicitly declined (§V.120).
+    """Return True if the run sent a message or explicitly declined (§V.120).
 
     Walks the message ledger (mirrors :func:`_extract_tool_errors`) for a
     ``reply_email`` or ``send_email`` ToolReturnPart that carries no
-    ``error`` key -- the reply reached Gmail -- or a ``noop`` return, the
-    explicit decline. Either satisfies the inbound-reply obligation;
-    neither means the inbound email was left unanswered while the run
-    reported success.
+    ``error`` key -- the message reached Gmail -- or a ``noop`` return, the
+    explicit decline. Either satisfies the send obligation for both
+    directions (inbound reply and outbound first reach-out); neither means
+    the run left the message unsent while reporting success.
     """
     for message in result.all_messages():
         if not isinstance(message, ModelRequest):
@@ -761,16 +761,22 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
                     f"workflow={workflow.id}, contact={contact.id}"
                 )
 
-            # §V.120: an inbound-trigger run must answer -- either send a
-            # reply or take an explicit noop. The tool-count check above
-            # passes when the model called only search/read tools and then
-            # narrated a reply it never sent, which leaves the inbound email
-            # unanswered while reporting success. Hold inbound triggers
-            # (email present, trigger in {email, task}) to the stronger bar.
-            if (
-                email is not None
-                and trigger in ("email", "task")
-                and not _sent_reply(result)
+            # §V.120 (per §B.106): a send-obligated run must finish in a send
+            # or an explicit noop. The tool-count check above passes when the
+            # model called only search/read tools and then narrated a message
+            # it never sent, which leaves the work undone while reporting
+            # success. Two trigger classes carry the obligation: an inbound
+            # trigger (email present, trigger in {email, task}) answers via
+            # reply_email, and an outbound first reach-out (no email, trigger
+            # in {enrollment_run, enrollment_schedule}) opens via send_email.
+            # ``manual`` stays exempt (direct programmatic / test path).
+            inbound_send_obligated = email is not None and trigger in ("email", "task")
+            outbound_send_obligated = email is None and trigger in (
+                "enrollment_run",
+                "enrollment_schedule",
+            )
+            if (inbound_send_obligated or outbound_send_obligated) and not _sent_reply(
+                result
             ):
                 logfire.warn(
                     "agent.completed_without_reply",
@@ -779,8 +785,8 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
                     agent_output=result.output,
                 )
                 raise AgentCompletedWithoutReplyError(
-                    f"inbound-trigger run completed without a reply or noop: "
-                    f"workflow={workflow.id}, contact={contact.id}"
+                    f"send-obligated run completed without a send or noop: "
+                    f"workflow={workflow.id}, contact={contact.id}, trigger={trigger}"
                 )
 
             span.set_attribute("result", "completed")

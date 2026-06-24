@@ -43,11 +43,13 @@ class AgentDidNotUseToolsError(MailPilotError):
 
 
 class AgentCompletedWithoutReplyError(MailPilotError):
-    """Inbound-trigger run ended without a reply or an explicit noop.
+    """Send-obligated run ended without a send or an explicit noop.
 
     Strengthens ``AgentDidNotUseToolsError`` (`§V.81`): a run may call
     search and read tools, satisfy the tool-count check, then narrate its
     intent to reply without ever calling ``reply_email`` / ``send_email``.
-    For an inbound trigger that leaves the email unanswered, which is a
-    failure -- not a silent ``completed`` (`§V.120`, `§B.103`).
+    Two trigger classes are send-obligated -- an inbound trigger that must
+    answer (`§B.103`) and an outbound first reach-out that must open
+    (`§B.106`). Leaving the message unsent is a failure, not a silent
+    ``completed`` (`§V.120`).
     """
