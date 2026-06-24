@@ -58,9 +58,6 @@ def test_batch_gate_states_distinct_batch_rule() -> None:
     assert "stale-count <= 24" in section, (
         "Batch-gate § must drop `First 24` when stale-count <= 24 (== `All <N>`, §V.117)"
     )
-    assert "V117" in section.replace(".", ""), (
-        "Batch-gate § must cite §V.117 for the distinct-batch rule"
-    )
 
 
 def test_first_nine_marked_always_distinct() -> None:

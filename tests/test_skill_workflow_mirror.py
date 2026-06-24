@@ -89,20 +89,30 @@ def test_skill_mirror_matches_saved_workflow(
 
 
 def test_pairs_cover_every_spec_of_record_mirror() -> None:
-    """Completeness guard: every ``spec-of-record mirror`` SKILL.md is in
-    ``_PAIRS``, so a new skill+workflow mirror cannot ship unaudited."""
+    """Completeness guard: every mailpilot-owned ``spec-of-record mirror``
+    SKILL.md is in ``_PAIRS``, so a new skill+workflow mirror cannot ship
+    unaudited.
+
+    ``glob`` does not recurse symlinks, so the lead-pipeline skills detached
+    into the ``workflows`` repo (symlinked under ``.claude/skills/``, §V.103)
+    are not discovered here -- they are covered by their explicit ``_PAIRS``
+    entries instead, and their saved-workflow byte-identity is still asserted
+    above. The guard therefore checks the no-uncovered-mirror direction only: a
+    discoverable mirror absent from ``_PAIRS`` fails; an explicit ``_PAIRS``
+    entry whose SKILL.md is not discoverable (detached) is allowed.
+    """
     mirror_skills = {
         skill_md
         for skill_md in _SKILLS_ROOT.glob("**/SKILL.md")
         if "spec-of-record mirror" in skill_md.read_text()
     }
     covered = {skill_path for skill_path, _ in _PAIRS}
+    uncovered = mirror_skills - covered
 
-    assert mirror_skills == covered, (
-        "every SKILL.md carrying a `spec-of-record mirror` must be byte-identity "
-        f"tested; uncovered={sorted(str(p) for p in mirror_skills - covered)} "
-        f"stale={sorted(str(p) for p in covered - mirror_skills)} -- extend _PAIRS "
-        "(§V.73(d))"
+    assert not uncovered, (
+        "every discoverable SKILL.md carrying a `spec-of-record mirror` must be "
+        f"byte-identity tested; uncovered={sorted(str(p) for p in uncovered)} -- "
+        "extend _PAIRS (§V.73(d))"
     )
 
 
