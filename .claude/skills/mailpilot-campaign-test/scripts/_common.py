@@ -5,7 +5,7 @@ shell out to the ``mailpilot`` CLI and parse its JSON envelopes, and name the
 reusable test scaffolding the agentic run depends on.
 
 The skill tests the real outbound workflow agent
-(``workflows/outbound-lab5-llm-lookup-work.toml``) against real contact data
+(``workflows/ai-engineering.toml``) against real contact data
 without ever emailing a real contact. It does this by mirroring each selected
 real contact's name/title/company onto a persistent alias-contact whose own
 email is one of the nine inbound aliases, enrolling that alias-contact in an
@@ -49,7 +49,7 @@ NEUTRAL_COMPANY_NAME = "MailPilot Campaign Test"
 
 # The outbound workflow whose agent this skill exercises. The default is the
 # committed lab5.ca cold-outreach definition; ``--workflow-file`` overrides it.
-DEFAULT_WORKFLOW_FILE = "workflows/outbound-lab5-llm-lookup-work.toml"
+DEFAULT_WORKFLOW_FILE = "workflows/ai-engineering.toml"
 
 
 def repo_root() -> Path:

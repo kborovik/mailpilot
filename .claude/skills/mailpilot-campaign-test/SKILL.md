@@ -3,7 +3,7 @@ name: mailpilot-campaign-test
 description: >-
   Test the real outbound cold-email workflow agent against real CRM contacts
   before any real send. Runs the live workflow agent (default
-  workflows/outbound-lab5-llm-lookup-work.toml) so it drafts and sends a
+  workflows/ai-engineering.toml) so it drafts and sends a
   genuinely personalized email per contact, but mirrors each real contact onto a
   controlled inbound alias (inbound1@lab5.ca through inbound9@lab5.ca) so the
   real contact address is never emailed, confirms delivery from Gmail, and runs
@@ -114,7 +114,7 @@ the run is capped at nine messages (one per alias).
 ## Arguments
 
 - `--workflow-file <path>` -- the outbound workflow TOML whose agent to test.
-  Defaults to `workflows/outbound-lab5-llm-lookup-work.toml`.
+  Defaults to `workflows/ai-engineering.toml`.
 - `--limit N` -- number of contacts to test (default 9, clamped to at most 9).
 - `--company-domain <domain>` -- restrict to one company's contacts.
 - `--min-confidence N` -- restrict to contacts with `email_confidence` at least
@@ -346,4 +346,4 @@ contact and company, draft a personalized email that renders correctly and clear
 the outbound body lint, and stay on message. This skill runs that real agent
 against real contact data while keeping every recipient on a controlled alias, so
 a broken workflow is caught before it reaches a prospect. The default workflow
-definition lives at `workflows/outbound-lab5-llm-lookup-work.toml`.
+definition lives at `workflows/ai-engineering.toml`.

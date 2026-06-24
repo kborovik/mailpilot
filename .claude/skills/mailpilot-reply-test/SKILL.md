@@ -227,7 +227,7 @@ one-paragraph summary.
 
 **7b. Solutions — Opus sub-agent.** Give it `investigation.md`. It maps each root
 cause to a concrete fix (a workflow-instruction tweak in
-`workflows/demo-lab5-mailpilot.toml`, a code/spec change with `file:line` /
+`workflows/mailpilot-demo.toml`, a code/spec change with `file:line` /
 `§V.N`, or an environment fix), notes confidence, and writes
 `.mptest/$RUN_ID/solutions.md`. Then re-run `generate_report.py` (step 6) so the
 report folds in both sections.

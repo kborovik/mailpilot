@@ -29,7 +29,7 @@ from _common import (
 )
 
 WORKFLOW_TEMPLATE = "inbound-google-drive"
-WORKFLOW_TOML = "workflows/demo-lab5-mailpilot.toml"
+WORKFLOW_TOML = "workflows/mailpilot-demo.toml"
 DRIVE_ID_RE = re.compile(r"\b([A-Za-z0-9_-]{25,})\b")
 
 
