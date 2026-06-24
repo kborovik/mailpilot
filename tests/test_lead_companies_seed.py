@@ -28,6 +28,15 @@ SEED_PY_PATH = (
     / "seed_companies.py"
 )
 
+# seed_companies.py lives in the lead-companies skill, symlinked into the
+# detached private workflows repo (§V.103). When that repo is not checked out
+# (e.g. CI) the symlink dangles, so the whole module skips rather than erroring
+# on import. It runs wherever the workflows repo is present (local dev).
+pytestmark = pytest.mark.skipif(
+    not SEED_PY_PATH.exists(),
+    reason="seed_companies.py symlink target absent (detached workflows repo, §V.103)",
+)
+
 
 @pytest.fixture
 def seed_module() -> types.ModuleType:
