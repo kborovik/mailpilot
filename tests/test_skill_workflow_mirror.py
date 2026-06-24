@@ -40,6 +40,17 @@ _PAIRS = (
     ),
 )
 
+# The lead-pipeline skills + workflows are symlinked into the detached private
+# workflows repo (§V.103). When that repo is not checked out (e.g. CI) the
+# symlinks dangle, so the body-identity guards skip rather than fail. They run
+# wherever the workflows repo is present (local dev); the guard belongs to that
+# repo's own CI. The completeness guard below does not read symlinked content
+# (``glob`` does not recurse symlinks) and runs unconditionally.
+_SKIP_DETACHED = pytest.mark.skipif(
+    not all(path.exists() for pair in _PAIRS for path in pair),
+    reason="lead-pipeline skill/workflow symlink targets absent (detached workflows repo, §V.103)",
+)
+
 _FIRST_JS_BLOCK = re.compile(r"```js\n(.*?)```", re.DOTALL)
 
 
@@ -67,6 +78,7 @@ def _post_meta_body(source: str) -> str:
     return source[meta_close + 3 :].strip()
 
 
+@_SKIP_DETACHED
 @pytest.mark.parametrize(
     ("skill_path", "saved_path"),
     _PAIRS,
@@ -116,6 +128,7 @@ def test_pairs_cover_every_spec_of_record_mirror() -> None:
     )
 
 
+@_SKIP_DETACHED
 def test_extraction_is_non_vacuous() -> None:
     """Guard against a silently-broken matcher -- each embedded mirror must
     start with the ``meta`` declaration and yield a non-empty post-``meta``
@@ -128,6 +141,7 @@ def test_extraction_is_non_vacuous() -> None:
         assert _post_meta_body(block), f"{skill_path}: empty post-`meta` body"
 
 
+@_SKIP_DETACHED
 def test_comparator_detects_divergence() -> None:
     """Guard against a tautological assertion -- the comparison must flag a
     body that differs by a single token, not just whitespace."""
