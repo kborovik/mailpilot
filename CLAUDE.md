@@ -18,8 +18,13 @@ Agent-operated CRM. Gmail is the comms layer. Two layers of intelligence:
 
 - Technical accuracy over politeness.
 - Simplicity above all. YAGNI is law.
-- Agent-driven, not system-driven. The system provides tools and scheduling;
-  LLM agents make all business decisions.
+- System-driven, not agent-driven. The system owns lifecycle, scheduling, and
+  guardrails as deterministic rules. LLM agents make only the scoped tactical
+  decisions that need judgment — classify, draft, pick a terminal disposition.
+- Minimal decision surface. The harness pre-structures each agent turn so a
+  small, cheap model faces one narrow choice, not many. Bundle multi-step
+  side-effects behind a single tool; constrain the palette to the decision at
+  hand. Reserve heavy multi-step reasoning for the strategic Claude Code layer.
 - Type-safety is non-negotiable. basedpyright strict.
 - TDD for all changes.
 - Background loops wake on events, not timers. Canonical: `start_sync_loop` in

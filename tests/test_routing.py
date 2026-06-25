@@ -12,6 +12,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from conftest import (
     make_test_account,
     make_test_contact,
+    make_test_enrollment,
     make_test_settings,
     make_test_workflow,
 )
@@ -19,8 +20,10 @@ from mailpilot.agent import classify as classify_module
 from mailpilot.database import (
     activate_workflow,
     create_email,
+    create_task,
     get_email,
     get_enrollment,
+    get_task,
     update_workflow,
 )
 from mailpilot.routing import (
@@ -562,6 +565,71 @@ def test_route_email_creates_enrollment_on_route(
     enrollment = get_enrollment(database_connection, workflow.id, contact.id)
     assert enrollment is not None
     assert enrollment.status == "active"
+
+
+def test_route_email_cancels_pending_followups_on_reply(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.123: an inbound reply cancels the enrollment's future follow-up
+    touches but preserves the operator first-touch. The enrollment pre-exists
+    (the reply case), so the cancel must fire on the ON CONFLICT branch."""
+    account = make_test_account(database_connection, email="cancel@example.com")
+    contact = make_test_contact(database_connection, email="lead@example.com")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="inbound"
+    )
+    _activate_workflow(database_connection, workflow.id)
+
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="prior",
+        gmail_thread_id="t-cancel",
+        workflow_id=workflow.id,
+        is_routed=True,
+    )
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    first_touch = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="scheduled first reach-out",
+        scheduled_at="2099-12-31T00:00:00Z",
+        context={"trigger": "enrollment_schedule"},
+    )
+    followup = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="breakup touch",
+        scheduled_at="2099-12-31T00:00:00Z",
+        context={"trigger": "followup"},
+    )
+
+    new_email = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="reply",
+        gmail_thread_id="t-cancel",
+        contact_id=contact.id,
+    )
+    assert new_email is not None
+
+    route_email(
+        database_connection, new_email, "lead@example.com", make_test_settings()
+    )
+
+    cancelled_followup = get_task(database_connection, followup.id)
+    assert cancelled_followup is not None
+    assert cancelled_followup.status == "cancelled"
+
+    kept_first_touch = get_task(database_connection, first_touch.id)
+    assert kept_first_touch is not None
+    assert kept_first_touch.status == "pending"
 
 
 def test_route_email_enrollment_idempotent(
