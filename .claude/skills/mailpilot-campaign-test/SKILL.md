@@ -16,7 +16,7 @@ description: >-
   workflow before I send it". This sends LIVE Gmail traffic to the alias mailbox;
   it never emails the real contacts.
 argument-hint: "[--workflow-file <path>] [--limit N] [--company-domain <domain>] [--min-confidence N]"
-allowed-tools: Bash(uv run *), Read, Agent, AskUserQuestion, mcp__claude_ai_logfire__query_run, mcp__claude_ai_logfire__query_schema_reference
+allowed-tools: Bash(uv run *), Read, Agent, mcp__claude_ai_logfire__query_run
 ---
 
 # mailpilot-campaign-test
@@ -71,7 +71,7 @@ the run is capped at nine messages (one per alias).
   including the outbound body lint. The skill then reads back what the agent
   actually sent (subject and body).
 - **Verify.** Syncs `inbound@lab5.ca` and confirms each sent email arrived,
-  matched by the agent-written subject.
+  matched by its unique recipient alias, never the agent-written subject.
 - **Critique.** An Opus sub-agent reads the workflow's own wording (its
   `objective` and `instructions`) and the sent emails as evidence, then scores
   the wording against the rubric (`references/marketing-rubric.md`): message

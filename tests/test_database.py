@@ -2170,6 +2170,33 @@ def test_list_emails_summary_includes_is_routed(
     assert results[unrouted.id].is_routed is False
 
 
+def test_list_emails_summary_includes_recipients(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """Summary projection MUST carry the To/Cc/Bcc map (§V.7).
+
+    A single bulk `email list` exposes each message's recipients so the
+    campaign-test delivery check keys arrivals on the recipient alias without a
+    per-row `email view` (§V.122).
+    """
+    account = make_test_account(database_connection)
+    created = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="msg_with_recipients",
+        subject="shared subject",
+        recipients={"to": ["inbound2@lab5.ca"], "cc": ["ops@lab5.ca"]},
+    )
+    assert created is not None
+
+    results = {row.id: row for row in list_emails(database_connection)}
+    assert results[created.id].recipients == {
+        "to": ["inbound2@lab5.ca"],
+        "cc": ["ops@lab5.ca"],
+    }
+
+
 def test_list_emails_by_status(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
@@ -2524,12 +2551,8 @@ def test_list_emails_filter_by_recipient(
     )
     results = list_emails(database_connection, recipient="kb@lab5.ca")
     assert len(results) == 1
-    # `recipients` is not in EmailSummary; verify by hydrating via get_email.
-    from mailpilot.database import get_email
-
-    full = get_email(database_connection, results[0].id)
-    assert full is not None
-    assert "kb@lab5.ca" in full.recipients["to"]
+    # recipients rides EmailSummary now (§V.7) -- read it straight off the row.
+    assert "kb@lab5.ca" in results[0].recipients["to"]
 
 
 def test_list_emails_filter_by_recipient_matches_cc(
@@ -4461,8 +4484,9 @@ def test_email_list_summary_get_full(
     emails = list_emails(database_connection, account_id=account.id)
     assert isinstance(emails[0], EmailSummary)
     assert not hasattr(emails[0], "body_text")
-    assert not hasattr(emails[0], "recipients")
     assert not hasattr(emails[0], "labels")
+    # recipients rides the summary now (§V.7) -- the campaign-test delivery key.
+    assert emails[0].recipients == {"to": ["x@y.com"]}
     full = get_email(database_connection, emails[0].id)
     assert full is not None
     assert full.body_text == "body"
@@ -4530,8 +4554,9 @@ def test_email_search_summary_get_full(
     emails = search_emails(database_connection, "meeting")
     assert isinstance(emails[0], EmailSummary)
     assert not hasattr(emails[0], "body_text")
-    assert not hasattr(emails[0], "recipients")
     assert not hasattr(emails[0], "labels")
+    # recipients rides the summary now (§V.7) -- both projections carry it.
+    assert emails[0].recipients == {"to": ["client@example.com"]}
     full = get_email(database_connection, emails[0].id)
     assert full is not None
     assert full.body_text == "Let's schedule a call"

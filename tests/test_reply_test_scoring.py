@@ -24,19 +24,83 @@ _SCRIPTS = (
 
 _QA_PAIRS = _SCRIPTS.parent / "assets" / "QA-Pairs.json"
 
-# A brittle in-scope token has the header-plus-qualifier shape ``Label
-# (Qualifier)``: an alphabetic label word followed by a parenthesized clause
-# (e.g. ``Maximum (15 ppm RO Feed)``). The reply renders such a fact across two
-# table cells, so the contiguous-substring match in ``_grade_inscope`` never
-# hits and a correct grounded reply false-FAILs (§B.102). An atomic token is a
-# single contiguous value -- model id, bare number, or number plus short unit --
-# the reply cannot restructure away (§V.105).
-_BRITTLE_INSCOPE_TOKEN = re.compile(r"[A-Za-z][\w-]*\s+\([^)]*\)")
+# An in-scope expected_token must be ATOMIC: a single contiguous value the reply
+# cannot restructure away. The guard is an allowlist of atomic shapes, not a
+# denylist of one brittle shape (§V.105, §B.109). The prior guard matched only
+# the ``Label (Qualifier)`` header (§B.102), so a non-header non-atomic token
+# slipped through -- a verb-bearing sentence fragment
+# (``KDF 55 medium can remove over 99%``) or a multi-word product description
+# (``(40) 8" TFC spiral wound membranes``). A grounded reply may reorder or
+# re-split those, so the contiguous-substring match in ``_grade_inscope``
+# false-FAILs, breaking the false-PASS-at-worst contract.
+
+# A trailing parenthesized qualifier (``Label (Qualifier)``) renders across two
+# table cells -- the §B.102 offender.
+_TRAILING_QUALIFIER = re.compile(r"\S\s*\([^)]*\)\s*$")
+
+# An atomic token carries at most this many whitespace pieces (a value plus a
+# short unit and a short trailing qualifier, e.g. ``15 ppm RO Feed``); five or
+# more pieces is a sentence fragment or product description.
+_MAX_ATOMIC_PIECES = 4
+
+# Verbs and auxiliaries that mark prose (a sentence fragment) rather than a value.
+_SENTENCE_VERBS = frozenset(
+    {
+        "can",
+        "cannot",
+        "remove",
+        "removes",
+        "reduce",
+        "reduces",
+        "provide",
+        "provides",
+        "deliver",
+        "delivers",
+        "produce",
+        "produces",
+        "handle",
+        "handles",
+        "require",
+        "requires",
+        "is",
+        "are",
+        "was",
+        "has",
+        "have",
+    }
+)
+
+
+def _is_atomic_inscope_token(token: str) -> bool:
+    """True when ``token`` is an atomic in-scope value (§V.105 allowlist).
+
+    Atomic = model id (``EDI-220``) | bare number (``28``) | number plus a short
+    unit (``0.48 mm``), optionally trailing a short qualifier (``15 ppm RO
+    Feed``) | a short label of at most two words (``Effective Size``). Anything
+    else -- a ``Label (Qualifier)`` header, a verb-bearing sentence fragment, a
+    multi-word product description -- is brittle.
+    """
+    normalized = re.sub(r"\s+", " ", token).strip()
+    pieces = normalized.lower().split()
+    if _TRAILING_QUALIFIER.search(normalized):
+        return False
+    if len(pieces) > _MAX_ATOMIC_PIECES:
+        return False
+    if any(piece in _SENTENCE_VERBS for piece in pieces):
+        return False
+    # A three-plus-word phrase with no numeric anchor is a multi-word
+    # label/description; a one- or two-word label or any numeric value holds.
+    has_digit = any(char.isdigit() for char in normalized)
+    return has_digit or len(pieces) <= 2
 
 
 def _is_brittle_inscope_token(token: str) -> bool:
-    """True when ``token`` has the layout-dependent ``Label (Qualifier)`` shape."""
-    return _BRITTLE_INSCOPE_TOKEN.search(token) is not None
+    """True when ``token`` is NOT an atomic in-scope value (§V.105, §B.109).
+
+    Inverse of the atomic-shape allowlist; the prior guard denylisted only the
+    ``Label (Qualifier)`` header, so non-header non-atomic tokens slipped past.
+    """
+    return not _is_atomic_inscope_token(token)
 
 
 def _load(module_name: str) -> Any:
@@ -174,25 +238,42 @@ def test_apply_judgments_unresolved_judge_stays_pending_and_fails():
     assert updated["failed"] is True
 
 
-# --- atomic in-scope tokens guard (§V.105, closes §B.102) ---------------------
+# --- atomic in-scope tokens guard (§V.105, closes §B.102, §B.109) -------------
 
 
 def test_brittle_inscope_token_predicate():
-    # The §B.102 offender: a header label plus a parenthesized qualifier.
+    # Three brittle shapes, not just one (§B.109): the §B.102 header label plus a
+    # parenthesized qualifier, a verb-bearing sentence fragment, and a multi-word
+    # product description. The prior denylist caught only the first.
     assert _is_brittle_inscope_token("Maximum (15 ppm RO Feed)") is True
-    # Atomic values the reply cannot restructure away pass: the split-out fact,
-    # a model id, a bare number, a number plus short unit, and a count-prefixed
-    # value whose only parenthesis leads (not a trailing qualifier).
+    assert _is_brittle_inscope_token("KDF 55 medium can remove over 99%") is True
+    assert (
+        _is_brittle_inscope_token("remove up to 98% of water-soluble cations") is True
+    )
+    assert _is_brittle_inscope_token('(40) 8" TFC spiral wound membranes') is True
+    # Atomic values the reply cannot restructure away pass: a split-out fact, a
+    # model id, a bare number, a number plus short unit, a number plus a short
+    # trailing qualifier, a short label, and a count-prefixed value whose only
+    # parenthesis leads (not a trailing qualifier).
+    assert _is_brittle_inscope_token("over 99%") is False
+    assert _is_brittle_inscope_token("98%") is False
+    assert _is_brittle_inscope_token("40") is False
     assert _is_brittle_inscope_token("15 ppm RO Feed") is False
     assert _is_brittle_inscope_token("EDI-220") is False
     assert _is_brittle_inscope_token("28") is False
     assert _is_brittle_inscope_token("0.48 mm") is False
+    assert _is_brittle_inscope_token("Effective Size") is False
     assert _is_brittle_inscope_token('(20) 8"x40"') is False
 
 
 def test_inscope_expected_tokens_are_atomic():
     # Every in-scope rubric token must be atomic; a layout-dependent token
     # false-FAILs a grounded reply, breaking the false-PASS-at-worst contract.
+    # The §B.109 offenders -- a verb-bearing sentence fragment and a multi-word
+    # product description -- were atomized in QA-Pairs.json (qa-in-006,
+    # qa-in-009); the guard now flags both shapes, so neither re-enters a rubric.
+    assert _is_brittle_inscope_token("KDF 55 medium can remove over 99%") is True
+    assert _is_brittle_inscope_token('(40) 8" TFC spiral wound membranes') is True
     pairs = json.loads(_QA_PAIRS.read_text())
     brittle = [
         (pair["id"], token)
