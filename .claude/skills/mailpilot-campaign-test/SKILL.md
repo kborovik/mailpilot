@@ -16,7 +16,7 @@ description: >-
   workflow before I send it". This sends LIVE Gmail traffic to the alias mailbox;
   it never emails the real contacts.
 argument-hint: "[--workflow-file <path>] [--limit N] [--company-domain <domain>] [--min-confidence N]"
-allowed-tools: Bash(uv run *), Read, Agent, AskUserQuestion, mcp__claude_ai_logfire__query_run, mcp__claude_ai_logfire__query_schema_reference
+allowed-tools: Bash(uv run *), Read, Agent, mcp__claude_ai_logfire__query_run
 ---
 
 # mailpilot-campaign-test
