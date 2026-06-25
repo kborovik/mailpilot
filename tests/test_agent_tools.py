@@ -106,6 +106,43 @@ def test_send_email_success(
     gmail_client.send_message.assert_called_once()
 
 
+def test_send_email_forwards_thread_id_to_email_ops(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """The agent send_email tool forwards thread_id to email_ops.send_email.
+
+    Plumbs outbound thread-continuation through the tool layer (§V.78) so a
+    later touch threads natively; the dict return shape is unchanged.
+    """
+    from unittest.mock import patch
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    gmail_client = _make_gmail_client(account)
+
+    returned = MagicMock()
+    returned.id = "email-id-1"
+    returned.gmail_message_id = "gmail-msg-1"
+    returned.gmail_thread_id = "thread-cont"
+
+    with patch("mailpilot.email_ops.send_email", return_value=returned) as ops_send:
+        result = send_email(
+            connection=database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=make_test_settings(),
+            workflow_id=workflow.id,
+            to="prospect@example.com",
+            subject="Following up",
+            body="Third touch",
+            thread_id="thread-cont",
+        )
+
+    assert ops_send.call_args.kwargs["thread_id"] == "thread-cont"
+    assert result["gmail_thread_id"] == "thread-cont"
+
+
 def test_send_email_blocked_by_contact_status(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):

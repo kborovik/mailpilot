@@ -32,6 +32,7 @@ from mailpilot.agent.invoke import (
     _wrap_create_task,  # pyright: ignore[reportPrivateUsage]
     _wrap_disable_contact,  # pyright: ignore[reportPrivateUsage]
     _wrap_record_enrollment_outcome,  # pyright: ignore[reportPrivateUsage]
+    _wrap_send_email,  # pyright: ignore[reportPrivateUsage]
     invoke_workflow_agent,
 )
 from mailpilot.database import (
@@ -1424,6 +1425,18 @@ def test_wrappers_do_not_take_contact_id_from_llm() -> None:
             f"{wrapper.__name__} must read contact_id from ctx.deps, "
             f"not accept it as a parameter; got params: {list(params)}"
         )
+
+
+def test_wrap_send_email_exposes_optional_thread_id() -> None:
+    """The agent-visible send_email tool carries an optional thread_id (§V.78).
+
+    Lets the model continue a multi-touch outbound thread by passing the
+    gmail_thread_id captured on touch 1; the parameter is optional so a
+    first reach-out omits it.
+    """
+    param = inspect.signature(_wrap_send_email).parameters.get("thread_id")
+    assert param is not None, "_wrap_send_email must accept thread_id"
+    assert param.default is None, "thread_id must default to None (optional)"
 
 
 # -- Tests: tool error surfacing -----------------------------------------------

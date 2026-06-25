@@ -177,6 +177,7 @@ def send_email(  # noqa: PLR0913
     to: str,
     subject: str,
     body: str,
+    thread_id: str | None = None,
     cc: str | None = None,
     bcc: str | None = None,
 ) -> dict[str, Any]:
@@ -184,6 +185,10 @@ def send_email(  # noqa: PLR0913
 
     Thin wrapper over :func:`mailpilot.email_ops.send_email`. Converts
     typed policy exceptions into the LLM-facing error dict shape.
+
+    Pass ``thread_id`` to continue a multi-touch outbound thread: supply
+    the ``gmail_thread_id`` returned by the first touch so later touches
+    thread natively.
     """
     format_error = _check_spec_table(body)
     if format_error is not None:
@@ -196,6 +201,7 @@ def send_email(  # noqa: PLR0913
         if not bypass:
             return format_error
     try:
+        # thread_id forwards outbound thread-continuation per §V.78.
         email = email_ops.send_email(
             connection,
             account,
@@ -205,6 +211,7 @@ def send_email(  # noqa: PLR0913
             subject=subject,
             body=body,
             workflow_id=workflow_id,
+            thread_id=thread_id,
             cc=cc,
             bcc=bcc,
         )

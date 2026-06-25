@@ -107,6 +107,7 @@ def send_email(  # noqa: PLR0913
     subject: str,
     body: str,
     workflow_id: str | None = None,
+    thread_id: str | None = None,
     cc: str | None = None,
     bcc: str | None = None,
 ) -> Email:
@@ -116,6 +117,11 @@ def send_email(  # noqa: PLR0913
     contact-status and 30-day cold-outbound cooldown guards. The cooldown
     query is workflow-scoped, so it runs only when ``workflow_id`` is set
     (ad-hoc CLI sends without a workflow have no cooldown context).
+
+    When ``thread_id`` is supplied (a later touch in a multi-touch outbound
+    sequence), threading headers are derived from prior local rows in the
+    thread so the message threads natively, with no contact_id requirement
+    (§V.78).
 
     Raises:
         AccountDisabledError: sending account is soft-disabled (§V.79).
@@ -154,6 +160,7 @@ def send_email(  # noqa: PLR0913
         body=body,
         contact_id=contact_id,
         workflow_id=workflow_id,
+        thread_id=thread_id,
         cc=cc,
         bcc=bcc,
     )

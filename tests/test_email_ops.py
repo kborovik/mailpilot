@@ -251,6 +251,72 @@ def test_send_email_no_workflow_id_skips_enrollment(
     assert email.gmail_message_id == "gmail-msg-1"
 
 
+def test_send_email_with_thread_id_continues_outbound_thread(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """thread_id continues a multi-touch outbound sequence (§V.78).
+
+    Given two prior outbound touches in a thread, a third send carrying
+    that thread_id (no explicit in_reply_to) derives In-Reply-To from the
+    latest prior row and References from the whole chain, and returns the
+    same gmail_thread_id -- so later touches thread natively without a
+    contact_id.
+    """
+    account = make_test_account(database_connection)
+    touch1_mid = "<touch1@mail.gmail.com>"
+    touch2_mid = "<touch2@mail.gmail.com>"
+    touch1 = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        gmail_message_id="touch-1",
+        gmail_thread_id="thread-cont",
+        rfc2822_message_id=touch1_mid,
+        status="sent",
+    )
+    touch2 = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        gmail_message_id="touch-2",
+        gmail_thread_id="thread-cont",
+        rfc2822_message_id=touch2_mid,
+        status="sent",
+    )
+    assert touch1 is not None
+    assert touch2 is not None
+    # CURRENT_TIMESTAMP is constant within the test transaction, so age
+    # touch1 explicitly to make touch2 the deterministic latest row.
+    database_connection.execute(
+        "UPDATE email SET created_at = created_at - INTERVAL '1 hour' WHERE id = %(id)s",
+        {"id": touch1.id},
+    )
+
+    gmail_client = MagicMock()
+    gmail_client.send_message.return_value = {
+        "id": "touch-3",
+        "threadId": "thread-cont",
+        "labelIds": ["SENT"],
+    }
+
+    email = send_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        to="prospect@example.com",
+        subject="Following up",
+        body="Third touch",
+        thread_id="thread-cont",
+    )
+
+    assert email.gmail_thread_id == "thread-cont"
+    assert email.in_reply_to == touch2_mid
+    assert email.references_header == f"{touch1_mid} {touch2_mid}"
+    _, send_kwargs = gmail_client.send_message.call_args
+    assert send_kwargs["thread_id"] == "thread-cont"
+
+
 # -- reply_email ---------------------------------------------------------------
 
 

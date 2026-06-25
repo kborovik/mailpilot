@@ -155,10 +155,16 @@ def _wrap_send_email(  # noqa: PLR0913
     to: str,
     subject: str,
     body: str,
+    thread_id: str | None = None,
     cc: str | None = None,
     bcc: str | None = None,
 ) -> dict[str, Any]:
-    """Send a new outbound email. For replies, use reply_email instead."""
+    """Send a new outbound email. For replies, use reply_email instead.
+
+    Pass thread_id (the gmail_thread_id returned by an earlier touch) to
+    continue a multi-touch outbound thread; omit it for a first reach-out.
+    """
+    # thread_id forwards outbound thread-continuation per §V.78.
     return agent_tools.send_email(
         connection=ctx.deps.connection,
         account=ctx.deps.account,
@@ -168,6 +174,7 @@ def _wrap_send_email(  # noqa: PLR0913
         to=to,
         subject=subject,
         body=body,
+        thread_id=thread_id,
         cc=cc,
         bcc=bcc,
     )
