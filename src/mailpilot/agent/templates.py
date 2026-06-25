@@ -23,6 +23,7 @@ from pydantic_ai import Tool
 from mailpilot.agent.invoke import (
     AgentDeps,
     _wrap_cancel_task,  # pyright: ignore[reportPrivateUsage]
+    _wrap_conclude_enrollment,  # pyright: ignore[reportPrivateUsage]
     _wrap_create_task,  # pyright: ignore[reportPrivateUsage]
     _wrap_disable_contact,  # pyright: ignore[reportPrivateUsage]
     _wrap_list_drive_markdown,  # pyright: ignore[reportPrivateUsage]
@@ -32,7 +33,6 @@ from mailpilot.agent.invoke import (
     _wrap_read_contact,  # pyright: ignore[reportPrivateUsage]
     _wrap_read_drive_markdown,  # pyright: ignore[reportPrivateUsage]
     _wrap_read_email,  # pyright: ignore[reportPrivateUsage]
-    _wrap_record_enrollment_outcome,  # pyright: ignore[reportPrivateUsage]
     _wrap_reply_email,  # pyright: ignore[reportPrivateUsage]
     _wrap_search_drive_markdown,  # pyright: ignore[reportPrivateUsage]
     _wrap_search_emails,  # pyright: ignore[reportPrivateUsage]
@@ -49,8 +49,8 @@ class WorkflowTemplate:
     (§V.31): ``trigger='task'`` -> _DEFERRED_TASK_TASK (terminal-outcome
     instruction); other triggers (``enrollment_run``,
     ``enrollment_schedule`` per §V.32, ``manual``, ``email``) ->
-    _DEFERRED_TASK_INITIAL (initial-send-only instruction; prevents
-    premature ``record_enrollment_outcome`` on first reach-out).
+    _DEFERRED_TASK_INITIAL (initial-send-only instruction; prevents a
+    premature ``conclude_enrollment`` terminal on first reach-out).
     Canonical fragment order per §V.45: _BASE -> _DEFERRED_TASK_<branch> ->
     _MUST_SEND -> _DECLINE -> _NO_FABRICATION. Per §V.41 there is no
     workflow-specific overlay fragment; KB-grounding discipline lives in
@@ -104,14 +104,16 @@ _BASE = (
 )
 
 _DEFERRED_TASK_TASK = (
-    "After achieving the workflow goal for a contact, call "
-    "record_enrollment_outcome with outcome='completed' and a brief reason. "
-    "If work cannot complete now but should resume later, schedule a deferred "
-    "task via create_task with a future scheduled_at.\n"
+    "After achieving the workflow goal for a contact, conclude the enrollment "
+    "by calling conclude_enrollment with a disposition -- meeting_booked when "
+    "the goal is met, do_not_contact when the contact asks not to be reached, "
+    "or contact_later to defer (optionally pass reschedule_at) -- and a brief "
+    "note. If work cannot complete now but should resume later, schedule a "
+    "deferred task via create_task with a future scheduled_at.\n"
 )
 
 _DEFERRED_TASK_INITIAL = (
-    "Send the initial email and stop; do not call record_enrollment_outcome "
+    "Send the initial email and stop; do not call conclude_enrollment "
     "on this invocation. The outcome will be assessed when a reply arrives "
     "or when a follow-up task drains. If the initial send is not appropriate "
     "right now but should resume later, schedule a deferred task via "
@@ -171,7 +173,7 @@ _CORE: tuple[Tool[AgentDeps], ...] = (
     Tool(_wrap_reply_email, name="reply_email"),
     Tool(_wrap_create_task, name="create_task"),
     Tool(_wrap_cancel_task, name="cancel_task"),
-    Tool(_wrap_record_enrollment_outcome, name="record_enrollment_outcome"),
+    Tool(_wrap_conclude_enrollment, name="conclude_enrollment"),
     Tool(_wrap_disable_contact, name="disable_contact"),
     Tool(_wrap_list_enrollments, name="list_enrollments"),
     Tool(_wrap_search_emails, name="search_emails"),

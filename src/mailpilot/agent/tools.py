@@ -13,7 +13,7 @@ Tools (see §I agent tools):
     - ``reply_email`` -- reply in-thread with auto-resolved recipient and subject
     - ``create_task`` -- schedule deferred work
     - ``cancel_task`` -- cancel a pending task
-    - ``record_enrollment_outcome`` -- record per-workflow outcome on timeline
+    - ``conclude_enrollment`` -- terminal: record outcome + run disposition side effects
     - ``disable_contact`` -- set global contact block (bounced/unsubscribed)
     - ``search_emails`` -- query email history
     - ``list_enrollments`` -- list enrollments in workflow with status
@@ -30,6 +30,7 @@ import contextvars
 import re
 from collections.abc import Generator
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 import logfire
@@ -335,34 +336,66 @@ def cancel_task(
     return {"id": task.id, "status": task.status}
 
 
-def record_enrollment_outcome(
+# §V.127: the agent's single terminal tool. The model picks ONE disposition and
+# writes a note; the system runs the deterministic side effects. Only
+# ``meeting_booked`` records the enrollment goal as reached (``completed``);
+# ``do_not_contact`` and ``contact_later`` did not reach the goal this cycle
+# (``failed``), the latter scheduling a fresh re-enrollment touch (§V.32).
+_CONCLUDE_DISPOSITIONS = ("meeting_booked", "do_not_contact", "contact_later")
+_CONCLUDE_OUTCOME: dict[str, str] = {
+    "meeting_booked": "completed",
+    "do_not_contact": "failed",
+    "contact_later": "failed",
+}
+# Default deferral when ``contact_later`` omits ``reschedule_at`` -- about three
+# months out (§V.127). The scheduled task self-fires when the date arrives.
+_RESCHEDULE_DEFAULT_DAYS = 90
+
+
+def conclude_enrollment(
     connection: psycopg.Connection[dict[str, Any]],
     enrollment_id: str,
-    outcome: str,
-    reason: str,
-) -> dict[str, str]:
-    """Record an outcome (completed or failed) on the activity timeline.
+    disposition: str,
+    note: str,
+    reschedule_at: str | None = None,
+) -> dict[str, Any]:
+    """Conclude the current enrollment with one terminal disposition.
 
-    Outcome is purely a timeline event -- the enrollment row's status is
-    not modified. The agent declares the engagement done; if a later
-    inbound reply arrives, the agent can react without first
-    "reactivating" anything.
+    The agent picks one ``disposition`` and writes a ``note``; the system runs
+    the deterministic side effects so a cheap model faces one decision, not
+    several tool calls. Every disposition records an enrollment outcome on the
+    timeline and cancels the enrollment's pending future follow-up tasks (the
+    operator first-touch preserved), then:
+
+        - ``meeting_booked`` -- records a completed outcome and writes a note
+          (the "I booked" reply path, distinct from calendar detection).
+        - ``do_not_contact`` -- records a failed outcome, sets a global block on
+          the contact, and writes a note.
+        - ``contact_later`` -- records a failed outcome and schedules a
+          re-enrollment first-touch task at ``reschedule_at`` (about three
+          months out when omitted), then writes a note.
 
     Args:
         connection: Open database connection.
-        enrollment_id: Enrollment ID (scalar).
-        outcome: "completed" or "failed".
-        reason: Agent's explanation (e.g., "meeting booked", "no response").
+        enrollment_id: Current enrollment ID (from deps, not the LLM).
+        disposition: One of meeting_booked, do_not_contact, contact_later.
+        note: The agent's explanation, written to the outcome activity and a
+            contact note.
+        reschedule_at: ISO 8601 timestamp for the contact_later re-enrollment
+            touch; defaults to about three months out when omitted.
 
     Returns:
-        Dict with the recorded outcome, or an error dict if the
-        enrollment is missing or the outcome is invalid.
+        Dict echoing the disposition and recorded outcome (plus the resolved
+        reschedule_at for contact_later), or an error dict on a bad disposition
+        or a missing enrollment.
     """
-    valid_outcomes = ("completed", "failed")
-    if outcome not in valid_outcomes:
+    if disposition not in _CONCLUDE_DISPOSITIONS:
         return {
-            "error": "invalid_outcome",
-            "message": f"outcome must be one of {valid_outcomes}, got: {outcome}",
+            "error": "invalid_disposition",
+            "message": (
+                f"disposition must be one of {_CONCLUDE_DISPOSITIONS}, "
+                f"got: {disposition}"
+            ),
         }
     enrollment = database.get_enrollment_by_id(connection, enrollment_id)
     if enrollment is None:
@@ -370,18 +403,43 @@ def record_enrollment_outcome(
             "error": "not_found",
             "message": f"enrollment not found: {enrollment_id}",
         }
-    contact = database.get_contact(connection, enrollment.contact_id)
-    database.create_activity(
-        connection,
-        contact_id=enrollment.contact_id,
-        activity_type=f"enrollment_{outcome}",
-        summary=reason or f"Enrollment {outcome}",
-        detail={"reason": reason},
-        company_id=contact.company_id if contact is not None else None,
-        workflow_id=enrollment.workflow_id,
-        enrollment_id=enrollment.id,
+
+    contact_id = enrollment.contact_id
+    outcome = _CONCLUDE_OUTCOME[disposition]
+    note_body = note or f"Enrollment concluded: {disposition}"
+
+    database.record_enrollment_outcome(
+        connection, enrollment_id, outcome=outcome, reason=note_body
     )
-    return {"outcome": outcome, "reason": reason}
+    database.cancel_enrollment_followup_tasks(connection, enrollment_id)
+
+    result: dict[str, Any] = {"disposition": disposition, "outcome": outcome}
+
+    if disposition == "do_not_contact":
+        database.disable_contact(
+            connection, contact_id, reason=f"do_not_contact: {note_body}"
+        )
+    elif disposition == "contact_later":
+        scheduled_at = (
+            reschedule_at
+            or (
+                datetime.now(UTC) + timedelta(days=_RESCHEDULE_DEFAULT_DAYS)
+            ).isoformat()
+        )
+        database.create_task(
+            connection,
+            enrollment_id=enrollment_id,
+            workflow_id=enrollment.workflow_id,
+            contact_id=contact_id,
+            description="scheduled re-enrollment first reach-out",
+            scheduled_at=scheduled_at,
+            context={"trigger": "enrollment_schedule"},
+            email_id=None,
+        )
+        result["reschedule_at"] = scheduled_at
+
+    database.create_note(connection, body=note_body, contact_id=contact_id)
+    return result
 
 
 def disable_contact(

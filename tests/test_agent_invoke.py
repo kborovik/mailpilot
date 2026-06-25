@@ -29,9 +29,9 @@ from mailpilot.agent.invoke import (
     _build_agent,  # pyright: ignore[reportPrivateUsage]
     _build_anthropic_model,  # pyright: ignore[reportPrivateUsage]
     _build_user_prompt,  # pyright: ignore[reportPrivateUsage]
+    _wrap_conclude_enrollment,  # pyright: ignore[reportPrivateUsage]
     _wrap_create_task,  # pyright: ignore[reportPrivateUsage]
     _wrap_disable_contact,  # pyright: ignore[reportPrivateUsage]
-    _wrap_record_enrollment_outcome,  # pyright: ignore[reportPrivateUsage]
     _wrap_send_email,  # pyright: ignore[reportPrivateUsage]
     invoke_workflow_agent,
 )
@@ -1341,6 +1341,41 @@ def test_outbound_enrollment_run_with_send_passes(
     assert result["status"] == "completed"
 
 
+def test_outbound_conclude_enrollment_satisfies_send_guard(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.120 + §V.127: conclude_enrollment is a valid send-obligation terminal.
+
+    A send-obligated outbound run that calls conclude_enrollment instead of
+    send_email must pass the guard like noop -- the agent reached a terminal
+    disposition, so the run is complete, not a dropped send.
+    """
+    _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    model = _model_that_calls_tool(
+        "conclude_enrollment",
+        {"disposition": "meeting_booked", "note": "prospect booked a meeting"},
+    )
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
+        result = invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            trigger="enrollment_run",
+            model_override=model,
+        )
+
+    assert result is not None
+    assert result["status"] == "completed"
+    assert result["tool_errors"] == []
+
+
 def test_invoke_span_failed_when_completed_without_reply(
     database_connection: psycopg.Connection[dict[str, Any]],
     capfire: CaptureLogfire,
@@ -1416,7 +1451,7 @@ def test_wrappers_do_not_take_contact_id_from_llm() -> None:
     the contact's email as contact_id and the tool returned not_found.
     """
     for wrapper in (
-        _wrap_record_enrollment_outcome,
+        _wrap_conclude_enrollment,
         _wrap_disable_contact,
         _wrap_create_task,
     ):
@@ -1442,8 +1477,8 @@ def test_wrap_send_email_exposes_optional_thread_id() -> None:
 # -- Tests: tool error surfacing -----------------------------------------------
 
 
-def _model_calls_record_enrollment_outcome_with_invalid_outcome() -> FunctionModel:
-    """Build a FunctionModel that calls record_enrollment_outcome with bad outcome."""
+def _model_calls_conclude_enrollment_with_invalid_disposition() -> FunctionModel:
+    """Build a FunctionModel that calls conclude_enrollment with a bad disposition."""
     call_count = 0
 
     def _respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
@@ -1453,8 +1488,8 @@ def _model_calls_record_enrollment_outcome_with_invalid_outcome() -> FunctionMod
             return ModelResponse(
                 parts=[
                     ToolCallPart(
-                        tool_name="record_enrollment_outcome",
-                        args={"outcome": "not-a-real-outcome", "reason": "test"},
+                        tool_name="conclude_enrollment",
+                        args={"disposition": "not-a-real-disposition", "note": "test"},
                     )
                 ]
             )
@@ -1468,8 +1503,8 @@ def test_invoke_surfaces_tool_errors_in_result(
 ) -> None:
     """When a tool returns {error: ...}, the result must surface it.
 
-    Regression for the 2026-04-26 smoke test defect where record_enrollment_outcome
-    returned not_found and the orchestration still reported success.
+    Regression for the 2026-04-26 smoke test defect where a terminal tool
+    returned an error and the orchestration still reported success.
     """
     _account, contact, workflow = _setup(database_connection)
     settings = make_test_settings(
@@ -1484,7 +1519,7 @@ def test_invoke_surfaces_tool_errors_in_result(
             settings,
             workflow,
             contact,
-            model_override=_model_calls_record_enrollment_outcome_with_invalid_outcome(),
+            model_override=_model_calls_conclude_enrollment_with_invalid_disposition(),
         )
 
     assert result is not None
@@ -1492,7 +1527,7 @@ def test_invoke_surfaces_tool_errors_in_result(
         "expected at least one tool error in the result, got: "
         f"{result.get('tool_errors')!r}"
     )
-    assert result["tool_errors"][0]["tool"] == "record_enrollment_outcome"
+    assert result["tool_errors"][0]["tool"] == "conclude_enrollment"
 
 
 # -- Tests: §V.47 prompt-cache settings ---------------------------------------

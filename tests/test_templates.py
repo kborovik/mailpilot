@@ -56,7 +56,7 @@ class TestUniversalTemplateInvariants:
 
     def test_deferred_task_protocol_present(self, template: WorkflowTemplate) -> None:
         """§V.45: _DEFERRED_TASK fragment composed into every template's protocol."""
-        assert "record_enrollment_outcome" in template.protocol
+        assert "conclude_enrollment" in template.protocol
 
     def test_no_fabrication_protocol_present(self, template: WorkflowTemplate) -> None:
         """§V.45: _NO_FABRICATION fragment composed into every template's protocol."""
@@ -115,6 +115,24 @@ def test_base_strips_permissive_markdown_wording() -> None:
 
 def _tool_names(template: WorkflowTemplate) -> set[str]:
     return {tool.name for tool in template.tools}
+
+
+def test_record_enrollment_outcome_absent_from_agent_tool_set() -> None:
+    """§V.127 / §I: conclude_enrollment is the sole agent terminal.
+
+    ``record_enrollment_outcome`` becomes the system-internal recorder
+    (§V.15) -- it must not be bound to any template's tool set; every
+    template binds ``conclude_enrollment`` in its place.
+    """
+    for template in TEMPLATES.values():
+        names = _tool_names(template)
+        assert "record_enrollment_outcome" not in names, (
+            f"template {template.name!r} still binds record_enrollment_outcome; "
+            f"§V.127 makes it system-internal"
+        )
+        assert "conclude_enrollment" in names, (
+            f"template {template.name!r} must bind conclude_enrollment (§V.127)"
+        )
 
 
 def test_outbound_general_excludes_drive_tools() -> None:
@@ -216,8 +234,8 @@ def test_non_drive_templates_protocol_excludes_grounding() -> None:
 # -- §V.31: trigger-aware deferred-task fragment -------------------------------
 
 
-_RECORD_OUTCOME_INSTRUCTION = (
-    "After achieving the workflow goal for a contact, call record_enrollment_outcome"
+_CONCLUDE_INSTRUCTION = (
+    "After achieving the workflow goal for a contact, conclude the enrollment"
 )
 _INITIAL_INSTRUCTION = "Send the initial email and stop"
 
@@ -228,7 +246,7 @@ def test_build_protocol_task_carries_record_outcome_instruction(
 ) -> None:
     """§V.31: ``trigger='task'`` keeps the terminal-outcome instruction."""
     protocol = template.build_protocol("task")
-    assert _RECORD_OUTCOME_INSTRUCTION in protocol
+    assert _CONCLUDE_INSTRUCTION in protocol
     assert _INITIAL_INSTRUCTION not in protocol
 
 
@@ -245,7 +263,7 @@ def test_build_protocol_non_task_uses_initial_branch(
     shares first-touch semantics with ``enrollment_run`` per §V.30."""
     protocol = template.build_protocol(trigger)
     assert _INITIAL_INSTRUCTION in protocol
-    assert _RECORD_OUTCOME_INSTRUCTION not in protocol
+    assert _CONCLUDE_INSTRUCTION not in protocol
 
 
 @pytest.mark.parametrize(
@@ -304,7 +322,7 @@ def test_must_send_ordered_after_trigger_branch_before_decline(
     protocol = template.build_protocol(trigger)
     must_send = templates_module._MUST_SEND  # pyright: ignore[reportPrivateUsage]
     deferred_marker = (
-        _RECORD_OUTCOME_INSTRUCTION if trigger == "task" else _INITIAL_INSTRUCTION
+        _CONCLUDE_INSTRUCTION if trigger == "task" else _INITIAL_INSTRUCTION
     )
     base_idx = protocol.find("Keep your final summary brief")
     deferred_idx = protocol.find(deferred_marker)
@@ -446,7 +464,7 @@ def test_registered_tool_source_docstrings_carry_no_spec_citation() -> None:
     docstring, including the Args/Returns sections. T130's guard scanned only
     ``tool.description`` (the wrapper summary), so §-cites buried in an Args or
     Returns line of a source-function docstring (read_contact, create_task,
-    record_enrollment_outcome, list_enrollments, read_company, read_drive_markdown)
+    conclude_enrollment, list_enrollments, read_company, read_drive_markdown)
     leaked to the model unaudited. Sweep the full source docstring of every
     registered tool. Internal helpers (_check_spec_table) are out of scope --
     they are never registered, so the model never sees them."""
@@ -515,7 +533,7 @@ def test_build_agent_trigger_routes_protocol_branch(template_name: str) -> None:
 
     ``trigger='task'`` keeps the terminal-outcome instruction; non-``task``
     triggers swap to the initial-send-only branch so the agent's system
-    prompt cannot direct premature ``record_enrollment_outcome`` calls
+    prompt cannot direct a premature ``conclude_enrollment`` terminal
     on first reach-out.
     """
     from datetime import UTC, datetime
@@ -547,10 +565,10 @@ def test_build_agent_trigger_routes_protocol_branch(template_name: str) -> None:
         return "".join(item for item in parts if isinstance(item, str))
 
     task_instructions = _instructions("task")
-    assert _RECORD_OUTCOME_INSTRUCTION in task_instructions
+    assert _CONCLUDE_INSTRUCTION in task_instructions
     assert _INITIAL_INSTRUCTION not in task_instructions
 
     for trigger in ("enrollment_run", "enrollment_schedule", "manual", "email"):
         initial_instructions = _instructions(trigger)
         assert _INITIAL_INSTRUCTION in initial_instructions
-        assert _RECORD_OUTCOME_INSTRUCTION not in initial_instructions
+        assert _CONCLUDE_INSTRUCTION not in initial_instructions

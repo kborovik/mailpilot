@@ -232,17 +232,26 @@ def _wrap_cancel_task(
     )
 
 
-def _wrap_record_enrollment_outcome(
+def _wrap_conclude_enrollment(
     ctx: RunContext[AgentDeps],
-    outcome: str,
-    reason: str,
-) -> dict[str, str]:
-    """Record an enrollment outcome (completed or failed) on the timeline."""
-    return agent_tools.record_enrollment_outcome(
+    disposition: str,
+    note: str,
+    reschedule_at: str | None = None,
+) -> dict[str, Any]:
+    """Conclude the current enrollment with one terminal disposition.
+
+    `disposition` is one of meeting_booked, do_not_contact, contact_later.
+    The system records the outcome, cancels pending follow-ups, and -- per
+    disposition -- disables the contact or schedules a re-enrollment, then
+    writes a note. This is a terminal action that satisfies the send
+    obligation, like noop.
+    """
+    return agent_tools.conclude_enrollment(
         connection=ctx.deps.connection,
         enrollment_id=ctx.deps.enrollment_id,
-        outcome=outcome,
-        reason=reason,
+        disposition=disposition,
+        note=note,
+        reschedule_at=reschedule_at,
     )
 
 
@@ -379,7 +388,7 @@ def _build_agent(workflow: Workflow, trigger: str = "manual") -> Agent[AgentDeps
     to the template protocol. The deferred-task fragment branches on
     ``trigger`` per §V.31: ``trigger='task'`` uses the terminal-outcome
     instruction; other triggers use the initial-send-only instruction
-    (prevents premature ``record_enrollment_outcome`` on first reach-out).
+    (prevents a premature ``conclude_enrollment`` terminal on first reach-out).
     """
     from mailpilot.agent.templates import TEMPLATES
 
@@ -549,14 +558,15 @@ def _extract_tool_errors(result: Any) -> list[dict[str, str]]:
 
 
 def _sent_reply(result: Any) -> bool:
-    """Return True if the run sent a message or explicitly declined (§V.120).
+    """Return True if the run sent a message or reached a terminal (§V.120).
 
     Walks the message ledger (mirrors :func:`_extract_tool_errors`) for a
     ``reply_email`` or ``send_email`` ToolReturnPart that carries no
-    ``error`` key -- the message reached Gmail -- or a ``noop`` return, the
-    explicit decline. Either satisfies the send obligation for both
-    directions (inbound reply and outbound first reach-out); neither means
-    the run left the message unsent while reporting success.
+    ``error`` key -- the message reached Gmail -- or a ``noop`` /
+    ``conclude_enrollment`` return, the explicit decline and the agent
+    terminal (§V.127). Any of these satisfies the send obligation for both
+    directions (inbound reply and outbound first reach-out); none means the
+    run left the message unsent while reporting success.
     """
     for message in result.all_messages():
         if not isinstance(message, ModelRequest):
@@ -567,7 +577,12 @@ def _sent_reply(result: Any) -> bool:
             errored = isinstance(part.content, dict) and "error" in part.content
             if errored:
                 continue
-            if part.tool_name in ("reply_email", "send_email", "noop"):
+            if part.tool_name in (
+                "reply_email",
+                "send_email",
+                "noop",
+                "conclude_enrollment",
+            ):
                 return True
     return False
 
@@ -661,7 +676,7 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
 
             # Resolve enrollment id from the (workflow_id, contact_id) UNIQUE
             # pair so tool wrappers can pass it through to ``create_task`` /
-            # ``record_enrollment_outcome`` without asking the LLM for it.
+            # ``conclude_enrollment`` without asking the LLM for it.
             # The enrollment row is guaranteed present at this point: outbound
             # invocations create the enrollment in ``enrollment add``; inbound
             # invocations create it in ``routing._ensure_enrollment``.

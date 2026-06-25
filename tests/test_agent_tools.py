@@ -20,6 +20,7 @@ from conftest import (
 )
 from mailpilot.agent.tools import (
     cancel_task,
+    conclude_enrollment,
     create_task,
     disable_contact,
     list_drive_markdown,
@@ -29,7 +30,6 @@ from mailpilot.agent.tools import (
     read_contact,
     read_drive_markdown,
     read_email,
-    record_enrollment_outcome,
     reply_email,
     reply_rejection_scope,
     search_drive_markdown,
@@ -41,12 +41,14 @@ from mailpilot.database import (
     create_email,
     create_enrollment,
     get_contact,
-    get_enrollment,
     get_task,
     update_workflow,
 )
 from mailpilot.database import (
     create_task as db_create_task,
+)
+from mailpilot.database import (
+    record_enrollment_outcome as db_record_enrollment_outcome,
 )
 from mailpilot.models import Account
 
@@ -911,41 +913,46 @@ def test_cancel_task_not_found(
     assert result["error"] == "not_found"
 
 
-# -- record_enrollment_outcome -----------------------------------------------------
+# -- conclude_enrollment (§V.127) ----------------------------------------------
 
 
-def test_record_enrollment_outcome_completed_writes_activity_only(
+def test_conclude_enrollment_meeting_booked_records_completed(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """outcome='completed' emits enrollment_completed activity, no status change."""
-    from mailpilot.database import list_activities
+    """§V.127: meeting_booked records a completed outcome + note, no disable."""
+    from mailpilot.database import list_activities, list_notes
 
     account = make_test_account(database_connection)
     contact = make_test_contact(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
 
-    result = record_enrollment_outcome(
+    result = conclude_enrollment(
         connection=database_connection,
         enrollment_id=enrollment.id,
-        outcome="completed",
-        reason="meeting booked",
+        disposition="meeting_booked",
+        note="booked a Google Meet",
     )
-    assert result == {"outcome": "completed", "reason": "meeting booked"}
+    assert result == {"disposition": "meeting_booked", "outcome": "completed"}
 
-    refreshed = get_enrollment(database_connection, workflow.id, contact.id)
-    assert refreshed is not None
-    assert refreshed.status == "active"  # unchanged
-
-    activities = list_activities(database_connection, contact_id=contact.id)
-    types = [a.type for a in activities]
+    types = [
+        a.type for a in list_activities(database_connection, contact_id=contact.id)
+    ]
     assert "enrollment_completed" in types
 
+    # The contact stays active (no global block on a positive disposition).
+    refreshed = get_contact(database_connection, contact.id)
+    assert refreshed is not None
+    assert refreshed.disabled_reason is None
 
-def test_record_enrollment_outcome_failed(
+    notes = list_notes(database_connection, contact_id=contact.id)
+    assert any(n.body_preview.startswith("booked a Google Meet") for n in notes)
+
+
+def test_conclude_enrollment_do_not_contact_disables_contact(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """outcome='failed' emits enrollment_failed activity."""
+    """§V.127 + §V.79/§V.80: do_not_contact records failed + blocks the contact."""
     from mailpilot.database import list_activities
 
     account = make_test_account(database_connection)
@@ -953,38 +960,154 @@ def test_record_enrollment_outcome_failed(
     workflow = make_test_workflow(database_connection, account_id=account.id)
     enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
 
-    record_enrollment_outcome(
+    result = conclude_enrollment(
         connection=database_connection,
         enrollment_id=enrollment.id,
-        outcome="failed",
-        reason="no response",
+        disposition="do_not_contact",
+        note="asked to be removed",
     )
+    assert result == {"disposition": "do_not_contact", "outcome": "failed"}
+
     types = [
         a.type for a in list_activities(database_connection, contact_id=contact.id)
     ]
     assert "enrollment_failed" in types
 
+    blocked = get_contact(database_connection, contact.id)
+    assert blocked is not None
+    assert blocked.disabled_reason is not None
+    assert blocked.disabled_reason.startswith("do_not_contact:")
 
-def test_record_enrollment_outcome_rejects_invalid_outcome(
+
+def test_conclude_enrollment_contact_later_schedules_default_reschedule(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    result = record_enrollment_outcome(
+    """§V.127 + §V.32: contact_later schedules a re-enrollment first-touch.
+
+    With no ``reschedule_at`` the task lands about three months out and
+    carries ``trigger=enrollment_schedule`` so it self-fires as a fresh
+    first reach-out.
+    """
+    from mailpilot.database import list_tasks
+
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+
+    result = conclude_enrollment(
         connection=database_connection,
-        enrollment_id="nonexistent",
-        outcome="cancelled",
-        reason="x",
+        enrollment_id=enrollment.id,
+        disposition="contact_later",
+        note="circle back in Q3",
     )
-    assert result.get("error") == "invalid_outcome"
+    assert result["disposition"] == "contact_later"
+    assert result["outcome"] == "failed"
+    scheduled = datetime.fromisoformat(result["reschedule_at"])
+    # Default deferral is ~90 days out; assert it is comfortably in the future.
+    assert scheduled > datetime.now(UTC) + timedelta(days=80)
+
+    tasks = list_tasks(database_connection, contact_id=contact.id, status="pending")
+    assert len(tasks) == 1
+    task = get_task(database_connection, tasks[0].id)
+    assert task is not None
+    assert task.context.get("trigger") == "enrollment_schedule"
+    assert task.email_id is None
 
 
-def test_record_enrollment_outcome_missing_enrollment(
+def test_conclude_enrollment_contact_later_honors_explicit_reschedule(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    result = record_enrollment_outcome(
+    """§V.127: an agent-supplied reschedule_at is used verbatim."""
+    from mailpilot.database import list_tasks
+
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+
+    when = (datetime.now(UTC) + timedelta(days=30)).isoformat()
+    result = conclude_enrollment(
+        connection=database_connection,
+        enrollment_id=enrollment.id,
+        disposition="contact_later",
+        note="next month",
+        reschedule_at=when,
+    )
+    assert result["reschedule_at"] == when
+
+    tasks = list_tasks(database_connection, contact_id=contact.id, status="pending")
+    assert len(tasks) == 1
+    assert tasks[0].scheduled_at == datetime.fromisoformat(when)
+
+
+def test_conclude_enrollment_cancels_future_followups_preserves_first_touch(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.127 + §V.123/§V.32: conclude cancels pending future follow-ups but
+    leaves the operator first-touch (trigger=enrollment_schedule) untouched."""
+
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+
+    future = (datetime.now(UTC) + timedelta(days=5)).isoformat()
+    followup = db_create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="cold breakup touch",
+        scheduled_at=future,
+        context={"trigger": "task"},
+    )
+    first_touch = db_create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="scheduled first reach-out",
+        scheduled_at=future,
+        context={"trigger": "enrollment_schedule"},
+    )
+
+    conclude_enrollment(
+        connection=database_connection,
+        enrollment_id=enrollment.id,
+        disposition="meeting_booked",
+        note="booked",
+    )
+
+    cancelled = get_task(database_connection, followup.id)
+    assert cancelled is not None
+    assert cancelled.status == "cancelled"
+
+    preserved = get_task(database_connection, first_touch.id)
+    assert preserved is not None
+    assert preserved.status == "pending"
+
+
+def test_conclude_enrollment_rejects_invalid_disposition(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    result = conclude_enrollment(
         connection=database_connection,
         enrollment_id="nonexistent",
-        outcome="completed",
-        reason="x",
+        disposition="ghosted",
+        note="x",
+    )
+    assert result.get("error") == "invalid_disposition"
+
+
+def test_conclude_enrollment_missing_enrollment(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    result = conclude_enrollment(
+        connection=database_connection,
+        enrollment_id="01900000-0000-7000-8000-0000000000ff",
+        disposition="meeting_booked",
+        note="x",
     )
     assert result.get("error") == "not_found"
 
@@ -1091,13 +1214,13 @@ def test_list_enrollments_includes_latest_outcome(
     )
     make_test_enrollment(database_connection, workflow.id, pending_contact.id)
 
-    record_enrollment_outcome(
+    db_record_enrollment_outcome(
         connection=database_connection,
         enrollment_id=completed_enrollment.id,
         outcome="completed",
         reason="meeting booked",
     )
-    record_enrollment_outcome(
+    db_record_enrollment_outcome(
         connection=database_connection,
         enrollment_id=failed_enrollment.id,
         outcome="failed",
@@ -1134,13 +1257,13 @@ def test_list_enrollments_uses_most_recent_outcome(
     contact = make_test_contact(database_connection, email="flip@example.com")
     enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
 
-    record_enrollment_outcome(
+    db_record_enrollment_outcome(
         connection=database_connection,
         enrollment_id=enrollment.id,
         outcome="failed",
         reason="initial soft fail",
     )
-    record_enrollment_outcome(
+    db_record_enrollment_outcome(
         connection=database_connection,
         enrollment_id=enrollment.id,
         outcome="completed",
