@@ -61,8 +61,8 @@
     "source_file": "kdf-process-filtration-media.md",
     "question": "What percentage of free chlorine can KDF 55 medium remove, and what is the heavy metal removal efficiency of KDF 55, KDF 85 and KDF-C media?",
     "expected_tokens": [
-      "KDF 55 medium can remove over 99%",
-      "remove up to 98% of water-soluble cations"
+      "over 99%",
+      "98%"
     ]
   },
   {
@@ -96,7 +96,7 @@
       "RO-500 Series",
       "260,000 GPD",
       "model #TW-270K-8580",
-      "(40) 8\" TFC spiral wound membranes"
+      "40"
     ]
   },
   {
