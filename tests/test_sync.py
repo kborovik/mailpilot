@@ -484,6 +484,7 @@ def test_run_periodic_iteration_full_sweep_skips_already_synced(
         with (
             patch("mailpilot.sync.GmailClient"),
             patch("mailpilot.sync.sync_account") as mock_sync_account,
+            patch("mailpilot.sync._poll_all_calendars"),
         ):
             _run_periodic_iteration(
                 database_connection,
@@ -500,6 +501,42 @@ def test_run_periodic_iteration_full_sweep_skips_already_synced(
 
     synced_emails = [call.args[1].email for call in mock_sync_account.call_args_list]
     assert sorted(synced_emails) == sorted([notified.email, other.email])
+
+
+def test_run_periodic_iteration_polls_calendars_on_full_sweep(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.126: the run-interval full sweep polls calendars; a non-sweep tick does not."""
+    import queue as _queue
+    import threading
+
+    from mailpilot.sync import (
+        _run_periodic_iteration,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    settings = make_test_settings()
+    sync_queue: _queue.Queue[str] = _queue.Queue()
+
+    for do_full_sweep, expected_calls in ((True, 1), (False, 0)):
+        pool, in_flight = _empty_pool_and_inflight()
+        try:
+            with (
+                patch("mailpilot.sync._sync_all_accounts"),
+                patch("mailpilot.sync._poll_all_calendars") as mock_poll,
+            ):
+                _run_periodic_iteration(
+                    database_connection,
+                    settings,
+                    sync_queue,
+                    wakeup_source="timer",
+                    do_full_sweep=do_full_sweep,
+                    pool=pool,
+                    in_flight=in_flight,
+                    wakeup_event=threading.Event(),
+                )
+        finally:
+            pool.shutdown(wait=True)
+        assert mock_poll.call_count == expected_calls
 
 
 def test_drain_sync_queue_skips_disabled_account(

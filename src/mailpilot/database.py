@@ -2385,6 +2385,94 @@ def list_enrollments_with_outcomes(
     return [EnrollmentWithOutcome.model_validate(row) for row in rows]
 
 
+def list_active_outbound_enrollments_for_contact(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact_id: str,
+) -> list[Enrollment]:
+    """List a contact's active enrollments in outbound workflows (§V.128).
+
+    The booking-conclusion fan-out feeds on this: a meeting booked by an
+    attendee outranks every cold outbound sequence, so the system concludes
+    each active outbound enrollment the contact holds (§V.128). Inbound
+    enrollments and disabled enrollments are excluded -- a booking concludes
+    only live cold sequences.
+
+    Args:
+        connection: Open database connection.
+        contact_id: Contact FK.
+
+    Returns:
+        Active enrollments in outbound workflows for the contact, ordered by
+        ``created_at`` (denormalised parent identifiers joined per §V.5).
+    """
+    rows = connection.execute(
+        """\
+        SELECT
+            enrollment.*,
+            workflow.name AS workflow_name,
+            contact.email AS contact_email,
+            TRIM(
+                COALESCE(contact.first_name, '')
+                || ' '
+                || COALESCE(contact.last_name, '')
+            ) AS contact_name
+        FROM enrollment
+        JOIN workflow ON workflow.id = enrollment.workflow_id
+        JOIN contact ON contact.id = enrollment.contact_id
+        WHERE enrollment.contact_id = %(contact_id)s
+          AND enrollment.status = 'active'
+          AND workflow.type = 'outbound'
+        ORDER BY enrollment.created_at
+        """,
+        {"contact_id": contact_id},
+    ).fetchall()
+    return [Enrollment.model_validate(row) for row in rows]
+
+
+def record_enrollment_outcome(
+    connection: psycopg.Connection[dict[str, Any]],
+    enrollment_id: str,
+    outcome: str,
+    reason: str,
+) -> Activity:
+    """Record a completed/failed outcome on the enrollment timeline (§V.15).
+
+    System-internal recorder: the outcome is purely an activity-timeline event
+    (``enrollment_completed`` / ``enrollment_failed``); the ``enrollment`` row
+    status is never modified (§V.15). Both the deterministic booking conclusion
+    (§V.128) and the agent terminal route through here.
+
+    Args:
+        connection: Open database connection.
+        enrollment_id: Enrollment ID (scalar).
+        outcome: ``"completed"`` or ``"failed"``.
+        reason: Explanation inlined into the activity (e.g. ``"meeting booked"``).
+
+    Returns:
+        The created outcome ``Activity``.
+
+    Raises:
+        ValueError: If ``outcome`` is not completed/failed, or the enrollment
+            does not exist.
+    """
+    if outcome not in ("completed", "failed"):
+        raise ValueError(f"outcome must be completed or failed, got: {outcome}")
+    enrollment = get_enrollment_by_id(connection, enrollment_id)
+    if enrollment is None:
+        raise ValueError(f"enrollment not found: {enrollment_id}")
+    contact = get_contact(connection, enrollment.contact_id)
+    return create_activity(
+        connection,
+        contact_id=enrollment.contact_id,
+        activity_type=f"enrollment_{outcome}",
+        summary=reason or f"Enrollment {outcome}",
+        detail={"reason": reason},
+        company_id=contact.company_id if contact is not None else None,
+        workflow_id=enrollment.workflow_id,
+        enrollment_id=enrollment.id,
+    )
+
+
 def disable_enrollment(
     connection: psycopg.Connection[dict[str, Any]],
     enrollment_id: str,

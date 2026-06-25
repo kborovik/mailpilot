@@ -38,10 +38,13 @@ import psycopg
 from opentelemetry import context as otel_context
 from psycopg.rows import dict_row
 
+from mailpilot.calendar import CalendarClient, CalendarEvent
 from mailpilot.database import (
+    cancel_enrollment_followup_tasks,
     create_activity,
     create_contacts_bulk,
     create_email,
+    create_note,
     create_or_get_contact_by_email,
     create_tasks_for_routed_emails,
     delete_sync_status,
@@ -52,13 +55,17 @@ from mailpilot.database import (
     get_emails_by_gmail_thread_id,
     get_latest_email_in_thread,
     get_sync_status,
+    link_meeting_attendee,
     list_accounts,
+    list_active_outbound_enrollments_for_contact,
     list_pending_tasks,
     list_workflows,
+    record_enrollment_outcome,
     update_account,
     update_contact,
     update_email,
     update_sync_heartbeat,
+    upsert_meeting,
     upsert_sync_status,
 )
 from mailpilot.gmail import (
@@ -69,7 +76,7 @@ from mailpilot.gmail import (
     parse_sender,
     strip_control_chars,
 )
-from mailpilot.models import Account, Contact, Email
+from mailpilot.models import Account, Contact, Email, Meeting
 from mailpilot.operator_log import operator_event
 from mailpilot.routing import route_email
 from mailpilot.settings import Settings
@@ -389,6 +396,9 @@ def _run_periodic_iteration(  # noqa: PLR0913
         # Periodic safety-net sync of all accounts.
         if do_full_sweep:
             _sync_all_accounts(connection, settings, synced)
+            # Calendar ingestion polls on the same run-interval cadence
+            # (§V.21 fallback; event-wake push channels deferred to #154).
+            _poll_all_calendars(connection)
 
         # Bridge routed emails to tasks and dispatch the queue.
         new_tasks = create_tasks_for_routed_emails(connection)
@@ -473,6 +483,112 @@ def _sync_all_accounts(
                 email=account.email,
             )
             operator_event("error", source="sync.account.sync_failed", message=str(exc))
+
+
+# -- Calendar ingestion --------------------------------------------------------
+
+
+def _poll_all_calendars(
+    connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Poll each enabled account's calendar and ingest upcoming events (§V.126).
+
+    Runs on the run-interval full-sweep tick (§V.21 fallback; event-wake push
+    channels deferred to #154). Disabled accounts are gated out by the
+    ``list_accounts`` default-exclude (§V.118). Per-account errors are logged,
+    never raised, so one account's calendar transport fault cannot stall the
+    loop -- mirrors ``_sync_all_accounts``.
+    """
+    if not has_google_credentials():
+        return
+    summaries = list_accounts(connection, limit=1000)
+    for summary in summaries:
+        account = get_account(connection, summary.id)
+        if account is None:
+            continue
+        try:
+            client = CalendarClient(account.email)
+            for event in client.list_upcoming_events():
+                ingest_calendar_event(connection, event)
+        except Exception as exc:
+            logfire.exception(
+                "sync.calendar.poll_failed",
+                account_id=account.id,
+                email=account.email,
+            )
+            operator_event(
+                "error", source="sync.calendar.poll_failed", message=str(exc)
+            )
+
+
+def ingest_calendar_event(
+    connection: psycopg.Connection[dict[str, Any]],
+    event: CalendarEvent,
+) -> Meeting:
+    """Upsert one calendar event to a meeting and conclude any bookings (§V.126).
+
+    Idempotent on ``google_event_id`` (§V.125): re-polling the same event
+    updates the existing ``meeting`` row in place, never duplicating it. Each
+    attendee email matched to a contact links through ``meeting_attendee``; an
+    unmatched email produces no link.
+
+    Booking conclusion fires only on a *fresh* attendee link --
+    ``link_meeting_attendee`` returns ``None`` for a repeat pair, so the
+    deterministic conclusion fan-out (§V.128) runs exactly once per
+    (meeting, contact), never again on a later re-poll.
+
+    Args:
+        connection: Open database connection.
+        event: Normalized upcoming calendar event.
+
+    Returns:
+        The upserted ``Meeting`` row.
+    """
+    meeting = upsert_meeting(
+        connection,
+        google_event_id=event.google_event_id,
+        meet_url=event.meet_url,
+        summary=event.summary,
+        scheduled_at=event.scheduled_at,
+        ends_at=event.ends_at,
+    )
+    if not event.attendee_emails:
+        return meeting
+    contacts = get_contacts_by_emails(connection, event.attendee_emails)
+    for contact in contacts.values():
+        link = link_meeting_attendee(connection, meeting.id, contact.id)
+        if link is not None:
+            _conclude_outbound_enrollments_for_booking(connection, contact, meeting)
+    return meeting
+
+
+def _conclude_outbound_enrollments_for_booking(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact: Contact,
+    meeting: Meeting,
+) -> None:
+    """Conclude every active outbound enrollment for a booked attendee (§V.128).
+
+    A booked meeting outranks any cold sequence, so for each active outbound
+    enrollment the contact holds the system: records a ``completed`` outcome
+    (§V.15), cancels the enrollment's pending future follow-up tasks (§V.123,
+    first-touch preserved per §V.32), and writes a system booking note. All
+    deterministic -- no agent turn (§V.128).
+    """
+    enrollments = list_active_outbound_enrollments_for_contact(connection, contact.id)
+    for enrollment in enrollments:
+        record_enrollment_outcome(
+            connection,
+            enrollment.id,
+            outcome="completed",
+            reason="meeting booked",
+        )
+        cancel_enrollment_followup_tasks(connection, enrollment.id)
+        note_body = (
+            f"Meeting booked ({meeting.summary or 'untitled'}); "
+            f"concluding enrollment in workflow {enrollment.workflow_name}."
+        )
+        create_note(connection, body=note_body, contact_id=contact.id)
 
 
 def _drain_pending_tasks(

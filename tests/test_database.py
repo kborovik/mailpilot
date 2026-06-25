@@ -71,6 +71,7 @@ from mailpilot.database import (
     import_snapshot,
     link_meeting_attendee,
     list_accounts,
+    list_active_outbound_enrollments_for_contact,
     list_activities,
     list_companies,
     list_contacts,
@@ -84,6 +85,7 @@ from mailpilot.database import (
     list_workflows_full,
     manual_retry_task,
     pause_workflow,
+    record_enrollment_outcome,
     reschedule_task_for_retry,
     search_companies,
     search_contacts,
@@ -4126,6 +4128,85 @@ def test_cancel_enrollment_followup_tasks_scoped_to_enrollment(
     refetched = get_task(database_connection, followup_b.id)
     assert refetched is not None
     assert refetched.status == "pending"
+
+
+# -- record_enrollment_outcome (§V.15) -----------------------------------------
+
+
+def test_record_enrollment_outcome_writes_timeline_activity(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.15: a completed outcome writes a timeline activity, row untouched."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    company = make_test_company(database_connection)
+    contact = make_test_contact(database_connection, company_id=company.id)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+
+    activity = record_enrollment_outcome(
+        database_connection, enrollment.id, "completed", "meeting booked"
+    )
+
+    assert activity.type == "enrollment_completed"
+    assert activity.enrollment_id == enrollment.id
+    assert activity.workflow_id == workflow.id
+    assert activity.contact_id == contact.id
+    assert activity.company_id == company.id
+    # §V.15: enrollment row status is unchanged by an outcome.
+    refetched = get_enrollment(database_connection, workflow.id, contact.id)
+    assert refetched is not None
+    assert refetched.status == "active"
+
+
+def test_record_enrollment_outcome_rejects_invalid_outcome(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+
+    with pytest.raises(ValueError, match="completed or failed"):
+        record_enrollment_outcome(database_connection, enrollment.id, "booked", "nope")
+
+
+# -- list_active_outbound_enrollments_for_contact (§V.128) ---------------------
+
+
+def test_list_active_outbound_enrollments_filters_by_direction_and_status(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.128: only active enrollments in outbound workflows are returned."""
+    account = make_test_account(database_connection)
+    outbound = make_test_workflow(
+        database_connection,
+        account_id=account.id,
+        name="Outbound",
+        workflow_type="outbound",
+    )
+    inbound = make_test_workflow(
+        database_connection,
+        account_id=account.id,
+        name="Inbound",
+        workflow_type="inbound",
+    )
+    disabled_outbound = make_test_workflow(
+        database_connection,
+        account_id=account.id,
+        name="Disabled Outbound",
+        workflow_type="outbound",
+    )
+    contact = make_test_contact(database_connection)
+    live = make_test_enrollment(database_connection, outbound.id, contact.id)
+    make_test_enrollment(database_connection, inbound.id, contact.id)
+    halted = make_test_enrollment(database_connection, disabled_outbound.id, contact.id)
+    disable_enrollment(database_connection, halted.id, "operator halt")
+
+    result = list_active_outbound_enrollments_for_contact(
+        database_connection, contact.id
+    )
+
+    assert [e.id for e in result] == [live.id]
 
 
 def test_create_tasks_for_routed_emails(
