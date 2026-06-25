@@ -320,7 +320,7 @@ def _try_classify(
     inbound_summaries = [s for s in summaries if s.type == "inbound"]
     if not inbound_summaries:
         return (None, "skipped_no_inbound_workflows")
-    # classify_email reads workflow.objective, which is not in WorkflowSummary;
+    # classify_email reads workflow.goal, which is not in WorkflowSummary;
     # hydrate via get_workflow so the LLM prompt has the full record.
     inbound_workflows = [
         full

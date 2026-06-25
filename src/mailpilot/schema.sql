@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS workflow (
                       )),
     type              TEXT NOT NULL CHECK (type IN ('inbound', 'outbound')),
     name              TEXT NOT NULL,
-    objective         TEXT NOT NULL DEFAULT '',
+    goal              TEXT NOT NULL DEFAULT '',
     instructions      TEXT NOT NULL DEFAULT '',
     theme             TEXT NOT NULL DEFAULT 'blue',
     status            TEXT NOT NULL DEFAULT 'draft'

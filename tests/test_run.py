@@ -34,7 +34,7 @@ def _make_workflow(**overrides: Any) -> Workflow:
         "account_id": _ACCOUNT_ID,
         "account_email": "owner@example.com",
         "status": "active",
-        "objective": "Test",
+        "goal": "Test",
         "instructions": "Do the thing.",
         "created_at": _NOW,
         "updated_at": _NOW,

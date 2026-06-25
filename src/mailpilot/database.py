@@ -2008,11 +2008,11 @@ def search_workflows(
     query: str,
     limit: int = 100,
 ) -> list[WorkflowSummary]:
-    """Search workflows by name or objective.
+    """Search workflows by name or goal.
 
     Args:
         connection: Open database connection.
-        query: Search term (matched against name and objective).
+        query: Search term (matched against name and goal).
         limit: Maximum number of results.
 
     Returns:
@@ -2026,7 +2026,7 @@ def search_workflows(
                workflow.status, workflow.created_at
         FROM workflow JOIN account ON account.id = workflow.account_id
         WHERE LOWER(workflow.name) LIKE LOWER(%(pattern)s)
-           OR LOWER(workflow.objective) LIKE LOWER(%(pattern)s)
+           OR LOWER(workflow.goal) LIKE LOWER(%(pattern)s)
         ORDER BY LOWER(workflow.name)
         LIMIT %(limit)s
         """,
@@ -2042,7 +2042,7 @@ def update_workflow(
 ) -> Workflow | None:
     """Update a workflow by ID.
 
-    Only ``name``, ``objective``, and ``instructions`` are updatable.
+    Only ``name``, ``goal``, and ``instructions`` are updatable.
     Status transitions use ``activate_workflow()`` / ``pause_workflow()``.
     ``type`` and ``account_id`` are immutable after creation.
 
@@ -2054,7 +2054,7 @@ def update_workflow(
     Returns:
         Updated workflow, or None if not found.
     """
-    allowed = {"name", "objective", "instructions", "theme"}
+    allowed = {"name", "goal", "instructions", "theme"}
     if "template" in fields:
         raise ValueError(
             "workflow.template is immutable; "
@@ -2084,7 +2084,7 @@ def activate_workflow(
     """Transition a workflow to active status.
 
     Valid transitions: ``draft -> active``, ``paused -> active``.
-    Guards: ``objective`` and ``instructions`` must be non-empty.
+    Guards: ``goal`` and ``instructions`` must be non-empty.
 
     Args:
         connection: Open database connection.
@@ -2095,15 +2095,15 @@ def activate_workflow(
 
     Raises:
         ValueError: If workflow not found, already active, or missing
-            objective/instructions.
+            goal/instructions.
     """
     workflow = get_workflow(connection, workflow_id)
     if workflow is None:
         raise ValueError(f"workflow {workflow_id} not found")
     if workflow.status == "active":
         raise ValueError("workflow is already active")
-    if not workflow.objective.strip():
-        raise ValueError("objective must be non-empty to activate")
+    if not workflow.goal.strip():
+        raise ValueError("goal must be non-empty to activate")
     if not workflow.instructions.strip():
         raise ValueError("instructions must be non-empty to activate")
     row = connection.execute(
@@ -2339,7 +2339,7 @@ def list_enrollments_with_outcomes(
     Outcomes (`completed` / `failed`) are timeline-only and do not change
     `enrollment.status` (§V.15). This helper LEFT JOINs the most recent
     `enrollment_completed` / `enrollment_failed` activity per row so the
-    agent can answer "has this objective already been satisfied for any
+    agent can answer "has this goal already been satisfied for any
     contact in this workflow?" in a single query.
 
     Args:

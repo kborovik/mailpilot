@@ -58,7 +58,7 @@ def _activate(connection: psycopg.Connection[dict[str, Any]], workflow_id: str) 
     update_workflow(
         connection,
         workflow_id,
-        objective="Test objective",
+        goal="Test goal",
         instructions="Test instructions",
     )
     activate_workflow(connection, workflow_id)
@@ -1075,7 +1075,7 @@ def test_list_enrollments_includes_latest_outcome(
 ):
     """Each enrollment row carries the latest enrollment_completed/failed
     outcome so the agent can coordinate across contacts (skip person B if
-    person A at the same company already finished the objective)."""
+    person A at the same company already finished the goal)."""
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     _activate(database_connection, workflow.id)

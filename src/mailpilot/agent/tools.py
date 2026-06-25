@@ -417,7 +417,7 @@ def list_enrollments(
     """List enrollments in a workflow with their latest outcome.
 
     Lets the agent coordinate across contacts (e.g., skip person B if
-    person A at the same company already completed the objective). Each
+    person A at the same company already achieved the goal). Each
     row includes ``latest_outcome`` (``completed`` / ``failed`` / ``None``),
     ``latest_outcome_reason``, and ``latest_outcome_at`` -- pulled from the
     activity timeline since outcomes are timeline-only.

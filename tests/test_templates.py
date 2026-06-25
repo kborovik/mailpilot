@@ -217,8 +217,7 @@ def test_non_drive_templates_protocol_excludes_grounding() -> None:
 
 
 _RECORD_OUTCOME_INSTRUCTION = (
-    "After completing the workflow objective for a contact, "
-    "call record_enrollment_outcome"
+    "After achieving the workflow goal for a contact, call record_enrollment_outcome"
 )
 _INITIAL_INSTRUCTION = "Send the initial email and stop"
 

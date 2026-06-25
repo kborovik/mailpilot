@@ -152,7 +152,7 @@ class Workflow(BaseModel):
     account_id: str
     account_email: str
     status: WorkflowStatus = "draft"
-    objective: str = ""
+    goal: str = ""
     instructions: str = ""
     theme: str = "blue"
     created_at: datetime

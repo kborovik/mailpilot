@@ -35,10 +35,10 @@ class ClassificationResult(BaseModel):
 
 _INSTRUCTIONS = """\
 You route an inbound email to one of the candidate workflows by matching
-the email's content against each workflow's objective.
+the email's content against each workflow's goal.
 
 Rules:
-- Pick the workflow whose objective is the best semantic match for the email.
+- Pick the workflow whose goal is the best semantic match for the email.
 - Return the workflow's exact id in the `workflow_id` field.
 - If no workflow is a clear match, set `workflow_id` to null -- do not guess.
 - Populate `reasoning` with one short sentence explaining the decision.
@@ -95,7 +95,7 @@ def classify_email(
 
     Lightweight LLM call using Pydantic AI structured output (see §V.27):
     - Input: email subject, body, sender + list of active workflows
-      (name, objective)
+      (name, goal)
     - Output: workflow_id or None (unrouted)
     - No tools, no agent -- pure routing decision
 
@@ -107,7 +107,7 @@ def classify_email(
         subject: Email subject line.
         body: Email body (plain text).
         sender: Sender email address.
-        active_workflows: Active workflows for the account (name, objective).
+        active_workflows: Active workflows for the account (name, goal).
         settings: Application settings; supplies ``anthropic_api_key``,
             ``anthropic_model``, and ``anthropic_base_url``.
 
@@ -167,7 +167,7 @@ def _format_prompt(
             {
                 "id": workflow.id,
                 "name": workflow.name,
-                "objective": workflow.objective,
+                "goal": workflow.goal,
             }
             for workflow in active_workflows
         ],

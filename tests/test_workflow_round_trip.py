@@ -27,7 +27,7 @@ from mailpilot.database import (
     update_workflow,
 )
 
-_EXPORT_FIELDS = ("name", "template", "objective", "instructions", "theme")
+_EXPORT_FIELDS = ("name", "template", "goal", "instructions", "theme")
 
 
 @pytest.fixture
@@ -50,7 +50,7 @@ def _seed_workflows(
     update_workflow(
         connection,
         alpha.id,
-        objective="Book demos with mid-market accounts.",
+        goal="Book demos with mid-market accounts.",
         instructions="You are a courteous sales rep.\nCite every figure.\n",
     )
     activate_workflow(connection, alpha.id)
@@ -74,7 +74,7 @@ def _seed_workflows(
     update_workflow(
         connection,
         charlie.id,
-        objective="Answer support questions grounded in the KB.",
+        goal="Answer support questions grounded in the KB.",
         instructions="Cite the source markdown file in every reply.",
     )
     activate_workflow(connection, charlie.id)
@@ -212,7 +212,7 @@ def test_workflow_export_toml_excludes_denormalized_fields(
     ``account_email`` (§V.5 parent-NI denorm) and ``account_id`` are read-only
     view fields; an exported catalog entry that carried them would attempt to
     write a non-existent / wrong column on re-import. Every ``*.toml`` must parse
-    to exactly ``{name, template, theme, objective, instructions}``.
+    to exactly ``{name, template, theme, goal, instructions}``.
     """
     account = make_test_account(database_connection)
     _seed_workflows(database_connection, account.id)

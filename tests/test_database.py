@@ -1355,8 +1355,8 @@ def test_list_workflows_full_orders_by_name(
     make_test_workflow(database_connection, account_id=account.id, name="Bravo")
     results = list_workflows_full(database_connection, account.id)
     assert [w.name for w in results] == ["Alpha", "Bravo", "Charlie"]
-    # Returns full Workflow rows (not summaries) -- objective/instructions present.
-    assert all(hasattr(w, "objective") for w in results)
+    # Returns full Workflow rows (not summaries) -- goal/instructions present.
+    assert all(hasattr(w, "goal") for w in results)
     assert all(hasattr(w, "instructions") for w in results)
 
 
@@ -1374,9 +1374,9 @@ def test_list_workflows_full_scopes_to_account(
 def test_update_workflow(database_connection: psycopg.Connection[dict[str, Any]]):
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
-    updated = update_workflow(database_connection, workflow.id, objective="Book demo")
+    updated = update_workflow(database_connection, workflow.id, goal="Book demo")
     assert updated is not None
-    assert updated.objective == "Book demo"
+    assert updated.goal == "Book demo"
 
 
 def test_update_workflow_ignores_immutable_fields(
@@ -1416,14 +1416,14 @@ def test_activate_workflow(database_connection: psycopg.Connection[dict[str, Any
     update_workflow(
         database_connection,
         workflow.id,
-        objective="Book demo",
+        goal="Book demo",
         instructions="You are a sales rep.",
     )
     activated = activate_workflow(database_connection, workflow.id)
     assert activated.status == "active"
 
 
-def test_activate_workflow_requires_objective(
+def test_activate_workflow_requires_goal(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     account = make_test_account(database_connection)
@@ -1431,7 +1431,7 @@ def test_activate_workflow_requires_objective(
     update_workflow(
         database_connection, workflow.id, instructions="You are a sales rep."
     )
-    with pytest.raises(ValueError, match="objective must be non-empty"):
+    with pytest.raises(ValueError, match="goal must be non-empty"):
         activate_workflow(database_connection, workflow.id)
 
 
@@ -1440,7 +1440,7 @@ def test_activate_workflow_requires_instructions(
 ):
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
-    update_workflow(database_connection, workflow.id, objective="Book demo")
+    update_workflow(database_connection, workflow.id, goal="Book demo")
     with pytest.raises(ValueError, match="instructions must be non-empty"):
         activate_workflow(database_connection, workflow.id)
 
@@ -1451,7 +1451,7 @@ def test_pause_workflow(database_connection: psycopg.Connection[dict[str, Any]])
     update_workflow(
         database_connection,
         workflow.id,
-        objective="Book demo",
+        goal="Book demo",
         instructions="You are a sales rep.",
     )
     activate_workflow(database_connection, workflow.id)
@@ -1477,7 +1477,7 @@ def test_list_workflows_by_status(
     update_workflow(
         database_connection,
         w1.id,
-        objective="Book demo",
+        goal="Book demo",
         instructions="You are a sales rep.",
     )
     activate_workflow(database_connection, w1.id)
@@ -1529,13 +1529,13 @@ def test_search_workflows_by_name(
     assert results[0].name == "Demo outreach"
 
 
-def test_search_workflows_by_objective(
+def test_search_workflows_by_goal(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     account = make_test_account(database_connection)
     w1 = make_test_workflow(database_connection, account_id=account.id, name="Alpha")
     make_test_workflow(database_connection, account_id=account.id, name="Beta")
-    update_workflow(database_connection, w1.id, objective="Book discovery call")
+    update_workflow(database_connection, w1.id, goal="Book discovery call")
     results = search_workflows(database_connection, "discovery")
     assert len(results) == 1
     assert results[0].id == w1.id
@@ -1581,7 +1581,7 @@ def test_workflow_account_email_populated_across_returners(
     updated = update_workflow(
         database_connection,
         created.id,
-        objective="Book demo",
+        goal="Book demo",
         instructions="Do.",
     )
     assert updated is not None
@@ -4619,10 +4619,10 @@ def test_workflow_list_summary_get_full(
     make_test_workflow(database_connection, account_id=account.id)
     workflows = list_workflows(database_connection)
     assert isinstance(workflows[0], WorkflowSummary)
-    assert not hasattr(workflows[0], "objective")
+    assert not hasattr(workflows[0], "goal")
     full = get_workflow(database_connection, workflows[0].id)
     assert full is not None
-    assert hasattr(full, "objective")
+    assert hasattr(full, "goal")
 
 
 def test_enrollment_list_summary_drops_reason_and_created_at(
@@ -4704,10 +4704,10 @@ def test_workflow_search_summary_get_full(
     make_test_workflow(database_connection, account_id=account.id, name="Outreach")
     workflows = search_workflows(database_connection, "outreach")
     assert isinstance(workflows[0], WorkflowSummary)
-    assert not hasattr(workflows[0], "objective")
+    assert not hasattr(workflows[0], "goal")
     full = get_workflow(database_connection, workflows[0].id)
     assert full is not None
-    assert hasattr(full, "objective")
+    assert hasattr(full, "goal")
 
 
 def test_email_search_summary_get_full(

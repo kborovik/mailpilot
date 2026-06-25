@@ -53,7 +53,7 @@ def _activate(connection: psycopg.Connection[dict[str, Any]], workflow_id: str) 
     update_workflow(
         connection,
         workflow_id,
-        objective="Test objective",
+        goal="Test goal",
         instructions="You are a sales outreach agent. Send an email to the contact.",
     )
     activate_workflow(connection, workflow_id)
@@ -1397,7 +1397,7 @@ def test_workflow_agent_has_explicit_name_for_otel_traces() -> None:
         account_id="01900000-0000-7000-8000-000000000002",
         account_email="owner@example.com",
         status="active",
-        objective="O",
+        goal="O",
         instructions="I",
         created_at=now,
         updated_at=now,

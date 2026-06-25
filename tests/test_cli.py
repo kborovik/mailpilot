@@ -3147,7 +3147,7 @@ def _make_workflow(**overrides: Any) -> Workflow:
         "account_id": _ACCOUNT_ID,
         "account_email": "test@example.com",
         "status": "draft",
-        "objective": "",
+        "goal": "",
         "instructions": "",
         "theme": "blue",
         "created_at": _NOW,
@@ -3199,14 +3199,12 @@ def test_workflow_create(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert data["workflow"]["type"] == "outbound"
 
 
-def test_workflow_create_with_objective_and_instructions(
+def test_workflow_create_with_goal_and_instructions(
     runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
 ) -> None:
-    workflow = _make_workflow(
-        objective="Book demo", instructions="You are a sales rep."
-    )
+    workflow = _make_workflow(goal="Book demo", instructions="You are a sales rep.")
     activated = _make_workflow(
-        status="active", objective="Book demo", instructions="You are a sales rep."
+        status="active", goal="Book demo", instructions="You are a sales rep."
     )
     instructions_file = tmp_path / "instructions.md"
     instructions_file.write_text("You are a sales rep.")
@@ -3234,7 +3232,7 @@ def test_workflow_create_with_objective_and_instructions(
                 "outbound-general",
                 "--account-email",
                 _ACCOUNT_ID,
-                "--objective",
+                "--goal",
                 "Book demo",
                 "--instructions-file",
                 str(instructions_file),
@@ -3245,7 +3243,7 @@ def test_workflow_create_with_objective_and_instructions(
     mock_update.assert_called_once_with(
         mock_connection,
         _WORKFLOW_ID,
-        objective="Book demo",
+        goal="Book demo",
         instructions="You are a sales rep.",
     )
     mock_activate.assert_called_once_with(mock_connection, _WORKFLOW_ID)
@@ -3256,11 +3254,9 @@ def test_workflow_create_with_objective_and_instructions(
 def test_workflow_create_with_inline_instructions(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    workflow = _make_workflow(
-        objective="Book demo", instructions="You are a sales rep."
-    )
+    workflow = _make_workflow(goal="Book demo", instructions="You are a sales rep.")
     activated = _make_workflow(
-        status="active", objective="Book demo", instructions="You are a sales rep."
+        status="active", goal="Book demo", instructions="You are a sales rep."
     )
     account = _make_account()
     with (
@@ -3284,7 +3280,7 @@ def test_workflow_create_with_inline_instructions(
                 "outbound-general",
                 "--account-email",
                 _ACCOUNT_ID,
-                "--objective",
+                "--goal",
                 "Book demo",
                 "--instructions",
                 "You are a sales rep.",
@@ -3409,9 +3405,9 @@ def test_workflow_create_auto_activates(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     created = _make_workflow()
-    updated = _make_workflow(objective="Book demo", instructions="You are a sales rep.")
+    updated = _make_workflow(goal="Book demo", instructions="You are a sales rep.")
     activated = _make_workflow(
-        status="active", objective="Book demo", instructions="You are a sales rep."
+        status="active", goal="Book demo", instructions="You are a sales rep."
     )
     account = _make_account()
     with (
@@ -3435,7 +3431,7 @@ def test_workflow_create_auto_activates(
                 "outbound-general",
                 "--account-email",
                 _ACCOUNT_ID,
-                "--objective",
+                "--goal",
                 "Book demo",
                 "--instructions",
                 "You are a sales rep.",
@@ -3451,9 +3447,7 @@ def test_workflow_create_auto_activates(
 def test_workflow_create_draft_skips_activation(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    workflow = _make_workflow(
-        objective="Book demo", instructions="You are a sales rep."
-    )
+    workflow = _make_workflow(goal="Book demo", instructions="You are a sales rep.")
     account = _make_account()
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
@@ -3474,7 +3468,7 @@ def test_workflow_create_draft_skips_activation(
                 "outbound-general",
                 "--account-email",
                 _ACCOUNT_ID,
-                "--objective",
+                "--goal",
                 "Book demo",
                 "--instructions",
                 "You are a sales rep.",
@@ -3944,7 +3938,7 @@ def test_workflow_search(runner: CliRunner, mock_connection: MagicMock) -> None:
 def test_workflow_start(runner: CliRunner, mock_connection: MagicMock) -> None:
     activated = _make_workflow(
         status="active",
-        objective="Book demo",
+        goal="Book demo",
         instructions="You are a sales rep.",
     )
     with (
@@ -3962,7 +3956,7 @@ def test_workflow_start(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert data["workflow"]["status"] == "active"
 
 
-def test_workflow_start_missing_objective(
+def test_workflow_start_missing_goal(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     with (
@@ -3970,7 +3964,7 @@ def test_workflow_start_missing_objective(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch(
             "mailpilot.database.activate_workflow",
-            side_effect=ValueError("objective must be non-empty to activate"),
+            side_effect=ValueError("goal must be non-empty to activate"),
         ),
     ):
         result = runner.invoke(main, ["workflow", "start", _WORKFLOW_ID])
@@ -3979,7 +3973,7 @@ def test_workflow_start_missing_objective(
     data = json.loads(result.output)
     assert data["error"] == "invalid_state"
     assert "workflow update" in data["message"]
-    assert "--objective" in data["message"]
+    assert "--goal" in data["message"]
 
 
 def test_workflow_start_missing_instructions(
@@ -4051,7 +4045,7 @@ def test_workflow_export_writes_toml_files_and_json_envelope(
     account = _make_account()
     workflow = _make_workflow(
         name="Demo outreach",
-        objective="Book demos",
+        goal="Book demos",
         instructions="You are a sales rep.\nCite the source file.\n",
         theme="green",
     )
@@ -4093,7 +4087,7 @@ def test_workflow_export_writes_toml_files_and_json_envelope(
         "name": "Demo outreach",
         "template": "outbound-general",
         "theme": "green",
-        "objective": "Book demos",
+        "goal": "Book demos",
         "instructions": "You are a sales rep.\nCite the source file.\n",
     }
 
@@ -4164,7 +4158,7 @@ def _import_payload(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "name": "Demo outreach",
         "template": "outbound-general",
-        "objective": "Book demos",
+        "goal": "Book demos",
         "instructions": "You are a sales rep.",
         "theme": "green",
     }
@@ -4178,7 +4172,7 @@ def _write_workflow_toml(path: pathlib.Path, payload: dict[str, Any]) -> None:
     literal string, mirroring the catalog convention ``workflow export`` emits.
     """
     lines: list[str] = []
-    for key in ("name", "template", "theme", "objective"):
+    for key in ("name", "template", "theme", "goal"):
         if key in payload:
             value = payload[key].replace("\\", "\\\\").replace('"', '\\"')
             lines.append(f'{key} = "{value}"')
@@ -4233,7 +4227,7 @@ def test_workflow_import_create_path_activates(
     mock_update.assert_called_once_with(
         mock_connection,
         created.id,
-        objective="Book demos",
+        goal="Book demos",
         instructions="You are a sales rep.",
     )
     mock_activate.assert_called_once_with(mock_connection, created.id)
@@ -4246,9 +4240,9 @@ def test_workflow_import_create_path_draft_no_activation(
     runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
 ) -> None:
     account = _make_account()
-    created = _make_workflow(objective="", instructions="")
+    created = _make_workflow(goal="", instructions="")
     file = tmp_path / "wf.toml"
-    _write_workflow_toml(file, _import_payload(objective="Book demos", instructions=""))
+    _write_workflow_toml(file, _import_payload(goal="Book demos", instructions=""))
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
@@ -4279,7 +4273,7 @@ def test_workflow_import_update_path_diff_only(
 ) -> None:
     account = _make_account()
     existing = _make_workflow(
-        objective="Old objective",
+        goal="Old goal",
         instructions="Old instructions",
         theme="blue",
         status="active",
@@ -4288,7 +4282,7 @@ def test_workflow_import_update_path_diff_only(
     _write_workflow_toml(
         file,
         _import_payload(
-            objective="New objective",
+            goal="New goal",
             instructions="Old instructions",
             theme="blue",
         ),
@@ -4319,9 +4313,7 @@ def test_workflow_import_update_path_diff_only(
     assert result.exit_code == 0, result.output
     mock_create.assert_not_called()
     mock_activate.assert_not_called()
-    mock_update.assert_called_once_with(
-        mock_connection, existing.id, objective="New objective"
-    )
+    mock_update.assert_called_once_with(mock_connection, existing.id, goal="New goal")
     data = json.loads(result.output)
     assert data["workflows"] == [{"name": "Demo outreach", "action": "updated"}]
 
@@ -4331,7 +4323,7 @@ def test_workflow_import_unchanged_no_mutation(
 ) -> None:
     account = _make_account()
     existing = _make_workflow(
-        objective="Book demos",
+        goal="Book demos",
         instructions="You are a sales rep.",
         theme="green",
         status="active",
@@ -4486,7 +4478,7 @@ def test_workflow_import_toml_multiline_literal_preserved(
         'name = "Demo"\n'
         'template = "inbound-google-drive"\n'
         'theme = "blue"\n'
-        'objective = "Answer questions."\n'
+        'goal = "Answer questions."\n'
         "instructions = '''\n"
         'Line one with a literal | pipe and "quotes".\n'
         "Line two.\n"
@@ -4533,11 +4525,11 @@ def test_workflow_import_directory_globs_toml(
     catalog.mkdir()
     (catalog / "alpha.toml").write_text(
         'name = "Alpha"\ntemplate = "outbound-general"\n'
-        'objective = "o"\ninstructions = "i"\ntheme = "green"\n'
+        'goal = "o"\ninstructions = "i"\ntheme = "green"\n'
     )
     (catalog / "bravo.toml").write_text(
         'name = "Bravo"\ntemplate = "inbound-general"\n'
-        'objective = "o"\ninstructions = "i"\ntheme = "blue"\n'
+        'goal = "o"\ninstructions = "i"\ntheme = "blue"\n'
     )
     (catalog / "notes.md").write_text("not a workflow")
     with (
@@ -4607,7 +4599,7 @@ def test_workflow_import_directory_parse_error_continues_batch(
     (catalog / "bad.toml").write_text("template = =\n")
     (catalog / "good.toml").write_text(
         'name = "Good"\ntemplate = "outbound-general"\n'
-        'objective = "o"\ninstructions = "i"\ntheme = "green"\n'
+        'goal = "o"\ninstructions = "i"\ntheme = "green"\n'
     )
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
@@ -4646,7 +4638,7 @@ def test_workflow_import_toml_missing_required_field(
     account = _make_account()
     toml_file = tmp_path / "wf.toml"
     toml_file.write_text(
-        'name = "No template"\nobjective = "o"\ninstructions = "i"\ntheme = "blue"\n'
+        'name = "No template"\ngoal = "o"\ninstructions = "i"\ntheme = "blue"\n'
     )
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
@@ -4687,7 +4679,7 @@ def test_enrollment_run(runner: CliRunner, mock_connection: MagicMock) -> None:
     """
     workflow = _make_workflow(
         status="active",
-        objective="Book demo",
+        goal="Book demo",
         instructions="You are a sales rep.",
     )
     contact = Contact(

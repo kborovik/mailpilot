@@ -30,7 +30,7 @@ def _activate_workflow(
     update_workflow(
         connection,
         workflow_id,
-        objective="Handle inbound inquiries",
+        goal="Handle inbound inquiries",
         instructions="Reply helpfully",
     )
     activate_workflow(connection, workflow_id)

@@ -2419,7 +2419,7 @@ def _create_and_populate_workflow(
     template: str,
     account_id: str,
     theme: str | None,
-    objective: str | None,
+    goal: str | None,
     resolved_instructions: str | None,
     activate: bool,
 ) -> tuple[Any, list[str]] | None:
@@ -2441,8 +2441,8 @@ def _create_and_populate_workflow(
     if created is None:
         return None
     extras: dict[str, object] = {}
-    if objective is not None:
-        extras["objective"] = objective
+    if goal is not None:
+        extras["goal"] = goal
     if resolved_instructions is not None:
         extras["instructions"] = resolved_instructions
     if extras:
@@ -2450,8 +2450,8 @@ def _create_and_populate_workflow(
     if activate:
         created = activate_workflow(connection, created.id)
     changed = ["name", "template", "account_id", "theme"]
-    if objective is not None:
-        changed.append("objective")
+    if goal is not None:
+        changed.append("goal")
     if resolved_instructions is not None:
         changed.append("instructions")
     if activate:
@@ -2475,7 +2475,7 @@ def _create_and_populate_workflow(
     default=None,
     help="Owning Gmail account (email or ID).",
 )
-@click.option("--objective", default=None, help="Workflow objective.")
+@click.option("--goal", default=None, help="Workflow goal.")
 @click.option(
     "--instructions",
     default=None,
@@ -2502,7 +2502,7 @@ def workflow_create(
     name: str,
     template: str,
     account_email: str | None,
-    objective: str | None,
+    goal: str | None,
     instructions: str | None,
     instructions_file: str | None,
     theme: str | None,
@@ -2521,16 +2521,16 @@ def workflow_create(
             "--instructions and --instructions-file are mutually exclusive",
             "validation_error",
         )
-    has_objective = objective is not None
+    has_goal = goal is not None
     has_instructions = instructions is not None or instructions_file is not None
-    if not draft and not (has_objective and has_instructions):
+    if not draft and not (has_goal and has_instructions):
         output_error(
-            "cannot activate workflow without objective and instructions. "
+            "cannot activate workflow without goal and instructions. "
             "Use --draft to create without them.",
             "validation_error",
         )
     resolved = _resolve_instructions(instructions, instructions_file)
-    activate = not draft and has_objective and has_instructions
+    activate = not draft and has_goal and has_instructions
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         account_id = _resolve_account(connection, account_email).id
@@ -2546,7 +2546,7 @@ def workflow_create(
                 template=template,
                 account_id=account_id,
                 theme=theme,
-                objective=objective,
+                goal=goal,
                 resolved_instructions=resolved,
                 activate=activate,
             )
@@ -2571,7 +2571,7 @@ def workflow_create(
 @workflow.command("update")
 @click.argument("workflow_id")
 @click.option("--name", default=None, help="Workflow name.")
-@click.option("--objective", default=None, help="Workflow objective.")
+@click.option("--goal", default=None, help="Workflow goal.")
 @click.option(
     "--instructions",
     default=None,
@@ -2591,7 +2591,7 @@ def workflow_create(
 def workflow_update(
     workflow_id: str,
     name: str | None,
-    objective: str | None,
+    goal: str | None,
     instructions: str | None,
     instructions_file: str | None,
     theme: str | None,
@@ -2616,8 +2616,8 @@ def workflow_update(
         fields: dict[str, object] = {}
         if name is not None:
             fields["name"] = name
-        if objective is not None:
-            fields["objective"] = objective
+        if goal is not None:
+            fields["goal"] = goal
         if resolved is not None:
             fields["instructions"] = resolved
         if theme is not None:
@@ -2628,7 +2628,7 @@ def workflow_update(
                 output_error(f"workflow not found: {workflow_id}", "not_found")
             changed = [
                 field
-                for field in ("name", "objective", "instructions", "theme")
+                for field in ("name", "goal", "instructions", "theme")
                 if getattr(before, field) != getattr(updated, field)
             ]
             operator_event(
@@ -2645,7 +2645,7 @@ def workflow_update(
 @click.argument("query")
 @click.option("--limit", default=100, help="Maximum results.")
 def workflow_search(query: str, limit: int) -> None:
-    """Search workflows by name or objective."""
+    """Search workflows by name or goal."""
     from mailpilot.database import initialize_database, search_workflows
 
     connection = initialize_database(_database_url())
@@ -2720,7 +2720,7 @@ def workflow_view(workflow_id: str) -> None:
 @workflow.command("start")
 @click.argument("workflow_id")
 def workflow_start(workflow_id: str) -> None:
-    """Start a workflow (requires non-empty objective and instructions)."""
+    """Start a workflow (requires non-empty goal and instructions)."""
     from mailpilot.database import activate_workflow, initialize_database
     from mailpilot.operator_log import cli_mutation, operator_event
 
@@ -2731,10 +2731,10 @@ def workflow_start(workflow_id: str) -> None:
                 activated = activate_workflow(connection, workflow_id)
             except ValueError as exc:
                 message = str(exc)
-                if "objective" in message:
+                if "goal" in message:
                     output_error(
-                        f"cannot start: objective is empty. "
-                        f'Run: workflow update {workflow_id} --objective "..."',
+                        f"cannot start: goal is empty. "
+                        f'Run: workflow update {workflow_id} --goal "..."',
                         "invalid_state",
                     )
                 if "instructions" in message:
@@ -2781,7 +2781,7 @@ def workflow_stop(workflow_id: str) -> None:
 def _toml_basic_string(value: str) -> str:
     r"""Quote ``value`` as a TOML basic string with the minimal escaping.
 
-    Single-line def fields (``name``, ``template``, ``theme``, ``objective``)
+    Single-line def fields (``name``, ``template``, ``theme``, ``goal``)
     round-trip through this; ``\``, ``"`` and control bytes are escaped so the
     emitted file re-parses to the original value.
     """
@@ -2810,7 +2810,7 @@ def _workflow_slug(name: str) -> str:
 def _workflow_to_toml(workflow: Any) -> str:
     """Serialize a ``Workflow`` row to a one-workflow TOML catalog entry (§V.103).
 
-    Emits the def fields ``{name, template, theme, objective, instructions}`` in
+    Emits the def fields ``{name, template, theme, goal, instructions}`` in
     a fixed order; ``instructions`` uses a multi-line literal string so pipes and
     quotes survive verbatim. The leading newline after the opening ``'''`` is
     trimmed by the TOML parser, so the value re-parses byte-identically.
@@ -2819,7 +2819,7 @@ def _workflow_to_toml(workflow: Any) -> str:
         f"name = {_toml_basic_string(workflow.name)}\n"
         f"template = {_toml_basic_string(workflow.template)}\n"
         f"theme = {_toml_basic_string(workflow.theme)}\n"
-        f"objective = {_toml_basic_string(workflow.objective)}\n"
+        f"goal = {_toml_basic_string(workflow.goal)}\n"
         f"instructions = '''\n{workflow.instructions}'''\n"
     )
 
@@ -2841,7 +2841,7 @@ def workflow_export(account_email: str | None, out_dir: str) -> None:
     """Export an account's workflows as one TOML file each.
 
     TOML-only: writes one ``*.toml`` per workflow into ``--out-dir`` (def fields
-    ``{name, template, theme, objective, instructions}``, name-sorted) and prints
+    ``{name, template, theme, goal, instructions}``, name-sorted) and prints
     a JSON status envelope listing the paths written. TOML never reaches stdout
     -- stdout stays strict JSON. ``export -> dir -> import`` round-trips
     idempotently.
@@ -2869,7 +2869,7 @@ def workflow_export(account_email: str | None, out_dir: str) -> None:
         connection.close()
 
 
-_WORKFLOW_IMPORT_UPDATABLE = ("objective", "instructions", "theme")
+_WORKFLOW_IMPORT_UPDATABLE = ("goal", "instructions", "theme")
 
 
 def _import_workflow_create(
@@ -2901,20 +2901,20 @@ def _import_workflow_create(
             "message": (f"workflow {name!r} already exists for account {account_id}"),
         }
     extras: dict[str, object] = {}
-    objective = entry.get("objective")
+    goal = entry.get("goal")
     instructions = entry.get("instructions")
-    if objective:
-        extras["objective"] = objective
+    if goal:
+        extras["goal"] = goal
     if instructions:
         extras["instructions"] = instructions
     if extras:
         update_workflow(connection, created.id, **extras)
-    activated = bool(objective and instructions)
+    activated = bool(goal and instructions)
     if activated:
         activate_workflow(connection, created.id)
     changed = ["name", "template", "account_id", "theme"]
-    if objective:
-        changed.append("objective")
+    if goal:
+        changed.append("goal")
     if instructions:
         changed.append("instructions")
     if activated:
@@ -3092,7 +3092,7 @@ def workflow_import(account_email: str | None, file: str | None) -> None:
 
     Each parsed entry feeds the same upsert (keyed on ``(account_id, name)``):
     workflows absent from the DB are created (and activated when both
-    ``objective`` and ``instructions`` are non-empty), present workflows are
+    ``goal`` and ``instructions`` are non-empty), present workflows are
     updated for changed fields only, ``template`` differences emit a per-row
     ``template_immutable`` error, and ``status`` is never written by import.
     """

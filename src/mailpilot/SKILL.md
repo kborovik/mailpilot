@@ -157,7 +157,7 @@ mailpilot workflow import --account-email <ACCOUNT_REF> --file workflows/
 `workflow export` writes one `*.toml` per workflow into `--out-dir` and prints a
 JSON status envelope of the paths written (TOML never goes to stdout). `workflow
 import` takes a single `.toml` file or a directory of them (`*.toml` glob). Each
-file carries `name`, `template`, `objective`, `instructions`, `theme`, with
+file carries `name`, `template`, `goal`, `instructions`, `theme`, with
 `instructions` as a TOML multi-line literal string. Available templates:
 
 ```

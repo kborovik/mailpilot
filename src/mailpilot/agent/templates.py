@@ -104,7 +104,7 @@ _BASE = (
 )
 
 _DEFERRED_TASK_TASK = (
-    "After completing the workflow objective for a contact, call "
+    "After achieving the workflow goal for a contact, call "
     "record_enrollment_outcome with outcome='completed' and a brief reason. "
     "If work cannot complete now but should resume later, schedule a deferred "
     "task via create_task with a future scheduled_at.\n"

@@ -918,7 +918,7 @@ def test_sync_account_skips_classification_for_emails_before_earliest_workflow(
     update_workflow(
         database_connection,
         workflow.id,
-        objective="Handle inquiries",
+        goal="Handle inquiries",
         instructions="Reply helpfully",
     )
     activate_workflow(database_connection, workflow.id)
@@ -2311,7 +2311,7 @@ def test_sync_one_message_emits_skip_span_when_predates_workflows(
     update_workflow(
         database_connection,
         workflow.id,
-        objective="Handle inquiries",
+        goal="Handle inquiries",
         instructions="Reply helpfully",
     )
     activate_workflow(database_connection, workflow.id)
@@ -2432,7 +2432,7 @@ def test_sync_one_message_persists_route_method_predates_workflows(
     update_workflow(
         database_connection,
         workflow.id,
-        objective="Handle inquiries",
+        goal="Handle inquiries",
         instructions="Reply helpfully",
     )
     activate_workflow(database_connection, workflow.id)

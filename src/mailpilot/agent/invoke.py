@@ -470,7 +470,7 @@ def _format_trigger(
     if trigger in ("enrollment_run", "enrollment_schedule"):
         return (
             "\nFirst reach-out for this enrollment. "
-            "Compose the initial outbound message per the workflow objective "
+            "Compose the initial outbound message per the workflow goal "
             "and instructions."
         )
     if trigger == "task" and task_description:
@@ -496,7 +496,7 @@ def _build_user_prompt(  # noqa: PLR0913
     """Assemble the user prompt for the agent."""
     sections: list[str] = [
         f"Workflow: {workflow.name}",
-        f"Objective: {workflow.objective}",
+        f"Goal: {workflow.goal}",
         f"Type: {workflow.type}",
         f"\nContact: {contact.email}",
     ]
@@ -595,7 +595,7 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
     Args:
         connection: Open database connection.
         settings: Application settings (API keys, model config).
-        workflow: Workflow with instructions (system prompt) and objective.
+        workflow: Workflow with instructions (system prompt) and goal.
         contact: Target contact.
         email: Triggering inbound email, if any.
         task_description: Deferred task description, if triggered by task runner.

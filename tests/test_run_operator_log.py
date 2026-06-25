@@ -29,7 +29,7 @@ def _wf() -> Workflow:
         template="outbound-general",
         type="outbound",
         status="active",
-        objective="Test",
+        goal="Test",
         instructions="Do.",
         created_at=_NOW,
         updated_at=_NOW,

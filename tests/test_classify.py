@@ -23,7 +23,7 @@ from mailpilot.models import Workflow
 def make_workflow(
     workflow_id: str,
     name: str,
-    objective: str,
+    goal: str,
     workflow_type: str = "inbound",
 ) -> Workflow:
     now = datetime.now(UTC)
@@ -36,7 +36,7 @@ def make_workflow(
         account_id="account-1",
         account_email="account-1@example.com",
         status="active",
-        objective=objective,
+        goal=goal,
         instructions="",
         created_at=now,
         updated_at=now,

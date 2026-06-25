@@ -42,7 +42,7 @@ def _activate_workflow(
     update_workflow(
         connection,
         workflow_id,
-        objective="Handle inbound inquiries",
+        goal="Handle inbound inquiries",
         instructions="Reply helpfully",
     )
     activate_workflow(connection, workflow_id)
@@ -321,7 +321,7 @@ def test_route_email_classification_skips_outbound_workflows(
     update_workflow(
         database_connection,
         outbound_wf.id,
-        objective="Cold outreach",
+        goal="Cold outreach",
         instructions="Send cold emails",
     )
     activate_workflow(database_connection, outbound_wf.id)
@@ -884,7 +884,7 @@ def test_route_email_span_has_route_method_skipped_no_inbound_workflows(
     update_workflow(
         database_connection,
         outbound_wf.id,
-        objective="Cold outreach",
+        goal="Cold outreach",
         instructions="Send cold emails",
     )
     activate_workflow(database_connection, outbound_wf.id)
@@ -1338,7 +1338,7 @@ def test_route_email_persists_route_method_skipped_no_inbound_workflows(
     update_workflow(
         database_connection,
         outbound_wf.id,
-        objective="Cold outreach",
+        goal="Cold outreach",
         instructions="Send cold emails",
     )
     activate_workflow(database_connection, outbound_wf.id)

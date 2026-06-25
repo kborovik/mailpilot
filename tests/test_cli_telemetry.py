@@ -88,7 +88,7 @@ def _make_workflow(**overrides: Any) -> Workflow:
         "account_email": "outbound@lab5.ca",
         "status": "draft",
         "theme": "blue",
-        "objective": "",
+        "goal": "",
         "instructions": "",
         "created_at": _NOW,
         "updated_at": _NOW,
@@ -622,7 +622,7 @@ def test_workflow_start_emits_status_change(
     capfire: CaptureLogfire,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    activated = _make_workflow(status="active", objective="x", instructions="y")
+    activated = _make_workflow(status="active", goal="x", instructions="y")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
@@ -643,7 +643,7 @@ def test_workflow_stop_emits_status_change(
     capfire: CaptureLogfire,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    paused = _make_workflow(status="paused", objective="x", instructions="y")
+    paused = _make_workflow(status="paused", goal="x", instructions="y")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
@@ -665,16 +665,14 @@ def test_workflow_import_idempotent_on_unchanged_rows(
     tmp_path: pathlib.Path,
 ) -> None:
     """Re-run import on already-up-to-date rows -> every row event has changed=[]."""
-    existing = _make_workflow(
-        name="Outbound", objective="x", instructions="y", theme="blue"
-    )
+    existing = _make_workflow(name="Outbound", goal="x", instructions="y", theme="blue")
     account = _make_account()
     toml_file = tmp_path / "outbound.toml"
     toml_file.write_text(
         'name = "Outbound"\n'
         'template = "outbound-general"\n'
         'theme = "blue"\n'
-        'objective = "x"\n'
+        'goal = "x"\n'
         "instructions = '''\ny'''\n"
     )
     with (

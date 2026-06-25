@@ -33,7 +33,7 @@ def _activate(connection: psycopg.Connection[dict[str, Any]], workflow_id: str) 
     update_workflow(
         connection,
         workflow_id,
-        objective="Test objective",
+        goal="Test goal",
         instructions="Send a follow-up to the contact.",
     )
     activate_workflow(connection, workflow_id)
