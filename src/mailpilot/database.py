@@ -4658,6 +4658,40 @@ def list_meetings(
     return [Meeting.model_validate(row) for row in rows]
 
 
+def update_meeting(
+    connection: psycopg.Connection[dict[str, Any]],
+    meeting_id: str,
+    **fields: object,
+) -> Meeting | None:
+    """Update a meeting by ID (§V.125).
+
+    Only ``summary`` and ``status`` are operator-editable -- the ingest-owned
+    columns (``google_event_id``, ``meet_url``, ``scheduled_at``, ``ends_at``)
+    are refreshed by CalendarClient re-poll (§V.126), never edited from the CLI.
+    ``status`` is record-keeping only and gates nothing (§V.125). Non-allowed
+    fields are silently dropped; an empty update returns the row unchanged.
+
+    Args:
+        connection: Open database connection.
+        meeting_id: Meeting ID.
+        **fields: Fields to update (only ``summary`` / ``status`` honoured).
+
+    Returns:
+        Updated meeting, or None if not found.
+    """
+    allowed = {"summary", "status"}
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return get_meeting(connection, meeting_id)
+    updates["id"] = meeting_id
+    query = _build_update("meeting", updates, SQL("id = %(id)s"))
+    row = connection.execute(query, updates).fetchone()
+    connection.commit()
+    if row is None:
+        return None
+    return Meeting.model_validate(row)
+
+
 def upsert_meeting(
     connection: psycopg.Connection[dict[str, Any]],
     google_event_id: str,

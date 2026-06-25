@@ -96,6 +96,7 @@ from mailpilot.database import (
     update_company,
     update_contact,
     update_email,
+    update_meeting,
     update_workflow,
     upsert_meeting,
 )
@@ -5774,3 +5775,48 @@ def test_link_meeting_attendee_unknown_refs_raise(
     assert meeting is not None
     with pytest.raises(ValueError, match="contact not found"):
         link_meeting_attendee(database_connection, meeting.id, "no-such-contact")
+
+
+def test_update_meeting_summary_and_status(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.125: update_meeting edits summary + status (record-keeping only)."""
+    meeting = create_meeting(
+        database_connection, google_event_id="evt-upd", summary="Original"
+    )
+    assert meeting is not None
+    assert meeting.status == "scheduled"
+
+    updated = update_meeting(
+        database_connection, meeting.id, summary="Renamed", status="cancelled"
+    )
+    assert updated is not None
+    assert updated.id == meeting.id
+    assert updated.summary == "Renamed"
+    assert updated.status == "cancelled"
+
+
+def test_update_meeting_not_found_returns_none(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    assert (
+        update_meeting(database_connection, "no-such-meeting", status="completed")
+        is None
+    )
+
+
+def test_update_meeting_ignores_non_allowed_fields(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.126: ingest-owned columns are not operator-editable via update_meeting."""
+    meeting = create_meeting(
+        database_connection, google_event_id="evt-guard", meet_url="https://m/orig"
+    )
+    assert meeting is not None
+
+    # meet_url is ingest-owned; the kwarg is dropped, leaving the row unchanged.
+    unchanged = update_meeting(
+        database_connection, meeting.id, meet_url="https://m/new"
+    )
+    assert unchanged is not None
+    assert unchanged.meet_url == "https://m/orig"

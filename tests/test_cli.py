@@ -23,6 +23,8 @@ from mailpilot.models import (
     Email,
     Enrollment,
     EnrollmentSummary,
+    Meeting,
+    MeetingAttendee,
     Note,
     SchemaStatus,
     Tag,
@@ -8517,3 +8519,295 @@ def test_workflow_list_type_flag_removed(runner: CliRunner) -> None:
 
     assert result.exit_code != 0
     assert "no such option" in result.output.lower()
+
+
+# -- Meeting CLI ---------------------------------------------------------------
+
+_MEETING_ID = "01234567-0000-7000-0000-b00000000001"
+
+
+def _make_meeting(**overrides: Any) -> Meeting:
+    defaults: dict[str, Any] = {
+        "id": _MEETING_ID,
+        "google_event_id": "evt-1",
+        "meet_url": "https://meet.google.com/abc-defg-hij",
+        "summary": "Intro call",
+        "scheduled_at": _NOW,
+        "ends_at": _NOW,
+        "status": "scheduled",
+        "created_at": _NOW,
+        "updated_at": _NOW,
+    }
+    return Meeting(**{**defaults, **overrides})
+
+
+def _make_meeting_attendee(**overrides: Any) -> MeetingAttendee:
+    defaults: dict[str, Any] = {
+        "id": "01234567-0000-7000-0000-b00000000099",
+        "meeting_id": _MEETING_ID,
+        "contact_id": "01234567-0000-7000-0000-000000000003",
+        "created_at": _NOW,
+    }
+    return MeetingAttendee(**{**defaults, **overrides})
+
+
+def test_meeting_no_create_command(runner: CliRunner) -> None:
+    """§V.126: meeting rows are ingested, never operator-created -- no `create`."""
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(main, ["meeting", "create"])
+
+    # Click rejects the unknown subcommand at parse time (usage error, exit 2).
+    assert result.exit_code == 2
+
+
+def test_meeting_list(runner: CliRunner, mock_connection: MagicMock) -> None:
+    meetings = [_make_meeting()]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_meetings", return_value=meetings) as mock_list,
+    ):
+        result = runner.invoke(main, ["meeting", "list"])
+
+    assert result.exit_code == 0, result.output
+    mock_list.assert_called_once_with(
+        mock_connection,
+        limit=100,
+        contact_id=None,
+        status=None,
+        since=None,
+        until=None,
+    )
+    data = json.loads(result.output)
+    assert len(data["meetings"]) == 1
+    assert data["meetings"][0]["id"] == _MEETING_ID
+
+
+def test_meeting_list_with_filters(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    contact = _make_contact()
+    meetings = [_make_meeting()]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_contact_by_email", return_value=contact),
+        patch("mailpilot.database.list_meetings", return_value=meetings) as mock_list,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "meeting",
+                "list",
+                "--contact-email",
+                contact.email,
+                "--status",
+                "completed",
+                "--limit",
+                "5",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_list.assert_called_once_with(
+        mock_connection,
+        limit=5,
+        contact_id=contact.id,
+        status="completed",
+        since=None,
+        until=None,
+    )
+
+
+def test_meeting_list_status_rejects_out_of_set(runner: CliRunner) -> None:
+    """§V.88: an out-of-set --status value is rejected at parse time."""
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(main, ["meeting", "list", "--status", "bogus"])
+
+    assert result.exit_code != 0
+    assert "bogus" in result.output
+
+
+def test_meeting_view(runner: CliRunner, mock_connection: MagicMock) -> None:
+    meeting = _make_meeting()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_meeting", return_value=meeting),
+    ):
+        result = runner.invoke(main, ["meeting", "view", meeting.id])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["meeting"]["id"] == meeting.id
+    assert data["meeting"]["summary"] == "Intro call"
+
+
+def test_meeting_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_meeting", return_value=None),
+    ):
+        result = runner.invoke(main, ["meeting", "view", _MEETING_ID])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+
+
+def test_meeting_add_attendee(runner: CliRunner, mock_connection: MagicMock) -> None:
+    meeting = _make_meeting()
+    contact = _make_contact()
+    link = _make_meeting_attendee(contact_id=contact.id)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_meeting", return_value=meeting),
+        patch("mailpilot.database.get_contact_by_email", return_value=contact),
+        patch(
+            "mailpilot.database.link_meeting_attendee", return_value=link
+        ) as mock_link,
+    ):
+        result = runner.invoke(
+            main,
+            ["meeting", "add", meeting.id, "--contact-email", contact.email],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_link.assert_called_once_with(mock_connection, meeting.id, contact.id)
+    data = json.loads(result.output)
+    assert data["meeting_attendee"]["meeting_id"] == meeting.id
+    assert data["meeting_attendee"]["contact_id"] == contact.id
+
+
+def test_meeting_add_meeting_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.94: a missing meeting errors not_found before any link write."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_meeting", return_value=None),
+    ):
+        result = runner.invoke(
+            main, ["meeting", "add", _MEETING_ID, "--contact-email", "x@acme.com"]
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+
+
+def test_meeting_add_duplicate_pair(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.125: re-linking the same pair errors already_exists."""
+    meeting = _make_meeting()
+    contact = _make_contact()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_meeting", return_value=meeting),
+        patch("mailpilot.database.get_contact_by_email", return_value=contact),
+        patch("mailpilot.database.link_meeting_attendee", return_value=None),
+    ):
+        result = runner.invoke(
+            main,
+            ["meeting", "add", meeting.id, "--contact-email", contact.email],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "already_exists"
+
+
+def test_meeting_update(runner: CliRunner, mock_connection: MagicMock) -> None:
+    before = _make_meeting(summary="Intro call", status="scheduled")
+    after = _make_meeting(summary="Renamed", status="completed")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_meeting", return_value=before),
+        patch("mailpilot.database.update_meeting", return_value=after) as mock_update,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "meeting",
+                "update",
+                before.id,
+                "--summary",
+                "Renamed",
+                "--status",
+                "completed",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_update.assert_called_once_with(
+        mock_connection, before.id, summary="Renamed", status="completed"
+    )
+    data = json.loads(result.output)
+    assert data["meeting"]["summary"] == "Renamed"
+    assert data["meeting"]["status"] == "completed"
+
+
+def test_meeting_update_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_meeting", return_value=None),
+    ):
+        result = runner.invoke(
+            main, ["meeting", "update", _MEETING_ID, "--summary", "x"]
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+
+
+def test_meeting_update_status_rejects_out_of_set(runner: CliRunner) -> None:
+    """§V.88: an out-of-set --status value is rejected at parse time."""
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main, ["meeting", "update", _MEETING_ID, "--status", "bogus"]
+        )
+
+    assert result.exit_code != 0
+    assert "bogus" in result.output
+
+
+def test_meeting_cancel(runner: CliRunner, mock_connection: MagicMock) -> None:
+    before = _make_meeting(status="scheduled")
+    after = _make_meeting(status="cancelled")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_meeting", return_value=before),
+        patch("mailpilot.database.update_meeting", return_value=after) as mock_update,
+    ):
+        result = runner.invoke(main, ["meeting", "cancel", before.id])
+
+    assert result.exit_code == 0, result.output
+    mock_update.assert_called_once_with(mock_connection, before.id, status="cancelled")
+    data = json.loads(result.output)
+    assert data["meeting"]["status"] == "cancelled"
+
+
+def test_meeting_cancel_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_meeting", return_value=None),
+    ):
+        result = runner.invoke(main, ["meeting", "cancel", _MEETING_ID])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
