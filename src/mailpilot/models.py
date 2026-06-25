@@ -303,6 +303,7 @@ class EmailSummary(BaseModel):
     direction: EmailDirection
     subject: str
     sender: str
+    recipients: dict[str, list[str]]
     status: str
     is_routed: bool
     route_method: str | None

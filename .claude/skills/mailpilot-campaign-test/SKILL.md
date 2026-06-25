@@ -71,7 +71,7 @@ the run is capped at nine messages (one per alias).
   including the outbound body lint. The skill then reads back what the agent
   actually sent (subject and body).
 - **Verify.** Syncs `inbound@lab5.ca` and confirms each sent email arrived,
-  matched by the agent-written subject.
+  matched by its unique recipient alias, never the agent-written subject.
 - **Critique.** An Opus sub-agent reads the workflow's own wording (its
   `objective` and `instructions`) and the sent emails as evidence, then scores
   the wording against the rubric (`references/marketing-rubric.md`): message

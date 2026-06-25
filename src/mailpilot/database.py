@@ -2821,7 +2821,7 @@ def list_emails(
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
         "SELECT id, account_id, contact_id, workflow_id, direction, "
-        "subject, sender, status, is_routed, route_method, "
+        "subject, sender, recipients, status, is_routed, route_method, "
         "gmail_thread_id, sent_at, received_at "
         "FROM email {} "
         "ORDER BY COALESCE(sent_at, received_at) DESC LIMIT %(limit)s"
@@ -2855,7 +2855,7 @@ def search_emails(
         params["account_id"] = account_id
     query_sql = SQL(
         "SELECT id, account_id, contact_id, workflow_id, direction, "
-        "subject, sender, status, is_routed, route_method, "
+        "subject, sender, recipients, status, is_routed, route_method, "
         "gmail_thread_id, sent_at, received_at "
         "FROM email "
         "WHERE (LOWER(subject) LIKE LOWER(%(pattern)s) "
