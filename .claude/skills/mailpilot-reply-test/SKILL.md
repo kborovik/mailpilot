@@ -4,9 +4,10 @@ description: >-
   Run the live end-to-end reply test for the lab5.ca/mailpilot demo agent: send
   water-treatment product questions from outbound@lab5.ca to inbound@lab5.ca,
   let the inbound-google-drive workflow auto-reply, grade replies against
-  QA-Pairs.json, measure token use + reply latency from Logfire, and emit a
-  brief report — auto-escalating to an Opus root-cause investigation and
-  solution analysis if anything fails. Use this whenever the user wants to test,
+  QA-Pairs.json, measure token use + reply latency from Logfire, review the demo
+  workflow wording with an Opus sub-agent, and emit a brief report —
+  auto-escalating to an Opus root-cause investigation and solution analysis if
+  anything fails. Use this whenever the user wants to test,
   smoke-test, or validate the MailPilot inbound reply agent or demo workflow,
   run a Run-A / Run-B email-delivery test, check reply grounding or polite-
   decline behavior, or measure reply latency and token cost — even when they
@@ -38,16 +39,18 @@ the `mailpilot` console script, and the package are importable. Scripts live in
 - Grades each reply (see `references/grading.md`): in-scope deterministically,
   out-scope + compare by a Sonnet judge sub-agent (§V.105). Pulls per-reply
   tokens + latency from Logfire, writes `report.md`, and investigates failures.
+- Reviews every reply with an Opus sub-agent and recommends concrete edits to the
+  demo workflow file (`workflows/mailpilot-demo.toml`). Runs on every pass, not
+  only on failure.
 
 ## Safety — read before running
 
 - This sends **real Gmail** between `outbound@lab5.ca` and `inbound@lab5.ca`
   (1 message for Run-A, 4 for Run-B).
-- Step 0b runs `make clean`, which **drops and re-creates the local `mailpilot`
-  and `mailpilot_test` databases** (companies/contacts are exported first). This
-  is intentional — a clean DB is what makes each run deterministic — but it wipes
-  all local CRM state, so only run this skill against a local/dev database, never
-  a shared one.
+- This skill **never touches the database**. Any reset or clean is a manual
+  operator step run outside the skill (§V.119). If you want a known-empty
+  baseline, run the clean yourself before invoking. Preflight reports any missing
+  test accounts so you can re-create them by hand.
 - `mailpilot run` has no per-account scope: while up it syncs **all** accounts
   and could auto-reply to any genuine inbound mail. The skill keeps it up only
   for the test window and stops it at teardown. **Teardown is mandatory** — run
@@ -62,8 +65,9 @@ the `mailpilot` console script, and the package are importable. Scripts live in
 |---|---|---|
 | Setup checks, Run-A, Run-B, Analysis | **Sonnet** sub-agents | Mechanical: run scripts / one SQL query, return a short summary. |
 | Reply judging (out-scope + compare) | **Sonnet** sub-agent | NL-shaped grading a deterministic script cannot do reliably (§V.105): reads the reply, rubric, advisory signals, and source datasheet, returns PASS/FAIL + rationale. |
+| Workflow improvement review | **Opus** sub-agent | Judgment-heavy critique of reply quality and workflow wording; runs on every pass, isolated so the reply bodies and the workflow file never enter the orchestrator's window. |
 | Failure investigation, Solution analysis | **Opus** sub-agents | Hard reasoning; isolated in sub-agents so the heavy Logfire/code reading never enters the orchestrator's window. |
-| Baseline reset (`make clean` + account re-create), run-loop start + stop, report generation | Orchestrator, directly | The reset must precede every sub-agent phase; the loop must outlive every phase, so the one process alive across all of them owns it; pairing start+stop there guarantees teardown always runs. Trivial deterministic commands. |
+| Run-loop start + stop, report generation | Orchestrator, directly | The loop must outlive every phase, so the one process alive across all of them owns it; pairing start+stop there guarantees teardown always runs. Trivial deterministic commands. |
 
 Spawn each sub-agent with the Agent tool and the stated `model`. Pass it `RUN_ID`
 and the exact commands; require it to return **only** the small JSON/summary
@@ -79,24 +83,6 @@ Reuse the printed value (e.g. `746e35cd`) as a **literal** wherever `$RUN_ID`
 appears below — substitute the actual string into each command. Do not rely on a
 shell variable: separate tool calls do not share shell state. Artifacts go to
 `.mptest/<run_id>/`.
-
-### 0b. Reset to a deterministic baseline — orchestrator, directly
-Every run must start from a known-empty database so results are reproducible and
-not contaminated by prior runs. Run `make clean` (exports companies/contacts,
-then drops + re-creates the `mailpilot` and `mailpilot_test` databases; the
-schema re-applies on first connection), then re-create the test accounts that the
-clean wiped:
-```bash
-make clean
-uv run mailpilot account create --email outbound@lab5.ca --display-name "MailPilot Outbound"
-uv run mailpilot account create --email inbound@lab5.ca  --display-name "MailPilot Inbound"
-uv run mailpilot account create --email hello@lab5.ca     --display-name "MailPilot Hello"
-```
-Do **not** re-import the demo workflow here — preflight (step 1) imports it
-idempotently onto the inbound account. The orchestrator owns this step because it
-is a trivial deterministic command that must run before any sub-agent phase. If
-`make clean` or an `account create` fails, surface the error and abort (the loop
-is not up yet, so there is nothing to tear down).
 
 ### 1. Setup checks — Sonnet sub-agent
 Have it run, in order, and report the result of each:
@@ -204,11 +190,34 @@ Returns: total tokens, avg/max latency, model(s). Keep raw rows out of the reply
 uv run python .claude/skills/mailpilot-reply-test/scripts/run_loop_stop.py --run-id $RUN_ID
 ```
 
+### 5b. Workflow improvement review — Opus sub-agent (ALWAYS)
+Runs on every pass, not only on failure. The sub-agent grades reply quality and
+recommends concrete edits to the demo workflow file. Scope is wording — distinct
+from step 7, which root-causes failures from Logfire. Give it `RUN_ID` and these
+inputs to read:
+- `.mptest/$RUN_ID/replies_A.json` and `replies_B.json` — the reply bodies.
+- `.mptest/$RUN_ID/scoring_A.json` and `scoring_B.json` — verdicts and per-case
+  detail.
+- `.mptest/$RUN_ID/judgments_B.json` — the judge's rationales (when present).
+- `.claude/skills/mailpilot-reply-test/assets/QA-Pairs.json` — the questions and
+  the facts a grounded reply must carry.
+- `workflows/mailpilot-demo.toml` — the workflow's current objective and
+  instructions, the text its edits must target.
+
+It judges each reply on grounding, structure, citation discipline, tone, and
+decline behavior — including replies that passed, since a pass can still read
+poorly. It writes `.mptest/$RUN_ID/workflow_review.md`: a prioritized list of
+edits to `workflows/mailpilot-demo.toml`, each quoting the current instruction
+line, giving the proposed replacement, the motivating evidence (case id plus a
+short reply excerpt), and a confidence. It returns a one-paragraph summary. It
+**must not edit** the workflow file — it only recommends.
+
 ### 6. Report — orchestrator, directly
 ```bash
 uv run python .claude/skills/mailpilot-reply-test/scripts/generate_report.py --run-id $RUN_ID
 ```
-Reads `.mptest/$RUN_ID/report.md` and present its summary to the user.
+Reads `.mptest/$RUN_ID/report.md` and present its summary to the user. The report
+folds in `workflow_review.md` automatically.
 
 ### 7. Failure escalation — only if a run scored FAIL or NO_REPLY
 Check `scoring_A.json` / `scoring_B.json` `failed` flags.
@@ -237,5 +246,5 @@ report folds in both sections.
 Everything for a run is under `.mptest/$RUN_ID/` (git-ignored): `preflight.json`,
 `validate_qa.json`, `run_manifest.json`, `sends_*.json`, `replies_*.json`,
 `scoring_*.json`, `judge_*.json`, `judgments_*.json`, `logfire_metrics.json`,
-`run.log`, `run.pid`, `report.md`, and (on failure) `investigation.md` /
-`solutions.md`.
+`workflow_review.md`, `run.log`, `run.pid`, `report.md`, and (on failure)
+`investigation.md` / `solutions.md`.

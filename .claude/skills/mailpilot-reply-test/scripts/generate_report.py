@@ -2,8 +2,9 @@
 
 Merges the manifest, preflight, QA validation, per-run scoring, and (when
 present) Logfire token/latency metrics into ``report.md`` and prints a short
-summary to stdout. Folds in ``investigation.md`` / ``solutions.md`` when the
-failure-escalation phase has produced them.
+summary to stdout. Folds in ``workflow_review.md`` (the always-on workflow
+critique) and ``investigation.md`` / ``solutions.md`` (the failure-escalation
+phase) when present.
 
 Usage:
     uv run python scripts/generate_report.py --run-id <id>
@@ -238,6 +239,11 @@ def main() -> int:
     for run in ("A", "B"):
         _emit_run_table(directory, run, metric_cases, lines)
     _emit_performance(directory, metrics, metric_cases, lines)
+    _fold_in(
+        directory / "workflow_review.md",
+        "## Workflow improvement review (Opus)",
+        lines,
+    )
     _fold_in(directory / "investigation.md", "## Failure investigation (Opus)", lines)
     _fold_in(directory / "solutions.md", "## Proposed solutions (Opus)", lines)
 
