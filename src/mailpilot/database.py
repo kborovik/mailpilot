@@ -3288,6 +3288,47 @@ def cancel_task(
     return Task.model_validate(row)
 
 
+def cancel_enrollment_followup_tasks(
+    connection: psycopg.Connection[dict[str, Any]],
+    enrollment_id: str,
+) -> list[Task]:
+    """Cancel an enrollment's pending future follow-up tasks (§V.123).
+
+    Bulk-cancels every ``pending`` task for ``enrollment_id`` whose
+    ``scheduled_at`` is still in the future, excluding the operator
+    first-touch task (the row carrying ``context->>'trigger' =
+    'enrollment_schedule'`` per §V.32). Called from ``routing.route_email``
+    when an inbound reply routes to the enrollment: the prospect engaged,
+    so any later cold follow-up touch is cancelled before it wakes.
+
+    Already-due tasks (``scheduled_at <= now``) and non-pending tasks are
+    left untouched; status moves ``pending`` -> ``cancelled`` (mirrors
+    ``cancel_task``). Agent-created follow-ups may carry a NULL
+    ``email_id``, so the first-touch is identified by the trigger label,
+    not by ``email_id``.
+
+    Args:
+        connection: Open database connection.
+        enrollment_id: Enrollment whose follow-up tasks to cancel.
+
+    Returns:
+        The cancelled tasks, ordered by scheduled_at; empty when none matched.
+    """
+    rows = connection.execute(
+        """\
+        UPDATE task SET status = 'cancelled', completed_at = CURRENT_TIMESTAMP
+        WHERE enrollment_id = %(enrollment_id)s
+          AND status = 'pending'
+          AND scheduled_at > CURRENT_TIMESTAMP
+          AND COALESCE(context->>'trigger', '') <> 'enrollment_schedule'
+        RETURNING *
+        """,
+        {"enrollment_id": enrollment_id},
+    ).fetchall()
+    connection.commit()
+    return [Task.model_validate(row) for row in rows]
+
+
 def list_tasks(
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str | None = None,

@@ -22,6 +22,7 @@ from conftest import (
 )
 from mailpilot.database import (
     activate_workflow,
+    cancel_enrollment_followup_tasks,
     cancel_task,
     complete_task,
     create_account,
@@ -61,6 +62,7 @@ from mailpilot.database import (
     get_latest_email_in_thread,
     get_note,
     get_status_payload,
+    get_task,
     get_unprocessed_inbound_email,
     get_workflow,
     import_snapshot,
@@ -3946,6 +3948,178 @@ def test_find_pending_first_touch_task_scoped_to_enrollment(
     )
     assert find_pending_first_touch_task(database_connection, enroll_b.id) is None
     assert find_pending_first_touch_task(database_connection, enroll_a.id) is not None
+
+
+# -- cancel_enrollment_followup_tasks (§V.123) ---------------------------------
+
+_FAR_FUTURE = "2099-12-31T00:00:00Z"
+_FAR_PAST = "2000-01-01T00:00:00Z"
+
+
+def test_cancel_enrollment_followup_tasks_cancels_future_pending(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.123: a future pending follow-up (email_id NULL) is cancelled."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    followup = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="breakup touch",
+        scheduled_at=_FAR_FUTURE,
+        context={"trigger": "followup"},
+    )
+
+    cancelled = cancel_enrollment_followup_tasks(database_connection, enrollment.id)
+
+    assert [t.id for t in cancelled] == [followup.id]
+    refetched = get_task(database_connection, followup.id)
+    assert refetched is not None
+    assert refetched.status == "cancelled"
+    assert refetched.completed_at is not None
+
+
+def test_cancel_enrollment_followup_tasks_cancels_email_bound_followup(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.123: a follow-up carrying email_id is still cancelled (keys on trigger)."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    email = create_email(
+        database_connection,
+        gmail_message_id="msg-fc",
+        gmail_thread_id="thread-fc",
+        account_id=account.id,
+        direction="inbound",
+        subject="hi",
+        body_text="ping",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+    )
+    assert email is not None
+    followup = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="follow-up bound to a prior email",
+        scheduled_at=_FAR_FUTURE,
+        email_id=email.id,
+    )
+
+    cancelled = cancel_enrollment_followup_tasks(database_connection, enrollment.id)
+
+    assert [t.id for t in cancelled] == [followup.id]
+
+
+def test_cancel_enrollment_followup_tasks_preserves_first_touch(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.123/§V.32: the enrollment_schedule first-touch is never cancelled."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    first_touch = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="scheduled first reach-out",
+        scheduled_at=_FAR_FUTURE,
+        context={"trigger": "enrollment_schedule"},
+    )
+
+    cancelled = cancel_enrollment_followup_tasks(database_connection, enrollment.id)
+
+    assert cancelled == []
+    refetched = get_task(database_connection, first_touch.id)
+    assert refetched is not None
+    assert refetched.status == "pending"
+
+
+def test_cancel_enrollment_followup_tasks_skips_already_due(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.123: a task already due (scheduled_at <= now) is left to fire."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    due = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="already due",
+        scheduled_at=_FAR_PAST,
+        context={"trigger": "followup"},
+    )
+
+    cancelled = cancel_enrollment_followup_tasks(database_connection, enrollment.id)
+
+    assert cancelled == []
+    refetched = get_task(database_connection, due.id)
+    assert refetched is not None
+    assert refetched.status == "pending"
+
+
+def test_cancel_enrollment_followup_tasks_skips_non_pending(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.123: completed/cancelled tasks are untouched."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    task = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="future but completed",
+        scheduled_at=_FAR_FUTURE,
+        context={"trigger": "followup"},
+    )
+    complete_task(database_connection, task.id, status="completed")
+
+    cancelled = cancel_enrollment_followup_tasks(database_connection, enrollment.id)
+
+    assert cancelled == []
+
+
+def test_cancel_enrollment_followup_tasks_scoped_to_enrollment(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.123: a sibling enrollment's follow-up is invisible."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact_a = make_test_contact(database_connection, email="a@test.com")
+    contact_b = make_test_contact(database_connection, email="b@test.com")
+    enroll_a = make_test_enrollment(database_connection, workflow.id, contact_a.id)
+    enroll_b = make_test_enrollment(database_connection, workflow.id, contact_b.id)
+    followup_b = create_task(
+        database_connection,
+        enrollment_id=enroll_b.id,
+        workflow_id=workflow.id,
+        contact_id=contact_b.id,
+        description="b breakup touch",
+        scheduled_at=_FAR_FUTURE,
+        context={"trigger": "followup"},
+    )
+
+    cancelled = cancel_enrollment_followup_tasks(database_connection, enroll_a.id)
+
+    assert cancelled == []
+    refetched = get_task(database_connection, followup_b.id)
+    assert refetched is not None
+    assert refetched.status == "pending"
 
 
 def test_create_tasks_for_routed_emails(

@@ -32,12 +32,14 @@ import psycopg
 
 from mailpilot.agent.classify import classify_email
 from mailpilot.database import (
+    cancel_enrollment_followup_tasks,
     create_activity,
     create_enrollment,
     disable_contact,
     find_email_by_rfc2822_message_id,
     get_contact,
     get_emails_by_gmail_thread_id,
+    get_enrollment,
     get_workflow,
     list_workflows,
     update_email,
@@ -134,6 +136,9 @@ def route_email(
                 )
                 if result.contact_id is not None:
                     _ensure_enrollment(connection, workflow_id, result.contact_id)
+                    _cancel_pending_followups(
+                        connection, workflow_id, result.contact_id, result.id
+                    )
             else:
                 operator_event("route.no_match", email_id=result.id)
 
@@ -361,3 +366,31 @@ def _ensure_enrollment(
         workflow_id=workflow_id,
         enrollment_id=enrollment.id,
     )
+
+
+def _cancel_pending_followups(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+    contact_id: str,
+    email_id: str,
+) -> None:
+    """Cancel the enrollment's pending future follow-up touches (§V.123).
+
+    An inbound reply means the prospect engaged, so any later cold
+    follow-up touch is cancelled before it wakes. The operator first-touch
+    (``trigger='enrollment_schedule'``) is preserved. The enrollment is
+    resolved fresh rather than reusing ``_ensure_enrollment`` because the
+    reply case finds a pre-existing enrollment, where ``create_enrollment``
+    returns ``None`` (§V.28) -- the cancel must fire on that branch too.
+    """
+    enrollment = get_enrollment(connection, workflow_id, contact_id)
+    if enrollment is None:
+        return
+    cancelled = cancel_enrollment_followup_tasks(connection, enrollment.id)
+    if cancelled:
+        operator_event(
+            "route.followups_cancelled",
+            email_id=email_id,
+            enrollment_id=enrollment.id,
+            cancelled_count=len(cancelled),
+        )
