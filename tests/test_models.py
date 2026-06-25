@@ -11,6 +11,8 @@ from mailpilot.models import (
     Contact,
     Email,
     Enrollment,
+    Meeting,
+    MeetingAttendee,
     Task,
     Workflow,
 )
@@ -234,3 +236,29 @@ def test_task_defaults():
     assert task.status == "pending"
     assert task.completed_at is None
     assert task.context == {}
+
+
+def test_meeting_defaults():
+    meeting = Meeting(id="1", created_at=NOW, updated_at=NOW)
+    assert meeting.status == "scheduled"
+    assert meeting.google_event_id is None
+    assert meeting.meet_url is None
+    assert meeting.summary == ""
+    assert meeting.scheduled_at is None
+    assert meeting.ends_at is None
+
+
+def test_meeting_invalid_status_raises():
+    with pytest.raises(ValidationError):
+        Meeting(id="1", status="postponed", created_at=NOW, updated_at=NOW)  # type: ignore[arg-type]
+
+
+def test_meeting_attendee_required_fields():
+    attendee = MeetingAttendee(id="1", meeting_id="m1", contact_id="c1", created_at=NOW)
+    assert attendee.meeting_id == "m1"
+    assert attendee.contact_id == "c1"
+
+
+def test_meeting_attendee_missing_required_raises():
+    with pytest.raises(ValidationError):
+        MeetingAttendee(id="1", meeting_id="m1", created_at=NOW)  # type: ignore[call-arg]

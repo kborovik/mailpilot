@@ -477,6 +477,72 @@ def test_migration_005_drops_tag_disabled_activity_type(
     assert admitted["type"] == "tag_removed"
 
 
+# -- migration 007: add meeting + meeting_attendee tables (§V.125) -------------
+
+
+def test_migration_007_adds_meeting_tables(
+    migration_schema: psycopg.Connection[dict[str, Any]],
+):
+    """§V.125: migration 007 adds the `meeting` + `meeting_attendee` tables.
+
+    A meeting is keyed on `google_event_id` (nullable-unique idempotent ingest)
+    and links attendees through `meeting_attendee` (UNIQUE per pair). The DDL
+    is byte-identical to schema.sql, so the identity test guards the structure;
+    this test exercises the new constraints on a migrate-from-zero build.
+    """
+    conn = migration_schema
+    # Build the pre-007 world: every shipped migration up to 006.
+    for prefix in ("001", "002", "003", "004", "005", "006"):
+        conn.execute(_read_shipped_migration(prefix))  # type: ignore[arg-type]
+    conn.commit()
+
+    # Pre-007 the tables do not exist.
+    pre = conn.execute("SELECT to_regclass('meeting') AS oid").fetchone()
+    assert pre is not None
+    assert pre["oid"] is None
+
+    # Apply the add.
+    conn.execute(_read_shipped_migration("007"))  # type: ignore[arg-type]
+    conn.commit()
+
+    # The status CHECK admits the four documented values and rejects others.
+    conn.execute(
+        "INSERT INTO meeting (id, google_event_id, status) VALUES (%s, %s, %s)",
+        ("m1", "evt-1", "scheduled"),
+    )
+    conn.commit()
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            "INSERT INTO meeting (id, status) VALUES (%s, %s)", ("m2", "postponed")
+        )
+    conn.rollback()
+
+    # google_event_id is unique (idempotent ingest key).
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        conn.execute(
+            "INSERT INTO meeting (id, google_event_id) VALUES (%s, %s)",
+            ("m3", "evt-1"),
+        )
+    conn.rollback()
+
+    # meeting_attendee enforces UNIQUE per (meeting_id, contact_id) pair.
+    conn.execute(
+        "INSERT INTO contact (id, email) VALUES (%s, %s)", ("ct1", "a@acme.com")
+    )
+    conn.execute(
+        "INSERT INTO meeting_attendee (id, meeting_id, contact_id) VALUES (%s, %s, %s)",
+        ("ma1", "m1", "ct1"),
+    )
+    conn.commit()
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        conn.execute(
+            "INSERT INTO meeting_attendee (id, meeting_id, contact_id) "
+            "VALUES (%s, %s, %s)",
+            ("ma2", "m1", "ct1"),
+        )
+    conn.rollback()
+
+
 # -- identity invariant: schema.sql == apply-all-migrations-from-zero (§V.108) -
 
 

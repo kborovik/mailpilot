@@ -1,7 +1,7 @@
 """Integration tests for database CRUD operations (real DB)."""
 
 import threading
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import Any, cast
 
 import psycopg
@@ -32,6 +32,7 @@ from mailpilot.database import (
     create_contacts_bulk,
     create_email,
     create_enrollment,
+    create_meeting,
     create_or_get_contact_by_email,
     create_tag,
     create_task,
@@ -60,18 +61,22 @@ from mailpilot.database import (
     get_enrollment,
     get_last_cold_outbound,
     get_latest_email_in_thread,
+    get_meeting,
+    get_meeting_by_google_event_id,
     get_note,
     get_status_payload,
     get_task,
     get_unprocessed_inbound_email,
     get_workflow,
     import_snapshot,
+    link_meeting_attendee,
     list_accounts,
     list_activities,
     list_companies,
     list_contacts,
     list_emails,
     list_enrollments_detailed,
+    list_meetings,
     list_notes,
     list_tags,
     list_tasks,
@@ -90,6 +95,7 @@ from mailpilot.database import (
     update_contact,
     update_email,
     update_workflow,
+    upsert_meeting,
 )
 
 # -- Account -------------------------------------------------------------------
@@ -5518,3 +5524,172 @@ def test_import_snapshot_unresolvable_fk_is_per_row_error(
     assert result["errors"][0]["key"] == "orphan@nowhere.com"
     assert get_contact_by_email(database_connection, "good@acme.com") is not None
     assert get_contact_by_email(database_connection, "orphan@nowhere.com") is None
+
+
+# -- Meeting -------------------------------------------------------------------
+
+
+def test_create_and_get_meeting(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.125: create a meeting row and round-trip it by id."""
+    start = datetime(2026, 7, 1, 15, 0, tzinfo=UTC)
+    end = datetime(2026, 7, 1, 15, 30, tzinfo=UTC)
+    meeting = create_meeting(
+        database_connection,
+        google_event_id="evt-1",
+        meet_url="https://meet.google.com/abc-defg-hij",
+        summary="Intro call",
+        scheduled_at=start,
+        ends_at=end,
+    )
+    assert meeting is not None
+    assert meeting.google_event_id == "evt-1"
+    assert meeting.summary == "Intro call"
+    assert meeting.status == "scheduled"
+    assert meeting.scheduled_at == start
+    assert meeting.ends_at == end
+
+    fetched = get_meeting(database_connection, meeting.id)
+    assert fetched is not None
+    assert fetched.id == meeting.id
+    assert fetched.meet_url == "https://meet.google.com/abc-defg-hij"
+
+
+def test_get_meeting_not_found(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    assert get_meeting(database_connection, "nonexistent") is None
+
+
+def test_create_meeting_conflict_returns_none(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.125/§V.90: a second create on the same google_event_id returns None."""
+    first = create_meeting(database_connection, google_event_id="evt-dup")
+    assert first is not None
+    second = create_meeting(database_connection, google_event_id="evt-dup")
+    assert second is None
+
+
+def test_upsert_meeting_idempotent_on_google_event_id(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.125/§V.90: re-polling the same event updates in place, no dup row."""
+    first = upsert_meeting(
+        database_connection,
+        google_event_id="evt-2",
+        summary="Original title",
+        status="scheduled",
+    )
+    second = upsert_meeting(
+        database_connection,
+        google_event_id="evt-2",
+        summary="Renamed title",
+        status="completed",
+    )
+    # Same row (same id), fields updated.
+    assert second.id == first.id
+    assert second.summary == "Renamed title"
+    assert second.status == "completed"
+
+    # Exactly one row carries the event id.
+    rows = database_connection.execute(
+        "SELECT COUNT(*) AS n FROM meeting WHERE google_event_id = 'evt-2'"
+    ).fetchone()
+    assert rows is not None
+    assert rows["n"] == 1
+
+    by_event = get_meeting_by_google_event_id(database_connection, "evt-2")
+    assert by_event is not None
+    assert by_event.id == first.id
+
+
+def test_list_meetings_orders_and_filters(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.125: list_meetings orders newest scheduled first; status + contact scope."""
+    early = create_meeting(
+        database_connection,
+        google_event_id="evt-early",
+        scheduled_at=datetime(2026, 7, 1, tzinfo=UTC),
+        status="scheduled",
+    )
+    late = create_meeting(
+        database_connection,
+        google_event_id="evt-late",
+        scheduled_at=datetime(2026, 8, 1, tzinfo=UTC),
+        status="completed",
+    )
+    assert early is not None
+    assert late is not None
+
+    all_meetings = list_meetings(database_connection)
+    assert [m.id for m in all_meetings] == [late.id, early.id]
+
+    completed = list_meetings(database_connection, status="completed")
+    assert [m.id for m in completed] == [late.id]
+
+    contact = make_test_contact(database_connection)
+    link_meeting_attendee(database_connection, late.id, contact.id)
+    scoped = list_meetings(database_connection, contact_id=contact.id)
+    assert [m.id for m in scoped] == [late.id]
+
+
+def test_link_meeting_attendee_pair_unique(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.125: a meeting links its attendees; a repeat pair link returns None."""
+    meeting = create_meeting(database_connection, google_event_id="evt-3")
+    assert meeting is not None
+    contact = make_test_contact(database_connection)
+
+    link = link_meeting_attendee(database_connection, meeting.id, contact.id)
+    assert link is not None
+    assert link.meeting_id == meeting.id
+    assert link.contact_id == contact.id
+
+    # Re-linking the same pair is idempotent (no duplicate row).
+    again = link_meeting_attendee(database_connection, meeting.id, contact.id)
+    assert again is None
+
+    rows = database_connection.execute(
+        "SELECT COUNT(*) AS n FROM meeting_attendee WHERE meeting_id = %s",
+        (meeting.id,),
+    ).fetchone()
+    assert rows is not None
+    assert rows["n"] == 1
+
+
+def test_link_meeting_attendee_multi_attendee(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.125: one meeting links more than one attendee contact."""
+    meeting = create_meeting(database_connection, google_event_id="evt-4")
+    assert meeting is not None
+    contact_a = make_test_contact(database_connection, email="a@acme.com")
+    contact_b = make_test_contact(database_connection, email="b@acme.com")
+
+    assert link_meeting_attendee(database_connection, meeting.id, contact_a.id)
+    assert link_meeting_attendee(database_connection, meeting.id, contact_b.id)
+
+    rows = database_connection.execute(
+        "SELECT COUNT(*) AS n FROM meeting_attendee WHERE meeting_id = %s",
+        (meeting.id,),
+    ).fetchone()
+    assert rows is not None
+    assert rows["n"] == 2
+
+
+def test_link_meeting_attendee_unknown_refs_raise(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.94-style guard: linking an unknown meeting or contact raises."""
+    contact = make_test_contact(database_connection)
+    with pytest.raises(ValueError, match="meeting not found"):
+        link_meeting_attendee(database_connection, "no-such-meeting", contact.id)
+
+    meeting = create_meeting(database_connection, google_event_id="evt-5")
+    assert meeting is not None
+    with pytest.raises(ValueError, match="contact not found"):
+        link_meeting_attendee(database_connection, meeting.id, "no-such-contact")

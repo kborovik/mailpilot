@@ -239,6 +239,36 @@ CREATE TABLE IF NOT EXISTS note (
 CREATE INDEX IF NOT EXISTS idx_note_contact_id ON note(contact_id) WHERE contact_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_note_company_id ON note(company_id) WHERE company_id IS NOT NULL;
 
+-- Meeting = first-class entity peer to email (§V.125). One row per Google
+-- Calendar event, keyed on `google_event_id` (nullable-unique, idempotent
+-- ingest, mirrors email.gmail_message_id §V.90). `meeting_attendee` links one
+-- meeting to >=1 contact (UNIQUE per pair, mirrors tag_assignment §V.116). The
+-- `status` column is operator record-keeping only and gates nothing -- booking
+-- conclusion (§V.128) fires at booking regardless of a later completed|no_show.
+CREATE TABLE IF NOT EXISTS meeting (
+    id              TEXT PRIMARY KEY,
+    google_event_id TEXT UNIQUE,
+    meet_url        TEXT,
+    summary         TEXT NOT NULL DEFAULT '',
+    scheduled_at    TIMESTAMPTZ,
+    ends_at         TIMESTAMPTZ,
+    status          TEXT NOT NULL DEFAULT 'scheduled'
+                    CHECK (status IN ('scheduled', 'completed', 'cancelled', 'no_show')),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS meeting_attendee (
+    id              TEXT PRIMARY KEY,
+    meeting_id      TEXT NOT NULL REFERENCES meeting(id),
+    contact_id      TEXT NOT NULL REFERENCES contact(id),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (meeting_id, contact_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_meeting_attendee_meeting ON meeting_attendee(meeting_id);
+CREATE INDEX IF NOT EXISTS idx_meeting_attendee_contact ON meeting_attendee(contact_id);
+
 CREATE TABLE IF NOT EXISTS sync_status (
     id            TEXT PRIMARY KEY DEFAULT 'singleton',
     pid           INTEGER NOT NULL,

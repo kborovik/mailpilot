@@ -473,6 +473,44 @@ class NoteSummary(BaseModel):
     created_at: datetime
 
 
+MeetingStatus = Literal["scheduled", "completed", "cancelled", "no_show"]
+
+
+class Meeting(BaseModel):
+    """A calendar meeting, first-class entity peer to email (§V.125).
+
+    One row per Google Calendar event, keyed on ``google_event_id``
+    (nullable-unique, idempotent ingest, mirrors ``email.gmail_message_id``
+    §V.90). Attendees link through ``MeetingAttendee``. ``status`` is operator
+    record-keeping only and gates nothing -- booking conclusion (§V.128) fires
+    at booking regardless of a later ``completed``/``no_show`` (§V.125).
+    """
+
+    id: str
+    google_event_id: str | None = None
+    meet_url: str | None = None
+    summary: str = ""
+    scheduled_at: datetime | None = None
+    ends_at: datetime | None = None
+    status: MeetingStatus = "scheduled"
+    created_at: datetime
+    updated_at: datetime
+
+
+class MeetingAttendee(BaseModel):
+    """A link binding a `Meeting` to one attendee contact (§V.125).
+
+    UNIQUE per ``(meeting_id, contact_id)`` pair (mirrors `TagAssignment`
+    §V.116). One meeting links one or more attendees; attendees are matched to
+    contacts by email at ingest time, an unmatched email produces no link.
+    """
+
+    id: str
+    meeting_id: str
+    contact_id: str
+    created_at: datetime
+
+
 class ContactView(BaseModel):
     """View-only projection of `Contact` with inlined notes (§V.8).
 
