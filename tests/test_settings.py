@@ -44,6 +44,20 @@ def test_set_setting_round_trips_reasoning_keys(tmp_path: Path):
     assert reloaded.anthropic_effort == "high"
 
 
+def test_anthropic_max_tokens_default():
+    """§V.130: anthropic_max_tokens defaults to 16384 (output budget bounded)."""
+    settings = Settings()
+    assert settings.anthropic_max_tokens == 16384
+
+
+def test_set_setting_round_trips_max_tokens(tmp_path: Path):
+    """§V.130: config set/get persists the output-token budget override."""
+    config_path = tmp_path / "config.json"
+    set_setting("anthropic_max_tokens", 32768, config_path=config_path)
+    reloaded = load_settings(config_path=config_path)
+    assert reloaded.anthropic_max_tokens == 32768
+
+
 def test_anthropic_thinking_rejects_invalid_value():
     """§V.130: anthropic_thinking is a closed Literal; an off-list value is rejected."""
     with pytest.raises(ValidationError):

@@ -84,6 +84,9 @@ Keys:
 - `anthropic_effort` -- workflow-agent reasoning effort. Default `high`; one of
   `low`, `medium`, `high`, `xhigh`, `max`, or empty to send no effort key.
   `xhigh` needs Opus 4.7 or newer. Classifier never reads this key.
+- `anthropic_max_tokens` -- workflow-agent output-token budget. Default `16384`;
+  always sent so default-active thinking cannot exhaust the provider-default
+  budget before any reply text. Classifier never reads this key.
 - `google_application_credentials` -- path to service-account JSON. Optional
   when running on a platform that exposes Application Default Credentials (GCE
   attached service account, GKE Workload Identity, Cloud Run identity); leave

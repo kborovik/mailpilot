@@ -1659,6 +1659,50 @@ def test_build_anthropic_model_reasoning_preserves_cache_flags() -> None:
     assert model.settings.get("anthropic_cache_instructions") is True
 
 
+def test_build_anthropic_model_always_passes_max_tokens() -> None:
+    """§V.130: default settings bound the output stream at max_tokens=16384.
+
+    The output-token budget is always passed (not empty-gated like the
+    reasoning knobs), so default-active thinking cannot exhaust the
+    provider-default budget before any reply text (§B.115).
+    """
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="claude-sonnet-4-6"
+    )
+    model = _build_anthropic_model(settings)
+    assert model.settings is not None
+    assert model.settings.get("max_tokens") == 16384
+
+
+def test_build_anthropic_model_threads_max_tokens_override() -> None:
+    """§V.130: an operator-set anthropic_max_tokens flows into model settings."""
+    settings = make_test_settings(
+        anthropic_api_key="sk-test",
+        anthropic_model="claude-sonnet-4-6",
+        anthropic_max_tokens=32768,
+    )
+    model = _build_anthropic_model(settings)
+    assert model.settings is not None
+    assert model.settings.get("max_tokens") == 32768
+
+
+def test_build_anthropic_model_max_tokens_preserves_reasoning_and_cache() -> None:
+    """§V.130 + §V.47: max_tokens rides alongside the reasoning + cache flags."""
+    settings = make_test_settings(
+        anthropic_api_key="sk-test",
+        anthropic_model="claude-opus-4-7",
+        anthropic_thinking="adaptive",
+        anthropic_effort="xhigh",
+    )
+    model = _build_anthropic_model(settings)
+    assert model.settings is not None
+    assert model.settings.get("max_tokens") == 16384
+    assert model.settings.get("anthropic_thinking") == {"type": "adaptive"}
+    assert model.settings.get("anthropic_effort") == "xhigh"
+    assert model.settings.get("anthropic_cache_tool_definitions") is True
+    assert model.settings.get("anthropic_cache_instructions") is True
+
+
 def test_build_anthropic_model_requires_api_key() -> None:
     """Missing api_key raises a clear error rather than reaching the API."""
     settings = make_test_settings(

@@ -436,11 +436,14 @@ def _build_anthropic_model(settings: Settings) -> AnthropicModel:
     call to that vendor with no code change.
 
     §V.130: ``anthropic_thinking`` and ``anthropic_effort`` are config-gated
-    reasoning controls scoped to the workflow agent. Both default unset, so the
-    production call shape is unchanged until an operator opts in. When set, the
-    thinking value becomes an ``anthropic_thinking={'type': <value>}`` block and
-    the effort value passes through as ``anthropic_effort``; the cache flags
-    (§V.47) are unaffected. The classifier never reads these settings.
+    reasoning controls scoped to the workflow agent. Both default active; an
+    operator opts out per knob by setting it to ''. When set, the thinking value
+    becomes an ``anthropic_thinking={'type': <value>}`` block and the effort
+    value passes through as ``anthropic_effort``. ``anthropic_max_tokens`` is
+    ALWAYS passed as ``max_tokens`` (not empty-gated) so default-active thinking
+    cannot exhaust the provider-default output budget before any reply text
+    (§B.115). The cache flags (§V.47) are unaffected. The classifier never reads
+    these settings.
     """
     if not settings.anthropic_api_key:
         raise ValueError(
@@ -450,6 +453,7 @@ def _build_anthropic_model(settings: Settings) -> AnthropicModel:
     model_settings = AnthropicModelSettings(
         anthropic_cache_tool_definitions=True,
         anthropic_cache_instructions=True,
+        max_tokens=settings.anthropic_max_tokens,
     )
     if settings.anthropic_thinking:
         model_settings["anthropic_thinking"] = {"type": settings.anthropic_thinking}
