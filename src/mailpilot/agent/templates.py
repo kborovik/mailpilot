@@ -128,21 +128,15 @@ _DEFERRED_TASK_INITIAL = (
 # here in the comment. Names three tools, satisfying the >=2-distinct-tool rule
 # (§V.40).
 _MUST_SEND = (
-    "End every trigger turn by actually sending the message: call reply_email "
-    "to answer an inbound thread, or send_email to open an outbound one. "
-    "Drafting the message text in your reasoning is not sending it -- the "
-    "message reaches the recipient only through a reply_email or send_email "
-    "tool call. If no message is appropriate, call noop to decline explicitly. "
-    "Never finish a turn having drafted a message without calling one of these "
-    "tools.\n"
+    "End every trigger turn with a tool call: reply_email to answer an inbound "
+    "thread, send_email to open an outbound one, or noop to decline explicitly. "
+    "Drafting the message in your reasoning does not send it -- the recipient "
+    "sees it only through a reply_email or send_email call.\n"
 )
 
 _DECLINE = (
     "If no available information is relevant to the question, reply with a "
-    "polite decline that does not invent facts. The decline path still "
-    "requires at least one tool call (e.g. reply_email to send the decline, "
-    "or noop if no contact action is appropriate) to satisfy the tool-use "
-    "contract.\n"
+    "polite decline that does not invent facts.\n"
 )
 
 _NO_FABRICATION = (
