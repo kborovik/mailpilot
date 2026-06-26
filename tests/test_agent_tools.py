@@ -19,6 +19,7 @@ from conftest import (
     make_test_workflow,
 )
 from mailpilot.agent.tools import (
+    _mark_reply_emitted,  # pyright: ignore[reportPrivateUsage]
     cancel_task,
     conclude_enrollment,
     create_task,
@@ -31,7 +32,9 @@ from mailpilot.agent.tools import (
     read_drive_markdown,
     read_email,
     reply_email,
+    reply_emitted_scope,
     reply_rejection_scope,
+    reply_was_emitted,
     search_drive_markdown,
     search_emails,
     send_email,
@@ -77,6 +80,89 @@ def _make_gmail_client(
         "labelIds": ["SENT"],
     }
     return client
+
+
+# -- reply-emitted flag (§V.131) ----------------------------------------------
+
+
+def test_reply_was_emitted_false_outside_scope() -> None:
+    """§V.131: outside a ``reply_emitted_scope`` the flag reads False and
+    ``_mark_reply_emitted`` is a no-op (legacy / CLI paths without a task)."""
+    assert reply_was_emitted() is False
+    _mark_reply_emitted()
+    assert reply_was_emitted() is False
+
+
+def test_reply_emitted_scope_marks_and_resets() -> None:
+    """§V.131: inside the scope the flag starts False, flips True on
+    ``_mark_reply_emitted``, and resets to False on scope exit."""
+    with reply_emitted_scope():
+        assert reply_was_emitted() is False
+        _mark_reply_emitted()
+        assert reply_was_emitted() is True
+    assert reply_was_emitted() is False
+
+
+def test_send_email_success_marks_reply_emitted(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.131: a successful ``send_email`` marks the per-task reply-emitted
+    flag so the run-loop fallback never double-replies."""
+    account = make_test_account(database_connection)
+    make_test_contact(database_connection, email="recipient@example.com")
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    gmail_client = _make_gmail_client(account)
+
+    with reply_emitted_scope():
+        result = send_email(
+            connection=database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=make_test_settings(),
+            workflow_id=workflow.id,
+            to="recipient@example.com",
+            subject="Hello",
+            body="Hi there",
+        )
+        assert "error" not in result
+        assert reply_was_emitted() is True
+
+
+def test_reply_email_success_marks_reply_emitted(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.131: a successful ``reply_email`` marks the per-task reply-emitted
+    flag."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection, email="sender@example.com")
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Question about pricing",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        gmail_message_id="inbound-msg-1",
+        gmail_thread_id="thread-abc",
+    )
+    assert inbound is not None
+    gmail_client = _make_gmail_client(account)
+
+    with reply_emitted_scope():
+        result = reply_email(
+            connection=database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=make_test_settings(),
+            workflow_id=workflow.id,
+            email_id=inbound.id,
+            body="Here is the pricing info.",
+        )
+        assert "error" not in result
+        assert reply_was_emitted() is True
 
 
 # -- send_email ----------------------------------------------------------------

@@ -116,6 +116,67 @@ def _consume_reply_rejection(
     return True
 
 
+# §V.131: per-task reply-emitted flag, sibling of the §V.71 reply-rejection
+# counter. ``run.execute_task`` enters ``reply_emitted_scope`` alongside
+# ``reply_rejection_scope`` so a successful ``reply_email`` / ``send_email`` this
+# task flips the flag. The run-loop terminal branch reads it via
+# ``reply_was_emitted`` to decide whether a terminal inbound failure still owes
+# the sender a fallback acknowledgement -- the ``connection.rollback()`` at the
+# head of ``_handle_agent_failure`` erases a mid-turn-sent email row while Gmail
+# kept the message, so this in-run flag is the only sound already-replied signal
+# (blocks a double-reply when a non-transient class raised after a successful
+# send). The flag is a mutable object, not a re-bound value, so a mark inside a
+# worker thread's copied context -- Pydantic AI dispatches sync tools via
+# asyncio.to_thread -- mutates the shared object the main thread reads back
+# (mirrors ``_ReplyRejectionCounter``). Outside a scope the flag stays ``None``.
+
+
+class _ReplyEmittedFlag:
+    __slots__ = ("emitted",)
+
+    def __init__(self) -> None:
+        self.emitted: bool = False
+
+
+_REPLY_EMITTED: contextvars.ContextVar[_ReplyEmittedFlag | None] = (
+    contextvars.ContextVar("mailpilot.reply_emitted", default=None)
+)
+
+
+@contextmanager
+def reply_emitted_scope() -> Generator[None]:
+    """Install a fresh per-task reply-emitted flag (§V.131).
+
+    Wrap each task-drained ``agent.invoke`` so a successful ``reply_email`` /
+    ``send_email`` this task sets the flag. ``run._handle_agent_failure`` reads
+    it via :func:`reply_was_emitted` to suppress a duplicate fallback reply.
+    Outside a scope (CLI / legacy paths without a task row) the flag stays
+    absent and :func:`reply_was_emitted` reads ``False``.
+    """
+    token = _REPLY_EMITTED.set(_ReplyEmittedFlag())
+    try:
+        yield
+    finally:
+        _REPLY_EMITTED.reset(token)
+
+
+def _mark_reply_emitted() -> None:
+    """Record that a send reached Gmail this task (§V.131).
+
+    No-op outside a :func:`reply_emitted_scope` so non-task callers are
+    unaffected.
+    """
+    flag = _REPLY_EMITTED.get()
+    if flag is not None:
+        flag.emitted = True
+
+
+def reply_was_emitted() -> bool:
+    """Return ``True`` when a send reached Gmail this task (§V.131)."""
+    flag = _REPLY_EMITTED.get()
+    return flag is not None and flag.emitted
+
+
 # Per §V.42: detect spec-shape rows (label + any whitespace + non-whitespace
 # value, length capped at 80 chars) on lines that do not use Markdown
 # pipe-table syntax. Three or more *consecutive* such lines without a
@@ -219,6 +280,9 @@ def send_email(  # noqa: PLR0913
     except email_ops.EmailOpsError as exc:
         return {"error": exc.code, "message": str(exc)}
 
+    # §V.131: the message reached Gmail -- mark the per-task reply-emitted flag
+    # so the run-loop terminal branch never sends a duplicate fallback reply.
+    _mark_reply_emitted()
     return {
         "id": email.id,
         "gmail_message_id": email.gmail_message_id,
@@ -266,6 +330,9 @@ def reply_email(  # noqa: PLR0913
     except email_ops.EmailOpsError as exc:
         return {"error": exc.code, "message": str(exc)}
 
+    # §V.131: the reply reached Gmail -- mark the per-task reply-emitted flag so
+    # the run-loop terminal branch never sends a duplicate fallback reply.
+    _mark_reply_emitted()
     return {
         "id": email.id,
         "gmail_message_id": email.gmail_message_id,

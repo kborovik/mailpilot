@@ -13,11 +13,20 @@ from typing import Any
 import logfire
 import psycopg
 
+from mailpilot import email_ops
 from mailpilot.agent import invoke_workflow_agent
 from mailpilot.agent.retry import BACKOFF_SECONDS, MAX_ATTEMPTS, is_transient
-from mailpilot.agent.tools import reply_rejection_scope
+from mailpilot.agent.templates import (
+    _FALLBACK_ACKNOWLEDGEMENT,  # pyright: ignore[reportPrivateUsage]
+)
+from mailpilot.agent.tools import (
+    reply_emitted_scope,
+    reply_rejection_scope,
+    reply_was_emitted,
+)
 from mailpilot.database import (
     complete_task,
+    get_account,
     get_contact,
     get_email,
     get_enrollment,
@@ -25,6 +34,7 @@ from mailpilot.database import (
     reschedule_task_for_lock_contention,
     reschedule_task_for_retry,
 )
+from mailpilot.gmail import GmailClient
 from mailpilot.models import Task
 from mailpilot.operator_log import operator_event
 from mailpilot.settings import Settings
@@ -59,6 +69,11 @@ def execute_task(
         # ``enrollment run``, etc.) the counter is absent and the check
         # behaves as before.
         reply_rejection_scope(),
+        # §V.131: install a per-task reply-emitted flag so a successful
+        # ``reply_email`` / ``send_email`` this task is recorded in memory.
+        # ``_handle_agent_failure`` reads it to suppress a duplicate fallback
+        # reply when a non-transient class raised after a mid-turn send.
+        reply_emitted_scope(),
     ):
         workflow = get_workflow(connection, task.workflow_id)
         if workflow is None or workflow.status != "active":
@@ -142,7 +157,7 @@ def execute_task(
                 task_id=task.id,
             )
         except Exception as exc:
-            _handle_agent_failure(connection, task, exc)
+            _handle_agent_failure(connection, settings, task, exc)
             return
 
         if result is None:
@@ -167,10 +182,16 @@ def execute_task(
 
 def _handle_agent_failure(
     connection: psycopg.Connection[dict[str, Any]],
+    settings: Settings,
     task: Task,
     exc: Exception,
 ) -> None:
-    """Branch transient (retry) vs terminal (`failed`) per `§V.49`."""
+    """Branch transient (retry) vs terminal (`failed`) per `§V.49`.
+
+    On a terminal failure of an inbound-email task, send one fixed fallback
+    acknowledgement before marking the task ``failed`` so the sender never
+    gets silent NO_REPLY (§V.131).
+    """
     connection.rollback()
     next_attempt = task.attempt_count + 1
     transient = is_transient(exc)
@@ -197,6 +218,15 @@ def _handle_agent_failure(
         task_id=task.id,
     )
     operator_event("error", source="run.task.agent_failed", message=str(exc))
+    # §V.131: a terminal failure on an inbound-email task owes the sender one
+    # fixed acknowledgement instead of silent NO_REPLY. An outbound first
+    # reach-out (``email_id`` NULL) stays silent -- silence is correct on a cold
+    # open. The in-run reply-emitted flag is the only sound already-replied
+    # signal: the ``connection.rollback()`` above erased any mid-turn-sent email
+    # row while Gmail kept the message, so a thread/DB read would miss it and a
+    # double-reply could follow a non-transient class that raised after a send.
+    if task.email_id is not None and not reply_was_emitted():
+        _send_fallback_acknowledgement(connection, settings, task)
     terminal_reason = "max_attempts" if transient else "non_transient"
     complete_task(
         connection,
@@ -208,3 +238,42 @@ def _handle_agent_failure(
             "terminal": terminal_reason,
         },
     )
+
+
+def _send_fallback_acknowledgement(
+    connection: psycopg.Connection[dict[str, Any]],
+    settings: Settings,
+    task: Task,
+) -> None:
+    """Send the fixed fallback acknowledgement for a terminal inbound failure.
+
+    Best-effort per §V.131: a send failure logs an operator error and still
+    returns so the caller marks the task ``failed``. Never re-raises -- the
+    fallback must not mask the original terminal failure. Resolves the inbound
+    email, its owning account, and a Gmail client the same way ``invoke`` does,
+    then replies in-thread with the code-defined ``_FALLBACK_ACKNOWLEDGEMENT``
+    body so the reply is never model-generated.
+    """
+    try:
+        email = get_email(connection, task.email_id) if task.email_id else None
+        if email is None:
+            return
+        account = get_account(connection, email.account_id)
+        if account is None:
+            return
+        gmail_client = GmailClient(account.email)
+        email_ops.reply_email(
+            connection,
+            account,
+            gmail_client,
+            settings,
+            email_id=email.id,
+            body=_FALLBACK_ACKNOWLEDGEMENT,
+            workflow_id=task.workflow_id,
+        )
+    except Exception as exc:
+        operator_event(
+            "error",
+            source="run.task.fallback_failed",
+            message=str(exc),
+        )

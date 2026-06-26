@@ -496,6 +496,25 @@ def test_registered_tool_source_docstrings_carry_no_spec_citation() -> None:
             )
 
 
+# -- §V.131: fixed fallback acknowledgement body ------------------------------
+
+
+def test_fallback_acknowledgement_is_fixed_content_free_ascii() -> None:
+    """§V.131: the fallback acknowledgement is a code-defined, content-free,
+    ASCII body -- never model-generated and never partial -- so the grounding
+    risk the agent failed on cannot reach the sender (§B.116). It carries no
+    SPEC cite (§C ASCII-only project artifact) and is not composed into any
+    template protocol (it is an email body, not a prompt fragment)."""
+    body = templates_module._FALLBACK_ACKNOWLEDGEMENT  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(body, str)
+    assert body.strip()
+    assert body.isascii()
+    assert _SPEC_CITE.search(body) is None
+    for template in TEMPLATES.values():
+        for trigger in _ALL_TRIGGERS:
+            assert body not in template.build_protocol(trigger)
+
+
 # -- _build_agent integration --------------------------------------------------
 
 

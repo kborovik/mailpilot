@@ -9,6 +9,7 @@ from unittest.mock import patch
 import psycopg
 
 from mailpilot.models import (
+    Account,
     Contact,
     Email,
     Enrollment,
@@ -40,6 +41,16 @@ def _make_workflow(**overrides: Any) -> Workflow:
         "updated_at": _NOW,
     }
     return Workflow(**{**defaults, **overrides})
+
+
+def _make_account(**overrides: Any) -> Account:
+    defaults: dict[str, Any] = {
+        "id": _ACCOUNT_ID,
+        "email": "owner@example.com",
+        "created_at": _NOW,
+        "updated_at": _NOW,
+    }
+    return Account(**{**defaults, **overrides})
 
 
 def _make_contact(**overrides: Any) -> Contact:
@@ -667,3 +678,174 @@ def test_execute_task_with_email(
         trigger="task",
         task_id=_TASK_ID,
     )
+
+
+def test_execute_task_terminal_inbound_failure_sends_fallback(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.131: a terminal failure on an inbound-email task sends one fixed
+    content-free acknowledgement before marking the task ``failed`` so the
+    sender never gets silent NO_REPLY (§B.116)."""
+    from unittest.mock import MagicMock
+
+    from conftest import make_test_settings
+    from mailpilot.agent.templates import (
+        _FALLBACK_ACKNOWLEDGEMENT,  # pyright: ignore[reportPrivateUsage]
+    )
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings()
+    email = _make_email()
+    task = _make_task(email_id=_EMAIL_ID)
+    workflow = _make_workflow()
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+    account = _make_account()
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch("mailpilot.run.get_email", return_value=email),
+        patch("mailpilot.run.get_account", return_value=account),
+        patch("mailpilot.run.GmailClient", return_value=MagicMock()),
+        patch(
+            "mailpilot.run.invoke_workflow_agent",
+            side_effect=RuntimeError("LLM error"),
+        ),
+        patch("mailpilot.run.email_ops") as mock_email_ops,
+        patch("mailpilot.run.complete_task") as mock_complete,
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_email_ops.reply_email.assert_called_once()
+    kwargs = mock_email_ops.reply_email.call_args.kwargs
+    assert kwargs["email_id"] == _EMAIL_ID
+    assert kwargs["body"] == _FALLBACK_ACKNOWLEDGEMENT
+    mock_complete.assert_called_once_with(
+        database_connection,
+        _TASK_ID,
+        status="failed",
+        result={
+            "reason": "LLM error",
+            "attempt_count": 1,
+            "terminal": "non_transient",
+        },
+    )
+
+
+def test_execute_task_terminal_outbound_failure_sends_no_fallback(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.131: an outbound first reach-out failure (``email_id`` NULL) stays
+    silent -- no fallback acknowledgement on a cold open."""
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings()
+    task = _make_task(email_id=None)
+    workflow = _make_workflow()
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch(
+            "mailpilot.run.invoke_workflow_agent",
+            side_effect=RuntimeError("LLM error"),
+        ),
+        patch("mailpilot.run.email_ops") as mock_email_ops,
+        patch("mailpilot.run.complete_task") as mock_complete,
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_email_ops.reply_email.assert_not_called()
+    assert mock_complete.call_args.kwargs["status"] == "failed"
+
+
+def test_execute_task_no_double_reply_when_reply_emitted(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.131: when a reply was emitted mid-turn before a non-transient class
+    raised, the in-run reply-emitted flag blocks a second fallback reply."""
+    from conftest import make_test_settings
+    from mailpilot.agent.tools import (
+        _mark_reply_emitted,  # pyright: ignore[reportPrivateUsage]
+    )
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings()
+    email = _make_email()
+    task = _make_task(email_id=_EMAIL_ID)
+    workflow = _make_workflow()
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+
+    def _send_then_raise(*_args: Any, **_kwargs: Any) -> None:
+        # Simulate a successful mid-turn send followed by a terminal class.
+        _mark_reply_emitted()
+        raise RuntimeError("post-send failure")
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch("mailpilot.run.get_email", return_value=email),
+        patch(
+            "mailpilot.run.invoke_workflow_agent",
+            side_effect=_send_then_raise,
+        ),
+        patch("mailpilot.run.email_ops") as mock_email_ops,
+        patch("mailpilot.run.complete_task") as mock_complete,
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_email_ops.reply_email.assert_not_called()
+    assert mock_complete.call_args.kwargs["status"] == "failed"
+
+
+def test_execute_task_fallback_send_failure_still_marks_failed(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.131: a fallback-send failure is best-effort -- it logs an operator
+    error and still falls through to mark the task ``failed``."""
+    from unittest.mock import MagicMock
+
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings()
+    email = _make_email()
+    task = _make_task(email_id=_EMAIL_ID)
+    workflow = _make_workflow()
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+    account = _make_account()
+
+    mock_email_ops = MagicMock()
+    mock_email_ops.reply_email.side_effect = RuntimeError("gmail send failed")
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch("mailpilot.run.get_email", return_value=email),
+        patch("mailpilot.run.get_account", return_value=account),
+        patch("mailpilot.run.GmailClient", return_value=MagicMock()),
+        patch(
+            "mailpilot.run.invoke_workflow_agent",
+            side_effect=RuntimeError("LLM error"),
+        ),
+        patch("mailpilot.run.email_ops", mock_email_ops),
+        patch("mailpilot.run.complete_task") as mock_complete,
+        patch("mailpilot.run.operator_event") as mock_operator_event,
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_email_ops.reply_email.assert_called_once()
+    assert mock_complete.call_args.kwargs["status"] == "failed"
+    sources = [c.kwargs.get("source") for c in mock_operator_event.call_args_list]
+    assert "run.task.fallback_failed" in sources
+    assert "run.task.agent_failed" in sources

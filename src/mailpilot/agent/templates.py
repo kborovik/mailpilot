@@ -149,6 +149,20 @@ _DECLINE = (
     "polite decline that does not invent facts.\n"
 )
 
+# _FALLBACK_ACKNOWLEDGEMENT is the fixed, content-free body the run loop sends
+# when an inbound-email task fails terminally and no reply was emitted this run
+# (§V.131, closes §B.116). It is code-defined -- never model-generated and never
+# partial -- so the grounding risk the agent failed on (a fabricated or truncated
+# answer, §V.45 / §V.130) cannot reach the sender; the inbound sender gets a brief
+# receipt instead of silent NO_REPLY. ``run._handle_agent_failure`` sends this
+# string verbatim via ``email_ops.reply_email``; an outbound first reach-out
+# failure (no inbound email_id) stays silent. The model never sees this string,
+# yet it stays ASCII-only per §C (code-defined content, not agent-generated).
+_FALLBACK_ACKNOWLEDGEMENT = (
+    "Thank you for your message. We have received it and a member of our team "
+    "will follow up with you shortly.\n"
+)
+
 _NO_FABRICATION = (
     "Never fabricate specifications, model numbers, prices, or claims that "
     "are not present in the available context. When uncertain, decline rather "
