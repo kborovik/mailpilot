@@ -495,9 +495,10 @@ def _poll_all_calendars(
 
     Runs on the run-interval full-sweep tick (§V.21 fallback; event-wake push
     channels deferred to #154). Disabled accounts are gated out by the
-    ``list_accounts`` default-exclude (§V.118). Per-account errors are logged,
-    never raised, so one account's calendar transport fault cannot stall the
-    loop -- mirrors ``_sync_all_accounts``.
+    ``list_accounts`` default-exclude (§V.118). Per-account errors are isolated
+    inside ``_poll_account_calendar`` -- logged, never raised -- so one
+    account's calendar transport fault cannot stall the loop (mirrors
+    ``_sync_all_accounts``).
     """
     if not has_google_credentials():
         return
@@ -506,19 +507,48 @@ def _poll_all_calendars(
         account = get_account(connection, summary.id)
         if account is None:
             continue
-        try:
-            client = CalendarClient(account.email)
-            for event in client.list_upcoming_events():
-                ingest_calendar_event(connection, event)
-        except Exception as exc:
-            logfire.exception(
-                "sync.calendar.poll_failed",
-                account_id=account.id,
-                email=account.email,
-            )
-            operator_event(
-                "error", source="sync.calendar.poll_failed", message=str(exc)
-            )
+        _poll_account_calendar(connection, account)
+
+
+def _poll_account_calendar(
+    connection: psycopg.Connection[dict[str, Any]],
+    account: Account,
+) -> str | None:
+    """Poll one account's calendar and ingest its upcoming events (§V.126).
+
+    Shared per-account helper for the two calendar-polling sites: the
+    run-interval full sweep (``_poll_all_calendars``) and the per-account
+    ``account sync`` CLI path. The calendar transport fault is isolated here --
+    logged via paired ``logfire.exception`` / ``operator_event`` (§V.51) and
+    never raised -- so one account's calendar failure stalls neither the sync
+    loop nor the Gmail sync. Callers gate on ``has_google_credentials``.
+
+    Each upcoming event upserts one ``meeting`` row idempotently on
+    ``google_event_id`` (§V.125) and concludes any active outbound booking
+    exactly once (§V.128) through ``ingest_calendar_event``.
+
+    Args:
+        connection: Open database connection.
+        account: The account whose calendar to poll.
+
+    Returns:
+        The error message string when the poll failed, ``None`` on success.
+        The CLI records the string on its per-account result row; the sync
+        loop ignores it (the fault is already logged).
+    """
+    try:
+        client = CalendarClient(account.email)
+        for event in client.list_upcoming_events():
+            ingest_calendar_event(connection, event)
+        return None
+    except Exception as exc:
+        logfire.exception(
+            "sync.calendar.poll_failed",
+            account_id=account.id,
+            email=account.email,
+        )
+        operator_event("error", source="sync.calendar.poll_failed", message=str(exc))
+        return str(exc)
 
 
 def ingest_calendar_event(

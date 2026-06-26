@@ -895,9 +895,12 @@ def account_sync(account_email: str | None, since: str | None) -> None:
     import logfire
 
     from mailpilot.database import get_account, initialize_database, list_accounts
-    from mailpilot.gmail import GmailClient
+    from mailpilot.gmail import GmailClient, has_google_credentials
     from mailpilot.settings import get_settings
-    from mailpilot.sync import sync_account
+    from mailpilot.sync import (
+        _poll_account_calendar,  # pyright: ignore[reportPrivateUsage]
+        sync_account,
+    )
 
     backfill_since: datetime | None = None
     if since is not None:
@@ -921,6 +924,7 @@ def account_sync(account_email: str | None, since: str | None) -> None:
 
         rows: list[dict[str, object]] = []
         total_stored = 0
+        poll_calendars = has_google_credentials()
         with logfire.span("cli.account.sync", account_count=len(accounts)) as span:
             for acc in accounts:
                 row: dict[str, object] = {
@@ -938,6 +942,14 @@ def account_sync(account_email: str | None, since: str | None) -> None:
                     )
                     row["stored"] = stored
                     total_stored += stored
+                    # §V.126: ingest the account's upcoming calendar events in
+                    # the same pass. The helper isolates its own transport
+                    # fault (never raised), so a calendar failure is recorded
+                    # on the row but never aborts the Gmail sync.
+                    if poll_calendars:
+                        calendar_error = _poll_account_calendar(connection, acc)
+                        if calendar_error is not None:
+                            row["calendar_error"] = calendar_error
                 except Exception as exc:
                     from mailpilot.sync import sync_errors
 

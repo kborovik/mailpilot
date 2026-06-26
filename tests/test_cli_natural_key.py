@@ -266,6 +266,7 @@ def test_account_sync_account_email_polymorphic(
         ) as by_email,
         patch("mailpilot.database.list_accounts") as list_accounts,
         patch("mailpilot.gmail.GmailClient"),
+        patch("mailpilot.gmail.has_google_credentials", return_value=False),
         patch("mailpilot.sync.sync_account", return_value=0) as sync,
     ):
         result = runner.invoke(
@@ -287,6 +288,7 @@ def test_account_sync_since_passes_backfill_bound(
         patch("mailpilot.database.initialize_database", return_value=conn),
         patch("mailpilot.database.get_account", return_value=account),
         patch("mailpilot.gmail.GmailClient"),
+        patch("mailpilot.gmail.has_google_credentials", return_value=False),
         patch("mailpilot.sync.sync_account", return_value=0) as sync,
     ):
         result = runner.invoke(

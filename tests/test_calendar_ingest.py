@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, LiteralString
+from unittest.mock import patch
 
 import psycopg
 
@@ -14,7 +15,10 @@ from conftest import (
 )
 from mailpilot.calendar import CalendarEvent
 from mailpilot.database import create_task, get_task
-from mailpilot.sync import ingest_calendar_event
+from mailpilot.sync import (
+    _poll_account_calendar,  # pyright: ignore[reportPrivateUsage]
+    ingest_calendar_event,
+)
 
 _FAR_FUTURE = "2099-12-31T00:00:00Z"
 
@@ -220,3 +224,79 @@ def test_inbound_enrollment_not_concluded_by_booking(
     # ...but the inbound enrollment is left untouched.
     assert _completed_count(database_connection, contact.id) == 0
     assert _note_count(database_connection, contact.id) == 0
+
+
+# -- _poll_account_calendar (the shared per-account helper, §V.126) ------------
+
+
+def test_poll_account_calendar_ingests_event_and_concludes_booking(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.126/§V.128: the helper polls one account's calendar, ingests the
+    upcoming event, and concludes the attendee's active outbound enrollment.
+
+    This is the unit the ``account sync`` CLI path calls per account.
+    """
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="outbound"
+    )
+    contact = make_test_contact(database_connection, email="prospect@acme.com")
+    make_test_enrollment(database_connection, workflow.id, contact.id)
+
+    with patch("mailpilot.sync.CalendarClient") as mock_client_cls:
+        mock_client_cls.return_value.list_upcoming_events.return_value = [
+            _event("prospect@acme.com")
+        ]
+        error = _poll_account_calendar(database_connection, account)
+
+    assert error is None
+    mock_client_cls.assert_called_once_with(account.email)
+    assert _count(database_connection, "SELECT COUNT(*) FROM meeting", ()) == 1
+    assert _completed_count(database_connection, contact.id) == 1
+
+
+def test_poll_account_calendar_repoll_no_duplicate_concludes_once(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.125/§V.128: re-polling the same google_event_id creates no duplicate
+    meeting row and concludes the enrollment exactly once."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="outbound"
+    )
+    contact = make_test_contact(database_connection, email="prospect@acme.com")
+    make_test_enrollment(database_connection, workflow.id, contact.id)
+
+    with patch("mailpilot.sync.CalendarClient") as mock_client_cls:
+        mock_client_cls.return_value.list_upcoming_events.return_value = [
+            _event("prospect@acme.com")
+        ]
+        assert _poll_account_calendar(database_connection, account) is None
+        assert _poll_account_calendar(database_connection, account) is None
+
+    assert _count(database_connection, "SELECT COUNT(*) FROM meeting", ()) == 1
+    assert _count(database_connection, "SELECT COUNT(*) FROM meeting_attendee", ()) == 1
+    assert _completed_count(database_connection, contact.id) == 1
+    assert _note_count(database_connection, contact.id) == 1
+
+
+def test_poll_account_calendar_isolates_transport_error(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.126: a calendar transport fault is isolated -- the helper logs it,
+    returns the error string, and never raises (so the Gmail sync survives)."""
+    account = make_test_account(database_connection)
+
+    with (
+        patch("mailpilot.sync.CalendarClient") as mock_client_cls,
+        patch("logfire.exception"),
+    ):
+        mock_client_cls.return_value.list_upcoming_events.side_effect = RuntimeError(
+            "calendar 500"
+        )
+        error = _poll_account_calendar(database_connection, account)
+
+    assert error == "calendar 500"
+    # The failed poll ingested nothing.
+    assert _count(database_connection, "SELECT COUNT(*) FROM meeting", ()) == 0

@@ -558,6 +558,7 @@ def test_account_sync_all_accounts(
         patch("mailpilot.database.list_accounts", return_value=[acc_a, acc_b]),
         patch("mailpilot.database.get_account", side_effect=[acc_a, acc_b]),
         patch("mailpilot.gmail.GmailClient") as mock_client_cls,
+        patch("mailpilot.gmail.has_google_credentials", return_value=False),
         patch("mailpilot.sync.sync_account", side_effect=[3, 5]) as mock_sync,
     ):
         result = runner.invoke(main, ["account", "sync"])
@@ -583,6 +584,7 @@ def test_account_sync_single_account(
         patch("mailpilot.database.get_account", return_value=account) as mock_get,
         patch("mailpilot.database.list_accounts") as mock_list,
         patch("mailpilot.gmail.GmailClient"),
+        patch("mailpilot.gmail.has_google_credentials", return_value=False),
         patch("mailpilot.sync.sync_account", return_value=2),
     ):
         result = runner.invoke(main, ["account", "sync", "--account-email", account.id])
@@ -634,6 +636,7 @@ def test_account_sync_error_isolated_per_account(
         patch("mailpilot.database.list_accounts", return_value=[acc_a, acc_b]),
         patch("mailpilot.database.get_account", side_effect=[acc_a, acc_b]),
         patch("mailpilot.gmail.GmailClient"),
+        patch("mailpilot.gmail.has_google_credentials", return_value=False),
         patch("logfire.exception"),
         patch(
             "mailpilot.sync.sync_account",
@@ -648,6 +651,82 @@ def test_account_sync_error_isolated_per_account(
     assert data["accounts"][0]["error"] == "gmail 500"
     assert "stored" not in data["accounts"][0]
     assert data["accounts"][1]["stored"] == 4
+
+
+def test_account_sync_polls_calendar_per_account(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.126: account sync polls each account's calendar after Gmail sync."""
+    acc_a = _make_account(
+        id="01234567-0000-7000-0000-0000000000a1", email="a@example.com"
+    )
+    acc_b = _make_account(
+        id="01234567-0000-7000-0000-0000000000b2", email="b@example.com"
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_accounts", return_value=[acc_a, acc_b]),
+        patch("mailpilot.database.get_account", side_effect=[acc_a, acc_b]),
+        patch("mailpilot.gmail.GmailClient"),
+        patch("mailpilot.gmail.has_google_credentials", return_value=True),
+        patch("mailpilot.sync.sync_account", side_effect=[3, 5]),
+        patch("mailpilot.sync._poll_account_calendar", return_value=None) as mock_poll,
+    ):
+        result = runner.invoke(main, ["account", "sync"])
+
+    assert result.exit_code == 0, result.output
+    assert mock_poll.call_count == 2
+    polled_emails = [call.args[1].email for call in mock_poll.call_args_list]
+    assert polled_emails == ["a@example.com", "b@example.com"]
+    data = json.loads(result.output)
+    assert [r["stored"] for r in data["accounts"]] == [3, 5]
+    assert all("calendar_error" not in r for r in data["accounts"])
+
+
+def test_account_sync_skips_calendar_without_credentials(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.126: no Google credentials -> the calendar poll is gated out."""
+    account = _make_account(email="only@example.com")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.gmail.GmailClient"),
+        patch("mailpilot.gmail.has_google_credentials", return_value=False),
+        patch("mailpilot.sync.sync_account", return_value=2),
+        patch("mailpilot.sync._poll_account_calendar") as mock_poll,
+    ):
+        result = runner.invoke(main, ["account", "sync", "--account-email", account.id])
+
+    assert result.exit_code == 0, result.output
+    mock_poll.assert_not_called()
+
+
+def test_account_sync_calendar_error_isolated_from_gmail_success(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.126: a calendar fault is recorded on the row but the Gmail sync,
+    whose store count survives, never aborts (command exits 0)."""
+    account = _make_account(email="only@example.com")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.gmail.GmailClient"),
+        patch("mailpilot.gmail.has_google_credentials", return_value=True),
+        patch("mailpilot.sync.sync_account", return_value=7),
+        patch("mailpilot.sync._poll_account_calendar", return_value="calendar 500"),
+    ):
+        result = runner.invoke(main, ["account", "sync", "--account-email", account.id])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    row = data["accounts"][0]
+    assert row["stored"] == 7
+    assert row["calendar_error"] == "calendar 500"
+    assert "error" not in row
 
 
 # -- company helpers -----------------------------------------------------------
