@@ -12,13 +12,13 @@ Checks:
 (iii) settings key list in `## Settings` == `Settings.model_fields` keys in `settings.py` — `src/mailpilot/SKILL.md` only.
 (iv) env-var-prefix description in `## Settings` == `SettingsConfigDict(env_prefix=...)` value in `settings.py` (`MAILPILOT_*`) — `src/mailpilot/SKILL.md` only.
 
-## §V.42 — Inbound reply format-check rejection algorithm
+## §V.42 — Email body format-check rejection algorithm
 
 Trigger when `src/mailpilot/agent/` or `src/mailpilot/email_renderer.py` changed.
 
 Rejection condition: >= 3 consecutive spec-shape lines (short label + whitespace + value) in reply body w/o `|---|` separator -> `format_check_mismatch`. ASCII rule-lines (`---`, `===`, `___`) not treated as separators.
 
-_SPEC_TABLE requirement: MUST explicitly mandate GFM pipe table w/ header row + `|---|` separator for spec rows (model numbers, flow rates, dimensions, capacities); the mandate lives in the _SPEC_TABLE fragment composed into inbound templates' protocol_pre only (inbound-general + inbound-google-drive), NOT outbound-general; "may use Markdown tables" (permissive) alone insufficient — format-lint is backstop, not primary enforcement. _check_spec_table fires on reply_email (inbound) only, not send_email (outbound) — prompt mandate + lint scope to inbound together (lint w/o the primary prompt mandate re-creates the §B.78 retry loop).
+_SPEC_TABLE requirement: MUST explicitly mandate GFM pipe table w/ header row + `|---|` separator for spec rows (model numbers, flow rates, dimensions, capacities); the prompt mandate lives in the _SPEC_TABLE fragment composed into inbound templates' protocol_pre only (inbound-general + inbound-google-drive), NOT outbound-general; "may use Markdown tables" (permissive) alone insufficient — format-lint is backstop, not primary enforcement. _check_spec_table stays email-universal core (§V.45 format glue) — fires on send_email + reply_email both; §V.71 caps any retry loop.
 
 Mechanical check:
 - `rg -n 'may use Markdown' src/mailpilot/agent/templates.py` -> zero hits (permissive wording retired).
