@@ -95,9 +95,7 @@ _BASE = (
     "row per spec. Do not use space-aligned or single-spaced lines as a "
     "substitute; such spec blocks are rejected by the outbound format lint.\n"
     "When a trigger email is included in your prompt, its full body is "
-    "already provided -- do not call read_email to fetch it again. The "
-    "current contact's profile is also inlined, so do not call read_contact "
-    "for the same address either.\n"
+    "already provided -- do not call read_email to fetch it again.\n"
     "If read_contact or read_company returns notes or company_notes, treat "
     "them as context for personalizing your response. Never invent facts "
     "about a contact or company that aren't supported by their notes.\n"
@@ -130,21 +128,15 @@ _DEFERRED_TASK_INITIAL = (
 # here in the comment. Names three tools, satisfying the >=2-distinct-tool rule
 # (§V.40).
 _MUST_SEND = (
-    "End every trigger turn by actually sending the message: call reply_email "
-    "to answer an inbound thread, or send_email to open an outbound one. "
-    "Drafting the message text in your reasoning is not sending it -- the "
-    "message reaches the recipient only through a reply_email or send_email "
-    "tool call. If no message is appropriate, call noop to decline explicitly. "
-    "Never finish a turn having drafted a message without calling one of these "
-    "tools.\n"
+    "End every trigger turn with a tool call: reply_email to answer an inbound "
+    "thread, send_email to open an outbound one, or noop to decline explicitly. "
+    "Drafting the message in your reasoning does not send it -- the recipient "
+    "sees it only through a reply_email or send_email call.\n"
 )
 
 _DECLINE = (
     "If no available information is relevant to the question, reply with a "
-    "polite decline that does not invent facts. The decline path still "
-    "requires at least one tool call (e.g. reply_email to send the decline, "
-    "or noop if no contact action is appropriate) to satisfy the tool-use "
-    "contract.\n"
+    "polite decline that does not invent facts.\n"
 )
 
 _NO_FABRICATION = (
