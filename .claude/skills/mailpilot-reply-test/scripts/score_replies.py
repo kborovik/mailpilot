@@ -51,7 +51,13 @@ _DASHES = str.maketrans(
 
 
 def _norm(text: str) -> str:
-    return re.sub(r"\s+", " ", text.lower().translate(_DASHES)).strip()
+    # Strip thousands-separator commas so a datasheet figure rendered as
+    # "6,000 gpd" matches an expected token stored as "6000 gpd" (and the
+    # reverse). The lookarounds delete a comma only when a digit sits on both
+    # sides, so list commas, trailing commas, and decimals are preserved. Both
+    # the body and every token pass through _norm, so the rule is symmetric.
+    collapsed = re.sub(r"\s+", " ", text.lower().translate(_DASHES)).strip()
+    return re.sub(r"(?<=\d),(?=\d)", "", collapsed)
 
 
 def _loose(tok: str, body_n: str) -> bool:
