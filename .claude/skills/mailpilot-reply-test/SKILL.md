@@ -63,8 +63,9 @@ the `mailpilot` console script, and the package are importable. Scripts live in
 
 | Phase | Model | Why |
 |---|---|---|
-| Setup checks, Run-A, Run-B, Analysis | **Sonnet** sub-agents | Mechanical: run scripts / one SQL query, return a short summary. |
+| Setup checks, Run-A, Run-B | **Sonnet** sub-agents | Mechanical: run scripts, return a short summary. |
 | Reply judging (out-scope + compare) | **Sonnet** sub-agent | NL-shaped grading a deterministic script cannot do reliably (§V.105): reads the reply, rubric, advisory signals, and source datasheet, returns PASS/FAIL + rationale. |
+| Analysis (Logfire metrics) | **Opus** sub-agent | Runs one SQL query, reconciles column names to the live Logfire schema, and interprets token economics and latency; isolated so the raw query rows never enter the orchestrator's window. |
 | Workflow improvement review | **Opus** sub-agent | Judgment-heavy critique of reply quality and workflow wording; runs on every pass, isolated so the reply bodies and the workflow file never enter the orchestrator's window. |
 | Failure investigation, Solution analysis | **Opus** sub-agents | Hard reasoning; isolated in sub-agents so the heavy Logfire/code reading never enters the orchestrator's window. |
 | Run-loop start + stop, report generation | Orchestrator, directly | The loop must outlive every phase, so the one process alive across all of them owns it; pairing start+stop there guarantees teardown always runs. Trivial deterministic commands. |
@@ -149,7 +150,7 @@ Returns: the finalized compare + out-of-scope verdicts with one-line rationales.
 If `judge_prep` reports a `datasheet_error`, judge grounding from the reply's own
 citations and note the degraded check in the rationale.
 
-### 4. Analysis — Sonnet sub-agent (Logfire MCP)
+### 4. Analysis — Opus sub-agent (Logfire MCP)
 Skip if `preflight.logfire_ok` is false (note it in the report). Otherwise the
 sub-agent:
 1. Reads `reports/reply-test/$RUN_ID/replies_A.json` and `replies_B.json` and collects each
