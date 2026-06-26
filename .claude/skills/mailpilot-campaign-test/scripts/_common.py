@@ -75,8 +75,8 @@ def skill_root() -> Path:
 
 
 def run_dir(run_id: str) -> Path:
-    """Return (creating) the artifact dir: ``<repo>/.campaign-test/<run_id>``."""
-    directory = repo_root() / ".campaign-test" / run_id
+    """Return (creating) the artifact dir: ``<repo>/reports/campaign-test/<run_id>``."""
+    directory = repo_root() / "reports" / "campaign-test" / run_id
     directory.mkdir(parents=True, exist_ok=True)
     return directory
 

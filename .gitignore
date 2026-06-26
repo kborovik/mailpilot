@@ -6,7 +6,11 @@
 .skill-eval/
 .env
 .firecrawl/
+# Skill run artifacts (campaign-test, reply-test, prompt-audit) live here now.
+/reports/
+# Legacy hidden artifact dirs (pre-reports/); kept ignored for any local leftovers.
 .campaign-test/
+.mpaudit/
 .mptest/
 .pytest_cache/
 .ruff_cache/

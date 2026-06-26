@@ -22,8 +22,10 @@ OUTBOUND_EMAIL = "outbound@lab5.ca"
 INBOUND_EMAIL = "inbound@lab5.ca"
 
 # Reply subject is "Re: [MP-TEST <run_id> <case_id>] <hint>"; we match the tag.
+# The run id is date-stamped (``YYYY-MM-DD-HHMMSS_<hex>``), so the token spans
+# digits, dashes, an underscore, and hex -- it is space-delimited from case_id.
 SUBJECT_TAG_RE = re.compile(
-    r"\[MP-TEST (?P<run_id>[0-9a-f]+) (?P<case_id>qa-[a-z]+-\d+)\]"
+    r"\[MP-TEST (?P<run_id>[0-9a-f_-]+) (?P<case_id>qa-[a-z]+-\d+)\]"
 )
 
 
@@ -37,8 +39,8 @@ def repo_root() -> Path:
 
 
 def run_dir(run_id: str) -> Path:
-    """Return (creating) the artifact dir for a run: ``<repo>/.mptest/<run_id>``."""
-    directory = repo_root() / ".mptest" / run_id
+    """Return (creating) the artifact dir for a run: ``<repo>/reports/reply-test/<run_id>``."""
+    directory = repo_root() / "reports" / "reply-test" / run_id
     directory.mkdir(parents=True, exist_ok=True)
     return directory
 

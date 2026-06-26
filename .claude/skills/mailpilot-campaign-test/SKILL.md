@@ -148,9 +148,9 @@ are stopped.
 ```bash
 uv run python .claude/skills/mailpilot-campaign-test/scripts/new_run_id.py
 ```
-Reuse the printed value (e.g. `746e35cd`) as a **literal** wherever `$RUN_ID`
-appears below. Separate tool calls do not share shell state. Artifacts go to
-`.campaign-test/<run_id>/` (git-ignored).
+Reuse the printed value (e.g. `2026-06-26-142305_746e35cd`) as a **literal**
+wherever `$RUN_ID` appears below. Separate tool calls do not share shell state. Artifacts go to
+`reports/campaign-test/<run_id>/` (git-ignored).
 
 ### 0b. Ensure the test accounts exist -- create if missing
 ```bash
@@ -197,7 +197,7 @@ uv run python .claude/skills/mailpilot-campaign-test/scripts/send_touch1.py --ru
 ```
 Runs each enrollment so the live agent sends a cold Touch 1 to `inbound@lab5.ca`,
 then reads back each Touch 1 row (subject, thread, RFC Message-ID). Reports `sent`
-and any `missing_message_id`. Read a sent body from `.campaign-test/$RUN_ID/`
+and any `missing_message_id`. Read a sent body from `reports/campaign-test/$RUN_ID/`
 (`mailpilot email view <id>`) and show the user what the agent produced. A
 `missing_message_id` entry is a risk: routing the reply later depends on it (see
 step 6).
@@ -238,27 +238,27 @@ First bundle the workflow wording with the branch evidence:
 ```bash
 uv run python .claude/skills/mailpilot-campaign-test/scripts/critique_prep.py --run-id $RUN_ID
 ```
-This writes `.campaign-test/$RUN_ID/critique_input.json` with a `workflow` block
+This writes `reports/campaign-test/$RUN_ID/critique_input.json` with a `workflow` block
 and a `scenarios` list (each with the inbound reply, the agent's reply, the
 expected branch, and the observed outcome). Then spawn ONE sub-agent with the
 Agent tool and `model: opus`. Give it only the two paths and the output contract:
 
 > You are a reply-handling workflow critic. The unit of critique is the workflow
 > wording, not the individual replies. Read
-> `.campaign-test/<RUN_ID>/critique_input.json` -- its `workflow` block holds the
+> `reports/campaign-test/<RUN_ID>/critique_input.json` -- its `workflow` block holds the
 > `goal` and `instructions` that drove the agent, and its `scenarios` list
 > is evidence of how that wording handled each reply branch (each with the inbound
 > reply, the agent's reply, the expected branch, and the observed outcome). Also
 > read `.claude/skills/mailpilot-campaign-test/references/marketing-rubric.md`.
 > Critique the workflow's reply-handling wording against the rubric, using the
 > scenarios as evidence, and suggest concrete edits to the `goal` and
-> `instructions`. Write `.campaign-test/<RUN_ID>/critiques.json` as
+> `instructions`. Write `reports/campaign-test/<RUN_ID>/critiques.json` as
 > `{"workflow_name": <str>, "overall_score": <1-5>, "dimension_scores": {...},
 > "strengths": [...], "patterns": [...], "weaknesses": [...], "edits": [...],
 > "summary": "<one paragraph>"}` -- each `edits` entry names the line to change
 > and gives the replacement wording, and the first `edits` entry is the single
 > highest-impact change. Also write a readable
-> `.campaign-test/<RUN_ID>/critiques.md`. Return only a two-line summary: the
+> `reports/campaign-test/<RUN_ID>/critiques.md`. Return only a two-line summary: the
 > reply-handling score and the highest-impact edit. Do not return the reply
 > bodies.
 
@@ -269,7 +269,7 @@ gates the verdict.
 ```bash
 uv run python .claude/skills/mailpilot-campaign-test/scripts/generate_report.py --run-id $RUN_ID
 ```
-Reads `.campaign-test/$RUN_ID/report.md` and presents its summary. The report
+Reads `reports/campaign-test/$RUN_ID/report.md` and presents its summary. The report
 folds in the critique. The verdict is PASS only when every scenario's observed
 branch matched its expectation.
 
@@ -283,7 +283,7 @@ re-run.
 
 ### 11. Analyze Logfire telemetry
 Query the run's spans through the Logfire MCP (`mcp__claude_ai_logfire__query_run`,
-`project: mailpilot`) and save `.campaign-test/$RUN_ID/logfire_report.md`. The
+`project: mailpilot`) and save `reports/campaign-test/$RUN_ID/logfire_report.md`. The
 run's spans are in the `development` environment. Scope the time range to the run
 window: `touch1.json` holds `window_start`; query from a minute before it to a few
 minutes after the last handle step. Pull these facts and write them up:
@@ -308,7 +308,7 @@ and skip this step -- it is read-only and never gates the verdict.
 
 ## Artifacts
 
-Everything for a run is under `.campaign-test/$RUN_ID/` (git-ignored):
+Everything for a run is under `reports/campaign-test/$RUN_ID/` (git-ignored):
 `preflight.json`, `run_manifest.json`, `scaffold.json`, `ephemeral_<scenario>.toml`,
 `touch1.json`, `replies.json`, `handled.json`, `verify.json`, `critique_input.json`,
 `critiques.json`, `critiques.md`, `report.md`, `cleanup.json`, and
@@ -323,7 +323,7 @@ passing run:
 ## Next
 
 1. mailpilot email list --account-email inbound@lab5.ca --limit 20 -- inspect the Touch 1s, replies, and agent handling
-2. open .campaign-test/<run_id>/report.md -- re-read the per-scenario table
+2. open reports/campaign-test/<run_id>/report.md -- re-read the per-scenario table
 3. /mailpilot-campaign-test --company-domain <domain> -- re-run grounded on one company
 ```
 
@@ -332,8 +332,8 @@ After a failing run:
 ```
 ## Next
 
-1. open .campaign-test/<run_id>/verify.json -- read which branch the agent missed and why
-2. open .campaign-test/<run_id>/logfire_report.md -- separate a routing miss (unrouted / 429) from a wrong-branch decision
+1. open reports/campaign-test/<run_id>/verify.json -- read which branch the agent missed and why
+2. open reports/campaign-test/<run_id>/logfire_report.md -- separate a routing miss (unrouted / 429) from a wrong-branch decision
 3. edit the workflow's "Handling replies" wording -- apply the critique's highest-impact edit
 4. /mailpilot-campaign-test -- re-run after the edit
 ```

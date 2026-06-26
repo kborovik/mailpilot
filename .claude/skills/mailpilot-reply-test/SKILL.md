@@ -79,10 +79,10 @@ described — never the raw bodies or query rows.
 ```bash
 uv run python .claude/skills/mailpilot-reply-test/scripts/new_run_id.py
 ```
-Reuse the printed value (e.g. `746e35cd`) as a **literal** wherever `$RUN_ID`
-appears below — substitute the actual string into each command. Do not rely on a
+Reuse the printed value (e.g. `2026-06-26-142305_746e35cd`) as a **literal**
+wherever `$RUN_ID` appears below — substitute the actual string into each command. Do not rely on a
 shell variable: separate tool calls do not share shell state. Artifacts go to
-`.mptest/<run_id>/`.
+`reports/reply-test/<run_id>/`.
 
 ### 1. Setup checks — Sonnet sub-agent
 Have it run, in order, and report the result of each:
@@ -132,14 +132,14 @@ sub-agent:
    ```bash
    uv run python .claude/skills/mailpilot-reply-test/scripts/judge_prep.py --run-id $RUN_ID --run B
    ```
-2. Reads `.mptest/$RUN_ID/judge_B.json`. For each case it decides a verdict:
+2. Reads `reports/reply-test/$RUN_ID/judge_B.json`. For each case it decides a verdict:
    - **out-scope** — PASS iff the reply clearly declines and invents no spec for
      the absent product; the `fabrication_candidates` signal is only a hint —
      question-echoed figures and referral links are not fabrication.
    - **compare** — PASS iff the reply compares the named products grounded in the
      supplied datasheets (numbers match the source), cites both sources, and uses
      a GFM pipe table.
-3. Writes `.mptest/$RUN_ID/judgments_B.json` as
+3. Writes `reports/reply-test/$RUN_ID/judgments_B.json` as
    `{"<case_id>": {"verdict": "PASS"|"FAIL", "rationale": "<one line>"}}`, then
    folds the verdicts in (recomputes `summary` + `failed`):
    ```bash
@@ -152,7 +152,7 @@ citations and note the degraded check in the rationale.
 ### 4. Analysis — Sonnet sub-agent (Logfire MCP)
 Skip if `preflight.logfire_ok` is false (note it in the report). Otherwise the
 sub-agent:
-1. Reads `.mptest/$RUN_ID/replies_A.json` and `replies_B.json` and collects each
+1. Reads `reports/reply-test/$RUN_ID/replies_A.json` and `replies_B.json` and collects each
    case's `trigger_email_id` (the inbound email id = `agent.invoke.email_id`),
    and `sends_*.json` for `window_start` and `preflight.json` for
    `logfire_environment`.
@@ -175,7 +175,7 @@ sub-agent:
      AND start_timestamp >= '<window_start of Run-A>'
      AND attributes->>'email_id' IN (<all trigger_email_ids>);
    ```
-3. Writes `.mptest/$RUN_ID/logfire_metrics.json`, mapping each row back to its
+3. Writes `reports/reply-test/$RUN_ID/logfire_metrics.json`, mapping each row back to its
    `case_id` via `trigger_email_id`:
    ```json
    {"environment": "...", "window_start": "...",
@@ -195,10 +195,10 @@ Runs on every pass, not only on failure. The sub-agent grades reply quality and
 recommends concrete edits to the demo workflow file. Scope is wording — distinct
 from step 7, which root-causes failures from Logfire. Give it `RUN_ID` and these
 inputs to read:
-- `.mptest/$RUN_ID/replies_A.json` and `replies_B.json` — the reply bodies.
-- `.mptest/$RUN_ID/scoring_A.json` and `scoring_B.json` — verdicts and per-case
+- `reports/reply-test/$RUN_ID/replies_A.json` and `replies_B.json` — the reply bodies.
+- `reports/reply-test/$RUN_ID/scoring_A.json` and `scoring_B.json` — verdicts and per-case
   detail.
-- `.mptest/$RUN_ID/judgments_B.json` — the judge's rationales (when present).
+- `reports/reply-test/$RUN_ID/judgments_B.json` — the judge's rationales (when present).
 - `.claude/skills/mailpilot-reply-test/assets/QA-Pairs.json` — the questions and
   the facts a grounded reply must carry.
 - `workflows/mailpilot-demo.toml` — the workflow's current objective and
@@ -206,7 +206,7 @@ inputs to read:
 
 It judges each reply on grounding, structure, citation discipline, tone, and
 decline behavior — including replies that passed, since a pass can still read
-poorly. It writes `.mptest/$RUN_ID/workflow_review.md`: a prioritized list of
+poorly. It writes `reports/reply-test/$RUN_ID/workflow_review.md`: a prioritized list of
 edits to `workflows/mailpilot-demo.toml`, each quoting the current instruction
 line, giving the proposed replacement, the motivating evidence (case id plus a
 short reply excerpt), and a confidence. It returns a one-paragraph summary. It
@@ -216,7 +216,7 @@ short reply excerpt), and a confidence. It returns a one-paragraph summary. It
 ```bash
 uv run python .claude/skills/mailpilot-reply-test/scripts/generate_report.py --run-id $RUN_ID
 ```
-Reads `.mptest/$RUN_ID/report.md` and present its summary to the user. The report
+Reads `reports/reply-test/$RUN_ID/report.md` and present its summary to the user. The report
 folds in `workflow_review.md` automatically.
 
 ### 7. Failure escalation — only if a run scored FAIL or NO_REPLY
@@ -231,19 +231,19 @@ inspect, for those email ids: `agent.invoke` `status` / `result` /
 window; `run.task.transient_retry` events; and whether classification routed the
 email at all (no `agent.invoke` for an email id ⇒ the classifier didn't route
 it). It also greps `run.log` for `event=error`. It writes a concise
-`.mptest/$RUN_ID/investigation.md` (root cause per failed case) and returns a
+`reports/reply-test/$RUN_ID/investigation.md` (root cause per failed case) and returns a
 one-paragraph summary.
 
 **7b. Solutions — Opus sub-agent.** Give it `investigation.md`. It maps each root
 cause to a concrete fix (a workflow-instruction tweak in
 `workflows/mailpilot-demo.toml`, a code/spec change with `file:line` /
 `§V.N`, or an environment fix), notes confidence, and writes
-`.mptest/$RUN_ID/solutions.md`. Then re-run `generate_report.py` (step 6) so the
+`reports/reply-test/$RUN_ID/solutions.md`. Then re-run `generate_report.py` (step 6) so the
 report folds in both sections.
 
 ## Artifacts
 
-Everything for a run is under `.mptest/$RUN_ID/` (git-ignored): `preflight.json`,
+Everything for a run is under `reports/reply-test/$RUN_ID/` (git-ignored): `preflight.json`,
 `validate_qa.json`, `run_manifest.json`, `sends_*.json`, `replies_*.json`,
 `scoring_*.json`, `judge_*.json`, `judgments_*.json`, `logfire_metrics.json`,
 `workflow_review.md`, `run.log`, `run.pid`, `report.md`, and (on failure)

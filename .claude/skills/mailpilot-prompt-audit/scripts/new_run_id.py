@@ -1,4 +1,4 @@
-"""Print a fresh date-stamped run id for a test run.
+"""Print a fresh date-stamped run id for an audit run.
 
 A standalone helper (no shell-special characters on the command line) so the
 orchestrator can mint a run id portably across shells:
