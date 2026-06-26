@@ -241,6 +241,20 @@ def test_get_model_carries_cache_settings() -> None:
     assert model.settings.get("anthropic_cache_instructions") is True
 
 
+def test_get_model_omits_reasoning_keys() -> None:
+    """§V.130: classifier _get_model carries no thinking/effort keys.
+
+    The classifier is a one-shot structured-output decision; its signature
+    takes no Settings, so it cannot pick up the reasoning controls. Reasoning
+    config stays scoped to the workflow agent.
+    """
+    _get_model.cache_clear()
+    model = _get_model("sk-test", "claude-sonnet-4-6", "https://api.anthropic.com")
+    assert model.settings is not None
+    assert model.settings.get("anthropic_thinking") is None
+    assert model.settings.get("anthropic_effort") is None
+
+
 def test_get_model_uses_240s_read_timeout() -> None:
     """§V.48: classifier's AnthropicProvider HTTP client carries a 240s read-timeout.
 

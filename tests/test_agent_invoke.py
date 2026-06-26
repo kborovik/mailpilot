@@ -1584,6 +1584,62 @@ def test_build_anthropic_model_carries_cache_settings() -> None:
     assert model.settings.get("anthropic_cache_instructions") is True
 
 
+def test_build_anthropic_model_omits_reasoning_keys_when_unset() -> None:
+    """§V.130: unset reasoning settings leave both keys off (current behavior).
+
+    Both ``anthropic_thinking`` and ``anthropic_effort`` default to '', so the
+    workflow agent's model settings carry no reasoning config and the
+    production call shape is unchanged until an operator opts in.
+    """
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="claude-sonnet-4-6"
+    )
+    model = _build_anthropic_model(settings)
+    assert model.settings is not None
+    assert model.settings.get("anthropic_thinking") is None
+    assert model.settings.get("anthropic_effort") is None
+
+
+def test_build_anthropic_model_sets_thinking_when_configured() -> None:
+    """§V.130: anthropic_thinking='adaptive' adds the thinking config block."""
+    settings = make_test_settings(
+        anthropic_api_key="sk-test",
+        anthropic_model="claude-sonnet-4-6",
+        anthropic_thinking="adaptive",
+    )
+    model = _build_anthropic_model(settings)
+    assert model.settings is not None
+    assert model.settings.get("anthropic_thinking") == {"type": "adaptive"}
+
+
+def test_build_anthropic_model_sets_effort_when_configured() -> None:
+    """§V.130: anthropic_effort='high' threads the reasoning effort level."""
+    settings = make_test_settings(
+        anthropic_api_key="sk-test",
+        anthropic_model="claude-opus-4-7",
+        anthropic_effort="high",
+    )
+    model = _build_anthropic_model(settings)
+    assert model.settings is not None
+    assert model.settings.get("anthropic_effort") == "high"
+
+
+def test_build_anthropic_model_reasoning_preserves_cache_flags() -> None:
+    """§V.130 + §V.47: both reasoning keys set leaves the cache flags intact."""
+    settings = make_test_settings(
+        anthropic_api_key="sk-test",
+        anthropic_model="claude-opus-4-7",
+        anthropic_thinking="adaptive",
+        anthropic_effort="xhigh",
+    )
+    model = _build_anthropic_model(settings)
+    assert model.settings is not None
+    assert model.settings.get("anthropic_thinking") == {"type": "adaptive"}
+    assert model.settings.get("anthropic_effort") == "xhigh"
+    assert model.settings.get("anthropic_cache_tool_definitions") is True
+    assert model.settings.get("anthropic_cache_instructions") is True
+
+
 def test_build_anthropic_model_requires_api_key() -> None:
     """Missing api_key raises a clear error rather than reaching the API."""
     settings = make_test_settings(

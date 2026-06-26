@@ -28,6 +28,12 @@ DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 
 LogfireEnvironment = Literal["development", "production"]
 
+# Workflow-agent reasoning controls (§V.130). '' = unset = current no-reasoning
+# behavior; these gate extended thinking and reasoning effort on the workflow
+# agent only -- the classifier is a one-shot decision and never reads them.
+AnthropicThinking = Literal["", "adaptive"]
+AnthropicEffort = Literal["", "low", "medium", "high", "xhigh", "max"]
+
 # Fields whose values must never appear in telemetry. database_url can carry
 # user:password@host credentials, so it is treated as secret too.
 SECRET_KEYS = frozenset({"anthropic_api_key", "logfire_token", "database_url"})
@@ -60,6 +66,8 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     anthropic_model: str = DEFAULT_ANTHROPIC_MODEL
     anthropic_base_url: str = DEFAULT_ANTHROPIC_BASE_URL
+    anthropic_thinking: AnthropicThinking = ""
+    anthropic_effort: AnthropicEffort = ""
     google_pubsub_topic: str = "mailpilot-topic-dev"
     google_pubsub_subscription: str = "mailpilot-sub-dev"
     google_application_credentials: str = ""

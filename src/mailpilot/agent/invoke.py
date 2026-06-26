@@ -434,12 +434,27 @@ def _build_anthropic_model(settings: Settings) -> AnthropicModel:
     ``api.anthropic.com``; pointing it at an Anthropic-compatible endpoint
     (e.g. ``https://api.novita.ai/anthropic``) routes the same Messages-API
     call to that vendor with no code change.
+
+    §V.130: ``anthropic_thinking`` and ``anthropic_effort`` are config-gated
+    reasoning controls scoped to the workflow agent. Both default unset, so the
+    production call shape is unchanged until an operator opts in. When set, the
+    thinking value becomes an ``anthropic_thinking={'type': <value>}`` block and
+    the effort value passes through as ``anthropic_effort``; the cache flags
+    (§V.47) are unaffected. The classifier never reads these settings.
     """
     if not settings.anthropic_api_key:
         raise ValueError(
             "anthropic_api_key is required for agent invocation; "
             "set it via `mailpilot config set anthropic_api_key ...`",
         )
+    model_settings = AnthropicModelSettings(
+        anthropic_cache_tool_definitions=True,
+        anthropic_cache_instructions=True,
+    )
+    if settings.anthropic_thinking:
+        model_settings["anthropic_thinking"] = {"type": settings.anthropic_thinking}
+    if settings.anthropic_effort:
+        model_settings["anthropic_effort"] = settings.anthropic_effort
     return AnthropicModel(
         settings.anthropic_model,
         provider=AnthropicProvider(
@@ -447,10 +462,7 @@ def _build_anthropic_model(settings: Settings) -> AnthropicModel:
             base_url=settings.anthropic_base_url,
             http_client=httpx.AsyncClient(timeout=httpx.Timeout(240.0)),
         ),
-        settings=AnthropicModelSettings(
-            anthropic_cache_tool_definitions=True,
-            anthropic_cache_instructions=True,
-        ),
+        settings=model_settings,
     )
 
 

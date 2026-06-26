@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 from logfire.testing import CaptureLogfire
+from pydantic import ValidationError
 
 from mailpilot.settings import Settings, load_settings, save_settings, set_setting
 
@@ -17,6 +18,35 @@ def test_default_settings():
     assert settings.anthropic_base_url == "https://api.anthropic.com"
     assert settings.logfire_environment == "development"
     assert settings.google_pubsub_topic == "mailpilot-topic-dev"
+
+
+def test_anthropic_reasoning_defaults_unset():
+    """§V.130: anthropic_thinking + anthropic_effort default to '' (no reasoning)."""
+    settings = Settings()
+    assert settings.anthropic_thinking == ""
+    assert settings.anthropic_effort == ""
+
+
+def test_set_setting_round_trips_reasoning_keys(tmp_path: Path):
+    """§V.130: config set/get persists the reasoning controls."""
+    config_path = tmp_path / "config.json"
+    set_setting("anthropic_thinking", "adaptive", config_path=config_path)
+    set_setting("anthropic_effort", "high", config_path=config_path)
+    reloaded = load_settings(config_path=config_path)
+    assert reloaded.anthropic_thinking == "adaptive"
+    assert reloaded.anthropic_effort == "high"
+
+
+def test_anthropic_thinking_rejects_invalid_value():
+    """§V.130: anthropic_thinking is a closed Literal; an off-list value is rejected."""
+    with pytest.raises(ValidationError):
+        Settings(anthropic_thinking="enabled")  # pyright: ignore[reportArgumentType]
+
+
+def test_anthropic_effort_rejects_invalid_value():
+    """§V.130: anthropic_effort is a closed Literal; an off-list value is rejected."""
+    with pytest.raises(ValidationError):
+        Settings(anthropic_effort="extreme")  # pyright: ignore[reportArgumentType]
 
 
 def test_anthropic_base_url_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
