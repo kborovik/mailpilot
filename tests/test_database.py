@@ -77,6 +77,7 @@ from mailpilot.database import (
     list_contacts,
     list_emails,
     list_enrollments_detailed,
+    list_meeting_attendees,
     list_meetings,
     list_notes,
     list_tags,
@@ -5820,3 +5821,103 @@ def test_update_meeting_ignores_non_allowed_fields(
     )
     assert unchanged is not None
     assert unchanged.meet_url == "https://m/orig"
+
+
+def test_list_meeting_attendees_returns_attendee_contacts(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.8/§B.112: list_meeting_attendees reads the meeting's attendee contacts."""
+    meeting = create_meeting(database_connection, google_event_id="evt-att")
+    assert meeting is not None
+    alice = make_test_contact(database_connection, email="alice@acme.com")
+    bob = make_test_contact(database_connection, email="bob@acme.com")
+    link_meeting_attendee(database_connection, meeting.id, alice.id)
+    link_meeting_attendee(database_connection, meeting.id, bob.id)
+
+    attendees = list_meeting_attendees(database_connection, meeting.id)
+
+    # Ordered by email; carries email + name (the reader for the write+filter pair).
+    assert [c.email for c in attendees] == ["alice@acme.com", "bob@acme.com"]
+    assert all(isinstance(c.email, str) for c in attendees)
+
+
+def test_list_meeting_attendees_empty_when_no_links(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.8: a meeting with no linked attendees reads an empty list, not None."""
+    meeting = create_meeting(database_connection, google_event_id="evt-noatt")
+    assert meeting is not None
+    assert list_meeting_attendees(database_connection, meeting.id) == []
+
+
+def test_load_meeting_view_inlines_attendees_and_summary(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.8/§B.112: load_meeting_view inlines attendee contacts + summary fields."""
+    from mailpilot.database import load_meeting_view
+
+    meeting = create_meeting(
+        database_connection, google_event_id="evt-view", summary="Intro"
+    )
+    assert meeting is not None
+    alice = make_test_contact(database_connection, email="alice@acme.com")
+    bob = make_test_contact(database_connection, email="bob@acme.com")
+    link_meeting_attendee(database_connection, meeting.id, alice.id)
+    link_meeting_attendee(database_connection, meeting.id, bob.id)
+
+    view = load_meeting_view(database_connection, meeting.id)
+
+    assert view is not None
+    assert view.id == meeting.id
+    assert view.summary == "Intro"
+    assert [c.email for c in view.attendees] == ["alice@acme.com", "bob@acme.com"]
+    assert view.attendee_emails == ["alice@acme.com", "bob@acme.com"]
+    assert view.attendee_count == 2
+
+
+def test_load_meeting_view_not_found_returns_none(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from mailpilot.database import load_meeting_view
+
+    assert load_meeting_view(database_connection, "no-such-meeting") is None
+
+
+def test_meeting_view_field_set_superset_of_base_and_summary() -> None:
+    """§V.8/§B.94: MeetingView field set ⊇ Meeting columns + MeetingSummary denorm.
+
+    Recurrence guard: a view model omitting a base column is silently stripped
+    from ``**meeting.model_dump()`` (Pydantic ``extra=ignore``), so the field
+    set is tracked against both the base entity and the list summary.
+    """
+    from mailpilot.models import Meeting, MeetingSummary, MeetingView
+
+    base = set(Meeting.model_fields)
+    summary = set(MeetingSummary.model_fields)
+    view = set(MeetingView.model_fields)
+
+    assert base <= view, f"MeetingView missing base columns: {base - view}"
+    assert summary <= view, f"MeetingView missing summary denorm: {summary - view}"
+    assert {"attendees", "attendee_emails", "attendee_count"} <= view
+
+
+def test_list_meetings_projects_attendee_summary(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.8/§V.96: list_meetings rows carry attendee emails + count (no N+1)."""
+    meeting = create_meeting(database_connection, google_event_id="evt-summary")
+    assert meeting is not None
+    alice = make_test_contact(database_connection, email="alice@acme.com")
+    bob = make_test_contact(database_connection, email="bob@acme.com")
+    link_meeting_attendee(database_connection, meeting.id, alice.id)
+    link_meeting_attendee(database_connection, meeting.id, bob.id)
+    bare = create_meeting(database_connection, google_event_id="evt-bare")
+    assert bare is not None
+
+    rows = {m.id: m for m in list_meetings(database_connection)}
+
+    assert rows[meeting.id].attendee_emails == ["alice@acme.com", "bob@acme.com"]
+    assert rows[meeting.id].attendee_count == 2
+    # A meeting with no attendees carries an empty summary, not NULL.
+    assert rows[bare.id].attendee_emails == []
+    assert rows[bare.id].attendee_count == 0

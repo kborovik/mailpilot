@@ -45,6 +45,8 @@ from mailpilot.models import (
     EnrollmentWithOutcome,
     Meeting,
     MeetingAttendee,
+    MeetingSummary,
+    MeetingView,
     Note,
     NoteSummary,
     SchemaMetadata,
@@ -4609,8 +4611,14 @@ def list_meetings(
     status: str | None = None,
     since: str | None = None,
     until: str | None = None,
-) -> list[Meeting]:
+) -> list[MeetingSummary]:
     """List meetings, newest scheduled first, with optional filters (§V.125).
+
+    Each summary carries ``attendee_emails`` + ``attendee_count`` (child
+    aggregate over ``meeting_attendee`` joined to ``contact``, mirroring
+    ``contact_count`` §V.96) via a single LATERAL join, so a
+    ``--contact-email``-scoped result names who attends without a per-row
+    attendee probe (§V.8, §B.112).
 
     Args:
         connection: Open database connection.
@@ -4622,7 +4630,8 @@ def list_meetings(
         until: Upper bound (inclusive) on ``scheduled_at`` (ISO 8601).
 
     Returns:
-        Matching meetings ordered by ``scheduled_at`` DESC NULLS LAST.
+        Matching meetings ordered by ``scheduled_at`` DESC NULLS LAST, each
+        carrying its attendee summary.
     """
     clauses: list[Composable] = []
     params: dict[str, Any] = {"limit": limit}
@@ -4647,7 +4656,19 @@ def list_meetings(
     if clauses:
         where = SQL("WHERE ") + SQL(" AND ").join(clauses)
     query = (
-        SQL("SELECT m.* FROM meeting m ")
+        SQL(
+            "SELECT m.*, "
+            "COALESCE(att.emails, ARRAY[]::text[]) AS attendee_emails, "
+            "COALESCE(att.cnt, 0) AS attendee_count "
+            "FROM meeting m "
+            "LEFT JOIN LATERAL ("
+            "SELECT array_agg(ct.email ORDER BY ct.email) AS emails, "
+            "COUNT(*) AS cnt "
+            "FROM meeting_attendee ma "
+            "JOIN contact ct ON ct.id = ma.contact_id "
+            "WHERE ma.meeting_id = m.id"
+            ") att ON TRUE "
+        )
         + where
         + SQL(
             " ORDER BY m.scheduled_at DESC NULLS LAST, m.created_at DESC "
@@ -4655,7 +4676,7 @@ def list_meetings(
         )
     )
     rows = connection.execute(query, params).fetchall()
-    return [Meeting.model_validate(row) for row in rows]
+    return [MeetingSummary.model_validate(row) for row in rows]
 
 
 def update_meeting(
@@ -4793,6 +4814,38 @@ def link_meeting_attendee(
     return MeetingAttendee.model_validate(row)
 
 
+def list_meeting_attendees(
+    connection: psycopg.Connection[dict[str, Any]],
+    meeting_id: str,
+) -> list[Contact]:
+    """List the contacts attending a meeting (§V.8, the reader for §B.112).
+
+    Joins ``meeting_attendee`` to ``contact`` so the operator reads who attends.
+    The reader half of the link relation whose writer is
+    ``link_meeting_attendee`` and whose filter is ``meeting list
+    --contact-email`` -- without it the booking conclusion (§V.128) is reachable
+    only by raw SQL.
+
+    Args:
+        connection: Open database connection.
+        meeting_id: Meeting ID.
+
+    Returns:
+        Attendee contacts ordered by email; empty list when none are linked.
+    """
+    rows = connection.execute(
+        """\
+        SELECT ct.*
+        FROM meeting_attendee ma
+        JOIN contact ct ON ct.id = ma.contact_id
+        WHERE ma.meeting_id = %(meeting_id)s
+        ORDER BY ct.email
+        """,
+        {"meeting_id": meeting_id},
+    ).fetchall()
+    return [Contact.model_validate(row) for row in rows]
+
+
 # -- Composite View Loaders ----------------------------------------------------
 
 
@@ -4880,6 +4933,33 @@ def load_company_view(
         **company.model_dump(),
         notes=notes,
         notes_total=notes_total,
+    )
+
+
+def load_meeting_view(
+    connection: psycopg.Connection[dict[str, Any]],
+    meeting_id: str,
+) -> MeetingView | None:
+    """Load a meeting with its attendee contacts inlined per §V.8.
+
+    Returns ``None`` when the meeting does not exist. ``attendees`` carries the
+    full attendee `Contact` rows (email + name + every base column) joined via
+    ``meeting_attendee`` (§V.125); ``attendee_emails`` + ``attendee_count``
+    mirror the ``meeting list`` summary denorm (§V.96). The reader for the
+    write+filter relation that previously had none (§B.112).
+
+    The projection is a base-entity superset per §V.8: every ``Meeting`` column
+    is forwarded via ``**meeting.model_dump()``.
+    """
+    meeting = get_meeting(connection, meeting_id)
+    if meeting is None:
+        return None
+    attendees = list_meeting_attendees(connection, meeting_id)
+    return MeetingView(
+        **meeting.model_dump(),
+        attendees=attendees,
+        attendee_emails=[contact.email for contact in attendees],
+        attendee_count=len(attendees),
     )
 
 

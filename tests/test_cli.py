@@ -25,6 +25,8 @@ from mailpilot.models import (
     EnrollmentSummary,
     Meeting,
     MeetingAttendee,
+    MeetingSummary,
+    MeetingView,
     Note,
     SchemaStatus,
     Tag,
@@ -8630,6 +8632,41 @@ def _make_meeting_attendee(**overrides: Any) -> MeetingAttendee:
     return MeetingAttendee(**{**defaults, **overrides})
 
 
+def _make_meeting_summary(**overrides: Any) -> MeetingSummary:
+    defaults: dict[str, Any] = {
+        "id": _MEETING_ID,
+        "google_event_id": "evt-1",
+        "meet_url": "https://meet.google.com/abc-defg-hij",
+        "summary": "Intro call",
+        "scheduled_at": _NOW,
+        "ends_at": _NOW,
+        "status": "scheduled",
+        "attendee_emails": ["alice@acme.com", "bob@acme.com"],
+        "attendee_count": 2,
+        "created_at": _NOW,
+    }
+    return MeetingSummary(**{**defaults, **overrides})
+
+
+def _make_meeting_view(**overrides: Any) -> MeetingView:
+    contact = _make_contact(email="alice@acme.com")
+    defaults: dict[str, Any] = {
+        "id": _MEETING_ID,
+        "google_event_id": "evt-1",
+        "meet_url": "https://meet.google.com/abc-defg-hij",
+        "summary": "Intro call",
+        "scheduled_at": _NOW,
+        "ends_at": _NOW,
+        "status": "scheduled",
+        "attendees": [contact],
+        "attendee_emails": [contact.email],
+        "attendee_count": 1,
+        "created_at": _NOW,
+        "updated_at": _NOW,
+    }
+    return MeetingView(**{**defaults, **overrides})
+
+
 def test_meeting_no_create_command(runner: CliRunner) -> None:
     """§V.126: meeting rows are ingested, never operator-created -- no `create`."""
     with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
@@ -8640,7 +8677,8 @@ def test_meeting_no_create_command(runner: CliRunner) -> None:
 
 
 def test_meeting_list(runner: CliRunner, mock_connection: MagicMock) -> None:
-    meetings = [_make_meeting()]
+    """§V.8/§V.96: meeting list rows carry the attendee summary (names who attends)."""
+    meetings = [_make_meeting_summary()]
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
@@ -8660,6 +8698,8 @@ def test_meeting_list(runner: CliRunner, mock_connection: MagicMock) -> None:
     data = json.loads(result.output)
     assert len(data["meetings"]) == 1
     assert data["meetings"][0]["id"] == _MEETING_ID
+    assert data["meetings"][0]["attendee_emails"] == ["alice@acme.com", "bob@acme.com"]
+    assert data["meetings"][0]["attendee_count"] == 2
 
 
 def test_meeting_list_with_filters(
@@ -8708,25 +8748,29 @@ def test_meeting_list_status_rejects_out_of_set(runner: CliRunner) -> None:
 
 
 def test_meeting_view(runner: CliRunner, mock_connection: MagicMock) -> None:
-    meeting = _make_meeting()
+    """§V.8/§B.112: meeting view inlines attendee contacts."""
+    view = _make_meeting_view()
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_meeting", return_value=meeting),
+        patch("mailpilot.database.load_meeting_view", return_value=view),
     ):
-        result = runner.invoke(main, ["meeting", "view", meeting.id])
+        result = runner.invoke(main, ["meeting", "view", view.id])
 
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
-    assert data["meeting"]["id"] == meeting.id
+    assert data["meeting"]["id"] == view.id
     assert data["meeting"]["summary"] == "Intro call"
+    assert data["meeting"]["attendees"][0]["email"] == "alice@acme.com"
+    assert data["meeting"]["attendee_emails"] == ["alice@acme.com"]
+    assert data["meeting"]["attendee_count"] == 1
 
 
 def test_meeting_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_meeting", return_value=None),
+        patch("mailpilot.database.load_meeting_view", return_value=None),
     ):
         result = runner.invoke(main, ["meeting", "view", _MEETING_ID])
 

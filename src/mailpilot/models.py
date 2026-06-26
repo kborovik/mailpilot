@@ -511,6 +511,58 @@ class MeetingAttendee(BaseModel):
     created_at: datetime
 
 
+class MeetingSummary(BaseModel):
+    """List-view projection of `Meeting` with a compact attendee summary (§V.8).
+
+    Carries ``attendee_emails`` + ``attendee_count`` (child-aggregate denorm
+    over ``meeting_attendee`` joined to ``contact``, mirroring ``contact_count``
+    §V.96) so a ``meeting list --contact-email`` result names who attends
+    without a per-row attendee probe. The reader half of the link relation whose
+    writer is ``link_meeting_attendee`` and whose filter is ``--contact-email``
+    (§B.112).
+    """
+
+    id: str
+    google_event_id: str | None = None
+    meet_url: str | None = None
+    summary: str = ""
+    scheduled_at: datetime | None = None
+    ends_at: datetime | None = None
+    status: MeetingStatus = "scheduled"
+    attendee_emails: list[str] = []
+    attendee_count: int = 0
+    created_at: datetime
+
+
+class MeetingView(BaseModel):
+    """View-only projection of `Meeting` with inlined attendees (§V.8).
+
+    Used by CLI ``meeting view``. ``attendees`` carries the meeting's full
+    attendee `Contact` rows (email + name + every base column) joined via
+    ``meeting_attendee`` (§V.125), so the operator sees who attends -- the
+    reader for the write+filter relation that previously had none (§B.112).
+
+    Per §V.8 the projection is a base-entity superset: it carries every
+    ``Meeting`` column (forwarded via ``**meeting.model_dump()``) plus the
+    ``MeetingSummary`` attendee denorm (``attendee_emails`` + ``attendee_count``)
+    and the inlined ``attendees`` list. Omitting a base column would let
+    Pydantic ``extra=ignore`` silently strip it (§B.94).
+    """
+
+    id: str
+    google_event_id: str | None = None
+    meet_url: str | None = None
+    summary: str = ""
+    scheduled_at: datetime | None = None
+    ends_at: datetime | None = None
+    status: MeetingStatus = "scheduled"
+    attendees: list[Contact] = []
+    attendee_emails: list[str] = []
+    attendee_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
 class ContactView(BaseModel):
     """View-only projection of `Contact` with inlined notes (§V.8).
 

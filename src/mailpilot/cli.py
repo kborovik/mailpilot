@@ -3756,12 +3756,12 @@ def meeting_list(
 @meeting.command("view")
 @click.argument("meeting_id")
 def meeting_view(meeting_id: str) -> None:
-    """Show a meeting by ID."""
-    from mailpilot.database import get_meeting, initialize_database
+    """Show a meeting by ID with its attendee contacts inlined."""
+    from mailpilot.database import initialize_database, load_meeting_view
 
     connection = initialize_database(_database_url())
     try:
-        found = get_meeting(connection, meeting_id)
+        found = load_meeting_view(connection, meeting_id)
         if found is None:
             output_error(f"meeting not found: {meeting_id}", "not_found")
         output_entity("meeting", found)
