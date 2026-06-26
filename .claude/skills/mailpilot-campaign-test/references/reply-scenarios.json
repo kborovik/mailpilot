@@ -1,0 +1,72 @@
+{
+  "_comment": "Reply-branch scenarios for the multi-step campaign test. Each scenario gets its own ephemeral workflow + enrollment + Touch 1 + crafted reply. The test replies to Touch 1 from inbound@lab5.ca with reply_body, lets the live agent handle the reply, then asserts the observable state in `expect`. Expectations are deliberately tolerant of the wording-vs-tool gap: ai-engineering.toml's 'Handling replies' names outcomes like 'completed/opt-out', but the agent's actual tool (conclude_enrollment) maps opt-out and bad-contact to a `failed` outcome plus a contact disable. So the gating assertions key on the strong, branch-defining signal (a disable, a reply, a terminal outcome), and the observed outcome type is reported, not gated, where the two diverge. `outcome` ∈ completed|failed|none|terminal_or_followup|any. `agent_replied` ∈ true|false|null (null = do not gate). `reply_contains` is an additional substring gate on the agent's reply body when present.",
+  "scenarios": [
+    {
+      "key": "booked",
+      "label": "Positive -- wants the call",
+      "expected_branch": "Confirm warmly, share the calendar link, conclude meeting_booked (completed).",
+      "reply_body": "Yes, this is interesting and the cost numbers look compelling. I would like to book a 30-minute call. How is next week for you?",
+      "expect": {
+        "outcome": "completed",
+        "contact_disabled": false,
+        "agent_replied": true,
+        "reply_contains": ["calendar.app.google"]
+      }
+    },
+    {
+      "key": "question",
+      "label": "Question -- interested, not ready",
+      "expected_branch": "Answer briefly, re-offer the calendar link, do NOT conclude; enrollment stays active.",
+      "reply_body": "Before we set up a call, can you tell me roughly what one sourced reply costs to run, and how MailPilot avoids guessing when a question is out of scope?",
+      "expect": {
+        "outcome": "none",
+        "contact_disabled": false,
+        "agent_replied": true
+      }
+    },
+    {
+      "key": "not_now",
+      "label": "Not now -- soft objection",
+      "expected_branch": "Reply graciously, then either conclude (contact_later) or schedule one soft follow-up. Do NOT disable.",
+      "reply_body": "Thanks for reaching out. This is not a priority for us right now. Maybe revisit next quarter.",
+      "expect": {
+        "outcome": "terminal_or_followup",
+        "contact_disabled": false,
+        "agent_replied": true
+      }
+    },
+    {
+      "key": "opt_out",
+      "label": "Opt-out -- explicit unsubscribe",
+      "expected_branch": "Disable the contact (unsubscribed), conclude. The disable is the branch signal; outcome type is reported (do_not_contact records `failed`).",
+      "reply_body": "Please stop contacting me and remove me from your list. Unsubscribe.",
+      "expect": {
+        "outcome": "any",
+        "contact_disabled": true,
+        "agent_replied": null
+      }
+    },
+    {
+      "key": "auto_reply",
+      "label": "Auto-reply -- out of office",
+      "expected_branch": "noop: do not burn a touch. No reply, no outcome, no disable; the cadence continues.",
+      "reply_body": "Automatic reply: I am out of the office until Monday with no access to email. I will respond when I return.",
+      "expect": {
+        "outcome": "none",
+        "contact_disabled": false,
+        "agent_replied": false
+      }
+    },
+    {
+      "key": "wrong_person",
+      "label": "Wrong person -- bad contact",
+      "expected_branch": "Disable the contact (bad-contact), conclude failed. Stands in for the bounce branch, which routing handles deterministically before the agent and cannot be forged from a normal mailbox.",
+      "reply_body": "You have the wrong person. I do not handle anything like this and I am not the right contact. There is no one here for this.",
+      "expect": {
+        "outcome": "any",
+        "contact_disabled": true,
+        "agent_replied": null
+      }
+    }
+  ]
+}

@@ -1,243 +1,257 @@
 ---
 name: mailpilot-campaign-test
 description: >-
-  Test the real outbound cold-email workflow agent against real CRM contacts
-  before any real send. Runs the live workflow agent (default
-  workflows/ai-engineering.toml) so it drafts and sends a
-  genuinely personalized email per contact, but mirrors each real contact onto a
-  controlled inbound alias (inbound1@lab5.ca through inbound9@lab5.ca) so the
-  real contact address is never emailed, confirms delivery from Gmail, and runs
-  an Opus sub-agent that critiques the workflow's own wording (its objective and
-  instructions) using the sent emails as evidence and suggests edits to improve
-  it. Use this whenever the user wants to test, smoke-test, dry-run,
-  preview, simulate, critique, or validate an outbound campaign, cold-email
-  blast, or outreach workflow against real or discovered leads -- even when they
-  only say "test the campaign", "test my cold email", or "check the outreach
-  workflow before I send it". This sends LIVE Gmail traffic to the alias mailbox;
-  it never emails the real contacts.
-argument-hint: "[--workflow-file <path>] [--limit N] [--company-domain <domain>] [--min-confidence N]"
+  Test the full multi-step flow of the real outbound cold-email workflow agent
+  (default workflows/ai-engineering.toml) before any real send. The live agent
+  sends a personalized cold Touch 1 to a controlled prospect mailbox
+  (inbound@lab5.ca), then the test replies to that email with content crafted to
+  drive each branch of the workflow's reply handling -- positive/booked,
+  question, not-now, opt-out, auto-reply/out-of-office, and wrong-person -- and
+  the live agent handles each reply. The test then verifies the agent took the
+  right branch (booked the call, declined, disabled the contact, or did nothing)
+  and runs an Opus sub-agent that critiques the workflow's reply-handling wording
+  and suggests edits. Use this whenever the user wants to test, smoke-test,
+  dry-run, simulate, critique, or validate an outbound campaign, cold-email
+  blast, outreach workflow, or its reply handling and branch outcomes -- even
+  when they only say "test the campaign", "test my cold email", "test the full
+  flow", or "check the outreach workflow before I send it". This sends LIVE Gmail
+  traffic between outbound@lab5.ca and inbound@lab5.ca; it never emails a real
+  contact.
+argument-hint: "[--workflow-file <path>] [--company-domain <domain>] [--min-confidence N]"
 allowed-tools: Bash(uv run *), Read, Agent, mcp__claude_ai_logfire__query_run
 ---
 
 # mailpilot-campaign-test
 
-Test the real outbound workflow agent against real CRM contacts, as close to
-production as possible, without emailing anyone real. The skill runs the live
-agent defined by an outbound workflow TOML, so the agent reads each contact and
-company, drafts a personalized email, and sends it through the same path the
-production agent uses. Real contacts supply the personalization data (name,
-title, company); the recipient is always a controlled inbound alias, so no real
-person is ever emailed.
+Test the real outbound workflow agent across its **full multi-step flow**, as
+close to production as possible, without emailing anyone real. The skill runs the
+live agent defined by an outbound workflow TOML through two agent turns:
 
-Deterministic work is done by the Python scripts in `scripts/`. They shell out
-to the `mailpilot` CLI and emit compact JSON, so the orchestrator spends no
-tokens on data plumbing. Run every command from the repo root with `uv run
-python` so the project venv, the `mailpilot` console script, and the package are
-importable. Scripts live in `.claude/skills/mailpilot-campaign-test/scripts/`.
+1. **Touch 1** -- the agent reads the prospect contact and the real grounding
+   company, drafts a personalized cold email, and sends it.
+2. **Reply handling** -- the test plays the prospect: it replies to that Touch 1
+   with content crafted to drive one branch of the workflow's "Handling replies"
+   section, and the live agent handles the reply and takes a branch.
 
-## How the alias safety works
+The recipient is always the controlled `inbound@lab5.ca` mailbox, so no real
+person is ever emailed. Deterministic work is done by the Python scripts in
+`scripts/`; they shell out to the `mailpilot` CLI (and, for the scoped
+reply-handling trigger, import a few `mailpilot` functions) and emit compact
+JSON, so the orchestrator spends no tokens on data plumbing. Run every command
+from the repo root with `uv run python`.
 
-The agent sends to the contact's stored email. The safety guarantee is that the
-contact the agent reads is never a real prospect: it is a persistent
-**alias-contact** whose own email is one of nine inbound aliases.
+## How the safety + isolation works
 
-- **Source:** `outbound@lab5.ca` sends every message.
-- **Alias-contacts:** nine persistent contacts whose email is `inbound1@lab5.ca`
-  through `inbound9@lab5.ca`. A run mirrors a selected real contact's name,
-  title, and company onto one alias-contact, then runs the agent against it. The
-  agent reads the alias-contact and sends to its email -- the alias. The real
-  contact row is never touched and its address is never a recipient.
-- **Delivery mailbox:** `inbound@lab5.ca` receives all nine aliases and is the
-  account synced to confirm delivery.
-
-`contact.email` is globally unique, so there can be exactly one contact per
-alias address. That is why the alias-contacts are persistent and reused, and why
-the run is capped at nine messages (one per alias).
+- **Sender:** `outbound@lab5.ca` sends every Touch 1 and every agent reply.
+- **Prospect:** one persistent contact whose own email IS `inbound@lab5.ca`. The
+  agent sends Touch 1 to the contact's email, so it can only ever reach the
+  controlled mailbox. The test replies from that same mailbox, so the reply's
+  From maps the inbound reply back to this one prospect contact.
+- **Grounding:** a real contact's first name, last name, title, and company are
+  mirrored onto the prospect contact, and it is linked to the real company for
+  the run, so the agent's `read_contact` / `read_company` steps have real
+  grounding. The real contact row is never modified and its address is never a
+  recipient.
+- **Scenario isolation:** every reply branch gets its **own ephemeral workflow**.
+  An enrollment is per (workflow, contact), so N ephemeral workflows give N
+  independent enrollments for the one prospect contact -- one per scenario -- and
+  a fresh workflow id also dodges the 30-day cold-send cooldown (§V.79).
+- **No run loop:** the skill never starts `mailpilot run`. Reply handling is
+  driven scoped (see step 6): sync the sender, route each reply, bridge it to a
+  task, and invoke the agent on it -- the same path the loop uses, but only for
+  this run's workflows, so no auto-reply ever fires for genuine mail.
 
 ## What it does
 
-- **Select.** Picks up to nine real contacts as the personalization source,
-  skipping the alias-contact scaffolding itself.
-- **Scaffold.** Ensures the nine alias-contacts and a neutral, disabled test
-  company exist, then mirrors each selected real contact's first name, last name,
-  title, and company onto its alias-contact. The alias-contact is linked to the
-  REAL company for the duration of the run so the agent's `read_company` step has
-  real grounding.
-- **Enroll.** Imports an ephemeral, per-run copy of the outbound workflow into
-  `outbound@lab5.ca` and enrolls the alias-contacts. A fresh workflow each run
-  means the 30-day cold-send cooldown never blocks a re-run.
-- **Run the agent.** Runs each enrollment synchronously. The live agent drafts a
-  personalized email and sends it to the alias through the production send path,
-  including the outbound body lint. The skill then reads back what the agent
-  actually sent (subject and body).
-- **Verify.** Syncs `inbound@lab5.ca` and confirms each sent email arrived,
-  matched by its unique recipient alias, never the agent-written subject.
-- **Critique.** An Opus sub-agent reads the workflow's own wording (its
-  `objective` and `instructions`) and the sent emails as evidence, then scores
-  the wording against the rubric (`references/marketing-rubric.md`): message
-  clarity, personalization directives, value-proposition framing, structure and
-  length, subject directives, tone constraints, and deliverability guardrails. It
-  returns the patterns the emails share, the wording gaps that cause them, and
-  concrete edits to the workflow -- highest-impact first -- so the operator can
-  improve the wording and re-run. Advisory only; it never changes the PASS or
-  FAIL verdict.
-- **Report.** Writes a per-contact table and a PASS or FAIL verdict, plus the
-  workflow-wording critique with its suggested edits.
-- **Clean up.** Re-parks the alias-contacts off the real companies and stops the
+- **Set up.** Ensures the prospect contact and a neutral disabled test company
+  exist, mirrors a real contact onto the prospect for grounding, then imports one
+  ephemeral workflow per scenario and enrolls the prospect in each.
+- **Send Touch 1.** Runs each enrollment so the live agent drafts and sends a
+  cold Touch 1 to `inbound@lab5.ca` through the production send path (including
+  the §V.42 body lint), and captures each Touch 1's RFC 2822 Message-ID.
+- **Inject replies.** Syncs the prospect mailbox, matches each received Touch 1 by
+  Message-ID, and replies with the scenario's crafted body -- so the agent sees a
+  real, in-thread prospect reply.
+- **Handle replies.** Syncs the sender so each reply routes back to its ephemeral
+  workflow, bridges it to a task, and invokes the live agent on it. Scenarios are
+  handled one at a time, re-enabling the shared prospect contact between each, so
+  an opt-out / wrong-person disable never blocks a later scenario.
+- **Verify branches.** For each scenario, reads the observable state the agent
+  left -- terminal outcome, contact disabled or not, whether the agent replied,
+  any follow-up task -- and checks it against the branch the scenario should have
+  driven. PASS only when every scenario matched.
+- **Critique.** An Opus sub-agent reads the workflow's reply-handling wording and
+  the branch evidence, scores it against the rubric
+  (`references/marketing-rubric.md`), and suggests concrete edits. Advisory only;
+  it never changes the verdict.
+- **Report.** Writes a per-scenario table (expected branch | observed | PASS or
+  FAIL) and an overall verdict, plus the critique.
+- **Clean up.** Re-enables and re-parks the prospect contact and stops every
   ephemeral workflow.
-- **Analyze telemetry.** Queries the run's Logfire spans and saves
-  `logfire_report.md`: which model the agent ran on, token use and latency per
-  email, agent tool errors, send results, and any Gmail 429 rate-limit errors
-  during the verify sync. A missing delivery paired with verify-sync 429s points
-  to a rate-limited sync, not a workflow failure.
+- **Analyze telemetry.** Queries the run's Logfire spans: which model the agent
+  ran on, token use and latency per turn, agent tool errors, send results, and
+  any Gmail 429 rate-limit errors during sync.
 
 ## Safety -- read before running
 
-- The real contacts are the personalization **data source only**. The agent only
-  ever reads an alias-contact and sends to its alias address
-  (`inbound{1-9}@lab5.ca`). A real contact address is never the recipient, and
-  the real contact row is never modified.
-- This sends **real Gmail** from `outbound@lab5.ca` to the alias mailbox (one
-  message per selected contact, at most nine), drafted live by the agent.
-- The skill creates persistent test scaffolding in the live database: nine
-  alias-contacts and one neutral disabled test company (`campaign-test.invalid`,
-  hidden from `company list` and lead discovery). These are reused across runs.
-- During a run, each alias-contact is linked to a real company for grounding,
-  which adds one to that company's contact_count transiently. Cleanup re-parks
-  the alias-contacts on the neutral company, so real companies are untouched at
-  rest. Cleanup is best-effort and idempotent; the next run's setup also re-parks
-  defensively.
-- Each run leaves one stopped `[campaign-test <run_id>]` workflow on
-  `outbound@lab5.ca`. Workflows cannot be deleted, so this is expected; an
-  operator may ignore or `workflow stop` leftover rows.
-- The skill never starts `mailpilot run`, so no sync loop or auto-reply fires
-  during the test.
-- The run is capped at nine contacts (one per alias). `--limit N` only lowers the
-  count; values above nine are clamped to nine.
+- The real contact is the personalization **data source only**. The agent only
+  ever reads the prospect contact and sends to `inbound@lab5.ca`. A real contact
+  address is never a recipient, and the real contact row is never modified.
+- This sends **real Gmail**: one Touch 1 per scenario from `outbound@lab5.ca` to
+  `inbound@lab5.ca`, one crafted reply per scenario back the other way, and the
+  agent's own handling replies. With the default six scenarios that is up to
+  about a dozen messages, all between the two test mailboxes.
+- The skill creates persistent test scaffolding in the live database: one prospect
+  contact (`inbound@lab5.ca`) and one neutral disabled test company
+  (`campaign-test.invalid`, hidden from `company list` and lead discovery). These
+  are reused across runs.
+- During a run the prospect contact is linked to a real company for grounding,
+  which adds one to that company's contact_count transiently. Cleanup re-parks it
+  on the neutral company, so real companies are untouched at rest.
+- An opt-out / wrong-person branch disables the prospect contact globally. The
+  handling step re-enables it between scenarios, and cleanup re-enables it at the
+  end; the next run's setup also re-enables defensively. This is test scaffolding,
+  not a real unsubscribe.
+- Each run leaves several stopped `[campaign-test <run_id> <scenario>]` workflows
+  on `outbound@lab5.ca`. Workflows cannot be deleted, so this is expected.
+- The skill never starts `mailpilot run`, so no sync loop or auto-reply fires for
+  any other account.
 
 ## Arguments
 
 - `--workflow-file <path>` -- the outbound workflow TOML whose agent to test.
   Defaults to `workflows/ai-engineering.toml`.
-- `--limit N` -- number of contacts to test (default 9, clamped to at most 9).
-- `--company-domain <domain>` -- restrict to one company's contacts.
-- `--min-confidence N` -- restrict to contacts with `email_confidence` at least
-  N.
+- `--company-domain <domain>` -- restrict the grounding contact to one company.
+- `--min-confidence N` -- restrict the grounding contact to `email_confidence`
+  at least N.
 
 The workflow file must exist and be valid TOML with `name`, `template`,
-`objective`, and `instructions`. The default lives under `workflows/`, a
+`goal`, and `instructions`. The default lives under `workflows/`, a
 gitignored symlink to the independent repo at `/Users/kb/github/workflows`. If
 that path is absent, restore the symlink (`ln -s ../workflows workflows`) or pass
-`--workflow-file` with an explicit path.
+`--workflow-file` with an explicit path. The reply branches are fixed by
+`references/reply-scenarios.json`.
 
 ## Procedure
 
-The orchestrator runs every step directly. Steps 0 through 5, 7, and 8 are
-deterministic scripts. Step 6 (critique) is a sub-agent phase: spawn it with the
-Agent tool and `model: opus`. Step 9 (telemetry) queries Logfire through the MCP.
-The heavy reading -- the workflow wording, the email bodies, the contact context,
-and the rubric -- stays inside the critique sub-agent; it returns only a short
-summary.
+The orchestrator runs every step directly. Steps 0 through 7, 9, and 10 are
+deterministic scripts. Step 8 (critique) is a sub-agent phase: spawn it with the
+Agent tool and `model: opus`. Step 11 (telemetry) queries Logfire through the
+MCP. The heavy reading -- the workflow wording, the reply bodies, the rubric --
+stays inside the critique sub-agent; it returns only a short summary.
+
+**Always run cleanup (step 10) before you finish, even if a later step fails**,
+so the prospect contact is re-enabled and re-parked and the ephemeral workflows
+are stopped.
 
 ### 0. Mint a run id
 ```bash
 uv run python .claude/skills/mailpilot-campaign-test/scripts/new_run_id.py
 ```
 Reuse the printed value (e.g. `746e35cd`) as a **literal** wherever `$RUN_ID`
-appears below. Separate tool calls do not share shell state, so do not rely on a
-shell variable. Artifacts go to `.campaign-test/<run_id>/` (git-ignored).
+appears below. Separate tool calls do not share shell state. Artifacts go to
+`.campaign-test/<run_id>/` (git-ignored).
 
 ### 0b. Ensure the test accounts exist -- create if missing
-Preflight (step 1) fails when `outbound@lab5.ca` or `inbound@lab5.ca` is absent,
-which is the state right after `make clean` wipes them. Create each account only
-if it is missing:
 ```bash
 uv run mailpilot account view --email outbound@lab5.ca >/dev/null 2>&1 || uv run mailpilot account create --email outbound@lab5.ca --display-name "MailPilot Outbound"
 uv run mailpilot account view --email inbound@lab5.ca  >/dev/null 2>&1 || uv run mailpilot account create --email inbound@lab5.ca  --display-name "MailPilot Inbound"
 ```
-The `account view` guard makes this idempotent: `account create` errors with
-`duplicate_key` on an existing email, so the create runs only when `view` reports
-the account is missing. Never run `make clean` here -- this skill tests against
-the live CRM database, and `make clean` would drop real company and contact rows
-(§V.119). Creating an absent account adds only that account row, so this step is
-data-loss-free. The guard cannot re-enable a disabled account; if preflight still
-reports an account disabled, re-enable it with `mailpilot account enable`.
+The `account view` guard makes this idempotent. Never run `make clean` here --
+this skill tests against the live CRM database, and `make clean` would drop real
+company and contact rows (§V.119). The guard cannot re-enable a disabled account;
+if preflight reports an account disabled, re-enable it with `mailpilot account
+enable`.
 
 ### 1. Preflight
 ```bash
 uv run python .claude/skills/mailpilot-campaign-test/scripts/preflight.py --run-id $RUN_ID [--workflow-file <path>]
 ```
 Validates the workflow TOML, resolves the `outbound@lab5.ca` sender and the
-`inbound@lab5.ca` alias mailbox, confirms neither account is disabled, confirms
-Google credentials are configured, and counts the real contacts. **Stop the run**
-if `verdict != "ok"`. Surface the issues. A `WARNING` line is not blocking.
+`inbound@lab5.ca` prospect mailbox, confirms neither account is disabled,
+confirms Google credentials, and counts the real contacts available for
+grounding. **Stop the run** if `verdict != "ok"`. A `WARNING` line is not
+blocking.
 
-### 2. Select contacts
+### 2. Select the grounding contact
 ```bash
-uv run python .claude/skills/mailpilot-campaign-test/scripts/select_contacts.py --run-id $RUN_ID [--limit N] [--company-domain <domain>] [--min-confidence N]
+uv run python .claude/skills/mailpilot-campaign-test/scripts/select_contacts.py --run-id $RUN_ID [--company-domain <domain>] [--min-confidence N]
 ```
-Picks up to nine real contacts (excluding the alias-contact scaffolding) and
-writes the run manifest. **Stop the run** if `selected` is 0 -- run
+Picks one real contact as the Touch 1 personalization grounding and writes the
+run manifest. **Stop the run** if no grounding contact is selected -- run
 `/lead-contacts` first to seed contacts.
 
-### 3. Set up the run
+### 3. Set up the scenarios
 ```bash
-uv run python .claude/skills/mailpilot-campaign-test/scripts/setup_run.py --run-id $RUN_ID
+uv run python .claude/skills/mailpilot-campaign-test/scripts/setup_scenarios.py --run-id $RUN_ID
 ```
-Ensures the alias-contacts and the neutral test company exist, mirrors each
-selected real contact onto its alias-contact (linked to the real company),
-imports the ephemeral per-run workflow, and enrolls the alias-contacts. Reports
-the `ephemeral_workflow_id` and how many alias-contacts were enrolled. Writes
-`scaffold.json`. **From here on, always run cleanup (step 8) before you finish,
-even if a later step fails**, so the alias-contacts are re-parked and the
-ephemeral workflow is stopped.
+Ensures the prospect contact and neutral company exist, mirrors the grounding
+contact onto the prospect (linked to the real company), imports one ephemeral
+workflow per scenario, and enrolls the prospect in each. Reports how many
+scenarios were enrolled. **From here on, always run cleanup (step 10) before you
+finish.**
 
-### 4. Run the live agent
+### 4. Send Touch 1
 ```bash
-uv run python .claude/skills/mailpilot-campaign-test/scripts/run_agents.py --run-id $RUN_ID
+uv run python .claude/skills/mailpilot-campaign-test/scripts/send_touch1.py --run-id $RUN_ID
 ```
-Runs each enrollment synchronously. The live agent drafts and sends each email to
-its alias, then the script reads back what was sent. Reports `sent`, `failed`,
-and `skipped`. Read a sent body or two from `.campaign-test/$RUN_ID/sends.json`
-and show the user what the agent actually produced (subject and body), plus any
-failures.
+Runs each enrollment so the live agent sends a cold Touch 1 to `inbound@lab5.ca`,
+then reads back each Touch 1 row (subject, thread, RFC Message-ID). Reports `sent`
+and any `missing_message_id`. Read a sent body from `.campaign-test/$RUN_ID/`
+(`mailpilot email view <id>`) and show the user what the agent produced. A
+`missing_message_id` entry is a risk: routing the reply later depends on it (see
+step 6).
 
-### 5. Verify delivery
+### 5. Inject replies
 ```bash
-uv run python .claude/skills/mailpilot-campaign-test/scripts/verify_delivery.py --run-id $RUN_ID
+uv run python .claude/skills/mailpilot-campaign-test/scripts/inject_replies.py --run-id $RUN_ID
 ```
-Syncs `inbound@lab5.ca` and confirms each sent email arrived, matched by the
-agent-written subject. Reports `delivered` and any `missing`. If a delivery is
-missing, do not conclude non-delivery yet: the inbound sync can drop fetched
-messages when Gmail returns HTTP 429 ("Too many concurrent requests for user"),
-so the message reached the mailbox but never landed in the local store. The
-Logfire analysis (step 9) confirms whether that happened before you blame the
-workflow or the aliases.
+Syncs the prospect mailbox, matches each received Touch 1 by Message-ID, and
+replies with each scenario's crafted body. Polls until every Touch 1 has arrived
+or it times out (~5 min). Reports `replies_sent` and any `not_received`.
 
-### 6. Critique -- Opus sub-agent
-The objective of this step is to **suggest changes and improvements to the
-workflow wording**, not to grade individual emails. First bundle the workflow
-wording with the emails it produced:
+### 6. Handle replies
+```bash
+uv run python .claude/skills/mailpilot-campaign-test/scripts/handle_replies.py --run-id $RUN_ID
+```
+Syncs the sender so each reply routes back to its ephemeral workflow (by RFC
+Message-ID), bridges each to a task, and invokes the live agent on it -- handling
+scenarios one at a time and re-enabling the prospect contact between each.
+Reports `handled` and any `unrouted`. **An `unrouted` scenario means routing did
+not match the reply to its workflow** (most often a Touch 1 that never captured
+its Message-ID); that scenario cannot be verified and the report will show it.
+
+### 7. Verify branches
+```bash
+uv run python .claude/skills/mailpilot-campaign-test/scripts/verify_branches.py --run-id $RUN_ID
+```
+For each scenario, reads the observable state (terminal outcome, contact disabled
+or not, whether the agent replied, any follow-up task) and checks it against the
+expected branch in `references/reply-scenarios.json`. Reports the verdict and any
+`failed` scenarios. The expectations are tolerant of the wording-vs-tool gap (the
+TOML says "completed/opt-out" but the disable branches record `failed`): the
+gating keys on the branch-defining signal, and a divergent outcome type is
+reported, not gated.
+
+### 8. Critique -- Opus sub-agent
+First bundle the workflow wording with the branch evidence:
 ```bash
 uv run python .claude/skills/mailpilot-campaign-test/scripts/critique_prep.py --run-id $RUN_ID
 ```
 This writes `.campaign-test/$RUN_ID/critique_input.json` with a `workflow` block
-(name, objective, instructions) and an `emails` list (each with contact and
-company context, subject, and body). If `prepared` is 0 (nothing was sent), skip
-the sub-agent and note it -- with no emails there is no evidence to judge the
-wording against. Otherwise spawn ONE sub-agent with the Agent tool and
-`model: opus`. Give it only the two paths and the output contract below -- it does
-its own reading, so the bodies never enter your window:
+and a `scenarios` list (each with the inbound reply, the agent's reply, the
+expected branch, and the observed outcome). Then spawn ONE sub-agent with the
+Agent tool and `model: opus`. Give it only the two paths and the output contract:
 
-> You are a cold-email workflow critic. The unit of critique is the workflow
-> wording, not the individual emails. Read
+> You are a reply-handling workflow critic. The unit of critique is the workflow
+> wording, not the individual replies. Read
 > `.campaign-test/<RUN_ID>/critique_input.json` -- its `workflow` block holds the
-> `objective` and `instructions` that drove the agent, and its `emails` list is
-> evidence of what that wording produced (each with the recipient's contact and
-> company context, the subject, and the body). Also read
-> `.claude/skills/mailpilot-campaign-test/references/marketing-rubric.md`.
-> Critique the workflow wording against the rubric, using the emails as evidence
-> across the set, and suggest concrete edits to the `objective` and
+> `goal` and `instructions` that drove the agent, and its `scenarios` list
+> is evidence of how that wording handled each reply branch (each with the inbound
+> reply, the agent's reply, the expected branch, and the observed outcome). Also
+> read `.claude/skills/mailpilot-campaign-test/references/marketing-rubric.md`.
+> Critique the workflow's reply-handling wording against the rubric, using the
+> scenarios as evidence, and suggest concrete edits to the `goal` and
 > `instructions`. Write `.campaign-test/<RUN_ID>/critiques.json` as
 > `{"workflow_name": <str>, "overall_score": <1-5>, "dimension_scores": {...},
 > "strengths": [...], "patterns": [...], "weaknesses": [...], "edits": [...],
@@ -245,74 +259,60 @@ its own reading, so the bodies never enter your window:
 > and gives the replacement wording, and the first `edits` entry is the single
 > highest-impact change. Also write a readable
 > `.campaign-test/<RUN_ID>/critiques.md`. Return only a two-line summary: the
-> workflow-wording score and the highest-impact edit. Do not return the bodies,
-> and do not rewrite individual emails.
+> reply-handling score and the highest-impact edit. Do not return the reply
+> bodies.
 
-Substitute the literal run id for `<RUN_ID>`. The score does not gate the
-verdict; it is advisory feedback on the workflow wording for the operator.
+Substitute the literal run id for `<RUN_ID>`. The score is advisory; it never
+gates the verdict.
 
-### 7. Report
+### 9. Report
 ```bash
 uv run python .claude/skills/mailpilot-campaign-test/scripts/generate_report.py --run-id $RUN_ID
 ```
 Reads `.campaign-test/$RUN_ID/report.md` and presents its summary. The report
-folds in the workflow-wording score and the critique section with its suggested
-edits. The verdict is PASS only when there are zero send failures and zero
-missing deliveries; the critique never changes it.
+folds in the critique. The verdict is PASS only when every scenario's observed
+branch matched its expectation.
 
-### 8. Clean up
+### 10. Clean up
 ```bash
 uv run python .claude/skills/mailpilot-campaign-test/scripts/cleanup.py --run-id $RUN_ID
 ```
-Re-parks the alias-contacts on the neutral test company (removing the
-real-company link) and stops the ephemeral workflow. **Always run this**, even if
-an earlier step failed, so the run leaves no real-company contact_count skew and
-no active test workflow. It is idempotent and safe to re-run.
+Re-enables and re-parks the prospect contact and stops every ephemeral workflow.
+**Always run this**, even if an earlier step failed. It is idempotent and safe to
+re-run.
 
-### 9. Analyze Logfire telemetry
+### 11. Analyze Logfire telemetry
 Query the run's spans through the Logfire MCP (`mcp__claude_ai_logfire__query_run`,
 `project: mailpilot`) and save `.campaign-test/$RUN_ID/logfire_report.md`. The
 run's spans are in the `development` environment. Scope the time range to the run
-window: `sends.json` holds `window_start`; query from a minute before it to a few
-minutes after the last verify sync. Pull these five facts and write them up:
+window: `touch1.json` holds `window_start`; query from a minute before it to a few
+minutes after the last handle step. Pull these facts and write them up:
 
-- **Model and token use** -- `span_name = 'agent run'` gives per-run latency and
-  `gen_ai.usage.input_tokens` / `gen_ai.usage.output_tokens`. The `chat <model>`
-  spans (e.g. `chat zai-org/glm-5.2`) give the model name and the call total.
-  Report which model the workflow actually ran on; it is not always a Claude
-  model.
+- **Model and token use** -- `span_name = 'agent run'` or `'agent.invoke'` gives
+  per-turn latency and `gen_ai.usage.input_tokens` / `output_tokens`. Report which
+  model the workflow actually ran on; it is not always a Claude model.
 - **Agent tool errors** -- `span_name = 'agent.tool_errors'`. The `tool_errors`
-  attribute names the tool and error. A repeated `read_company` `not_found`, for
-  example, is a wasted model turn worth flagging.
-- **Send results** -- `span_name = 'gmail.send_message'`. Confirm one per email
-  and no failures.
+  attribute names the tool and error.
+- **Send results** -- `span_name = 'gmail.send_message'`. Confirm sends and no
+  failures.
 - **Inbound-sync rate limiting** -- `span_name = 'gmail batch message error'`.
-  Each row's `error` attribute carries the HTTP status. HTTP 429 ("Too many
-  concurrent requests for user") in the verify window means the sync was rate
-  limited and dropped fetched messages. **A missing delivery plus a 429 burst in
-  the same minute means the email reached the mailbox but the sync lost it -- not
-  a workflow failure and not an alias gap.**
+  HTTP 429 in a sync window means the sync was rate limited and dropped fetched
+  messages. **A missing Touch 1 arrival or a missing reply route plus a 429 burst
+  in the same minute means the message reached the mailbox but the sync lost it --
+  not a workflow failure.**
 - **Exceptions** -- any row with `is_exception = true` in the window.
 
-Example aggregation:
-```sql
-SELECT span_name, count(*) AS n,
-       sum(CASE WHEN is_exception THEN 1 ELSE 0 END) AS exceptions
-FROM records
-WHERE start_timestamp >= '<window_start_utc>'
-  AND deployment_environment = 'development'
-GROUP BY span_name ORDER BY n DESC LIMIT 50
-```
 Present a three-line summary: model and total tokens, any tool-error pattern, and
-whether any 429s hit the verify sync. If the Logfire MCP or token is unavailable,
-note that and skip this step -- it is read-only and never gates the verdict.
+whether any 429s hit a sync. If the Logfire MCP or token is unavailable, note that
+and skip this step -- it is read-only and never gates the verdict.
 
 ## Artifacts
 
 Everything for a run is under `.campaign-test/$RUN_ID/` (git-ignored):
-`preflight.json`, `run_manifest.json`, `scaffold.json`, `ephemeral_workflow.toml`,
-`sends.json`, `delivery.json`, `critique_input.json`, `critiques.json`,
-`critiques.md`, `report.md`, `cleanup.json`, and `logfire_report.md`.
+`preflight.json`, `run_manifest.json`, `scaffold.json`, `ephemeral_<scenario>.toml`,
+`touch1.json`, `replies.json`, `handled.json`, `verify.json`, `critique_input.json`,
+`critiques.json`, `critiques.md`, `report.md`, `cleanup.json`, and
+`logfire_report.md`.
 
 ## OUTPUT -- "Next" block
 
@@ -322,9 +322,9 @@ passing run:
 ```
 ## Next
 
-1. mailpilot email list --account-email inbound@lab5.ca --limit 9 -- inspect the delivered copies
-2. /mailpilot-campaign-test --company-domain <domain> -- test one company's contacts
-3. open .campaign-test/<run_id>/report.md -- re-read the per-contact table
+1. mailpilot email list --account-email inbound@lab5.ca --limit 20 -- inspect the Touch 1s, replies, and agent handling
+2. open .campaign-test/<run_id>/report.md -- re-read the per-scenario table
+3. /mailpilot-campaign-test --company-domain <domain> -- re-run grounded on one company
 ```
 
 After a failing run:
@@ -332,9 +332,9 @@ After a failing run:
 ```
 ## Next
 
-1. open .campaign-test/<run_id>/logfire_report.md -- check whether missing deliveries were verify-sync 429s, not send failures
-2. open .campaign-test/<run_id>/report.md -- read the per-contact send failures
-3. edit the workflow instructions -- fix what made the agent's send fail (e.g. a spec block that must be a |---| pipe table)
+1. open .campaign-test/<run_id>/verify.json -- read which branch the agent missed and why
+2. open .campaign-test/<run_id>/logfire_report.md -- separate a routing miss (unrouted / 429) from a wrong-branch decision
+3. edit the workflow's "Handling replies" wording -- apply the critique's highest-impact edit
 4. /mailpilot-campaign-test -- re-run after the edit
 ```
 
@@ -343,26 +343,26 @@ After a failing run:
 - `mailpilot` installed locally with a working DB (`mailpilot config get
   database_url`).
 - The `outbound@lab5.ca` and `inbound@lab5.ca` accounts present and neither
-  disabled. Step 0b creates either account if it is missing (for example after
-  `make clean`), but cannot re-enable a disabled one -- use `mailpilot account
-  enable` for that.
-- The nine aliases `inbound1@lab5.ca` through `inbound9@lab5.ca` configured on
-  the `inbound@lab5.ca` mailbox in Google Workspace.
-- `google_application_credentials` set (the live send needs Gmail auth).
+  disabled. Step 0b creates either if missing but cannot re-enable a disabled one
+  -- use `mailpilot account enable`.
+- `google_application_credentials` set (the live send and replies need Gmail
+  auth).
 - The workflow file present (the `workflows/` symlink points at
   `/Users/kb/github/workflows`; restore it with `ln -s ../workflows workflows` if
   absent).
-- At least one real contact in the database (run `/lead-contacts` first).
+- At least one real contact in the database for grounding (run `/lead-contacts`
+  first).
 
 ## Why this skill exists
 
-`/lead-companies` and `/lead-contacts` produce real contact rows for cold
-outreach. Before a workflow goes to those real people, its agent must read the
-contact and company, draft a personalized email that renders correctly and clears
-the outbound body lint, and stay on message. This skill runs that real agent
-against real contact data while keeping every recipient on a controlled alias, so
-a broken workflow is caught before it reaches a prospect. The critique then reads
-the emails as a set and points back at the workflow wording: it suggests the edits
-to the `objective` and `instructions` that would lift the next batch, since the
-wording is what the operator actually changes. The default workflow definition
-lives at `workflows/ai-engineering.toml`.
+Before a workflow goes to real prospects, its agent must do the whole job, not
+just the first email: read the contact and company, draft a Touch 1 that renders
+and clears the body lint, and then handle whatever the prospect replies -- book
+the call, answer a question, defer gracefully, honor an unsubscribe, ignore an
+auto-reply, and drop a wrong contact. This skill runs that real agent through the
+full send-reply-handle loop against real contact data while keeping every
+recipient on the controlled `inbound@lab5.ca` mailbox, so a broken branch is
+caught before it reaches a prospect. The critique then reads the branches as a set
+and points back at the workflow's reply-handling wording -- the text the operator
+actually edits. The default workflow definition lives at
+`workflows/ai-engineering.toml`.

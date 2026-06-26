@@ -1,12 +1,12 @@
-"""Preflight: verify the environment can run the live agentic campaign test.
+"""Preflight: verify the environment can run the multi-step campaign test.
 
 Validates the outbound workflow TOML (the agent definition under test),
-resolves the sender (outbound@lab5.ca) and the alias mailbox (inbound@lab5.ca,
-which receives every inbound{1-9} alias), confirms neither account is disabled,
-confirms Google credentials are configured (the live send needs them), and
-counts the real contacts available as personalization data. Writes
-``preflight.json`` (the single source of resolved state for later scripts) and
-exits non-zero on a blocking issue.
+resolves the sender (outbound@lab5.ca) and the prospect mailbox
+(inbound@lab5.ca, which is also the prospect contact's address), confirms
+neither account is disabled, confirms Google credentials are configured (the
+live send needs them), and counts the real contacts available as Touch 1
+personalization grounding. Writes ``preflight.json`` (the single source of
+resolved state for later scripts) and exits non-zero on a blocking issue.
 
 Usage:
     uv run python scripts/preflight.py --run-id <id> [--workflow-file <path>]
@@ -21,9 +21,9 @@ import tomllib
 from pathlib import Path
 
 from _common import (
-    ALIAS_MAILBOX,
-    ALIASES,
     DEFAULT_WORKFLOW_FILE,
+    PROSPECT_EMAIL,
+    PROSPECT_MAILBOX,
     SENDER_EMAIL,
     mp,
     repo_root,
@@ -32,7 +32,7 @@ from _common import (
     write_json,
 )
 
-_REQUIRED_WORKFLOW_FIELDS = ("name", "template", "objective", "instructions")
+_REQUIRED_WORKFLOW_FIELDS = ("name", "template", "goal", "instructions")
 
 
 def _resolve_workflow(
@@ -62,15 +62,15 @@ def _resolve_workflow(
     if not str(parsed["template"]).startswith("outbound"):
         issues.append(
             f"WARNING workflow template {parsed['template']!r} is not an outbound "
-            "template; the campaign test drives an outbound reach-out"
+            "template; the campaign test drives an outbound reach-out plus replies"
         )
 
 
 def _resolve_accounts(result: dict[str, object], issues: list[str]) -> None:
     sender = resolve_account(SENDER_EMAIL)
-    mailbox = resolve_account(ALIAS_MAILBOX)
+    mailbox = resolve_account(PROSPECT_MAILBOX)
     result["sender_account_id"] = sender.get("id") if sender else None
-    result["alias_mailbox_account_id"] = mailbox.get("id") if mailbox else None
+    result["prospect_mailbox_account_id"] = mailbox.get("id") if mailbox else None
     if not sender:
         issues.append(
             f"sending account {SENDER_EMAIL} not found (run `mailpilot account create`)"
@@ -82,26 +82,27 @@ def _resolve_accounts(result: dict[str, object], issues: list[str]) -> None:
         )
     if not mailbox:
         issues.append(
-            f"alias mailbox {ALIAS_MAILBOX} not found (run `mailpilot account create`)"
+            f"prospect mailbox {PROSPECT_MAILBOX} not found "
+            "(run `mailpilot account create`)"
         )
     elif mailbox.get("disabled_reason"):
         issues.append(
-            f"alias mailbox {ALIAS_MAILBOX} is disabled "
-            f"({mailbox['disabled_reason']}); delivery cannot be confirmed"
+            f"prospect mailbox {PROSPECT_MAILBOX} is disabled "
+            f"({mailbox['disabled_reason']}); replies cannot be sent or confirmed"
         )
 
 
 def _count_contacts(result: dict[str, object], issues: list[str]) -> None:
-    """Count real contacts available, excluding infrastructure addresses.
+    """Count real contacts available for Touch 1 grounding.
 
-    Infrastructure = the system's own accounts and the nine alias-contacts;
-    none of those is a prospect.
+    Infrastructure addresses are never grounding prospects: the system's own
+    accounts (which includes the prospect mailbox address).
     """
     accounts = mp(
         ["account", "list", "--include-disabled", "--limit", "100"], check=False
     )
     excluded = {str(a.get("email", "")).lower() for a in accounts.get("accounts", [])}
-    excluded.update(a.lower() for a in ALIASES)
+    excluded.add(PROSPECT_EMAIL.lower())
     data = mp(["contact", "list", "--limit", "200"], check=False)
     real = [
         c
@@ -112,7 +113,7 @@ def _count_contacts(result: dict[str, object], issues: list[str]) -> None:
     if not real:
         issues.append(
             "no real contacts found (run `/lead-contacts` first to seed verified "
-            "contact rows)"
+            "contact rows for Touch 1 grounding)"
         )
 
 
@@ -142,8 +143,8 @@ def main() -> int:
     issues: list[str] = []
     result: dict[str, object] = {
         "sender_email": SENDER_EMAIL,
-        "alias_mailbox": ALIAS_MAILBOX,
-        "aliases": ALIASES,
+        "prospect_mailbox": PROSPECT_MAILBOX,
+        "prospect_email": PROSPECT_EMAIL,
     }
 
     _resolve_workflow(args.workflow_file, result, issues)

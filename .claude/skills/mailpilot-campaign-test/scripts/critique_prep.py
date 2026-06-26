@@ -1,14 +1,14 @@
-"""Bundle the workflow wording with the emails it produced for critique.
+"""Bundle the workflow wording with the reply branches it produced for critique.
 
-The critique judges the workflow's ``objective`` and ``instructions`` -- the
-wording that drove the agent -- and the sent emails are evidence of what that
-wording produces. This script writes ``critique_input.json`` with two parts: the
-``workflow`` block (name, objective, instructions, read from the ephemeral
-workflow TOML the run actually ran on) and the ``emails`` list (one record per
-sent email, joining the agent-written subject and body with the real contact's
-mirrored fields and the real company's profile, fetched once per domain via
-``mailpilot company view``). The Opus critique sub-agent reads this single file
-instead of running many CLI queries. Deterministic data plumbing, no LLM.
+The critique judges the workflow's ``goal`` and ``instructions`` -- in
+particular its "Handling replies" section -- and the agent's actual branch
+behavior is the evidence. This script writes ``critique_input.json`` with two
+parts: the ``workflow`` block (name, goal, instructions, read from the
+source workflow TOML the run imported) and a ``scenarios`` list. Each scenario
+record carries the crafted inbound reply, the agent's handling reply, the branch
+the agent was expected to take, and the observed outcome (whether it took it).
+The Opus critique sub-agent reads this single file instead of running many CLI
+queries. Deterministic data plumbing, no LLM.
 
 Usage:
     uv run python scripts/critique_prep.py --run-id <id>
@@ -21,17 +21,17 @@ import json
 import tomllib
 from pathlib import Path
 
-from _common import mp, read_json, run_dir, write_json
+from _common import load_scenarios, mp, read_json, run_dir, write_json
 
 # Company-profile fields worth giving the critic for grounding (subset of
 # CompanyProfile); kept small so the critique input stays compact.
 PROFILE_FIELDS = ("summary", "products", "target_customers")
 
 
-def _company_context(domain: str, cache: dict[str, dict]) -> dict:
-    """Return {name, profile fields} for a company domain, cached per domain."""
-    if domain in cache:
-        return cache[domain]
+def _company_context(domain: str | None) -> dict | None:
+    """Return {domain, name, profile fields} for the grounding company."""
+    if not domain:
+        return None
     context: dict[str, object] = {"domain": domain}
     data = mp(["company", "view", domain], check=False)
     company = data.get("company") if isinstance(data, dict) else None
@@ -41,28 +41,21 @@ def _company_context(domain: str, cache: dict[str, dict]) -> dict:
         if isinstance(profile, dict):
             for field in PROFILE_FIELDS:
                 context[field] = profile.get(field)
-    cache[domain] = context
     return context
 
 
-def _workflow_wording(directory: Path) -> dict[str, object]:
-    """Return the run's workflow wording: name, objective, instructions.
-
-    Reads the ephemeral workflow TOML the run actually imported, so the critic
-    judges the exact wording the agent ran on (the ephemeral copy differs from
-    the source only in its name line). Missing or unparseable TOML yields a
-    sparse block so the critique still runs against the email evidence.
-    """
-    toml_path = directory / "ephemeral_workflow.toml"
-    if not toml_path.exists():
+def _workflow_wording(workflow_file: str) -> dict[str, object]:
+    """Return the workflow wording under test: name, goal, instructions."""
+    path = Path(workflow_file)
+    if not path.exists():
         return {}
     try:
-        data = tomllib.loads(toml_path.read_text())
+        data = tomllib.loads(path.read_text())
     except tomllib.TOMLDecodeError:
         return {}
     return {
         "name": data.get("name"),
-        "objective": data.get("objective"),
+        "goal": data.get("goal"),
         "instructions": data.get("instructions"),
     }
 
@@ -74,36 +67,41 @@ def main() -> int:
 
     directory = run_dir(args.run_id)
     manifest = read_json(directory / "run_manifest.json")
-    contact_by_seq = {c["sequence"]: c for c in manifest["contacts"]}
-    sends = read_json(directory / "sends.json")["sends"]
+    verify = read_json(directory / "verify.json")
+    reply_bodies = {s["key"]: s["reply_body"] for s in load_scenarios()}
+    verify_by_key = {r["scenario_key"]: r for r in verify["scenarios"]}
 
-    cache: dict[str, dict] = {}
+    grounding = manifest.get("grounding_contact") or {}
+    company = _company_context(grounding.get("company_domain"))
+
     records = []
-    for send in sends:
-        if send.get("status") != "sent":
-            continue
-        seq = send["sequence"]
-        contact = contact_by_seq.get(seq, {})
-        domain = contact.get("company_domain")
-        company = _company_context(domain, cache) if domain else None
+    for scenario in load_scenarios():
+        key = scenario["key"]
+        result = verify_by_key.get(key, {})
+        observed = result.get("observed", {})
         records.append(
             {
-                "sequence": seq,
-                "alias": send.get("alias"),
-                "contact": {
-                    "first_name": contact.get("first_name"),
-                    "last_name": contact.get("last_name"),
-                    "title": contact.get("title"),
-                    "email": contact.get("email"),
-                    "company_domain": domain,
+                "scenario_key": key,
+                "label": scenario["label"],
+                "expected_branch": scenario["expected_branch"],
+                "inbound_reply": reply_bodies.get(key),
+                "agent_reply": observed.get("reply_excerpt") or "",
+                "observed": {
+                    "outcome": observed.get("outcome"),
+                    "contact_disabled": observed.get("contact_disabled"),
+                    "agent_replied": observed.get("agent_replied"),
+                    "followup_task": observed.get("followup_task"),
                 },
-                "company": company,
-                "subject": send.get("subject"),
-                "body": send.get("body"),
+                "pass": result.get("pass"),
+                "notes": result.get("notes", []),
             }
         )
 
-    bundle = {"workflow": _workflow_wording(directory), "emails": records}
+    bundle = {
+        "workflow": _workflow_wording(manifest["workflow_file"]),
+        "company": company,
+        "scenarios": records,
+    }
     write_json(directory / "critique_input.json", bundle)
     print(json.dumps({"prepared": len(records)}, indent=2))
     return 0 if records else 1

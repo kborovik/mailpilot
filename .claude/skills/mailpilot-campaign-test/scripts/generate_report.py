@@ -1,13 +1,11 @@
 """Fold every phase into one Markdown report and an overall verdict.
 
-Joins the send (agent-run), delivery, and critique artifacts into a per-contact
-table plus a PASS/FAIL verdict. PASS requires zero send failures and -- when the
-delivery check ran -- zero missing deliveries. A send failure here means the live
-agent did not produce a deliverable email (an agent error, or a body that never
-cleared the §V.42 lint inside the send path). The workflow-wording critique is
-advisory: it adds a wording-score line and a critique section that suggests edits
-to the workflow, but never changes the verdict. Writes ``report.md`` and prints
-it.
+Joins the Touch 1 (send), reply-injection, handling, and branch-verification
+artifacts into a per-scenario table plus a PASS/FAIL verdict. PASS requires every
+scenario's observed branch to match its expectation and no setup/send/route
+failure along the way. The workflow-wording critique is advisory: it adds a
+score line and a section suggesting edits to the workflow's reply handling, but
+never changes the verdict. Writes ``report.md`` and prints it.
 
 Usage:
     uv run python scripts/generate_report.py --run-id <id>
@@ -20,25 +18,25 @@ import argparse
 from _common import read_json, run_dir
 
 
-def critique_section(
-    critique_ran: bool,
-    critique_doc: dict[str, object] | None,
-) -> list[str]:
-    """Build the Markdown lines for the advisory workflow-wording critique.
+def _observed_cell(observed: dict) -> str:
+    """One-line summary of the observed branch state for the table."""
+    if not observed:
+        return "n/a"
+    outcome = observed.get("outcome", "none")
+    disabled = "yes" if observed.get("contact_disabled") else "no"
+    replied = "yes" if observed.get("agent_replied") else "no"
+    followup = "+task" if observed.get("followup_task") else ""
+    return f"outcome={outcome}, disabled={disabled}, replied={replied}{followup}"
 
-    The critique judges the workflow's ``objective`` and ``instructions`` -- the
-    wording that drove the agent -- using the sent emails as evidence, and
-    suggests edits to that wording. It is advisory and never changes the verdict.
 
-    Args:
-        critique_ran: Whether the critique phase produced an artifact.
-        critique_doc: The workflow-wording critique document, or None when
-            skipped.
+def critique_section(critique_doc: dict[str, object] | None) -> list[str]:
+    """Build the Markdown lines for the advisory reply-handling critique.
 
-    Returns:
-        The Markdown lines for the critique section.
+    The critique judges the workflow's reply-handling wording using each
+    scenario's reply and the agent's handling as evidence, and suggests edits.
+    It is advisory and never changes the verdict.
     """
-    if not critique_ran or not critique_doc:
+    if not critique_doc:
         return ["- critique: skipped"]
 
     score = critique_doc.get("overall_score")
@@ -49,14 +47,14 @@ def critique_section(
     edits = critique_doc.get("edits") or []
 
     lines = [
-        f"- critique: ran, workflow-wording score {score_text}",
+        f"- critique: ran, reply-handling wording score {score_text}",
         "",
-        "## Workflow-wording critique",
+        "## Workflow-wording critique (reply handling)",
         "",
         summary,
     ]
     if patterns:
-        lines += ["", "### Patterns across the emails"]
+        lines += ["", "### Patterns across the branches"]
         lines += [f"- {pattern}" for pattern in patterns]
     if weaknesses:
         lines += ["", "### Wording weaknesses"]
@@ -74,73 +72,69 @@ def main() -> int:
 
     directory = run_dir(args.run_id)
     manifest = read_json(directory / "run_manifest.json")
-    contact_by_seq = {c["sequence"]: c for c in manifest["contacts"]}
-    sends = read_json(directory / "sends.json")["sends"]
+    verify = read_json(directory / "verify.json")
 
-    delivery_path = directory / "delivery.json"
-    delivery = read_json(delivery_path) if delivery_path.exists() else None
-    delivered = set(delivery["delivered"]) if delivery else set()
-    delivery_ran = delivery is not None
+    touch1_path = directory / "touch1.json"
+    touch1 = read_json(touch1_path) if touch1_path.exists() else {"sends": []}
+    replies_path = directory / "replies.json"
+    replies = read_json(replies_path) if replies_path.exists() else {"replies": []}
+    handled_path = directory / "handled.json"
+    handled = read_json(handled_path) if handled_path.exists() else {"handled": []}
 
     critique_path = directory / "critiques.json"
     critique_doc = read_json(critique_path) if critique_path.exists() else None
-    critique_ran = critique_doc is not None
+
+    touch1_sent = sum(1 for s in touch1["sends"] if s.get("status") == "sent")
+    replies_sent = sum(1 for r in replies["replies"] if r.get("reply_status") == "sent")
+    handled_ok = sum(
+        1 for h in handled["handled"] if h.get("handled_status") == "handled"
+    )
 
     lines = [
-        f"# Campaign test report -- run {args.run_id}",
+        f"# Campaign reply-flow test report -- run {args.run_id}",
         "",
         f"Workflow under test: {manifest.get('workflow_name') or '(unknown)'}.",
         "",
-        "The live outbound agent drafted and sent each email. Real contacts "
-        "supplied personalization data (mirrored onto an alias-contact); every "
-        "message was sent to an inbound alias, never to the real address.",
+        "The live outbound agent sent a cold Touch 1 to the prospect mailbox; the "
+        "test replied with content crafted to drive each branch; the agent handled "
+        "each reply. Every message went to the controlled inbound@lab5.ca mailbox, "
+        "never a real prospect.",
         "",
-        "| # | Contact | Sent to | Agent run | Send | Delivered |",
-        "|---|---|---|---|---|---|",
+        "| Scenario | Expected branch | Observed | Result |",
+        "|---|---|---|---|",
     ]
-    send_failures = 0
-    for send in sorted(sends, key=lambda s: s["sequence"]):
-        seq = send["sequence"]
-        contact = contact_by_seq.get(seq, {})
-        if send.get("status") == "failed":
-            send_failures += 1
-        delivered_cell = "n/a"
-        if delivery_ran:
-            delivered_cell = "yes" if seq in delivered else "no"
+    for result in verify["scenarios"]:
+        observed = _observed_cell(result.get("observed", {}))
+        verdict_cell = "PASS" if result.get("pass") else "FAIL"
         lines.append(
-            f"| {seq} | {contact.get('email', '?')} | {send.get('alias', '?')} | "
-            f"{send.get('agent_run_status', 'n/a')} | {send.get('status', 'n/a')} | "
-            f"{delivered_cell} |"
+            f"| {result['scenario_key']} | {result.get('expected_branch', '')} | "
+            f"{observed} | {verdict_cell} |"
         )
 
-    missing = delivery["missing"] if delivery_ran else []
-    passed = send_failures == 0 and (not delivery_ran or not missing)
-    verdict = "PASS" if passed else "FAIL"
-
+    verdict = verify["verdict"]
     lines += [
         "",
         f"**Verdict: {verdict}**",
         "",
-        f"- emails sent: {sum(1 for s in sends if s['status'] == 'sent')}/{len(sends)}",
-        f"- send failures: {send_failures}",
-        f"- delivery check: {'ran' if delivery_ran else 'skipped'}"
-        + (f", missing {missing}" if delivery_ran and missing else ""),
+        f"- scenarios passed: {verify['passed']}/{verify['of']}",
+        f"- Touch 1 sent: {touch1_sent}/{len(touch1['sends'])}",
+        f"- replies injected: {replies_sent}/{len(replies['replies'])}",
+        f"- replies handled: {handled_ok}/{len(handled['handled'])}",
     ]
 
-    # Surface any send failure reasons so a FAIL is actionable.
-    failures = [s for s in sends if s.get("status") == "failed" and s.get("error")]
+    failures = [r for r in verify["scenarios"] if not r.get("pass")]
     if failures:
-        lines.append("")
-        lines.append("## Send failures")
-        for send in sorted(failures, key=lambda s: s["sequence"]):
-            lines.append(f"- #{send['sequence']} ({send['alias']}): {send['error']}")
+        lines += ["", "## Failing scenarios"]
+        for result in failures:
+            notes = "; ".join(result.get("notes", [])) or "(no detail)"
+            lines.append(f"- {result['scenario_key']}: {notes}")
 
-    lines += critique_section(critique_ran, critique_doc)
+    lines += critique_section(critique_doc)
 
     report = "\n".join(lines) + "\n"
     (directory / "report.md").write_text(report)
     print(report)
-    return 0 if passed else 1
+    return 0 if verdict == "PASS" else 1
 
 
 if __name__ == "__main__":

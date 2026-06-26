@@ -1,15 +1,17 @@
 """Tear down the per-run scaffolding's live side effects.
 
-Two cleanups, both idempotent and best-effort:
-  1. Re-park each alias-contact on the neutral test company, removing the
-     real-company link the run added. This keeps the real company's
-     contact_count untouched at rest, so lead-contacts discovery is not skewed
-     by the test (§V.96).
-  2. Stop the ephemeral per-run workflow so it no longer shows as active on the
-     sender account. Workflows cannot be deleted (no hard-delete, §V.10), so a
-     stopped ``[campaign-test ...]`` row remains; that is expected and harmless.
+Three cleanups, all idempotent and best-effort:
+  1. Re-enable the prospect contact if a branch (opt-out / wrong-person) left it
+     disabled, so the next run starts from a clean, enabled contact. The operator
+     owns consent; this block is test scaffolding, not a real unsubscribe.
+  2. Re-park the prospect contact on the neutral test company, removing the real
+     grounding-company link the run added, so the real company's contact_count is
+     untouched at rest and lead-contacts discovery is not skewed (§V.96).
+  3. Stop every per-scenario ephemeral workflow so none shows as active on the
+     sender account. Workflows cannot be deleted (no hard-delete, §V.10), so the
+     stopped ``[campaign-test ...]`` rows remain; that is expected and harmless.
 
-The persistent alias-contacts and the neutral test company are intentionally
+The persistent prospect contact and the neutral test company are intentionally
 left in place for reuse by the next run. Writes ``cleanup.json``.
 
 Usage:
@@ -31,35 +33,52 @@ def main() -> int:
 
     directory = run_dir(args.run_id)
     scaffold = read_json(directory / "scaffold.json")
+    prospect_email = scaffold["prospect_email"]
 
-    reparked = []
-    for entry in scaffold["entries"]:
-        if entry["linked_company_domain"] == NEUTRAL_COMPANY_DOMAIN:
-            continue
+    # 1. Re-enable the prospect contact if a branch disabled it.
+    view = mp(["contact", "view", prospect_email], check=False)
+    was_disabled = bool(
+        view.get("ok") and view.get("contact", {}).get("disabled_reason")
+    )
+    if was_disabled:
+        mp(["contact", "enable", prospect_email], check=False)
+
+    # 2. Re-park the prospect contact on the neutral company.
+    reparked = False
+    if scaffold.get("linked_company_domain") != NEUTRAL_COMPANY_DOMAIN:
         mp(
             [
                 "contact",
                 "update",
-                entry["alias"],
+                prospect_email,
                 "--company-domain",
                 NEUTRAL_COMPANY_DOMAIN,
             ],
             check=False,
         )
-        reparked.append(entry["alias"])
+        reparked = True
 
-    stop = mp(["workflow", "stop", scaffold["ephemeral_workflow_id"]], check=False)
-    workflow_stopped = bool(stop.get("ok"))
+    # 3. Stop every per-scenario ephemeral workflow.
+    stopped = []
+    for entry in scaffold["entries"]:
+        result = mp(["workflow", "stop", entry["ephemeral_workflow_id"]], check=False)
+        if result.get("ok"):
+            stopped.append(entry["ephemeral_workflow_id"])
 
-    result = {
-        "reparked_alias_contacts": reparked,
-        "ephemeral_workflow_id": scaffold["ephemeral_workflow_id"],
-        "workflow_stopped": workflow_stopped,
+    summary = {
+        "prospect_email": prospect_email,
+        "contact_re_enabled": was_disabled,
+        "contact_reparked": reparked,
+        "workflows_stopped": stopped,
     }
-    write_json(directory / "cleanup.json", result)
+    write_json(directory / "cleanup.json", summary)
     print(
         json.dumps(
-            {"reparked": len(reparked), "workflow_stopped": workflow_stopped},
+            {
+                "contact_re_enabled": was_disabled,
+                "contact_reparked": reparked,
+                "workflows_stopped": len(stopped),
+            },
             indent=2,
         )
     )

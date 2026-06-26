@@ -1,17 +1,23 @@
 """Shared helpers for the campaign-test skill scripts.
 
 Deterministic, no-LLM utilities: locate the repo and per-run artifact dir,
-shell out to the ``mailpilot`` CLI and parse its JSON envelopes, and name the
-reusable test scaffolding the agentic run depends on.
+shell out to the ``mailpilot`` CLI and parse its JSON envelopes, load the
+scenario catalog, and name the scaffolding the multi-step test depends on.
 
-The skill tests the real outbound workflow agent
-(``workflows/ai-engineering.toml``) against real contact data
-without ever emailing a real contact. It does this by mirroring each selected
-real contact's name/title/company onto a persistent alias-contact whose own
-email is one of the nine inbound aliases, enrolling that alias-contact in an
-ephemeral copy of the workflow, and letting the live agent draft and send to
-the alias. Because the agent sends to the contact's stored email, and that
-stored email is the alias, the real address is never a recipient.
+The skill tests the **full multi-step flow** of the real outbound workflow agent
+(``workflows/ai-engineering.toml``): the agent sends a cold Touch 1, the test
+replies to that email with content crafted to drive each branch of the
+workflow's "Handling replies" section, the agent handles the reply, and the test
+verifies the branch the agent took. No real prospect is ever emailed -- the only
+recipient is the controlled ``inbound@lab5.ca`` mailbox.
+
+The prospect is a single contact whose own email IS ``inbound@lab5.ca``. Inbound
+contact attribution is by the From address, and a reply can only be sent from a
+real mailbox, so one prospect mailbox means one prospect contact. Scenarios stay
+independent because each gets its **own ephemeral workflow** -- an enrollment is
+per (workflow, contact), so N ephemeral workflows give N independent enrollments
+for the same contact, and a fresh workflow id also dodges the 30-day cold-send
+cooldown (§V.79).
 
 Run every script via ``uv run python`` so the project venv (and the
 ``mailpilot`` console script + importable package) is on PATH.
@@ -24,32 +30,34 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-# Source account for every send.
+# Source account for every Touch 1 send.
 SENDER_EMAIL = "outbound@lab5.ca"
 
-# Target addresses. Each selected real contact is mirrored onto one of nine
-# persistent alias-contacts whose own email is an ``inbound{1-9}@lab5.ca``
-# alias; all nine aliases deliver into the ALIAS_MAILBOX account, which the
-# skill syncs to confirm delivery. The contact's stored email IS the alias, so
-# the agent -- which sends to the contact's email -- can only ever reach the
-# alias, never the real address. The skill never starts ``mailpilot run``, so
-# no auto-reply fires even though this mailbox carries an inbound workflow.
-ALIAS_MAILBOX = "inbound@lab5.ca"
-ALIASES = [f"inbound{number}@lab5.ca" for number in range(1, 10)]
-MAX_ALIASES = len(ALIASES)
+# The prospect mailbox AND the prospect contact's email. The agent sends Touch 1
+# to this address (so no real prospect is reached), and the test replies from
+# this same mailbox, so the reply's From maps the inbound reply back to this one
+# prospect contact (sync attributes an inbound email to the contact matching the
+# From address). The skill never starts ``mailpilot run``; reply handling is
+# driven scoped instead (see ``handle_replies.py``), so no auto-reply loop fires.
+PROSPECT_MAILBOX = "inbound@lab5.ca"
+PROSPECT_EMAIL = "inbound@lab5.ca"
 
-# Neutral parking company for the alias-contacts. Disabled so it stays out of
-# ``company list`` and the lead-contacts discovery set (§V.96 / §V.114), and a
-# ``.invalid`` domain so it can never collide with a real company (§V.90).
-# Alias-contacts park here at rest; a run links them to the real company only
-# for the duration of the run, then cleanup re-parks them here so the real
-# company's contact_count is untouched between runs.
+# Neutral parking company for the prospect contact at rest. Disabled so it stays
+# out of ``company list`` and the lead-contacts discovery set (§V.96 / §V.114),
+# and a ``.invalid`` domain so it can never collide with a real company (§V.90).
+# The prospect contact parks here at rest; a run links it to the real grounding
+# company only for the duration of the run, then cleanup re-parks it here so the
+# real company's contact_count is untouched between runs.
 NEUTRAL_COMPANY_DOMAIN = "campaign-test.invalid"
 NEUTRAL_COMPANY_NAME = "MailPilot Campaign Test"
 
 # The outbound workflow whose agent this skill exercises. The default is the
 # committed lab5.ca cold-outreach definition; ``--workflow-file`` overrides it.
 DEFAULT_WORKFLOW_FILE = "workflows/ai-engineering.toml"
+
+# The scenario catalog drives the reply branches under test. One ephemeral
+# workflow + one enrollment + one Touch 1 + one crafted reply per scenario.
+SCENARIOS_FILE = "references/reply-scenarios.json"
 
 
 def repo_root() -> Path:
@@ -59,6 +67,11 @@ def repo_root() -> Path:
         if (parent / "pyproject.toml").exists():
             return parent
     return here.parent
+
+
+def skill_root() -> Path:
+    """Return the skill directory (parent of ``scripts/``)."""
+    return Path(__file__).resolve().parent.parent
 
 
 def run_dir(run_id: str) -> Path:
@@ -78,20 +91,22 @@ def write_json(path: Path, obj: Any) -> None:
     path.write_text(json.dumps(obj, indent=2, default=str))
 
 
-def alias_for(sequence: int) -> str:
-    """Map a 1-based contact sequence to its inbound alias (wraps past nine)."""
-    return ALIASES[(sequence - 1) % MAX_ALIASES]
+def load_scenarios() -> list[dict[str, Any]]:
+    """Return the reply-branch scenario catalog (list of scenario dicts)."""
+    path = skill_root() / SCENARIOS_FILE
+    return read_json(path)["scenarios"]
 
 
-def ephemeral_workflow_name(run_id: str) -> str:
-    """Name the per-run ephemeral workflow.
+def ephemeral_workflow_name(run_id: str, scenario_key: str) -> str:
+    """Name a per-scenario ephemeral workflow.
 
-    Each run imports a fresh workflow under a unique name so the 30-day
-    cold-send cooldown (§V.79, keyed on account+contact+workflow) never blocks
-    a re-run: a fresh workflow id has no prior cold outbound. Named so an
-    operator can spot and stop leftover test workflows in ``workflow list``.
+    Each scenario imports a fresh workflow under a unique name so its enrollment
+    is independent of the other scenarios' and the 30-day cold-send cooldown
+    (§V.79, keyed on account+contact+workflow) never blocks a re-run: a fresh
+    workflow id has no prior cold outbound. Named so an operator can spot and
+    stop leftover test workflows in ``workflow list``.
     """
-    return f"[campaign-test {run_id}]"
+    return f"[campaign-test {run_id} {scenario_key}]"
 
 
 def mp(args: list[str], *, check: bool = True) -> dict[str, Any]:
