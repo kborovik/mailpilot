@@ -40,10 +40,7 @@ DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6"
 DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 DEFAULT_ANTHROPIC_THINKING: AnthropicThinking = "adaptive"
 DEFAULT_ANTHROPIC_EFFORT: AnthropicEffort = "high"
-# §V.130: output-token budget always bounded (not empty-gated like the
-# reasoning knobs) so default-active thinking cannot exhaust the
-# provider-default budget before any reply text (§B.115).
-DEFAULT_ANTHROPIC_MAX_TOKENS = 16384
+DEFAULT_ANTHROPIC_MAX_TOKENS = 32768
 DEFAULT_GOOGLE_PUBSUB_TOPIC = "mailpilot-topic-dev"
 DEFAULT_GOOGLE_PUBSUB_SUBSCRIPTION = "mailpilot-sub-dev"
 DEFAULT_GOOGLE_APPLICATION_CREDENTIALS = ""
