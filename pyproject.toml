@@ -1,6 +1,6 @@
 [project]
 name = "mailpilot"
-version = "0.13.1"
+version = "0.14.0"
 description = "Agent-operated CRM with Gmail as the comms layer"
 readme = "README.md"
 authors = [
