@@ -273,6 +273,35 @@ def reply_email(  # noqa: PLR0913
     }
 
 
+def _reject_past_timestamp(value: str, *, field: str) -> dict[str, str] | None:
+    """Reject an agent-supplied timestamp that is not strictly in the future.
+
+    §V.129 GUARD: the agent boundary refuses a past-dated schedule so a
+    wrong-year timestamp never persists a task that fires next run-loop tick
+    and then survives a booking conclusion (cancel_enrollment_followup_tasks
+    cancels only future rows). Returns an error dict when ``value`` parses to
+    a moment at or before now; ``None`` when it is strictly later so the
+    caller proceeds. A naive timestamp is read as UTC. An unparseable value
+    falls through (``None``) to the existing downstream handling.
+    """
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    now = datetime.now(UTC)
+    if parsed <= now:
+        return {
+            "error": "past_scheduled_at",
+            "message": (
+                f"{field} must be strictly after the current time "
+                f"({now.isoformat()}); got {value!r}"
+            ),
+        }
+    return None
+
+
 def create_task(  # noqa: PLR0913
     connection: psycopg.Connection[dict[str, Any]],
     enrollment_id: str,
@@ -291,13 +320,20 @@ def create_task(  # noqa: PLR0913
         workflow_id: Current workflow FK (denormalised from enrollment).
         contact_id: Contact this task targets (denormalised from enrollment).
         description: What the agent should do when the task runs.
-        scheduled_at: When to execute (ISO 8601 timestamp).
+        scheduled_at: When to execute (ISO 8601 timestamp, strictly future).
         context: Arbitrary JSON context for the agent on re-invocation.
         email_id: Optional triggering email for focused context.
 
     Returns:
-        Dict with created task ID.
+        Dict with created task ID, or an error dict when scheduled_at is past.
     """
+    # Reject a past-dated schedule at the agent boundary so no already-due task
+    # row is ever persisted (§V.129). The guard sits here, not in
+    # database.create_task, so the system-computed enrollment_schedule
+    # first-touch (§V.32) stays exempt.
+    timestamp_error = _reject_past_timestamp(scheduled_at, field="scheduled_at")
+    if timestamp_error is not None:
+        return timestamp_error
     task = database.create_task(
         connection,
         enrollment_id=enrollment_id,
@@ -403,6 +439,16 @@ def conclude_enrollment(
             "error": "not_found",
             "message": f"enrollment not found: {enrollment_id}",
         }
+
+    # Reject an agent-supplied contact_later reschedule_at that is not strictly
+    # future, before any side effect runs so the enrollment is neither
+    # concluded nor scheduled (§V.129). The error key lets _sent_reply skip
+    # this call (§V.120) so the agent retries with a corrected date. The
+    # default-omitted ~3-month path is system-set (§V.127), so it is exempt.
+    if disposition == "contact_later" and reschedule_at is not None:
+        timestamp_error = _reject_past_timestamp(reschedule_at, field="reschedule_at")
+        if timestamp_error is not None:
+            return timestamp_error
 
     contact_id = enrollment.contact_id
     outcome = _CONCLUDE_OUTCOME[disposition]

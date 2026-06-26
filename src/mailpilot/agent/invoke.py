@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import zlib
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 
 import httpx
@@ -393,12 +394,27 @@ def _build_agent(workflow: Workflow, trigger: str = "manual") -> Agent[AgentDeps
     from mailpilot.agent.templates import TEMPLATES
 
     template = TEMPLATES[workflow.template]
-    return Agent(
+    agent = Agent(
         name="mailpilot.workflow",
         deps_type=AgentDeps,
         instructions=template.build_protocol(trigger) + workflow.instructions,
         tools=list(template.tools),
     )
+
+    # §V.129 PREVENT: a dynamic instruction re-evaluated at run-start injects
+    # the current date so the model grounds a relative schedule ("about one
+    # month out") on a real ``now`` and never guesses the year. ``date.today()``
+    # rolls once per day -- far slower than the Anthropic prompt-cache TTL
+    # (§V.47) -- so the static protocol prefix still caches across same-day
+    # runs. The model-visible string carries no SPEC citation (§V.45).
+    @agent.instructions
+    def _ground_current_date() -> str:
+        return (
+            f"The current date is {date.today().isoformat()}. "
+            "Ground every relative schedule on this date and never guess the year."
+        )
+
+    return agent
 
 
 def _build_anthropic_model(settings: Settings) -> AnthropicModel:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from datetime import date
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -1439,6 +1440,38 @@ def test_workflow_agent_has_explicit_name_for_otel_traces() -> None:
     )
     agent = _build_agent(workflow)
     assert agent.name == "mailpilot.workflow"
+
+
+def test_agent_instructions_carry_current_date(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.129: a dynamic instruction injects today's date into the prompt.
+
+    The agent grounds a relative schedule (e.g. "about one month out") on a
+    real ``now`` and never guesses the year. Rendered instructions reach the
+    model on the ``ModelRequest`` and must contain today's ISO date.
+    """
+    _account, contact, workflow = _setup(database_connection)
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    captured: list[ModelMessage] = []
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
+        invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            model_override=_capturing_model(captured),
+        )
+
+    instructions = " ".join(
+        getattr(msg, "instructions", None) or "" for msg in captured
+    )
+    assert date.today().isoformat() in instructions
 
 
 # -- Tests: wrapper signatures -------------------------------------------------

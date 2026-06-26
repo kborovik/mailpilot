@@ -833,13 +833,14 @@ def test_create_task_success(
     workflow = make_test_workflow(database_connection, account_id=account.id)
     enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
 
+    scheduled_at = (datetime.now(UTC) + timedelta(days=3)).isoformat()
     result = create_task(
         connection=database_connection,
         enrollment_id=enrollment.id,
         workflow_id=workflow.id,
         contact_id=contact.id,
         description="Follow up in 3 days",
-        scheduled_at="2026-04-22T10:00:00Z",
+        scheduled_at=scheduled_at,
     )
 
     assert "id" in result
@@ -870,7 +871,7 @@ def test_create_task_with_context_and_email(
         workflow_id=workflow.id,
         contact_id=contact.id,
         description="Reply to question",
-        scheduled_at="2026-04-22T10:00:00Z",
+        scheduled_at=(datetime.now(UTC) + timedelta(days=3)).isoformat(),
         context={"topic": "pricing"},
         email_id=email.id,
     )
@@ -879,6 +880,61 @@ def test_create_task_with_context_and_email(
     assert task is not None
     assert task.context == {"topic": "pricing"}
     assert task.email_id == email.id
+
+
+def test_create_task_rejects_past_scheduled_at(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.129: a past-dated scheduled_at is rejected at the tool boundary.
+
+    The guard returns an error envelope and persists NO task row so a
+    wrong-year follow-up never fires next run-loop tick.
+    """
+    from mailpilot.database import list_tasks
+
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+
+    past = (datetime.now(UTC) - timedelta(days=1)).isoformat()
+    result = create_task(
+        connection=database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="Soft follow-up next month",
+        scheduled_at=past,
+    )
+
+    assert result.get("error") == "past_scheduled_at"
+    assert "id" not in result
+    assert list_tasks(database_connection, contact_id=contact.id) == []
+
+
+def test_create_task_future_scheduled_at_persists(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.129: a strictly-future scheduled_at passes the guard and persists."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+
+    future = (datetime.now(UTC) + timedelta(days=30)).isoformat()
+    result = create_task(
+        connection=database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="Soft follow-up next month",
+        scheduled_at=future,
+    )
+
+    assert "id" in result
+    task = get_task(database_connection, result["id"])
+    assert task is not None
+    assert task.status == "pending"
 
 
 # -- cancel_task ---------------------------------------------------------------
@@ -1039,6 +1095,40 @@ def test_conclude_enrollment_contact_later_honors_explicit_reschedule(
     tasks = list_tasks(database_connection, contact_id=contact.id, status="pending")
     assert len(tasks) == 1
     assert tasks[0].scheduled_at == datetime.fromisoformat(when)
+
+
+def test_conclude_enrollment_contact_later_rejects_past_reschedule(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.129 + §V.127: a past agent-supplied reschedule_at is rejected.
+
+    The guard fires before any side effect, so the enrollment is neither
+    concluded nor scheduled; the error envelope lets ``_sent_reply`` skip
+    the call (§V.120) and the agent retries with a corrected date.
+    """
+    from mailpilot.database import list_activities, list_tasks
+
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+
+    past = (datetime.now(UTC) - timedelta(days=1)).isoformat()
+    result = conclude_enrollment(
+        connection=database_connection,
+        enrollment_id=enrollment.id,
+        disposition="contact_later",
+        note="circle back",
+        reschedule_at=past,
+    )
+
+    assert result.get("error") == "past_scheduled_at"
+    # No outcome recorded and no re-enrollment task scheduled (no side effects).
+    types = [
+        a.type for a in list_activities(database_connection, contact_id=contact.id)
+    ]
+    assert "enrollment_failed" not in types
+    assert list_tasks(database_connection, contact_id=contact.id) == []
 
 
 def test_conclude_enrollment_cancels_future_followups_preserves_first_touch(
