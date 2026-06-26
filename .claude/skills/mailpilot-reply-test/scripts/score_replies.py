@@ -49,14 +49,24 @@ _DASHES = str.maketrans(
     )
 )
 
+# Fold the multiplication-sign family to ASCII "x" so a size token rendered
+# with a multiplication glyph matches an expected token stored as "8\"x40\"".
+# Multiplication glyphs are typographic, never semantic, in spec dimension
+# tokens. Code points: U+00D7 multiplication sign, U+2715 multiplication x,
+# U+2716 heavy multiplication x, U+2217 asterisk operator.
+_TIMES = str.maketrans(dict.fromkeys(map(chr, (0x00D7, 0x2715, 0x2716, 0x2217)), "x"))
+
 
 def _norm(text: str) -> str:
     # Strip thousands-separator commas so a datasheet figure rendered as
     # "6,000 gpd" matches an expected token stored as "6000 gpd" (and the
     # reverse). The lookarounds delete a comma only when a digit sits on both
-    # sides, so list commas, trailing commas, and decimals are preserved. Both
-    # the body and every token pass through _norm, so the rule is symmetric.
-    collapsed = re.sub(r"\s+", " ", text.lower().translate(_DASHES)).strip()
+    # sides, so list commas, trailing commas, and decimals are preserved. The
+    # dash and multiplication folds run first so a typographic glyph in a size
+    # token matches the ASCII rubric form. Both the body and every token pass
+    # through _norm, so every rule here is symmetric.
+    folded = text.lower().translate(_DASHES).translate(_TIMES)
+    collapsed = re.sub(r"\s+", " ", folded).strip()
     return re.sub(r"(?<=\d),(?=\d)", "", collapsed)
 
 

@@ -137,6 +137,21 @@ def test_inscope_fail_lists_missing_token():
     assert detail["missing"] == ["260,000 GPD"]
 
 
+def test_inscope_folds_multiplication_sign_to_ascii_x():
+    # A grounded reply that renders an element size with the typographic
+    # multiplication sign (U+00D7) must match an expected token stored with
+    # ASCII "x" (8"x40"). The multiplication family is typographic, never
+    # semantic, in a dimension token, so folding it keeps the
+    # false-PASS-at-worst contract: a correct figure never false-FAILs (§V.105).
+    score = _load("score_replies")
+    grading = {"expected_tokens": ['(20) 8"x40"']}
+    times = chr(0x00D7)  # U+00D7 multiplication sign, not ASCII "x"
+    body = f'Membrane elements: (20) 8"{times}40" Hydranautics ESPA1.'
+    verdict, detail = score.grade("inscope", body, grading)
+    assert verdict == "PASS"
+    assert detail["missing"] == []
+
+
 # --- out-scope: deferred to judge, advisory signals (§V.105, closes §B.88) -----
 
 
