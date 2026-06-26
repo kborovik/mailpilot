@@ -79,11 +79,11 @@ Keys:
 - `anthropic_base_url` -- Anthropic-compatible API endpoint. Default
   `https://api.anthropic.com`; point it at e.g. `https://api.novita.ai/anthropic`
   to route the same call to another vendor.
-- `anthropic_thinking` -- workflow-agent extended thinking. Empty (default)
-  leaves it off; `adaptive` enables it. Classifier never reads this key.
-- `anthropic_effort` -- workflow-agent reasoning effort. Empty (default) leaves
-  the API default; one of `low`, `medium`, `high`, `xhigh`, `max`. `xhigh`
-  needs Opus 4.7 or newer. Classifier never reads this key.
+- `anthropic_thinking` -- workflow-agent extended thinking. Default `adaptive`
+  (on); set to empty to turn it off. Classifier never reads this key.
+- `anthropic_effort` -- workflow-agent reasoning effort. Default `high`; one of
+  `low`, `medium`, `high`, `xhigh`, `max`, or empty to send no effort key.
+  `xhigh` needs Opus 4.7 or newer. Classifier never reads this key.
 - `google_application_credentials` -- path to service-account JSON. Optional
   when running on a platform that exposes Application Default Credentials (GCE
   attached service account, GKE Workload Identity, Cloud Run identity); leave

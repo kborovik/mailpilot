@@ -20,9 +20,16 @@ def test_default_settings():
     assert settings.google_pubsub_topic == "mailpilot-topic-dev"
 
 
-def test_anthropic_reasoning_defaults_unset():
-    """§V.130: anthropic_thinking + anthropic_effort default to '' (no reasoning)."""
+def test_anthropic_reasoning_defaults_active():
+    """§V.130: workflow agent reasons by default -- thinking='adaptive', effort='high'."""
     settings = Settings()
+    assert settings.anthropic_thinking == "adaptive"
+    assert settings.anthropic_effort == "high"
+
+
+def test_anthropic_reasoning_disables_per_knob():
+    """§V.130: an operator opts out per knob by setting it to ''."""
+    settings = Settings(anthropic_thinking="", anthropic_effort="")
     assert settings.anthropic_thinking == ""
     assert settings.anthropic_effort == ""
 

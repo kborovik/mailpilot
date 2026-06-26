@@ -24,9 +24,9 @@ CONFIG_PATH = MAILPILOT_DIR / "config.json"
 
 LogfireEnvironment = Literal["development", "production"]
 
-# Workflow-agent reasoning controls (§V.130). '' = unset = current no-reasoning
-# behavior; these gate extended thinking and reasoning effort on the workflow
-# agent only -- the classifier is a one-shot decision and never reads them.
+# Workflow-agent reasoning controls (§V.130). '' turns a knob off (no key sent);
+# the defaults below enable both. These gate extended thinking and reasoning
+# effort on the workflow agent only -- the classifier never reads them.
 AnthropicThinking = Literal["", "adaptive"]
 AnthropicEffort = Literal["", "low", "medium", "high", "xhigh", "max"]
 
@@ -38,8 +38,8 @@ DEFAULT_LOGFIRE_ENVIRONMENT: LogfireEnvironment = "development"
 DEFAULT_ANTHROPIC_API_KEY = ""
 DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6"
 DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
-DEFAULT_ANTHROPIC_THINKING: AnthropicThinking = ""
-DEFAULT_ANTHROPIC_EFFORT: AnthropicEffort = ""
+DEFAULT_ANTHROPIC_THINKING: AnthropicThinking = "adaptive"
+DEFAULT_ANTHROPIC_EFFORT: AnthropicEffort = "high"
 DEFAULT_GOOGLE_PUBSUB_TOPIC = "mailpilot-topic-dev"
 DEFAULT_GOOGLE_PUBSUB_SUBSCRIPTION = "mailpilot-sub-dev"
 DEFAULT_GOOGLE_APPLICATION_CREDENTIALS = ""

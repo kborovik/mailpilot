@@ -1584,15 +1584,34 @@ def test_build_anthropic_model_carries_cache_settings() -> None:
     assert model.settings.get("anthropic_cache_instructions") is True
 
 
-def test_build_anthropic_model_omits_reasoning_keys_when_unset() -> None:
-    """§V.130: unset reasoning settings leave both keys off (current behavior).
+def test_build_anthropic_model_defaults_enable_reasoning() -> None:
+    """§V.130: default settings make the workflow agent reason.
 
-    Both ``anthropic_thinking`` and ``anthropic_effort`` default to '', so the
-    workflow agent's model settings carry no reasoning config and the
-    production call shape is unchanged until an operator opts in.
+    Both reasoning knobs default to active, so a model built from default
+    settings carries ``anthropic_thinking={'type': 'adaptive'}`` and
+    ``anthropic_effort='high'``.
     """
     settings = make_test_settings(
         anthropic_api_key="sk-test", anthropic_model="claude-sonnet-4-6"
+    )
+    model = _build_anthropic_model(settings)
+    assert model.settings is not None
+    assert model.settings.get("anthropic_thinking") == {"type": "adaptive"}
+    assert model.settings.get("anthropic_effort") == "high"
+
+
+def test_build_anthropic_model_omits_reasoning_keys_when_disabled() -> None:
+    """§V.130: setting both reasoning knobs to '' leaves both keys off.
+
+    An operator opts out per knob by setting it to ''. An empty value passes no
+    ``anthropic_thinking``/``anthropic_effort`` key, restoring the no-reasoning
+    call shape.
+    """
+    settings = make_test_settings(
+        anthropic_api_key="sk-test",
+        anthropic_model="claude-sonnet-4-6",
+        anthropic_thinking="",
+        anthropic_effort="",
     )
     model = _build_anthropic_model(settings)
     assert model.settings is not None
