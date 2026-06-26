@@ -76,25 +76,41 @@ class TestUniversalTemplateInvariants:
         assert "No markdown" not in template.protocol
 
 
-def test_base_mandates_pipe_table_for_spec_rows() -> None:
-    """§V.42 / §B.78: _BASE must explicitly mandate a GFM pipe table for
-    product-spec rows so the outbound format lint is a backstop, not the
-    primary enforcement. A permissive "may use Markdown tables" alone is the
-    bug §B.78 records -- the agent emits a space-aligned spec block first, the
-    lint rejects, the agent retries (7/8 invocations under burst, retry_rate
-    0.875 >> the §V.70 0.05 ceiling)."""
-    base = templates_module._BASE  # pyright: ignore[reportPrivateUsage]
+def test_spec_table_mandates_pipe_table_for_spec_rows() -> None:
+    """§V.42 / §B.78 / §B.114: the GFM pipe-table mandate for product-spec rows
+    lives in the _SPEC_TABLE fragment so the format lint is a backstop, not the
+    primary enforcement. A permissive "may use Markdown tables" alone is the bug
+    §B.78 records -- the agent emits a space-aligned spec block first, the lint
+    rejects, the agent retries (7/8 invocations under burst, retry_rate 0.875 >>
+    the §V.70 0.05 ceiling). Product-spec answering is an inbound knowledge-base
+    concern (§B.114), so the fragment composes into the inbound templates only."""
+    spec_table = templates_module._SPEC_TABLE  # pyright: ignore[reportPrivateUsage]
     # Marked as a hard requirement, not a permissive suggestion.
-    assert "MUST" in base
+    assert "MUST" in spec_table
     # The mandated rendering is a pipe table with a |---| header separator.
-    assert "pipe table" in base
-    assert "|---|" in base
+    assert "pipe table" in spec_table
+    assert "|---|" in spec_table
     # Scoped to product-spec rows per §V.42 (model numbers, flow rates, ...).
-    assert "model numbers" in base
-    # The mandate flows into every template that composes _BASE.
-    for template in TEMPLATES.values():
-        assert "pipe table" in template.protocol
-        assert "|---|" in template.protocol
+    assert "model numbers" in spec_table
+    # The mandate flows into the inbound templates only (§V.42, §V.45).
+    for name in ("inbound-general", "inbound-google-drive"):
+        assert "pipe table" in TEMPLATES[name].protocol
+        assert "|---|" in TEMPLATES[name].protocol
+
+
+def test_outbound_excludes_spec_table_mandate() -> None:
+    """§V.42 / §V.45 / §B.114: the product-spec pipe-table mandate is an inbound
+    knowledge-base concern, so outbound-general carries none of it -- its
+    protocol_pre is _BASE alone, and the composed protocol names no product-spec
+    / pipe-table / flow-rate text. Outbound scaffolding stays on-topic."""
+    outbound = TEMPLATES["outbound-general"]
+    assert outbound.protocol_pre == templates_module._BASE  # pyright: ignore[reportPrivateUsage]
+    protocol = outbound.protocol
+    for marker in ("pipe table", "|---|", "product specification", "flow rate"):
+        assert marker not in protocol, (
+            f"§B.114: product-spec marker {marker!r} leaked into the "
+            f"outbound-general protocol -- the _SPEC_TABLE mandate is inbound-only"
+        )
 
 
 def test_base_strips_permissive_markdown_wording() -> None:

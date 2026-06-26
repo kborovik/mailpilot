@@ -80,25 +80,35 @@ class WorkflowTemplate:
 # one constant; every template that composes the fragment picks up the change.
 
 
-# _BASE mandates a GFM pipe table for product-spec rows; the outbound format
-# lint (_check_spec_table in tools.py) rejects space-aligned spec blocks -- the
-# pipe-table mandate is the primary enforcement, the lint a backstop (§V.42).
-# Per §V.45 the prompt string itself carries no §-cite: the runtime reply agent
-# has no SPEC.md, so the governing invariant is named here in the comment, not
-# in the model-visible text (closes §B.79).
+# _BASE carries the email-universal scaffolding composed into every template's
+# protocol_pre: brief-summary, the read_email guard, and the personalize-via-
+# notes directive (§V.8). Per §V.45 the prompt string itself carries no §-cite:
+# the runtime agent has no SPEC.md, so governing invariants are named here in the
+# comment, not in the model-visible text (closes §B.79).
 _BASE = (
     "Keep your final summary brief (2-3 sentences, plain text, no emojis).\n"
-    "When the reply body carries product specifications (model numbers, flow "
-    "rates, dimensions, capacities), you MUST present them as a "
-    "GitHub-flavored Markdown pipe table with a header row and a |---| "
-    "separator -- e.g. `| Specification | Value |` then `|---|---|` and one "
-    "row per spec. Do not use space-aligned or single-spaced lines as a "
-    "substitute; such spec blocks are rejected by the outbound format lint.\n"
     "When a trigger email is included in your prompt, its full body is "
     "already provided -- do not call read_email to fetch it again.\n"
     "If read_contact or read_company returns notes or company_notes, treat "
     "them as context for personalizing your response. Never invent facts "
     "about a contact or company that aren't supported by their notes.\n"
+)
+
+# _SPEC_TABLE mandates a GFM pipe table for product-spec rows. Product-spec
+# answering is an inbound knowledge-base concern (§B.114), so this fragment is
+# composed into the inbound templates' protocol_pre only, never outbound-general
+# (§V.42, §V.45). The _check_spec_table lint (tools.py) stays email-universal
+# core and rejects space-aligned spec blocks on send + reply both -- the
+# pipe-table mandate is the primary enforcement on the inbound path, the lint a
+# backstop (§V.42); §V.71 caps any retry loop. Per §V.45 the model-visible
+# string carries no §-cite.
+_SPEC_TABLE = (
+    "When the reply body carries product specifications (model numbers, flow "
+    "rates, dimensions, capacities), you MUST present them as a "
+    "GitHub-flavored Markdown pipe table with a header row and a |---| "
+    "separator -- e.g. `| Specification | Value |` then `|---|---|` and one "
+    "row per spec. Do not use space-aligned or single-spaced lines as a "
+    "substitute; such spec blocks are rejected by the format lint.\n"
 )
 
 _DEFERRED_TASK_TASK = (
@@ -208,7 +218,7 @@ TEMPLATES: dict[WorkflowTemplateName, WorkflowTemplate] = {
         name="inbound-general",
         direction="inbound",
         description="Inbound auto-reply workflow without external knowledge base.",
-        protocol_pre=_BASE,
+        protocol_pre=_BASE + _SPEC_TABLE,
         protocol_post=_MUST_SEND + _DECLINE + _NO_FABRICATION,
         tools=_CORE,
     ),
@@ -218,7 +228,7 @@ TEMPLATES: dict[WorkflowTemplateName, WorkflowTemplate] = {
         description=(
             "Inbound auto-reply grounded in a Google Drive Markdown knowledge base."
         ),
-        protocol_pre=_BASE,
+        protocol_pre=_BASE + _SPEC_TABLE,
         protocol_post=_MUST_SEND + _DECLINE + _NO_FABRICATION,
         tools=_CORE + _DRIVE,
     ),
