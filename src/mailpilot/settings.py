@@ -22,10 +22,6 @@ from pydantic_settings import (
 MAILPILOT_DIR = Path.home() / ".mailpilot"
 CONFIG_PATH = MAILPILOT_DIR / "config.json"
 
-DEFAULT_DATABASE_URL = "postgresql://localhost/mailpilot"
-DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6"
-DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
-
 LogfireEnvironment = Literal["development", "production"]
 
 # Workflow-agent reasoning controls (§V.130). '' = unset = current no-reasoning
@@ -33,6 +29,22 @@ LogfireEnvironment = Literal["development", "production"]
 # agent only -- the classifier is a one-shot decision and never reads them.
 AnthropicThinking = Literal["", "adaptive"]
 AnthropicEffort = Literal["", "low", "medium", "high", "xhigh", "max"]
+
+# Field defaults (the lowest-priority source per the module docstring). Every
+# Settings field draws its default from one of these named constants.
+DEFAULT_DATABASE_URL = "postgresql://localhost/mailpilot"
+DEFAULT_LOGFIRE_TOKEN = ""
+DEFAULT_LOGFIRE_ENVIRONMENT: LogfireEnvironment = "development"
+DEFAULT_ANTHROPIC_API_KEY = ""
+DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6"
+DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
+DEFAULT_ANTHROPIC_THINKING: AnthropicThinking = ""
+DEFAULT_ANTHROPIC_EFFORT: AnthropicEffort = ""
+DEFAULT_GOOGLE_PUBSUB_TOPIC = "mailpilot-topic-dev"
+DEFAULT_GOOGLE_PUBSUB_SUBSCRIPTION = "mailpilot-sub-dev"
+DEFAULT_GOOGLE_APPLICATION_CREDENTIALS = ""
+DEFAULT_RUN_INTERVAL = 60
+DEFAULT_MAX_CONCURRENT_TASKS = 10
 
 # Fields whose values must never appear in telemetry. database_url can carry
 # user:password@host credentials, so it is treated as secret too.
@@ -61,18 +73,18 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MAILPILOT_")
 
     database_url: PostgresDsn = PostgresDsn(DEFAULT_DATABASE_URL)
-    logfire_token: str = ""
-    logfire_environment: LogfireEnvironment = "development"
-    anthropic_api_key: str = ""
+    logfire_token: str = DEFAULT_LOGFIRE_TOKEN
+    logfire_environment: LogfireEnvironment = DEFAULT_LOGFIRE_ENVIRONMENT
+    anthropic_api_key: str = DEFAULT_ANTHROPIC_API_KEY
     anthropic_model: str = DEFAULT_ANTHROPIC_MODEL
     anthropic_base_url: str = DEFAULT_ANTHROPIC_BASE_URL
-    anthropic_thinking: AnthropicThinking = ""
-    anthropic_effort: AnthropicEffort = ""
-    google_pubsub_topic: str = "mailpilot-topic-dev"
-    google_pubsub_subscription: str = "mailpilot-sub-dev"
-    google_application_credentials: str = ""
-    run_interval: int = 60
-    max_concurrent_tasks: int = 10
+    anthropic_thinking: AnthropicThinking = DEFAULT_ANTHROPIC_THINKING
+    anthropic_effort: AnthropicEffort = DEFAULT_ANTHROPIC_EFFORT
+    google_pubsub_topic: str = DEFAULT_GOOGLE_PUBSUB_TOPIC
+    google_pubsub_subscription: str = DEFAULT_GOOGLE_PUBSUB_SUBSCRIPTION
+    google_application_credentials: str = DEFAULT_GOOGLE_APPLICATION_CREDENTIALS
+    run_interval: int = DEFAULT_RUN_INTERVAL
+    max_concurrent_tasks: int = DEFAULT_MAX_CONCURRENT_TASKS
 
     @classmethod
     def settings_customise_sources(
