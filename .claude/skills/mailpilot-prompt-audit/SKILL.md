@@ -139,9 +139,10 @@ sub-agent. Give it `RUN_ID`, the environment (default `development`), the
 lookback (default 13 days), and the composed `workflow_id`s from step 1, and
 this contract:
 
-> You pull per-system telemetry for the mailpilot prompt audit. Use the Logfire
-> MCP, `project: mailpilot`. Call `query_schema_reference` once if you need the
-> schema. Run the two queries below over the last `<DAYS>` days in
+> You pull per-system telemetry for the mailpilot prompt audit. Run each query
+> through the Logfire MCP with `mcp__claude_ai_logfire__query_run`
+> (`project: mailpilot`); call `mcp__claude_ai_logfire__query_schema_reference`
+> once if you need the schema. Run the two queries below over the last `<DAYS>` days in
 > `deployment_environment = '<ENVIRONMENT>'`. Set the MCP `start_timestamp` /
 > `end_timestamp` to span the lookback; the MCP enforces a strict 14-day maximum
 > measured to the second, so if a query is rejected for exceeding the max range,
