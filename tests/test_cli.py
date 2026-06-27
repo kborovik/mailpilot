@@ -6428,6 +6428,129 @@ def test_note_add_missing_body(runner: CliRunner, mock_connection: MagicMock) ->
     assert result.exit_code != 0
 
 
+# -- note remove ---------------------------------------------------------------
+
+
+def test_note_remove_on_contact(runner: CliRunner, mock_connection: MagicMock) -> None:
+    contact = _make_contact()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_contact", return_value=contact),
+        patch("mailpilot.database.delete_notes", return_value=2) as mock_clear,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "note",
+                "remove",
+                "--contact-email",
+                "01234567-0000-7000-0000-000000000003",
+            ],
+        )
+
+    assert result.exit_code == 0
+    mock_clear.assert_called_once_with(
+        mock_connection,
+        contact_id="01234567-0000-7000-0000-000000000003",
+    )
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["note"]["cleared"] == 2
+    assert data["note"]["owner_type"] == "contact"
+
+
+def test_note_remove_on_company(runner: CliRunner, mock_connection: MagicMock) -> None:
+    company = _make_company(id="01234567-0000-7000-0000-000000000002")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=company),
+        patch("mailpilot.database.delete_notes", return_value=1) as mock_clear,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "note",
+                "remove",
+                "--company-domain",
+                "01234567-0000-7000-0000-000000000002",
+            ],
+        )
+
+    assert result.exit_code == 0
+    mock_clear.assert_called_once_with(
+        mock_connection,
+        company_id="01234567-0000-7000-0000-000000000002",
+    )
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["note"]["cleared"] == 1
+    assert data["note"]["owner_type"] == "company"
+
+
+def test_note_remove_no_entity(runner: CliRunner, mock_connection: MagicMock) -> None:
+    """note remove without --contact-email or --company-domain should error."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(main, ["note", "remove"])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+
+
+def test_note_remove_both_entities(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """note remove with both owners should error."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "note",
+                "remove",
+                "--contact-email",
+                "a@b.test",
+                "--company-domain",
+                "b.test",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+
+
+def test_note_remove_contact_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_contact", return_value=None),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "note",
+                "remove",
+                "--contact-email",
+                "01234567-0000-7000-0000-0000000000c1",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+    assert "contact" in data["message"]
+
+
 # -- note list -----------------------------------------------------------------
 
 

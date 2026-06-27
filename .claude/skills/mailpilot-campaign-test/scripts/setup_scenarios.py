@@ -8,7 +8,9 @@ For the run this:
      prospect contact and links it to the REAL grounding company, so the
      workflow's ``read_contact`` / ``read_company`` steps have real grounding.
      Cleanup re-parks it on the neutral company afterward (§V.96). Re-enables the
-     prospect contact if a prior interrupted run left it disabled.
+     prospect contact if a prior interrupted run left it disabled, and clears its
+     notes so a prior run's do-not-contact / wrong-person notes never poison this
+     run's read_contact grounding (§V.14).
   3. For each scenario, imports an ephemeral, uniquely-named copy of the workflow
      into the sender account and enrolls the prospect contact in it. A fresh
      workflow id per scenario gives each scenario an independent enrollment and
@@ -78,13 +80,16 @@ def _ensure_prospect_contact() -> str:
     """Create the prospect contact parked on the neutral company if absent.
 
     Re-enables it if a prior interrupted run's opt-out / wrong-person branch left
-    it disabled, so this run starts from a clean, enabled contact. Returns the
-    prospect contact's id.
+    it disabled, and clears its notes so a prior run's do-not-contact and
+    wrong-person notes never poison this run's read_contact grounding -- those
+    notes otherwise make the agent conclude do-not-contact and skip Touch 1
+    (§V.14). Returns the prospect contact's id.
     """
     existing = mp(["contact", "view", PROSPECT_EMAIL], check=False)
     if existing.get("ok"):
         if existing["contact"].get("disabled_reason"):
             mp(["contact", "enable", PROSPECT_EMAIL], check=False)
+        mp(["note", "remove", "--contact-email", PROSPECT_EMAIL], check=False)
         return existing["contact"]["id"]
     created = mp(
         [
