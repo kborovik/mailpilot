@@ -193,7 +193,7 @@ T194|x|impl §V.130(∆) per §B.115 — `anthropic_max_tokens` setting; always-
 T195|x|impl §V.131(+) per §B.116 — `_FALLBACK_ACKNOWLEDGEMENT` + reply-emitted flag; fallback send in `_handle_agent_failure` for inbound failures|V131,B116,V48,V49,V71
 T196|x|impl §V.132 disposition persistence — record_enrollment_outcome disposition param writes detail.disposition; conclude_enrollment forwards disposition + booking-conclusion passes meeting_booked; JSONB key no migration|V132,V127,V128,V15
 T197|x|impl §V.132 + §I — `workflow stats` funnel: single-SQL aggregation fn in database.py + CLI `workflow stats` verb + `{"workflow_stats"}` envelope|V132,V107,V4,V54
-T198|.|impl §V.14(∆) + §I per #168 — `delete_notes` fn + CLI `note remove --contact-email|--company-domain` (clear an owner's notes); campaign-test setup clears prospect notes pre-Touch-1 + send_touch1 re-enables prospect between scenarios|V14,V91,B118
+T198|x|impl §V.14(∆) + §I per #168 — `delete_notes` fn + CLI `note remove --contact-email|--company-domain` (clear an owner's notes); campaign-test setup clears prospect notes pre-Touch-1 + send_touch1 re-enables prospect between scenarios|V14,V91,B118
 
 ## §B BUGS
 

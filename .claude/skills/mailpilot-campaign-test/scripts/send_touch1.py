@@ -25,6 +25,7 @@ import json
 from datetime import datetime
 
 from _common import (
+    PROSPECT_EMAIL,
     PROSPECT_MAILBOX,
     SENDER_EMAIL,
     mp,
@@ -32,6 +33,19 @@ from _common import (
     run_dir,
     write_json,
 )
+
+
+def _ensure_prospect_enabled() -> None:
+    """Re-enable the prospect contact if a prior scenario's branch disabled it.
+
+    With notes cleared at setup no Touch 1 should conclude do-not-contact, but if
+    one does and disables the contact, re-enabling here keeps the remaining
+    scenarios from cascading into noop on a disabled contact.
+    """
+    view = mp(["contact", "view", PROSPECT_EMAIL], check=False)
+    reason = view.get("contact", {}).get("disabled_reason") if view.get("ok") else None
+    if reason is not None:
+        mp(["contact", "enable", PROSPECT_EMAIL], check=False)
 
 
 def _run_enrollment(enrollment_id: str) -> dict:
@@ -96,6 +110,7 @@ def main() -> int:
 
     sends = []
     for entry in scaffold["entries"]:
+        _ensure_prospect_enabled()
         run = _run_enrollment(entry["enrollment_id"])
         touch1 = _read_touch1(entry["ephemeral_workflow_id"])
         status = "sent" if touch1 else "failed"

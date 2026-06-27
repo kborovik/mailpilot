@@ -2331,6 +2331,57 @@ def note_add(contact_email: str | None, company_domain: str | None, body: str) -
         connection.close()
 
 
+@note.command("remove")
+@click.option("--contact-email", default=None, help="Owner contact (email or ID).")
+@click.option("--company-domain", default=None, help="Owner company (domain or ID).")
+def note_remove(contact_email: str | None, company_domain: str | None) -> None:
+    """Clear every note on a contact or company (the sole note hard-delete).
+
+    Deletes only the owner's note rows; the note_added activity trail stays
+    append-only. Operator-only -- the agent never clears notes. Exactly one of
+    --contact-email or --company-domain is required.
+    """
+    # Note clear is the sole CLI hard-delete per §V.14; the activity trail stays
+    # append-only per §V.91. Operator-only, never an agent tool.
+    from mailpilot.database import delete_notes, initialize_database
+    from mailpilot.operator_log import cli_mutation, operator_event
+
+    if (contact_email is None) == (company_domain is None):
+        output_error(
+            "exactly one of --contact-email or --company-domain is required",
+            "validation_error",
+        )
+    connection = initialize_database(_database_url(), require_current_schema=True)
+    try:
+        if contact_email is not None:
+            owner = ("contact", _resolve_contact(connection, contact_email).id)
+        else:
+            assert company_domain is not None
+            owner = ("company", _resolve_company(connection, company_domain).id)
+        with cli_mutation("note", "remove", owner_type=owner[0], owner_id=owner[1]):
+            if owner[0] == "contact":
+                cleared = delete_notes(connection, contact_id=owner[1])
+            else:
+                cleared = delete_notes(connection, company_id=owner[1])
+            operator_event(
+                "note.remove",
+                owner_type=owner[0],
+                owner_id=owner[1],
+                cleared=cleared,
+            )
+            output(
+                {
+                    "note": {
+                        "cleared": cleared,
+                        "owner_type": owner[0],
+                        "owner_id": owner[1],
+                    }
+                }
+            )
+    finally:
+        connection.close()
+
+
 @note.command("list")
 @scope_option("--contact-email", "contact_email", "Filter by contact (email or ID).")
 @scope_option("--company-domain", "company_domain", "Filter by company (domain or ID).")
