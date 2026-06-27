@@ -172,6 +172,32 @@ class WorkflowSummary(BaseModel):
     created_at: datetime
 
 
+class WorkflowStats(BaseModel):
+    """Per-campaign funnel for one workflow at enrollment grain (§V.132).
+
+    Eight stage counts computed by a single deterministic SQL aggregate over
+    the workflow's enrollments -- no LLM. The enrollment row (one per contact)
+    is the grain, so every count is contact-distinct: a multi-touch outbound
+    sequence never double-counts.
+
+    ``workflow_id`` and ``workflow_name`` carry the parent identity (§V.5) so
+    the CLI envelope names the campaign without a separate lookup. The envelope
+    key is ``workflow_stats`` (an aggregate, not a ``workflow`` entity row) per
+    §V.132.
+    """
+
+    workflow_id: str
+    workflow_name: str
+    enrolled: int
+    sent: int
+    bounced: int
+    replied: int
+    meeting_booked: int
+    contact_later: int
+    do_not_contact: int
+    active: int
+
+
 class WorkflowTemplateSummary(BaseModel):
     """List-view projection of a workflow template (code-defined, read-only)."""
 

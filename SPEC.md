@@ -192,7 +192,7 @@ T193|x|impl §V.42(∆) + §V.45(∆) per §B.114 — extract `_SPEC_TABLE` frag
 T194|x|impl §V.130(∆) per §B.115 — `anthropic_max_tokens` setting; always-passed in `_build_anthropic_model`|V130,B115,V47
 T195|x|impl §V.131(+) per §B.116 — `_FALLBACK_ACKNOWLEDGEMENT` + reply-emitted flag; fallback send in `_handle_agent_failure` for inbound failures|V131,B116,V48,V49,V71
 T196|x|impl §V.132 disposition persistence — record_enrollment_outcome disposition param writes detail.disposition; conclude_enrollment forwards disposition + booking-conclusion passes meeting_booked; JSONB key no migration|V132,V127,V128,V15
-T197|.|impl §V.132 + §I — `workflow stats` funnel: single-SQL aggregation fn in database.py + CLI `workflow stats` verb + `{"workflow_stats"}` envelope|V132,V107,V4,V54
+T197|x|impl §V.132 + §I — `workflow stats` funnel: single-SQL aggregation fn in database.py + CLI `workflow stats` verb + `{"workflow_stats"}` envelope|V132,V107,V4,V54
 
 ## §B BUGS
 

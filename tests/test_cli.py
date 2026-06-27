@@ -34,6 +34,7 @@ from mailpilot.models import (
     TagSummary,
     Task,
     Workflow,
+    WorkflowStats,
 )
 
 _NOW = datetime(2024, 1, 1, tzinfo=UTC)
@@ -3993,6 +3994,57 @@ def test_workflow_view_not_found(runner: CliRunner, mock_connection: MagicMock) 
         patch("mailpilot.database.get_workflow", return_value=None),
     ):
         result = runner.invoke(main, ["workflow", "view", "nope"])
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+
+
+def test_workflow_stats_envelope(runner: CliRunner, mock_connection: MagicMock) -> None:
+    """§V.132/§V.4: `workflow stats` ships the aggregate under `workflow_stats`."""
+    stats = WorkflowStats(
+        workflow_id=_WORKFLOW_ID,
+        workflow_name="Demo outreach",
+        enrolled=8,
+        sent=5,
+        bounced=1,
+        replied=3,
+        meeting_booked=1,
+        contact_later=1,
+        do_not_contact=1,
+        active=4,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow_stats", return_value=stats),
+    ):
+        result = runner.invoke(main, ["workflow", "stats", _WORKFLOW_ID])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert "workflow" not in data
+    funnel = data["workflow_stats"]
+    assert funnel["workflow_id"] == _WORKFLOW_ID
+    assert funnel["enrolled"] == 8
+    assert funnel["sent"] == 5
+    assert funnel["bounced"] == 1
+    assert funnel["replied"] == 3
+    assert funnel["meeting_booked"] == 1
+    assert funnel["contact_later"] == 1
+    assert funnel["do_not_contact"] == 1
+    assert funnel["active"] == 4
+
+
+def test_workflow_stats_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.107: an unknown workflow ref exits not_found."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow_stats", return_value=None),
+    ):
+        result = runner.invoke(main, ["workflow", "stats", "nope"])
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["error"] == "not_found"

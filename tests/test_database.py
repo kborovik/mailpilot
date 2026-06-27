@@ -68,6 +68,7 @@ from mailpilot.database import (
     get_task,
     get_unprocessed_inbound_email,
     get_workflow,
+    get_workflow_stats,
     import_snapshot,
     link_meeting_attendee,
     list_accounts,
@@ -4207,6 +4208,162 @@ def test_record_enrollment_outcome_omits_disposition_when_absent(
     )
 
     assert "disposition" not in activity.detail
+
+
+# -- get_workflow_stats (§V.132) -----------------------------------------------
+
+
+def test_get_workflow_stats_returns_none_for_unknown_workflow(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.107: an unknown workflow ref resolves to None (CLI maps -> not_found)."""
+    assert (
+        get_workflow_stats(database_connection, "01234567-0000-7000-0000-0000000000ff")
+        is None
+    )
+
+
+def test_get_workflow_stats_counts_all_funnel_stages(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.132: each of the 8 stages counts at enrollment grain."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="outbound"
+    )
+
+    # enrolled-only contact (no email, no outcome) -> counts only in `enrolled`+`active`.
+    company = make_test_company(database_connection)
+    enrolled_only = make_test_contact(
+        database_connection, email="enrolled@testcorp.com", company_id=company.id
+    )
+    make_test_enrollment(database_connection, workflow.id, enrolled_only.id)
+
+    # sent contact -> outbound status='sent' email.
+    sent_contact = make_test_contact(
+        database_connection, email="sent@testcorp.com", company_id=company.id
+    )
+    make_test_enrollment(database_connection, workflow.id, sent_contact.id)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        status="sent",
+        contact_id=sent_contact.id,
+        workflow_id=workflow.id,
+    )
+
+    # bounced contact -> outbound status='bounced' email.
+    bounced_contact = make_test_contact(
+        database_connection, email="bounced@testcorp.com", company_id=company.id
+    )
+    make_test_enrollment(database_connection, workflow.id, bounced_contact.id)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        status="bounced",
+        contact_id=bounced_contact.id,
+        workflow_id=workflow.id,
+    )
+
+    # replied contact -> inbound routed email.
+    replied_contact = make_test_contact(
+        database_connection, email="replied@testcorp.com", company_id=company.id
+    )
+    make_test_enrollment(database_connection, workflow.id, replied_contact.id)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        status="received",
+        contact_id=replied_contact.id,
+        workflow_id=workflow.id,
+        is_routed=True,
+        route_method="classified",
+    )
+
+    # booked contact -> completed outcome (disposition meeting_booked).
+    booked_contact = make_test_contact(
+        database_connection, email="booked@testcorp.com", company_id=company.id
+    )
+    booked = make_test_enrollment(database_connection, workflow.id, booked_contact.id)
+    record_enrollment_outcome(
+        database_connection,
+        booked.id,
+        "completed",
+        "meeting booked",
+        disposition="meeting_booked",
+    )
+
+    # contact_later contact -> failed outcome (disposition contact_later).
+    later_contact = make_test_contact(
+        database_connection, email="later@testcorp.com", company_id=company.id
+    )
+    later = make_test_enrollment(database_connection, workflow.id, later_contact.id)
+    record_enrollment_outcome(
+        database_connection,
+        later.id,
+        "failed",
+        "circle back",
+        disposition="contact_later",
+    )
+
+    # do_not_contact contact -> failed outcome (disposition do_not_contact).
+    dnc_contact = make_test_contact(
+        database_connection, email="dnc@testcorp.com", company_id=company.id
+    )
+    dnc = make_test_enrollment(database_connection, workflow.id, dnc_contact.id)
+    record_enrollment_outcome(
+        database_connection,
+        dnc.id,
+        "failed",
+        "opted out",
+        disposition="do_not_contact",
+    )
+
+    stats = get_workflow_stats(database_connection, workflow.id)
+    assert stats is not None
+    assert stats.workflow_id == workflow.id
+    assert stats.workflow_name == workflow.name
+    assert stats.enrolled == 7
+    assert stats.sent == 1
+    assert stats.bounced == 1
+    assert stats.replied == 1
+    assert stats.meeting_booked == 1
+    assert stats.contact_later == 1
+    assert stats.do_not_contact == 1
+    # active = status='active' enrollments with no terminal outcome: the
+    # enrolled-only, sent, bounced, and replied contacts (4); the three
+    # outcome-bearing rows drop out.
+    assert stats.active == 4
+
+
+def test_get_workflow_stats_multi_touch_not_double_counted(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.132: a multi-touch enrollment counts once at enrollment grain."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="outbound"
+    )
+    contact = make_test_contact(database_connection)
+    make_test_enrollment(database_connection, workflow.id, contact.id)
+    for touch in range(3):
+        create_email(
+            database_connection,
+            account_id=account.id,
+            direction="outbound",
+            status="sent",
+            subject=f"Touch {touch}",
+            contact_id=contact.id,
+            workflow_id=workflow.id,
+        )
+
+    stats = get_workflow_stats(database_connection, workflow.id)
+    assert stats is not None
+    assert stats.enrolled == 1
+    assert stats.sent == 1
 
 
 # -- list_active_outbound_enrollments_for_contact (§V.128) ---------------------

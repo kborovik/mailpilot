@@ -59,6 +59,7 @@ from mailpilot.models import (
     Task,
     TaskSummary,
     Workflow,
+    WorkflowStats,
     WorkflowSummary,
 )
 from mailpilot.operator_log import operator_event
@@ -2005,6 +2006,126 @@ def list_workflows_full(
         {"account_id": account_id},
     ).fetchall()
     return [Workflow.model_validate(row) for row in rows]
+
+
+def get_workflow_stats(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+) -> WorkflowStats | None:
+    """Compute the per-campaign funnel for one workflow (§V.132).
+
+    A single deterministic SQL aggregate over the workflow's enrollments -- no
+    LLM. The enrollment row (one per contact) is the grain, so each stage is
+    contact-distinct and a multi-touch outbound sequence never double-counts.
+    Eight stages:
+
+    - ``enrolled``: the workflow's enrollment rows.
+    - ``sent`` / ``bounced``: enrollments with at least one outbound email of
+      that status (send auto-resolves ``email.contact_id`` from the recipient,
+      ``email.workflow_id`` is set at spawn).
+    - ``replied``: enrollments with at least one routed inbound email (routing
+      sets ``contact_id`` + ``workflow_id`` per §V.27).
+    - ``meeting_booked``: enrollments whose latest terminal outcome is
+      ``enrollment_completed`` (disposition-independent -- completed maps only
+      to meeting_booked).
+    - ``contact_later`` / ``do_not_contact``: enrollments whose latest terminal
+      outcome is ``enrollment_failed``, split by ``detail->>'disposition'``.
+    - ``active``: ``status='active'`` enrollments with no terminal outcome.
+
+    Outcomes are timeline-only (§V.15): the latest ``enrollment_completed`` /
+    ``enrollment_failed`` activity per enrollment wins (cf
+    ``list_enrollments_with_outcomes``). Pre-§V.132 failed rows lack a
+    disposition key, so they fall out of both failure splits (legacy gap).
+
+    Args:
+        connection: Open database connection.
+        workflow_id: Workflow ID (entity ref per §V.107).
+
+    Returns:
+        ``WorkflowStats`` for the workflow, or ``None`` when no workflow
+        matches the id (the CLI maps None -> ``not_found``).
+    """
+    workflow = get_workflow(connection, workflow_id)
+    if workflow is None:
+        return None
+    row = connection.execute(
+        """\
+        WITH per_enrollment AS (
+            SELECT
+                e.status,
+                EXISTS (
+                    SELECT 1 FROM email
+                    WHERE email.workflow_id = e.workflow_id
+                      AND email.contact_id = e.contact_id
+                      AND email.direction = 'outbound'
+                      AND email.status = 'sent'
+                ) AS has_sent,
+                EXISTS (
+                    SELECT 1 FROM email
+                    WHERE email.workflow_id = e.workflow_id
+                      AND email.contact_id = e.contact_id
+                      AND email.direction = 'outbound'
+                      AND email.status = 'bounced'
+                ) AS has_bounced,
+                EXISTS (
+                    SELECT 1 FROM email
+                    WHERE email.workflow_id = e.workflow_id
+                      AND email.contact_id = e.contact_id
+                      AND email.direction = 'inbound'
+                      AND email.is_routed = TRUE
+                ) AS has_replied,
+                outcome.latest_outcome,
+                outcome.disposition
+            FROM enrollment e
+            LEFT JOIN LATERAL (
+                SELECT
+                    CASE a.type
+                        WHEN 'enrollment_completed' THEN 'completed'
+                        WHEN 'enrollment_failed' THEN 'failed'
+                    END AS latest_outcome,
+                    a.detail->>'disposition' AS disposition
+                FROM activity a
+                WHERE a.contact_id = e.contact_id
+                  AND a.workflow_id = e.workflow_id
+                  AND a.type IN ('enrollment_completed', 'enrollment_failed')
+                ORDER BY a.created_at DESC
+                LIMIT 1
+            ) outcome ON TRUE
+            WHERE e.workflow_id = %(workflow_id)s
+        )
+        SELECT
+            COUNT(*) AS enrolled,
+            COUNT(*) FILTER (WHERE has_sent) AS sent,
+            COUNT(*) FILTER (WHERE has_bounced) AS bounced,
+            COUNT(*) FILTER (WHERE has_replied) AS replied,
+            COUNT(*) FILTER (WHERE latest_outcome = 'completed')
+                AS meeting_booked,
+            COUNT(*) FILTER (
+                WHERE latest_outcome = 'failed' AND disposition = 'contact_later'
+            ) AS contact_later,
+            COUNT(*) FILTER (
+                WHERE latest_outcome = 'failed' AND disposition = 'do_not_contact'
+            ) AS do_not_contact,
+            COUNT(*) FILTER (
+                WHERE status = 'active' AND latest_outcome IS NULL
+            ) AS active
+        FROM per_enrollment
+        """,
+        {"workflow_id": workflow_id},
+    ).fetchone()
+    assert row is not None  # aggregate over a present workflow always returns 1 row
+    return WorkflowStats(
+        workflow_id=workflow.id,
+        workflow_name=workflow.name,
+        enrolled=row["enrolled"],
+        sent=row["sent"],
+        bounced=row["bounced"],
+        replied=row["replied"],
+        meeting_booked=row["meeting_booked"],
+        contact_later=row["contact_later"],
+        do_not_contact=row["do_not_contact"],
+        active=row["active"],
+    )
 
 
 def search_workflows(

@@ -2730,6 +2730,22 @@ def workflow_view(workflow_id: str) -> None:
         connection.close()
 
 
+@workflow.command("stats")
+@click.argument("workflow_id")
+def workflow_stats(workflow_id: str) -> None:
+    """Show the per-campaign funnel for a workflow."""
+    from mailpilot.database import get_workflow_stats, initialize_database
+
+    connection = initialize_database(_database_url())
+    try:
+        stats = get_workflow_stats(connection, workflow_id)
+        if stats is None:
+            output_error(f"workflow not found: {workflow_id}", "not_found")
+        output({"workflow_stats": stats.model_dump(mode="json")})
+    finally:
+        connection.close()
+
+
 @workflow.command("start")
 @click.argument("workflow_id")
 def workflow_start(workflow_id: str) -> None:
