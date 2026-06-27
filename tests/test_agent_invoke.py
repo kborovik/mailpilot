@@ -1660,7 +1660,7 @@ def test_build_anthropic_model_reasoning_preserves_cache_flags() -> None:
 
 
 def test_build_anthropic_model_always_passes_max_tokens() -> None:
-    """§V.130: default settings bound the output stream at max_tokens=16384.
+    """§V.130: default settings bound the output stream at max_tokens=32768.
 
     The output-token budget is always passed (not empty-gated like the
     reasoning knobs), so default-active thinking cannot exhaust the
@@ -1671,7 +1671,7 @@ def test_build_anthropic_model_always_passes_max_tokens() -> None:
     )
     model = _build_anthropic_model(settings)
     assert model.settings is not None
-    assert model.settings.get("max_tokens") == 16384
+    assert model.settings.get("max_tokens") == 32768
 
 
 def test_build_anthropic_model_threads_max_tokens_override() -> None:
@@ -1679,11 +1679,11 @@ def test_build_anthropic_model_threads_max_tokens_override() -> None:
     settings = make_test_settings(
         anthropic_api_key="sk-test",
         anthropic_model="claude-sonnet-4-6",
-        anthropic_max_tokens=32768,
+        anthropic_max_tokens=8192,
     )
     model = _build_anthropic_model(settings)
     assert model.settings is not None
-    assert model.settings.get("max_tokens") == 32768
+    assert model.settings.get("max_tokens") == 8192
 
 
 def test_build_anthropic_model_max_tokens_preserves_reasoning_and_cache() -> None:
@@ -1696,7 +1696,7 @@ def test_build_anthropic_model_max_tokens_preserves_reasoning_and_cache() -> Non
     )
     model = _build_anthropic_model(settings)
     assert model.settings is not None
-    assert model.settings.get("max_tokens") == 16384
+    assert model.settings.get("max_tokens") == 32768
     assert model.settings.get("anthropic_thinking") == {"type": "adaptive"}
     assert model.settings.get("anthropic_effort") == "xhigh"
     assert model.settings.get("anthropic_cache_tool_definitions") is True

@@ -45,9 +45,9 @@ def test_set_setting_round_trips_reasoning_keys(tmp_path: Path):
 
 
 def test_anthropic_max_tokens_default():
-    """§V.130: anthropic_max_tokens defaults to 16384 (output budget bounded)."""
+    """§V.130: anthropic_max_tokens defaults to 32768 (output budget bounded)."""
     settings = Settings()
-    assert settings.anthropic_max_tokens == 16384
+    assert settings.anthropic_max_tokens == 32768
 
 
 def test_set_setting_round_trips_max_tokens(tmp_path: Path):
