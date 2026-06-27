@@ -206,8 +206,14 @@ def main() -> int:
     import psycopg
     from psycopg.rows import dict_row
 
+    from mailpilot.cli import configure_logging
     from mailpilot.database import create_tasks_for_routed_emails
     from mailpilot.settings import get_settings
+
+    # This step runs the agent in-process via ``execute_task``; mirror the CLI so
+    # pydantic-ai's chat and tool spans reach Logfire (issue #163). Console output
+    # goes to stderr at warn level, so the stdout JSON envelope stays clean (§V.3).
+    configure_logging()
 
     settings = get_settings()
     database_url = str(settings.database_url)
