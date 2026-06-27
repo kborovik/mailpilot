@@ -4637,32 +4637,26 @@ def add_company_note(
     return note
 
 
-def delete_notes(
+def delete_note(
     connection: psycopg.Connection[dict[str, Any]],
-    contact_id: str | None = None,
-    company_id: str | None = None,
-) -> int:
-    """Delete every note owned by a contact or company; return the deleted count.
+    note_id: str,
+) -> bool:
+    """Delete a single note by id; return whether a row was deleted.
 
-    Operator-only reset path per §V.14 -- the sole note hard-delete. Removes only
-    `note` rows; the `note_added` activity trail stays append-only and intact
-    (§V.91). Exactly one of contact_id/company_id must be set.
+    The sole note hard-delete per §V.14 -- removes one `note` row only, never
+    its owner's other notes. The `note_added` activity trail stays append-only
+    and intact (§V.91). Operator-only, never an agent tool.
 
-    Raises:
-        ValueError: If neither or both of contact_id/company_id are set.
+    Args:
+        connection: Open database connection.
+        note_id: Note ID to delete.
+
+    Returns:
+        True if a note row was deleted, False if no note had that id.
     """
-    if (contact_id is None) == (company_id is None):
-        raise ValueError("exactly one of contact_id or company_id is required")
-    if contact_id is not None:
-        cursor = connection.execute(
-            "DELETE FROM note WHERE contact_id = %(id)s", {"id": contact_id}
-        )
-    else:
-        cursor = connection.execute(
-            "DELETE FROM note WHERE company_id = %(id)s", {"id": company_id}
-        )
+    cursor = connection.execute("DELETE FROM note WHERE id = %(id)s", {"id": note_id})
     connection.commit()
-    return cursor.rowcount
+    return cursor.rowcount > 0
 
 
 # -- Meeting -------------------------------------------------------------------

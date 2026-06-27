@@ -158,3 +158,25 @@ def resolve_account_id(email: str) -> str | None:
     """Return the UUIDv7 account id for an email address, or None if absent."""
     account = resolve_account(email)
     return account.get("id") if account else None
+
+
+def clear_contact_notes(contact_ref: str) -> int:
+    """Delete every note on a contact one at a time; return the deleted count.
+
+    `note remove` deletes a single note by id (§V.14), so this lists the
+    contact's notes and removes each by id -- the reset path no longer has a
+    bulk-clear. Idempotent and best-effort: a missing contact or zero notes
+    yields 0. A do-not-contact / wrong-person branch appends only a handful of
+    notes per run, well under the list cap.
+    """
+    listed = mp(
+        ["note", "list", "--contact-email", contact_ref, "--limit", "100"],
+        check=False,
+    )
+    notes = listed.get("notes", []) if listed.get("ok") else []
+    removed = 0
+    for note in notes:
+        result = mp(["note", "remove", note["id"]], check=False)
+        if result.get("ok"):
+            removed += 1
+    return removed

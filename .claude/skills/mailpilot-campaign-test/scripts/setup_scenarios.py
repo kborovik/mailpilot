@@ -36,6 +36,7 @@ from _common import (
     NEUTRAL_COMPANY_NAME,
     PROSPECT_EMAIL,
     SENDER_EMAIL,
+    clear_contact_notes,
     ephemeral_workflow_name,
     load_scenarios,
     mp,
@@ -89,7 +90,7 @@ def _ensure_prospect_contact() -> str:
     if existing.get("ok"):
         if existing["contact"].get("disabled_reason"):
             mp(["contact", "enable", PROSPECT_EMAIL], check=False)
-        mp(["note", "remove", "--contact-email", PROSPECT_EMAIL], check=False)
+        clear_contact_notes(PROSPECT_EMAIL)
         return existing["contact"]["id"]
     created = mp(
         [

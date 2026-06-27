@@ -3438,75 +3438,88 @@ def test_get_note_not_found(
     assert found is None
 
 
-def test_delete_notes_removes_contact_notes_and_returns_count(
+def test_delete_note_removes_one_note_returns_true(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    from mailpilot.database import delete_notes
+    from mailpilot.database import delete_note
 
     contact = make_test_contact(database_connection)
-    make_test_note(database_connection, contact_id=contact.id, body="one")
-    make_test_note(database_connection, contact_id=contact.id, body="two")
-    cleared = delete_notes(database_connection, contact_id=contact.id)
-    assert cleared == 2
+    note = make_test_note(database_connection, contact_id=contact.id, body="one")
+    deleted = delete_note(database_connection, note.id)
+    assert deleted is True
     assert list_notes(database_connection, contact_id=contact.id) == []
 
 
-def test_delete_notes_leaves_other_owners_untouched(
+def test_delete_note_leaves_sibling_notes(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    from mailpilot.database import delete_notes
+    """Deleting one note must leave the owner's other notes intact (§V.14)."""
+    from mailpilot.database import delete_note
+
+    contact = make_test_contact(database_connection)
+    keep_one = make_test_note(database_connection, contact_id=contact.id, body="keep 1")
+    drop = make_test_note(database_connection, contact_id=contact.id, body="drop me")
+    keep_two = make_test_note(database_connection, contact_id=contact.id, body="keep 2")
+
+    deleted = delete_note(database_connection, drop.id)
+
+    assert deleted is True
+    remaining = {n.id for n in list_notes(database_connection, contact_id=contact.id)}
+    assert remaining == {keep_one.id, keep_two.id}
+
+
+def test_delete_note_leaves_other_owners_untouched(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from mailpilot.database import delete_note
 
     target = make_test_contact(database_connection, email="target@acme.test")
     other = make_test_contact(database_connection, email="other@acme.test")
     company = make_test_company(database_connection)
-    make_test_note(database_connection, contact_id=target.id, body="poison")
+    drop = make_test_note(database_connection, contact_id=target.id, body="poison")
     make_test_note(database_connection, contact_id=other.id, body="keep-contact")
     make_test_note(database_connection, company_id=company.id, body="keep-company")
 
-    cleared = delete_notes(database_connection, contact_id=target.id)
+    delete_note(database_connection, drop.id)
 
-    assert cleared == 1
     assert list_notes(database_connection, contact_id=target.id) == []
     assert len(list_notes(database_connection, contact_id=other.id)) == 1
     assert len(list_notes(database_connection, company_id=company.id)) == 1
 
 
-def test_delete_notes_on_company(
+def test_delete_note_on_company(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    from mailpilot.database import delete_notes
+    from mailpilot.database import delete_note
 
     company = make_test_company(database_connection)
-    make_test_note(database_connection, company_id=company.id, body="one")
-    cleared = delete_notes(database_connection, company_id=company.id)
-    assert cleared == 1
+    note = make_test_note(database_connection, company_id=company.id, body="one")
+    deleted = delete_note(database_connection, note.id)
+    assert deleted is True
     assert list_notes(database_connection, company_id=company.id) == []
 
 
-def test_delete_notes_leaves_activity_trail_append_only(
+def test_delete_note_missing_returns_false(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    from mailpilot.database import add_contact_note, delete_notes
+    from mailpilot.database import delete_note
+
+    assert delete_note(database_connection, "nonexistent-id") is False
+
+
+def test_delete_note_leaves_activity_trail_append_only(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    from mailpilot.database import add_contact_note, delete_note
 
     contact = make_test_contact(database_connection)
-    add_contact_note(database_connection, contact_id=contact.id, body="audited")
+    note = add_contact_note(database_connection, contact_id=contact.id, body="audited")
 
-    delete_notes(database_connection, contact_id=contact.id)
+    delete_note(database_connection, note.id)
 
     assert list_notes(database_connection, contact_id=contact.id) == []
     activities = list_activities(database_connection, contact_id=contact.id)
     assert [a.type for a in activities] == ["note_added"]
-
-
-def test_delete_notes_requires_exactly_one_owner(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    from mailpilot.database import delete_notes
-
-    with pytest.raises(ValueError, match="exactly one"):
-        delete_notes(database_connection)
-    with pytest.raises(ValueError, match="exactly one"):
-        delete_notes(database_connection, contact_id="c1", company_id="co1")
 
 
 def test_status_payload_counts_block_includes_notes(

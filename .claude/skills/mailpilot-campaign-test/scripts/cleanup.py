@@ -26,7 +26,14 @@ from __future__ import annotations
 import argparse
 import json
 
-from _common import NEUTRAL_COMPANY_DOMAIN, mp, read_json, run_dir, write_json
+from _common import (
+    NEUTRAL_COMPANY_DOMAIN,
+    clear_contact_notes,
+    mp,
+    read_json,
+    run_dir,
+    write_json,
+)
 
 
 def main() -> int:
@@ -46,10 +53,7 @@ def main() -> int:
     )
     if was_disabled:
         mp(["contact", "enable", prospect_email], check=False)
-    cleared = mp(["note", "remove", "--contact-email", prospect_email], check=False)
-    notes_cleared = (
-        cleared.get("note", {}).get("cleared", 0) if cleared.get("ok") else 0
-    )
+    notes_cleared = clear_contact_notes(prospect_email)
 
     # 2. Re-park the prospect contact on the neutral company.
     reparked = False
