@@ -154,8 +154,8 @@ wherever `$RUN_ID` appears below. Separate tool calls do not share shell state. 
 
 ### 0b. Ensure the test accounts exist -- create if missing
 ```bash
-uv run mailpilot account view --email outbound@lab5.ca >/dev/null 2>&1 || uv run mailpilot account create --email outbound@lab5.ca --display-name "MailPilot Outbound"
-uv run mailpilot account view --email inbound@lab5.ca  >/dev/null 2>&1 || uv run mailpilot account create --email inbound@lab5.ca  --display-name "MailPilot Inbound"
+uv run mailpilot account view outbound@lab5.ca >/dev/null 2>&1 || uv run mailpilot account create --email outbound@lab5.ca --display-name "MailPilot Outbound"
+uv run mailpilot account view inbound@lab5.ca  >/dev/null 2>&1 || uv run mailpilot account create --email inbound@lab5.ca  --display-name "MailPilot Inbound"
 ```
 The `account view` guard makes this idempotent. Never run `make clean` here --
 this skill tests against the live CRM database, and `make clean` would drop real
