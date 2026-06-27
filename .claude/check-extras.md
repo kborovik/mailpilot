@@ -550,14 +550,14 @@ Trigger: `Makefile` changed.
 - `rg 'db.*export.*snap\|snap.*db.*export' Makefile` -> export-to-snap in db-backup target
 - `rg 'clean.*db-backup\|db-backup.*clean\|clean.*:.*db-backup' Makefile` -> make clean depends on db-backup
 
-## §V.122 — campaign-test delivery keyed on recipient alias
+## §V.122 — campaign-test Touch 1 delivery keyed on rfc2822_message_id per scenario
 
-`verify_delivery.py` keys each arrival on its unique recipient alias, never the agent-written subject. Sequence N owns alias `inbound{N}@lab5.ca` (one send each; §I aliases `inbound1..9@lab5.ca`). The alias rides the received `To` header (preserved through catch-all routing into `inbound@lab5.ca`). `verify_delivery.py` builds an alias→sequence map from the single bulk `email list` recipients projection (§V.7), counts a sequence delivered when its alias appears. Subject = agent-generated + collision-prone, NEVER an identity key. Verdict PASS when every sent sequence's alias arrives.
+`send_touch1.py` captures `outbound_email_id` + `rfc2822_message_id` per scenario enrollment immediately after each Touch 1 send. One shared prospect contact (`inbound@lab5.ca`) receives all sends; isolation is by ephemeral workflow (one per scenario), not by recipient alias — no `inbound{N}@lab5.ca` aliases exist. `inject_replies.py` matches received Touch 1 emails by `rfc2822_message_id` (primary key); subject match is a fallback only. A scenario whose send status is not `sent` or whose `rfc2822_message_id` is missing fails before reply injection. Subject = agent-generated + collision-prone, NEVER the primary identity key.
 
 Trigger: `.claude/skills/mailpilot-campaign-test/**` changed.
-- `rg 'inbound[0-9]\b' .claude/skills/mailpilot-campaign-test/scripts/verify_delivery.py | grep '@lab5.ca'` -> alias-keyed map in verify script
-- `rg 'recipients\b' .claude/skills/mailpilot-campaign-test/scripts/verify_delivery.py` -> reads recipients projection (§V.7)
-- `rg 'subject.*key\|subject.*identity\|subject.*delivery' .claude/skills/mailpilot-campaign-test/scripts/verify_delivery.py` -> zero hits (subject not a delivery key)
+- `rg 'rfc2822_message_id' .claude/skills/mailpilot-campaign-test/scripts/send_touch1.py` -> message-id captured at send
+- `rg 'rfc2822_message_id' .claude/skills/mailpilot-campaign-test/scripts/inject_replies.py` -> message-id used to match received Touch 1
+- `rg 'inbound[1-9]@lab5\.ca' .claude/skills/mailpilot-campaign-test/scripts/` -> zero hits (no per-scenario aliases)
 
 ## §V.125 — meeting + meeting_attendee schema
 
