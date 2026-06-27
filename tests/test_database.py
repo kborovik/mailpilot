@@ -4172,6 +4172,43 @@ def test_record_enrollment_outcome_rejects_invalid_outcome(
         record_enrollment_outcome(database_connection, enrollment.id, "booked", "nope")
 
 
+def test_record_enrollment_outcome_persists_disposition_in_detail(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.132: a supplied disposition lands in the activity ``detail`` JSONB."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+
+    activity = record_enrollment_outcome(
+        database_connection,
+        enrollment.id,
+        "completed",
+        "meeting booked",
+        disposition="meeting_booked",
+    )
+
+    assert activity.detail["disposition"] == "meeting_booked"
+    assert activity.detail["reason"] == "meeting booked"
+
+
+def test_record_enrollment_outcome_omits_disposition_when_absent(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.132: omitting disposition writes no key (legacy/forward gap)."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+
+    activity = record_enrollment_outcome(
+        database_connection, enrollment.id, "failed", "hard bounce"
+    )
+
+    assert "disposition" not in activity.detail
+
+
 # -- list_active_outbound_enrollments_for_contact (§V.128) ---------------------
 
 

@@ -612,6 +612,7 @@ def _conclude_outbound_enrollments_for_booking(
             enrollment.id,
             outcome="completed",
             reason="meeting booked",
+            disposition="meeting_booked",
         )
         cancel_enrollment_followup_tasks(connection, enrollment.id)
         note_body = (

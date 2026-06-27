@@ -139,6 +139,27 @@ def test_booking_concludes_active_outbound_enrollment_and_cancels_followups(
     assert preserved.status == "pending"
 
 
+def test_booking_conclusion_persists_meeting_booked_disposition(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.132: booking conclusion stamps ``detail.disposition = meeting_booked``."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="outbound"
+    )
+    contact = make_test_contact(database_connection, email="prospect@acme.com")
+    make_test_enrollment(database_connection, workflow.id, contact.id)
+
+    ingest_calendar_event(database_connection, _event("prospect@acme.com"))
+
+    rows = database_connection.execute(
+        "SELECT detail->>'disposition' AS disposition FROM activity "
+        "WHERE contact_id = %s AND type = 'enrollment_completed'",
+        (contact.id,),
+    ).fetchall()
+    assert [row["disposition"] for row in rows] == ["meeting_booked"]
+
+
 def test_repoll_does_not_duplicate_meeting_or_conclusion(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:

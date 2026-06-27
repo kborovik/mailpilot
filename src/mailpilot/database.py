@@ -2436,6 +2436,7 @@ def record_enrollment_outcome(
     enrollment_id: str,
     outcome: str,
     reason: str,
+    disposition: str | None = None,
 ) -> Activity:
     """Record a completed/failed outcome on the enrollment timeline (§V.15).
 
@@ -2444,11 +2445,19 @@ def record_enrollment_outcome(
     status is never modified (§V.15). Both the deterministic booking conclusion
     (§V.128) and the agent terminal route through here.
 
+    When supplied, ``disposition`` is persisted into the activity ``detail``
+    JSONB under the ``disposition`` key (§V.132) so the per-campaign funnel can
+    split ``failed`` outcomes into ``do_not_contact`` versus ``contact_later``
+    and confirm ``completed`` maps to ``meeting_booked``. The key is omitted
+    when ``disposition`` is None, so pre-change rows carry no key (legacy gap).
+
     Args:
         connection: Open database connection.
         enrollment_id: Enrollment ID (scalar).
         outcome: ``"completed"`` or ``"failed"``.
         reason: Explanation inlined into the activity (e.g. ``"meeting booked"``).
+        disposition: Terminal disposition (§V.127) in {meeting_booked,
+            do_not_contact, contact_later}, or None to write no disposition key.
 
     Returns:
         The created outcome ``Activity``.
@@ -2463,12 +2472,15 @@ def record_enrollment_outcome(
     if enrollment is None:
         raise ValueError(f"enrollment not found: {enrollment_id}")
     contact = get_contact(connection, enrollment.contact_id)
+    detail: dict[str, object] = {"reason": reason}
+    if disposition is not None:
+        detail["disposition"] = disposition
     return create_activity(
         connection,
         contact_id=enrollment.contact_id,
         activity_type=f"enrollment_{outcome}",
         summary=reason or f"Enrollment {outcome}",
-        detail={"reason": reason},
+        detail=detail,
         company_id=contact.company_id if contact is not None else None,
         workflow_id=enrollment.workflow_id,
         enrollment_id=enrollment.id,

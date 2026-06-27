@@ -1288,6 +1288,41 @@ def test_conclude_enrollment_missing_enrollment(
     assert result.get("error") == "not_found"
 
 
+@pytest.mark.parametrize(
+    ("disposition", "outcome_type"),
+    [
+        ("meeting_booked", "enrollment_completed"),
+        ("do_not_contact", "enrollment_failed"),
+        ("contact_later", "enrollment_failed"),
+    ],
+)
+def test_conclude_enrollment_forwards_disposition_to_outcome_detail(
+    database_connection: psycopg.Connection[dict[str, Any]],
+    disposition: str,
+    outcome_type: str,
+):
+    """§V.132: conclude_enrollment forwards its disposition into the outcome
+    activity ``detail`` for every disposition (§V.127)."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+
+    conclude_enrollment(
+        connection=database_connection,
+        enrollment_id=enrollment.id,
+        disposition=disposition,
+        note="concluding",
+    )
+
+    rows = database_connection.execute(
+        "SELECT detail->>'disposition' AS disposition FROM activity "
+        "WHERE contact_id = %s AND type = %s",
+        (contact.id, outcome_type),
+    ).fetchall()
+    assert [row["disposition"] for row in rows] == [disposition]
+
+
 # -- disable_contact -----------------------------------------------------------
 
 

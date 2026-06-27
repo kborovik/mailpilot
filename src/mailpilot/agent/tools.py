@@ -522,7 +522,11 @@ def conclude_enrollment(
     note_body = note or f"Enrollment concluded: {disposition}"
 
     database.record_enrollment_outcome(
-        connection, enrollment_id, outcome=outcome, reason=note_body
+        connection,
+        enrollment_id,
+        outcome=outcome,
+        reason=note_body,
+        disposition=disposition,
     )
     database.cancel_enrollment_followup_tasks(connection, enrollment_id)
 
