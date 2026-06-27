@@ -338,15 +338,18 @@ Trigger: `src/mailpilot/agent/tools.py` or `src/mailpilot/agent/invoke.py` chang
 - `rg 'past_scheduled_at\b' src/mailpilot/agent/tools.py` -> guard error code present
 - `rg 'past_scheduled_at\b' src/mailpilot/database.py` -> zero hits (guard at boundary, not DB layer)
 
-## §V.130 — workflow-agent model settings
+## §V.47 — Anthropic model config: caching flags + model settings
 
-`_build_anthropic_model` (invoke.py) reads `anthropic_thinking`, `anthropic_effort`, `anthropic_max_tokens` settings into `AnthropicModelSettings`. `anthropic_max_tokens` ALWAYS passed as `max_tokens=<int>` (not empty-gated) — caps output stream so default-active thinking cannot exhaust the provider-default budget. `anthropic_thinking` and `anthropic_effort` added ONLY when non-empty (empty = knob off). Defaults: `anthropic_thinking=adaptive`, `anthropic_effort=high`, `anthropic_max_tokens=32768`. `xhigh` effort requires Opus 4.7+ (errors on Sonnet 4.6). Classifier `_get_model` (classify.py) EXCLUDED — one-shot structured-output decision, carries no settings. Caching flags (§V.47) unchanged on both call sites.
+Caching (both call sites — classifier + workflow agent): `anthropic_cache_instructions=True` + `anthropic_cache_tool_definitions=True`. Telemetry attribute names: `agent.invoke` rollup span carries bare `cache_read_input_tokens` + `cache_creation_input_tokens` (from `usage.cache_read_tokens`/`cache_write_tokens`); per-call `chat` span carries OTel `gen_ai.usage.cache_read.input_tokens` + `gen_ai.usage.details.cache_creation_input_tokens` — verify caching against these exact names. `gen_ai.usage.cache_read_input_tokens` exists on neither span (null = false caching-off diagnosis, §B.113).
+
+Model settings (workflow agent only — classifier `_get_model` excluded): `_build_anthropic_model` (invoke.py) reads `anthropic_thinking`, `anthropic_effort`, `anthropic_max_tokens` settings into `AnthropicModelSettings`. `anthropic_max_tokens` ALWAYS passed as `max_tokens=<int>` (not empty-gated) — caps output stream so default-active thinking cannot exhaust the provider-default budget. `anthropic_thinking` and `anthropic_effort` added ONLY when non-empty (empty = knob off). Defaults: `anthropic_thinking=adaptive`, `anthropic_effort=high`, `anthropic_max_tokens=32768`. `xhigh` effort requires Opus 4.7+ (errors on Sonnet 4.6).
 
 Trigger: `src/mailpilot/agent/invoke.py` or `src/mailpilot/settings.py` changed.
+- `rg 'anthropic_cache_instructions.*True\|anthropic_cache_tool_definitions.*True' src/mailpilot/agent/invoke.py` -> caching flags on both call sites
 - `rg 'max_tokens.*anthropic_max_tokens\|anthropic_max_tokens.*max_tokens' src/mailpilot/agent/invoke.py` -> `max_tokens` always set (not in an `if` guard)
 - `rg 'if.*anthropic_thinking\|if.*anthropic_effort' src/mailpilot/agent/invoke.py` -> conditionally added
 - `rg 'max_tokens\b' src/mailpilot/agent/classify.py` -> zero hits (classifier excluded)
-- `rg 'anthropic_cache_instructions.*True\|anthropic_cache_tool_definitions.*True' src/mailpilot/agent/invoke.py` -> caching flags still present (§V.47 regression)
+- `rg 'anthropic_cache_instructions\b' src/mailpilot/agent/classify.py` -> caching flags present on classifier too
 
 ## §V.131 — fallback acknowledgement on terminal inbound failure
 
@@ -357,3 +360,240 @@ Trigger: `src/mailpilot/run.py` or `src/mailpilot/agent/templates.py` changed.
 - `rg 'reply_emitted_scope\|reply_emitted\b' src/mailpilot/agent/tools.py src/mailpilot/run.py` -> contextvar flag present in both
 - `rg 'email_id.*fallback\|fallback.*email_id\|task\.email_id\b' src/mailpilot/run.py` -> inbound gate in `_handle_agent_failure`
 - `rg 'fallback_failed\b' src/mailpilot/run.py` -> best-effort send failure error event
+
+## §V.5 — parent denorm on list/view rows
+
+`workflow` rows carry `account_email`; `enrollment` rows carry `workflow_name` + `contact_email` + `contact_name`; `contact` list/search rows carry `company_domain` (LEFT JOIN company ON company_id, NULL when company_id NULL). The `company_domain` join backs the `--company-domain` Scope filter (resolve-then-scope per §V.107/§V.115 family 1) — unknown domain → `not_found`, not silent `[]`. Every FK projection stays feed-able by natural key.
+
+Trigger: `src/mailpilot/database.py` changed.
+- `rg 'account_email.*workflow\|workflow.*account_email' src/mailpilot/database.py` -> workflow rows carry account_email
+- `rg 'LEFT JOIN company\b' src/mailpilot/database.py` -> contact rows LEFT JOIN company for company_domain
+- `rg 'workflow_name.*enrollment\|enrollment.*workflow_name' src/mailpilot/database.py` -> enrollment rows carry workflow_name denorm
+
+## §V.7 — EmailSummary projection
+
+`EmailSummary` MUST include `gmail_thread_id`, `is_routed`, `route_method`, and `recipients` (To/Cc/Bcc address map mirroring the Email base field). Operator audits routing from CLI without Logfire. A single bulk `email list` exposes each message's recipients without a per-row `email view`. `list_emails` SELECT projects `recipients` so the map populates (not default-empty). §V.122 keys campaign-test delivery on the recipients projection.
+
+Trigger: `src/mailpilot/database.py` or `src/mailpilot/models.py` changed.
+- `rg 'gmail_thread_id\b' src/mailpilot/models.py | grep EmailSummary` -> gmail_thread_id in EmailSummary
+- `rg 'route_method\b' src/mailpilot/models.py | grep EmailSummary` -> route_method in EmailSummary
+- `rg 'recipients\b' src/mailpilot/models.py | grep EmailSummary` -> recipients in EmailSummary
+- `rg 'recipients\b' src/mailpilot/database.py | grep list_emails` -> recipients projected in list_emails SELECT
+
+## §V.10 — tag soft-disable
+
+`tag.disabled_reason TEXT NULL`; non-NULL = disabled, carries reason. `tag disable <name>` sets it (disabled_reason IS NULL gate blocks double-disable). `tag enable <name>` clears it (disabled_reason IS NOT NULL gate blocks enabling an active tag). Vocabulary-tag disable/enable write no activity — a `tag` row has no contact/company owner (§V.17). `tag list` hides disabled unless `--include-disabled`. `tag disable` retires a vocabulary-table (`tag`) entry (§V.116), NOT a per-owner link — `tag remove` is the distinct unlinking verb.
+
+Trigger: `src/mailpilot/cli.py` or `src/mailpilot/database.py` changed.
+- `rg 'disabled_reason.*tag\|tag.*disabled_reason' src/mailpilot/schema.sql` -> disabled_reason col on tag table
+- `rg '"tag".*"enable"\|enable_tag\b' src/mailpilot/cli.py src/mailpilot/database.py` -> tag enable verb present
+- `rg 'IS NULL.*disabled_reason\|disabled_reason.*IS NULL' src/mailpilot/database.py | grep tag` -> double-disable gate on tag
+
+## §V.11 — status payload envelope
+
+`mailpilot status` envelope = `{version, schema, sync_loop, accounts, tasks, config, counts}`. Schema block carries three-state `verdict` in {current, pending, drift} + `recorded_hash`/`current_hash` + applied/pending migration counts (not a bare drift bool, §V.109). Tasks block carries `pending`, `failed_24h`, `scheduled_future`, `oldest_pending_age_seconds`, `max_attempt_count_pending`.
+
+Trigger: `src/mailpilot/cli.py` changed.
+- `rg 'sync_loop\b' src/mailpilot/cli.py | grep status` -> sync_loop key in status envelope
+- `rg 'failed_24h\|oldest_pending_age_seconds\|max_attempt_count_pending' src/mailpilot/cli.py src/mailpilot/database.py` -> task block fields present
+- `rg 'recorded_hash\|current_hash' src/mailpilot/cli.py | grep status` -> hash fields in schema block
+
+## §V.15 — enrollment lifecycle + outcome model
+
+`enrollment.status` in {active, disabled} (no `paused`). `disabled` = operator halt, requires non-empty `disabled_reason` (CHECK) + `enrollment_disabled` activity, reversible via `enrollment enable <id>` (status disabled→active, clears `disabled_reason`, `status <> 'disabled'` gate blocks enabling a live enrollment, emits `enrollment_enabled` activity). `enrollment disable`/`enable` are the sole halt/resume surface (NO `enrollment update` status verb). Outcomes live on activity timeline via `record_enrollment_outcome` (accepts only completed|failed), enrollment row untouched.
+
+Trigger: `src/mailpilot/database.py` or `src/mailpilot/models.py` changed.
+- `rg 'status.*CHECK\b' src/mailpilot/schema.sql | grep enrollment` -> status CHECK in schema
+- `rg 'enrollment_disabled\b' src/mailpilot/database.py` -> enrollment_disabled activity on disable
+- `rg 'enrollment_enabled\b' src/mailpilot/database.py` -> enrollment_enabled activity on enable
+- `rg 'record_enrollment_outcome\b' src/mailpilot/database.py` -> outcome fn present (activity-only)
+- `rg "status.*<>.*'disabled'\|!=.*'disabled'" src/mailpilot/database.py` -> enabling guard
+
+## §V.77 — outbound email row persistence + orphan recovery
+
+Outbound email row persists only AFTER Gmail accepts send — Gmail failure produces no orphan row. Post-send `create_email ON CONFLICT (gmail_message_id) DO NOTHING` → None signals the row already exists; recover via `get_email_by_gmail_message_id` + return (idempotent send, never raise). Genuinely unrecoverable (no gmail_id, or conflicting row vanished after conflict): log `orphan_gmail_send` + raise.
+
+Trigger: `src/mailpilot/sync.py` or `src/mailpilot/gmail.py` changed.
+- `rg 'ON CONFLICT.*gmail_message_id\|gmail_message_id.*ON CONFLICT' src/mailpilot/database.py` -> conflict handling present
+- `rg 'get_email_by_gmail_message_id\b' src/mailpilot/sync.py src/mailpilot/gmail.py` -> recovery fn called
+- `rg 'orphan_gmail_send\b' src/mailpilot/sync.py src/mailpilot/gmail.py` -> orphan error event logged
+
+## §V.78 — outbound MIME headers + thread_id threading
+
+Outbound MIME stamped `X-MailPilot-Version` always + `X-MailPilot-Account-Id` when account-bound. Replies set `In-Reply-To` + `References` (`References` defaults to `in_reply_to`). Send path threads via optional `thread_id` — `send_email` agent tool + `_wrap_send_email` + `email_ops.send_email` forward `thread_id` to `sync.send_email`. Supplied without explicit `in_reply_to` → `_resolve_threading_headers` derives `In-Reply-To`/`References` from prior local thread rows. Multi-touch outbound threads natively: capture `gmail_thread_id` on touch 1, pass as `thread_id` on later touches; no `contact_id` requirement (unlike `reply_email` §V.79).
+
+Trigger: `src/mailpilot/sync.py` or `src/mailpilot/gmail.py` changed.
+- `rg 'X-MailPilot-Version\b' src/mailpilot/sync.py src/mailpilot/gmail.py` -> version header stamped
+- `rg '_resolve_threading_headers\b' src/mailpilot/sync.py src/mailpilot/gmail.py` -> threading header resolver present
+- `rg 'thread_id\b' src/mailpilot/agent/tools.py | grep send_email` -> thread_id param on send_email tool
+
+## §V.79 — send/reply guards + account soft-disable lifecycle
+
+Send/reply guards: disabled contact OR disabled account blocks send + reply; cold-send cooldown 30 days per (account, contact, workflow); reply requires original `gmail_thread_id` + `contact_id` (typed errors); reply subject gets "Re: " prefix unless already prefixed, case-insensitive.
+
+Account soft-disable: `account.disabled_reason TEXT NULL` (non-NULL = disabled, carries reason). `account disable <ref> --reason <text>` sets it (disabled_reason IS NULL gate blocks double-disable). `account enable <ref>` clears it (disabled_reason IS NOT NULL gate blocks enabling an active account). A disabled account is gated everywhere it would touch Gmail — sync loop skips it, `account sync` all-accounts mode skips it, `renew_watches()` skips it, send + reply refuse it. `account list` default-hides disabled; `--include-disabled` opts in. Operator-only — the agent never disables or enables an account.
+
+Trigger: `src/mailpilot/sync.py`, `src/mailpilot/database.py`, or `src/mailpilot/agent/invoke.py` changed.
+- `rg 'disabled_reason\b' src/mailpilot/schema.sql | grep account` -> account soft-disable col
+- `rg 'cold.send.*cooldown\|cooldown.*30\|30.*days' src/mailpilot/sync.py src/mailpilot/database.py` -> cooldown gate
+- `rg '"account".*"disable"\b\|"account".*"enable"\b' src/mailpilot/cli.py` -> both verbs present
+- `rg 'disabled_reason.*skip\|account.*disabled.*sync\|sync.*skip.*disabled' src/mailpilot/sync.py` -> sync loop skip gate
+- `rg 'include.disabled\b' src/mailpilot/cli.py | grep account` -> account list --include-disabled
+
+## §V.80 — bounce/unsubscribe handling + contact disable
+
+Bounce detection: sender local-part in {mailer-daemon, postmaster} (case-insensitive) OR label contains "BOUNCE" → most recent outbound in same thread + account marked `bounced` + contact disabled with "bounced:" reason prefix. Unsubscribe path uses "unsubscribed:" prefix. `contact enable <ref>` clears `disabled_reason` regardless of prefix (operator owns consent, no unsubscribe carve-out). `disabled_reason IS NOT NULL` gate blocks re-enabling an active contact. Operator-only — the agent disables on bounce/unsubscribe, never re-enables.
+
+Trigger: `src/mailpilot/routing.py` or `src/mailpilot/sync.py` changed.
+- `rg 'mailer-daemon\|postmaster\|BOUNCE\b' src/mailpilot/routing.py src/mailpilot/sync.py` -> bounce detection strings
+- `rg '"bounced:"\|"unsubscribed:"' src/mailpilot/database.py src/mailpilot/sync.py src/mailpilot/routing.py` -> reason prefixes
+- `rg 'enable_contact\b' src/mailpilot/agent/tools.py` -> zero hits (re-enable is operator-only, not agent tool)
+
+## §V.90 — natural-key UNIQUE constraints
+
+UNIQUE: `account.email`, `company.domain`, `contact.email`, `workflow(account_id, name)`, `enrollment(workflow_id, contact_id)`, `email.gmail_message_id` (nullable-unique). `tag.name` globally unique (vocabulary row §V.116). `tag_assignment` UNIQUE per (tag_id, owner). These natural keys = canonical CLI identifiers — case-insensitive handles resolved polymorphic (§V.107); unknown key → `not_found` (§V.94).
+
+Trigger: `src/mailpilot/schema.sql` or `src/mailpilot/database.py` changed.
+- `rg 'UNIQUE.*email\b' src/mailpilot/schema.sql` -> account + contact email UNIQUE
+- `rg 'UNIQUE.*domain\b' src/mailpilot/schema.sql` -> company domain UNIQUE
+- `rg 'UNIQUE.*gmail_message_id' src/mailpilot/schema.sql` -> email nullable-unique
+- `rg 'UNIQUE.*tag_id.*owner\|UNIQUE.*owner.*tag_id' src/mailpilot/schema.sql` -> tag_assignment UNIQUE per pair
+
+## §V.95 — contact lead-metadata flat columns
+
+`contact.title TEXT NULL` (role label); `contact.email_confidence INT NULL`, schema CHECK `email_confidence BETWEEN 0 AND 100`. NULL = Bouncer unknown (unbilled, unverified) = high risk. `email_confidence` = sole email-risk score. `contact list --max-email-confidence N` surfaces `email_confidence <= N OR IS NULL` — SQL inequality alone (NULL excluded) is the trap; admit-all (§V.96) never drops unknowns. No `ContactProfile` model.
+
+Trigger: `src/mailpilot/models.py` or `src/mailpilot/database.py` changed.
+- `rg 'email_confidence\b.*INT\|title\b.*TEXT' src/mailpilot/schema.sql` -> flat cols (not JSONB)
+- `rg 'email_confidence.*BETWEEN.*0.*100\|CHECK.*email_confidence' src/mailpilot/schema.sql` -> schema CHECK
+- `rg 'max.email.confidence\b' src/mailpilot/database.py` -> filter option present
+- `rg 'IS NULL.*email_confidence\|email_confidence.*IS NULL' src/mailpilot/database.py` -> NULL-inclusive in filter
+
+## §V.104 — reply-test reply-loop guard
+
+Live reply-test (`.claude/skills/mailpilot-reply-test`) requires `outbound@lab5.ca` have no active workflow. `inbound-google-drive` agent reply lands in outbound mailbox → `skipped_no_workflows` (§V.76), no second reply. Any active outbound workflow re-enters routing → inbound↔outbound auto-reply loop. No-outbound-workflow is a load-bearing test precondition, not incidental.
+
+Trigger: `.claude/skills/mailpilot-reply-test/**` changed.
+- `rg 'outbound@lab5.ca\b' .claude/skills/mailpilot-reply-test/SKILL.md | grep -i 'no.*workflow\|precondition'` -> guard stated in skill body
+- `rg 'skipped_no_workflows\b' .claude/skills/mailpilot-reply-test/SKILL.md` -> expected routing outcome named
+
+## §V.106 — Drive search whitespace-tokenized OR-joined predicates
+
+`search_drive_markdown` query = whitespace-tokenized; each token generates `fullText contains '<token>'`; all tokens OR-joined; raw hyphenated token retained (hyphenated model tried whole + split); results union+deduped by file_id; ~8-token cap. Single salient term surfaces the file. NEVER a single whole-phrase `fullText contains '{query}'` predicate — Drive punctuation-tokenizes + AND-joins internally → false-negatives on hyphenated/multi-word queries.
+
+Trigger: `src/mailpilot/drive.py` changed.
+- `rg 'fullText contains\b' src/mailpilot/drive.py` -> OR-joined token predicates
+- `rg '\.split()\b' src/mailpilot/drive.py | grep -i search` -> whitespace tokenization
+- `rg 'file_id.*set\b\|dedupe\b' src/mailpilot/drive.py | grep search` -> union+dedupe by file_id
+
+## §V.109 — three-state schema verdict + tiered gate
+
+Verdict in {current, pending, drift}. `_read_schema_metadata` breakout: metadata-row-missing vs table-missing → None collapse avoided — ledger-behind = `pending`, hash-mismatch or manual-edit = `drift`. Read-only diagnosis (`status`, `db check`) tolerates + reports. `run` + every CLI mutation dead-stops: drift → `schema_drift` envelope + exit 1; pending → `schema_migration_pending` envelope + exit 1. Two distinct codes since remedy differs (drift = investigate divergence, pending = run `db migrate`). Fail at startup, not mid-batch.
+
+Trigger: `src/mailpilot/database.py` changed.
+- `rg 'schema_drift\b' src/mailpilot/database.py src/mailpilot/cli.py` -> drift code present
+- `rg 'schema_migration_pending\b' src/mailpilot/database.py src/mailpilot/cli.py` -> pending code present (distinct from drift)
+- `rg 'determine_schema_verdict\b\|_read_schema_metadata\b' src/mailpilot/database.py` -> verdict fn present
+- `rg '"current"\b\|"pending"\b\|"drift"\b' src/mailpilot/database.py | grep verdict` -> three-state values
+
+## §V.110 — initialize_database off the hot path
+
+`initialize_database()` = connect + verify, NOT provision. Empty-DB auto-provision fires only when `account` table is absent (data-loss-free; keeps `make clean` + test fixtures ergonomic). Populated DB never mutates structure as a connection side-effect. Explicit forward paths: `db init` (provision empty, refuses if `account` exists, no `--force`) + `db migrate` (advance populated).
+
+Trigger: `src/mailpilot/database.py` changed.
+- `rg 'initialize_database\b' src/mailpilot/database.py` -> fn present
+- `rg 'information_schema.*account\b\|table.*account.*exist' src/mailpilot/database.py` -> empty-DB gate on `account` table absence
+- `rg '_provision_schema\b' src/mailpilot/database.py` -> provision fn separate from initialize
+
+## §V.111 — CLI --help zero SPEC citations
+
+Every Click command/group `--help` (docstring-derived help + option `help=` strings) renders free of `§V/§T/§B.<n>`. Guard walks the command tree, renders each `--help`, greps for `§[VTB].[0-9]+` → zero hits. Operator-facing twin of §V.45 (agent-prompt text).
+
+Trigger: `src/mailpilot/cli.py` changed.
+- `rg '§[VTB]\.[0-9]+' src/mailpilot/cli.py | grep -v '^\s*#'` -> classify each hit: in a Click `help=` string or docstring → fail; in a `#` comment → exempt
+- Full guard: render `mailpilot --help` recursively (each sub-command), grep rendered output for `§[VTB]` pattern → zero hits
+
+## §V.112 — lead-companies scoped enrich-scope
+
+Domain/URL/UUID args enrich ONLY rows resolved or seeded this run, never the global profile-NULL backlog. `seed_companies.py` emits `seeded_stale` (rows created/matched this run via `touched_apexes` accumulator) distinct from global `stale`. Fast path feeds `seeded_stale` for domain/URL-token runs, `stale` for file/bare runs. Global stale set is never the dispatch fan-out for a scoped arg.
+
+Trigger: `.claude/skills/lead-companies/**` changed.
+- `rg 'seeded_stale\b' .claude/skills/lead-companies/scripts/seed_companies.py` -> seeded_stale present (not global stale)
+- `rg 'touched_apexes\b' .claude/skills/lead-companies/scripts/seed_companies.py` -> accumulator present
+- `rg 'backlog\b\|global.*stale\|stale.*global' .claude/skills/lead-companies/SKILL.md` -> explicit not-backlog statement
+
+## §V.113 — Bouncer single GET per contact
+
+Bouncer email verify = real-time single GET `/v1.1/email/verify?email=` per contact (at most 5 per company per run; per-email billing). NEVER POST `/email/verify/batch/sync`. Empty body, 4xx/5xx, or missing status = verify FAILURE (retry once, then NULL with noted reason) — never a clean Bouncer `status="unknown"`.
+
+Trigger: `.claude/skills/lead-contacts/**` changed.
+- `rg 'batch/sync\|batch.sync' .claude/skills/lead-contacts/` -> zero hits (POST batch absent)
+- `rg '/v1.1/email/verify\b' .claude/skills/lead-contacts/` -> single-GET present
+- `rg 'retry.*once\|once.*retry' .claude/skills/lead-contacts/SKILL.md .claude/skills/lead-contacts/scripts/` -> single retry on failure
+
+## §V.114 — company soft-disable
+
+`company.disabled_reason TEXT NULL` (non-NULL = disabled, carries reason). `company disable <id> --reason <text>` sets it (disabled_reason IS NULL gate blocks double-disable, mirrors §V.10). `company list` hides disabled unless `--include-disabled`. `company enable <ref>` clears `disabled_reason` (disabled_reason IS NOT NULL gate blocks re-enabling an active company). Part of uniform disable/enable verb pairing across company|contact|tag|enrollment (§V.10/§V.15/§V.80). Operator-only — lead-contacts negative-verdict memoization moved to the `no-contacts-found` tag (§V.96, §V.116).
+
+Trigger: `src/mailpilot/cli.py` or `src/mailpilot/database.py` changed.
+- `rg 'disabled_reason\b' src/mailpilot/schema.sql | grep company` -> disabled_reason col on company table
+- `rg '"company".*"disable"\b\|"company".*"enable"\b' src/mailpilot/cli.py` -> both verbs present
+- `rg 'include.disabled\b' src/mailpilot/cli.py | grep company` -> --include-disabled on company list
+- `rg 'IS NULL.*disabled_reason\|disabled_reason.*IS NULL' src/mailpilot/database.py | grep company` -> double-disable gate
+
+## §V.119 — destructive DB op backup-first
+
+Every destructive DB op (`make clean`, any `dropdb`) runs `mailpilot db export --file ~/Documents/MailPilot/snap-<ts>.json` first (single JSON snapshot = tag vocabulary + company + contact, §V.121). CLI writes the file + exits 0 before any `dropdb`. Failed export aborts the drop (fail-closed, no `|| true` swallow). Restore = `mailpilot db import --file <snap>`. Company + contact = paid live data (discovery credits §V.96/§V.113), never wiped without a durable backup. Backup dir `~/Documents/MailPilot/` is iCloud-synced (portable across macOS instances), outside the dropped DB.
+
+Trigger: `Makefile` changed.
+- `rg 'db-backup\b' Makefile` -> db-backup target present
+- `rg 'db.*export.*snap\|snap.*db.*export' Makefile` -> export-to-snap in db-backup target
+- `rg 'clean.*db-backup\|db-backup.*clean\|clean.*:.*db-backup' Makefile` -> make clean depends on db-backup
+
+## §V.122 — campaign-test delivery keyed on recipient alias
+
+`verify_delivery.py` keys each arrival on its unique recipient alias, never the agent-written subject. Sequence N owns alias `inbound{N}@lab5.ca` (one send each; §I aliases `inbound1..9@lab5.ca`). The alias rides the received `To` header (preserved through catch-all routing into `inbound@lab5.ca`). `verify_delivery.py` builds an alias→sequence map from the single bulk `email list` recipients projection (§V.7), counts a sequence delivered when its alias appears. Subject = agent-generated + collision-prone, NEVER an identity key. Verdict PASS when every sent sequence's alias arrives.
+
+Trigger: `.claude/skills/mailpilot-campaign-test/**` changed.
+- `rg 'inbound[0-9]\b' .claude/skills/mailpilot-campaign-test/scripts/verify_delivery.py | grep '@lab5.ca'` -> alias-keyed map in verify script
+- `rg 'recipients\b' .claude/skills/mailpilot-campaign-test/scripts/verify_delivery.py` -> reads recipients projection (§V.7)
+- `rg 'subject.*key\|subject.*identity\|subject.*delivery' .claude/skills/mailpilot-campaign-test/scripts/verify_delivery.py` -> zero hits (subject not a delivery key)
+
+## §V.125 — meeting + meeting_attendee schema
+
+`meeting` table cols: `{id, google_event_id, meet_url, summary, scheduled_at, ends_at, status, created_at, updated_at}`. `google_event_id` nullable-unique (idempotent ingest, mirrors `email.gmail_message_id` §V.90). `status` CHECK in {scheduled, completed, cancelled, no_show}. `meeting_attendee(meeting_id, contact_id)` link table UNIQUE per pair (mirrors `tag_assignment` §V.116). One meeting links at least 1 attendee. Attendees matched to contacts by email; unmatched email = no link. `status` col = operator record-keeping only, gates NOTHING — booking conclusion (§V.128) fires at booking regardless of later completed|no_show.
+
+Trigger: `src/mailpilot/schema.sql` or `src/mailpilot/database.py` changed.
+- `rg 'google_event_id\b' src/mailpilot/schema.sql` -> nullable-unique col present
+- `rg 'meeting_attendee\b' src/mailpilot/schema.sql` -> link table present
+- `rg 'scheduled.*completed.*cancelled.*no_show\|status.*CHECK\b' src/mailpilot/schema.sql | grep meeting` -> status enum
+- `rg 'UNIQUE.*meeting_id.*contact_id\|UNIQUE.*contact_id.*meeting_id' src/mailpilot/schema.sql` -> link table UNIQUE per pair
+
+## §V.128 — calendar booking concludes enrollments, no agent turn
+
+For each attendee contact (§V.125) holding an active outbound enrollment: system concludes via `record_enrollment_outcome` (§V.15) + cancels pending future follow-ups via `cancel_enrollment_followup_tasks` + writes a system booking note. Fan-out fires for EVERY active outbound enrollment the attendee holds — a booked meeting outranks any cold sequence regardless of stated goal (§V.124). `cancel_enrollment_followup_tasks` fires from three sites: inbound reply routing (§V.123), calendar booking ingestion (§V.126), `conclude_enrollment` (§V.127); first-touch exclusion (§V.32) holds at every site.
+
+Trigger: `src/mailpilot/calendar.py` or `src/mailpilot/sync.py` changed.
+- `rg 'record_enrollment_outcome\b' src/mailpilot/calendar.py src/mailpilot/sync.py` -> conclusion call present
+- `rg 'cancel_enrollment_followup_tasks\b' src/mailpilot/calendar.py src/mailpilot/sync.py` -> follow-up cancel call present
+- `rg 'booking.*note\|system.*note\b' src/mailpilot/calendar.py src/mailpilot/sync.py` -> system booking note written
+- `rg 'active.*outbound\b.*enrollment\|outbound.*active\b.*enrollment' src/mailpilot/calendar.py src/mailpilot/sync.py` -> only active outbound enrollments concluded
+
+## §V.132 — workflow stats funnel
+
+`workflow stats <workflow>` = read-only per-campaign funnel, 1 workflow by entity ref (§V.107), single deterministic SQL aggregate (no LLM). Envelope `{"workflow_stats": {...}, "ok": true}` (aggregate not a workflow entity row — singular-key exception cf `db export` §V.121). 8 stages at enrollment grain (contact-distinct, multi-touch never double-counts):
+- `enrolled` = workflow's enrollment rows
+- `sent` = enrollments with at least 1 outbound `status='sent'` email
+- `bounced` = enrollments with at least 1 outbound `status='bounced'` email
+- `replied` = enrollments with at least 1 inbound routed email (route sets contact_id + workflow_id §V.27)
+- `meeting_booked` = latest-outcome `enrollment_completed` (disposition-independent)
+- `contact_later` / `do_not_contact` = latest-outcome `enrollment_failed` split by `detail->>'disposition'`
+- `active` = `status='active'` enrollment with no terminal outcome
+
+Disposition persistence: `record_enrollment_outcome` writes `detail.disposition` in {meeting_booked, do_not_contact, contact_later} from `conclude_enrollment.disposition` (§V.127) + booking-conclusion `meeting_booked` (§V.128). JSONB key, no migration. Pre-change failed rows lack disposition (legacy gap; forward campaigns are exact).
+
+Trigger: `src/mailpilot/database.py` or `src/mailpilot/cli.py` changed.
+- `rg 'workflow_stats\b' src/mailpilot/database.py` -> aggregate fn present
+- `rg 'meeting_booked\|contact_later\|do_not_contact' src/mailpilot/database.py | grep stats` -> disposition stages
+- `rg '"workflow_stats"' src/mailpilot/cli.py` -> envelope key correct
+- `rg 'DISTINCT.*contact_id\b' src/mailpilot/database.py | grep stats` -> enrollment grain aggregate
