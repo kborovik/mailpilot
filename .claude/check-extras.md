@@ -301,6 +301,8 @@ Trigger: `src/mailpilot/routing.py`, `src/mailpilot/sync.py`, or `src/mailpilot/
 
 `workflow.goal` = free-text observable outcome that concludes the enrollment (e.g. "prospect books a Google Meet"). Renamed from `workflow.objective` via migration 006. One field, two readers: (1) conclude_enrollment disposition gate — agent calls `conclude_enrollment` when it judges goal met; system concludes deterministically on calendar booking regardless of stated goal; (2) classify.py semantic-match key for inbound workflow routing (§V.76). `_DEFERRED_TASK_TASK` fragment (§V.45) names "the workflow goal" (not "objective"). `record_enrollment_outcome` is system-internal (§V.15) — NOT exposed to the agent.
 
+Definition text matches the composed-protocol mechanism: `goal` + reply-branch `instructions` claim only outcomes/actions the trigger branch can reach. Inbound (`trigger=email`) goal claims no terminal record — §V.31 composes initial-send-only + forbids `conclude_enrollment`, so 'record the outcome completed' never fires. A reply branch names exactly one terminal action, never a two-option close (`create_task` OR `conclude_enrollment`) — agent takes both (§B.120); `contact_later` already schedules re-enrollment (§V.127), so a same-turn `create_task` double-queues.
+
 Trigger: `src/mailpilot/models.py`, `src/mailpilot/agent/classify.py`, or `src/mailpilot/agent/invoke.py` changed.
 - `rg '\bgoal\b' src/mailpilot/models.py` -> `goal` present; `rg '\bobjective\b' src/mailpilot/models.py` -> zero hits
 - `rg '"Goal:"' src/mailpilot/agent/invoke.py` -> `Goal:` label in agent prompt
