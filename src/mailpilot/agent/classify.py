@@ -39,6 +39,8 @@ the email's content against each workflow's goal.
 
 Rules:
 - Pick the workflow whose goal is the best semantic match for the email.
+- A goal may name where NOT to route (for example "send X to Y instead");
+  honor those explicit redirect hints over surface word overlap.
 - Return the workflow's exact id in the `workflow_id` field.
 - If no workflow is a clear match, set `workflow_id` to null -- do not guess.
 - Populate `reasoning` with one short sentence explaining the decision.

@@ -217,6 +217,19 @@ def test_classify_span_has_usage_attributes(capfire: CaptureLogfire) -> None:
     assert attrs["total_tokens"] == attrs["input_tokens"] + attrs["output_tokens"]
 
 
+def test_instructions_honor_explicit_redirect_hints() -> None:
+    """Classifier honors a goal's explicit cross-routing hint over word overlap.
+
+    Both live goals carry redirect lines ("send X to Y instead"). Routing on
+    raw semantic overlap alone could beat the intended negative-routing, so the
+    instructions tell the model to honor explicit redirect hints over surface
+    word overlap.
+    """
+    instructions = classify_module._INSTRUCTIONS.lower()  # pyright: ignore[reportPrivateUsage]
+    assert "redirect" in instructions
+    assert "instead" in instructions
+
+
 def test_classifier_agent_has_explicit_name_for_otel_traces() -> None:
     """Classifier and workflow agents both emit `agent run` spans -- giving
     each Agent an explicit `name=` keeps `gen_ai.agent.name` legible instead
