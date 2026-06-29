@@ -1252,6 +1252,93 @@ def test_create_contacts_bulk_returns_existing_and_new(
     assert result["alice@example.com"].id == existing.id
 
 
+# -- §V.90: contact.email canonicalized lowercase at write + lookup (§B.121) ---
+
+
+def test_create_contact_lowercases_email_on_insert(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.90: create_contact stores a mixed-case address as lowercase."""
+    contact = create_contact(database_connection, email="CThorne@Example.com")
+    assert contact is not None
+    assert contact.email == "cthorne@example.com"
+
+
+def test_create_contact_case_variant_hits_conflict_no_duplicate(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.90/§B.121: a case-variant insert hits ON CONFLICT -> None, no duplicate.
+
+    Outlook/Exchange recase the local-part; the write-path lowercase (not the
+    case-sensitive UNIQUE) is the dedup guard.
+    """
+    first = create_contact(database_connection, email="cthorne@example.com")
+    assert first is not None
+    second = create_contact(database_connection, email="CThorne@example.com")
+    assert second is None
+    row = database_connection.execute(
+        "SELECT COUNT(*) AS n FROM contact WHERE email = %(email)s",
+        {"email": "cthorne@example.com"},
+    ).fetchone()
+    assert row is not None
+    assert row["n"] == 1
+
+
+def test_get_contact_by_email_resolves_mixed_case(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.90: a mixed-case lookup resolves the canonical lowercase row."""
+    contact = make_test_contact(database_connection, email="alice@test.com")
+    found = get_contact_by_email(database_connection, "Alice@Test.COM")
+    assert found is not None
+    assert found.id == contact.id
+
+
+def test_create_or_get_contact_by_email_case_variant_returns_existing(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.90/§B.121: a recased From resolves the enrolled row, never mints a dup."""
+    first = create_or_get_contact_by_email(
+        database_connection, email="cthorne@example.com", first_name="Chris"
+    )
+    second = create_or_get_contact_by_email(
+        database_connection, email="CThorne@Example.com", first_name="Chris"
+    )
+    assert second.id == first.id
+    row = database_connection.execute(
+        "SELECT COUNT(*) AS n FROM contact WHERE email = %(email)s",
+        {"email": "cthorne@example.com"},
+    ).fetchone()
+    assert row is not None
+    assert row["n"] == 1
+
+
+def test_get_contacts_by_emails_resolves_mixed_case(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.90: batch lookup canonicalizes inputs to the lowercase stored key."""
+    contact = make_test_contact(database_connection, email="alice@example.com")
+    result = get_contacts_by_emails(database_connection, ["Alice@Example.com"])
+    assert set(result.keys()) == {"alice@example.com"}
+    assert result["alice@example.com"].id == contact.id
+
+
+def test_create_contacts_bulk_folds_case_variants_to_one_row(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.90/§B.121: case-variant inputs collapse to a single canonical row."""
+    result = create_contacts_bulk(
+        database_connection, ["CThorne@Example.com", "cthorne@example.com"]
+    )
+    assert set(result.keys()) == {"cthorne@example.com"}
+    row = database_connection.execute(
+        "SELECT COUNT(*) AS n FROM contact WHERE email = %(email)s",
+        {"email": "cthorne@example.com"},
+    ).fetchone()
+    assert row is not None
+    assert row["n"] == 1
+
+
 def test_create_contacts_bulk_deduplicates_input(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):

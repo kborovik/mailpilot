@@ -543,6 +543,155 @@ def test_migration_007_adds_meeting_tables(
     conn.rollback()
 
 
+# -- migration 008: lowercase contact.email + merge case-variants (§V.90/§B.121) -
+
+
+def test_migration_008_merges_case_variant_contacts_and_lowercases(
+    migration_schema: psycopg.Connection[dict[str, Any]],
+):
+    """§V.90/§B.121: migration 008 folds case-variant duplicate contacts onto the
+    canonical (earliest) lowercase row, repoints child rows, drops the
+    duplicates, then lowercases every surviving address.
+
+    A pre-fix build could mint a bare duplicate when an inbound reply recased the
+    From local-part (`CThorne@` vs the enrolled `cthorne@`). The migration heals
+    that: the canonical row keeps its enrollment, the duplicate's email row is
+    repointed onto it, and the duplicate contact is removed.
+    """
+    conn = migration_schema
+    # Build the pre-008 world: every shipped migration up to 007.
+    for prefix in ("001", "002", "003", "004", "005", "006", "007"):
+        conn.execute(_read_shipped_migration(prefix))  # type: ignore[arg-type]
+    conn.commit()
+
+    conn.execute(
+        "INSERT INTO account (id, email) VALUES (%s, %s)", ("ac1", "rep@lab5.ca")
+    )
+    conn.execute(
+        "INSERT INTO workflow (id, account_id, template, type, name) "
+        "VALUES (%s, %s, %s, %s, %s)",
+        ("wf1", "ac1", "outbound-general", "outbound", "W"),
+    )
+    # Canonical (earliest) lowercase contact with an enrollment.
+    conn.execute(
+        "INSERT INTO contact (id, email, created_at) VALUES (%s, %s, %s)",
+        ("ct_canon", "cthorne@example.com", "2026-01-01T00:00:00Z"),
+    )
+    conn.execute(
+        "INSERT INTO enrollment (id, workflow_id, contact_id) VALUES (%s, %s, %s)",
+        ("en1", "wf1", "ct_canon"),
+    )
+    # Bare duplicate minted later from a recased inbound From, carrying one email.
+    conn.execute(
+        "INSERT INTO contact (id, email, created_at) VALUES (%s, %s, %s)",
+        ("ct_dup", "CThorne@example.com", "2026-02-01T00:00:00Z"),
+    )
+    conn.execute(
+        "INSERT INTO email (id, account_id, contact_id, direction) "
+        "VALUES (%s, %s, %s, %s)",
+        ("em1", "ac1", "ct_dup", "inbound"),
+    )
+    # An unrelated already-lowercase contact must survive untouched.
+    conn.execute(
+        "INSERT INTO contact (id, email) VALUES (%s, %s)",
+        ("ct_other", "bob@example.com"),
+    )
+    conn.commit()
+
+    # Apply the merge.
+    conn.execute(_read_shipped_migration("008"))  # type: ignore[arg-type]
+    conn.commit()
+
+    # The duplicate is gone; exactly one row carries the lowercased key.
+    rows = conn.execute(
+        "SELECT id FROM contact WHERE email = %s", ("cthorne@example.com",)
+    ).fetchall()
+    assert [r["id"] for r in rows] == ["ct_canon"]
+    assert (
+        conn.execute("SELECT id FROM contact WHERE id = %s", ("ct_dup",)).fetchone()
+        is None
+    )
+
+    # The duplicate's email row was repointed onto the canonical contact.
+    email_row = conn.execute(
+        "SELECT contact_id FROM email WHERE id = %s", ("em1",)
+    ).fetchone()
+    assert email_row is not None
+    assert email_row["contact_id"] == "ct_canon"
+
+    # Every surviving address is lowercase; the unrelated row is untouched.
+    remaining = conn.execute("SELECT id, email FROM contact ORDER BY id").fetchall()
+    assert {(r["id"], r["email"]) for r in remaining} == {
+        ("ct_canon", "cthorne@example.com"),
+        ("ct_other", "bob@example.com"),
+    }
+
+
+def test_migration_008_merges_colliding_enrollment_and_repoints_tasks(
+    migration_schema: psycopg.Connection[dict[str, Any]],
+):
+    """§V.90/§B.121: when duplicate and canonical share a workflow, the duplicate
+    enrollment collides on UNIQUE (workflow_id, contact_id). The migration
+    repoints the duplicate enrollment's tasks onto the canonical enrollment, then
+    drops the duplicate enrollment so the repoint never violates the constraint.
+    """
+    conn = migration_schema
+    for prefix in ("001", "002", "003", "004", "005", "006", "007"):
+        conn.execute(_read_shipped_migration(prefix))  # type: ignore[arg-type]
+    conn.commit()
+
+    conn.execute(
+        "INSERT INTO account (id, email) VALUES (%s, %s)", ("ac1", "rep@lab5.ca")
+    )
+    conn.execute(
+        "INSERT INTO workflow (id, account_id, template, type, name) "
+        "VALUES (%s, %s, %s, %s, %s)",
+        ("wf1", "ac1", "outbound-general", "outbound", "W"),
+    )
+    conn.execute(
+        "INSERT INTO contact (id, email, created_at) VALUES (%s, %s, %s)",
+        ("ct_canon", "dana@example.com", "2026-01-01T00:00:00Z"),
+    )
+    conn.execute(
+        "INSERT INTO contact (id, email, created_at) VALUES (%s, %s, %s)",
+        ("ct_dup", "Dana@Example.com", "2026-02-01T00:00:00Z"),
+    )
+    # Both contacts enrolled in the same workflow -> repoint would collide.
+    conn.execute(
+        "INSERT INTO enrollment (id, workflow_id, contact_id) VALUES (%s, %s, %s)",
+        ("en_canon", "wf1", "ct_canon"),
+    )
+    conn.execute(
+        "INSERT INTO enrollment (id, workflow_id, contact_id) VALUES (%s, %s, %s)",
+        ("en_dup", "wf1", "ct_dup"),
+    )
+    conn.execute(
+        "INSERT INTO task (id, enrollment_id, workflow_id, contact_id, description, "
+        "scheduled_at) VALUES (%s, %s, %s, %s, %s, %s)",
+        ("tk1", "en_dup", "wf1", "ct_dup", "follow up", "2026-03-01T00:00:00Z"),
+    )
+    conn.commit()
+
+    conn.execute(_read_shipped_migration("008"))  # type: ignore[arg-type]
+    conn.commit()
+
+    # The duplicate enrollment is gone; the canonical one survives.
+    enrollments = conn.execute(
+        "SELECT id, contact_id FROM enrollment ORDER BY id"
+    ).fetchall()
+    assert [(r["id"], r["contact_id"]) for r in enrollments] == [
+        ("en_canon", "ct_canon"),
+    ]
+    # The duplicate enrollment's task was repointed onto the canonical enrollment
+    # and the canonical contact.
+    task = conn.execute(
+        "SELECT enrollment_id, contact_id FROM task WHERE id = %s", ("tk1",)
+    ).fetchone()
+    assert task is not None
+    assert task["enrollment_id"] == "en_canon"
+    assert task["contact_id"] == "ct_canon"
+
+
 # -- identity invariant: schema.sql == apply-all-migrations-from-zero (§V.108) -
 
 

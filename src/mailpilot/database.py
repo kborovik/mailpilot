@@ -1394,6 +1394,10 @@ def create_contact(
         Created contact, or ``None`` if a contact with this email already
         existed.
     """
+    # Canonicalize the natural key lowercase before insert (§V.90). The
+    # case-sensitive ``email`` UNIQUE would otherwise let a recased local-part
+    # (Outlook/Exchange) mint a duplicate row past ON CONFLICT (§B.121).
+    email = email.lower()
     row = connection.execute(
         """\
         INSERT INTO contact (id, email, company_id, first_name, last_name,
@@ -1455,6 +1459,9 @@ def get_contact_by_email(
     Returns:
         Contact if found, None otherwise.
     """
+    # Match against the lowercase natural key (§V.90) so a mixed-case lookup
+    # resolves the canonical row.
+    email = email.lower()
     row = connection.execute(
         "SELECT * FROM contact WHERE email = %(email)s",
         {"email": email},
@@ -1488,6 +1495,11 @@ def create_or_get_contact_by_email(
     Returns:
         Existing or newly created contact.
     """
+    # Canonicalize the natural key lowercase (§V.90) so a recased sender resolves
+    # the enrolled row rather than minting a bare duplicate (§B.121). The
+    # delegated ``get_contact_by_email`` / ``create_contact`` also lowercase; the
+    # explicit normalization keeps the error message and re-fetch key canonical.
+    email = email.lower()
     existing = get_contact_by_email(connection, email)
     if existing is not None:
         backfill: dict[str, object] = {}
@@ -1530,10 +1542,14 @@ def get_contacts_by_emails(
         emails: Email addresses to look up. Duplicates are tolerated.
 
     Returns:
-        Mapping from email to Contact for every input email that has an
-        existing row. Missing emails are simply absent from the dict.
+        Mapping from lowercase email to Contact for every input email that has
+        an existing row. Keys are the canonical lowercase natural key (§V.90),
+        so a mixed-case input resolves under its lowercase form. Missing emails
+        are simply absent from the dict.
     """
-    unique = list(set(emails))
+    # Canonicalize and dedupe on the lowercase natural key (§V.90) so case
+    # variants collapse to one lookup value and resolve the canonical row.
+    unique = list({email.lower() for email in emails})
     if not unique:
         return {}
     rows = connection.execute(
@@ -1560,9 +1576,14 @@ def create_contacts_bulk(
         emails: Email addresses to ensure. Duplicates are tolerated.
 
     Returns:
-        Mapping from email to Contact for every input email.
+        Mapping from lowercase email to Contact for every input email. Keys are
+        the canonical lowercase natural key (§V.90); case-variant inputs collapse
+        to a single row.
     """
-    unique = list(set(emails))
+    # Canonicalize and dedupe on the lowercase natural key (§V.90) before insert
+    # so case variants share one row and ON CONFLICT never mints a duplicate
+    # (§B.121).
+    unique = list({email.lower() for email in emails})
     if not unique:
         return {}
     ids = [_new_id() for _ in unique]
