@@ -199,7 +199,7 @@ T197|x|impl §V.132 + §I — `workflow stats` funnel: single-SQL aggregation fn
 T198|x|impl §V.14(∆) + §I per #168 — `delete_notes` fn + CLI `note remove --contact-email|--company-domain` (clear an owner's notes); campaign-test setup clears prospect notes pre-Touch-1 + send_touch1 re-enables prospect between scenarios|V14,V91,B118
 T199|x|redesign §V.14(∆) — `note remove <note_id>` single-note hard-delete replaces owner bulk-clear; `delete_note(note_id)` fn replaces `delete_notes`; campaign-test reset (setup + cleanup) loops `note list` + remove-by-id via `clear_contact_notes`|V14,V91
 T200|x|impl §V.90(∆) per §B.121 — lowercase `email` natural key in create_contact/get_contact_by_email/create_or_get_contact_by_email/create_contacts_bulk/get_contacts_by_emails before match+insert; migration merges existing case-variant duplicate contacts onto canonical lowercase row|V90,B121
-T201|.|impl §V.133(+) + §I — `task stats` single-SQL aggregate fn in database.py + CLI `task stats` verb + `{"task_stats"}` envelope; `--trigger` Enum filter on `context->>'trigger'` for `task list` + `task stats`; `--bucket-tz` day-bucketing for distinct_scheduled_days|V133,V107,V26,V32,V4,V115
+T201|x|impl §V.133(+) + §I — `task stats` single-SQL aggregate fn in database.py + CLI `task stats` verb + `{"task_stats"}` envelope; `--trigger` Enum filter on `context->>'trigger'` for `task list` + `task stats`; `--bucket-tz` day-bucketing for distinct_scheduled_days|V133,V107,V26,V32,V4,V115
 
 ## §B BUGS
 

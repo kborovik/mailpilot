@@ -66,6 +66,7 @@ from mailpilot.database import (
     get_note,
     get_status_payload,
     get_task,
+    get_task_stats,
     get_unprocessed_inbound_email,
     get_workflow,
     get_workflow_stats,
@@ -4014,6 +4015,215 @@ def test_list_tasks_with_filters(
     pending = list_tasks(database_connection, status="pending")
     assert len(pending) == 1
     assert pending[0].contact_id == contact_a.id
+
+
+def test_list_tasks_filters_by_trigger(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.133/§V.32: `--trigger` selects on context->>'trigger', shared w/ stats."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="first touch",
+        scheduled_at="2026-04-22T12:00:00Z",
+        context={"trigger": "enrollment_schedule"},
+    )
+    create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="deferred follow-up",
+        scheduled_at="2026-04-23T12:00:00Z",
+        context={"trigger": "task"},
+    )
+    # A row with no trigger key (default '{}' context) never matches a filter.
+    create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="no trigger key",
+        scheduled_at="2026-04-24T12:00:00Z",
+    )
+
+    first_touch = list_tasks(database_connection, trigger="enrollment_schedule")
+    assert len(first_touch) == 1
+    assert first_touch[0].description == "first touch"
+
+    deferred = list_tasks(database_connection, trigger="task")
+    assert len(deferred) == 1
+    assert deferred[0].description == "deferred follow-up"
+
+
+# -- get_task_stats (§V.133) ---------------------------------------------------
+
+
+def test_get_task_stats_counts_per_status_total_and_window(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.133: per-status + total counts, distinct days, first/last scheduled_at."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    # Three pending tasks across two calendar days, plus one cancelled.
+    create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="day 1 morning",
+        scheduled_at="2026-04-22T09:00:00Z",
+    )
+    create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="day 1 evening",
+        scheduled_at="2026-04-22T21:00:00Z",
+    )
+    create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="day 2",
+        scheduled_at="2026-04-25T12:00:00Z",
+    )
+    to_cancel = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="to cancel",
+        scheduled_at="2026-04-26T12:00:00Z",
+    )
+    cancel_task(database_connection, to_cancel.id)
+
+    stats = get_task_stats(database_connection)
+    assert stats.total == 4
+    assert stats.pending == 3
+    assert stats.completed == 0
+    assert stats.failed == 0
+    assert stats.cancelled == 1
+    # Distinct UTC days: 2026-04-22, 2026-04-25, 2026-04-26.
+    assert stats.distinct_scheduled_days == 3
+    # Aware-datetime equality compares instants; the returned tzinfo reflects
+    # the session TimeZone, which need not be UTC.
+    assert stats.first_scheduled_at == datetime(2026, 4, 22, 9, tzinfo=UTC)
+    assert stats.last_scheduled_at == datetime(2026, 4, 26, 12, tzinfo=UTC)
+
+
+def test_get_task_stats_empty_set_is_all_zero(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.133: an empty task set returns zero counts and NULL first/last."""
+    stats = get_task_stats(database_connection)
+    assert stats.total == 0
+    assert stats.pending == 0
+    assert stats.distinct_scheduled_days == 0
+    assert stats.first_scheduled_at is None
+    assert stats.last_scheduled_at is None
+
+
+def test_get_task_stats_bucket_tz_shifts_day_count(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.133: distinct_scheduled_days buckets in the supplied IANA timezone."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    # Both instants fall on 2026-04-22 in UTC, but straddle midnight in New York
+    # (UTC-4 in April): 02:00Z -> 2026-04-21 22:00, 20:00Z -> 2026-04-22 16:00.
+    create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="early",
+        scheduled_at="2026-04-22T02:00:00Z",
+    )
+    create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="late",
+        scheduled_at="2026-04-22T20:00:00Z",
+    )
+
+    assert get_task_stats(database_connection).distinct_scheduled_days == 1
+    assert (
+        get_task_stats(
+            database_connection, bucket_tz="America/New_York"
+        ).distinct_scheduled_days
+        == 2
+    )
+
+
+def test_get_task_stats_filters_by_workflow_and_trigger(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.133/§V.107/§V.26: --workflow-id + --trigger narrow the aggregate set."""
+    account = make_test_account(database_connection)
+    workflow_a = make_test_workflow(
+        database_connection, account_id=account.id, name="campaign-a"
+    )
+    workflow_b = make_test_workflow(
+        database_connection, account_id=account.id, name="campaign-b"
+    )
+    contact = make_test_contact(database_connection)
+    enroll_a = make_test_enrollment(database_connection, workflow_a.id, contact.id)
+    enroll_b = make_test_enrollment(database_connection, workflow_b.id, contact.id)
+    create_task(
+        database_connection,
+        enrollment_id=enroll_a.id,
+        workflow_id=workflow_a.id,
+        contact_id=contact.id,
+        description="a first touch",
+        scheduled_at="2026-04-22T12:00:00Z",
+        context={"trigger": "enrollment_schedule"},
+    )
+    create_task(
+        database_connection,
+        enrollment_id=enroll_a.id,
+        workflow_id=workflow_a.id,
+        contact_id=contact.id,
+        description="a follow-up",
+        scheduled_at="2026-04-23T12:00:00Z",
+        context={"trigger": "task"},
+    )
+    create_task(
+        database_connection,
+        enrollment_id=enroll_b.id,
+        workflow_id=workflow_b.id,
+        contact_id=contact.id,
+        description="b first touch",
+        scheduled_at="2026-04-22T12:00:00Z",
+        context={"trigger": "enrollment_schedule"},
+    )
+
+    by_workflow = get_task_stats(database_connection, workflow_id=workflow_a.id)
+    assert by_workflow.total == 2
+
+    first_touch = get_task_stats(database_connection, trigger="enrollment_schedule")
+    assert first_touch.total == 2
+
+    by_both = get_task_stats(
+        database_connection,
+        workflow_id=workflow_a.id,
+        trigger="enrollment_schedule",
+    )
+    assert by_both.total == 1
 
 
 def test_find_pending_first_touch_task_none(

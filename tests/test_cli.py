@@ -33,6 +33,7 @@ from mailpilot.models import (
     TagAssignment,
     TagSummary,
     Task,
+    TaskStats,
     Workflow,
     WorkflowStats,
 )
@@ -7555,6 +7556,7 @@ def test_task_list(runner: CliRunner, mock_connection: MagicMock) -> None:
         workflow_id=None,
         contact_id=None,
         status=None,
+        trigger=None,
         limit=100,
         since=None,
         until=None,
@@ -7585,6 +7587,8 @@ def test_task_list_with_filters(runner: CliRunner, mock_connection: MagicMock) -
                 _CONTACT_ID,
                 "--status",
                 "pending",
+                "--trigger",
+                "enrollment_schedule",
                 "--limit",
                 "10",
             ],
@@ -7596,6 +7600,7 @@ def test_task_list_with_filters(runner: CliRunner, mock_connection: MagicMock) -
         workflow_id=_WORKFLOW_ID,
         contact_id=_CONTACT_ID,
         status="pending",
+        trigger="enrollment_schedule",
         limit=10,
         since=None,
         until=None,
@@ -7618,6 +7623,137 @@ def test_task_list_workflow_not_found(
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["error"] == "not_found"
+
+
+# -- task stats ----------------------------------------------------------------
+
+
+def _make_task_stats() -> TaskStats:
+    return TaskStats(
+        total=4,
+        pending=3,
+        completed=0,
+        failed=0,
+        cancelled=1,
+        distinct_scheduled_days=3,
+        first_scheduled_at=datetime(2026, 4, 22, 9, tzinfo=UTC),
+        last_scheduled_at=datetime(2026, 4, 26, 12, tzinfo=UTC),
+    )
+
+
+def test_task_stats_envelope(runner: CliRunner, mock_connection: MagicMock) -> None:
+    """§V.133/§V.4: `task stats` ships the aggregate under `task_stats`."""
+    stats = _make_task_stats()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_task_stats", return_value=stats) as mock_stats,
+    ):
+        result = runner.invoke(main, ["task", "stats"])
+
+    assert result.exit_code == 0, result.output
+    mock_stats.assert_called_once_with(
+        mock_connection,
+        workflow_id=None,
+        trigger=None,
+        bucket_tz="UTC",
+    )
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert "task" not in data
+    funnel = data["task_stats"]
+    assert funnel["total"] == 4
+    assert funnel["pending"] == 3
+    assert funnel["cancelled"] == 1
+    assert funnel["distinct_scheduled_days"] == 3
+    assert funnel["first_scheduled_at"] == "2026-04-22T09:00:00Z"
+    assert funnel["last_scheduled_at"] == "2026-04-26T12:00:00Z"
+
+
+def test_task_stats_threads_filters(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.133/§V.107/§V.26: --workflow-id, --trigger, --bucket-tz reach the fn."""
+    workflow = _make_workflow()
+    stats = _make_task_stats()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=workflow),
+        patch("mailpilot.database.get_task_stats", return_value=stats) as mock_stats,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "task",
+                "stats",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--trigger",
+                "enrollment_schedule",
+                "--bucket-tz",
+                "America/New_York",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_stats.assert_called_once_with(
+        mock_connection,
+        workflow_id=_WORKFLOW_ID,
+        trigger="enrollment_schedule",
+        bucket_tz="America/New_York",
+    )
+
+
+def test_task_stats_unknown_workflow_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.107: an unknown --workflow-id exits not_found."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=None),
+    ):
+        result = runner.invoke(
+            main,
+            ["task", "stats", "--workflow-id", "01234567-0000-7000-0000-0000000000fe"],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+
+
+def test_task_stats_invalid_bucket_tz_validation_error(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.4: an unknown IANA timezone exits validation_error (clean envelope)."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_task_stats") as mock_stats,
+    ):
+        result = runner.invoke(
+            main, ["task", "stats", "--bucket-tz", "Mars/Olympus_Mons"]
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    mock_stats.assert_not_called()
+
+
+def test_task_stats_rejects_unknown_trigger(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.26: --trigger is a closed Choice; an off-taxonomy value is rejected."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(main, ["task", "stats", "--trigger", "bogus"])
+
+    assert result.exit_code != 0
 
 
 # -- task view -----------------------------------------------------------------

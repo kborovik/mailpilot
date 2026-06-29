@@ -373,6 +373,31 @@ class TaskSummary(BaseModel):
     attempt_count: int = 0
 
 
+class TaskStats(BaseModel):
+    """Task-cadence aggregate over the task queue at task grain (§V.133).
+
+    Per-status counts plus ``total``, the distinct scheduled-day count bucketed
+    in a chosen IANA timezone, and the first/last ``scheduled_at`` timestamps.
+    Computed by a single deterministic SQL aggregate -- no LLM. Optional
+    ``--workflow-id`` (§V.107) and ``--trigger`` (§V.26 taxonomy) filters narrow
+    the task set before aggregation. The envelope key is ``task_stats`` (an
+    aggregate, not a ``task`` entity row) per §V.133 -- mirrors the
+    ``workflow_stats`` exception of §V.132.
+
+    ``first_scheduled_at`` / ``last_scheduled_at`` are ``None`` when the filtered
+    task set is empty (``MIN`` / ``MAX`` over zero rows).
+    """
+
+    total: int
+    pending: int
+    completed: int
+    failed: int
+    cancelled: int
+    distinct_scheduled_days: int
+    first_scheduled_at: datetime | None
+    last_scheduled_at: datetime | None
+
+
 ActivityType = Literal[
     "email_sent",
     "email_received",

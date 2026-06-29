@@ -72,6 +72,9 @@ _WORKFLOW_TEMPLATES = ["outbound-general", "inbound-general", "inbound-google-dr
 _EMAIL_STATUSES = ["sent", "received", "bounced"]
 _ENROLLMENT_STATUSES = ["active", "disabled"]
 _TASK_STATUSES = ["pending", "completed", "failed", "cancelled"]
+# Caller-path taxonomy stored in task.context->>'trigger' (§V.26); shared by
+# `task list --trigger` and `task stats --trigger`.
+_TASK_TRIGGERS = ["enrollment_run", "enrollment_schedule", "task", "email", "manual"]
 _MEETING_STATUSES = ["scheduled", "completed", "cancelled", "no_show"]
 
 
@@ -3647,12 +3650,14 @@ def task() -> None:
 @scope_option("--workflow-id", "workflow_id", "Filter by workflow ID.")
 @scope_option("--contact-email", "contact_email", "Filter by contact (email or ID).")
 @enum_option("--status", "status", _TASK_STATUSES, "Filter by task status.")
+@enum_option("--trigger", "trigger", _TASK_TRIGGERS, "Filter by task trigger.")
 @time_window_options("scheduled_at")
 @limit_option
 def task_list(
     workflow_id: str | None,
     contact_email: str | None,
     status: str | None,
+    trigger: str | None,
     limit: int,
     since: str | None,
     until: str | None,
@@ -3678,11 +3683,53 @@ def task_list(
             workflow_id=workflow_id,
             contact_id=contact_id,
             status=status,
+            trigger=trigger,
             limit=limit,
             since=since,
             until=until,
         )
         output({"tasks": [t.model_dump(mode="json") for t in tasks]})
+    finally:
+        connection.close()
+
+
+@task.command("stats")
+@scope_option("--workflow-id", "workflow_id", "Filter by workflow ID.")
+@enum_option("--trigger", "trigger", _TASK_TRIGGERS, "Filter by task trigger.")
+@click.option(
+    "--bucket-tz",
+    default="UTC",
+    help="IANA timezone for day-bucketing distinct_scheduled_days.",
+)
+def task_stats(
+    workflow_id: str | None,
+    trigger: str | None,
+    bucket_tz: str,
+) -> None:
+    """Show the task-cadence aggregate over the task queue."""
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    from mailpilot.database import (
+        get_task_stats,
+        get_workflow,
+        initialize_database,
+    )
+
+    connection = initialize_database(_database_url())
+    try:
+        if workflow_id is not None and get_workflow(connection, workflow_id) is None:
+            output_error(f"workflow not found: {workflow_id}", "not_found")
+        try:
+            ZoneInfo(bucket_tz)
+        except ZoneInfoNotFoundError, ValueError:
+            output_error(f"unknown timezone: {bucket_tz}", "validation_error")
+        stats = get_task_stats(
+            connection,
+            workflow_id=workflow_id,
+            trigger=trigger,
+            bucket_tz=bucket_tz,
+        )
+        output({"task_stats": stats.model_dump(mode="json")})
     finally:
         connection.close()
 

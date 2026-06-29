@@ -57,6 +57,7 @@ from mailpilot.models import (
     TagAssignment,
     TagSummary,
     Task,
+    TaskStats,
     TaskSummary,
     Workflow,
     WorkflowStats,
@@ -3580,6 +3581,7 @@ def list_tasks(
     workflow_id: str | None = None,
     contact_id: str | None = None,
     status: str | None = None,
+    trigger: str | None = None,
     limit: int = 100,
     since: str | None = None,
     until: str | None = None,
@@ -3591,6 +3593,9 @@ def list_tasks(
         workflow_id: Filter by workflow ID.
         contact_id: Filter by contact ID.
         status: Filter by task status.
+        trigger: Filter by caller path stored in ``context->>'trigger'``
+            (§V.26 taxonomy); deterministic first-touch select on
+            ``enrollment_schedule`` (§V.32), never reads ``description``.
         limit: Maximum results.
         since: ISO datetime inclusive lower bound on ``scheduled_at``.
         until: ISO datetime inclusive upper bound on ``scheduled_at``.
@@ -3609,6 +3614,9 @@ def list_tasks(
     if status is not None:
         conditions.append(SQL("status = %(status)s"))
         params["status"] = status
+    if trigger is not None:
+        conditions.append(SQL("COALESCE(context->>'trigger', '') = %(trigger)s"))
+        params["trigger"] = trigger
     if since is not None:
         conditions.append(SQL("scheduled_at >= %(since)s"))
         params["since"] = since
@@ -3623,6 +3631,69 @@ def list_tasks(
     ).format(where)
     rows = connection.execute(query, params).fetchall()
     return [TaskSummary.model_validate(row) for row in rows]
+
+
+def get_task_stats(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str | None = None,
+    trigger: str | None = None,
+    bucket_tz: str = "UTC",
+) -> TaskStats:
+    """Compute the task-cadence aggregate over the task queue (§V.133).
+
+    A single deterministic SQL aggregate at task grain -- no LLM. Returns
+    per-status counts {pending, completed, failed, cancelled} plus ``total``,
+    the count of distinct calendar days the tasks are scheduled across (bucketed
+    in ``bucket_tz``), and the first/last ``scheduled_at``. Optional
+    ``workflow_id`` and ``trigger`` narrow the task set before aggregation, the
+    same filter axes ``list_tasks`` carries.
+
+    ``distinct_scheduled_days`` buckets each ``scheduled_at`` (a ``TIMESTAMPTZ``)
+    into its wall-clock date in ``bucket_tz`` -- ``AT TIME ZONE`` shifts the
+    instant into that zone before truncating to a date, so a midnight-straddling
+    instant lands on the operator's local day, not UTC's. The window filters
+    (§V.115 lifecycle) stay on ``list_tasks``; this aggregate keeps to the
+    cadence question.
+
+    Args:
+        connection: Open database connection.
+        workflow_id: Filter by workflow ID (entity ref per §V.107).
+        trigger: Filter by ``context->>'trigger'`` (§V.26 taxonomy);
+            ``enrollment_schedule`` selects the first-touch tasks (§V.32).
+        bucket_tz: IANA timezone name for day-bucketing ``distinct_scheduled_days``
+            (caller validates; an unknown zone raises at query time).
+
+    Returns:
+        ``TaskStats`` over the filtered task set (all-zero counts and NULL
+        first/last when no task matches).
+    """
+    conditions: list[SQL] = []
+    params: dict[str, object] = {"bucket_tz": bucket_tz}
+    if workflow_id is not None:
+        conditions.append(SQL("workflow_id = %(workflow_id)s"))
+        params["workflow_id"] = workflow_id
+    if trigger is not None:
+        conditions.append(SQL("COALESCE(context->>'trigger', '') = %(trigger)s"))
+        params["trigger"] = trigger
+    where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
+    query = SQL(
+        """\
+        SELECT
+            COUNT(*) AS total,
+            COUNT(*) FILTER (WHERE status = 'pending') AS pending,
+            COUNT(*) FILTER (WHERE status = 'completed') AS completed,
+            COUNT(*) FILTER (WHERE status = 'failed') AS failed,
+            COUNT(*) FILTER (WHERE status = 'cancelled') AS cancelled,
+            COUNT(DISTINCT (scheduled_at AT TIME ZONE %(bucket_tz)s)::date)
+                AS distinct_scheduled_days,
+            MIN(scheduled_at) AS first_scheduled_at,
+            MAX(scheduled_at) AS last_scheduled_at
+        FROM task {}
+        """
+    ).format(where)
+    row = connection.execute(query, params).fetchone()
+    assert row is not None  # an aggregate without GROUP BY always returns one row
+    return TaskStats.model_validate(row)
 
 
 def reschedule_task_for_retry(
