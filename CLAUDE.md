@@ -168,6 +168,27 @@ Invariants in §V.51-55.
 - **Cloud project** — `mailpilot` (token-scoped). MCP queries set
   `project='mailpilot'` and filter by `deployment_environment` (§V.52).
 
+## Production database (read-only reporting)
+
+Connect to the production database for reports and data checks. Use the
+read-only `reporter` user — never a write user for ad-hoc queries. The host
+resolves over Tailscale, so the machine must be on the tailnet.
+
+Credentials live in `.env` (gitignored): `PROD_DB_HOST`, `PROD_DB_NAME`,
+`PROD_DB_USER`, `PROD_DB_PASSWORD`. Do not paste the password into commands,
+commit it, or print it. Load it from `.env` instead.
+
+```bash
+set -a; source .env; set +a
+PGPASSWORD="$PROD_DB_PASSWORD" PGCONNECT_TIMEOUT=10 \
+  psql -h "$PROD_DB_HOST" -U "$PROD_DB_USER" -d "$PROD_DB_NAME"
+```
+
+- `reporter` is read-only. Any write fails — that is the intended guardrail.
+- Run multi-statement report scripts through stdin (`psql ... <<'SQL'`), not
+  `-c`, so `\echo` section headers work.
+- This is live, paid data (§V.119). Read only — never mutate from here.
+
 ## Workflows repo (detached)
 
 The `workflows/` directory is a gitignored symlink to the independent
