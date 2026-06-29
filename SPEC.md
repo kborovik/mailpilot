@@ -195,6 +195,7 @@ T196|x|impl §V.132 disposition persistence — record_enrollment_outcome dispos
 T197|x|impl §V.132 + §I — `workflow stats` funnel: single-SQL aggregation fn in database.py + CLI `workflow stats` verb + `{"workflow_stats"}` envelope|V132,V107,V4,V54
 T198|x|impl §V.14(∆) + §I per #168 — `delete_notes` fn + CLI `note remove --contact-email|--company-domain` (clear an owner's notes); campaign-test setup clears prospect notes pre-Touch-1 + send_touch1 re-enables prospect between scenarios|V14,V91,B118
 T199|x|redesign §V.14(∆) — `note remove <note_id>` single-note hard-delete replaces owner bulk-clear; `delete_note(note_id)` fn replaces `delete_notes`; campaign-test reset (setup + cleanup) loops `note list` + remove-by-id via `clear_contact_notes`|V14,V91
+T200|.|impl §V.90(∆) per §B.121 — lowercase `email` natural key in create_contact/get_contact_by_email/create_or_get_contact_by_email/create_contacts_bulk/get_contacts_by_emails before match+insert; migration merges existing case-variant duplicate contacts onto canonical lowercase row|V90,B121
 
 ## §B BUGS
 
@@ -230,3 +231,4 @@ B117|2026-06-26|§V.105 + check-extras.md named `score_replies.py` + 3-shape all
 B118|2026-06-27|prospect notes from prior runs (do-not-contact, wrong-person) poisoned `read_contact` grounding; setup cleared re-enable but not notes; agent concluded do_not_contact + skipped Touch 1|V14
 B119|2026-06-27|V122 drift: campaign-test refactored to single-prospect multi-scenario architecture after T180; `verify_delivery.py` + `inbound{N}@lab5.ca` aliases removed; V122 text described the superseded alias-keyed design|V122
 B120|2026-06-27|AI Engineering not_now branch named a two-option close (create_task OR conclude_enrollment contact_later); live agent took both — concluded contact_later AND created a follow-up task; contact_later already re-enrolls so prospect double-queued|V124
+B121|2026-06-29|inbound reply From local-part cased unlike enrolled (`CThorne@` vs `cthorne@`); sync sender→contact resolve keys off raw-cased address; case-sensitive `contact.email` UNIQUE misses canonical row + mints bare duplicate; `email.sender` independently lowercased so paths disagree|V90

@@ -455,11 +455,14 @@ Trigger: `src/mailpilot/routing.py` or `src/mailpilot/sync.py` changed.
 
 UNIQUE: `account.email`, `company.domain`, `contact.email`, `workflow(account_id, name)`, `enrollment(workflow_id, contact_id)`, `email.gmail_message_id` (nullable-unique). `tag.name` globally unique (vocabulary row §V.116). `tag_assignment` UNIQUE per (tag_id, owner). These natural keys = canonical CLI identifiers — case-insensitive handles resolved polymorphic (§V.107); unknown key → `not_found` (§V.94).
 
+`contact.email` natural key canonicalized lowercase at every write + lookup — `create_contact`, `get_contact_by_email`, `create_or_get_contact_by_email`, `create_contacts_bulk`, `get_contacts_by_emails` lowercase the `email` arg before the `contact.email` match|insert; sync sender→contact resolve feeds the same normalized key. Mirrors `email.sender` lowercase persist + CLI polymorphic case-insensitive resolution (§V.107). `contact.email` `TEXT UNIQUE` is case-sensitive, so write-path lowercase (NOT the constraint) is the case-variant dedup guard; case-variant `From` (Outlook/Exchange recase local-part) never mints a duplicate bare contact (closes §B.121).
+
 Trigger: `src/mailpilot/schema.sql` or `src/mailpilot/database.py` changed.
 - `rg 'UNIQUE.*email\b' src/mailpilot/schema.sql` -> account + contact email UNIQUE
 - `rg 'UNIQUE.*domain\b' src/mailpilot/schema.sql` -> company domain UNIQUE
 - `rg 'UNIQUE.*gmail_message_id' src/mailpilot/schema.sql` -> email nullable-unique
 - `rg 'UNIQUE.*tag_id.*owner\|UNIQUE.*owner.*tag_id' src/mailpilot/schema.sql` -> tag_assignment UNIQUE per pair
+- `rg -n 'email\.lower\(\)|lower\(email' src/mailpilot/database.py` -> contact natural-key fns lowercase before match|insert
 
 ## §V.95 — contact lead-metadata flat columns
 
