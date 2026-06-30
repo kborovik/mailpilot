@@ -96,7 +96,8 @@ V53: agent tool spans come from logfire.instrument_pydantic_ai() (gen_ai.tool.na
 V54: CLI mutation = logfire.span + operator_event; constraint code vocabulary; SystemExit absorbed at boundary — → .claude/check-extras.md §V.54
 V55: tool_response span attr exempt from Logfire scrubbing; all other attrs scrubbed
 V62: /release extends /gh:release — post-tag: push main + v<x.y.z>, uv build + gh release create v<x.y.z> --verify-tag + wheel attach; confirm-before-mutate gate; version source = pyproject.toml; deploy = published wheel — → .claude/check-extras.md §V.62
-V67: persisted outbound in_reply_to + references_header mirror wire MIME headers exactlyV69: tick classifying >= 1 inbound -> next tick forces full sweep + wakeup_event set
+V67: persisted outbound in_reply_to + references_header mirror wire MIME headers exactly
+V69: tick classifying >= 1 inbound -> next tick forces full sweep + wakeup_event set
 V71: per-task reply-rejection counter (reply_rejection_scope) — format_check rejections cap 3; past cap bypasses; outside scope always enforces
 V72: company.profile JSONB validated vs CompanyProfile — required {summary, products, target_customers, sources} non-empty; timezone optional, null on multi-zone; malformed -> validation_error
 V73: skill-body-embedded Workflow snippet runnable as authored — (a) zero free vars; (b) args-as-collection guard; (c) prose-matches-dispatch; (d) saved-workflow byte-identical — recipe → .claude/check-extras.md §V.73
@@ -116,7 +117,8 @@ V86: secret settings (anthropic_api_key, logfire_token, database_url) redacted a
 V87: cross-account isolation — thread + RFC message-id lookups scoped to account_id; agent read_email cross-account -> None (prompt-injection guard)
 V88: entity enums enforced by schema CHECK — workflow.template/type/status, enrollment.status, email.direction/status/route_method, task.status, activity.type; value sets authoritative in schema.sql
 V89: singleton rows — schema_metadata id=1, sync_status id='singleton'
-V90: natural-key UNIQUE constraints = canonical CLI identifiers; unknown key -> not_found — → .claude/check-extras.md §V.90V92: email render = Markdown -> HTML inline styles only, no stylesheet; THEMES = {blue, green, orange, purple, red, slate}; None/unknown theme -> blue fallback
+V90: natural-key UNIQUE constraints = canonical CLI identifiers; unknown key -> not_found — → .claude/check-extras.md §V.90
+V92: email render = Markdown -> HTML inline styles only, no stylesheet; THEMES = {blue, green, orange, purple, red, slate}; None/unknown theme -> blue fallback
 V93: operator_event -> stderr single line "HH:MM:SS event=NAME k=v ..."; newlines collapsed to space; whitespace values double-quoted, inner quotes escaped
 V94: CLI FK validation precedes mutation — referenced entity missing -> error envelope, no partial write
 V95: contact lead-metadata flat cols: title TEXT, email_confidence INT; NULL = high risk; --max-email-confidence includes NULL — → .claude/check-extras.md §V.95
@@ -142,7 +144,6 @@ V114: company soft-disable — disabled_reason TEXT NULL, uniform disable/enable
 V115: `list` filter flag = six-family closed taxonomy {Scope, Enum, Range, Presence, Text-match, Lifecycle}; `--limit` (default 100) = sole result control; `--direction` = canonical direction axis; shared Click decorators composed fixed-order in `cli.py`/`_filters.py`; → .claude/check-extras.md §V.115
 V116: tags = `tag` vocabulary table + `tag_assignment` link table; `tag add` errors `not_found` on undefined (never auto-creates); `company|contact list --tag <name>` / `--no-tag <name>` (repeatable) membership filters; → .claude/check-extras.md §V.116
 V117: batch-gate option distinctness — fixed cap suppressed when stale-count <= cap — → .claude/check-extras.md §V.117
-
 V119: destructive DB op backs up first via `mailpilot db export`; failed export aborts drop (fail-closed) — → .claude/check-extras.md §V.119
 V120: trigger run MUST leave a `reply_email`|`send_email` ToolReturnPart w/o `error` key OR a successful `noop` OR `conclude_enrollment`; send-obligated = inbound (`email is not None`) OR outbound first reach-out; `_sent_reply` walker + `AgentCompletedWithoutReplyError` guard; `manual` exempt; → .claude/check-extras.md §V.120
 V121: db snapshot bundle = `{schema_version, exported_at, tags, companies, contacts}` JSON; `db export`/`db import` by natural key (never source-DB UUID); drift|pending dead-stops import; export→import round-trip field-identical (test-enforced); → .claude/check-extras.md §V.121
@@ -154,12 +155,9 @@ V126: CalendarClient mirrors GmailClient/DriveClient shape; `_poll_account_calen
 V127: `conclude_enrollment(disposition, note, reschedule_at)` = sole agent terminal; disposition in {meeting_booked, do_not_contact, contact_later}; system side-effects per disposition; counts as send-obligation terminal (§V.120); `record_enrollment_outcome` NOT in agent tool set; → .claude/check-extras.md §V.127
 V128: calendar booking concludes active outbound enrollments + cancels follow-ups, no agent turn — → .claude/check-extras.md §V.128
 V129: agent-supplied timestamps: grounded (current-date injected per run via `@agent.instructions`) + future-checked at boundary (create_task + conclude_enrollment.reschedule_at reject past timestamps); guard NOT in database.create_task; → .claude/check-extras.md §V.129
-
 V131: terminal inbound agent failure sends one `_FALLBACK_ACKNOWLEDGEMENT` fixed reply — gate: inbound `email_id` set AND reply-emitted contextvar unset; outbound first-touch stays silent; fallback-send failure logs error + marks task failed; → .claude/check-extras.md §V.131
 V132: workflow stats funnel — single SQL aggregate, 8 stages, enrollment grain, envelope {workflow_stats} — → .claude/check-extras.md §V.132
-
 V133: task stats aggregate — single SQL, task grain, envelope {task_stats}; filters --workflow-id (§V.107) + --trigger (§V.26); returns per-status {pending,completed,failed,cancelled}+total + distinct_scheduled_days + first/last scheduled_at; → .claude/check-extras.md §V.133
-
 V134: `workflow check` = read-only wording-integrity check per §V.108 shape — SHA-256 over {template,theme,goal,instructions} keyed by `name`; states {in_sync,out_of_sync,not_imported,orphaned}; report-only envelope {"workflow_check"}; not a deploy gate; → .claude/check-extras.md §V.134
 
 ## §T TASKS
