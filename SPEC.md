@@ -56,15 +56,15 @@ V10: tag soft-disable — disabled_reason TEXT NULL, reversible via `tag enable`
 V11: status payload = fixed envelope {version, schema, sync_loop, accounts, tasks, config, counts} — → .claude/check-extras.md §V.11
 V12: IDs minted client-side via _new_id() -> UUIDv7; enrollment addressed by scalar id, composite (workflow_id, contact_id) retired from signatures
 V13: tag + note target = XOR — exactly one of {contact_id, company_id} set (schema CHECK)
-V14: activity append-only — INSERT only, no update/delete fns; note INSERT + single-note hard-delete `note remove <note_id>` (§I) — one note row per call (no bulk-clear, no note update), operator-only NOT an agent tool, activity trail untouched
+V14: activity append-only — INSERT only, no update/delete fns; note INSERT + single-note hard-delete `note remove <note_id>` (§I) — one note row per call (no bulk-clear, no note update), operator-only NOT an agent tool, trail untouched; tag/note mutation + activity row: one txn — both or neither; `note remove` deletes note row only, no activity — prior note_added rows survive as the append-only trail
 V15: enrollment.status in {active, disabled}; outcomes on activity timeline via record_enrollment_outcome — → .claude/check-extras.md §V.15
 V16: race-safe create — UNIQUE-bearing create_X uses ON CONFLICT DO NOTHING -> None to race loser, exactly 1 row persists; bulk variants converge to shared ids; CLI surfaces duplicate_key envelope
 V17: activity targets >= 1 of {contact_id, company_id}, both allowed (multi-target); list_activities enforces same
-V18: schema drift = live structure diverged from `schema.sql` w/ no migration path (manual edit | DB ahead of code), hash-mismatch primitive §V.19 — distinct from `pending` (unapplied `migrations/`, §V.108); drift response tiered per §V.109 (`status`/`db check` tolerate+report, `run`+mutations dead-stop), no longer warn-only
+V18: schema drift = live structure diverged from `schema.sql` w/ no migration path (manual edit | DB ahead of code), hash-mismatch primitive §V.19 — distinct from `pending` (unapplied `migrations/`, §V.108); drift response tiered per §V.109 (`status`/`db check` tolerate+report, `run`+mutations dead-stop)
 V19: schema hash = sha256 over normalized schema.sql (strip -- comments, collapse whitespace)
 V20: email.route_method NULL or in 7-value enum (schema CHECK, set per §I.cli); non-NULL -> is_routed=TRUE; NULL + is_routed=TRUE = pipeline ran, no match ("unrouted" = span-only label)
 V21: background loops wake on events not timers — wakeup_event set by Pub/Sub notify + pg NOTIFY task_pending (INSERT + retry-UPDATE triggers); run_interval tick = fallback only
-V22: <= 1 routing.route_email span lifecycle per email_id — History-API re-delivery + repeat sync sweep never trigger second route pass (is_routed gate); duplicate route spans inflate metrics + mask classifier regressions
+V22: <= 1 routing.route_email span lifecycle per email_id — is_routed gate; History-API re-delivery + repeat sync never trigger second route pass; → .claude/check-extras.md §V.22
 V23: task drain = bounded pool <= max_concurrent_tasks; each worker owns its psycopg.Connection; atomic claim blocks re-dispatch of in-flight tasks; each worker roots its own trace — drain worker detaches the dispatching tick's sync.loop.iteration OTel context before run.execute_task (py3.14 ThreadPoolExecutor.submit propagates the active span); trace_id 1:1 w/ agent.invoke
 V24: main loop never blocks on task futures — reaper collects on later ticks + emits task.drain
 V25: advisory locks 2-tier — coarse (workflow_id, contact_id) + task-scoped (task_id split-half CRC32 pair); lock acquired before agent.invoke span opens (loser -> None, no span); contention -> reschedule w/o attempt_count bump, scheduled_at push fires task_pending_trigger
@@ -79,7 +79,7 @@ V33: enrollment self-loop rejected — contact.email == workflow account email, 
 V34: every Drive call carries Shared-Drive flags — corpora="allDrives", supportsAllDrives=True, includeItemsFromAllDrives=True
 V35: Drive KB isolation = per-account impersonation (DWD with_subject); account reads only files its identity can read; list/search filter mimeType text/markdown + trashed=false; content decoded UTF-8 errors=replace
 V37: auth = service account + domain-wide delegation; file creds -> with_subject(email); ADC -> iam.Signer credentials w/ subject=email; no OAuth user login
-V38: Drive tools registered sequential=True — serializes parallel dispatch (shared httplib2.Http thread-unsafe, max concurrent transport = 1); transport faults (HttpError, TimeoutError, OSError) -> structured drive_unavailable dict, never bare raise
+V38: Drive tools registered sequential=True (shared httplib2.Http thread-unsafe); transport faults (HttpError, TimeoutError, OSError) → structured drive_unavailable dict, never bare raise; → .claude/check-extras.md §V.38
 V39: agent tool failure -> error dict {error, message}, never exception to agent; agent re-drafts via tool-error path
 V40: protocol fragment naming tools ! name >= 2 distinct tools, never exactly 1
 V41: KB grounding rules (search-first, 2-search budget then single list, read top >= 3 hits, per-target search budget on compare) live in the workflow definition's `instructions` field (§V.103), not a code-defined template protocol fragment; inbound-google-drive template binds the Drive tool set but carries no grounding fragment
@@ -90,12 +90,12 @@ V46: template name = <direction>-<data-system>; prefix == direction field
 V47: Anthropic model config — caching flags (both calls) + model settings (workflow agent only, classifier excluded) + telemetry attribute names — → .claude/check-extras.md §V.47
 V48: Anthropic HTTP timeout = 240s (4x httpx default); APITimeoutError + httpx.ReadTimeout classified terminal not transient — mid-turn tool side-effects make retry unsafe
 V49: bounded auto-retry — 4 attempts, execute_task per-task classification, manual retry = failed/cancelled only — retry matrix → .claude/check-extras.md §V.49
-V51: every logfire.exception site reachable from `mailpilot run` ! paired operator_event("error", source=..., message=...); contract test sweeps run-reachable modules for logfire.exception sites — each ! operator_event("error") in same except block
+V51: every logfire.exception site reachable from `mailpilot run` ! paired operator_event("error", source=..., message=...); contract test sweeps run-reachable modules; → .claude/check-extras.md §V.51
 V52: logfire.configure(environment=settings.logfire_environment) -> spans carry deployment_environment; cloud queries filter by env
 V53: agent tool spans come from logfire.instrument_pydantic_ai() (gen_ai.tool.name attr); no logfire.span inside agent tools; agents carry explicit names mailpilot.classifier + mailpilot.workflow
 V54: CLI mutation = logfire.span + operator_event; constraint code vocabulary; SystemExit absorbed at boundary — → .claude/check-extras.md §V.54
 V55: tool_response span attr exempt from Logfire scrubbing; all other attrs scrubbed
-V62: /release extends /gh:release — post-tag: push main + v<x.y.z>, uv build asserts dist/mailpilot-<x.y.z>-py3-none-any.whl exists, gh release create v<x.y.z> --verify-tag --notes-from-tag attaches wheel; confirm-before-mutate gate covers push + upload; version source = pyproject.toml [project].version; deploy = published wheel asset — tag-only release not deployable
+V62: /release extends /gh:release — post-tag: push main + v<x.y.z>, uv build + gh release create v<x.y.z> --verify-tag + wheel attach; confirm-before-mutate gate; version source = pyproject.toml; deploy = published wheel — → .claude/check-extras.md §V.62
 V67: persisted outbound in_reply_to + references_header mirror wire MIME headers exactlyV69: tick classifying >= 1 inbound -> next tick forces full sweep + wakeup_event set
 V71: per-task reply-rejection counter (reply_rejection_scope) — format_check rejections cap 3; past cap bypasses; outside scope always enforces
 V72: company.profile JSONB validated vs CompanyProfile — required {summary, products, target_customers, sources} non-empty; timezone optional, null on multi-zone; malformed -> validation_error
@@ -116,9 +116,7 @@ V86: secret settings (anthropic_api_key, logfire_token, database_url) redacted a
 V87: cross-account isolation — thread + RFC message-id lookups scoped to account_id; agent read_email cross-account -> None (prompt-injection guard)
 V88: entity enums enforced by schema CHECK — workflow.template/type/status, enrollment.status, email.direction/status/route_method, task.status, activity.type; value sets authoritative in schema.sql
 V89: singleton rows — schema_metadata id=1, sync_status id='singleton'
-V90: natural-key UNIQUE constraints = canonical CLI identifiers; unknown key -> not_found — → .claude/check-extras.md §V.90
-V91: tag/note mutation + its activity row commit in one transaction — both or neither; `note remove` (§V.14) deletes the note row only + writes no activity — prior note_added rows survive as the append-only trail
-V92: email render = Markdown -> HTML inline styles only, no stylesheet; THEMES = {blue, green, orange, purple, red, slate}; None/unknown theme -> blue fallback
+V90: natural-key UNIQUE constraints = canonical CLI identifiers; unknown key -> not_found — → .claude/check-extras.md §V.90V92: email render = Markdown -> HTML inline styles only, no stylesheet; THEMES = {blue, green, orange, purple, red, slate}; None/unknown theme -> blue fallback
 V93: operator_event -> stderr single line "HH:MM:SS event=NAME k=v ..."; newlines collapsed to space; whitespace values double-quoted, inner quotes escaped
 V94: CLI FK validation precedes mutation — referenced entity missing -> error envelope, no partial write
 V95: contact lead-metadata flat cols: title TEXT, email_confidence INT; NULL = high risk; --max-email-confidence includes NULL — → .claude/check-extras.md §V.95
@@ -160,9 +158,9 @@ V129: agent-supplied timestamps: grounded (current-date injected per run via `@a
 V131: terminal inbound agent failure sends one `_FALLBACK_ACKNOWLEDGEMENT` fixed reply — gate: inbound `email_id` set AND reply-emitted contextvar unset; outbound first-touch stays silent; fallback-send failure logs error + marks task failed; → .claude/check-extras.md §V.131
 V132: workflow stats funnel — single SQL aggregate, 8 stages, enrollment grain, envelope {workflow_stats} — → .claude/check-extras.md §V.132
 
-V133: task stats aggregate — single SQL (no LLM), task grain, envelope {task_stats} (aggregate not a task row, cf §V.132); filters --workflow-id (§V.107) + --trigger (Enum on COALESCE(context->>'trigger','') vs §V.26 taxonomy, never reads description, shared w/ `task list`); returns per-status {pending,completed,failed,cancelled}+total + distinct_scheduled_days + first/last scheduled_at; --bucket-tz IANA (default UTC) buckets distinct_scheduled_days only; --trigger enrollment_schedule = first-touch select (§V.32)
+V133: task stats aggregate — single SQL, task grain, envelope {task_stats}; filters --workflow-id (§V.107) + --trigger (§V.26); returns per-status {pending,completed,failed,cancelled}+total + distinct_scheduled_days + first/last scheduled_at; → .claude/check-extras.md §V.133
 
-V134: `workflow check` = read-only wording-integrity check, mirrors `db check`/§V.108 (live 2-way SHA-256, no stored column) over wording fields {template, theme, goal, instructions}, keyed by workflow `name` (§V.90 global-unique join key, ! a hashed field); each `workflows/*.toml` read for its `name` field (! file stem), compared to workflow rows by name; states in {`in_sync` (name both sides + hash equal), `out_of_sync` (name both sides + hash differs, re-import due), `not_imported` (name in catalog def, no row), `orphaned` (name in row, no catalog def)}; def fields import-only (§V.103) so mismatch = catalog ahead, no row-ahead state; no `conflict` state — duplicate `name` across files import-forbidden (§V.103 name==unique-stem), hand-edit-only, last def wins; report-only envelope {"workflow_check": {...}, "ok": true} (aggregate not a workflow row, cf §V.132), not a deploy gate; §V.103 import-time name==stem enforcement untouched — check reads `name` field not stem
+V134: `workflow check` = read-only wording-integrity check per §V.108 shape — SHA-256 over {template,theme,goal,instructions} keyed by `name`; states {in_sync,out_of_sync,not_imported,orphaned}; report-only envelope {"workflow_check"}; not a deploy gate; → .claude/check-extras.md §V.134
 
 ## §T TASKS
 
@@ -172,18 +170,18 @@ T167|x|impl §V.10/§V.15/§V.80/§V.114 — `enable_company`/`enable_contact`/`
 T168|x|collapse enrollment to {active, disabled} — drop paused; migration 004; remove `enrollment update` + toggle path|V15,V83,V108,V88
 T169|x|impl §V.118(+) + §V.79(∆) — `disable_account`/`enable_account` in database.py; disabled gate in sync loop + send/reply + `account list`|V79
 T170|x|drop dead `tag_disabled` activity.type — schema.sql + models.py + migration 005|V10,V17,V108
-T171|x|impl §V.96(∆) + §V.116(∆) per §B.101 — typed `reason_code` enum; `contacts-exhausted` tag; `--no-tag` repeatable|V96,V116,B101
+T171|x|impl §V.96(∆) + §V.116(∆) — typed `reason_code` enum; `contacts-exhausted` tag; `--no-tag` repeatable|V96,V116,B101
 T172|x|impl §V.119 — `make db-backup` target; `make clean` depends on db-backup|V119
-T173|x|impl §V.105(∆) per §B.102 — split brittle qa-in-015 token; add `_is_brittle_inscope_token` atomicity guard|V105,B102
-T174|x|impl §V.120(+) per §B.103 — `_sent_reply` + `AgentCompletedWithoutReplyError`; inbound-trigger enforcement|V120,B103
+T173|x|impl §V.105(∆) — split brittle qa-in-015 token; add `_is_brittle_inscope_token` atomicity guard|V105,B102
+T174|x|impl §V.120(+) — `_sent_reply` + `AgentCompletedWithoutReplyError`; inbound-trigger enforcement|V120,B103
 T175|x|impl §V.45(∆) — `_MUST_SEND` fragment in templates.py; compose into protocol_post for all three templates|V45,V120
-T176|x|impl §V.121(+) + §V.119(∆) per §B.104 — `db export`/`db import` snapshot bundle; drop per-entity export/import|V121,V119,B104
-T177|x|impl §V.75(∆) per §B.105 — classify 429|5xx mid-batch as retained+retried; checkpoint never advances past unstored messages|V75,B105
-T178|x|impl §V.120(∆) per §B.106 — widen send-guard to outbound first reach-out triggers|V120,B106
-T179|x|impl §V.54(∆) per §B.107 — absorb controlled SystemExit at `cli_mutation` boundary; parent span stays clean|V54,B107
-T180|x|impl §V.7(∆) + §V.122(+) per §B.108 — `recipients` in EmailSummary; verify_delivery.py alias-keyed delivery verification|V7,V122,B108
-T181|x|impl §V.105(∆) per §B.109 — flip `_is_brittle_inscope_token` to allowlist; atomize qa-in-006 + qa-in-009 tokens|V105,B109
-T182|x|impl §V.123(+) per §B.110 — `cancel_enrollment_followup_tasks`; call from routing.route_email on inbound match|V123,B110,V28,V32
+T176|x|impl §V.121(+) + §V.119(∆) — `db export`/`db import` snapshot bundle; drop per-entity export/import|V121,V119,B104
+T177|x|impl §V.75(∆) — classify 429|5xx mid-batch as retained+retried; checkpoint never advances past unstored messages|V75,B105
+T178|x|impl §V.120(∆) — widen send-guard to outbound first reach-out triggers|V120,B106
+T179|x|impl §V.54(∆) — absorb controlled SystemExit at `cli_mutation` boundary; parent span stays clean|V54,B107
+T180|x|impl §V.7(∆) + §V.122(+) — `recipients` in EmailSummary; verify_delivery.py alias-keyed delivery verification|V7,V122,B108
+T181|x|impl §V.105(∆) — flip `_is_brittle_inscope_token` to allowlist; atomize qa-in-006 + qa-in-009 tokens|V105,B109
+T182|x|impl §V.123(+) — `cancel_enrollment_followup_tasks`; call from routing.route_email on inbound match|V123,B110,V28,V32
 T183|x|impl §V.78(∆) — expose optional `thread_id` on `send_email` agent tool; outbound thread-continuation|V78
 T184|x|impl §V.124(+) + §V.103(∆) — rename `workflow.objective` → `goal`; migration 006; update classify.py + invoke.py + TOML files|V124,V103,V108
 T185|x|impl §V.125(+) — `meeting` + `meeting_attendee` tables; migration 007; database.py CRUD|V125,V108
@@ -191,17 +189,17 @@ T186|x|impl §V.126(+) + §V.128(+) — CalendarClient; sync-loop poll + upsert 
 T187|x|impl §V.127(+) + §V.120(∆) — `conclude_enrollment` agent tool; drop `record_enrollment_outcome` from tool set|V127,V120,V15
 T188|x|impl §V.125/§I — `meeting` CLI noun: list|view|add|update|cancel|V125,V126
 T189|x|impl §V.126(∆) — `_poll_account_calendar` helper; wire into `account sync` per-account calendar pass|V126,V125,V128,V107
-T190|x|impl §V.129(+) per §B.111 — date-grounding in `@agent.instructions`; past-date guard at create_task + conclude_enrollment.reschedule_at|V129,B111,V127,V32
-T191|x|impl §V.8(∆) per §B.112 — `list_meeting_attendees`; MeetingView superset; list_meetings compact attendee summary|V8,B112,V125,V96
+T190|x|impl §V.129(+) — date-grounding in `@agent.instructions`; past-date guard at create_task + conclude_enrollment.reschedule_at|V129,B111,V127,V32
+T191|x|impl §V.8(∆) — `list_meeting_attendees`; MeetingView superset; list_meetings compact attendee summary|V8,B112,V125,V96
 T192|x|impl §V.130(+) — `anthropic_thinking` + `anthropic_effort` settings; thread into `_build_anthropic_model`|V47
-T193|x|impl §V.42(∆) + §V.45(∆) per §B.114 — extract `_SPEC_TABLE` fragment; inbound-templates-only composition|V42,V45,B114
-T194|x|impl §V.130(∆) per §B.115 — `anthropic_max_tokens` setting; always-passed in `_build_anthropic_model`|V47,B115
-T195|x|impl §V.131(+) per §B.116 — `_FALLBACK_ACKNOWLEDGEMENT` + reply-emitted flag; fallback send in `_handle_agent_failure` for inbound failures|V131,B116,V48,V49,V71
+T193|x|impl §V.42(∆) + §V.45(∆) — extract `_SPEC_TABLE` fragment; inbound-templates-only composition|V42,V45,B114
+T194|x|impl §V.130(∆) — `anthropic_max_tokens` setting; always-passed in `_build_anthropic_model`|V47,B115
+T195|x|impl §V.131(+) — `_FALLBACK_ACKNOWLEDGEMENT` + reply-emitted flag; fallback send in `_handle_agent_failure` for inbound failures|V131,B116,V48,V49,V71
 T196|x|impl §V.132 disposition persistence — record_enrollment_outcome disposition param writes detail.disposition; conclude_enrollment forwards disposition + booking-conclusion passes meeting_booked; JSONB key no migration|V132,V127,V128,V15
 T197|x|impl §V.132 + §I — `workflow stats` funnel: single-SQL aggregation fn in database.py + CLI `workflow stats` verb + `{"workflow_stats"}` envelope|V132,V107,V4,V54
-T198|x|impl §V.14(∆) + §I per #168 — `delete_notes` fn + CLI `note remove --contact-email|--company-domain` (clear an owner's notes); campaign-test setup clears prospect notes pre-Touch-1 + send_touch1 re-enables prospect between scenarios|V14,V91,B118
-T199|x|redesign §V.14(∆) — `note remove <note_id>` single-note hard-delete replaces owner bulk-clear; `delete_note(note_id)` fn replaces `delete_notes`; campaign-test reset (setup + cleanup) loops `note list` + remove-by-id via `clear_contact_notes`|V14,V91
-T200|x|impl §V.90(∆) per §B.121 — lowercase `email` natural key in create_contact/get_contact_by_email/create_or_get_contact_by_email/create_contacts_bulk/get_contacts_by_emails before match+insert; migration merges existing case-variant duplicate contacts onto canonical lowercase row|V90,B121
+T198|x|impl §V.14(∆) + §I — `delete_notes` fn + CLI `note remove --contact-email|--company-domain` (clear an owner's notes); campaign-test setup clears prospect notes pre-Touch-1 + send_touch1 re-enables prospect between scenarios|V14,B118
+T199|x|redesign §V.14(∆) — `note remove <note_id>` single-note hard-delete replaces owner bulk-clear; `delete_note(note_id)` fn replaces `delete_notes`; campaign-test reset (setup + cleanup) loops `note list` + remove-by-id via `clear_contact_notes`|V14
+T200|x|impl §V.90(∆) — lowercase `email` natural key in create_contact/get_contact_by_email/create_or_get_contact_by_email/create_contacts_bulk/get_contacts_by_emails before match+insert; migration merges existing case-variant duplicate contacts onto canonical lowercase row|V90,B121
 T201|x|impl §V.133(+) + §I — `task stats` single-SQL aggregate fn in database.py + CLI `task stats` verb + `{"task_stats"}` envelope; `--trigger` Enum filter on `context->>'trigger'` for `task list` + `task stats`; `--bucket-tz` day-bucketing for distinct_scheduled_days|V133,V107,V26,V32,V4,V115
 T202|x|impl §V.90(∆) + §V.107(∆) — workflow joins keyed entities, natural key `name`; migration 009 + schema.sql: `workflow.name` global UNIQUE (drop `(account_id, name)` composite) + kebab CHECK, one-time normalize existing names to kebab; polymorphic resolver resolves workflow by name case-insensitively; workflow leaves keyless list|V90,V107,V108,V103
 T203|x|impl §V.103(∆) — `workflow import` enforces `name` = kebab file-stem + global unique; def fields {name,template,theme,goal,instructions} import-only; `workflow update` restricted to non-def fields (status, account binding)|V103,V107,V90

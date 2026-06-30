@@ -602,3 +602,61 @@ Trigger: `src/mailpilot/database.py` or `src/mailpilot/cli.py` changed.
 - `rg 'meeting_booked\|contact_later\|do_not_contact' src/mailpilot/database.py | grep stats` -> disposition stages
 - `rg '"workflow_stats"' src/mailpilot/cli.py` -> envelope key correct
 - `rg 'DISTINCT.*contact_id\b' src/mailpilot/database.py | grep stats` -> enrollment grain aggregate
+
+## §V.22 — is_routed gate: single route pass per email
+
+At most 1 `routing.route_email` span lifecycle per `email_id`. Gate: every routing outcome (§V.20) sets `is_routed=TRUE`; a subsequent History-API re-delivery or repeat sync sweep skips routing entirely on an already-routed message. Duplicate route spans inflate metrics and mask classifier regressions.
+
+Trigger: `src/mailpilot/routing.py` or `src/mailpilot/sync.py` changed.
+- `rg 'is_routed\b' src/mailpilot/routing.py src/mailpilot/sync.py` -> is_routed gate present
+- `rg 'is_routed.*True\b\|True.*is_routed' src/mailpilot/database.py` -> is_routed set on every outcome
+- `rg 'if.*is_routed\b' src/mailpilot/routing.py src/mailpilot/sync.py` -> gate check before route call
+
+## §V.38 — Drive tools sequential=True
+
+All Drive-KB agent tools (`list_drive_markdown`, `read_drive_markdown`, `search_drive_markdown`) registered with `sequential=True` in the Pydantic-AI tool set; serializes parallel dispatch. Rationale: shared `httplib2.Http` transport is thread-unsafe; max concurrent transport = 1. Transport faults (`HttpError`, `TimeoutError`, `OSError`) → structured `drive_unavailable` error dict, NEVER bare raise to agent (§V.39).
+
+Trigger: `src/mailpilot/agent/tools.py` changed.
+- `rg 'sequential.*True\|True.*sequential' src/mailpilot/agent/tools.py | grep drive` -> sequential=True on Drive tools
+- `rg 'drive_unavailable\b' src/mailpilot/agent/tools.py` -> error dict key present
+- `rg 'HttpError\b\|TimeoutError\b\|OSError\b' src/mailpilot/agent/tools.py | grep drive` -> all three fault classes caught
+
+## §V.51 — logfire.exception + operator_event("error") pairing
+
+Every `logfire.exception(...)` call in the call-graph reachable from `mailpilot run` MUST appear in the same `except` block as `operator_event("error", source=..., message=...)`. A contract test sweeps all run-reachable modules for `logfire.exception` sites and asserts the paired `operator_event("error")` is present in the same except block — failure = terminal error produces no operator stderr line.
+
+Trigger: any `src/mailpilot/**/*.py` changed.
+- `rg -n 'logfire\.exception\b' src/mailpilot/` -> enumerate exception sites reachable from `mailpilot run`
+- For each hit file: verify same except block has `operator_event("error"` within 5 lines
+- `rg 'test.*logfire.*exception\|logfire.*exception.*test' src/mailpilot/tests/` -> contract test present
+
+## §V.62 — /release command recipe
+
+`/release` extends `/gh:release`. Post-tag sequence: (1) push `main` + `v<x.y.z>` tag; (2) `uv build` — asserts `dist/mailpilot-<x.y.z>-py3-none-any.whl` exists; (3) `gh release create v<x.y.z> --verify-tag --notes-from-tag` attaches wheel as downloadable asset. Confirm-before-mutate gate covers push + upload (single gate before all mutations). Version source = `pyproject.toml [project].version`. Deploy = published wheel asset — a tag-only release without the wheel is not deployable.
+
+Trigger: `.claude/skills/release/**` changed.
+- `rg 'uv build\b' .claude/skills/release/SKILL.md` -> uv build step present
+- `rg 'gh release create\b' .claude/skills/release/SKILL.md` -> release create present
+- `rg 'confirm\b.*push\|push.*confirm\b\|confirm.*before.*mutate' .claude/skills/release/SKILL.md` -> confirm gate covers push + upload
+- `rg 'dist/mailpilot-.*\.whl\b' .claude/skills/release/SKILL.md` -> wheel artifact asserted
+
+## §V.133 — task stats aggregate
+
+`task stats` = read-only aggregate, single SQL query, task grain, no LLM. Envelope `{"task_stats": {...}, "ok": true}` (aggregate, not a task entity row, cf §V.132). Filter options: `--workflow-id` (polymorphic §V.107); `--trigger` Enum filter on `COALESCE(context->>'trigger', '')` against §V.26 taxonomy — NEVER reads `description`. Shared `--trigger` decorator with `task list`. Returns: per-status counts `{pending, completed, failed, cancelled}` + `total` + `distinct_scheduled_days` (day-bucketed count) + `first_scheduled_at` + `last_scheduled_at`. `--bucket-tz <IANA>` (default UTC) buckets `distinct_scheduled_days` only; per-status counts are timezone-independent. `--trigger enrollment_schedule` selects first-touch tasks (§V.32).
+
+Trigger: `src/mailpilot/database.py` or `src/mailpilot/cli.py` changed.
+- `rg 'task_stats\b' src/mailpilot/database.py` -> aggregate fn present
+- `rg 'distinct_scheduled_days\b' src/mailpilot/database.py` -> day-bucket field present
+- `rg '"task_stats"' src/mailpilot/cli.py` -> envelope key correct
+- `rg "COALESCE.*trigger\b\|context.*trigger" src/mailpilot/database.py | grep task` -> trigger from context JSONB not description
+- `rg '"--trigger".*Choice\b' src/mailpilot/cli.py | grep task` -> trigger is a Choice (closed enum)
+
+## §V.134 — workflow check: wording-integrity states
+
+`workflow check` = read-only live 2-way SHA-256 over wording fields `{template, theme, goal, instructions}`. Join key = workflow `name` (§V.90 global-unique, NOT a hashed field). Each `workflows/*.toml` read for its `name` field (NOT file stem, §V.103); row set read from DB; joined by name. States: `in_sync` (name both sides + hash equal); `out_of_sync` (name both sides + hash differs → re-import due); `not_imported` (name in catalog def, no DB row); `orphaned` (name in DB row, no catalog def). No `conflict` state — duplicate `name` across files is import-forbidden (§V.103 name==unique-stem), hand-edit-only. No `row_ahead` state — def fields import-only (§V.103) so any mismatch = catalog ahead only. Report-only envelope `{"workflow_check": {...}, "ok": true}` (aggregate, not a workflow row, cf §V.132); NOT a deploy gate. Import-time `name==stem` enforcement (§V.103) is separate — `workflow check` reads the TOML `name` field, not the file stem.
+
+Trigger: `src/mailpilot/cli.py` changed.
+- `rg '"in_sync"\|"out_of_sync"\|"not_imported"\|"orphaned"' src/mailpilot/cli.py src/mailpilot/database.py` -> all 4 states present
+- `rg 'workflow_check\b' src/mailpilot/cli.py` -> envelope key present
+- `rg 'sha256\b\|hashlib.*sha256' src/mailpilot/cli.py src/mailpilot/database.py | grep workflow` -> SHA-256 hash present
+- `rg 'toml.*\["name"\]\|tomllib.*name\b\|name.*toml' src/mailpilot/cli.py src/mailpilot/database.py | grep workflow_check` -> reads `name` field from TOML (not file stem)
