@@ -56,8 +56,9 @@ the `mailpilot` console script, and the package are importable. Scripts live in
   for the test window and stops it at teardown. **Teardown is mandatory** — run
   it even if a phase failed (manual fallback: `pkill -f "mailpilot run"`).
 - No outbound workflow exists (and must not): the reply lands in
-  `outbound@lab5.ca`, which has no active workflow, so routing skips it — that
-  is what prevents a reply-loop.
+  `outbound@lab5.ca`, which has no active workflow, so routing marks it
+  `skipped_no_workflows` (§V.76) and sends no second reply — that is what
+  prevents a reply-loop.
 
 ## Model orchestration
 
