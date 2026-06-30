@@ -601,19 +601,24 @@ def test_workflow_update_changed_diff(
     mock_connection: MagicMock,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    before = _make_workflow(name="Old")
-    after = _make_workflow(name="New")
+    other_id = "01234567-0000-7000-0000-0000000000bb"
+    before = _make_workflow()
+    other = _make_account(id=other_id, email="other@lab5.ca")
+    after = _make_workflow(account_id=other_id, account_email="other@lab5.ca")
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=before),
+        patch("mailpilot.database.get_account", return_value=other),
         patch("mailpilot.database.update_workflow", return_value=after),
     ):
-        result = runner.invoke(main, ["workflow", "update", before.id, "--name", "New"])
+        result = runner.invoke(
+            main, ["workflow", "update", before.id, "--account-email", other_id]
+        )
 
     assert result.exit_code == 0, result.output
     err = result.stderr
-    assert "changed=['name']" in err
+    assert "changed=['account_id']" in err
 
 
 def test_workflow_start_emits_status_change(
@@ -665,11 +670,11 @@ def test_workflow_import_idempotent_on_unchanged_rows(
     tmp_path: pathlib.Path,
 ) -> None:
     """Re-run import on already-up-to-date rows -> every row event has changed=[]."""
-    existing = _make_workflow(name="Outbound", goal="x", instructions="y", theme="blue")
+    existing = _make_workflow(name="outbound", goal="x", instructions="y", theme="blue")
     account = _make_account()
     toml_file = tmp_path / "outbound.toml"
     toml_file.write_text(
-        'name = "Outbound"\n'
+        'name = "outbound"\n'
         'template = "outbound-general"\n'
         'theme = "blue"\n'
         'goal = "x"\n'

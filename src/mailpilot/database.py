@@ -2220,9 +2220,11 @@ def update_workflow(
 ) -> Workflow | None:
     """Update a workflow by ID.
 
-    Only ``name``, ``goal``, and ``instructions`` are updatable.
-    Status transitions use ``activate_workflow()`` / ``pause_workflow()``.
-    ``type`` and ``account_id`` are immutable after creation.
+    Writable fields: the def fields ``name``, ``goal``, ``instructions``,
+    ``theme`` (import-only writers per §V.103) plus the non-def ``account_id``
+    (account re-binding, the sole field ``workflow update`` exposes). Status
+    transitions use ``activate_workflow()`` / ``pause_workflow()``. ``type`` and
+    ``template`` are immutable after creation (§V.44).
 
     Args:
         connection: Open database connection.
@@ -2232,7 +2234,7 @@ def update_workflow(
     Returns:
         Updated workflow, or None if not found.
     """
-    allowed = {"name", "goal", "instructions", "theme"}
+    allowed = {"name", "goal", "instructions", "theme", "account_id"}
     if "template" in fields:
         raise ValueError(
             "workflow.template is immutable; "

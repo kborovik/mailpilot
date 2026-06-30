@@ -1479,15 +1479,17 @@ def test_update_workflow(database_connection: psycopg.Connection[dict[str, Any]]
     assert updated.goal == "Book demo"
 
 
-def test_update_workflow_ignores_immutable_fields(
+def test_update_workflow_rebinds_account(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """Non-allowed fields like `account_id` are silently dropped from update."""
+    """§V.103: `account_id` is a non-def field, so update re-binds the account."""
     account = make_test_account(database_connection)
+    other = make_test_account(database_connection, email="other@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
-    updated = update_workflow(database_connection, workflow.id, account_id="other")
+    updated = update_workflow(database_connection, workflow.id, account_id=other.id)
     assert updated is not None
-    assert updated.account_id == account.id
+    assert updated.account_id == other.id
+    assert updated.account_email == "other@example.com"
 
 
 def test_update_workflow_rejects_template_change(

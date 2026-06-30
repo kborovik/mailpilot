@@ -2632,68 +2632,43 @@ def workflow_create(
 
 @workflow.command("update")
 @click.argument("workflow_ref")
-@click.option("--name", default=None, help="Workflow name.")
-@click.option("--goal", default=None, help="Workflow goal.")
 @click.option(
-    "--instructions",
+    "--account-email",
     default=None,
-    help="Workflow instructions (inline text).",
-)
-@click.option(
-    "--instructions-file",
-    default=None,
-    type=click.Path(exists=True, dir_okay=False),
-    help="Path to a file with the workflow instructions (system prompt).",
-)
-@click.option(
-    "--theme",
-    default=None,
-    help="Email color theme (blue, green, orange, purple, red, slate).",
+    help="Re-bind the owning Gmail account (email or ID).",
 )
 def workflow_update(
     workflow_ref: str,
-    name: str | None,
-    goal: str | None,
-    instructions: str | None,
-    instructions_file: str | None,
-    theme: str | None,
+    account_email: str | None,
 ) -> None:
-    """Update a workflow by name or ID."""
+    """Update a workflow's non-def fields by name or ID.
+
+    Def fields ``{name, template, theme, goal, instructions}`` are import-only:
+    edit the ``workflows/*.toml`` and re-import to change them. ``update`` mutates
+    only non-def fields -- account binding here, status via ``start`` / ``stop``.
+    """
+    # Def fields import-only; update restricted to non-def fields per §V.103.
     from mailpilot.database import get_workflow, initialize_database, update_workflow
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    if theme is not None:
-        _validate_theme(theme)
-    if instructions is not None and instructions_file is not None:
+    if account_email is None:
         output_error(
-            "--instructions and --instructions-file are mutually exclusive",
+            "nothing to update: provide --account-email to re-bind the account "
+            "(def fields are import-only -- edit the TOML and re-import)",
             "validation_error",
         )
-    resolved = _resolve_instructions(instructions, instructions_file)
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         workflow_id = _resolve_workflow_id(connection, workflow_ref)
         before = get_workflow(connection, workflow_id)
         if before is None:
             output_error(f"workflow not found: {workflow_ref}", "not_found")
-        fields: dict[str, object] = {}
-        if name is not None:
-            fields["name"] = name
-        if goal is not None:
-            fields["goal"] = goal
-        if resolved is not None:
-            fields["instructions"] = resolved
-        if theme is not None:
-            fields["theme"] = theme
+        account_id = _resolve_account(connection, account_email).id
         with cli_mutation("workflow", "update", entity_id=workflow_id):
-            updated = update_workflow(connection, workflow_id, **fields)
+            updated = update_workflow(connection, workflow_id, account_id=account_id)
             if updated is None:
                 output_error(f"workflow not found: {workflow_id}", "not_found")
-            changed = [
-                field
-                for field in ("name", "goal", "instructions", "theme")
-                if getattr(before, field) != getattr(updated, field)
-            ]
+            changed = ["account_id"] if before.account_id != updated.account_id else []
             operator_event(
                 "workflow.update",
                 entity_id=workflow_id,
@@ -2815,14 +2790,15 @@ def workflow_start(workflow_ref: str) -> None:
                 message = str(exc)
                 if "goal" in message:
                     output_error(
-                        f"cannot start: goal is empty. "
-                        f'Run: workflow update {workflow_id} --goal "..."',
+                        "cannot start: goal is empty. Set 'goal' in the "
+                        "workflow's TOML and re-import: workflow import --file <path>",
                         "invalid_state",
                     )
                 if "instructions" in message:
                     output_error(
-                        f"cannot start: instructions are empty. "
-                        f'Run: workflow update {workflow_id} --instructions "..."',
+                        "cannot start: instructions are empty. Set 'instructions' "
+                        "in the workflow's TOML and re-import: "
+                        "workflow import --file <path>",
                         "invalid_state",
                     )
                 output_error(message, "invalid_state")
@@ -2876,18 +2852,6 @@ def _toml_basic_string(value: str) -> str:
         .replace("\t", "\\t")
     )
     return f'"{escaped}"'
-
-
-def _workflow_slug(name: str) -> str:
-    """Derive a filesystem-safe ``*.toml`` stem from a workflow ``name``.
-
-    Import keys on the in-file ``name`` field, not the filename, so the slug is
-    purely cosmetic -- it only needs to be deterministic for stable diffs.
-    """
-    import re
-
-    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-    return slug or "workflow"
 
 
 def _workflow_to_toml(workflow: Any) -> str:
@@ -2944,7 +2908,7 @@ def workflow_export(account_email: str | None, out_dir: str) -> None:
         directory.mkdir(parents=True, exist_ok=True)
         written: list[dict[str, str]] = []
         for current in workflows:
-            path = directory / f"{_workflow_slug(current.name)}.toml"
+            path = directory / f"{current.name}.toml"
             path.write_text(_workflow_to_toml(current))
             written.append({"name": current.name, "path": str(path)})
         output({"workflows": written})
@@ -2981,7 +2945,7 @@ def _import_workflow_create(
         return {
             "name": name,
             "error": "duplicate",
-            "message": (f"workflow {name!r} already exists for account {account_id}"),
+            "message": f"workflow {name!r} already exists (name is globally unique)",
         }
     extras: dict[str, object] = {}
     goal = entry.get("goal")
@@ -3045,8 +3009,37 @@ def _import_workflow_update(
     return {"name": current.name, "action": "updated"}
 
 
+def _validate_workflow_import_name(name: str, stem: str) -> str | None:
+    """Return an error if ``name`` is not a valid import key, else None (§V.103).
+
+    The name is the canonical cross-environment key (§V.107). It must be
+    kebab-shaped (lowercase letters, digits, single hyphens, mirroring the
+    schema CHECK), must not be UUID-shaped (resolver ambiguity, §V.107), and
+    must equal the source file stem so the file-to-row bijection holds.
+    """
+    import re
+
+    if _looks_like_uuid(name):
+        return f"workflow name {name!r} must not be UUID-shaped"
+    if not re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", name):
+        return (
+            f"workflow name {name!r} must be kebab-case: lowercase letters, "
+            "digits, single hyphens, no leading/trailing hyphen"
+        )
+    if name != stem:
+        return (
+            f"workflow name {name!r} must equal the file stem {stem!r}; "
+            "rename the file or the 'name' field so they match"
+        )
+    return None
+
+
 def _import_workflow_row(
-    connection: Any, account_id: str, existing: dict[str, Any], entry: dict[str, Any]
+    connection: Any,
+    account_id: str,
+    existing: dict[str, Any],
+    stem: str,
+    entry: dict[str, Any],
 ) -> dict[str, object]:
     from mailpilot.operator_log import operator_event
 
@@ -3063,6 +3056,19 @@ def _import_workflow_row(
             "name": name if isinstance(name, str) else "",
             "error": "validation_error",
             "message": "row missing required 'name' or 'template'",
+        }
+    name_error = _validate_workflow_import_name(name, stem)
+    if name_error is not None:
+        operator_event(
+            "workflow.import",
+            account_id=account_id,
+            name=name,
+            changed=[],
+        )
+        return {
+            "name": name,
+            "error": "validation_error",
+            "message": name_error,
         }
     current = existing.get(name)
     if current is None:
@@ -3088,20 +3094,21 @@ def _import_workflow_row(
 
 def _parse_toml_catalog_dir(
     path: pathlib.Path,
-) -> tuple[list[dict[str, Any]], list[dict[str, object]]]:
-    """Glob ``*.toml`` in a catalog dir; collect each as an entry (§V.103).
+) -> tuple[list[tuple[str, dict[str, Any]]], list[dict[str, object]]]:
+    """Glob ``*.toml`` in a catalog dir; collect each as a (stem, entry) pair (§V.103).
 
-    A file that fails to parse becomes a per-row error so the rest of the
-    catalog still imports (§V.63).
+    Each entry is paired with its file stem so import can enforce the
+    ``name == stem`` bijection (§V.103). A file that fails to parse becomes a
+    per-row error so the rest of the catalog still imports (§V.63).
     """
     import tomllib
 
-    entries: list[dict[str, Any]] = []
+    entries: list[tuple[str, dict[str, Any]]] = []
     pre_errors: list[dict[str, object]] = []
     for toml_path in sorted(path.glob("*.toml")):
         try:
             with toml_path.open("rb") as handle:
-                entries.append(tomllib.load(handle))
+                entries.append((toml_path.stem, tomllib.load(handle)))
         except tomllib.TOMLDecodeError as exc:
             pre_errors.append(
                 {
@@ -3115,14 +3122,15 @@ def _parse_toml_catalog_dir(
 
 def _load_workflow_import_entries(
     file: str | None,
-) -> tuple[list[dict[str, Any]], list[dict[str, object]]]:
-    """Parse a ``workflow import`` source into entries + per-row pre-errors (§V.103).
+) -> tuple[list[tuple[str, dict[str, Any]]], list[dict[str, object]]]:
+    """Parse a ``workflow import`` source into (stem, entry) pairs + errors (§V.103).
 
     TOML-only per §V.103, §V.63 (no JSON, no stdin). Dispatch by shape: a
     directory globs ``*.toml`` (catalog batch, per-file parse errors become
-    per-row pre-errors) and a single ``.toml`` file parses to one entry. A
-    missing ``--file`` or a non-TOML path exits via ``output_error`` with
-    ``validation_error``.
+    per-row pre-errors) and a single ``.toml`` file parses to one entry. Each
+    entry carries its file stem so import can enforce the ``name == stem``
+    bijection (§V.103). A missing ``--file`` or a non-TOML path exits via
+    ``output_error`` with ``validation_error``.
     """
     import pathlib
     import tomllib
@@ -3138,7 +3146,7 @@ def _load_workflow_import_entries(
     if path.suffix == ".toml":
         try:
             with path.open("rb") as handle:
-                return [tomllib.load(handle)], []
+                return [(path.stem, tomllib.load(handle))], []
         except tomllib.TOMLDecodeError as exc:
             output_error(f"malformed TOML: {exc}", "validation_error")
     output_error(
@@ -3199,8 +3207,8 @@ def workflow_import(account_email: str | None, file: str | None) -> None:
             existing = {w.name: w for w in list_workflows_full(connection, account_id)}
             results: list[dict[str, object]] = [*pre_errors]
             results.extend(
-                _import_workflow_row(connection, account_id, existing, entry)
-                for entry in entries
+                _import_workflow_row(connection, account_id, existing, stem, entry)
+                for stem, entry in entries
             )
             output({"workflows": results})
     finally:
