@@ -198,6 +198,48 @@ class WorkflowStats(BaseModel):
     active: int
 
 
+WorkflowCheckState = Literal["in_sync", "out_of_sync", "not_imported", "orphaned"]
+
+
+class WorkflowCheckEntry(BaseModel):
+    """One workflow name's wording-integrity state (§V.134).
+
+    The state names how the catalog def and the live row line up for one
+    globally unique ``name`` (§V.90), the join key (never a hashed field):
+
+    - ``in_sync``: name on both sides, wording hashes equal.
+    - ``out_of_sync``: name on both sides, hashes differ (re-import due).
+    - ``not_imported``: name in a catalog def, no matching row.
+    - ``orphaned``: name in a row, no matching catalog def.
+
+    ``catalog_hash`` is ``None`` when orphaned (no def) and ``row_hash`` is
+    ``None`` when not imported (no row); both are SHA-256 over the wording
+    fields ``{template, theme, goal, instructions}``.
+    """
+
+    name: str
+    state: WorkflowCheckState
+    catalog_hash: str | None
+    row_hash: str | None
+
+
+class WorkflowCheck(BaseModel):
+    """Aggregate wording-integrity report across every workflow name (§V.134).
+
+    A read-only 2-way live SHA-256 comparison mirroring ``db check``: each
+    ``workflows/*.toml`` def is joined to the live rows by ``name`` and
+    classified into one of four states. ``ok:true`` is reported regardless of
+    state -- the check informs, it is never a deploy gate. The envelope key is
+    ``workflow_check`` (an aggregate, not a ``workflow`` entity row, cf §V.132).
+    """
+
+    workflows: list[WorkflowCheckEntry]
+    in_sync: int
+    out_of_sync: int
+    not_imported: int
+    orphaned: int
+
+
 class WorkflowTemplateSummary(BaseModel):
     """List-view projection of a workflow template (code-defined, read-only)."""
 

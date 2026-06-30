@@ -2773,6 +2773,60 @@ def workflow_stats(workflow_ref: str) -> None:
         connection.close()
 
 
+def _read_workflow_check_catalog(file: str | None) -> dict[str, dict[str, Any]]:
+    """Read catalog ``*.toml`` defs into a ``{name -> entry}`` map (§V.134).
+
+    Reuses the import loader's TOML-only file-vs-dir dispatch (§V.103) but keys
+    each entry on its ``name`` field -- ``workflow check`` reads the field, not
+    the file stem (§V.134). A malformed file or an entry missing ``name`` exits
+    ``validation_error`` per the closed error vocabulary (§V.54); on a duplicate
+    ``name`` across files the last def wins (§V.134).
+    """
+    entries, pre_errors = _load_workflow_import_entries(file)
+    if pre_errors:
+        output_error(str(pre_errors[0]["message"]), "validation_error")
+    catalog: dict[str, dict[str, Any]] = {}
+    for _stem, entry in entries:
+        name = entry.get("name")
+        if not isinstance(name, str) or not name:
+            output_error(
+                "catalog entry missing required 'name' field", "validation_error"
+            )
+        catalog[name] = entry
+    return catalog
+
+
+@workflow.command("check")
+@click.option(
+    "--file",
+    "file",
+    default=None,
+    type=click.Path(exists=True),
+    help=(
+        "Catalog source (TOML only): a '.toml' file or a directory of '*.toml' "
+        "defs to check against the live workflow rows."
+    ),
+)
+def workflow_check(file: str | None) -> None:
+    """Report wording drift between catalog defs and live workflow rows.
+
+    A read-only 2-way live SHA-256 over the wording fields
+    {template, theme, goal, instructions}, joined by the globally unique name.
+    Mirrors ``db check`` but is report-only: every state (in_sync, out_of_sync,
+    not_imported, orphaned) exits 0 with ``ok:true`` -- the check informs, it is
+    never a deploy gate.
+    """
+    from mailpilot.database import check_workflow_wording, initialize_database
+
+    catalog = _read_workflow_check_catalog(file)
+    connection = initialize_database(_database_url())
+    try:
+        report = check_workflow_wording(connection, catalog)
+    finally:
+        connection.close()
+    output({"workflow_check": report.model_dump(mode="json")})
+
+
 @workflow.command("start")
 @click.argument("workflow_ref")
 def workflow_start(workflow_ref: str) -> None:

@@ -11,6 +11,7 @@ Convention:
 """
 
 import hashlib
+import json
 import re
 import urllib.parse
 import uuid
@@ -60,6 +61,8 @@ from mailpilot.models import (
     TaskStats,
     TaskSummary,
     Workflow,
+    WorkflowCheck,
+    WorkflowCheckEntry,
     WorkflowStats,
     WorkflowSummary,
 )
@@ -2034,30 +2037,30 @@ def list_workflows(
 
 def list_workflows_full(
     connection: psycopg.Connection[dict[str, Any]],
-    account_id: str,
+    account_id: str | None = None,
 ) -> list[Workflow]:
-    """List all workflows for an account as full rows ordered by name.
+    """List workflows as full rows ordered by name.
 
-    Used by ``workflow export`` to emit a declarative payload keyed on the
-    globally unique ``name`` (§V.90/§V.103). Ordering by ``name`` makes the
-    export output deterministic for diffs and round-trip testing.
+    Used by ``workflow export`` (account-scoped) to emit a declarative payload
+    keyed on the globally unique ``name`` (§V.90/§V.103) and by
+    ``workflow check`` (account omitted -> every row) to join the live rows
+    against the catalog by ``name`` (§V.134). Ordering by ``name`` makes the
+    output deterministic for diffs and round-trip testing.
 
     Args:
         connection: Open database connection.
-        account_id: Owning account ID.
+        account_id: Owning account ID; ``None`` lists every account's rows.
 
     Returns:
         Full ``Workflow`` rows ordered by ``name``.
     """
-    rows = connection.execute(
-        """\
-        SELECT workflow.*, account.email AS account_email
-        FROM workflow JOIN account ON account.id = workflow.account_id
-        WHERE workflow.account_id = %(account_id)s
-        ORDER BY workflow.name
-        """,
-        {"account_id": account_id},
-    ).fetchall()
+    where = SQL("WHERE workflow.account_id = %(account_id)s") if account_id else SQL("")
+    query = SQL(
+        "SELECT workflow.*, account.email AS account_email "
+        "FROM workflow JOIN account ON account.id = workflow.account_id "
+        "{} ORDER BY workflow.name"
+    ).format(where)
+    rows = connection.execute(query, {"account_id": account_id}).fetchall()
     return [Workflow.model_validate(row) for row in rows]
 
 
@@ -2178,6 +2181,126 @@ def get_workflow_stats(
         contact_later=row["contact_later"],
         do_not_contact=row["do_not_contact"],
         active=row["active"],
+    )
+
+
+def _compute_workflow_wording_hash(
+    template: str,
+    theme: str,
+    goal: str,
+    instructions: str,
+) -> str:
+    """SHA-256 over the wording fields {template, theme, goal, instructions} (§V.134).
+
+    The workflow ``name`` is the join key, never a hashed field (§V.134), so it
+    is excluded here. A canonical JSON serialization (sorted keys) keeps the
+    hash stable across field order and is safe for the pipe and newline content
+    that ``instructions`` carries -- a delimiter-joined string could collide.
+
+    Args:
+        template: Template name.
+        theme: Email color theme.
+        goal: Enrollment success goal.
+        instructions: Workflow instructions.
+
+    Returns:
+        Hex SHA-256 digest of the canonical wording payload.
+    """
+    canonical = json.dumps(
+        {
+            "template": template,
+            "theme": theme,
+            "goal": goal,
+            "instructions": instructions,
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _catalog_wording_hash(entry: dict[str, Any]) -> str:
+    """Hash a parsed catalog def the way an import would persist it (§V.134).
+
+    Applies the same field defaults ``workflow import`` applies (theme -> blue,
+    goal/instructions -> empty string) so an unchanged def hashes equal to the
+    row it produced. ``template`` defaults to empty so a malformed def without
+    one simply fails to match any row rather than raising.
+    """
+    return _compute_workflow_wording_hash(
+        template=str(entry.get("template") or ""),
+        theme=str(entry.get("theme") or "blue"),
+        goal=str(entry.get("goal") or ""),
+        instructions=str(entry.get("instructions") or ""),
+    )
+
+
+def check_workflow_wording(
+    connection: psycopg.Connection[dict[str, Any]],
+    catalog: dict[str, dict[str, Any]],
+) -> WorkflowCheck:
+    """Compare catalog defs against live rows by name and classify each (§V.134).
+
+    A read-only 2-way live SHA-256 over the wording fields
+    ``{template, theme, goal, instructions}`` mirroring ``db check``: no stored
+    column, both sides hashed on the fly. The globally unique ``name`` (§V.90)
+    is the join key, so the comparison spans every account's rows. Each name
+    lands in one of four states:
+
+    - ``in_sync``: name on both sides, hashes equal.
+    - ``out_of_sync``: name on both sides, hashes differ (re-import due).
+    - ``not_imported``: name in a catalog def, no row.
+    - ``orphaned``: name in a row, no catalog def.
+
+    Def fields are import-only (§V.103), so there is no row-ahead state -- a
+    mismatch always means the catalog leads. The report is informational
+    (``ok:true`` regardless of state); it is never a deploy gate.
+
+    Args:
+        connection: Open database connection.
+        catalog: Parsed catalog defs keyed by the def's ``name`` field (the CLI
+            reader applies last-def-wins on duplicate names per §V.134).
+
+    Returns:
+        ``WorkflowCheck`` carrying one entry per name plus rollup counts.
+    """
+    row_hashes = {
+        row.name: _compute_workflow_wording_hash(
+            template=row.template,
+            theme=row.theme,
+            goal=row.goal,
+            instructions=row.instructions,
+        )
+        for row in list_workflows_full(connection)
+    }
+    catalog_hashes = {
+        name: _catalog_wording_hash(entry) for name, entry in catalog.items()
+    }
+
+    entries: list[WorkflowCheckEntry] = []
+    for name in sorted(set(row_hashes) | set(catalog_hashes)):
+        catalog_hash = catalog_hashes.get(name)
+        row_hash = row_hashes.get(name)
+        if catalog_hash is not None and row_hash is not None:
+            state = "in_sync" if catalog_hash == row_hash else "out_of_sync"
+        elif catalog_hash is not None:
+            state = "not_imported"
+        else:
+            state = "orphaned"
+        entries.append(
+            WorkflowCheckEntry(
+                name=name,
+                state=state,
+                catalog_hash=catalog_hash,
+                row_hash=row_hash,
+            )
+        )
+    return WorkflowCheck(
+        workflows=entries,
+        in_sync=sum(1 for entry in entries if entry.state == "in_sync"),
+        out_of_sync=sum(1 for entry in entries if entry.state == "out_of_sync"),
+        not_imported=sum(1 for entry in entries if entry.state == "not_imported"),
+        orphaned=sum(1 for entry in entries if entry.state == "orphaned"),
     )
 
 

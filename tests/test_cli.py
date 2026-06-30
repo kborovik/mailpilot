@@ -35,6 +35,8 @@ from mailpilot.models import (
     Task,
     TaskStats,
     Workflow,
+    WorkflowCheck,
+    WorkflowCheckEntry,
     WorkflowStats,
 )
 
@@ -3960,6 +3962,100 @@ def test_workflow_stats_not_found(
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["error"] == "not_found"
+
+
+def test_workflow_check_envelope(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    """§V.134/§V.4: `workflow check` ships the report under `workflow_check`.
+
+    Report-only: out_of_sync + orphaned states still exit 0 with ``ok:true``
+    -- the check is never a deploy gate (cf ``db check`` which exits 1).
+    """
+    toml_path = tmp_path / "demo-flow.toml"
+    toml_path.write_text(
+        'name = "demo-flow"\ntemplate = "outbound-general"\ntheme = "blue"\n'
+        'goal = "Book demos."\ninstructions = "Be brief."\n'
+    )
+    report = WorkflowCheck(
+        workflows=[
+            WorkflowCheckEntry(
+                name="demo-flow",
+                state="out_of_sync",
+                catalog_hash="a" * 64,
+                row_hash="b" * 64,
+            ),
+            WorkflowCheckEntry(
+                name="ghost-flow",
+                state="orphaned",
+                catalog_hash=None,
+                row_hash="c" * 64,
+            ),
+        ],
+        in_sync=0,
+        out_of_sync=1,
+        not_imported=0,
+        orphaned=1,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.check_workflow_wording", return_value=report
+        ) as mock_check,
+    ):
+        result = runner.invoke(main, ["workflow", "check", "--file", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert "workflow" not in data
+    payload = data["workflow_check"]
+    assert payload["out_of_sync"] == 1
+    assert payload["orphaned"] == 1
+    assert {w["name"] for w in payload["workflows"]} == {"demo-flow", "ghost-flow"}
+    # The catalog passed to the DB join is keyed by the TOML 'name' field.
+    catalog_arg = mock_check.call_args.args[1]
+    assert "demo-flow" in catalog_arg
+
+
+def test_workflow_check_keys_on_name_field_not_stem(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    """§V.134: check joins by the TOML `name` field, never the file stem."""
+    toml_path = tmp_path / "file-stem.toml"
+    toml_path.write_text('name = "real-name"\ntemplate = "outbound-general"\n')
+    report = WorkflowCheck(
+        workflows=[], in_sync=0, out_of_sync=0, not_imported=0, orphaned=0
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.check_workflow_wording", return_value=report
+        ) as mock_check,
+    ):
+        result = runner.invoke(main, ["workflow", "check", "--file", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    catalog_arg = mock_check.call_args.args[1]
+    assert "real-name" in catalog_arg
+    assert "file-stem" not in catalog_arg
+
+
+def test_workflow_check_malformed_toml_errors(
+    runner: CliRunner, tmp_path: pathlib.Path
+) -> None:
+    """§V.54: a malformed catalog file exits validation_error before the DB join."""
+    toml_path = tmp_path / "broken-flow.toml"
+    toml_path.write_text("name = \nthis is not valid toml")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.check_workflow_wording") as mock_check,
+    ):
+        result = runner.invoke(main, ["workflow", "check", "--file", str(toml_path)])
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    mock_check.assert_not_called()
 
 
 def test_workflow_search(runner: CliRunner, mock_connection: MagicMock) -> None:

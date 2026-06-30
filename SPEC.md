@@ -205,7 +205,7 @@ T200|x|impl §V.90(∆) per §B.121 — lowercase `email` natural key in create_
 T201|x|impl §V.133(+) + §I — `task stats` single-SQL aggregate fn in database.py + CLI `task stats` verb + `{"task_stats"}` envelope; `--trigger` Enum filter on `context->>'trigger'` for `task list` + `task stats`; `--bucket-tz` day-bucketing for distinct_scheduled_days|V133,V107,V26,V32,V4,V115
 T202|x|impl §V.90(∆) + §V.107(∆) — workflow joins keyed entities, natural key `name`; migration 009 + schema.sql: `workflow.name` global UNIQUE (drop `(account_id, name)` composite) + kebab CHECK, one-time normalize existing names to kebab; polymorphic resolver resolves workflow by name case-insensitively; workflow leaves keyless list|V90,V107,V108,V103
 T203|x|impl §V.103(∆) — `workflow import` enforces `name` = kebab file-stem + global unique; def fields {name,template,theme,goal,instructions} import-only; `workflow update` restricted to non-def fields (status, account binding)|V103,V107,V90
-T204|.|impl §V.134(+) + §I — `workflow check` verb: 2-way live SHA-256 over wording fields {template,theme,goal,instructions} keyed by workflow `name` (read each `workflows/*.toml` name field, join rows by name); states {in_sync,out_of_sync,not_imported,orphaned}; `{"workflow_check"}` envelope|V134,V103,V107,V4,V54
+T204|x|impl §V.134(+) + §I — `workflow check` verb: 2-way live SHA-256 over wording fields {template,theme,goal,instructions} keyed by workflow `name` (read each `workflows/*.toml` name field, join rows by name); states {in_sync,out_of_sync,not_imported,orphaned}; `{"workflow_check"}` envelope|V134,V103,V107,V4,V54
 
 ## §B BUGS
 

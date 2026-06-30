@@ -24,6 +24,7 @@ from mailpilot.database import (
     activate_workflow,
     cancel_enrollment_followup_tasks,
     cancel_task,
+    check_workflow_wording,
     complete_task,
     create_account,
     create_activity,
@@ -6549,3 +6550,177 @@ def test_list_meetings_projects_attendee_summary(
     # A meeting with no attendees carries an empty summary, not NULL.
     assert rows[bare.id].attendee_emails == []
     assert rows[bare.id].attendee_count == 0
+
+
+# -- check_workflow_wording (§V.134) -------------------------------------------
+
+
+def _catalog_entry(
+    name: str,
+    template: str = "outbound-general",
+    theme: str = "blue",
+    goal: str = "",
+    instructions: str = "",
+) -> dict[str, Any]:
+    """Build a parsed-TOML catalog entry mirroring a workflow def (§V.103)."""
+    return {
+        "name": name,
+        "template": template,
+        "theme": theme,
+        "goal": goal,
+        "instructions": instructions,
+    }
+
+
+def test_check_workflow_wording_classifies_four_states(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.134: in_sync / out_of_sync / not_imported / orphaned by name + hash."""
+    account = make_test_account(database_connection)
+
+    synced = create_workflow(
+        database_connection,
+        name="synced-flow",
+        template="outbound-general",
+        account_id=account.id,
+        theme="green",
+    )
+    assert synced is not None
+    update_workflow(
+        database_connection,
+        synced.id,
+        goal="Book demos.",
+        instructions="Be concise.\n",
+    )
+
+    drifted = create_workflow(
+        database_connection,
+        name="drifted-flow",
+        template="outbound-general",
+        account_id=account.id,
+        theme="blue",
+    )
+    assert drifted is not None
+    update_workflow(
+        database_connection,
+        drifted.id,
+        goal="Old goal in the database.",
+    )
+
+    create_workflow(
+        database_connection,
+        name="orphaned-flow",
+        template="inbound-general",
+        account_id=account.id,
+    )
+
+    catalog = {
+        "synced-flow": _catalog_entry(
+            "synced-flow",
+            template="outbound-general",
+            theme="green",
+            goal="Book demos.",
+            instructions="Be concise.\n",
+        ),
+        "drifted-flow": _catalog_entry(
+            "drifted-flow",
+            template="outbound-general",
+            goal="New goal in the catalog file.",
+        ),
+        "new-flow": _catalog_entry("new-flow", template="inbound-general"),
+    }
+
+    report = check_workflow_wording(database_connection, catalog)
+    by_name = {entry.name: entry for entry in report.workflows}
+
+    assert by_name["synced-flow"].state == "in_sync"
+    assert by_name["drifted-flow"].state == "out_of_sync"
+    assert by_name["new-flow"].state == "not_imported"
+    assert by_name["orphaned-flow"].state == "orphaned"
+
+    # not_imported carries no row hash; orphaned carries no catalog hash.
+    assert by_name["new-flow"].row_hash is None
+    assert by_name["new-flow"].catalog_hash is not None
+    assert by_name["orphaned-flow"].catalog_hash is None
+    assert by_name["orphaned-flow"].row_hash is not None
+
+    assert report.in_sync == 1
+    assert report.out_of_sync == 1
+    assert report.not_imported == 1
+    assert report.orphaned == 1
+
+
+def test_check_workflow_wording_keyed_by_name_not_hashed(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.134: name is the join key, never hashed; a single wording flip moves state."""
+    account = make_test_account(database_connection)
+    flow = create_workflow(
+        database_connection,
+        name="hashed-flow",
+        template="outbound-general",
+        account_id=account.id,
+        theme="blue",
+    )
+    assert flow is not None
+    update_workflow(
+        database_connection,
+        flow.id,
+        goal="Same goal.",
+        instructions="Same body.",
+    )
+
+    same = {
+        "hashed-flow": _catalog_entry(
+            "hashed-flow",
+            template="outbound-general",
+            theme="blue",
+            goal="Same goal.",
+            instructions="Same body.",
+        )
+    }
+    same_report = check_workflow_wording(database_connection, same)
+    assert same_report.workflows[0].state == "in_sync"
+    assert same_report.workflows[0].catalog_hash == same_report.workflows[0].row_hash
+
+    # Flip exactly one wording field (theme) -> out_of_sync.
+    themed = {
+        "hashed-flow": _catalog_entry(
+            "hashed-flow",
+            template="outbound-general",
+            theme="red",
+            goal="Same goal.",
+            instructions="Same body.",
+        )
+    }
+    themed_report = check_workflow_wording(database_connection, themed)
+    assert themed_report.workflows[0].state == "out_of_sync"
+    assert (
+        themed_report.workflows[0].catalog_hash != themed_report.workflows[0].row_hash
+    )
+
+
+def test_check_workflow_wording_joins_globally_across_accounts(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.107: name is globally unique, so the check joins rows from every account."""
+    account_a = make_test_account(database_connection, email="a@example.com")
+    account_b = make_test_account(database_connection, email="b@example.com")
+    create_workflow(
+        database_connection,
+        name="account-a-flow",
+        template="outbound-general",
+        account_id=account_a.id,
+    )
+    create_workflow(
+        database_connection,
+        name="account-b-flow",
+        template="outbound-general",
+        account_id=account_b.id,
+    )
+
+    report = check_workflow_wording(database_connection, {})
+    names = {entry.name for entry in report.workflows}
+    assert names == {"account-a-flow", "account-b-flow"}
+    assert all(entry.state == "orphaned" for entry in report.workflows)
+    assert report.orphaned == 2
