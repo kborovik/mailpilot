@@ -3786,6 +3786,7 @@ def test_workflow_update_not_found(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow_by_name", return_value=None),
         patch("mailpilot.database.get_workflow", return_value=None),
         patch("mailpilot.database.update_workflow", return_value=None),
     ):
@@ -3992,6 +3993,7 @@ def test_workflow_view_not_found(runner: CliRunner, mock_connection: MagicMock) 
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow_by_name", return_value=None),
         patch("mailpilot.database.get_workflow", return_value=None),
     ):
         result = runner.invoke(main, ["workflow", "view", "nope"])
@@ -4043,6 +4045,7 @@ def test_workflow_stats_not_found(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow_by_name", return_value=None),
         patch("mailpilot.database.get_workflow_stats", return_value=None),
     ):
         result = runner.invoke(main, ["workflow", "stats", "nope"])

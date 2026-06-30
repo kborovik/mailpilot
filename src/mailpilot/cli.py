@@ -311,6 +311,25 @@ def _resolve_contact_id(connection: Any, contact_ref: str) -> str:
     return contact.id
 
 
+def _resolve_workflow_id(connection: Any, workflow_ref: str) -> str:
+    """Resolve a workflow reference (name or UUID) to its id (§V.107, §V.90).
+
+    Workflow is a keyed entity addressed by its globally unique ``name``
+    (§V.103). A UUID-shaped ref passes through unfetched (the caller's own
+    ``get``/lifecycle call validates existence); any other value resolves via
+    the ``name`` natural key, case-insensitively, exiting ``not_found`` when
+    unknown (§V.94).
+    """
+    if _looks_like_uuid(workflow_ref):
+        return workflow_ref
+    from mailpilot.database import get_workflow_by_name
+
+    workflow = get_workflow_by_name(connection, workflow_ref)
+    if workflow is None:
+        output_error(f"workflow not found: {workflow_ref}", "not_found")
+    return workflow.id
+
+
 def _resolve_tag(connection: Any, tag_ref: str) -> Any:
     """Resolve a tag reference (name or UUID) to its vocabulary row (§V.116).
 
@@ -2469,8 +2488,8 @@ def _create_and_populate_workflow(
     """Run the §V.54 mutation sequence: create -> update extras -> optional activate.
 
     Returns the populated workflow row and the list of fields written, or
-    ``None`` when ``create_workflow`` collided on the ``(account_id, name)``
-    unique constraint per §V.16(+).
+    ``None`` when ``create_workflow`` collided on the global ``name`` unique
+    constraint per §V.16(+).
     """
     from mailpilot.database import activate_workflow, create_workflow, update_workflow
 
@@ -2595,7 +2614,7 @@ def workflow_create(
             )
             if result is None:
                 output_error(
-                    f"workflow {name!r} already exists for account {account_id}",
+                    f"workflow {name!r} already exists",
                     "duplicate_key",
                 )
             created, changed = result
@@ -2612,7 +2631,7 @@ def workflow_create(
 
 
 @workflow.command("update")
-@click.argument("workflow_id")
+@click.argument("workflow_ref")
 @click.option("--name", default=None, help="Workflow name.")
 @click.option("--goal", default=None, help="Workflow goal.")
 @click.option(
@@ -2632,14 +2651,14 @@ def workflow_create(
     help="Email color theme (blue, green, orange, purple, red, slate).",
 )
 def workflow_update(
-    workflow_id: str,
+    workflow_ref: str,
     name: str | None,
     goal: str | None,
     instructions: str | None,
     instructions_file: str | None,
     theme: str | None,
 ) -> None:
-    """Update a workflow."""
+    """Update a workflow by name or ID."""
     from mailpilot.database import get_workflow, initialize_database, update_workflow
     from mailpilot.operator_log import cli_mutation, operator_event
 
@@ -2653,9 +2672,10 @@ def workflow_update(
     resolved = _resolve_instructions(instructions, instructions_file)
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
+        workflow_id = _resolve_workflow_id(connection, workflow_ref)
         before = get_workflow(connection, workflow_id)
         if before is None:
-            output_error(f"workflow not found: {workflow_id}", "not_found")
+            output_error(f"workflow not found: {workflow_ref}", "not_found")
         fields: dict[str, object] = {}
         if name is not None:
             fields["name"] = name
@@ -2745,46 +2765,49 @@ def workflow_list(
 
 
 @workflow.command("view")
-@click.argument("workflow_id")
-def workflow_view(workflow_id: str) -> None:
-    """Show a workflow by ID."""
+@click.argument("workflow_ref")
+def workflow_view(workflow_ref: str) -> None:
+    """Show a workflow by name or ID."""
     from mailpilot.database import get_workflow, initialize_database
 
     connection = initialize_database(_database_url())
     try:
+        workflow_id = _resolve_workflow_id(connection, workflow_ref)
         found = get_workflow(connection, workflow_id)
         if found is None:
-            output_error(f"workflow not found: {workflow_id}", "not_found")
+            output_error(f"workflow not found: {workflow_ref}", "not_found")
         output_entity("workflow", found)
     finally:
         connection.close()
 
 
 @workflow.command("stats")
-@click.argument("workflow_id")
-def workflow_stats(workflow_id: str) -> None:
-    """Show the per-campaign funnel for a workflow."""
+@click.argument("workflow_ref")
+def workflow_stats(workflow_ref: str) -> None:
+    """Show the per-campaign funnel for a workflow by name or ID."""
     from mailpilot.database import get_workflow_stats, initialize_database
 
     connection = initialize_database(_database_url())
     try:
+        workflow_id = _resolve_workflow_id(connection, workflow_ref)
         stats = get_workflow_stats(connection, workflow_id)
         if stats is None:
-            output_error(f"workflow not found: {workflow_id}", "not_found")
+            output_error(f"workflow not found: {workflow_ref}", "not_found")
         output({"workflow_stats": stats.model_dump(mode="json")})
     finally:
         connection.close()
 
 
 @workflow.command("start")
-@click.argument("workflow_id")
-def workflow_start(workflow_id: str) -> None:
-    """Start a workflow (requires non-empty goal and instructions)."""
+@click.argument("workflow_ref")
+def workflow_start(workflow_ref: str) -> None:
+    """Start a workflow by name or ID (requires non-empty goal and instructions)."""
     from mailpilot.database import activate_workflow, initialize_database
     from mailpilot.operator_log import cli_mutation, operator_event
 
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
+        workflow_id = _resolve_workflow_id(connection, workflow_ref)
         with cli_mutation("workflow", "start", entity_id=workflow_id):
             try:
                 activated = activate_workflow(connection, workflow_id)
@@ -2814,14 +2837,15 @@ def workflow_start(workflow_id: str) -> None:
 
 
 @workflow.command("stop")
-@click.argument("workflow_id")
-def workflow_stop(workflow_id: str) -> None:
-    """Stop an active workflow."""
+@click.argument("workflow_ref")
+def workflow_stop(workflow_ref: str) -> None:
+    """Stop an active workflow by name or ID."""
     from mailpilot.database import initialize_database, pause_workflow
     from mailpilot.operator_log import cli_mutation, operator_event
 
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
+        workflow_id = _resolve_workflow_id(connection, workflow_ref)
         with cli_mutation("workflow", "stop", entity_id=workflow_id):
             try:
                 paused = pause_workflow(connection, workflow_id)

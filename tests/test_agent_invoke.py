@@ -444,7 +444,7 @@ def test_email_history_scoped_to_workflow(
 
     # Email belonging to a DIFFERENT workflow -- should NOT appear.
     other_workflow = make_test_workflow(
-        database_connection, account_id=account.id, name="Other workflow"
+        database_connection, account_id=account.id, name="other-workflow"
     )
     _activate(database_connection, other_workflow.id)
     create_email(
@@ -1427,7 +1427,7 @@ def test_workflow_agent_has_explicit_name_for_otel_traces() -> None:
     now = datetime.now(UTC)
     workflow = Workflow(
         id="01900000-0000-7000-8000-000000000001",
-        name="N",
+        name="n",
         template="outbound-general",
         type="outbound",
         account_id="01900000-0000-7000-8000-000000000002",

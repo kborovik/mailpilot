@@ -209,13 +209,13 @@ def test_booking_concludes_every_outbound_enrollment_the_attendee_holds(
     workflow_one = make_test_workflow(
         database_connection,
         account_id=account.id,
-        name="Outbound One",
+        name="outbound-one",
         workflow_type="outbound",
     )
     workflow_two = make_test_workflow(
         database_connection,
         account_id=account.id,
-        name="Outbound Two",
+        name="outbound-two",
         workflow_type="outbound",
     )
     contact = make_test_contact(database_connection, email="prospect@acme.com")

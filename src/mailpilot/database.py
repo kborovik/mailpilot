@@ -1866,22 +1866,21 @@ def create_workflow(
     The workflow's ``type`` (``inbound`` / ``outbound``) is derived from
     the template's declared direction -- callers do not pass ``type``.
 
-    Uses ``ON CONFLICT (account_id, name) DO NOTHING`` per §V.16(+) so
-    callers can safely re-invoke without catching ``UniqueViolation``.
-    Returns ``None`` when a workflow already exists for ``(account_id,
-    name)``.
+    Uses ``ON CONFLICT (name) DO NOTHING`` per §V.16(+) so callers can safely
+    re-invoke without catching ``UniqueViolation``. ``name`` is globally unique
+    (§V.90/§V.103), so a collision against any account returns ``None``.
 
     Args:
         connection: Open database connection.
-        name: Workflow name.
+        name: Workflow name. Globally unique, kebab-shaped (§V.90/§V.103).
         template: Template name (e.g. ``outbound-general``). Drives both
             the agent shape and the workflow's direction.
         account_id: Account FK.
         theme: Email color theme (default "blue").
 
     Returns:
-        Created workflow, or ``None`` if a workflow with this
-        ``(account_id, name)`` pair already existed.
+        Created workflow, or ``None`` if a workflow with this ``name``
+        already existed.
     """
     from mailpilot.agent.templates import TEMPLATES
 
@@ -1897,7 +1896,7 @@ def create_workflow(
             VALUES (
                 %(id)s, %(name)s, %(template)s, %(type)s, %(account_id)s, %(theme)s
             )
-            ON CONFLICT (account_id, name) DO NOTHING
+            ON CONFLICT (name) DO NOTHING
             RETURNING *
         )
         SELECT inserted.*, account.email AS account_email
@@ -1938,6 +1937,38 @@ def get_workflow(
         WHERE workflow.id = %(id)s
         """,
         {"id": workflow_id},
+    ).fetchone()
+    if row is None:
+        return None
+    return Workflow.model_validate(row)
+
+
+def get_workflow_by_name(
+    connection: psycopg.Connection[dict[str, Any]],
+    name: str,
+) -> Workflow | None:
+    """Resolve a workflow by its globally unique ``name`` (§V.90/§V.107).
+
+    The name is the canonical cross-environment key (§V.103). Stored names are
+    kebab-shaped (lowercase), so the lookup lowercases the input to resolve the
+    natural key case-insensitively, mirroring the CLI polymorphic resolver.
+    Returns ``None`` when no workflow carries the name -- the caller surfaces
+    ``not_found``.
+
+    Args:
+        connection: Open database connection.
+        name: Workflow name (case-insensitive).
+
+    Returns:
+        Workflow if found, None otherwise.
+    """
+    row = connection.execute(
+        """\
+        SELECT workflow.*, account.email AS account_email
+        FROM workflow JOIN account ON account.id = workflow.account_id
+        WHERE workflow.name = %(name)s
+        """,
+        {"name": name.lower()},
     ).fetchone()
     if row is None:
         return None
@@ -2007,8 +2038,8 @@ def list_workflows_full(
 ) -> list[Workflow]:
     """List all workflows for an account as full rows ordered by name.
 
-    Used by ``workflow export`` to emit a declarative payload keyed on
-    ``(account_id, name)`` per §V.63. Ordering by ``name`` makes the
+    Used by ``workflow export`` to emit a declarative payload keyed on the
+    globally unique ``name`` (§V.90/§V.103). Ordering by ``name`` makes the
     export output deterministic for diffs and round-trip testing.
 
     Args:

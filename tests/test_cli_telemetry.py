@@ -1048,9 +1048,7 @@ def test_workflow_create_duplicate_emits_duplicate_key_envelope(
     err = result.stderr
     envelope = _envelope_from_stderr(err)
     assert envelope["error"] == "duplicate_key"
-    assert envelope["message"] == (
-        f"workflow 'Dup' already exists for account {account.id}"
-    )
+    assert envelope["message"] == "workflow 'Dup' already exists"
     assert envelope["ok"] is False
     assert _spans_named(capfire, "workflow.create")
     assert not _spans_named(capfire, "workflow.create.failed")

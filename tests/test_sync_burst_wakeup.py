@@ -135,7 +135,7 @@ def test_burst_10_emails_meets_t_delivery_ceiling(
     workflow = make_test_workflow(
         database_connection,
         account.id,
-        name="inbound flow",
+        name="inbound-flow",
         workflow_type="inbound",
     )
 

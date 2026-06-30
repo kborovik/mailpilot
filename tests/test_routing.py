@@ -166,13 +166,13 @@ def test_route_email_thread_match_uses_most_recent_workflow(
     wf_old = make_test_workflow(
         database_connection,
         account_id=account.id,
-        name="Old Workflow",
+        name="old-workflow",
         workflow_type="inbound",
     )
     wf_new = make_test_workflow(
         database_connection,
         account_id=account.id,
-        name="New Workflow",
+        name="new-workflow",
         workflow_type="inbound",
     )
 
@@ -315,7 +315,7 @@ def test_route_email_classification_skips_outbound_workflows(
     outbound_wf = make_test_workflow(
         database_connection,
         account_id=account.id,
-        name="Outbound Campaign",
+        name="outbound-campaign",
         workflow_type="outbound",
     )
     update_workflow(
@@ -697,7 +697,7 @@ def test_route_email_emits_enrollment_added_activity(
         database_connection,
         account_id=account.id,
         workflow_type="inbound",
-        name="Inbound Inquiry",
+        name="inbound-inquiry",
     )
     _activate_workflow(database_connection, workflow.id)
 
@@ -878,7 +878,7 @@ def test_route_email_span_has_route_method_skipped_no_inbound_workflows(
     outbound_wf = make_test_workflow(
         database_connection,
         account_id=account.id,
-        name="Outbound only",
+        name="outbound-only",
         workflow_type="outbound",
     )
     update_workflow(
@@ -1086,13 +1086,13 @@ def test_route_email_thread_match_takes_precedence_over_rfc(
     workflow_thread = make_test_workflow(
         database_connection,
         account_id=account.id,
-        name="Thread WF",
+        name="thread-wf",
         workflow_type="inbound",
     )
     workflow_rfc = make_test_workflow(
         database_connection,
         account_id=account.id,
-        name="RFC WF",
+        name="rfc-wf",
         workflow_type="inbound",
     )
     _activate_workflow(database_connection, workflow_thread.id)
@@ -1332,7 +1332,7 @@ def test_route_email_persists_route_method_skipped_no_inbound_workflows(
     outbound_wf = make_test_workflow(
         database_connection,
         account_id=account.id,
-        name="Outbound only",
+        name="outbound-only",
         workflow_type="outbound",
     )
     update_workflow(

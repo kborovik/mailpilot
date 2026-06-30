@@ -14,7 +14,7 @@ def test_create_workflow_default_theme(
     account = make_test_account(database_connection)
     workflow = create_workflow(
         database_connection,
-        name="Test",
+        name="test",
         template="outbound-general",
         account_id=account.id,
     )
@@ -28,7 +28,7 @@ def test_create_workflow_custom_theme(
     account = make_test_account(database_connection)
     workflow = create_workflow(
         database_connection,
-        name="Themed",
+        name="themed",
         template="outbound-general",
         account_id=account.id,
         theme="green",
@@ -43,7 +43,7 @@ def test_update_workflow_theme(
     account = make_test_account(database_connection)
     workflow = create_workflow(
         database_connection,
-        name="W",
+        name="w",
         template="outbound-general",
         account_id=account.id,
     )
@@ -59,7 +59,7 @@ def test_get_workflow_includes_theme(
     account = make_test_account(database_connection)
     created = create_workflow(
         database_connection,
-        name="Get",
+        name="get",
         template="inbound-general",
         account_id=account.id,
         theme="purple",

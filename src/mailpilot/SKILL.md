@@ -158,7 +158,7 @@ mailpilot contact disable <CONTACT_REF> --reason "left company"
 ### Define a workflow declaratively
 
 Workflow definitions are one TOML file per workflow. Export/import is TOML-only
-and idempotent; round-trip is keyed on `(account_id, name)`.
+and idempotent; round-trip is keyed on the globally unique `name`.
 
 ```
 mailpilot workflow export --account-email <ACCOUNT_REF> --out-dir workflows/

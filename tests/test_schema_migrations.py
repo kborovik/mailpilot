@@ -692,6 +692,71 @@ def test_migration_008_merges_colliding_enrollment_and_repoints_tasks(
     assert task["contact_id"] == "ct_canon"
 
 
+def test_migration_009_normalizes_names_and_swaps_constraint(
+    migration_schema: psycopg.Connection[dict[str, Any]],
+):
+    """§V.90/§V.103/§V.108: migration 009 normalizes existing workflow names to
+    kebab, drops the per-account ``(account_id, name)`` composite for a global
+    ``UNIQUE (name)``, and adds the kebab CHECK.
+    """
+    conn = migration_schema
+    for prefix in ("001", "002", "003", "004", "005", "006", "007", "008"):
+        conn.execute(_read_shipped_migration(prefix))  # type: ignore[arg-type]
+    conn.commit()
+
+    conn.execute(
+        "INSERT INTO account (id, email) VALUES (%s, %s)", ("ac1", "a@lab5.ca")
+    )
+    conn.execute(
+        "INSERT INTO account (id, email) VALUES (%s, %s)", ("ac2", "b@lab5.ca")
+    )
+    # Pre-009 names carry uppercase + spaces, distinct apexes across accounts.
+    conn.execute(
+        "INSERT INTO workflow (id, account_id, template, type, name) "
+        "VALUES (%s, %s, %s, %s, %s)",
+        ("wf1", "ac1", "outbound-general", "outbound", "AI Engineering"),
+    )
+    conn.execute(
+        "INSERT INTO workflow (id, account_id, template, type, name) "
+        "VALUES (%s, %s, %s, %s, %s)",
+        ("wf2", "ac2", "inbound-general", "inbound", "MailPilot Demo"),
+    )
+    conn.commit()
+
+    conn.execute(_read_shipped_migration("009"))  # type: ignore[arg-type]
+    conn.commit()
+
+    # Names are kebab-normalized.
+    names = conn.execute("SELECT id, name FROM workflow ORDER BY id").fetchall()
+    assert {(r["id"], r["name"]) for r in names} == {
+        ("wf1", "ai-engineering"),
+        ("wf2", "mailpilot-demo"),
+    }
+
+    # The composite is gone; a global UNIQUE + kebab CHECK replace it. Scope to
+    # this test schema's table via regclass -- a bare relname match would also
+    # see workflow tables in other schemas (public, identity-test schemas).
+    constraints = {
+        r["conname"]
+        for r in conn.execute(
+            "SELECT con.conname FROM pg_constraint con "
+            "WHERE con.conrelid = 'workflow'::regclass"
+        ).fetchall()
+    }
+    assert "workflow_account_id_name_key" not in constraints
+    assert "workflow_name_key" in constraints
+    assert "workflow_name_check" in constraints
+
+    # The kebab CHECK rejects a non-kebab insert.
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            "INSERT INTO workflow (id, account_id, template, type, name) "
+            "VALUES (%s, %s, %s, %s, %s)",
+            ("wf3", "ac1", "outbound-general", "outbound", "Bad Name"),
+        )
+    conn.rollback()
+
+
 # -- identity invariant: schema.sql == apply-all-migrations-from-zero (§V.108) -
 
 

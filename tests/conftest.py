@@ -166,7 +166,7 @@ def make_test_contact(
 def make_test_workflow(
     connection: psycopg.Connection[dict[str, Any]],
     account_id: str,
-    name: str = "Test Workflow",
+    name: str = "test-workflow",
     workflow_type: str = "outbound",
     template: str | None = None,
 ) -> Workflow:

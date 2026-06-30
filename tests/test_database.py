@@ -69,6 +69,7 @@ from mailpilot.database import (
     get_task_stats,
     get_unprocessed_inbound_email,
     get_workflow,
+    get_workflow_by_name,
     get_workflow_stats,
     import_snapshot,
     link_meeting_attendee,
@@ -1429,7 +1430,7 @@ def test_create_and_get_workflow(
 
     fetched = get_workflow(database_connection, workflow.id)
     assert fetched is not None
-    assert fetched.name == "Test Workflow"
+    assert fetched.name == "test-workflow"
 
 
 def test_list_workflows_by_account(
@@ -1437,11 +1438,11 @@ def test_list_workflows_by_account(
 ):
     a1 = make_test_account(database_connection, email="a@test.com")
     a2 = make_test_account(database_connection, email="b@test.com")
-    make_test_workflow(database_connection, account_id=a1.id, name="W1")
-    make_test_workflow(database_connection, account_id=a2.id, name="W2")
+    make_test_workflow(database_connection, account_id=a1.id, name="w1")
+    make_test_workflow(database_connection, account_id=a2.id, name="w2")
     results = list_workflows(database_connection, account_id=a1.id)
     assert len(results) == 1
-    assert results[0].name == "W1"
+    assert results[0].name == "w1"
 
 
 def test_list_workflows_full_orders_by_name(
@@ -1449,11 +1450,11 @@ def test_list_workflows_full_orders_by_name(
 ):
     """§V.63: ``workflow export`` payload must be name-ordered for deterministic diffs."""
     account = make_test_account(database_connection)
-    make_test_workflow(database_connection, account_id=account.id, name="Charlie")
-    make_test_workflow(database_connection, account_id=account.id, name="Alpha")
-    make_test_workflow(database_connection, account_id=account.id, name="Bravo")
+    make_test_workflow(database_connection, account_id=account.id, name="charlie")
+    make_test_workflow(database_connection, account_id=account.id, name="alpha")
+    make_test_workflow(database_connection, account_id=account.id, name="bravo")
     results = list_workflows_full(database_connection, account.id)
-    assert [w.name for w in results] == ["Alpha", "Bravo", "Charlie"]
+    assert [w.name for w in results] == ["alpha", "bravo", "charlie"]
     # Returns full Workflow rows (not summaries) -- goal/instructions present.
     assert all(hasattr(w, "goal") for w in results)
     assert all(hasattr(w, "instructions") for w in results)
@@ -1464,10 +1465,10 @@ def test_list_workflows_full_scopes_to_account(
 ):
     a1 = make_test_account(database_connection, email="a@test.com")
     a2 = make_test_account(database_connection, email="b@test.com")
-    make_test_workflow(database_connection, account_id=a1.id, name="A-only")
-    make_test_workflow(database_connection, account_id=a2.id, name="B-only")
+    make_test_workflow(database_connection, account_id=a1.id, name="a-only")
+    make_test_workflow(database_connection, account_id=a2.id, name="b-only")
     results = list_workflows_full(database_connection, a1.id)
-    assert [w.name for w in results] == ["A-only"]
+    assert [w.name for w in results] == ["a-only"]
 
 
 def test_update_workflow(database_connection: psycopg.Connection[dict[str, Any]]):
@@ -1571,8 +1572,8 @@ def test_list_workflows_by_status(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     account = make_test_account(database_connection)
-    w1 = make_test_workflow(database_connection, account_id=account.id, name="W1")
-    make_test_workflow(database_connection, account_id=account.id, name="W2")
+    w1 = make_test_workflow(database_connection, account_id=account.id, name="w1")
+    make_test_workflow(database_connection, account_id=account.id, name="w2")
     update_workflow(
         database_connection,
         w1.id,
@@ -1583,10 +1584,10 @@ def test_list_workflows_by_status(
     # w2 stays as draft
     active = list_workflows(database_connection, account_id=account.id, status="active")
     assert len(active) == 1
-    assert active[0].name == "W1"
+    assert active[0].name == "w1"
     drafts = list_workflows(database_connection, account_id=account.id, status="draft")
     assert len(drafts) == 1
-    assert drafts[0].name == "W2"
+    assert drafts[0].name == "w2"
     all_workflows = list_workflows(database_connection, account_id=account.id)
     assert len(all_workflows) == 2
 
@@ -1598,42 +1599,42 @@ def test_list_workflows_by_type(
     make_test_workflow(
         database_connection,
         account_id=account.id,
-        name="Outreach",
+        name="outreach",
         template="outbound-general",
     )
     make_test_workflow(
         database_connection,
         account_id=account.id,
-        name="Auto-reply",
+        name="auto-reply",
         template="inbound-general",
     )
     outbound = list_workflows(database_connection, workflow_type="outbound")
     assert len(outbound) == 1
-    assert outbound[0].name == "Outreach"
+    assert outbound[0].name == "outreach"
     inbound = list_workflows(database_connection, workflow_type="inbound")
     assert len(inbound) == 1
-    assert inbound[0].name == "Auto-reply"
+    assert inbound[0].name == "auto-reply"
 
 
 def test_search_workflows_by_name(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     account = make_test_account(database_connection)
-    make_test_workflow(database_connection, account_id=account.id, name="Demo outreach")
+    make_test_workflow(database_connection, account_id=account.id, name="demo-outreach")
     make_test_workflow(
-        database_connection, account_id=account.id, name="Support auto-reply"
+        database_connection, account_id=account.id, name="support-auto-reply"
     )
     results = search_workflows(database_connection, "demo")
     assert len(results) == 1
-    assert results[0].name == "Demo outreach"
+    assert results[0].name == "demo-outreach"
 
 
 def test_search_workflows_by_goal(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     account = make_test_account(database_connection)
-    w1 = make_test_workflow(database_connection, account_id=account.id, name="Alpha")
-    make_test_workflow(database_connection, account_id=account.id, name="Beta")
+    w1 = make_test_workflow(database_connection, account_id=account.id, name="alpha")
+    make_test_workflow(database_connection, account_id=account.id, name="beta")
     update_workflow(database_connection, w1.id, goal="Book discovery call")
     results = search_workflows(database_connection, "discovery")
     assert len(results) == 1
@@ -1645,7 +1646,7 @@ def test_search_workflows_respects_limit(
 ):
     account = make_test_account(database_connection)
     for i in range(5):
-        make_test_workflow(database_connection, account_id=account.id, name=f"Flow {i}")
+        make_test_workflow(database_connection, account_id=account.id, name=f"flow-{i}")
     results = search_workflows(database_connection, "flow", limit=2)
     assert len(results) == 2
 
@@ -1699,12 +1700,12 @@ def test_workflow_account_email_reflects_joined_account_per_workflow(
     """§V.5 parent-NI clause: JOIN scopes per workflow (no cross-talk)."""
     a1 = make_test_account(database_connection, email="one@parent-ni.test")
     a2 = make_test_account(database_connection, email="two@parent-ni.test")
-    make_test_workflow(database_connection, account_id=a1.id, name="W1")
-    make_test_workflow(database_connection, account_id=a2.id, name="W2")
+    make_test_workflow(database_connection, account_id=a1.id, name="w1")
+    make_test_workflow(database_connection, account_id=a2.id, name="w2")
     listed = list_workflows(database_connection)
     by_name = {row.name: row.account_email for row in listed}
-    assert by_name["W1"] == "one@parent-ni.test"
-    assert by_name["W2"] == "two@parent-ni.test"
+    assert by_name["w1"] == "one@parent-ni.test"
+    assert by_name["w2"] == "two@parent-ni.test"
 
 
 # -- Email ---------------------------------------------------------------------
@@ -2469,10 +2470,10 @@ def test_get_last_cold_outbound_scoped_to_workflow(
     account = make_test_account(database_connection)
     contact = make_test_contact(database_connection, email="r@example.com")
     wf_a = make_test_workflow(
-        database_connection, account_id=account.id, name="Campaign A"
+        database_connection, account_id=account.id, name="campaign-a"
     )
     wf_b = make_test_workflow(
-        database_connection, account_id=account.id, name="Campaign B"
+        database_connection, account_id=account.id, name="campaign-b"
     )
 
     # Cold outbound from workflow A.
@@ -3764,7 +3765,7 @@ def test_list_enrollments_detailed(
 ):
     account = make_test_account(database_connection)
     workflow = make_test_workflow(
-        database_connection, account_id=account.id, name="Outbound Campaign"
+        database_connection, account_id=account.id, name="outbound-campaign"
     )
     contact = make_test_contact(database_connection, email="alice@example.com")
     update_contact(
@@ -3779,7 +3780,7 @@ def test_list_enrollments_detailed(
     assert detail.contact_name == "Alice Smith"
     assert detail.status == "active"
     assert detail.workflow_id == workflow.id
-    assert detail.workflow_name == "Outbound Campaign"
+    assert detail.workflow_name == "outbound-campaign"
     assert detail.contact_id == contact.id
 
 
@@ -3832,7 +3833,7 @@ def test_enrollment_row_carries_parent_denorm_fields(
 
     account = make_test_account(database_connection)
     workflow = make_test_workflow(
-        database_connection, account_id=account.id, name="Outbound Campaign"
+        database_connection, account_id=account.id, name="outbound-campaign"
     )
     contact = make_test_contact(database_connection, email="alice@example.com")
     update_contact(
@@ -3843,31 +3844,31 @@ def test_enrollment_row_carries_parent_denorm_fields(
         database_connection, workflow_id=workflow.id, contact_id=contact.id
     )
     assert created is not None
-    assert created.workflow_name == "Outbound Campaign"
+    assert created.workflow_name == "outbound-campaign"
     assert created.contact_email == "alice@example.com"
     assert created.contact_name == "Alice Smith"
 
     by_id = get_enrollment_by_id(database_connection, created.id)
     assert by_id is not None
-    assert by_id.workflow_name == "Outbound Campaign"
+    assert by_id.workflow_name == "outbound-campaign"
     assert by_id.contact_email == "alice@example.com"
     assert by_id.contact_name == "Alice Smith"
 
     by_composite = get_enrollment(database_connection, workflow.id, contact.id)
     assert by_composite is not None
-    assert by_composite.workflow_name == "Outbound Campaign"
+    assert by_composite.workflow_name == "outbound-campaign"
     assert by_composite.contact_email == "alice@example.com"
     assert by_composite.contact_name == "Alice Smith"
 
     listed = list_enrollments(database_connection, workflow_id=workflow.id)
     assert len(listed) == 1
-    assert listed[0].workflow_name == "Outbound Campaign"
+    assert listed[0].workflow_name == "outbound-campaign"
     assert listed[0].contact_email == "alice@example.com"
     assert listed[0].contact_name == "Alice Smith"
 
     disabled = disable_enrollment(database_connection, created.id, "wrap-up")
     assert disabled is not None
-    assert disabled.workflow_name == "Outbound Campaign"
+    assert disabled.workflow_name == "outbound-campaign"
     assert disabled.contact_email == "alice@example.com"
     assert disabled.contact_name == "Alice Smith"
 
@@ -4758,19 +4759,19 @@ def test_list_active_outbound_enrollments_filters_by_direction_and_status(
     outbound = make_test_workflow(
         database_connection,
         account_id=account.id,
-        name="Outbound",
+        name="outbound",
         workflow_type="outbound",
     )
     inbound = make_test_workflow(
         database_connection,
         account_id=account.id,
-        name="Inbound",
+        name="inbound",
         workflow_type="inbound",
     )
     disabled_outbound = make_test_workflow(
         database_connection,
         account_id=account.id,
-        name="Disabled Outbound",
+        name="disabled-outbound",
         workflow_type="outbound",
     )
     contact = make_test_contact(database_connection)
@@ -5365,7 +5366,7 @@ def test_workflow_search_summary_get_full(
     from mailpilot.models import WorkflowSummary
 
     account = make_test_account(database_connection)
-    make_test_workflow(database_connection, account_id=account.id, name="Outreach")
+    make_test_workflow(database_connection, account_id=account.id, name="outreach")
     workflows = search_workflows(database_connection, "outreach")
     assert isinstance(workflows[0], WorkflowSummary)
     assert not hasattr(workflows[0], "goal")
@@ -5539,8 +5540,8 @@ def test_list_workflows_limit_and_since(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     account = make_test_account(database_connection)
-    make_test_workflow(database_connection, account_id=account.id, name="A")
-    make_test_workflow(database_connection, account_id=account.id, name="B")
+    make_test_workflow(database_connection, account_id=account.id, name="a")
+    make_test_workflow(database_connection, account_id=account.id, name="b")
     assert len(list_workflows(database_connection, limit=1)) == 1
     assert len(list_workflows(database_connection, since="9999-01-01T00:00:00")) == 0
 
@@ -5907,25 +5908,75 @@ def test_create_contact_returns_none_on_duplicate_email(
     assert second is None
 
 
-def test_create_workflow_returns_none_on_duplicate_account_id_name(
+def test_create_workflow_returns_none_on_duplicate_name(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """§V.16(+): re-create against existing (account_id, name) returns None."""
+    """§V.16(+): re-create against an existing global ``name`` returns None."""
     account = make_test_account(database_connection)
     first = create_workflow(
         database_connection,
-        name="Dup Workflow",
+        name="dup-workflow",
         template="outbound-general",
         account_id=account.id,
     )
     assert first is not None
     second = create_workflow(
         database_connection,
-        name="Dup Workflow",
+        name="dup-workflow",
         template="outbound-general",
         account_id=account.id,
     )
     assert second is None
+
+
+def test_create_workflow_name_globally_unique_across_accounts(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.90/§V.103: ``workflow.name`` is global -- two accounts cannot share it."""
+    a1 = make_test_account(database_connection, email="a@test.com")
+    a2 = make_test_account(database_connection, email="b@test.com")
+    first = create_workflow(
+        database_connection,
+        name="shared-name",
+        template="outbound-general",
+        account_id=a1.id,
+    )
+    assert first is not None
+    second = create_workflow(
+        database_connection,
+        name="shared-name",
+        template="outbound-general",
+        account_id=a2.id,
+    )
+    assert second is None
+
+
+def test_create_workflow_rejects_non_kebab_name(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.90/§V.103: the kebab CHECK rejects a non-kebab ``name``."""
+    account = make_test_account(database_connection)
+    with pytest.raises(psycopg.errors.CheckViolation):
+        create_workflow(
+            database_connection,
+            name="Not Kebab",
+            template="outbound-general",
+            account_id=account.id,
+        )
+
+
+def test_get_workflow_by_name_case_insensitive(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.90/§V.107: ``get_workflow_by_name`` resolves the natural key case-folded."""
+    account = make_test_account(database_connection)
+    created = make_test_workflow(
+        database_connection, account_id=account.id, name="ai-engineering"
+    )
+    found = get_workflow_by_name(database_connection, "AI-Engineering")
+    assert found is not None
+    assert found.id == created.id
+    assert get_workflow_by_name(database_connection, "no-such-flow") is None
 
 
 def test_create_or_get_contact_by_email_concurrent_is_safe(

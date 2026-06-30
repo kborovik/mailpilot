@@ -23,7 +23,14 @@ from mailpilot.cli import (
     _looks_like_uuid,  # pyright: ignore[reportPrivateUsage]
     main,
 )
-from mailpilot.models import Account, Company, CompanyView, Contact, ContactView
+from mailpilot.models import (
+    Account,
+    Company,
+    CompanyView,
+    Contact,
+    ContactView,
+    Workflow,
+)
 
 _NOW = datetime(2024, 1, 1, tzinfo=UTC)
 _UUID = "01234567-0000-7000-0000-000000000099"
@@ -59,6 +66,24 @@ def _contact(**over: Any) -> Contact:
         "updated_at": _NOW,
     }
     return Contact(**{**base, **over})
+
+
+def _workflow(**over: Any) -> Workflow:
+    base: dict[str, Any] = {
+        "id": _UUID,
+        "name": "ai-engineering",
+        "template": "outbound-general",
+        "type": "outbound",
+        "account_id": _UUID,
+        "account_email": "owner@example.com",
+        "status": "draft",
+        "goal": "",
+        "instructions": "",
+        "theme": "blue",
+        "created_at": _NOW,
+        "updated_at": _NOW,
+    }
+    return Workflow(**{**base, **over})
 
 
 @pytest.fixture
@@ -204,6 +229,56 @@ def test_contact_view_by_email_resolves_then_loads(
     assert result.exit_code == 0, result.output
     by_email.assert_called_once_with(conn, "lead@acme.com")
     load_view.assert_called_once_with(conn, contact.id)
+
+
+def test_workflow_view_by_name_uses_natural_key(
+    runner: CliRunner, conn: MagicMock
+) -> None:
+    workflow = _workflow()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=conn),
+        patch(
+            "mailpilot.database.get_workflow_by_name", return_value=workflow
+        ) as by_name,
+        patch("mailpilot.database.get_workflow", return_value=workflow) as by_id,
+    ):
+        result = runner.invoke(main, ["workflow", "view", "ai-engineering"])
+
+    assert result.exit_code == 0, result.output
+    by_name.assert_called_once_with(conn, "ai-engineering")
+    by_id.assert_called_once_with(conn, workflow.id)
+
+
+def test_workflow_view_by_uuid_uses_id(runner: CliRunner, conn: MagicMock) -> None:
+    workflow = _workflow()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=conn),
+        patch("mailpilot.database.get_workflow", return_value=workflow) as by_id,
+        patch("mailpilot.database.get_workflow_by_name") as by_name,
+    ):
+        result = runner.invoke(main, ["workflow", "view", _UUID])
+
+    assert result.exit_code == 0, result.output
+    by_id.assert_called_once_with(conn, _UUID)
+    by_name.assert_not_called()
+
+
+def test_workflow_view_unknown_name_not_found(
+    runner: CliRunner, conn: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=conn),
+        patch("mailpilot.database.get_workflow_by_name", return_value=None),
+    ):
+        result = runner.invoke(main, ["workflow", "view", "no-such-flow"])
+
+    assert result.exit_code == 1
+    import json
+
+    assert json.loads(result.output)["error"] == "not_found"
 
 
 # -- owner refs validate by natural key before mutation (§V.94) ----------------

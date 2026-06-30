@@ -41,7 +41,7 @@ def _seed_workflows(
     """Three workflows: active outbound, draft inbound, active KB-grounded."""
     alpha = create_workflow(
         connection,
-        name="Alpha outbound",
+        name="alpha-outbound",
         template="outbound-general",
         account_id=account_id,
         theme="green",
@@ -57,7 +57,7 @@ def _seed_workflows(
 
     create_workflow(
         connection,
-        name="Bravo inbound draft",
+        name="bravo-inbound-draft",
         template="inbound-general",
         account_id=account_id,
         theme="blue",
@@ -65,7 +65,7 @@ def _seed_workflows(
 
     charlie = create_workflow(
         connection,
-        name="Charlie KB",
+        name="charlie-kb",
         template="inbound-google-drive",
         account_id=account_id,
         theme="purple",
@@ -151,9 +151,9 @@ def test_workflow_export_import_round_trip_and_idempotence(
     )
     assert len(export["workflows"]) == 3
     assert [row["name"] for row in export["workflows"]] == [
-        "Alpha outbound",
-        "Bravo inbound draft",
-        "Charlie KB",
+        "alpha-outbound",
+        "bravo-inbound-draft",
+        "charlie-kb",
     ]
     original_catalog = _read_catalog(out_one)
     assert len(original_catalog) == 3

@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS workflow (
                           'inbound-google-drive'
                       )),
     type              TEXT NOT NULL CHECK (type IN ('inbound', 'outbound')),
-    name              TEXT NOT NULL,
+    name              TEXT NOT NULL
+                      CHECK (name ~ '^[a-z0-9]+(-[a-z0-9]+)*$'),
     goal              TEXT NOT NULL DEFAULT '',
     instructions      TEXT NOT NULL DEFAULT '',
     theme             TEXT NOT NULL DEFAULT 'blue',
@@ -56,7 +57,7 @@ CREATE TABLE IF NOT EXISTS workflow (
                       CHECK (status IN ('draft', 'active', 'paused')),
     created_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (account_id, name)
+    UNIQUE (name)
 );
 
 CREATE INDEX IF NOT EXISTS idx_workflow_account_id ON workflow(account_id);
