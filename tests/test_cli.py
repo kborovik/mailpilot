@@ -4058,6 +4058,54 @@ def test_workflow_check_malformed_toml_errors(
     mock_check.assert_not_called()
 
 
+def test_workflow_check_multiple_files_scope_to_catalog(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    """§V.134: repeatable --file reads every file and scopes the report to them."""
+    alpha = tmp_path / "alpha.toml"
+    alpha.write_text('name = "alpha"\ntemplate = "outbound-general"\n')
+    beta = tmp_path / "beta.toml"
+    beta.write_text('name = "beta"\ntemplate = "outbound-general"\n')
+    report = WorkflowCheck(
+        workflows=[], in_sync=0, out_of_sync=0, not_imported=0, orphaned=0
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.check_workflow_wording", return_value=report
+        ) as mock_check,
+    ):
+        result = runner.invoke(
+            main,
+            ["workflow", "check", "--file", str(alpha), "--file", str(beta)],
+        )
+    assert result.exit_code == 0, result.output
+    catalog_arg = mock_check.call_args.args[1]
+    assert {"alpha", "beta"} <= set(catalog_arg)
+    assert mock_check.call_args.kwargs["scope_to_catalog"] is True
+
+
+def test_workflow_check_directory_reports_orphaned(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    """§V.134: a directory is the full catalog, so orphaned rows still surface."""
+    (tmp_path / "x.toml").write_text('name = "x"\ntemplate = "outbound-general"\n')
+    report = WorkflowCheck(
+        workflows=[], in_sync=0, out_of_sync=0, not_imported=0, orphaned=0
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.check_workflow_wording", return_value=report
+        ) as mock_check,
+    ):
+        result = runner.invoke(main, ["workflow", "check", "--file", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert mock_check.call_args.kwargs["scope_to_catalog"] is False
+
+
 def test_workflow_search(runner: CliRunner, mock_connection: MagicMock) -> None:
     workflows = [_make_workflow(name="Demo")]
     with (

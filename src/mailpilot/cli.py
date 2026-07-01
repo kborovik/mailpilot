@@ -2773,41 +2773,65 @@ def workflow_stats(workflow_ref: str) -> None:
         connection.close()
 
 
-def _read_workflow_check_catalog(file: str | None) -> dict[str, dict[str, Any]]:
+def _read_workflow_check_catalog(
+    files: tuple[str, ...],
+) -> tuple[dict[str, dict[str, Any]], bool]:
     """Read catalog ``*.toml`` defs into a ``{name -> entry}`` map (§V.134).
 
     Reuses the import loader's TOML-only file-vs-dir dispatch (§V.103) but keys
     each entry on its ``name`` field -- ``workflow check`` reads the field, not
-    the file stem (§V.134). A malformed file or an entry missing ``name`` exits
-    ``validation_error`` per the closed error vocabulary (§V.54); on a duplicate
-    ``name`` across files the last def wins (§V.134).
+    the file stem (§V.134). ``--file`` is repeatable, so every passed source is
+    read and merged; on a duplicate ``name`` across files the last def wins
+    (§V.134). A malformed file or an entry missing ``name`` exits
+    ``validation_error`` per the closed error vocabulary (§V.54); an empty
+    ``files`` exits ``validation_error`` too.
+
+    Returns:
+        The merged catalog and ``scope_to_catalog``: ``True`` when every source
+        is a specific ``.toml`` file (the report presents only the inquired
+        names), ``False`` when any source is a directory (a full-catalog check
+        that still surfaces unaccounted rows as ``orphaned``, §V.134).
     """
-    entries, pre_errors = _load_workflow_import_entries(file)
-    if pre_errors:
-        output_error(str(pre_errors[0]["message"]), "validation_error")
+    import pathlib
+
+    if not files:
+        output_error(
+            "no input: provide --file PATH (a '.toml' file or a directory)",
+            "validation_error",
+        )
     catalog: dict[str, dict[str, Any]] = {}
-    for _stem, entry in entries:
-        name = entry.get("name")
-        if not isinstance(name, str) or not name:
-            output_error(
-                "catalog entry missing required 'name' field", "validation_error"
-            )
-        catalog[name] = entry
-    return catalog
+    scope_to_catalog = True
+    for file in files:
+        if pathlib.Path(file).is_dir():
+            scope_to_catalog = False
+        entries, pre_errors = _load_workflow_import_entries(file)
+        if pre_errors:
+            output_error(str(pre_errors[0]["message"]), "validation_error")
+        for _stem, entry in entries:
+            name = entry.get("name")
+            if not isinstance(name, str) or not name:
+                output_error(
+                    "catalog entry missing required 'name' field",
+                    "validation_error",
+                )
+            catalog[name] = entry
+    return catalog, scope_to_catalog
 
 
 @workflow.command("check")
 @click.option(
     "--file",
-    "file",
-    default=None,
+    "files",
+    multiple=True,
     type=click.Path(exists=True),
     help=(
         "Catalog source (TOML only): a '.toml' file or a directory of '*.toml' "
-        "defs to check against the live workflow rows."
+        "defs to check against the live workflow rows. Repeatable: pass --file "
+        "once per source. A specific-file check reports only the passed "
+        "workflows; a directory check also flags unaccounted rows as orphaned."
     ),
 )
-def workflow_check(file: str | None) -> None:
+def workflow_check(files: tuple[str, ...]) -> None:
     """Report wording drift between catalog defs and live workflow rows.
 
     A read-only 2-way live SHA-256 over the wording fields
@@ -2815,13 +2839,20 @@ def workflow_check(file: str | None) -> None:
     Mirrors ``db check`` but is report-only: every state (in_sync, out_of_sync,
     not_imported, orphaned) exits 0 with ``ok:true`` -- the check informs, it is
     never a deploy gate.
+
+    ``--file`` is repeatable. Passing specific ``.toml`` files scopes the report
+    to those workflows only; a live row you did not pass never appears as
+    orphaned. Pass a directory to check the full catalog, where a row with no
+    def surfaces as orphaned drift.
     """
     from mailpilot.database import check_workflow_wording, initialize_database
 
-    catalog = _read_workflow_check_catalog(file)
+    catalog, scope_to_catalog = _read_workflow_check_catalog(files)
     connection = initialize_database(_database_url())
     try:
-        report = check_workflow_wording(connection, catalog)
+        report = check_workflow_wording(
+            connection, catalog, scope_to_catalog=scope_to_catalog
+        )
     finally:
         connection.close()
     output({"workflow_check": report.model_dump(mode="json")})

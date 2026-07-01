@@ -224,13 +224,16 @@ class WorkflowCheckEntry(BaseModel):
 
 
 class WorkflowCheck(BaseModel):
-    """Aggregate wording-integrity report across every workflow name (§V.134).
+    """Aggregate wording-integrity report over the checked workflow names (§V.134).
 
     A read-only 2-way live SHA-256 comparison mirroring ``db check``: each
     ``workflows/*.toml`` def is joined to the live rows by ``name`` and
-    classified into one of four states. ``ok:true`` is reported regardless of
-    state -- the check informs, it is never a deploy gate. The envelope key is
-    ``workflow_check`` (an aggregate, not a ``workflow`` entity row, cf §V.132).
+    classified into one of four states. A directory check spans every name on
+    either side; a specific-file check reports only the passed names, so
+    ``orphaned`` (a row with no def) appears in directory mode only (§V.134).
+    ``ok:true`` is reported regardless of state -- the check informs, it is
+    never a deploy gate. The envelope key is ``workflow_check`` (an aggregate,
+    not a ``workflow`` entity row, cf §V.132).
     """
 
     workflows: list[WorkflowCheckEntry]

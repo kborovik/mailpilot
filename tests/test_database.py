@@ -6724,3 +6724,45 @@ def test_check_workflow_wording_joins_globally_across_accounts(
     assert names == {"account-a-flow", "account-b-flow"}
     assert all(entry.state == "orphaned" for entry in report.workflows)
     assert report.orphaned == 2
+
+
+def test_check_workflow_wording_scope_to_catalog_suppresses_orphaned(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.134: scoping to passed files reports only catalog names, no orphaned rows."""
+    account = make_test_account(database_connection)
+    create_workflow(
+        database_connection,
+        name="in-catalog-flow",
+        template="outbound-general",
+        account_id=account.id,
+    )
+    create_workflow(
+        database_connection,
+        name="other-db-flow",
+        template="outbound-general",
+        account_id=account.id,
+    )
+
+    catalog = {
+        "in-catalog-flow": _catalog_entry(
+            "in-catalog-flow", template="outbound-general"
+        ),
+        "new-flow": _catalog_entry("new-flow", template="inbound-general"),
+    }
+
+    scoped = check_workflow_wording(database_connection, catalog, scope_to_catalog=True)
+    names = {entry.name for entry in scoped.workflows}
+    # The unpassed DB row (other-db-flow) is absent; scoping shows only the
+    # inquired names. not_imported (catalog name, no row) still surfaces.
+    assert names == {"in-catalog-flow", "new-flow"}
+    assert scoped.orphaned == 0
+    by_name = {entry.name: entry for entry in scoped.workflows}
+    assert by_name["in-catalog-flow"].state == "in_sync"
+    assert by_name["new-flow"].state == "not_imported"
+
+    # Directory mode (the default) still surfaces the unpassed row as orphaned.
+    unscoped = check_workflow_wording(database_connection, catalog)
+    unscoped_by_name = {entry.name: entry for entry in unscoped.workflows}
+    assert unscoped_by_name["other-db-flow"].state == "orphaned"
+    assert unscoped.orphaned == 1

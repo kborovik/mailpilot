@@ -2238,6 +2238,7 @@ def _catalog_wording_hash(entry: dict[str, Any]) -> str:
 def check_workflow_wording(
     connection: psycopg.Connection[dict[str, Any]],
     catalog: dict[str, dict[str, Any]],
+    scope_to_catalog: bool = False,
 ) -> WorkflowCheck:
     """Compare catalog defs against live rows by name and classify each (§V.134).
 
@@ -2260,6 +2261,11 @@ def check_workflow_wording(
         connection: Open database connection.
         catalog: Parsed catalog defs keyed by the def's ``name`` field (the CLI
             reader applies last-def-wins on duplicate names per §V.134).
+        scope_to_catalog: When ``True``, report only the catalog names -- a DB
+            row with no def is dropped, never ``orphaned`` (§V.134). The CLI
+            sets this for a specific-file check so the report presents only the
+            inquired workflows; a directory check leaves it ``False`` so an
+            unaccounted DB row still surfaces as ``orphaned`` drift.
 
     Returns:
         ``WorkflowCheck`` carrying one entry per name plus rollup counts.
@@ -2277,8 +2283,11 @@ def check_workflow_wording(
         name: _catalog_wording_hash(entry) for name, entry in catalog.items()
     }
 
+    names = set(catalog_hashes)
+    if not scope_to_catalog:
+        names |= set(row_hashes)
     entries: list[WorkflowCheckEntry] = []
-    for name in sorted(set(row_hashes) | set(catalog_hashes)):
+    for name in sorted(names):
         catalog_hash = catalog_hashes.get(name)
         row_hash = row_hashes.get(name)
         if catalog_hash is not None and row_hash is not None:
