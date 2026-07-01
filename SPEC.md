@@ -203,6 +203,7 @@ T202|x|impl §V.90(∆) + §V.107(∆) — workflow joins keyed entities, natura
 T203|x|impl §V.103(∆) — `workflow import` enforces `name` = kebab file-stem + global unique; def fields {name,template,theme,goal,instructions} import-only; `workflow update` restricted to non-def fields (status, account binding)|V103,V107,V90
 T204|x|impl §V.134(+) + §I — `workflow check` verb: 2-way live SHA-256 over wording fields {template,theme,goal,instructions} keyed by workflow `name` (read each `workflows/*.toml` name field, join rows by name); states {in_sync,out_of_sync,not_imported,orphaned}; `{"workflow_check"}` envelope|V134,V103,V107,V4,V54
 T205|x|impl §V.4(∆) + §I — top-level int `record_count` = records displayed on every ok:true envelope (array payload -> len; single-object -> 1); error omits; thread through cli.py output helper|V4,V3
+T206|.|migrate pydantic-ai-slim[anthropic] v1→v2 — pin >=2.2.0,<3.0.0 (step through >=1.107.0 deprecation sweep, expect zero); classify.py `Agent[None, ClassificationResult]`→`Agent[object, ClassificationResult]` (v2 generic default None→object, type-only, sole [None] generic); verify §V.38 sequential=True barrier via test_agent_drive_concurrency.py unmodified + §V.53 span names (`agent run`, `running tool`, `gen_ai.tool.name`) under instr-format v5; agent-run spans move usage→`gen_ai.aggregated_usage.*` (own rollup spans agent.invoke + agent.classify_email unaffected); remaining v2 breaks verified n/a|V38,V53,V47
 
 ## §B BUGS
 
