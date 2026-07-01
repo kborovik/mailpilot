@@ -29,12 +29,16 @@ Every noun-verb command writes a single JSON document to stdout. Operator
 diagnostics go to stderr and never to stdout.
 
 - `list`, `search`, `sync`, `export`, `import`:
-  `{"<plural>": [...], "ok": true}`
+  `{"<plural>": [...], "record_count": <int>, "ok": true}`
 - `view`, `create`, `update`, `disable`, `enable`, `add`, `remove`,
   `reply`, `send`, `start`, `stop`, `cancel`, `retry`, `init`, `migrate`,
   `check`:
-  `{"<singular>": {...}, "ok": true}`
+  `{"<singular>": {...}, "record_count": 1, "ok": true}`
 - error: `{"error": "<code>", "message": "<text>", "ok": false}`
+
+Every `ok: true` envelope carries a top-level integer `record_count`: the
+array length for array payloads, `1` for single-object payloads. Error
+envelopes omit it.
 
 Plural keys mirror the noun (`accounts`, `companies`, `contacts`,
 `workflows`, `enrollments`, `tasks`, `emails`, `activities`, `tags`, `notes`,

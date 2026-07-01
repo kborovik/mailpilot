@@ -202,7 +202,7 @@ T201|x|impl §V.133(+) + §I — `task stats` single-SQL aggregate fn in databas
 T202|x|impl §V.90(∆) + §V.107(∆) — workflow joins keyed entities, natural key `name`; migration 009 + schema.sql: `workflow.name` global UNIQUE (drop `(account_id, name)` composite) + kebab CHECK, one-time normalize existing names to kebab; polymorphic resolver resolves workflow by name case-insensitively; workflow leaves keyless list|V90,V107,V108,V103
 T203|x|impl §V.103(∆) — `workflow import` enforces `name` = kebab file-stem + global unique; def fields {name,template,theme,goal,instructions} import-only; `workflow update` restricted to non-def fields (status, account binding)|V103,V107,V90
 T204|x|impl §V.134(+) + §I — `workflow check` verb: 2-way live SHA-256 over wording fields {template,theme,goal,instructions} keyed by workflow `name` (read each `workflows/*.toml` name field, join rows by name); states {in_sync,out_of_sync,not_imported,orphaned}; `{"workflow_check"}` envelope|V134,V103,V107,V4,V54
-T205|.|impl §V.4(∆) + §I — top-level int `record_count` = records displayed on every ok:true envelope (array payload -> len; single-object -> 1); error omits; thread through cli.py output helper|V4,V3
+T205|x|impl §V.4(∆) + §I — top-level int `record_count` = records displayed on every ok:true envelope (array payload -> len; single-object -> 1); error omits; thread through cli.py output helper|V4,V3
 
 ## §B BUGS
 

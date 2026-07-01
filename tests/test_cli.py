@@ -130,6 +130,92 @@ def test_skill_missing_file_hard_fails() -> None:
     assert "SKILL.md missing" in result.stderr
 
 
+# -- record_count envelope (§V.4) -----------------------------------------------
+
+
+def test_record_count_list_envelope(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """Array-bearing payload carries record_count == array len (§V.4)."""
+    accounts = [
+        _make_account(id="01234567-0000-7000-0000-000000000001", email="a@example.com"),
+        _make_account(id="01234567-0000-7000-0000-000000000002", email="b@example.com"),
+    ]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_accounts", return_value=accounts),
+    ):
+        result = runner.invoke(main, ["account", "list"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["record_count"] == 2
+
+
+def test_record_count_empty_list_envelope(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """Empty array-bearing payload carries record_count == 0 (§V.4)."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_accounts", return_value=[]),
+    ):
+        result = runner.invoke(main, ["account", "list"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["record_count"] == 0
+
+
+def test_record_count_single_entity_envelope(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """Single-object payload carries record_count == 1 (§V.4)."""
+    account = _make_account()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+    ):
+        result = runner.invoke(main, ["account", "view", account.id])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["record_count"] == 1
+
+
+def test_record_count_multi_key_payload_is_one(runner: CliRunner) -> None:
+    """Multi-key payload (config get KEY) counts as one record, never a list
+    value's len (§V.4)."""
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(main, ["config", "get", "run_interval"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["record_count"] == 1
+
+
+def test_record_count_absent_on_error(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """Error envelope omits record_count (§V.4)."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=None),
+    ):
+        result = runner.invoke(
+            main, ["account", "view", "01234567-0000-7000-0000-0000000000ff"]
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert "record_count" not in data
+
+
 # -- account create ------------------------------------------------------------
 
 
@@ -574,7 +660,7 @@ def test_account_sync_all_accounts(
     assert mock_sync.call_count == 2
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert set(data.keys()) == {"accounts", "ok"}
+    assert set(data.keys()) == {"accounts", "record_count", "ok"}
     assert [r["email"] for r in data["accounts"]] == ["a@example.com", "b@example.com"]
     assert [r["stored"] for r in data["accounts"]] == [3, 5]
     assert sum(r["stored"] for r in data["accounts"]) == 8
@@ -599,7 +685,7 @@ def test_account_sync_single_account(
     mock_get.assert_called_once_with(mock_connection, account.id)
     mock_list.assert_not_called()
     data = json.loads(result.output)
-    assert set(data.keys()) == {"accounts", "ok"}
+    assert set(data.keys()) == {"accounts", "record_count", "ok"}
     assert len(data["accounts"]) == 1
     assert data["accounts"][0]["email"] == "only@example.com"
     assert data["accounts"][0]["stored"] == 2
@@ -653,7 +739,7 @@ def test_account_sync_error_isolated_per_account(
 
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
-    assert set(data.keys()) == {"accounts", "ok"}
+    assert set(data.keys()) == {"accounts", "record_count", "ok"}
     assert data["accounts"][0]["error"] == "gmail 500"
     assert "stored" not in data["accounts"][0]
     assert data["accounts"][1]["stored"] == 4
@@ -8070,7 +8156,7 @@ def test_envelope_view_wraps_under_singular_key(
 
     assert result.exit_code == 0
     data = json.loads(result.output)
-    assert set(data.keys()) == {"account", "ok"}
+    assert set(data.keys()) == {"account", "record_count", "ok"}
     assert data["account"]["id"] == account.id
 
 
@@ -8090,7 +8176,7 @@ def test_envelope_create_wraps_under_singular_key(
 
     assert result.exit_code == 0
     data = json.loads(result.output)
-    assert set(data.keys()) == {"account", "ok"}
+    assert set(data.keys()) == {"account", "record_count", "ok"}
     assert data["account"]["email"] == account.email
 
 
@@ -8112,7 +8198,7 @@ def test_envelope_update_wraps_under_singular_key(
 
     assert result.exit_code == 0
     data = json.loads(result.output)
-    assert set(data.keys()) == {"account", "ok"}
+    assert set(data.keys()) == {"account", "record_count", "ok"}
     assert data["account"]["display_name"] == "Renamed"
 
 
@@ -8130,7 +8216,7 @@ def test_envelope_list_wraps_under_plural_key(
 
     assert result.exit_code == 0
     data = json.loads(result.output)
-    assert set(data.keys()) == {"accounts", "ok"}
+    assert set(data.keys()) == {"accounts", "record_count", "ok"}
     assert isinstance(data["accounts"], list)
 
 
@@ -8143,7 +8229,7 @@ def test_template_list(runner: CliRunner) -> None:
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert set(data.keys()) == {"templates", "ok"}
+    assert set(data.keys()) == {"templates", "record_count", "ok"}
     names = {t["name"] for t in data["templates"]}
     assert names == {"outbound-general", "inbound-general", "inbound-google-drive"}
     for tpl in data["templates"]:
@@ -8175,7 +8261,7 @@ def test_template_view_returns_full_record(runner: CliRunner) -> None:
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert set(data.keys()) == {"template", "ok"}
+    assert set(data.keys()) == {"template", "record_count", "ok"}
     record = data["template"]
     assert record["name"] == "inbound-google-drive"
     assert record["direction"] == "inbound"

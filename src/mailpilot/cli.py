@@ -131,6 +131,23 @@ def configure_logging(debug: bool = False) -> None:
 # -- JSON output pattern -------------------------------------------------------
 
 
+def _record_count(data: dict[str, Any]) -> int:
+    """Count the records a payload displays (§V.4).
+
+    An array-bearing payload -- exactly one top-level key whose value is a
+    list (`{"accounts": [...]}`) -- counts its array length. Every other
+    shape (single entity, aggregate `stats`/`check`, `status`, `db` status
+    objects, multi-key payloads like `config get`) counts as one record.
+    The single-key gate keeps a list-typed config *value* under a multi-key
+    payload from being miscounted as an array payload.
+    """
+    if len(data) == 1:
+        sole_value = next(iter(data.values()))
+        if isinstance(sole_value, list):
+            return len(sole_value)
+    return 1
+
+
 def output(data: dict[str, Any]) -> None:
     r"""Print structured JSON response to stdout.
 
@@ -138,8 +155,15 @@ def output(data: dict[str, Any]) -> None:
     string values are escaped, so downstream `json.loads` / `jq` callers never
     trip on raw control bytes. `ensure_ascii=False` keeps non-ASCII glyphs
     (em-dashes, accented characters) readable instead of `\uXXXX`-encoded.
+    Every ok:true envelope carries top-level `record_count` per §V.4.
     """
-    click.echo(json.dumps({**data, "ok": True}, indent=2, ensure_ascii=False))
+    click.echo(
+        json.dumps(
+            {**data, "record_count": _record_count(data), "ok": True},
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
 
 
 def output_entity(key: str, model: Any) -> None:
@@ -148,13 +172,7 @@ def output_entity(key: str, model: Any) -> None:
     Per SPEC §V.4: `<entity> view|create|update` -> `{"<singular>": {...}, "ok": true}`.
     Symmetric with `output({"<plural>": [...]})` used by list commands.
     """
-    click.echo(
-        json.dumps(
-            {key: model.model_dump(mode="json"), "ok": True},
-            indent=2,
-            ensure_ascii=False,
-        )
-    )
+    output({key: model.model_dump(mode="json")})
 
 
 def output_error(
