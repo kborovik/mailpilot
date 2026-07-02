@@ -94,7 +94,7 @@ V51: every logfire.exception site reachable from `mailpilot run` ! paired operat
 V52: logfire.configure(environment=settings.logfire_environment) -> spans carry deployment_environment; cloud queries filter by env
 V53: agent tool spans come from logfire.instrument_pydantic_ai() (gen_ai.tool.name attr); no logfire.span inside agent tools; agents carry explicit names mailpilot.classifier + mailpilot.workflow
 V54: CLI mutation = logfire.span + operator_event; constraint code vocabulary; SystemExit absorbed at boundary — → .claude/check-extras.md §V.54
-V55: tool_response span attr exempt from Logfire scrubbing; all other attrs scrubbed
+V55: `gen_ai.tool.call.result` span attr exempt from Logfire scrubbing; all other attrs scrubbed; scrubbing contract test drives a real instrumented tool call, never a fabricated span
 V62: /release extends /gh:release — post-tag: push main + v<x.y.z>, uv build + gh release create v<x.y.z> --verify-tag + wheel attach; confirm-before-mutate gate; version source = pyproject.toml; deploy = published wheel — → .claude/check-extras.md §V.62
 V67: persisted outbound in_reply_to + references_header mirror wire MIME headers exactly
 V69: tick classifying >= 1 inbound -> next tick forces full sweep + wakeup_event set
@@ -203,7 +203,7 @@ T202|x|impl §V.90(∆) + §V.107(∆) — workflow joins keyed entities, natura
 T203|x|impl §V.103(∆) — `workflow import` enforces `name` = kebab file-stem + global unique; def fields {name,template,theme,goal,instructions} import-only; `workflow update` restricted to non-def fields (status, account binding)|V103,V107,V90
 T204|x|impl §V.134(+) + §I — `workflow check` verb: 2-way live SHA-256 over wording fields {template,theme,goal,instructions} keyed by workflow `name` (read each `workflows/*.toml` name field, join rows by name); states {in_sync,out_of_sync,not_imported,orphaned}; `{"workflow_check"}` envelope|V134,V103,V107,V4,V54
 T205|x|impl §V.4(∆) + §I — top-level int `record_count` = records displayed on every ok:true envelope (array payload -> len; single-object -> 1); error omits; thread through cli.py output helper|V4,V3
-T206|.|migrate pydantic-ai-slim[anthropic] v1→v2 — pin >=2.2.0,<3.0.0 (step through >=1.107.0 deprecation sweep, expect zero); classify.py `Agent[None, ClassificationResult]`→`Agent[object, ClassificationResult]` (v2 generic default None→object, type-only, sole [None] generic); verify §V.38 sequential=True barrier via test_agent_drive_concurrency.py unmodified + §V.53 span names (`agent run`, `running tool`, `gen_ai.tool.name`) under instr-format v5; agent-run spans move usage→`gen_ai.aggregated_usage.*` (own rollup spans agent.invoke + agent.classify_email unaffected); remaining v2 breaks verified n/a|V38,V53,V47
+T206|x|migrate pydantic-ai-slim[anthropic] v1→v2 — pin >=2.2.0,<3.0.0 (1.107.0 deprecation sweep: zero warnings); classify.py `Agent[object, ClassificationResult]` (v2 generic default None→object, type-only); §V.38 sequential=True per-tool barrier verified, test_agent_drive_concurrency.py unmodified; instr-format v5 renames spans `agent run`→`invoke_agent <name>` + `running tool`→`execute_tool <name>` + attr `tool_response`→`gen_ai.tool.call.result` (scrub exemption re-keyed per §B.122); run-span usage→`gen_ai.aggregated_usage.*` (own rollup spans agent.invoke + agent.classify_email unaffected)|V38,V53,V55,V47
 
 ## §B BUGS
 
@@ -240,3 +240,4 @@ B118|2026-06-27|prospect notes from prior runs (do-not-contact, wrong-person) po
 B119|2026-06-27|V122 drift: campaign-test refactored to single-prospect multi-scenario architecture after T180; `verify_delivery.py` + `inbound{N}@lab5.ca` aliases removed; V122 text described the superseded alias-keyed design|V122
 B120|2026-06-27|AI Engineering not_now branch named a two-option close (create_task OR conclude_enrollment contact_later); live agent took both — concluded contact_later AND created a follow-up task; contact_later already re-enrolls so prospect double-queued|V124
 B121|2026-06-29|inbound reply From local-part cased unlike enrolled (`CThorne@` vs `cthorne@`); sync sender→contact resolve keys off raw-cased address; case-sensitive `contact.email` UNIQUE misses canonical row + mints bare duplicate; `email.sender` independently lowercased so paths disagree|V90
+B122|2026-07-01|pydantic-ai v2 instr-format 5 renames tool-return attr `tool_response`→`gen_ai.tool.call.result`; path-keyed scrub exemption silently dead; fabricated-span contract test asserted the hand-set old attr so stayed green|V55
