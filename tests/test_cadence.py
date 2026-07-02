@@ -16,9 +16,45 @@ import psycopg
 
 from conftest import make_test_account, make_test_contact, make_test_enrollment
 from mailpilot import database
-from mailpilot.cadence import advance_touch_cadence, next_touch_scheduled_at
+from mailpilot.cadence import (
+    advance_touch_cadence,
+    next_touch_scheduled_at,
+    resolve_touch_number,
+)
 from mailpilot.database import create_workflow, update_workflow
 from mailpilot.models import Enrollment, Workflow
+
+# -- resolve_touch_number: compose-only dispatch key (§V.136) ------------------
+
+
+def test_resolve_touch_number_from_context_touch() -> None:
+    """§V.136: a scheduled touch-N task carries context.touch -> that N."""
+    assert resolve_touch_number({"touch": 2, "prior_email_id": "e"}, "task") == 2
+
+
+def test_resolve_touch_number_context_wins_over_trigger() -> None:
+    """§V.136: context.touch takes precedence over the trigger-derived touch 1."""
+    assert resolve_touch_number({"touch": 3}, "enrollment_run") == 3
+
+
+def test_resolve_touch_number_first_reach_out_triggers_are_touch_one() -> None:
+    """§V.136: enrollment_run / enrollment_schedule with no context.touch = touch 1."""
+    assert resolve_touch_number(None, "enrollment_run") == 1
+    assert (
+        resolve_touch_number({"trigger": "enrollment_schedule"}, "enrollment_schedule")
+        == 1
+    )
+
+
+def test_resolve_touch_number_tool_loop_triggers_return_none() -> None:
+    """§V.136: a deferred reply-branch task / inbound reply / manual run stays on
+    the tool loop -- no touch number."""
+    assert resolve_touch_number(None, "task") is None
+    assert resolve_touch_number({}, "email") is None
+    assert resolve_touch_number(None, "manual") is None
+    # A non-int touch value is ignored (malformed context, not a touch run).
+    assert resolve_touch_number({"touch": "2"}, "task") is None
+
 
 # -- next_touch_scheduled_at: interval + weekend roll (§V.136) -----------------
 

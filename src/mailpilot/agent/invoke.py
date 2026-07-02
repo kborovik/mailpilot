@@ -25,19 +25,19 @@ from __future__ import annotations
 
 import zlib
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 import httpx
 import logfire
 import psycopg
-from pydantic_ai import Agent, RunContext
+from pydantic_ai import Agent, ModelRetry, RunContext
 from pydantic_ai.messages import ModelRequest, ToolReturnPart
 from pydantic_ai.models import Model
 from pydantic_ai.models.anthropic import AnthropicModel, AnthropicModelSettings
 from pydantic_ai.providers.anthropic import AnthropicProvider
 
-from mailpilot import database
+from mailpilot import cadence, database, email_ops
 from mailpilot.agent import tools as agent_tools
 from mailpilot.drive import DriveClient
 from mailpilot.exceptions import (
@@ -51,10 +51,17 @@ from mailpilot.models import (
     Contact,
     ContactView,
     Email,
+    Enrollment,
+    TouchMessage,
     Workflow,
 )
 from mailpilot.operator_log import operator_event
 from mailpilot.settings import Settings
+
+# §V.42 lint runs as the compose-only output validator with a bounded ModelRetry
+# so a space-aligned spec block is re-drafted a capped number of times before the
+# run fails terminally (mirrors the §V.71 tool-path rejection cap).
+_TOUCH_VALIDATION_RETRIES = 2
 
 
 @dataclass
@@ -404,6 +411,50 @@ def _build_agent(workflow: Workflow, trigger: str = "manual") -> Agent[AgentDeps
     return agent
 
 
+def _build_touch_agent(workflow: Workflow) -> Agent[None, TouchMessage]:
+    """Build the compose-only touch agent for an outbound touch run (§V.136).
+
+    A touch run (first reach-out or a system-scheduled follow-up in a workflow's
+    cadence) produces a structured ``TouchMessage`` instead of driving a tool
+    loop: the agent binds zero tools and its validated output *is* the action, so
+    the §V.81 tool-count check and the §V.120 reply walker do not apply and the
+    harness sends the message itself. The workflow's ``_TOUCH_COMPOSE`` protocol
+    plus its ``instructions`` frame the compose task. The §V.42 spec-table lint
+    runs as an output validator with a bounded ``ModelRetry`` so a space-aligned
+    spec block is re-drafted, capped by the agent retry budget. The date-grounding
+    instruction (§V.129) and the model-visible protocol carry no SPEC cite (§V.45).
+    """
+    from mailpilot.agent.templates import (
+        _TOUCH_COMPOSE,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    agent: Agent[None, TouchMessage] = Agent(
+        name="mailpilot.workflow",
+        output_type=TouchMessage,
+        instructions=_TOUCH_COMPOSE + workflow.instructions,
+        retries=_TOUCH_VALIDATION_RETRIES,
+    )
+
+    @agent.instructions
+    def _ground_current_date() -> str:
+        return (
+            f"The current date is {date.today().isoformat()}. "
+            "Ground every relative reference on this date and never guess the year."
+        )
+
+    @agent.output_validator
+    def _lint_spec_table(output: TouchMessage) -> TouchMessage:
+        # §V.42: the format lint is the compose-only output validator. A body
+        # that renders product specs as space-aligned text triggers a bounded
+        # ModelRetry (capped by ``retries``) instead of reaching the recipient.
+        format_error = agent_tools._check_spec_table(output.body)  # pyright: ignore[reportPrivateUsage]
+        if format_error is not None:
+            raise ModelRetry(format_error["message"])
+        return output
+
+    return agent
+
+
 def _build_anthropic_model(settings: Settings) -> AnthropicModel:
     """Construct the AnthropicModel with §V.47 cache_control + §V.48 read-timeout.
 
@@ -603,9 +654,10 @@ def _sent_reply(result: Any) -> bool:
     ``reply_email`` or ``send_email`` ToolReturnPart that carries no
     ``error`` key -- the message reached Gmail -- or a ``noop`` /
     ``conclude_enrollment`` return, the explicit decline and the agent
-    terminal (§V.127). Any of these satisfies the send obligation for both
-    directions (inbound reply and outbound first reach-out); none means the
-    run left the message unsent while reporting success.
+    terminal (§V.127). Any of these satisfies the send obligation on the
+    inbound tool-loop path; none means the run left the message unsent while
+    reporting success. The outbound first reach-out is a compose-only touch
+    run (§V.136) whose send is structural, so it is not walker-checked.
     """
     for message in result.all_messages():
         if not isinstance(message, ModelRequest):
@@ -626,10 +678,169 @@ def _sent_reply(result: Any) -> bool:
     return False
 
 
+# -- Compose-only touch send (§V.136) ------------------------------------------
+
+
+def _resolve_prior_touch_email(
+    connection: psycopg.Connection[dict[str, Any]],
+    task_context: dict[str, Any] | None,
+    email_history: list[Email],
+) -> Email | None:
+    """Resolve the prior touch's email for threading a follow-up (§V.136).
+
+    Prefers ``task_context['prior_email_id']`` -- the cadence engine threads the
+    id of touch N-1's email into a scheduled touch-N task. Falls back to the
+    enrollment's latest outbound email from ``email_history`` (newest-first,
+    already scoped to account + contact + workflow) so a touch that lost its
+    context still continues the last send. Returns ``None`` on the first touch
+    (no prior outbound), so the harness opens a new thread.
+    """
+    prior_id = task_context.get("prior_email_id") if task_context else None
+    if isinstance(prior_id, str):
+        prior = database.get_email(connection, prior_id)
+        if prior is not None:
+            return prior
+    return next((msg for msg in email_history if msg.direction == "outbound"), None)
+
+
+def _send_touch_message(  # noqa: PLR0913
+    connection: psycopg.Connection[dict[str, Any]],
+    account: Account,
+    gmail_client: GmailClient,
+    settings: Settings,
+    workflow: Workflow,
+    contact: Contact,
+    touch_message: TouchMessage,
+    prior_email: Email | None,
+) -> Email:
+    """Send one composed touch through the ``email_ops`` policy layer (§V.136).
+
+    A follow-up (a prior touch exists in the thread) is sent as a reply so it
+    threads natively and skips the cold-outbound cooldown -- ``reply_email``
+    auto-derives the recipient, ``Re:`` subject, thread, and In-Reply-To. The
+    first touch opens a new thread via ``send_email`` with the composed subject.
+    The §V.42 format lint already ran as the compose-only output validator, so
+    ``email_ops`` is called directly (the tool-layer lint is not re-applied).
+    """
+    if (
+        prior_email is not None
+        and prior_email.gmail_thread_id is not None
+        and prior_email.contact_id is not None
+    ):
+        return email_ops.reply_email(
+            connection,
+            account,
+            gmail_client,
+            settings,
+            email_id=prior_email.id,
+            body=touch_message.body,
+            workflow_id=workflow.id,
+        )
+    return email_ops.send_email(
+        connection,
+        account,
+        gmail_client,
+        settings,
+        to=contact.email,
+        subject=touch_message.subject or "",
+        body=touch_message.body,
+        workflow_id=workflow.id,
+    )
+
+
+def _run_compose_only_touch(  # noqa: PLR0913
+    *,
+    span: Any,
+    connection: psycopg.Connection[dict[str, Any]],
+    account: Account,
+    gmail_client: GmailClient,
+    settings: Settings,
+    workflow: Workflow,
+    contact: Contact,
+    enrollment: Enrollment,
+    email_history: list[Email],
+    task_context: dict[str, Any] | None,
+    prompt: str,
+    model: Model | str,
+    touch_number: int,
+) -> dict[str, Any]:
+    """Run one compose-only outbound touch: compose, send, advance cadence (§V.136).
+
+    One LLM call yields a validated ``TouchMessage`` (the §V.42 lint runs as its
+    output validator). The harness sends it via ``email_ops`` -- a follow-up
+    threads on the prior touch, the first touch opens a new thread -- then the
+    cadence engine schedules the next touch or, after the final one, concludes
+    the enrollment ``contact_later`` system-internally (§V.127, §V.128). No tool
+    loop, so §V.81 / §V.120 do not apply; the send is structural. Returns the
+    same completed-run result dict shape as the tool-loop path, plus the sent
+    email id and the touch number.
+    """
+    touch_agent = _build_touch_agent(workflow)
+    result = touch_agent.run_sync(prompt, model=model)
+    touch_message = result.output
+
+    prior_email = _resolve_prior_touch_email(connection, task_context, email_history)
+    sent_email = _send_touch_message(
+        connection,
+        account,
+        gmail_client,
+        settings,
+        workflow,
+        contact,
+        touch_message,
+        prior_email,
+    )
+    cadence.advance_touch_cadence(
+        connection,
+        workflow,
+        enrollment,
+        sent_touch_number=touch_number,
+        prior_email_id=sent_email.id,
+        base=datetime.now(UTC),
+    )
+
+    usage = result.usage
+    span.set_attribute("model", settings.anthropic_model)
+    span.set_attribute("input_tokens", usage.input_tokens)
+    span.set_attribute("output_tokens", usage.output_tokens)
+    span.set_attribute("total_tokens", usage.input_tokens + usage.output_tokens)
+    span.set_attribute("llm_requests", usage.requests)
+    # §V.47: bubble Anthropic prompt-cache token counts to the rollup span.
+    span.set_attribute("cache_read_input_tokens", usage.cache_read_tokens)
+    span.set_attribute("cache_creation_input_tokens", usage.cache_write_tokens)
+    # Compose-only runs bind no tools (§V.81 exempt) -- report zero for both so
+    # the rollup schema matches the tool-loop path.
+    span.set_attribute("tool_call_count", 0)
+    span.set_attribute("tool_error_count", 0)
+    span.set_attribute("touch_number", touch_number)
+    span.set_attribute("sent_email_id", sent_email.id)
+    reasoning = f"composed and sent touch {touch_number}"
+    span.set_attribute("result", "completed")
+    span.set_attribute("status", "completed")
+    span.set_attribute("agent_reasoning", reasoning)
+    operator_event(
+        "agent.run",
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        status="completed",
+        tool_calls=0,
+    )
+    return {
+        "workflow_id": workflow.id,
+        "contact_id": contact.id,
+        "status": "completed",
+        "tool_calls": 0,
+        "tool_errors": [],
+        "reasoning": reasoning,
+        "sent_email_id": sent_email.id,
+        "touch_number": touch_number,
+    }
+
+
 # -- Main entry point ----------------------------------------------------------
 
 
-def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
+def invoke_workflow_agent(  # noqa: PLR0913, PLR0915, C901
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
     workflow: Workflow,
@@ -743,8 +954,8 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
                 if full is not None
             ]
 
-            # Build agent and deps.
-            agent = _build_agent(workflow, trigger=trigger)
+            # Resolve the model once; both the compose-only and the tool-loop
+            # path use it.
             if model_override is not None:
                 model = model_override
             else:
@@ -776,7 +987,7 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
                 else None
             )
 
-            # Assemble prompt and run.
+            # Assemble prompt (shared by both agent shapes).
             prompt = _build_user_prompt(
                 workflow=workflow,
                 contact=contact,
@@ -791,6 +1002,37 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
 
             span.set_attribute("prompt_length", len(prompt))
 
+            # §V.136 dispatch: an outbound touch run -- the first reach-out or a
+            # system-scheduled touch-N task, both with no triggering email --
+            # composes a structured TouchMessage. The harness sends it and
+            # advances the cadence; there is no tool loop, so the §V.81 tool-count
+            # check and the §V.120 reply walker do not apply (the send is
+            # structural). All other runs (inbound reply, outbound reply-branch
+            # task, manual) keep the tool loop below.
+            touch_number = cadence.resolve_touch_number(task_context, trigger)
+            if (
+                workflow.type == "outbound"
+                and email is None
+                and touch_number is not None
+            ):
+                return _run_compose_only_touch(
+                    span=span,
+                    connection=connection,
+                    account=account,
+                    gmail_client=gmail_client,
+                    settings=settings,
+                    workflow=workflow,
+                    contact=contact,
+                    enrollment=enrollment,
+                    email_history=email_history,
+                    task_context=task_context,
+                    prompt=prompt,
+                    model=model,
+                    touch_number=touch_number,
+                )
+
+            # Tool-loop path: build the template agent and run it.
+            agent = _build_agent(workflow, trigger=trigger)
             result = agent.run_sync(prompt, model=model, deps=deps)
 
             # Scan tool returns for {"error": ...} payloads -- the agent may have
@@ -837,23 +1079,17 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
                     f"workflow={workflow.id}, contact={contact.id}"
                 )
 
-            # §V.120 (per §B.106): a send-obligated run must finish in a send
-            # or an explicit noop. The tool-count check above passes when the
-            # model called only search/read tools and then narrated a message
-            # it never sent, which leaves the work undone while reporting
-            # success. Two trigger classes carry the obligation: an inbound
-            # trigger (email present, trigger in {email, task}) answers via
-            # reply_email, and an outbound first reach-out (no email, trigger
-            # in {enrollment_run, enrollment_schedule}) opens via send_email.
-            # ``manual`` stays exempt (direct programmatic / test path).
-            inbound_send_obligated = email is not None and trigger in ("email", "task")
-            outbound_send_obligated = email is None and trigger in (
-                "enrollment_run",
-                "enrollment_schedule",
-            )
-            if (inbound_send_obligated or outbound_send_obligated) and not _sent_reply(
-                result
-            ):
+            # §V.120 (per §B.106, §V.136): a send-obligated run must finish in a
+            # send, a terminal, or an explicit noop. The tool-count check above
+            # passes when the model called only search/read tools and then
+            # narrated a message it never sent, which leaves the work undone
+            # while reporting success. The walker now covers the inbound path
+            # only -- a triggering email present (trigger in {email, task}) means
+            # the agent must reply, conclude, or noop. The outbound first
+            # reach-out is a compose-only touch run (dispatched above), so its
+            # send is structural, not walker-checked. ``manual`` stays exempt.
+            send_obligated = email is not None and trigger in ("email", "task")
+            if send_obligated and not _sent_reply(result):
                 logfire.warn(
                     "agent.completed_without_reply",
                     workflow_id=workflow.id,

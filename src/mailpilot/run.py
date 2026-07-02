@@ -24,6 +24,7 @@ from mailpilot.agent.tools import (
     reply_rejection_scope,
     reply_was_emitted,
 )
+from mailpilot.cadence import resolve_touch_number
 from mailpilot.database import (
     complete_task,
     get_account,
@@ -41,9 +42,12 @@ from mailpilot.settings import Settings
 
 _LOCK_CONTENTION_BACKOFF_SECONDS = 5
 _LOCK_CONTENTION_JITTER_SECONDS = 5
+# §V.136: a touch-N (N>=2) task whose workflow lost its cadence pair is pushed
+# one hour out instead of composing a malformed touch (§V.25 reschedule shape).
+_NULL_CADENCE_BACKOFF_SECONDS = 3600
 
 
-def execute_task(
+def execute_task(  # noqa: PLR0911
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
     task: Task,
@@ -144,6 +148,31 @@ def execute_task(
         # ``task`` for legacy task rows that pre-date scheduled enrollment.
         context_trigger = task.context.get("trigger") if task.context else None
         trigger = context_trigger if isinstance(context_trigger, str) else "task"
+
+        # §V.136 NULL-cadence belt: a scheduled touch N>=2 whose workflow has
+        # since lost its cadence pair cannot advance the sequence. Reschedule it
+        # one hour out and warn (§V.25 reschedule shape) rather than compose a
+        # touch with no follow-up context. Touch 1 (first reach-out) and
+        # single-touch workflows are unaffected -- they send and schedule nothing.
+        touch_number = resolve_touch_number(task.context, trigger)
+        if touch_number is not None and touch_number >= 2 and workflow.touches is None:
+            logfire.warn(
+                "run.task.null_cadence_touch",
+                task_id=task.id,
+                workflow_id=task.workflow_id,
+                touch=touch_number,
+            )
+            operator_event(
+                "task.null_cadence_reschedule",
+                task_id=task.id,
+                workflow_id=task.workflow_id,
+                touch=touch_number,
+            )
+            reschedule_task_for_lock_contention(
+                connection, task.id, _NULL_CADENCE_BACKOFF_SECONDS
+            )
+            return
+
         try:
             result = invoke_workflow_agent(
                 connection,

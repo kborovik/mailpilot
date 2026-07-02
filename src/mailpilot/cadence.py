@@ -27,6 +27,40 @@ from mailpilot.models import Enrollment, Workflow
 _SATURDAY = 5
 _SUNDAY = 6
 
+_FIRST_TOUCH_TRIGGERS = ("enrollment_run", "enrollment_schedule")
+
+
+def resolve_touch_number(
+    task_context: dict[str, Any] | None,
+    trigger: str,
+) -> int | None:
+    """Return the touch number for a compose-only touch run, else ``None`` (§V.136).
+
+    A run composes a touch (rather than driving a tool loop) when it is a
+    system-scheduled touch-N task -- ``task_context['touch']`` set by the cadence
+    engine -- or a first reach-out (``trigger`` in {enrollment_run,
+    enrollment_schedule}, which are touch 1). Any other run (a deferred
+    reply-branch task, an inbound reply, a manual call) returns ``None`` and
+    stays on the tool loop.
+
+    ``task_context['touch']`` wins over the trigger so a touch-N task drained as
+    the generic ``task`` trigger still resolves to N.
+
+    Args:
+        task_context: The task row's JSON context, if any.
+        trigger: The ``agent.invoke`` trigger label (§V.26).
+
+    Returns:
+        The 1-based touch number, or ``None`` for a tool-loop run.
+    """
+    if task_context is not None:
+        touch = task_context.get("touch")
+        if isinstance(touch, int):
+            return touch
+    if trigger in _FIRST_TOUCH_TRIGGERS:
+        return 1
+    return None
+
 
 def next_touch_scheduled_at(base: datetime, interval_days: int) -> datetime:
     """Return the next touch time: ``base`` plus the interval, weekend-rolled.

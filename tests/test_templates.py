@@ -349,52 +349,34 @@ def test_non_drive_templates_protocol_excludes_grounding() -> None:
 _CONCLUDE_INSTRUCTION = (
     "After achieving the workflow goal for a contact, conclude the enrollment"
 )
-_INITIAL_INSTRUCTION = "Send the initial email and stop"
 _INBOUND_INSTRUCTION = "Reply to the inbound email once, then stop"
-
-
-@pytest.mark.parametrize("template", list(TEMPLATES.values()), ids=lambda t: t.name)
-def test_build_protocol_task_branch_direction_aware(
-    template: WorkflowTemplate,
-) -> None:
-    """§V.31: on ``trigger='task'`` an outbound template keeps the
-    terminal-outcome instruction; an inbound template uses the inbound-reply
-    branch regardless of trigger (§B.124: the TASK branch used to order a
-    ``conclude_enrollment`` inbound workflows forbid)."""
-    protocol = template.build_protocol("task")
-    if template.direction == "inbound":
-        assert _INBOUND_INSTRUCTION in protocol
-        assert _CONCLUDE_INSTRUCTION not in protocol
-        assert _INITIAL_INSTRUCTION not in protocol
-    else:
-        assert _CONCLUDE_INSTRUCTION in protocol
-        assert _INITIAL_INSTRUCTION not in protocol
-        assert _INBOUND_INSTRUCTION not in protocol
 
 
 @pytest.mark.parametrize(
     "trigger",
-    ["enrollment_run", "enrollment_schedule", "manual", "email", "anything_else"],
+    ["task", "enrollment_run", "enrollment_schedule", "manual", "email"],
 )
 @pytest.mark.parametrize("template", list(TEMPLATES.values()), ids=lambda t: t.name)
-def test_build_protocol_non_task_branch_direction_aware(
+def test_build_protocol_branch_is_direction_only(
     template: WorkflowTemplate, trigger: str
 ) -> None:
-    """§V.31 + §V.32: for a non-``task`` trigger an outbound template swaps to
-    the initial-send-only instruction (``enrollment_schedule`` joins the
-    non-task set because it shares first-touch semantics with
-    ``enrollment_run`` per §V.30); an inbound template always uses the
-    inbound-reply branch (§B.124: the INITIAL branch used to mislabel an
-    inbound reply as a first reach-out)."""
+    """§V.31 + §V.136: ``build_protocol`` is direction-only after the
+    initial-send fragment was retired -- the outbound first reach-out is now a
+    compose-only touch run (§V.136), so no trigger selects an initial-send
+    branch. For every trigger an outbound template composes the terminal-outcome
+    instruction and an inbound template the inbound-reply instruction (§B.124:
+    the old TASK branch used to order a ``conclude_enrollment`` inbound workflows
+    forbid; the old INITIAL branch mislabeled an inbound reply as first
+    reach-out)."""
     protocol = template.build_protocol(trigger)
     if template.direction == "inbound":
         assert _INBOUND_INSTRUCTION in protocol
-        assert _INITIAL_INSTRUCTION not in protocol
         assert _CONCLUDE_INSTRUCTION not in protocol
     else:
-        assert _INITIAL_INSTRUCTION in protocol
-        assert _CONCLUDE_INSTRUCTION not in protocol
+        assert _CONCLUDE_INSTRUCTION in protocol
         assert _INBOUND_INSTRUCTION not in protocol
+    # The retired initial-send fragment never appears in a composed protocol.
+    assert "Send the initial email and stop" not in protocol
 
 
 @pytest.mark.parametrize(
@@ -452,12 +434,13 @@ def test_must_send_ordered_after_trigger_branch_before_decline(
     and before _DECLINE in the composed protocol."""
     protocol = template.build_protocol(trigger)
     must_send = templates_module._MUST_SEND  # pyright: ignore[reportPrivateUsage]
-    if template.direction == "inbound":
-        deferred_marker = _INBOUND_INSTRUCTION
-    elif trigger == "task":
-        deferred_marker = _CONCLUDE_INSTRUCTION
-    else:
-        deferred_marker = _INITIAL_INSTRUCTION
+    # §V.136: the deferred branch is direction-only -- inbound-reply for inbound,
+    # terminal-outcome for outbound (the initial-send fragment was retired).
+    deferred_marker = (
+        _INBOUND_INSTRUCTION
+        if template.direction == "inbound"
+        else _CONCLUDE_INSTRUCTION
+    )
     base_idx = protocol.find("Keep your final summary brief")
     deferred_idx = protocol.find(deferred_marker)
     must_send_idx = protocol.find(must_send)
@@ -633,6 +616,31 @@ def test_fallback_acknowledgement_is_fixed_content_free_ascii() -> None:
             assert body not in template.build_protocol(trigger)
 
 
+# -- §V.136: compose-only touch protocol fragment ------------------------------
+
+
+def test_touch_compose_fragment_hygiene() -> None:
+    """§V.136 / §V.45 / §V.40: the compose-only touch protocol is a non-empty,
+    ASCII, SPEC-cite-free fragment that names no tool (the compose-only agent
+    binds none, so §V.40 does not apply) and is NOT composed into any tool-loop
+    template protocol -- it is the separate compose-only shape (§V.44)."""
+    fragment = templates_module._TOUCH_COMPOSE  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(fragment, str)
+    assert fragment.strip()
+    assert fragment.isascii()
+    assert _SPEC_CITE.search(fragment) is None
+    # Names no bound tool (structured output is the action, no tool call).
+    known = _known_tool_names()
+    mentioned = {
+        name for name in known if re.search(rf"\b{re.escape(name)}\b", fragment)
+    }
+    assert mentioned == set()
+    # Not part of any tool-loop protocol composition.
+    for template in TEMPLATES.values():
+        for trigger in _ALL_TRIGGERS:
+            assert fragment not in template.build_protocol(trigger)
+
+
 # -- _build_agent integration --------------------------------------------------
 
 
@@ -682,14 +690,13 @@ def test_build_agent_binds_template_tools(template_name: str) -> None:
 
 @pytest.mark.parametrize("template_name", list(TEMPLATES.keys()))
 def test_build_agent_trigger_routes_protocol_branch(template_name: str) -> None:
-    """§V.31: ``_build_agent`` selects the deferred-task branch per direction +
-    ``trigger``.
+    """§V.31 + §V.136: ``_build_agent`` composes the direction-only deferred
+    branch.
 
-    An inbound template uses the inbound-reply branch for every trigger
-    (reply once, then stop). An outbound template keeps the terminal-outcome
-    instruction on ``trigger='task'`` and swaps to the initial-send-only
-    branch otherwise, so its system prompt cannot direct a premature
-    ``conclude_enrollment`` terminal on first reach-out.
+    An inbound template uses the inbound-reply branch (reply once, then stop);
+    an outbound template uses the terminal-outcome branch, for every trigger.
+    The initial-send-only branch was retired -- the outbound first reach-out is
+    a compose-only touch run (§V.136), not a tool-loop protocol.
     """
     from datetime import UTC, datetime
 
@@ -719,25 +726,12 @@ def test_build_agent_trigger_routes_protocol_branch(template_name: str) -> None:
         assert isinstance(parts, list)
         return "".join(item for item in parts if isinstance(item, str))
 
-    if template.direction == "inbound":
-        for trigger in (
-            "task",
-            "enrollment_run",
-            "enrollment_schedule",
-            "manual",
-            "email",
-        ):
-            instructions = _instructions(trigger)
+    for trigger in ("task", "enrollment_run", "enrollment_schedule", "manual", "email"):
+        instructions = _instructions(trigger)
+        if template.direction == "inbound":
             assert _INBOUND_INSTRUCTION in instructions
             assert _CONCLUDE_INSTRUCTION not in instructions
-            assert _INITIAL_INSTRUCTION not in instructions
-        return
-
-    task_instructions = _instructions("task")
-    assert _CONCLUDE_INSTRUCTION in task_instructions
-    assert _INITIAL_INSTRUCTION not in task_instructions
-
-    for trigger in ("enrollment_run", "enrollment_schedule", "manual", "email"):
-        initial_instructions = _instructions(trigger)
-        assert _INITIAL_INSTRUCTION in initial_instructions
-        assert _CONCLUDE_INSTRUCTION not in initial_instructions
+        else:
+            assert _CONCLUDE_INSTRUCTION in instructions
+            assert _INBOUND_INSTRUCTION not in instructions
+        assert "Send the initial email and stop" not in instructions

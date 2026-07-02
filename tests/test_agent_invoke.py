@@ -1362,76 +1362,39 @@ def test_inbound_email_run_with_noop_is_explicit_decline(
     assert result["status"] == "completed"
 
 
-def test_outbound_enrollment_run_without_send_raises(
-    database_connection: psycopg.Connection[dict[str, Any]],
-) -> None:
-    """§V.120 (per §B.106): an outbound first reach-out that never sends fails.
+def _touch_model(subject: str | None, body: str) -> FunctionModel:
+    """FunctionModel yielding a compose-only TouchMessage via ``final_result``.
 
-    An ``enrollment_run`` run with no triggering email is send-obligated.
-    The model calls only ``search_emails`` -- it satisfies §V.81 yet opens
-    no message. The widened guard must raise instead of reporting success,
-    so the cold email is never silently dropped.
+    Pydantic AI routes structured output through a synthetic ``final_result``
+    tool call (see the classifier tests), so the compose-only touch agent's model
+    returns it the same way.
     """
-    _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
-    settings = make_test_settings(
-        anthropic_api_key="sk-test", anthropic_model="test-model"
-    )
-    model = _model_that_calls_tool("search_emails", {"query": contact.email})
-    with (
-        patch("mailpilot.agent.invoke.GmailClient"),
-        patch("mailpilot.agent.invoke.DriveClient"),
-        pytest.raises(AgentCompletedWithoutReplyError, match=workflow.id),
-    ):
-        invoke_workflow_agent(
-            database_connection,
-            settings,
-            workflow,
-            contact,
-            trigger="enrollment_run",
-            model_override=model,
+
+    def _respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        del messages, info
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="final_result",
+                    args={"subject": subject, "body": body},
+                )
+            ]
         )
 
+    return FunctionModel(_respond)
 
-def test_outbound_enrollment_schedule_without_send_raises(
+
+def test_outbound_enrollment_run_composes_and_sends_touch(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.120 (per §B.106): the scheduled first-touch trigger is held to the
-    same send obligation as ``enrollment_run`` (both are outbound openers)."""
+    """§V.136: an outbound first reach-out (enrollment_run, no email) runs
+    compose-only. The agent yields a TouchMessage and the harness sends it via
+    send_email on a new thread, calling no send tool. The run completes
+    structurally (§V.120: the send is not walker-checked) and reports the sent
+    email id and touch 1. NULL cadence -> no follow-up scheduled (§V.136)."""
     _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
     settings = make_test_settings(
         anthropic_api_key="sk-test", anthropic_model="test-model"
-    )
-    model = _model_that_calls_tool("search_emails", {"query": contact.email})
-    with (
-        patch("mailpilot.agent.invoke.GmailClient"),
-        patch("mailpilot.agent.invoke.DriveClient"),
-        pytest.raises(AgentCompletedWithoutReplyError),
-    ):
-        invoke_workflow_agent(
-            database_connection,
-            settings,
-            workflow,
-            contact,
-            trigger="enrollment_schedule",
-            model_override=model,
-        )
-
-
-def test_outbound_enrollment_run_with_send_passes(
-    database_connection: psycopg.Connection[dict[str, Any]],
-) -> None:
-    """§V.120: an outbound run that calls send_email satisfies the guard.
-
-    Control for the raise cases above -- the widened gate must not flag a
-    first reach-out that actually opens the message.
-    """
-    _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
-    settings = make_test_settings(
-        anthropic_api_key="sk-test", anthropic_model="test-model"
-    )
-    model = _model_that_calls_tool(
-        "send_email",
-        {"to": contact.email, "subject": "Hello", "body": "Opening reach-out."},
     )
     with (
         patch("mailpilot.agent.invoke.GmailClient") as mock_cls,
@@ -1439,8 +1402,8 @@ def test_outbound_enrollment_run_with_send_passes(
     ):
         mock_client = MagicMock()
         mock_client.send_message.return_value = {
-            "id": "sent-outbound-guard",
-            "threadId": "thread-outbound-guard",
+            "id": "sent-touch-1",
+            "threadId": "thread-touch-1",
             "labelIds": ["SENT"],
         }
         mock_cls.return_value = mock_client
@@ -1450,26 +1413,288 @@ def test_outbound_enrollment_run_with_send_passes(
             workflow,
             contact,
             trigger="enrollment_run",
-            model_override=model,
+            model_override=_touch_model("Quick question", "Hi -- worth a chat?"),
         )
 
     assert result is not None
     assert result["status"] == "completed"
+    assert result["tool_calls"] == 0
+    assert result["touch_number"] == 1
+    assert result["sent_email_id"]
+    mock_client.send_message.assert_called_once()
+    call_kwargs = mock_client.send_message.call_args.kwargs
+    assert call_kwargs["to"] == contact.email
+    assert call_kwargs["subject"] == "Quick question"
+    assert call_kwargs.get("thread_id") is None
+    # NULL cadence: touch 1 sends and schedules no follow-up (§V.136).
+    tasks = database_connection.execute(
+        "SELECT id FROM task WHERE workflow_id = %s", (workflow.id,)
+    ).fetchall()
+    assert tasks == []
 
 
-def test_outbound_conclude_enrollment_satisfies_send_guard(
+def test_outbound_enrollment_schedule_composes_and_sends_touch(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.120 + §V.127: conclude_enrollment is a valid send-obligation terminal.
-
-    A send-obligated outbound run that calls conclude_enrollment instead of
-    send_email must pass the guard like noop -- the agent reached a terminal
-    disposition, so the run is complete, not a dropped send.
-    """
+    """§V.136 / §V.32: the scheduled first-touch trigger is also a compose-only
+    touch run -- it composes and sends touch 1 just like ``enrollment_run``."""
     _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
     settings = make_test_settings(
         anthropic_api_key="sk-test", anthropic_model="test-model"
     )
+    with (
+        patch("mailpilot.agent.invoke.GmailClient") as mock_cls,
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
+        mock_client = MagicMock()
+        mock_client.send_message.return_value = {
+            "id": "sent-sched-1",
+            "threadId": "thread-sched-1",
+            "labelIds": ["SENT"],
+        }
+        mock_cls.return_value = mock_client
+        result = invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            trigger="enrollment_schedule",
+            model_override=_touch_model("Intro", "Opening reach-out."),
+        )
+
+    assert result is not None
+    assert result["status"] == "completed"
+    assert result["touch_number"] == 1
+    mock_client.send_message.assert_called_once()
+
+
+def test_compose_only_touch_two_replies_and_schedules_next(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.136: a scheduled touch-2 task (context.touch=2, prior_email_id set)
+    composes a follow-up. The harness threads it on the prior touch via a reply
+    (no new-thread send, so the cold-outbound cooldown is skipped) and the
+    cadence engine schedules touch 3 with context {touch:3, prior_email_id}."""
+    account, contact, workflow = _setup(database_connection, workflow_type="outbound")
+    workflow = update_workflow(
+        database_connection, workflow.id, touches=3, touch_interval_days=7
+    )
+    assert workflow is not None
+
+    from mailpilot.database import create_email
+
+    prior = create_email(
+        database_connection,
+        gmail_message_id="msg-t1",
+        gmail_thread_id="thread-t1",
+        rfc2822_message_id="<t1@mail>",
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        direction="outbound",
+        subject="Quick question",
+        body_text="touch 1 body",
+    )
+    assert prior is not None
+
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    with (
+        patch("mailpilot.agent.invoke.GmailClient") as mock_cls,
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
+        mock_client = MagicMock()
+        mock_client.send_message.return_value = {
+            "id": "sent-touch-2",
+            "threadId": "thread-t1",
+            "labelIds": ["SENT"],
+        }
+        mock_cls.return_value = mock_client
+        result = invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            trigger="task",
+            task_context={"touch": 2, "prior_email_id": prior.id},
+            model_override=_touch_model(None, "Following up on my note."),
+        )
+
+    assert result is not None
+    assert result["touch_number"] == 2
+    # Threaded reply on the prior touch (§V.136), not a cold new-thread send.
+    call_kwargs = mock_client.send_message.call_args.kwargs
+    assert call_kwargs["thread_id"] == "thread-t1"
+    # Cadence advanced: touch 3 scheduled with the follow-up context (§V.136).
+    rows = database_connection.execute(
+        "SELECT context FROM task WHERE workflow_id = %s AND status = 'pending'",
+        (workflow.id,),
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["context"]["touch"] == 3
+    assert rows[0]["context"]["prior_email_id"] == result["sent_email_id"]
+
+
+def test_compose_only_prior_email_falls_back_to_latest_outbound(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.136: a touch task with no ``prior_email_id`` in context threads on the
+    enrollment's latest outbound email (fallback) so the follow-up still
+    continues the last send instead of opening a fresh cold thread."""
+    account, contact, workflow = _setup(database_connection, workflow_type="outbound")
+    workflow = update_workflow(
+        database_connection, workflow.id, touches=2, touch_interval_days=7
+    )
+    assert workflow is not None
+
+    from mailpilot.database import create_email
+
+    prior = create_email(
+        database_connection,
+        gmail_message_id="msg-latest",
+        gmail_thread_id="thread-latest",
+        rfc2822_message_id="<latest@mail>",
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        direction="outbound",
+        subject="Opening",
+        body_text="touch 1 body",
+    )
+    assert prior is not None
+
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    with (
+        patch("mailpilot.agent.invoke.GmailClient") as mock_cls,
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
+        mock_client = MagicMock()
+        mock_client.send_message.return_value = {
+            "id": "sent-fallback",
+            "threadId": "thread-latest",
+            "labelIds": ["SENT"],
+        }
+        mock_cls.return_value = mock_client
+        result = invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            trigger="task",
+            task_context={"touch": 2},  # no prior_email_id -> fallback
+            model_override=_touch_model(None, "Circling back."),
+        )
+
+    assert result is not None
+    call_kwargs = mock_client.send_message.call_args.kwargs
+    assert call_kwargs["thread_id"] == "thread-latest"
+
+
+def _touch_model_spec_then_clean() -> FunctionModel:
+    """FunctionModel returning a space-aligned spec block first, clean second.
+
+    Exercises the §V.42 lint as the compose-only output validator: the first
+    output trips the spec-table lint (a bounded ModelRetry), the retry recovers.
+    """
+    call_count = 0
+
+    def _respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        del messages, info
+        nonlocal call_count
+        call_count += 1
+        body = (
+            "Model AX-100  50 GPM\nFlow Rate  50 GPM\nWeight  9 kg"
+            if call_count == 1
+            else "Hi there -- a quick note about your setup."
+        )
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="final_result",
+                    args={"subject": "Specs", "body": body},
+                )
+            ]
+        )
+
+    return FunctionModel(_respond)
+
+
+def test_compose_only_spec_block_output_validator_retries(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.42 / §V.136: the format lint runs as the compose-only output validator.
+    A space-aligned spec block triggers a bounded ModelRetry; the retry produces
+    a clean body and only that reaches Gmail (one send)."""
+    _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    with (
+        patch("mailpilot.agent.invoke.GmailClient") as mock_cls,
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
+        mock_client = MagicMock()
+        mock_client.send_message.return_value = {
+            "id": "sent-retry",
+            "threadId": "thread-retry",
+            "labelIds": ["SENT"],
+        }
+        mock_cls.return_value = mock_client
+        result = invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            trigger="enrollment_run",
+            model_override=_touch_model_spec_then_clean(),
+        )
+
+    assert result is not None
+    assert result["status"] == "completed"
+    # Only the clean retry body was sent (the spec block was rejected before any
+    # send). Exactly one message reached Gmail, and the persisted row carries the
+    # clean body, not the space-aligned spec block.
+    mock_client.send_message.assert_called_once()
+    sent = database_connection.execute(
+        "SELECT body_text FROM email WHERE workflow_id = %s AND direction = 'outbound'",
+        (workflow.id,),
+    ).fetchone()
+    assert sent is not None
+    assert "Model AX-100" not in sent["body_text"]
+    assert "quick note" in sent["body_text"]
+
+
+def test_outbound_reply_conclude_enrollment_satisfies_send_guard(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.120 + §V.127: on the outbound reply path (a prospect reply drained as
+    a ``task`` with an inbound email) conclude_enrollment is a valid
+    send-obligation terminal -- it satisfies the inbound-only walker like noop.
+
+    The compose-only shape covers only the no-email first reach-out; a reply
+    keeps the tool loop, so the terminal-outcome walker still applies."""
+    account, contact, workflow = _setup(database_connection, workflow_type="outbound")
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    from mailpilot.database import create_email
+
+    reply = create_email(
+        database_connection,
+        gmail_message_id="msg-prospect-reply",
+        gmail_thread_id="thread-prospect-reply",
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        direction="inbound",
+        subject="Re: Quick question",
+        body_text="Yes, let's book a time.",
+    )
+    assert reply is not None
+
     model = _model_that_calls_tool(
         "conclude_enrollment",
         {"disposition": "meeting_booked", "note": "prospect booked a meeting"},
@@ -1483,7 +1708,8 @@ def test_outbound_conclude_enrollment_satisfies_send_guard(
             settings,
             workflow,
             contact,
-            trigger="enrollment_run",
+            email=reply,
+            trigger="task",
             model_override=model,
         )
 
@@ -2050,22 +2276,32 @@ def test_invoke_span_no_email_id_when_trigger_enrollment_run(
     capfire: CaptureLogfire,
 ) -> None:
     """trigger='enrollment_run' (CLI-initiated outbound first reach-out) never
-    carries email_id and preserves existing trigger / workflow / contact attrs."""
+    carries email_id and preserves existing trigger / workflow / contact attrs.
+
+    §V.136: enrollment_run is now a compose-only touch run, so the model yields
+    a TouchMessage and the harness sends it -- the span attrs still hold."""
     _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
     settings = make_test_settings(
         anthropic_api_key="sk-test", anthropic_model="test-model"
     )
     with (
-        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.GmailClient") as mock_cls,
         patch("mailpilot.agent.invoke.DriveClient"),
     ):
+        mock_client = MagicMock()
+        mock_client.send_message.return_value = {
+            "id": "sent-span-eid",
+            "threadId": "thread-span-eid",
+            "labelIds": ["SENT"],
+        }
+        mock_cls.return_value = mock_client
         invoke_workflow_agent(
             database_connection,
             settings,
             workflow,
             contact,
             trigger="enrollment_run",
-            model_override=FunctionModel(_model_that_calls_noop),
+            model_override=_touch_model("Hello", "Opening reach-out."),
         )
 
     invoke_spans = [

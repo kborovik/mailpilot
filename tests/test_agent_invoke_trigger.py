@@ -11,7 +11,7 @@ heuristically inferred.
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import psycopg
 from logfire.testing import CaptureLogfire
@@ -47,10 +47,22 @@ def _activate(connection: psycopg.Connection[dict[str, Any]], workflow_id: str) 
     activate_workflow(connection, workflow_id)
 
 
-def _model_that_calls_noop(
-    messages: list[ModelMessage], info: AgentInfo
-) -> ModelResponse:
-    del info
+def _dual_mode_model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """Serve both agent shapes so one ``_run`` covers every trigger (§V.136).
+
+    A compose-only touch agent (enrollment_run / enrollment_schedule) binds an
+    output tool -- yield a ``TouchMessage`` through it. A tool-loop agent (task /
+    manual) has no output tool -- call ``noop`` once, then finish.
+    """
+    if info.output_tools:
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name=info.output_tools[0].name,
+                    args={"subject": "Hi", "body": "A short note."},
+                )
+            ]
+        )
     for msg in messages:
         for part in msg.parts if hasattr(msg, "parts") else []:
             if isinstance(part, ToolCallPart):
@@ -88,15 +100,24 @@ def _run(
     )
 
     kwargs: dict[str, Any] = {
-        "model_override": FunctionModel(_model_that_calls_noop),
+        "model_override": FunctionModel(_dual_mode_model),
     }
     if trigger is not None:
         kwargs["trigger"] = trigger
 
     with (
-        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.GmailClient") as mock_cls,
         patch("mailpilot.agent.invoke.DriveClient"),
     ):
+        # A compose-only touch run (enrollment_run / enrollment_schedule) sends
+        # via Gmail; stub the send so the harness send path succeeds.
+        mock_client = MagicMock()
+        mock_client.send_message.return_value = {
+            "id": "sent-trigger",
+            "threadId": "thread-trigger",
+            "labelIds": ["SENT"],
+        }
+        mock_cls.return_value = mock_client
         invoke_workflow_agent(
             database_connection,
             settings,

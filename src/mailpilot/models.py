@@ -133,6 +133,24 @@ class ContactSummary(BaseModel):
     created_at: datetime
 
 
+class TouchMessage(BaseModel):
+    """Structured output of a compose-only outbound touch (§V.136).
+
+    A touch run (first reach-out or a system-scheduled follow-up in a
+    workflow's cadence) returns this instead of driving a tool loop: the
+    validated output *is* the action, so the compose-only agent binds zero
+    tools (§V.81 exempt). ``subject`` is the new-thread subject on the first
+    touch and ``None`` on a later follow-up that continues an existing thread
+    (the harness threads the reply and reuses the thread's subject); ``body``
+    is the plain-text message. The harness sends it via ``email_ops`` and
+    schedules the next touch -- one LLM call per touch, the send structural
+    (§V.120, §V.136).
+    """
+
+    subject: str | None = None
+    body: str
+
+
 WorkflowType = Literal["inbound", "outbound"]
 WorkflowStatus = Literal["draft", "active", "paused"]
 WorkflowTemplateName = Literal[
