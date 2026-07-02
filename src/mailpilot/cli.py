@@ -149,7 +149,7 @@ def _record_count(data: dict[str, Any]) -> int:
     return 1
 
 
-def output(data: dict[str, Any]) -> None:
+def output(data: dict[str, Any], *, record_count: int | None = None) -> None:
     r"""Print structured JSON response to stdout.
 
     Always RFC 8259 compliant: control characters (\n, \r, \t, etc.) inside
@@ -157,10 +157,19 @@ def output(data: dict[str, Any]) -> None:
     trip on raw control bytes. `ensure_ascii=False` keeps non-ASCII glyphs
     (em-dashes, accented characters) readable instead of `\uXXXX`-encoded.
     Every ok:true envelope carries top-level `record_count` per §V.4.
+    ``record_count`` overrides the inferred count for multi-key payloads whose
+    displayed records live in one array key (e.g. ``workflow import`` carries
+    ``applied``/``rejected`` beside ``workflows`` per §V.103).
     """
     click.echo(
         json.dumps(
-            {**data, "record_count": _record_count(data), "ok": True},
+            {
+                **data,
+                "record_count": (
+                    record_count if record_count is not None else _record_count(data)
+                ),
+                "ok": True,
+            },
             indent=2,
             ensure_ascii=False,
         )
@@ -3290,6 +3299,11 @@ def workflow_import(account_email: str | None, file: str | None) -> None:
     ``goal`` and ``instructions`` are non-empty), present workflows are
     updated for changed fields only, ``template`` differences emit a per-row
     ``template_immutable`` error, and ``status`` is never written by import.
+
+    The terminal envelope aggregates: top-level ``applied`` and ``rejected``
+    counts on every import envelope; zero applied rows -> an ``import_failed``
+    error envelope on stderr (per-row rows inlined) and exit 1, so scripts
+    gating on the exit code never mistake a no-op import for success.
     """
     from mailpilot.database import (
         initialize_database,
@@ -3314,7 +3328,27 @@ def workflow_import(account_email: str | None, file: str | None) -> None:
                 _import_workflow_row(connection, account_id, existing, stem, entry)
                 for stem, entry in entries
             )
-            output({"workflows": results})
+            rejected = sum(1 for row in results if "error" in row)
+            applied = len(results) - rejected
+            if applied == 0:
+                # Loud failure per §V.103 / §B.123: an import that lands zero
+                # rows must not report success. Per-row detail rides inside the
+                # error envelope, mirroring `db check` report inlining (§V.109).
+                message = (
+                    f"workflow import applied 0 of {len(results)} rows; "
+                    "every row was rejected"
+                    if results
+                    else "workflow import found no importable rows in source"
+                )
+                output_error(
+                    message,
+                    "import_failed",
+                    extra={"workflows": results, "applied": 0, "rejected": rejected},
+                )
+            output(
+                {"workflows": results, "applied": applied, "rejected": rejected},
+                record_count=len(results),
+            )
     finally:
         connection.close()
 

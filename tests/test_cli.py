@@ -4511,6 +4511,9 @@ def test_workflow_import_create_path_activates(
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["workflows"] == [{"name": "demo-outreach", "action": "created"}]
+    assert data["applied"] == 1
+    assert data["rejected"] == 0
+    assert data["record_count"] == 1
 
 
 def test_workflow_import_create_path_draft_no_activation(
@@ -4692,6 +4695,9 @@ def test_workflow_import_template_immutable_row_error(
     assert by_name["demo-outreach"]["error"] == "template_immutable"
     assert "inbound-general" in by_name["demo-outreach"]["message"]
     assert by_name["other-workflow"] == {"name": "other-workflow", "action": "created"}
+    assert data["applied"] == 1
+    assert data["rejected"] == 1
+    assert data["record_count"] == 2
     mock_create.assert_called_once()
 
 
@@ -4910,12 +4916,20 @@ def test_workflow_import_directory_parse_error_continues_batch(
     assert rows[0]["error"] == "validation_error"
     assert "bad.toml" in rows[0]["message"]
     assert rows[1] == {"name": "good", "action": "created"}
+    assert data["applied"] == 1
+    assert data["rejected"] == 1
+    assert data["record_count"] == 2
 
 
 def test_workflow_import_toml_missing_required_field(
     runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
 ) -> None:
-    """§V.103: missing required field shares the JSON path's per-row validation_error."""
+    """§V.103/§B.123: sole row missing a required field -> import_failed, exit 1.
+
+    The per-row ``validation_error`` stays inside ``workflows``, but with zero
+    rows applied the terminal envelope is the loud-failure ``import_failed``
+    error on stderr, never ``ok: true``.
+    """
     account = _make_account()
     toml_file = tmp_path / "wf.toml"
     toml_file.write_text(
@@ -4940,8 +4954,13 @@ def test_workflow_import_toml_missing_required_field(
             ],
         )
 
-    assert result.exit_code == 0, result.output
-    data = json.loads(result.output)
+    assert result.exit_code == 1, result.output
+    assert result.stdout == ""
+    data = json.loads(result.stderr)
+    assert data["ok"] is False
+    assert data["error"] == "import_failed"
+    assert data["applied"] == 0
+    assert data["rejected"] == 1
     rows = data["workflows"]
     assert rows[0]["name"] == "No template"
     assert rows[0]["error"] == "validation_error"
@@ -4951,7 +4970,7 @@ def test_workflow_import_toml_missing_required_field(
 def test_workflow_import_rejects_non_kebab_name(
     runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
 ) -> None:
-    """§V.103: a non-kebab `name` is a per-row validation_error; nothing is written."""
+    """§V.103/§B.123: a non-kebab `name` rejects the sole row -> import_failed, exit 1."""
     account = _make_account()
     toml_file = tmp_path / "demo-outreach.toml"
     _write_workflow_toml(toml_file, _import_payload(name="Demo_Outreach"))
@@ -4974,8 +4993,12 @@ def test_workflow_import_rejects_non_kebab_name(
             ],
         )
 
-    assert result.exit_code == 0, result.output
-    data = json.loads(result.output)
+    assert result.exit_code == 1, result.output
+    data = json.loads(result.stderr)
+    assert data["ok"] is False
+    assert data["error"] == "import_failed"
+    assert data["applied"] == 0
+    assert data["rejected"] == 1
     row = data["workflows"][0]
     assert row["name"] == "Demo_Outreach"
     assert row["error"] == "validation_error"
@@ -4986,10 +5009,11 @@ def test_workflow_import_rejects_non_kebab_name(
 def test_workflow_import_rejects_name_not_file_stem(
     runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
 ) -> None:
-    """§V.103: a kebab `name` not equal to the file stem is a per-row error.
+    """§V.103/§B.123: a kebab `name` unequal to the file stem rejects the sole row.
 
     The file stem is the canonical cross-environment key, so the in-file
     ``name`` must match it; here ``demo-outreach`` lives in ``other-name.toml``.
+    Zero rows applied -> ``import_failed`` on stderr, exit 1.
     """
     account = _make_account()
     toml_file = tmp_path / "other-name.toml"
@@ -5013,13 +5037,95 @@ def test_workflow_import_rejects_name_not_file_stem(
             ],
         )
 
-    assert result.exit_code == 0, result.output
-    data = json.loads(result.output)
+    assert result.exit_code == 1, result.output
+    data = json.loads(result.stderr)
+    assert data["ok"] is False
+    assert data["error"] == "import_failed"
     row = data["workflows"][0]
     assert row["name"] == "demo-outreach"
     assert row["error"] == "validation_error"
     assert "stem" in row["message"]
     mock_create.assert_not_called()
+
+
+def test_workflow_import_zero_applied_directory_exits_nonzero(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    """§V.103/§B.123: a directory import applying zero rows fails loudly.
+
+    Both rows are rejected (one malformed TOML, one non-kebab ``name``), so the
+    command exits 1 with an ``import_failed`` envelope on stderr; the per-row
+    errors ride inside the envelope under ``workflows``.
+    """
+    account = _make_account()
+    catalog = tmp_path / "catalog"
+    catalog.mkdir()
+    (catalog / "bad.toml").write_text("template = =\n")
+    _write_workflow_toml(
+        catalog / "demo-outreach.toml", _import_payload(name="Demo_Outreach")
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.database.list_workflows_full", return_value=[]),
+        patch("mailpilot.database.create_workflow") as mock_create,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "import",
+                "--account-email",
+                _ACCOUNT_ID,
+                "--file",
+                str(catalog),
+            ],
+        )
+
+    assert result.exit_code == 1, result.output
+    assert result.stdout == ""
+    data = json.loads(result.stderr)
+    assert data["ok"] is False
+    assert data["error"] == "import_failed"
+    assert data["applied"] == 0
+    assert data["rejected"] == 2
+    assert len(data["workflows"]) == 2
+    mock_create.assert_not_called()
+
+
+def test_workflow_import_empty_directory_exits_nonzero(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    """§V.103/§B.123: a directory holding no ``*.toml`` imports nothing -> exit 1."""
+    account = _make_account()
+    catalog = tmp_path / "catalog"
+    catalog.mkdir()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.database.list_workflows_full", return_value=[]),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "import",
+                "--account-email",
+                _ACCOUNT_ID,
+                "--file",
+                str(catalog),
+            ],
+        )
+
+    assert result.exit_code == 1, result.output
+    data = json.loads(result.stderr)
+    assert data["ok"] is False
+    assert data["error"] == "import_failed"
+    assert data["applied"] == 0
+    assert data["rejected"] == 0
+    assert data["workflows"] == []
 
 
 # -- enrollment run ------------------------------------------------------------
