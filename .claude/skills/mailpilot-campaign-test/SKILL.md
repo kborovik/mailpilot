@@ -112,7 +112,9 @@ from the repo root with `uv run python`.
   handling step re-enables it between scenarios, and cleanup re-enables it at the
   end; the next run's setup also re-enables defensively. This is test scaffolding,
   not a real unsubscribe.
-- Each run leaves several stopped `[campaign-test <run_id> <scenario>]` workflows
+- Each run leaves several stopped `campaign-test-<run-id>-<token>` workflows
+  (the scenario rides as an opaque hash token so the agent-visible workflow
+  name never primes the branch under test)
   on `outbound@lab5.ca`. Workflows cannot be deleted, so this is expected.
 - The skill never starts `mailpilot run`, so no sync loop or auto-reply fires for
   any other account.
@@ -311,7 +313,7 @@ and skip this step -- it is read-only and never gates the verdict.
 ## Artifacts
 
 Everything for a run is under `reports/campaign-test/$RUN_ID/` (git-ignored):
-`preflight.json`, `run_manifest.json`, `scaffold.json`, `ephemeral_<scenario>.toml`,
+`preflight.json`, `run_manifest.json`, `scaffold.json`, `campaign-test-<run-id>-<token>.toml`,
 `touch1.json`, `replies.json`, `handled.json`, `verify.json`, `critique_input.json`,
 `critiques.json`, `critiques.md`, `report.md`, `cleanup.json`, and
 `logfire_report.md`.

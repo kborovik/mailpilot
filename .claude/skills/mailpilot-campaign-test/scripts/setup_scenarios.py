@@ -141,14 +141,21 @@ def _mirror(grounding: dict | None) -> str:
 def _import_ephemeral_workflow(
     source_text: str, run_id: str, scenario_key: str, directory: Path
 ) -> str:
-    """Write + import a uniquely-named copy of the workflow. Return its id."""
+    """Write + import a uniquely-named copy of the workflow. Return its id.
+
+    The file stem must equal the workflow name -- ``workflow import`` enforces
+    the name == stem bijection (§V.103) -- so the ephemeral copy is written as
+    ``<name>.toml``, not ``ephemeral_<scenario>.toml``. Import reports a
+    per-row validation error with exit 0 and ``ok: true``, so the row is
+    checked explicitly.
+    """
     name = ephemeral_workflow_name(run_id, scenario_key)
     renamed, count = _NAME_LINE_RE.subn(f'name = "{name}"', source_text, count=1)
     if count != 1:
         raise RuntimeError("could not find a top-level name line in the workflow file")
-    ephemeral_path = directory / f"ephemeral_{scenario_key}.toml"
+    ephemeral_path = directory / f"{name}.toml"
     ephemeral_path.write_text(renamed)
-    mp(
+    imported = mp(
         [
             "workflow",
             "import",
@@ -159,6 +166,11 @@ def _import_ephemeral_workflow(
         ],
         check=True,
     )
+    for row in imported.get("workflows", []):
+        if row.get("error"):
+            raise RuntimeError(
+                f"workflow import rejected {name!r}: {row.get('message')}"
+            )
     listing = mp(
         ["workflow", "list", "--account-email", SENDER_EMAIL, "--limit", "200"],
         check=True,

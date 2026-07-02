@@ -12,7 +12,7 @@ Three cleanups, all idempotent and best-effort:
      untouched at rest and lead-contacts discovery is not skewed (§V.96).
   3. Stop every per-scenario ephemeral workflow so none shows as active on the
      sender account. Workflows cannot be deleted (no hard-delete, §V.10), so the
-     stopped ``[campaign-test ...]`` rows remain; that is expected and harmless.
+     stopped ``campaign-test-...`` rows remain; that is expected and harmless.
 
 The persistent prospect contact and the neutral test company are intentionally
 left in place for reuse by the next run. Writes ``cleanup.json``.

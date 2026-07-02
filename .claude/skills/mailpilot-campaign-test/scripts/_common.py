@@ -25,6 +25,7 @@ Run every script via ``uv run python`` so the project venv (and the
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -104,9 +105,17 @@ def ephemeral_workflow_name(run_id: str, scenario_key: str) -> str:
     is independent of the other scenarios' and the 30-day cold-send cooldown
     (§V.79, keyed on account+contact+workflow) never blocks a re-run: a fresh
     workflow id has no prior cold outbound. Named so an operator can spot and
-    stop leftover test workflows in ``workflow list``.
+    stop leftover test workflows in ``workflow list``. The name is kebab-case
+    because ``workflow import`` enforces kebab names equal to the file stem
+    (§V.103), so underscores in the run id become hyphens. The scenario rides
+    as an opaque hash token, never the key: the agent prompt includes the
+    workflow name (``invoke.py`` "Workflow: {name}"), and a readable key like
+    ``wrong-person`` primes the agent toward the branch under test -- it made
+    Touch 1 turns inspect the contact record and decline the send. The
+    scenario-to-name mapping lives in ``scaffold.json``.
     """
-    return f"[campaign-test {run_id} {scenario_key}]"
+    token = hashlib.sha1(scenario_key.encode()).hexdigest()[:8]
+    return f"campaign-test-{run_id}-{token}".replace("_", "-")
 
 
 def mp(args: list[str], *, check: bool = True) -> dict[str, Any]:
