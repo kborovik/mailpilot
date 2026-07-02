@@ -17,6 +17,7 @@ Agent-operated CRM. Gmail = comms layer. Claude Code = strategist; internal Pyda
 - KB files = `.md` in Drive folder named in `workflow.instructions`. no in-app PDF/Docs/HTML conversion.
 - ASCII-only project artifacts (code, docs, CLI output). Agent-generated email body content exempt.
 - Tool pattern: typed sig, DI deps, dict return, error dicts on failure (no raise to agent).
+- Harness-over-LLM: LLM turn = judgment only (classify, draft, pick terminal disposition); deterministic work (context fetch, scheduling, lifecycle, validation, bookkeeping) = harness code, never an agent tool round-trip. Every agent turn pre-fed w/ mechanically-loadable context (system holds key -> system loads data); post-decision side effects system-side; run answerable from DB state alone -> zero model calls. New tool / LLM turn admitted only for judgment the harness cannot encode.
 
 ## §I INTERFACES
 
