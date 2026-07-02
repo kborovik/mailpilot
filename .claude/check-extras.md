@@ -291,10 +291,10 @@ Trigger: `src/mailpilot/database.py` or `src/mailpilot/cli.py` db-export/import 
 
 ## §V.123 — reply-cancels-followups
 
-Inbound reply routing to an enrollment bulk-cancels that enrollment's pending future follow-up tasks: `UPDATE task SET status='cancelled' WHERE enrollment_id=%(id)s AND status='pending' AND scheduled_at > now() AND COALESCE(context->>'trigger','') <> 'enrollment_schedule'`. First-touch exclusion: rows whose trigger = `enrollment_schedule` (§V.32) are excluded. `cancel_enrollment_followup_tasks(connection, enrollment_id)` fires from 3 sites: (1) `routing.route_email` on successful inbound match (including pre-existing enrollment, not only first-insert branch), (2) calendar booking ingestion (§V.126/§V.128), (3) `conclude_enrollment` (§V.127).
+Inbound reply routing to an enrollment bulk-cancels that enrollment's pending future follow-up tasks: `UPDATE task SET status='cancelled' WHERE enrollment_id=%(id)s AND status='pending' AND scheduled_at > now() AND COALESCE(context->>'trigger','') <> 'enrollment_schedule'`. First-touch exclusion: rows whose trigger = `enrollment_schedule` (§V.32) are excluded. `cancel_enrollment_followup_tasks(connection, enrollment_id)` fires from 4 sites: (1) `routing.route_email` on successful inbound match (including pre-existing enrollment, not only first-insert branch), (2) calendar booking ingestion (§V.126/§V.128), (3) `conclude_enrollment` (§V.127), (4) cadence sequence exhaustion — `advance_touch_cadence` final-touch conclude (§V.136).
 
-Trigger: `src/mailpilot/routing.py`, `src/mailpilot/sync.py`, `src/mailpilot/agent/tools.py`, or `src/mailpilot/database.py` changed.
-- `rg 'cancel_enrollment_followup_tasks' src/mailpilot/routing.py src/mailpilot/sync.py src/mailpilot/agent/tools.py` -> present in 3 files
+Trigger: `src/mailpilot/routing.py`, `src/mailpilot/sync.py`, `src/mailpilot/agent/tools.py`, `src/mailpilot/cadence.py`, or `src/mailpilot/database.py` changed.
+- `rg 'cancel_enrollment_followup_tasks' src/mailpilot/routing.py src/mailpilot/sync.py src/mailpilot/agent/tools.py src/mailpilot/cadence.py` -> present in 4 files
 - `rg 'enrollment_schedule.*exclude\b\|exclude.*enrollment_schedule\b' src/mailpilot/database.py` -> first-touch exclusion in the query
 - `rg 'scheduled_at.*>.*now\(\)\|now\(\).*<.*scheduled_at' src/mailpilot/database.py` -> only future tasks cancelled
 
@@ -577,7 +577,7 @@ Trigger: `src/mailpilot/schema.sql` or `src/mailpilot/database.py` changed.
 
 ## §V.128 — calendar booking concludes enrollments, no agent turn
 
-For each attendee contact (§V.125) holding an active outbound enrollment: system concludes via `record_enrollment_outcome` (§V.15) + cancels pending future follow-ups via `cancel_enrollment_followup_tasks` + writes a system booking note. Fan-out fires for EVERY active outbound enrollment the attendee holds — a booked meeting outranks any cold sequence regardless of stated goal (§V.124). `cancel_enrollment_followup_tasks` fires from three sites: inbound reply routing (§V.123), calendar booking ingestion (§V.126), `conclude_enrollment` (§V.127); first-touch exclusion (§V.32) holds at every site.
+For each attendee contact (§V.125) holding an active outbound enrollment: system concludes via `record_enrollment_outcome` (§V.15) + cancels pending future follow-ups via `cancel_enrollment_followup_tasks` + writes a system booking note. Fan-out fires for EVERY active outbound enrollment the attendee holds — a booked meeting outranks any cold sequence regardless of stated goal (§V.124). `cancel_enrollment_followup_tasks` fires from four sites: inbound reply routing (§V.123), calendar booking ingestion (§V.126), `conclude_enrollment` (§V.127), cadence sequence exhaustion (§V.136); first-touch exclusion (§V.32) holds at every site.
 
 Trigger: `src/mailpilot/calendar.py` or `src/mailpilot/sync.py` changed.
 - `rg 'record_enrollment_outcome\b' src/mailpilot/calendar.py src/mailpilot/sync.py` -> conclusion call present
