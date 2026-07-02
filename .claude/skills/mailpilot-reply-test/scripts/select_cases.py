@@ -94,7 +94,10 @@ def main() -> int:
             "question": pair["question"],
             "source_file": pair.get("source_file"),
             "subject": make_subject(run_id, pair["id"], pair["expected_tokens"][0]),
-            "grading": {"expected_tokens": pair["expected_tokens"]},
+            "grading": {
+                "expected_tokens": pair["expected_tokens"],
+                "token_aliases": pair.get("token_aliases", {}),
+            },
         }
 
     def compare_case(pair: dict, run: str) -> dict:

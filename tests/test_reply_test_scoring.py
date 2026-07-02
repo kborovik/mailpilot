@@ -152,6 +152,53 @@ def test_inscope_folds_multiplication_sign_to_ascii_x():
     assert detail["missing"] == []
 
 
+def test_inscope_alias_satisfies_canonical_token():
+    # An accepted alternate surface form (e.g. the industry abbreviation "EDI"
+    # for "Electrodeionization") must satisfy its canonical expected token, per
+    # the false-PASS-at-worst contract: a factually correct reply never
+    # false-FAILs on wording (§V.105). token_hits and missing stay keyed by the
+    # canonical token so the report shape is unchanged.
+    score = _load("score_replies")
+    grading = {
+        "expected_tokens": ["207,360 GPD", "Electrodeionization"],
+        "token_aliases": {"Electrodeionization": ["EDI"]},
+    }
+    body = "Capacity is 207,360 GPD via Sand Filters + Reverse Osmosis + EDI."
+    verdict, detail = score.grade("inscope", body, grading)
+    assert verdict == "PASS"
+    assert detail["token_hits"] == {"207,360 GPD": True, "Electrodeionization": True}
+    assert detail["missing"] == []
+
+
+def test_inscope_alias_absent_still_fails_on_canonical():
+    # An alias widens matching; it must not weaken it. When neither the
+    # canonical form nor any alias appears, the canonical token is reported
+    # missing.
+    score = _load("score_replies")
+    grading = {
+        "expected_tokens": ["Electrodeionization"],
+        "token_aliases": {"Electrodeionization": ["EDI"]},
+    }
+    body = "The train is Sand Filters plus Reverse Osmosis."
+    verdict, detail = score.grade("inscope", body, grading)
+    assert verdict == "FAIL"
+    assert detail["missing"] == ["Electrodeionization"]
+
+
+def test_qa_pairs_token_aliases_reference_expected_tokens():
+    # A token_aliases key that names no expected token is dead data -- a typo
+    # would silently never fire. Every key must be one of that pair's
+    # expected_tokens.
+    pairs = json.loads(_QA_PAIRS.read_text())
+    dangling = [
+        (pair["id"], key)
+        for pair in pairs
+        for key in pair.get("token_aliases", {})
+        if key not in pair.get("expected_tokens", [])
+    ]
+    assert dangling == [], f"token_aliases keys not in expected_tokens: {dangling}"
+
+
 # --- out-scope: deferred to judge, advisory signals (§V.105, closes §B.88) -----
 
 

@@ -86,12 +86,21 @@ def _loose(tok: str, body_n: str) -> bool:
 
 
 def _grade_inscope(body: str, grading: dict) -> tuple[str, dict]:
-    """Deterministic in-scope grade: every expected token must be present."""
+    """Deterministic in-scope grade: every expected token must be present.
+
+    An optional ``token_aliases`` map lets a canonical token match on an
+    accepted alternate surface form (e.g. ``EDI`` for ``Electrodeionization``)
+    so a factually correct reply never false-FAILs on wording. ``token_hits``
+    and ``missing`` stay keyed by the canonical token.
+    """
     body_n = _norm(body)
-    hits = {
-        tok: (_norm(tok) in body_n or _loose(tok, body_n))
-        for tok in grading["expected_tokens"]
-    }
+    aliases = grading.get("token_aliases", {})
+
+    def _hit(token: str) -> bool:
+        forms = [token, *aliases.get(token, [])]
+        return any(_norm(form) in body_n or _loose(form, body_n) for form in forms)
+
+    hits = {tok: _hit(tok) for tok in grading["expected_tokens"]}
     verdict = "PASS" if all(hits.values()) else "FAIL"
     return verdict, {
         "token_hits": hits,

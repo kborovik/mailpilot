@@ -25,6 +25,12 @@ The reply must be grounded in the one source datasheet. PASS iff **every**
 
 - `detail.token_hits` records each token's presence; `detail.missing` lists any
   absent ones.
+- An optional `token_aliases` map on a QA pair lets a canonical expected token
+  be satisfied by an accepted alternate surface form (e.g. `EDI` for
+  `Electrodeionization`); a token with no alias entry matches only its own
+  text. Keep aliases narrow — an accepted abbreviation of the same term, never
+  a broad synonym that could mask a wrong answer. `token_hits` and `missing`
+  stay keyed by the canonical token.
 - **Selection guard**: `select_cases.py` only picks in-scope cases with ≥2
   specific tokens (length ≥ 5), and Run-A additionally requires *all* tokens to
   be length ≥ 4. This avoids a known weakness — a bare token like `"3"` is a
