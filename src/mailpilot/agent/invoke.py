@@ -386,10 +386,12 @@ def _build_agent(workflow: Workflow, trigger: str = "manual") -> Agent[AgentDeps
 
     The workflow's template (§V.44, §V.45) owns both the bound tool set and
     the system-prompt protocol. Workflow-specific instructions are appended
-    to the template protocol. The deferred-task fragment branches on
-    ``trigger`` per §V.31: ``trigger='task'`` uses the terminal-outcome
-    instruction; other triggers use the initial-send-only instruction
-    (prevents a premature ``conclude_enrollment`` terminal on first reach-out).
+    to the template protocol. The deferred-task fragment branches on direction
+    and ``trigger`` per §V.31: an inbound template uses the inbound-reply
+    instruction for every trigger (reply once, then stop; the system records
+    the outcome); an outbound template uses the terminal-outcome instruction on
+    ``trigger='task'`` and the initial-send-only instruction otherwise (which
+    prevents a premature ``conclude_enrollment`` terminal on first reach-out).
     """
     from mailpilot.agent.templates import TEMPLATES
 

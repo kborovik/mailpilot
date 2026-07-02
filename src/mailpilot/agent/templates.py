@@ -45,9 +45,12 @@ from mailpilot.models import WorkflowTemplateName, WorkflowType
 class WorkflowTemplate:
     """Named binding of agent tools + protocol composed from fragments.
 
-    The deferred-task fragment is selected per-invocation by ``trigger``
-    (§V.31): ``trigger='task'`` -> _DEFERRED_TASK_TASK (terminal-outcome
-    instruction); other triggers (``enrollment_run``,
+    The deferred-task fragment is selected per-invocation by direction +
+    ``trigger`` (§V.31). Inbound templates always use _DEFERRED_TASK_INBOUND
+    (reply once, then stop; the system records the outcome -- inbound binds
+    neither ``conclude_enrollment`` nor ``create_task``). Outbound templates
+    branch on ``trigger``: ``trigger='task'`` -> _DEFERRED_TASK_TASK
+    (terminal-outcome instruction); other triggers (``enrollment_run``,
     ``enrollment_schedule`` per §V.32, ``manual``, ``email``) ->
     _DEFERRED_TASK_INITIAL (initial-send-only instruction; prevents a
     premature ``conclude_enrollment`` terminal on first reach-out).
@@ -65,8 +68,19 @@ class WorkflowTemplate:
     tools: tuple[Tool[AgentDeps], ...]
 
     def build_protocol(self, trigger: str) -> str:
-        """Compose protocol per ``trigger`` per §V.31."""
-        deferred = _DEFERRED_TASK_TASK if trigger == "task" else _DEFERRED_TASK_INITIAL
+        """Compose protocol per direction + ``trigger`` per §V.31.
+
+        Inbound templates use the inbound-reply branch for every trigger
+        (reply once, then stop; the system records the outcome). Outbound
+        templates branch on ``trigger``: ``trigger='task'`` -> terminal-outcome
+        instruction, any other -> initial-send-only.
+        """
+        if self.direction == "inbound":
+            deferred = _DEFERRED_TASK_INBOUND
+        elif trigger == "task":
+            deferred = _DEFERRED_TASK_TASK
+        else:
+            deferred = _DEFERRED_TASK_INITIAL
         return self.protocol_pre + deferred + self.protocol_post
 
     @property
@@ -126,6 +140,23 @@ _DEFERRED_TASK_INITIAL = (
     "or when a follow-up task drains. If the initial send is not appropriate "
     "right now but should resume later, schedule a deferred task via "
     "create_task with a future scheduled_at.\n"
+)
+
+# _DEFERRED_TASK_INBOUND is the inbound branch (§V.31, closes §B.124). An
+# inbound auto-reply answers the incoming thread once and stops: the system
+# records the enrollment outcome after the reply, and an inbound reply never
+# schedules its own follow-up work. Inbound templates bind neither
+# conclude_enrollment nor create_task (see _INBOUND_CORE), so this fragment
+# names no tool -- the tool roster is the structural guard and the prompt just
+# frames the single-reply lifecycle. Composing the outbound TASK / INITIAL
+# branch into an inbound template was §B.124: the TASK branch ordered a
+# conclude_enrollment the workflow forbids, and the INITIAL branch mislabelled
+# the reply as a first reach-out. Per §V.45 the model-visible string carries no
+# §-cite.
+_DEFERRED_TASK_INBOUND = (
+    "Reply to the inbound email once, then stop. The system records the "
+    "enrollment outcome after your reply -- you do not record a disposition "
+    "or schedule any follow-up work yourself.\n"
 )
 
 # _MUST_SEND is the email-universal prompt-side mirror of the §V.120 runtime
@@ -199,6 +230,18 @@ _CORE: tuple[Tool[AgentDeps], ...] = (
     Tool(_wrap_noop, name="noop"),
 )
 
+# Inbound templates bind neither conclude_enrollment nor create_task (§V.31,
+# closes §B.124): the system records the enrollment outcome after an inbound
+# auto-reply, and an inbound reply schedules no follow-up of its own. The
+# inbound roster is _CORE minus those two outbound-lifecycle tools -- derived
+# from _CORE so the shared tools stay defined once (a new _CORE tool joins the
+# inbound roster automatically unless it is an outbound-lifecycle tool added to
+# the excluded set).
+_INBOUND_EXCLUDED_TOOLS = frozenset({"conclude_enrollment", "create_task"})
+_INBOUND_CORE: tuple[Tool[AgentDeps], ...] = tuple(
+    tool for tool in _CORE if tool.name not in _INBOUND_EXCLUDED_TOOLS
+)
+
 # Per §V.38: each Drive tool binds a googleapiclient.discovery.Resource that
 # carries one shared httplib2.Http transport with no internal locks. Pydantic
 # AI dispatches sync tools via asyncio.to_thread, so an Anthropic-emitted
@@ -234,7 +277,7 @@ TEMPLATES: dict[WorkflowTemplateName, WorkflowTemplate] = {
         description="Inbound auto-reply workflow without external knowledge base.",
         protocol_pre=_BASE + _SPEC_TABLE,
         protocol_post=_MUST_SEND + _DECLINE + _NO_FABRICATION,
-        tools=_CORE,
+        tools=_INBOUND_CORE,
     ),
     "inbound-google-drive": WorkflowTemplate(
         name="inbound-google-drive",
@@ -244,7 +287,7 @@ TEMPLATES: dict[WorkflowTemplateName, WorkflowTemplate] = {
         ),
         protocol_pre=_BASE + _SPEC_TABLE,
         protocol_post=_MUST_SEND + _DECLINE + _NO_FABRICATION,
-        tools=_CORE + _DRIVE,
+        tools=_INBOUND_CORE + _DRIVE,
     ),
 }
 

@@ -55,8 +55,14 @@ class TestUniversalTemplateInvariants:
         assert "polite decline" in template.protocol
 
     def test_deferred_task_protocol_present(self, template: WorkflowTemplate) -> None:
-        """§V.45: _DEFERRED_TASK fragment composed into every template's protocol."""
-        assert "conclude_enrollment" in template.protocol
+        """§V.31 / §V.45: a deferred-task branch composes into every template's
+        protocol -- the outbound terminal-outcome branch (names
+        ``conclude_enrollment``) for outbound, the inbound-reply branch for
+        inbound (names no tool, reply once then stop)."""
+        if template.direction == "inbound":
+            assert _INBOUND_INSTRUCTION in template.protocol
+        else:
+            assert "conclude_enrollment" in template.protocol
 
     def test_no_fabrication_protocol_present(self, template: WorkflowTemplate) -> None:
         """§V.45: _NO_FABRICATION fragment composed into every template's protocol."""
@@ -134,11 +140,13 @@ def _tool_names(template: WorkflowTemplate) -> set[str]:
 
 
 def test_record_enrollment_outcome_absent_from_agent_tool_set() -> None:
-    """§V.127 / §I: conclude_enrollment is the sole agent terminal.
+    """§V.127 / §V.31 / §I: ``record_enrollment_outcome`` is the system-internal
+    recorder (§V.15) -- it is never bound to any template's tool set.
 
-    ``record_enrollment_outcome`` becomes the system-internal recorder
-    (§V.15) -- it must not be bound to any template's tool set; every
-    template binds ``conclude_enrollment`` in its place.
+    ``conclude_enrollment`` is the outbound terminal, bound to outbound
+    templates. Inbound templates bind neither ``conclude_enrollment`` nor
+    ``create_task`` (§V.31) -- the system records the inbound outcome and an
+    inbound reply schedules no follow-up (§B.124).
     """
     for template in TEMPLATES.values():
         names = _tool_names(template)
@@ -146,9 +154,70 @@ def test_record_enrollment_outcome_absent_from_agent_tool_set() -> None:
             f"template {template.name!r} still binds record_enrollment_outcome; "
             f"§V.127 makes it system-internal"
         )
-        assert "conclude_enrollment" in names, (
-            f"template {template.name!r} must bind conclude_enrollment (§V.127)"
-        )
+        if template.direction == "outbound":
+            assert "conclude_enrollment" in names, (
+                f"outbound template {template.name!r} must bind "
+                f"conclude_enrollment (§V.127)"
+            )
+        else:
+            assert "conclude_enrollment" not in names, (
+                f"inbound template {template.name!r} must not bind "
+                f"conclude_enrollment (§V.31)"
+            )
+            assert "create_task" not in names, (
+                f"inbound template {template.name!r} must not bind create_task (§V.31)"
+            )
+
+
+def test_inbound_templates_exclude_lifecycle_tools_keep_send_tools() -> None:
+    """§V.31 / §B.124: inbound templates bind neither ``conclude_enrollment``
+    nor ``create_task`` -- the system records the inbound outcome and an inbound
+    reply schedules no follow-up -- yet they keep the send + read tools an
+    inbound auto-reply needs (reply_email, send_email, noop, read_contact,
+    read_email, search_emails)."""
+    for name in ("inbound-general", "inbound-google-drive"):
+        names = _tool_names(TEMPLATES[name])
+        assert "conclude_enrollment" not in names
+        assert "create_task" not in names
+        for kept in (
+            "reply_email",
+            "send_email",
+            "noop",
+            "read_contact",
+            "read_company",
+            "read_email",
+            "search_emails",
+        ):
+            assert kept in names, (
+                f"inbound template {name!r} dropped {kept!r} -- §V.31 removes "
+                f"only conclude_enrollment + create_task from _CORE"
+            )
+
+
+def test_outbound_general_binds_lifecycle_tools() -> None:
+    """§V.31 / §V.127: the outbound template keeps the full lifecycle roster --
+    ``conclude_enrollment`` (terminal) and ``create_task`` (deferred follow-up)
+    -- because outbound sequences own their enrollment lifecycle."""
+    names = _tool_names(TEMPLATES["outbound-general"])
+    assert "conclude_enrollment" in names
+    assert "create_task" in names
+
+
+def test_inbound_deferred_fragment_reply_once_records_outcome() -> None:
+    """§V.31 / §B.124: the inbound deferred fragment tells the agent to reply
+    once and stop, states the system records the outcome, and names no tool
+    (§V.40: a fragment names 0 or >=2 tools -- inbound's structural guard is the
+    tool roster, so the fragment names none). It carries no SPEC cite (§V.45)
+    and is ASCII-only (§C)."""
+    fragment = templates_module._DEFERRED_TASK_INBOUND  # pyright: ignore[reportPrivateUsage]
+    assert _INBOUND_INSTRUCTION in fragment
+    assert "records the" in fragment
+    # The two outbound-lifecycle tool names must not appear -- the inbound
+    # fragment neither orders nor forbids a tool it cannot call.
+    assert "conclude_enrollment" not in fragment
+    assert "create_task" not in fragment
+    assert fragment.isascii()
+    assert _SPEC_CITE.search(fragment) is None
 
 
 def test_outbound_general_excludes_drive_tools() -> None:
@@ -254,16 +323,26 @@ _CONCLUDE_INSTRUCTION = (
     "After achieving the workflow goal for a contact, conclude the enrollment"
 )
 _INITIAL_INSTRUCTION = "Send the initial email and stop"
+_INBOUND_INSTRUCTION = "Reply to the inbound email once, then stop"
 
 
 @pytest.mark.parametrize("template", list(TEMPLATES.values()), ids=lambda t: t.name)
-def test_build_protocol_task_carries_record_outcome_instruction(
+def test_build_protocol_task_branch_direction_aware(
     template: WorkflowTemplate,
 ) -> None:
-    """§V.31: ``trigger='task'`` keeps the terminal-outcome instruction."""
+    """§V.31: on ``trigger='task'`` an outbound template keeps the
+    terminal-outcome instruction; an inbound template uses the inbound-reply
+    branch regardless of trigger (§B.124: the TASK branch used to order a
+    ``conclude_enrollment`` inbound workflows forbid)."""
     protocol = template.build_protocol("task")
-    assert _CONCLUDE_INSTRUCTION in protocol
-    assert _INITIAL_INSTRUCTION not in protocol
+    if template.direction == "inbound":
+        assert _INBOUND_INSTRUCTION in protocol
+        assert _CONCLUDE_INSTRUCTION not in protocol
+        assert _INITIAL_INSTRUCTION not in protocol
+    else:
+        assert _CONCLUDE_INSTRUCTION in protocol
+        assert _INITIAL_INSTRUCTION not in protocol
+        assert _INBOUND_INSTRUCTION not in protocol
 
 
 @pytest.mark.parametrize(
@@ -271,15 +350,24 @@ def test_build_protocol_task_carries_record_outcome_instruction(
     ["enrollment_run", "enrollment_schedule", "manual", "email", "anything_else"],
 )
 @pytest.mark.parametrize("template", list(TEMPLATES.values()), ids=lambda t: t.name)
-def test_build_protocol_non_task_uses_initial_branch(
+def test_build_protocol_non_task_branch_direction_aware(
     template: WorkflowTemplate, trigger: str
 ) -> None:
-    """§V.31 + §V.32: non-``task`` triggers swap to the initial-send-only
-    instruction. ``enrollment_schedule`` joins the non-task set because it
-    shares first-touch semantics with ``enrollment_run`` per §V.30."""
+    """§V.31 + §V.32: for a non-``task`` trigger an outbound template swaps to
+    the initial-send-only instruction (``enrollment_schedule`` joins the
+    non-task set because it shares first-touch semantics with
+    ``enrollment_run`` per §V.30); an inbound template always uses the
+    inbound-reply branch (§B.124: the INITIAL branch used to mislabel an
+    inbound reply as a first reach-out)."""
     protocol = template.build_protocol(trigger)
-    assert _INITIAL_INSTRUCTION in protocol
-    assert _CONCLUDE_INSTRUCTION not in protocol
+    if template.direction == "inbound":
+        assert _INBOUND_INSTRUCTION in protocol
+        assert _INITIAL_INSTRUCTION not in protocol
+        assert _CONCLUDE_INSTRUCTION not in protocol
+    else:
+        assert _INITIAL_INSTRUCTION in protocol
+        assert _CONCLUDE_INSTRUCTION not in protocol
+        assert _INBOUND_INSTRUCTION not in protocol
 
 
 @pytest.mark.parametrize(
@@ -337,9 +425,12 @@ def test_must_send_ordered_after_trigger_branch_before_decline(
     and before _DECLINE in the composed protocol."""
     protocol = template.build_protocol(trigger)
     must_send = templates_module._MUST_SEND  # pyright: ignore[reportPrivateUsage]
-    deferred_marker = (
-        _CONCLUDE_INSTRUCTION if trigger == "task" else _INITIAL_INSTRUCTION
-    )
+    if template.direction == "inbound":
+        deferred_marker = _INBOUND_INSTRUCTION
+    elif trigger == "task":
+        deferred_marker = _CONCLUDE_INSTRUCTION
+    else:
+        deferred_marker = _INITIAL_INSTRUCTION
     base_idx = protocol.find("Keep your final summary brief")
     deferred_idx = protocol.find(deferred_marker)
     must_send_idx = protocol.find(must_send)
@@ -564,12 +655,14 @@ def test_build_agent_binds_template_tools(template_name: str) -> None:
 
 @pytest.mark.parametrize("template_name", list(TEMPLATES.keys()))
 def test_build_agent_trigger_routes_protocol_branch(template_name: str) -> None:
-    """§V.31: ``_build_agent`` swaps the deferred-task branch per ``trigger``.
+    """§V.31: ``_build_agent`` selects the deferred-task branch per direction +
+    ``trigger``.
 
-    ``trigger='task'`` keeps the terminal-outcome instruction; non-``task``
-    triggers swap to the initial-send-only branch so the agent's system
-    prompt cannot direct a premature ``conclude_enrollment`` terminal
-    on first reach-out.
+    An inbound template uses the inbound-reply branch for every trigger
+    (reply once, then stop). An outbound template keeps the terminal-outcome
+    instruction on ``trigger='task'`` and swaps to the initial-send-only
+    branch otherwise, so its system prompt cannot direct a premature
+    ``conclude_enrollment`` terminal on first reach-out.
     """
     from datetime import UTC, datetime
 
@@ -598,6 +691,20 @@ def test_build_agent_trigger_routes_protocol_branch(template_name: str) -> None:
         parts = agent._instructions  # pyright: ignore[reportPrivateUsage]
         assert isinstance(parts, list)
         return "".join(item for item in parts if isinstance(item, str))
+
+    if template.direction == "inbound":
+        for trigger in (
+            "task",
+            "enrollment_run",
+            "enrollment_schedule",
+            "manual",
+            "email",
+        ):
+            instructions = _instructions(trigger)
+            assert _INBOUND_INSTRUCTION in instructions
+            assert _CONCLUDE_INSTRUCTION not in instructions
+            assert _INITIAL_INSTRUCTION not in instructions
+        return
 
     task_instructions = _instructions("task")
     assert _CONCLUDE_INSTRUCTION in task_instructions
