@@ -163,7 +163,7 @@ Trigger: `src/mailpilot/models.py` or `src/mailpilot/database.py` changed.
 
 ## §V.45 — protocol composition + zero SPEC cites
 
-Protocol composed `_BASE → [_SPEC_TABLE (inbound only) →] trigger branch → _MUST_SEND → _DECLINE → _NO_FABRICATION`. `_SPEC_TABLE` = GFM pipe-table mandate for inbound product-spec; composed into inbound-general + inbound-google-drive `protocol_pre` only — outbound-general `protocol_pre` = `_BASE` alone. `_MUST_SEND` = end every trigger turn in a send or explicit noop; composed into `protocol_post` for all three templates. Every fragment is email-universal OR direction-scoped; never workflow-specific. Agent-facing text (composed protocol + registered tool docstrings) carries zero SPEC citation (`§V/§T/§B.<n>` tokens ban).
+Protocol composed `_BASE → [_SPEC_TABLE (inbound only) →] deferred branch → _MUST_SEND → _DECLINE → _NO_FABRICATION`; deferred branch selected per §V.31 (direction + trigger). `_SPEC_TABLE` = GFM pipe-table mandate for inbound product-spec; composed into inbound-general + inbound-google-drive `protocol_pre` only — outbound-general `protocol_pre` = `_BASE` alone. `_MUST_SEND` = end every trigger turn in a send or explicit noop; composed into `protocol_post` for all three templates. Every fragment is email-universal OR direction-scoped; never workflow-specific. Agent-facing text (composed protocol + registered tool docstrings) carries zero SPEC citation (`§V/§T/§B.<n>` tokens ban).
 
 Trigger: `src/mailpilot/agent/templates.py` or `src/mailpilot/agent/tools.py` changed.
 
