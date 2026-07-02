@@ -57,7 +57,14 @@ CREATE TABLE IF NOT EXISTS workflow (
                       CHECK (status IN ('draft', 'active', 'paused')),
     created_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (name)
+    touches             INTEGER,
+    touch_interval_days INTEGER,
+    UNIQUE (name),
+    CONSTRAINT workflow_touch_cadence_check CHECK (
+        ((touches IS NULL) = (touch_interval_days IS NULL))
+        AND (touches IS NULL OR touches > 0)
+        AND (touch_interval_days IS NULL OR touch_interval_days > 0)
+    )
 );
 
 CREATE INDEX IF NOT EXISTS idx_workflow_account_id ON workflow(account_id);

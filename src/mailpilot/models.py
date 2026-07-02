@@ -143,7 +143,16 @@ WorkflowTemplateName = Literal[
 
 
 class Workflow(BaseModel):
-    """Workflow binding an account to instructions and a direction."""
+    """Workflow binding an account to instructions and a direction.
+
+    ``touches`` and ``touch_interval_days`` are the system-owned cadence def
+    fields (§V.136): ``touches`` is the total number of sends in the sequence
+    and ``touch_interval_days`` is the spacing between them. They form a
+    nullable pair -- both ``None`` means single-touch (no automatic follow-up);
+    the schema CHECK forbids setting one without the other. Like the other def
+    fields they are import-only (§V.103) and covered by the ``workflow check``
+    wording hash (§V.134).
+    """
 
     id: str
     name: str
@@ -155,6 +164,8 @@ class Workflow(BaseModel):
     goal: str = ""
     instructions: str = ""
     theme: str = "blue"
+    touches: int | None = None
+    touch_interval_days: int | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -213,8 +224,9 @@ class WorkflowCheckEntry(BaseModel):
     - ``orphaned``: name in a row, no matching catalog def.
 
     ``catalog_hash`` is ``None`` when orphaned (no def) and ``row_hash`` is
-    ``None`` when not imported (no row); both are SHA-256 over the wording
-    fields ``{template, theme, goal, instructions}``.
+    ``None`` when not imported (no row); both are SHA-256 over the def fields
+    ``{template, theme, goal, instructions, touches, touch_interval_days}`` (the
+    cadence pair joined the hashed set per §V.136).
     """
 
     name: str

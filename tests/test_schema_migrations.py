@@ -757,6 +757,119 @@ def test_migration_009_normalizes_names_and_swaps_constraint(
     conn.rollback()
 
 
+# -- migration 010: touch-cadence def cols + legacy touch-task rewrite (§V.136) -
+
+
+def test_migration_010_adds_cadence_cols_and_rewrites_touch_tasks(
+    migration_schema: psycopg.Connection[dict[str, Any]],
+):
+    """§V.136/§V.108: migration 010 adds the nullable cadence pair
+    (``touches``, ``touch_interval_days``) with a both-or-neither CHECK, then
+    one-time rewrites every pending ``^Touch N of M`` task so its context
+    carries ``touch = N`` -- the parse lives and dies in the migration. A
+    completed touch task and a non-touch task are left untouched, and an
+    existing context key survives the merge.
+    """
+    conn = migration_schema
+    for prefix in ("001", "002", "003", "004", "005", "006", "007", "008", "009"):
+        conn.execute(_read_shipped_migration(prefix))  # type: ignore[arg-type]
+    conn.commit()
+
+    conn.execute(
+        "INSERT INTO account (id, email) VALUES (%s, %s)", ("ac1", "a@lab5.ca")
+    )
+    conn.execute(
+        "INSERT INTO workflow (id, account_id, template, type, name) "
+        "VALUES (%s, %s, %s, %s, %s)",
+        ("wf1", "ac1", "outbound-general", "outbound", "ai-engineering"),
+    )
+    conn.execute(
+        "INSERT INTO contact (id, email) VALUES (%s, %s)", ("ct1", "c@example.com")
+    )
+    conn.execute(
+        "INSERT INTO enrollment (id, workflow_id, contact_id) VALUES (%s, %s, %s)",
+        ("en1", "wf1", "ct1"),
+    )
+
+    def _seed_task(task_id: str, description: str, status: str, context: str) -> None:
+        conn.execute(
+            "INSERT INTO task (id, enrollment_id, workflow_id, contact_id, "
+            "description, context, scheduled_at, status) "
+            "VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s)",
+            (
+                task_id,
+                "en1",
+                "wf1",
+                "ct1",
+                description,
+                context,
+                "2026-08-01T00:00:00Z",
+                status,
+            ),
+        )
+
+    _seed_task("tk_t2", "Touch 2 of 3: value-add bump", "pending", "{}")
+    _seed_task("tk_t3", "Touch 3 of 3: breakup", "pending", '{"prior_email_id": "em9"}')
+    _seed_task(
+        "tk_first",
+        "scheduled first reach-out",
+        "pending",
+        '{"trigger": "enrollment_schedule"}',
+    )
+    _seed_task("tk_done", "Touch 2 of 3: value-add bump", "completed", "{}")
+    conn.commit()
+
+    # Pre-010 the cadence columns do not exist. Scope to this test schema --
+    # a bare table_name match would also see the public workflow table the
+    # session fixture provisions from the (already-cadenced) schema.sql.
+    pre = conn.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name = 'workflow' "
+        "AND column_name IN ('touches', 'touch_interval_days')"
+    ).fetchall()
+    assert pre == []
+
+    conn.execute(_read_shipped_migration("010"))  # type: ignore[arg-type]
+    conn.commit()
+
+    # Columns exist, nullable, default NULL on the pre-existing row.
+    row = conn.execute(
+        "SELECT touches, touch_interval_days FROM workflow WHERE id = 'wf1'"
+    ).fetchone()
+    assert row is not None
+    assert row["touches"] is None
+    assert row["touch_interval_days"] is None
+
+    # The both-or-neither CHECK rejects a half-configured cadence...
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute("UPDATE workflow SET touches = 3 WHERE id = 'wf1'")
+    conn.rollback()
+    # ...and a non-positive count...
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            "UPDATE workflow SET touches = 0, touch_interval_days = 7 WHERE id = 'wf1'"
+        )
+    conn.rollback()
+    # ...but accepts a full pair.
+    conn.execute(
+        "UPDATE workflow SET touches = 3, touch_interval_days = 7 WHERE id = 'wf1'"
+    )
+    conn.commit()
+
+    # Pending ``Touch N of M`` tasks gained context.touch = N; an existing key
+    # survives the JSONB merge. First-touch and completed tasks are untouched.
+    contexts = {
+        r["id"]: r["context"]
+        for r in conn.execute(
+            "SELECT id, context FROM task WHERE workflow_id = 'wf1'"
+        ).fetchall()
+    }
+    assert contexts["tk_t2"] == {"touch": 2}
+    assert contexts["tk_t3"] == {"prior_email_id": "em9", "touch": 3}
+    assert contexts["tk_first"] == {"trigger": "enrollment_schedule"}
+    assert contexts["tk_done"] == {}
+
+
 # -- identity invariant: schema.sql == apply-all-migrations-from-zero (§V.108) -
 
 

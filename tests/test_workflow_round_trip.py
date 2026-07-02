@@ -24,6 +24,7 @@ from mailpilot.cli import main
 from mailpilot.database import (
     activate_workflow,
     create_workflow,
+    get_workflow_by_name,
     update_workflow,
 )
 
@@ -233,3 +234,100 @@ def test_workflow_export_toml_excludes_denormalized_fields(
         with path.open("rb") as handle:
             parsed = tomllib.load(handle)
         assert set(parsed.keys()) == set(_EXPORT_FIELDS)
+
+
+def test_workflow_cadence_fields_round_trip(
+    runner: CliRunner,
+    database_connection: psycopg.Connection[dict[str, Any]],
+    tmp_path: pathlib.Path,
+) -> None:
+    """§V.103/§V.136: the cadence pair exports as bare TOML ints, re-imports onto
+    the row, and round-trips idempotently; a single-touch (NULL cadence)
+    workflow omits both keys entirely.
+    """
+    account = make_test_account(database_connection)
+
+    cadenced = create_workflow(
+        database_connection,
+        name="cadence-flow",
+        template="outbound-general",
+        account_id=account.id,
+        theme="green",
+    )
+    assert cadenced is not None
+    update_workflow(
+        database_connection,
+        cadenced.id,
+        goal="Book demos.",
+        instructions="Be brief.\n",
+        touches=3,
+        touch_interval_days=7,
+    )
+    activate_workflow(database_connection, cadenced.id)
+
+    single = create_workflow(
+        database_connection,
+        name="single-flow",
+        template="outbound-general",
+        account_id=account.id,
+    )
+    assert single is not None
+    update_workflow(
+        database_connection, single.id, goal="Say hi.", instructions="Once."
+    )
+    activate_workflow(database_connection, single.id)
+
+    out_dir = tmp_path / "cat"
+    _invoke(
+        runner,
+        database_connection,
+        [
+            "workflow",
+            "export",
+            "--account-email",
+            account.id,
+            "--out-dir",
+            str(out_dir),
+        ],
+    )
+    cadence_toml = (out_dir / "cadence-flow.toml").read_text()
+    assert "touches = 3" in cadence_toml
+    assert "touch_interval_days = 7" in cadence_toml
+    # A single-touch workflow carries neither cadence key.
+    single_toml = (out_dir / "single-flow.toml").read_text()
+    assert "touches" not in single_toml
+    assert "touch_interval_days" not in single_toml
+
+    database_connection.execute(
+        "DELETE FROM workflow WHERE account_id = %s", (account.id,)
+    )
+    database_connection.commit()
+
+    _invoke(
+        runner,
+        database_connection,
+        ["workflow", "import", "--account-email", account.id, "--file", str(out_dir)],
+    )
+    restored = get_workflow_by_name(database_connection, "cadence-flow")
+    assert restored is not None
+    assert restored.touches == 3
+    assert restored.touch_interval_days == 7
+    restored_single = get_workflow_by_name(database_connection, "single-flow")
+    assert restored_single is not None
+    assert restored_single.touches is None
+    assert restored_single.touch_interval_days is None
+
+    out_two = tmp_path / "cat2"
+    _invoke(
+        runner,
+        database_connection,
+        [
+            "workflow",
+            "export",
+            "--account-email",
+            account.id,
+            "--out-dir",
+            str(out_two),
+        ],
+    )
+    assert _read_catalog(out_two) == _read_catalog(out_dir)

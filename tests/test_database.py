@@ -6655,6 +6655,62 @@ def test_check_workflow_wording_classifies_four_states(
     assert report.orphaned == 1
 
 
+def test_check_workflow_wording_covers_cadence_pair(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.134/§V.136: touches + touch_interval_days join the wording hash, so a
+    cadence change (or a def that drops cadence) flips in_sync -> out_of_sync."""
+    account = make_test_account(database_connection)
+    flow = create_workflow(
+        database_connection,
+        name="cadence-hash",
+        template="outbound-general",
+        account_id=account.id,
+        theme="blue",
+    )
+    assert flow is not None
+    update_workflow(
+        database_connection,
+        flow.id,
+        goal="g",
+        instructions="i",
+        touches=3,
+        touch_interval_days=7,
+    )
+
+    matching = {
+        "cadence-hash": {
+            **_catalog_entry("cadence-hash", goal="g", instructions="i"),
+            "touches": 3,
+            "touch_interval_days": 7,
+        }
+    }
+    matched = check_workflow_wording(database_connection, matching)
+    assert matched.workflows[0].state == "in_sync"
+
+    # Flip the touch count only -> out_of_sync.
+    changed = {
+        "cadence-hash": {
+            **_catalog_entry("cadence-hash", goal="g", instructions="i"),
+            "touches": 5,
+            "touch_interval_days": 7,
+        }
+    }
+    assert (
+        check_workflow_wording(database_connection, changed).workflows[0].state
+        == "out_of_sync"
+    )
+
+    # A def that drops cadence (single-touch) drifts from a cadenced row.
+    dropped = {
+        "cadence-hash": _catalog_entry("cadence-hash", goal="g", instructions="i")
+    }
+    assert (
+        check_workflow_wording(database_connection, dropped).workflows[0].state
+        == "out_of_sync"
+    )
+
+
 def test_check_workflow_wording_keyed_by_name_not_hashed(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
