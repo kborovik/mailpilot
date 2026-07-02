@@ -50,8 +50,8 @@ since the row is retained.
 
 ## Exit codes
 
-- `0` -- success. `ok: true` payload.
-- `1` -- failure. `ok: false` payload on stdout, plus stderr diagnostic.
+- `0` -- success. `ok: true` payload on stdout.
+- `1` -- failure. `ok: false` envelope on stderr; stdout stays empty.
 
 The top-level `--skill`, `--version`, `--help`, `--completion` flags emit
 plain text (not JSON) and exit `0`.
@@ -183,6 +183,13 @@ mailpilot template view <NAME>
 `template` is immutable on update -- changing it requires deleting and
 recreating the workflow. Import reports a per-row `template_immutable` error
 when the value differs and continues with the rest of the batch.
+
+Every import envelope carries top-level integer `applied` and `rejected`
+counts beside the `workflows` rows. An import that applies zero rows (every
+row rejected, or no `*.toml` found) fails loudly: `import_failed` error
+envelope on stderr with the per-row rows inlined, exit 1. A partial import
+stays `ok: true` (exit 0) with per-row errors inline, so check `rejected`
+before trusting a batch.
 
 ### Enroll a contact
 
