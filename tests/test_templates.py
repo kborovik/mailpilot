@@ -68,12 +68,20 @@ class TestUniversalTemplateInvariants:
         """§V.45: _NO_FABRICATION fragment composed into every template's protocol."""
         assert "fabricate" in template.protocol
 
-    def test_protocol_warns_about_redundant_read_email(
+    def test_protocol_guards_against_redundant_trigger_email_fetch(
         self, template: WorkflowTemplate
     ) -> None:
-        """Trigger email body is inlined in the user prompt -- protocol must
-        tell the agent not to waste a round-trip on read_email."""
-        assert "read_email" in template.protocol
+        """§V.135: the trigger email body is inlined in the user prompt, so the
+        protocol tells the agent it is already provided -- yet it names no read
+        tool (naming exactly one read tool would trip §V.40, and the CRM records
+        are now mechanically pre-fed rather than fetched)."""
+        protocol = template.protocol
+        assert "already provided" in protocol
+        for read_tool in ("read_email", "read_contact", "read_company"):
+            assert read_tool not in protocol, (
+                f"template {template.name!r}: §V.135 -- _BASE must name no read "
+                f"tool, but the composed protocol mentions {read_tool!r}"
+            )
 
     def test_protocol_does_not_prohibit_markdown(
         self, template: WorkflowTemplate
@@ -132,6 +140,23 @@ def test_base_strips_permissive_markdown_wording() -> None:
         assert "may use Markdown" not in template.protocol
 
 
+def test_base_names_no_read_tools() -> None:
+    """§V.135 / §V.40: _BASE names no read tool.
+
+    The contact + company records are mechanically pre-fed into the user prompt
+    (§V.135) rather than fetched, so _BASE no longer references read_contact /
+    read_company, and the trigger-email nudge no longer names read_email.
+    Naming exactly one read tool would trip §V.40 (a fragment names 0 or >=2
+    tools); _BASE names zero. The personalization directive still stands, now
+    pointed at the pre-fed records."""
+    base = templates_module._BASE  # pyright: ignore[reportPrivateUsage]
+    for read_tool in ("read_email", "read_contact", "read_company"):
+        assert read_tool not in base
+    # The behavioural guidance survives the reword.
+    assert "already provided" in base
+    assert "records" in base
+
+
 # -- Per-template contract -----------------------------------------------------
 
 
@@ -173,8 +198,9 @@ def test_inbound_templates_exclude_lifecycle_tools_keep_send_tools() -> None:
     """§V.31 / §B.124: inbound templates bind neither ``conclude_enrollment``
     nor ``create_task`` -- the system records the inbound outcome and an inbound
     reply schedules no follow-up -- yet they keep the send + read tools an
-    inbound auto-reply needs (reply_email, send_email, noop, read_contact,
-    read_email, search_emails)."""
+    inbound auto-reply needs (reply_email, send_email, noop, read_email,
+    search_emails). The CRM record tools (read_contact / read_company) are gone
+    from every roster -- those records are mechanically pre-fed (§V.135)."""
     for name in ("inbound-general", "inbound-google-drive"):
         names = _tool_names(TEMPLATES[name])
         assert "conclude_enrollment" not in names
@@ -183,8 +209,6 @@ def test_inbound_templates_exclude_lifecycle_tools_keep_send_tools() -> None:
             "reply_email",
             "send_email",
             "noop",
-            "read_contact",
-            "read_company",
             "read_email",
             "search_emails",
         ):
@@ -192,6 +216,9 @@ def test_inbound_templates_exclude_lifecycle_tools_keep_send_tools() -> None:
                 f"inbound template {name!r} dropped {kept!r} -- §V.31 removes "
                 f"only conclude_enrollment + create_task from _CORE"
             )
+        # §V.135: the CRM record lookups are off every roster (pre-fed instead).
+        assert "read_contact" not in names
+        assert "read_company" not in names
 
 
 def test_outbound_general_binds_lifecycle_tools() -> None:
@@ -570,8 +597,8 @@ def test_registered_tool_source_docstrings_carry_no_spec_citation() -> None:
     description AND per-parameter help -- from the registered function's
     docstring, including the Args/Returns sections. T130's guard scanned only
     ``tool.description`` (the wrapper summary), so §-cites buried in an Args or
-    Returns line of a source-function docstring (read_contact, create_task,
-    conclude_enrollment, list_enrollments, read_company, read_drive_markdown)
+    Returns line of a source-function docstring (create_task, conclude_enrollment,
+    list_enrollments, read_email, read_drive_markdown)
     leaked to the model unaudited. Sweep the full source docstring of every
     registered tool. Internal helpers (_check_spec_table) are out of scope --
     they are never registered, so the model never sees them."""

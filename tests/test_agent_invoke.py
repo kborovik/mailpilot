@@ -184,12 +184,12 @@ def test_agent_no_tool_calls_raises(
 def test_agent_calls_real_tool_passes_enforcement(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """Agent calls a real tool (read_contact) -> enforcement passes."""
+    """Agent calls a real tool (search_emails) -> enforcement passes."""
     _account, contact, workflow = _setup(database_connection)
     settings = make_test_settings(
         anthropic_api_key="sk-test", anthropic_model="test-model"
     )
-    model = _model_that_calls_tool("read_contact", {"email": contact.email})
+    model = _model_that_calls_tool("search_emails", {"query": contact.email})
     with (
         patch("mailpilot.agent.invoke.GmailClient"),
         patch("mailpilot.agent.invoke.DriveClient"),
@@ -865,6 +865,121 @@ def test_manual_trigger_no_email_no_task_renders_outbound_fallback(
     assert "First reach-out" not in prompt
 
 
+# -- Tests: §V.135 mechanical context pre-feed ---------------------------------
+
+
+def test_build_user_prompt_renders_contact_and_company_records(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.135 / §V.8: the pre-fed ContactView + CompanyView render as JSON
+    ``Contact record:`` / ``Company record:`` sections byte-identical to the
+    loader's own serialization -- the same loaders back CLI ``contact view`` /
+    ``company view``, so the agent and operator see identical context."""
+    from conftest import make_test_company
+    from mailpilot.database import (
+        create_note,
+        load_company_view,
+        load_contact_view,
+    )
+
+    _account, _c, workflow = _setup(database_connection)
+    company = make_test_company(database_connection, name="Acme", domain="acme.com")
+    contact = make_test_contact(
+        database_connection, email="cv@acme.com", company_id=company.id
+    )
+    create_note(database_connection, body="MET_AT_CONF_MARKER", contact_id=contact.id)
+    create_note(database_connection, body="TOP_CUSTOMER_MARKER", company_id=company.id)
+
+    contact_view = load_contact_view(database_connection, contact.id)
+    company_view = load_company_view(database_connection, company.id)
+    assert contact_view is not None
+    assert company_view is not None
+
+    prompt = _build_user_prompt(
+        workflow=workflow,
+        contact=contact,
+        email_history=[],
+        contact_view=contact_view,
+        company_view=company_view,
+    )
+
+    assert "Contact record:" in prompt
+    assert "Company record:" in prompt
+    # Byte-identical to the loader serialization (§V.8).
+    assert contact_view.model_dump_json(indent=2) in prompt
+    assert company_view.model_dump_json(indent=2) in prompt
+    # The inlined notes only the loaders surface came through.
+    assert "MET_AT_CONF_MARKER" in prompt
+    assert "TOP_CUSTOMER_MARKER" in prompt
+
+
+def test_build_user_prompt_omits_company_record_without_company_view(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.135: a contact with no parent company renders no ``Company record:``
+    section -- ``company_view`` is None so the block is dropped."""
+    from mailpilot.database import load_contact_view
+
+    _account, contact, workflow = _setup(database_connection)
+    contact_view = load_contact_view(database_connection, contact.id)
+    assert contact_view is not None
+
+    prompt = _build_user_prompt(
+        workflow=workflow,
+        contact=contact,
+        email_history=[],
+        contact_view=contact_view,
+        company_view=None,
+    )
+
+    assert "Contact record:" in prompt
+    assert "Company record:" not in prompt
+
+
+def test_invoke_prefeeds_contact_and_company_records(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.135 / §V.8 / §C: invoke_workflow_agent mechanically loads the contact
+    + company records via the shared loaders and pre-feeds them into the prompt,
+    so the agent grounds on CRM state (and inlined notes) with no read-tool
+    round-trip -- the system holds the keys, so the harness loads the data."""
+    from conftest import make_test_company
+    from mailpilot.database import create_note
+
+    account = make_test_account(database_connection, email="sender@example.com")
+    company = make_test_company(database_connection, name="Acme", domain="acme.com")
+    contact = make_test_contact(
+        database_connection, email="lead@acme.com", company_id=company.id
+    )
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    create_enrollment(database_connection, workflow.id, contact.id)
+    create_note(database_connection, body="CONTACT_NOTE_MARKER", contact_id=contact.id)
+    create_note(database_connection, body="COMPANY_NOTE_MARKER", company_id=company.id)
+
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    captured: list[ModelMessage] = []
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
+        invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            model_override=_capturing_model(captured),
+        )
+
+    all_text = str(captured)
+    assert "Contact record:" in all_text
+    assert "Company record:" in all_text
+    assert "CONTACT_NOTE_MARKER" in all_text
+    assert "COMPANY_NOTE_MARKER" in all_text
+
+
 # -- Tests: early-exit paths ---------------------------------------------------
 
 
@@ -1118,7 +1233,7 @@ def test_inbound_email_run_without_reply_raises(
 ) -> None:
     """§V.120: inbound trigger that calls read tools but never replies fails.
 
-    The model satisfies §V.81 (one tool call -- ``read_contact``) yet sends
+    The model satisfies §V.81 (one tool call -- ``search_emails``) yet sends
     nothing. The guard must convert that silent non-reply into a raised
     ``AgentCompletedWithoutReplyError`` instead of a success.
     """
@@ -1129,7 +1244,7 @@ def test_inbound_email_run_without_reply_raises(
     settings = make_test_settings(
         anthropic_api_key="sk-test", anthropic_model="test-model"
     )
-    model = _model_that_calls_tool("read_contact", {"email": contact.email})
+    model = _model_that_calls_tool("search_emails", {"query": contact.email})
     with (
         patch("mailpilot.agent.invoke.GmailClient"),
         patch("mailpilot.agent.invoke.DriveClient"),
@@ -1158,7 +1273,7 @@ def test_inbound_task_run_without_reply_raises(
     settings = make_test_settings(
         anthropic_api_key="sk-test", anthropic_model="test-model"
     )
-    model = _model_that_calls_tool("read_contact", {"email": contact.email})
+    model = _model_that_calls_tool("search_emails", {"query": contact.email})
     with (
         patch("mailpilot.agent.invoke.GmailClient"),
         patch("mailpilot.agent.invoke.DriveClient"),
@@ -1253,7 +1368,7 @@ def test_outbound_enrollment_run_without_send_raises(
     """§V.120 (per §B.106): an outbound first reach-out that never sends fails.
 
     An ``enrollment_run`` run with no triggering email is send-obligated.
-    The model calls only ``read_contact`` -- it satisfies §V.81 yet opens
+    The model calls only ``search_emails`` -- it satisfies §V.81 yet opens
     no message. The widened guard must raise instead of reporting success,
     so the cold email is never silently dropped.
     """
@@ -1261,7 +1376,7 @@ def test_outbound_enrollment_run_without_send_raises(
     settings = make_test_settings(
         anthropic_api_key="sk-test", anthropic_model="test-model"
     )
-    model = _model_that_calls_tool("read_contact", {"email": contact.email})
+    model = _model_that_calls_tool("search_emails", {"query": contact.email})
     with (
         patch("mailpilot.agent.invoke.GmailClient"),
         patch("mailpilot.agent.invoke.DriveClient"),
@@ -1286,7 +1401,7 @@ def test_outbound_enrollment_schedule_without_send_raises(
     settings = make_test_settings(
         anthropic_api_key="sk-test", anthropic_model="test-model"
     )
-    model = _model_that_calls_tool("read_contact", {"email": contact.email})
+    model = _model_that_calls_tool("search_emails", {"query": contact.email})
     with (
         patch("mailpilot.agent.invoke.GmailClient"),
         patch("mailpilot.agent.invoke.DriveClient"),
@@ -1390,7 +1505,7 @@ def test_invoke_span_failed_when_completed_without_reply(
     settings = make_test_settings(
         anthropic_api_key="sk-test", anthropic_model="test-model"
     )
-    model = _model_that_calls_tool("read_contact", {"email": contact.email})
+    model = _model_that_calls_tool("search_emails", {"query": contact.email})
     with (
         patch("mailpilot.agent.invoke.GmailClient"),
         patch("mailpilot.agent.invoke.DriveClient"),

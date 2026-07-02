@@ -45,7 +45,14 @@ from mailpilot.exceptions import (
     AgentDidNotUseToolsError,
 )
 from mailpilot.gmail import GmailClient
-from mailpilot.models import Account, Contact, Email, Workflow
+from mailpilot.models import (
+    Account,
+    CompanyView,
+    Contact,
+    ContactView,
+    Email,
+    Workflow,
+)
 from mailpilot.operator_log import operator_event
 from mailpilot.settings import Settings
 
@@ -296,28 +303,6 @@ def _wrap_search_emails(
     )
 
 
-def _wrap_read_contact(
-    ctx: RunContext[AgentDeps],
-    email: str,
-) -> dict[str, Any]:
-    """Look up a contact by email address with inlined notes."""
-    return agent_tools.read_contact(
-        connection=ctx.deps.connection,
-        email=email,
-    )
-
-
-def _wrap_read_company(
-    ctx: RunContext[AgentDeps],
-    domain: str,
-) -> dict[str, Any]:
-    """Look up a company by domain with inlined notes."""
-    return agent_tools.read_company(
-        connection=ctx.deps.connection,
-        domain=domain,
-    )
-
-
 def _wrap_read_email(
     ctx: RunContext[AgentDeps],
     email_id: str,
@@ -535,8 +520,19 @@ def _build_user_prompt(  # noqa: PLR0913
     task_description: str = "",
     task_context: dict[str, Any] | None = None,
     trigger: str = "manual",
+    contact_view: ContactView | None = None,
+    company_view: CompanyView | None = None,
 ) -> str:
-    """Assemble the user prompt for the agent."""
+    """Assemble the user prompt for the agent.
+
+    ``contact_view`` and ``company_view`` are the mechanically pre-fed CRM
+    records (§V.135). ``invoke_workflow_agent`` loads them via
+    ``load_contact_view`` / ``load_company_view`` -- the same loaders that back
+    CLI ``contact view`` / ``company view`` -- so the agent and the operator see
+    byte-identical context (§V.8). Each is rendered as a JSON ``Contact
+    record:`` / ``Company record:`` section; the company section is omitted when
+    the contact has no parent company (``company_view`` is None).
+    """
     sections: list[str] = [
         f"Workflow: {workflow.name}",
         f"Goal: {workflow.goal}",
@@ -547,6 +543,15 @@ def _build_user_prompt(  # noqa: PLR0913
     if contact.first_name or contact.last_name:
         name = f"{contact.first_name or ''} {contact.last_name or ''}".strip()
         sections.append(f"Name: {name}")
+
+    # §V.135: pre-feed the contact + company records (with inlined notes) so the
+    # agent grounds on them directly instead of spending a read-tool round-trip.
+    # The JSON is the loader's own serialization, byte-identical to the CLI view
+    # (§V.8).
+    if contact_view is not None:
+        sections.append("\nContact record:\n" + contact_view.model_dump_json(indent=2))
+    if company_view is not None:
+        sections.append("\nCompany record:\n" + company_view.model_dump_json(indent=2))
 
     # §V.29: trigger email body is inlined under "New inbound email:" by
     # _format_trigger; exclude it from email_history so the body never appears
@@ -758,6 +763,19 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
                 enrollment_id=enrollment.id,
             )
 
+            # §V.135: mechanically pre-feed the CRM records the system already
+            # holds keys for. load_contact_view / load_company_view are the same
+            # loaders that back CLI ``contact view`` / ``company view``, so the
+            # agent prompt and the operator CLI carry byte-identical context
+            # (§V.8). The company record is loaded only when the contact has a
+            # parent company.
+            contact_view = database.load_contact_view(connection, contact.id)
+            company_view = (
+                database.load_company_view(connection, contact.company_id)
+                if contact.company_id is not None
+                else None
+            )
+
             # Assemble prompt and run.
             prompt = _build_user_prompt(
                 workflow=workflow,
@@ -767,6 +785,8 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915
                 task_description=task_description,
                 task_context=task_context,
                 trigger=trigger,
+                contact_view=contact_view,
+                company_view=company_view,
             )
 
             span.set_attribute("prompt_length", len(prompt))

@@ -5868,12 +5868,17 @@ def test_contact_view_field_set_superset_of_base_and_summary() -> None:
 
 
 def test_base_fragment_mentions_notes_directive() -> None:
-    """_BASE must contain the §V.8 personalize-via-notes directive once."""
+    """_BASE must contain the §V.8 / §V.135 personalize-from-notes directive once.
+
+    Post-T209 the notes arrive through the pre-fed ``Contact record:`` /
+    ``Company record:`` sections (§V.135) rather than a read tool, but the
+    directive to treat those notes as personalization context still stands.
+    """
     from mailpilot.agent.templates import (
         _BASE,  # pyright: ignore[reportPrivateUsage]
     )
 
-    needle = "treat them as context for personalizing your response"
+    needle = "as context for personalizing your response"
     assert needle in _BASE
     assert _BASE.count(needle) == 1
 

@@ -662,8 +662,9 @@ class MeetingView(BaseModel):
 class ContactView(BaseModel):
     """View-only projection of `Contact` with inlined notes (§V.8).
 
-    Used by both CLI ``contact view`` and agent tool ``read_contact`` so the
-    operator and the agent see byte-identical context. ``notes`` carries the
+    Used by CLI ``contact view`` and the workflow-agent prompt pre-feed
+    (``Contact record:`` section, §V.135) so the operator and the agent see
+    byte-identical context. ``notes`` carries the
     contact's own notes (full body, ORDER BY ``created_at`` DESC, capped at
     ``_INLINE_NOTES_CAP`` in ``database.py``); ``company_notes`` carries the
     parent company's notes when ``company_id`` is set, else an empty list.
@@ -698,7 +699,8 @@ class ContactView(BaseModel):
 class CompanyView(BaseModel):
     """View-only projection of `Company` with inlined notes (§V.8).
 
-    Used by both CLI ``company view`` and agent tool ``read_company``. Only
+    Used by CLI ``company view`` and the workflow-agent prompt pre-feed
+    (``Company record:`` section, §V.135). Only
     the company's own notes are inlined (capped, full body, DESC); company is
     a root entity with no parent to inherit from.
     """

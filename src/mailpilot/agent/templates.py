@@ -29,8 +29,6 @@ from mailpilot.agent.invoke import (
     _wrap_list_drive_markdown,  # pyright: ignore[reportPrivateUsage]
     _wrap_list_enrollments,  # pyright: ignore[reportPrivateUsage]
     _wrap_noop,  # pyright: ignore[reportPrivateUsage]
-    _wrap_read_company,  # pyright: ignore[reportPrivateUsage]
-    _wrap_read_contact,  # pyright: ignore[reportPrivateUsage]
     _wrap_read_drive_markdown,  # pyright: ignore[reportPrivateUsage]
     _wrap_read_email,  # pyright: ignore[reportPrivateUsage]
     _wrap_reply_email,  # pyright: ignore[reportPrivateUsage]
@@ -95,17 +93,23 @@ class WorkflowTemplate:
 
 
 # _BASE carries the email-universal scaffolding composed into every template's
-# protocol_pre: brief-summary, the read_email guard, and the personalize-via-
-# notes directive (§V.8). Per §V.45 the prompt string itself carries no §-cite:
-# the runtime agent has no SPEC.md, so governing invariants are named here in the
-# comment, not in the model-visible text (closes §B.79).
+# protocol_pre: brief-summary, the trigger-email-already-provided nudge, and the
+# personalize-from-the-pre-fed-records directive (§V.8, §V.135). The contact and
+# company records (with their recent notes) are now mechanically pre-fed into the
+# user prompt by invoke_workflow_agent via load_contact_view / load_company_view
+# (§V.135), so the agent no longer fetches them through a read tool. _BASE names
+# no read tool at all -- naming exactly one would trip §V.40 (a fragment names 0
+# or >=2 tools). Per §V.45 the prompt string itself carries no §-cite: the runtime
+# agent has no SPEC.md, so governing invariants are named here in the comment, not
+# in the model-visible text (closes §B.79).
 _BASE = (
     "Keep your final summary brief (2-3 sentences, plain text, no emojis).\n"
     "When a trigger email is included in your prompt, its full body is "
-    "already provided -- do not call read_email to fetch it again.\n"
-    "If read_contact or read_company returns notes or company_notes, treat "
-    "them as context for personalizing your response. Never invent facts "
-    "about a contact or company that aren't supported by their notes.\n"
+    "already provided; you do not need to fetch it again.\n"
+    "The contact and company records for this thread, including their most "
+    "recent notes, are provided in your prompt. Treat those notes as context "
+    "for personalizing your response. Never invent facts about a contact or "
+    "company that are not supported by their records.\n"
 )
 
 # _SPEC_TABLE mandates a GFM pipe table for product-spec rows. Product-spec
@@ -224,8 +228,6 @@ _CORE: tuple[Tool[AgentDeps], ...] = (
     Tool(_wrap_disable_contact, name="disable_contact"),
     Tool(_wrap_list_enrollments, name="list_enrollments"),
     Tool(_wrap_search_emails, name="search_emails"),
-    Tool(_wrap_read_contact, name="read_contact"),
-    Tool(_wrap_read_company, name="read_company"),
     Tool(_wrap_read_email, name="read_email"),
     Tool(_wrap_noop, name="noop"),
 )
