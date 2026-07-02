@@ -663,3 +663,14 @@ Trigger: `src/mailpilot/cli.py` changed.
 - `rg 'workflow_check\b' src/mailpilot/cli.py` -> envelope key present
 - `rg 'sha256\b\|hashlib.*sha256' src/mailpilot/cli.py src/mailpilot/database.py | grep workflow` -> SHA-256 hash present
 - `rg 'toml.*\["name"\]\|tomllib.*name\b\|name.*toml' src/mailpilot/cli.py src/mailpilot/database.py | grep workflow_check` -> reads `name` field from TOML (not file stem)
+
+## Recipe grep-runner — mechanization candidate (not implemented)
+
+Observed 2026-07-02 (T212 build probe + §V.123/§V.128 amends): recipe `rg` lines
+hand-run repeatedly to validate check-extras bodies against code — same shape,
+different file lists. Candidate mode: script parses every backticked `rg` line
+under each `## §V.<n>` header, executes it, emits per-section {line, hit_count,
+files}; prose expectations (`-> present in N files`, `-> zero hits`) stay
+operator-judged — the runner collapses the execute step, not the verdict.
+Overlaps /sdd:check's interactive recipe runs; implement only if hand-running
+recurs. Promotion path: seed a §T row.
