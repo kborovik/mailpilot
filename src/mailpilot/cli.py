@@ -86,15 +86,16 @@ def _database_url() -> str:
 
 
 def scrub_tool_response_callback(match: ScrubMatch) -> Any:
-    """Exempt agent ``tool_response`` payloads from default Logfire scrubbing.
+    """Exempt agent tool-return payloads from default Logfire scrubbing.
 
-    Pydantic-AI ``running tool`` spans carry the structured tool return value
-    under the ``tool_response`` attribute. Without this exemption the default
-    substring matcher redacts strings like ``"authorized"`` inside KB markdown,
-    making §V.57 grounding regressions unverifiable from traces alone. Per
-    §V.55, agent tool outputs are non-sensitive by design.
+    Pydantic-AI ``execute_tool`` spans carry the structured tool return value
+    under the ``gen_ai.tool.call.result`` attribute (instrumentation format 5;
+    named ``tool_response`` before pydantic-ai v2). Without this exemption the
+    default substring matcher redacts strings like ``"authorized"`` inside KB
+    markdown, making §V.57 grounding regressions unverifiable from traces
+    alone. Per §V.55, agent tool outputs are non-sensitive by design.
     """
-    if match.path[:2] == ("attributes", "tool_response"):
+    if match.path[:2] == ("attributes", "gen_ai.tool.call.result"):
         return match.value
     return None
 

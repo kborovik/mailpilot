@@ -2018,7 +2018,7 @@ def test_no_custom_agent_tool_spans(
 ):
     """Agent tools must not emit custom agent.tool.* spans.
 
-    Pydantic AI's instrument_pydantic_ai() already creates a 'running tool'
+    Pydantic AI's instrument_pydantic_ai() already creates an 'execute_tool'
     span per tool call with tool arguments. Custom spans duplicate that.
     See issue #72.
     """

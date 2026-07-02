@@ -1416,7 +1416,7 @@ def test_invoke_span_failed_when_completed_without_reply(
 
 
 def test_workflow_agent_has_explicit_name_for_otel_traces() -> None:
-    """Pydantic AI's `agent run` span carries `gen_ai.agent.name`, derived
+    """Pydantic AI's `invoke_agent` span carries `gen_ai.agent.name`, derived
     from the Agent's `name=` argument. Setting it explicitly keeps traces
     legible when both the workflow agent and the classifier agent fire in
     the same time window."""

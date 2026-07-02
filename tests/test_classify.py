@@ -231,7 +231,7 @@ def test_instructions_honor_explicit_redirect_hints() -> None:
 
 
 def test_classifier_agent_has_explicit_name_for_otel_traces() -> None:
-    """Classifier and workflow agents both emit `agent run` spans -- giving
+    """Classifier and workflow agents both emit `invoke_agent` spans -- giving
     each Agent an explicit `name=` keeps `gen_ai.agent.name` legible instead
     of leaking the private `_AGENT` variable name into telemetry."""
     assert _AGENT.name == "mailpilot.classifier"

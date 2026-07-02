@@ -288,9 +288,11 @@ run's spans are in the `development` environment. Scope the time range to the ru
 window: `touch1.json` holds `window_start`; query from a minute before it to a few
 minutes after the last handle step. Pull these facts and write them up:
 
-- **Model and token use** -- `span_name = 'agent run'` or `'agent.invoke'` gives
-  per-turn latency and `gen_ai.usage.input_tokens` / `output_tokens`. Report which
-  model the workflow actually ran on; it is not always a Claude model.
+- **Model and token use** -- `span_name = 'agent.invoke'` (rollup: bare
+  `input_tokens` / `output_tokens` attributes) or `span_name LIKE 'invoke_agent %'`
+  (pydantic-ai v2 run span: `gen_ai.aggregated_usage.input_tokens` /
+  `output_tokens`) gives per-turn latency and token use. Report which model the
+  workflow actually ran on; it is not always a Claude model.
 - **Agent tool errors** -- `span_name = 'agent.tool_errors'`. The `tool_errors`
   attribute names the tool and error.
 - **Send results** -- `span_name = 'gmail.send_message'`. Confirm sends and no
