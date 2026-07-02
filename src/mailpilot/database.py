@@ -2721,6 +2721,48 @@ def list_enrollments_with_outcomes(
     return [EnrollmentWithOutcome.model_validate(row) for row in rows]
 
 
+def get_latest_enrollment_outcome(
+    connection: psycopg.Connection[dict[str, Any]],
+    enrollment_id: str,
+) -> str | None:
+    """Return the enrollment's most recent terminal outcome, else None (§V.83).
+
+    Outcomes are timeline-only (§V.15): the newest ``enrollment_completed`` /
+    ``enrollment_failed`` activity for the enrollment is its current outcome.
+    Returns ``"completed"`` or ``"failed"`` when one exists, ``None`` when the
+    enrollment has no recorded outcome yet.
+
+    The touch pre-flight (§V.83) reads this to cancel a queued follow-up touch
+    once the sequence has concluded -- a booked meeting, opt-out, or
+    contact-later disposition -- without an LLM call.
+
+    Args:
+        connection: Open database connection.
+        enrollment_id: Enrollment FK (outcome activities carry it).
+
+    Returns:
+        ``"completed"``, ``"failed"``, or ``None``.
+    """
+    row = connection.execute(
+        """\
+        SELECT CASE type
+            WHEN 'enrollment_completed' THEN 'completed'
+            WHEN 'enrollment_failed' THEN 'failed'
+        END AS outcome
+        FROM activity
+        WHERE enrollment_id = %(enrollment_id)s
+          AND type IN ('enrollment_completed', 'enrollment_failed')
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        """,
+        {"enrollment_id": enrollment_id},
+    ).fetchone()
+    if row is None:
+        return None
+    outcome = row["outcome"]
+    return outcome if isinstance(outcome, str) else None
+
+
 def list_active_outbound_enrollments_for_contact(
     connection: psycopg.Connection[dict[str, Any]],
     contact_id: str,
@@ -3352,6 +3394,41 @@ def get_emails_by_gmail_thread_id(
         {"gmail_thread_id": gmail_thread_id},
     ).fetchall()
     return [Email.model_validate(row) for row in rows]
+
+
+def has_inbound_email_from_contact_after(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact_id: str,
+    after: datetime,
+) -> bool:
+    """Return True if the contact sent an inbound email after ``after`` (§V.83).
+
+    The touch pre-flight (§V.83) reads this to cancel a queued follow-up touch
+    when the contact has replied since the prior touch -- an engaged contact
+    must not receive the next cold touch. Complements the reply-time
+    cancellation (§V.123) by catching the touch already due when the reply
+    landed. Compares against the arrival timestamp (``received_at``, with
+    ``sent_at`` as a fallback for any row lacking it).
+
+    Args:
+        connection: Open database connection.
+        contact_id: Contact FK (set on inbound rows via sender resolution).
+        after: The prior touch's send moment -- only later inbound counts.
+
+    Returns:
+        True when at least one such inbound email exists.
+    """
+    row = connection.execute(
+        """\
+        SELECT 1 FROM email
+        WHERE contact_id = %(contact_id)s
+          AND direction = 'inbound'
+          AND COALESCE(received_at, sent_at) > %(after)s
+        LIMIT 1
+        """,
+        {"contact_id": contact_id, "after": after},
+    ).fetchone()
+    return row is not None
 
 
 def get_latest_email_in_thread(

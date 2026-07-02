@@ -62,6 +62,7 @@ from mailpilot.database import (
     get_enrollment,
     get_last_cold_outbound,
     get_latest_email_in_thread,
+    get_latest_enrollment_outcome,
     get_meeting,
     get_meeting_by_google_event_id,
     get_note,
@@ -72,6 +73,7 @@ from mailpilot.database import (
     get_workflow,
     get_workflow_by_name,
     get_workflow_stats,
+    has_inbound_email_from_contact_after,
     import_snapshot,
     link_meeting_attendee,
     list_accounts,
@@ -4593,6 +4595,104 @@ def test_record_enrollment_outcome_omits_disposition_when_absent(
     )
 
     assert "disposition" not in activity.detail
+
+
+# -- get_latest_enrollment_outcome (§V.83) -------------------------------------
+
+
+def test_get_latest_enrollment_outcome_none_when_no_outcome(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.83: an enrollment with no recorded outcome reports no terminal state."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+
+    assert get_latest_enrollment_outcome(database_connection, enrollment.id) is None
+
+
+def test_get_latest_enrollment_outcome_returns_latest_terminal(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.83/§V.15: the newest terminal outcome activity wins."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+
+    record_enrollment_outcome(
+        database_connection,
+        enrollment.id,
+        "failed",
+        "not now",
+        disposition="contact_later",
+    )
+    record_enrollment_outcome(
+        database_connection,
+        enrollment.id,
+        "completed",
+        "meeting booked",
+        disposition="meeting_booked",
+    )
+
+    assert (
+        get_latest_enrollment_outcome(database_connection, enrollment.id) == "completed"
+    )
+
+
+# -- has_inbound_email_from_contact_after (§V.83) ------------------------------
+
+
+def test_has_inbound_email_from_contact_after_true_for_later_inbound(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.83: an inbound email from the contact after the anchor is detected."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection)
+    prior_touch_at = datetime(2024, 1, 1, tzinfo=UTC)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        contact_id=contact.id,
+        direction="inbound",
+        gmail_message_id="msg_reply",
+        received_at=datetime(2024, 1, 2, tzinfo=UTC),
+    )
+
+    assert has_inbound_email_from_contact_after(
+        database_connection, contact.id, prior_touch_at
+    )
+
+
+def test_has_inbound_email_from_contact_after_false_when_none_later(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.83: earlier inbound and later outbound do not count as a reply."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection)
+    prior_touch_at = datetime(2024, 1, 2, tzinfo=UTC)
+    # Inbound before the anchor -- an earlier reply, not a fresh one.
+    create_email(
+        database_connection,
+        account_id=account.id,
+        contact_id=contact.id,
+        direction="inbound",
+        gmail_message_id="msg_old_reply",
+        received_at=datetime(2024, 1, 1, tzinfo=UTC),
+    )
+    # Outbound after the anchor -- our own later touch, not the contact's reply.
+    create_email(
+        database_connection,
+        account_id=account.id,
+        contact_id=contact.id,
+        direction="outbound",
+        sent_at=datetime(2024, 1, 3, tzinfo=UTC),
+    )
+
+    assert not has_inbound_email_from_contact_after(
+        database_connection, contact.id, prior_touch_at
+    )
 
 
 # -- get_workflow_stats (§V.132) -----------------------------------------------
