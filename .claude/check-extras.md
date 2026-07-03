@@ -664,6 +664,113 @@ Trigger: `src/mailpilot/cli.py` changed.
 - `rg 'sha256\b\|hashlib.*sha256' src/mailpilot/cli.py src/mailpilot/database.py | grep workflow` -> SHA-256 hash present
 - `rg 'toml.*\["name"\]\|tomllib.*name\b\|name.*toml' src/mailpilot/cli.py src/mailpilot/database.py | grep workflow_check` -> reads `name` field from TOML (not file stem)
 
+## §V.4 — CLI envelope + record_count
+
+Every cmd output MUST match the §I.cli envelope. ok:true envelope carries top-level int `record_count` = records displayed: array-bearing payload (`list`/`search`/`sync`/`export`/`import`) -> array len; single-object payload (single-entity verbs + aggregate `stats`/`check` + `status`) -> 1. Error path -> `{"error", "message", "ok": false}` + exit 1; `record_count` omitted on error. Envelope key vocabulary per §I.cli (plural for arrays, singular for single-object; `workflow_stats`/`task_stats`/`workflow_check`/`db` aggregate exceptions).
+
+Trigger: `src/mailpilot/cli.py` changed.
+- `rg 'record_count' src/mailpilot/cli.py` -> output helper stamps record_count on every ok:true envelope
+- `rg 'output_error' src/mailpilot/cli.py | head -3` -> error helper present ({"error","message","ok":false} + exit 1)
+
+## §V.14 — activity append-only + note lifecycle
+
+Activity = INSERT only — no update/delete fns for activity rows. Note = INSERT + single-note hard-delete `note remove <note_id>` (§I): one note row per call, no bulk-clear, no note update; operator-only, NOT an agent tool. Tag/note mutation + its activity row commit in one txn — both or neither. `note remove` deletes the note row only, writes no activity — prior `note_added` rows survive as the append-only trail.
+
+Trigger: `src/mailpilot/database.py` or `src/mailpilot/cli.py` changed.
+- `rg 'def update_activity\|def delete_activity' src/mailpilot/database.py` -> zero hits (activity append-only)
+- `rg 'def delete_note\b' src/mailpilot/database.py` -> single-note hard-delete fn present
+- `rg 'def delete_notes\b' src/mailpilot/database.py` -> zero hits (owner bulk-clear retired)
+- `rg 'note_added' src/mailpilot/database.py` -> note INSERT pairs its activity row in one txn
+
+## §V.18 — schema drift definition
+
+Schema drift = live DB structure diverged from `schema.sql` w/ no migration path (manual edit | DB ahead of code); primitive = hash mismatch per §V.19. Distinct from `pending` = unapplied `migrations/NNN_*.sql` (§V.108). Response tiered per §V.109: `status` + `db check` tolerate + report; `run` + mutations dead-stop.
+
+Trigger: `src/mailpilot/database.py` changed.
+- `rg '"drift"' src/mailpilot/database.py` -> drift verdict present, distinct from pending
+- `rg '"pending"' src/mailpilot/database.py` -> pending verdict present
+- `rg 'schema_hash\|recorded_hash' src/mailpilot/database.py` -> hash-mismatch primitive
+
+## §V.23 — task drain pool + per-worker trace isolation
+
+Task drain = bounded pool <= `max_concurrent_tasks`; each worker owns its psycopg.Connection; atomic claim blocks re-dispatch of in-flight tasks. Each worker roots its own trace — the drain worker detaches the dispatching tick's `sync.loop.iteration` OTel context before `run.execute_task` (py3.14 ThreadPoolExecutor.submit propagates the active span via contextvars), so trace_id maps 1:1 w/ agent.invoke.
+
+Trigger: `src/mailpilot/sync.py` changed.
+- `rg 'max_concurrent_tasks' src/mailpilot/sync.py` -> pool bound present
+- `rg 'otel_context' src/mailpilot/sync.py` -> worker attaches fresh context + detaches token
+- `rg 'ThreadPoolExecutor' src/mailpilot/sync.py` -> bounded executor drain
+
+## §V.25 — advisory locks 2-tier
+
+Advisory locks 2-tier: coarse (workflow_id, contact_id) + task-scoped (task_id split-half CRC32 pair). Lock acquired BEFORE the agent.invoke span opens — loser -> None, no span emitted. Contention -> reschedule w/o attempt_count bump; the scheduled_at push fires task_pending_trigger so the loop re-wakes.
+
+Trigger: `src/mailpilot/agent/invoke.py` or `src/mailpilot/database.py` changed.
+- `rg 'crc32' src/mailpilot/agent/invoke.py` -> CRC32 lock-key derivation present
+- `rg 'advisory' src/mailpilot/agent/invoke.py src/mailpilot/database.py` -> both lock tiers present
+- `rg 'task_pending_trigger' src/mailpilot/schema.sql` -> reschedule push re-wakes the loop
+
+## §V.27 — routing pipeline order + classifier bounds
+
+Routing pipeline order: thread match -> RFC message-id match -> LLM classify; every stage account-scoped. Classifier = single-turn, no tools; body truncated @ 16384 chars; hallucinated workflow_id coerced to None; zero active inbound workflows -> no LLM call. Every outcome marks is_routed=TRUE w/ a distinct route_method (§V.20 enum).
+
+Trigger: `src/mailpilot/routing.py` or `src/mailpilot/agent/classify.py` changed.
+- `rg 'rfc_message_id' src/mailpilot/routing.py` -> RFC message-id stage after thread match
+- `rg '16384' src/mailpilot/agent/classify.py` -> body truncation bound
+- `rg 'is_routed' src/mailpilot/routing.py` -> every outcome marks routed
+
+## §V.31 — deferred branch direction-aware
+
+Protocol deferred branch keyed on direction + trigger. Outbound: trigger='task' -> terminal-outcome instruction (`_DEFERRED_TASK_TASK`, names conclude_enrollment); outbound first reach-out = compose-only touch run, binds NO deferred fragment (§V.136). Inbound: every trigger -> inbound-reply instruction (`_DEFERRED_TASK_INBOUND`: reply once + stop, system records outcome, never conclude_enrollment / create_task); inbound templates bind neither conclude_enrollment nor create_task.
+
+Trigger: `src/mailpilot/agent/templates.py` changed.
+- `rg '_DEFERRED_TASK_INBOUND\|_DEFERRED_TASK_TASK' src/mailpilot/agent/templates.py` -> both direction fragments present
+- `rg 'build_protocol' src/mailpilot/agent/templates.py` -> direction-aware composition fn
+- `rg '_INBOUND_EXCLUDED_TOOLS' src/mailpilot/agent/templates.py` -> inbound rosters exclude conclude_enrollment + create_task
+
+## §V.41 — KB grounding rules live in workflow instructions
+
+KB grounding rules (search-first, 2-search budget then single list, read top >= 3 hits, per-target search budget on compare) live in the workflow definition's `instructions` field (§V.103), NOT a code-defined template protocol fragment. inbound-google-drive template binds the Drive tool set but carries no grounding fragment — grounding wording is per-workflow data, not code.
+
+Trigger: `src/mailpilot/agent/templates.py` or `workflows/*.toml` changed.
+- `rg -i 'search-first\|search first\|2-search' src/mailpilot/agent/templates.py` -> zero hits (no grounding fragment in code)
+- `rg 'list_drive_markdown' src/mailpilot/agent/templates.py` -> Drive tool set bound on inbound-google-drive
+
+## §V.44 — template registry owns agent shape
+
+TEMPLATES keys == WorkflowTemplateName members (registry total). WorkflowTemplate frozen (`@dataclass(frozen=True)`). Every template carries non-empty protocol + tools + description. workflow.template + type immutable post-create — update raises ValueError on either; type derived from template (never stored independently).
+
+Trigger: `src/mailpilot/agent/templates.py` or `src/mailpilot/database.py` changed.
+- `rg 'WorkflowTemplateName' src/mailpilot/agent/templates.py` -> registry keyed on the enum
+- `rg 'frozen=True' src/mailpilot/agent/templates.py` -> WorkflowTemplate frozen
+- `rg 'immutable' src/mailpilot/database.py | rg -i 'template\|type'` -> post-create immutability guard in update_workflow
+
+## §V.83 — execute_task pre-flight cancellation
+
+execute_task pre-flight cancels the task (zero LLM calls) when: workflow inactive/missing; contact disabled/missing; enrollment missing or status != active. Touch tasks (context.touch) additionally cancelled when the latest enrollment outcome is terminal OR an inbound email from the contact arrived after the prior touch — belt complementing reply-time cancellation (§V.123).
+
+Trigger: `src/mailpilot/run.py` changed.
+- `rg 'status="cancelled"' src/mailpilot/run.py` -> pre-flight cancel sites present
+- `rg '_touch_cancel_reason' src/mailpilot/run.py` -> touch-specific guard fn present
+
+## §V.135 — mechanical context pre-feed
+
+invoke_workflow_agent loads ContactView (+ CompanyView when contact.company_id set) via load_contact_view/load_company_view — the same shared loaders the CLI uses (§V.8), so agent + operator context stay byte-identical. _build_user_prompt renders `Contact record:` / `Company record:` JSON sections. read_contact/read_company absent from EVERY template roster (inbound included); _BASE names no read tools (§V.40 fragment-naming floor).
+
+Trigger: `src/mailpilot/agent/invoke.py` or `src/mailpilot/agent/templates.py` changed.
+- `rg 'load_contact_view\|load_company_view' src/mailpilot/agent/invoke.py` -> shared loaders pre-feed
+- `rg 'Contact record:' src/mailpilot/agent/invoke.py` -> prompt section rendered
+- `rg 'read_contact\|read_company' src/mailpilot/agent/templates.py` -> zero roster hits
+
+## §V.136 — system-owned touch cadence
+
+Workflow def fields `touches` + `touch_interval_days` (nullable pair, §V.103; NULL = single-touch, no auto follow-up). Cadence engine (`cadence.py`) owns schedule math (weekend -> Monday roll) + touch scheduled_at — system-computed only, §V.129 exempt path. Successful touch-N send -> harness creates touch-N+1 task w/ context {touch: N+1, prior_email_id}. Final touch -> system-internal conclude contact_later "sequence exhausted" (§V.127 record path, §V.128 shape, no agent turn). Touch runs (context.touch present | trigger enrollment_schedule | enrollment_run) = compose-only agent: output_type TouchMessage {subject: str|None, body: str}, zero tools; §V.42 lint runs as output validator (bounded ModelRetry); harness sends via email_ops + schedules the next touch — 1 LLM call per touch, send structural (§V.120). Outbound task|email triggers keep the tool loop; inbound unchanged (§V.44 registry owns both shapes). prior_email_id from task context; absent -> enrollment's latest outbound email. NULL-cadence belt: touch >= 2 vs NULL cadence -> reschedule +1h + operator warn (§V.25 shape); touch 1 vs NULL -> send + schedule nothing. create_task stays bound for reply-branch soft follow-ups. Cadence + after-touch prose live in def fields, never TOML instructions.
+
+Trigger: `src/mailpilot/cadence.py`, `src/mailpilot/agent/invoke.py`, or `src/mailpilot/email_ops.py` changed.
+- `rg 'touch_interval_days' src/mailpilot/cadence.py` -> cadence engine owns the pair
+- `rg 'TouchMessage' src/mailpilot/agent/invoke.py src/mailpilot/models.py` -> compose-only output type
+- `rg 'sequence exhausted' src/mailpilot/cadence.py` -> final-touch system conclusion
+- `rg 'prior_email_id' src/mailpilot/` -> touch context threading
+
 ## Recipe grep-runner — mechanization candidate (not implemented)
 
 Observed 2026-07-02 (T212 build probe + §V.123/§V.128 amends): recipe `rg` lines
