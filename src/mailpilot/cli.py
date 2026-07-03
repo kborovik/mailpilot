@@ -2970,18 +2970,26 @@ def _toml_basic_string(value: str) -> str:
 def _workflow_to_toml(workflow: Any) -> str:
     """Serialize a ``Workflow`` row to a one-workflow TOML catalog entry (§V.103).
 
-    Emits the def fields ``{name, template, theme, goal, instructions}`` in
-    a fixed order; ``instructions`` uses a multi-line literal string so pipes and
-    quotes survive verbatim. The leading newline after the opening ``'''`` is
-    trimmed by the TOML parser, so the value re-parses byte-identically.
+    Emits the def fields ``{name, template, theme, goal[, touches,
+    touch_interval_days], instructions}`` in a fixed order; ``instructions`` uses
+    a multi-line literal string so pipes and quotes survive verbatim. The leading
+    newline after the opening ``'''`` is trimmed by the TOML parser, so the value
+    re-parses byte-identically. The cadence pair (§V.136) emits as bare TOML ints
+    and is omitted entirely for a single-touch workflow (both columns NULL), so a
+    non-cadence catalog stays byte-identical to prior exports.
     """
-    return (
-        f"name = {_toml_basic_string(workflow.name)}\n"
-        f"template = {_toml_basic_string(workflow.template)}\n"
-        f"theme = {_toml_basic_string(workflow.theme)}\n"
-        f"goal = {_toml_basic_string(workflow.goal)}\n"
-        f"instructions = '''\n{workflow.instructions}'''\n"
-    )
+    parts = [
+        f"name = {_toml_basic_string(workflow.name)}\n",
+        f"template = {_toml_basic_string(workflow.template)}\n",
+        f"theme = {_toml_basic_string(workflow.theme)}\n",
+        f"goal = {_toml_basic_string(workflow.goal)}\n",
+    ]
+    if workflow.touches is not None:
+        parts.append(f"touches = {workflow.touches}\n")
+    if workflow.touch_interval_days is not None:
+        parts.append(f"touch_interval_days = {workflow.touch_interval_days}\n")
+    parts.append(f"instructions = '''\n{workflow.instructions}'''\n")
+    return "".join(parts)
 
 
 @workflow.command("export")
@@ -3001,7 +3009,8 @@ def workflow_export(account_email: str | None, out_dir: str) -> None:
     """Export an account's workflows as one TOML file each.
 
     TOML-only: writes one ``*.toml`` per workflow into ``--out-dir`` (def fields
-    ``{name, template, theme, goal, instructions}``, name-sorted) and prints
+    ``{name, template, theme, goal, instructions}`` plus the optional cadence
+    pair ``touches`` / ``touch_interval_days`` when set, name-sorted) and prints
     a JSON status envelope listing the paths written. TOML never reaches stdout
     -- stdout stays strict JSON. ``export -> dir -> import`` round-trips
     idempotently.
@@ -3029,7 +3038,35 @@ def workflow_export(account_email: str | None, out_dir: str) -> None:
         connection.close()
 
 
-_WORKFLOW_IMPORT_UPDATABLE = ("goal", "instructions", "theme")
+_WORKFLOW_IMPORT_UPDATABLE = (
+    "goal",
+    "instructions",
+    "theme",
+    "touches",
+    "touch_interval_days",
+)
+
+
+def _workflow_import_extras(entry: dict[str, Any]) -> dict[str, object]:
+    """Def fields an import writes onto a freshly created workflow (§V.103).
+
+    Beyond ``name`` / ``template`` / ``theme`` / account set at create time:
+    ``goal`` and ``instructions`` when non-empty, plus the cadence pair
+    ``touches`` / ``touch_interval_days`` when the def carries them (§V.136). The
+    schema CHECK rejects a half-configured cadence, surfacing as a per-row import
+    error.
+    """
+    extras: dict[str, object] = {}
+    goal = entry.get("goal")
+    instructions = entry.get("instructions")
+    if goal:
+        extras["goal"] = goal
+    if instructions:
+        extras["instructions"] = instructions
+    for cadence_field in ("touches", "touch_interval_days"):
+        if cadence_field in entry:
+            extras[cadence_field] = entry[cadence_field]
+    return extras
 
 
 def _import_workflow_create(
@@ -3060,23 +3097,13 @@ def _import_workflow_create(
             "error": "duplicate",
             "message": f"workflow {name!r} already exists (name is globally unique)",
         }
-    extras: dict[str, object] = {}
-    goal = entry.get("goal")
-    instructions = entry.get("instructions")
-    if goal:
-        extras["goal"] = goal
-    if instructions:
-        extras["instructions"] = instructions
+    extras = _workflow_import_extras(entry)
     if extras:
         update_workflow(connection, created.id, **extras)
-    activated = bool(goal and instructions)
+    activated = bool(entry.get("goal") and entry.get("instructions"))
     if activated:
         activate_workflow(connection, created.id)
-    changed = ["name", "template", "account_id", "theme"]
-    if goal:
-        changed.append("goal")
-    if instructions:
-        changed.append("instructions")
+    changed = ["name", "template", "account_id", "theme", *extras.keys()]
     if activated:
         changed.append("status")
     operator_event(

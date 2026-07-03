@@ -29,8 +29,6 @@ from mailpilot.agent.invoke import (
     _wrap_list_drive_markdown,  # pyright: ignore[reportPrivateUsage]
     _wrap_list_enrollments,  # pyright: ignore[reportPrivateUsage]
     _wrap_noop,  # pyright: ignore[reportPrivateUsage]
-    _wrap_read_company,  # pyright: ignore[reportPrivateUsage]
-    _wrap_read_contact,  # pyright: ignore[reportPrivateUsage]
     _wrap_read_drive_markdown,  # pyright: ignore[reportPrivateUsage]
     _wrap_read_email,  # pyright: ignore[reportPrivateUsage]
     _wrap_reply_email,  # pyright: ignore[reportPrivateUsage]
@@ -45,19 +43,18 @@ from mailpilot.models import WorkflowTemplateName, WorkflowType
 class WorkflowTemplate:
     """Named binding of agent tools + protocol composed from fragments.
 
-    The deferred-task fragment is selected per-invocation by direction +
-    ``trigger`` (§V.31). Inbound templates always use _DEFERRED_TASK_INBOUND
-    (reply once, then stop; the system records the outcome -- inbound binds
-    neither ``conclude_enrollment`` nor ``create_task``). Outbound templates
-    branch on ``trigger``: ``trigger='task'`` -> _DEFERRED_TASK_TASK
-    (terminal-outcome instruction); other triggers (``enrollment_run``,
-    ``enrollment_schedule`` per §V.32, ``manual``, ``email``) ->
-    _DEFERRED_TASK_INITIAL (initial-send-only instruction; prevents a
-    premature ``conclude_enrollment`` terminal on first reach-out).
-    Canonical fragment order per §V.45: _BASE -> _DEFERRED_TASK_<branch> ->
-    _MUST_SEND -> _DECLINE -> _NO_FABRICATION. Per §V.41 there is no
-    workflow-specific overlay fragment; KB-grounding discipline lives in
-    workflow.instructions.
+    ``build_protocol`` composes the tool-loop system prompt. The deferred-task
+    fragment is direction-scoped (§V.31): an inbound template uses
+    _DEFERRED_TASK_INBOUND (reply once, then stop; the system records the
+    outcome -- inbound binds neither ``conclude_enrollment`` nor
+    ``create_task``); an outbound template uses _DEFERRED_TASK_TASK
+    (terminal-outcome instruction). The outbound first reach-out is no longer a
+    tool-loop trigger -- it is a compose-only touch run (§V.136,
+    _TOUCH_COMPOSE), so the initial-send-only fragment was retired and
+    ``trigger`` no longer selects the branch. Canonical fragment order per
+    §V.45: _BASE -> _DEFERRED_TASK_<branch> -> _MUST_SEND -> _DECLINE ->
+    _NO_FABRICATION. Per §V.41 there is no workflow-specific overlay fragment;
+    KB-grounding discipline lives in workflow.instructions.
     """
 
     name: WorkflowTemplateName
@@ -67,26 +64,29 @@ class WorkflowTemplate:
     protocol_post: str
     tools: tuple[Tool[AgentDeps], ...]
 
-    def build_protocol(self, trigger: str) -> str:
-        """Compose protocol per direction + ``trigger`` per §V.31.
+    def build_protocol(self, trigger: str = "task") -> str:
+        """Compose the tool-loop protocol per direction (§V.31, §V.45).
 
-        Inbound templates use the inbound-reply branch for every trigger
-        (reply once, then stop; the system records the outcome). Outbound
-        templates branch on ``trigger``: ``trigger='task'`` -> terminal-outcome
-        instruction, any other -> initial-send-only.
+        Inbound templates use the inbound-reply branch (reply once, then stop;
+        the system records the outcome); outbound templates use the
+        terminal-outcome branch (conclude the enrollment when the goal is met).
+        The branch is direction-only: the outbound first reach-out moved to the
+        compose-only touch path (§V.136), so ``trigger`` no longer selects a
+        fragment. It is retained on the signature for call-site compatibility
+        (``template view`` + tests still pass it).
         """
-        if self.direction == "inbound":
-            deferred = _DEFERRED_TASK_INBOUND
-        elif trigger == "task":
-            deferred = _DEFERRED_TASK_TASK
-        else:
-            deferred = _DEFERRED_TASK_INITIAL
+        del trigger  # branch is direction-only after §V.136 retired _INITIAL
+        deferred = (
+            _DEFERRED_TASK_INBOUND
+            if self.direction == "inbound"
+            else _DEFERRED_TASK_TASK
+        )
         return self.protocol_pre + deferred + self.protocol_post
 
     @property
     def protocol(self) -> str:
-        """Default protocol (``trigger='task'``). Used by ``template view`` CLI."""
-        return self.build_protocol("task")
+        """Default protocol. Used by ``template view`` CLI."""
+        return self.build_protocol()
 
 
 # -- Protocol fragments --------------------------------------------------------
@@ -95,17 +95,23 @@ class WorkflowTemplate:
 
 
 # _BASE carries the email-universal scaffolding composed into every template's
-# protocol_pre: brief-summary, the read_email guard, and the personalize-via-
-# notes directive (§V.8). Per §V.45 the prompt string itself carries no §-cite:
-# the runtime agent has no SPEC.md, so governing invariants are named here in the
-# comment, not in the model-visible text (closes §B.79).
+# protocol_pre: brief-summary, the trigger-email-already-provided nudge, and the
+# personalize-from-the-pre-fed-records directive (§V.8, §V.135). The contact and
+# company records (with their recent notes) are now mechanically pre-fed into the
+# user prompt by invoke_workflow_agent via load_contact_view / load_company_view
+# (§V.135), so the agent no longer fetches them through a read tool. _BASE names
+# no read tool at all -- naming exactly one would trip §V.40 (a fragment names 0
+# or >=2 tools). Per §V.45 the prompt string itself carries no §-cite: the runtime
+# agent has no SPEC.md, so governing invariants are named here in the comment, not
+# in the model-visible text (closes §B.79).
 _BASE = (
     "Keep your final summary brief (2-3 sentences, plain text, no emojis).\n"
     "When a trigger email is included in your prompt, its full body is "
-    "already provided -- do not call read_email to fetch it again.\n"
-    "If read_contact or read_company returns notes or company_notes, treat "
-    "them as context for personalizing your response. Never invent facts "
-    "about a contact or company that aren't supported by their notes.\n"
+    "already provided; you do not need to fetch it again.\n"
+    "The contact and company records for this thread, including their most "
+    "recent notes, are provided in your prompt. Treat those notes as context "
+    "for personalizing your response. Never invent facts about a contact or "
+    "company that are not supported by their records.\n"
 )
 
 # _SPEC_TABLE mandates a GFM pipe table for product-spec rows. Product-spec
@@ -134,12 +140,27 @@ _DEFERRED_TASK_TASK = (
     "deferred task via create_task with a future scheduled_at.\n"
 )
 
-_DEFERRED_TASK_INITIAL = (
-    "Send the initial email and stop; do not call conclude_enrollment "
-    "on this invocation. The outcome will be assessed when a reply arrives "
-    "or when a follow-up task drains. If the initial send is not appropriate "
-    "right now but should resume later, schedule a deferred task via "
-    "create_task with a future scheduled_at.\n"
+# _TOUCH_COMPOSE is the compose-only touch protocol (§V.136). An outbound touch
+# run -- the first reach-out or a system-scheduled follow-up in a workflow's
+# cadence -- returns a structured message instead of calling a send tool: the
+# harness sends it via email_ops and schedules any further touch, so the send is
+# structural (§V.120) and the run is exempt from the tool-use enforcement (§V.81).
+# The fragment names no tool (the compose-only agent binds none), so §V.40 does
+# not apply. Personalization points at the mechanically pre-fed contact/company
+# records (§V.135). Per §V.45 the model-visible string carries no SPEC cite, and
+# it is ASCII-only per §C.
+_TOUCH_COMPOSE = (
+    "You are composing one outbound email in a cold-outreach sequence for this "
+    "contact. Write a brief, personalized message grounded only in the contact "
+    "and company records provided in your prompt; never invent facts they do "
+    "not support.\n"
+    "Return the message as structured output with a subject and a body. Provide "
+    "a subject for the first message that opens a new thread; on a later "
+    "follow-up that continues an existing thread you may leave the subject "
+    "empty to keep the thread's subject. Write the body as plain text with no "
+    "emojis.\n"
+    "The system sends the message and schedules any further follow-up -- you do "
+    "not send anything or schedule anything yourself.\n"
 )
 
 # _DEFERRED_TASK_INBOUND is the inbound branch (§V.31, closes §B.124). An
@@ -224,8 +245,6 @@ _CORE: tuple[Tool[AgentDeps], ...] = (
     Tool(_wrap_disable_contact, name="disable_contact"),
     Tool(_wrap_list_enrollments, name="list_enrollments"),
     Tool(_wrap_search_emails, name="search_emails"),
-    Tool(_wrap_read_contact, name="read_contact"),
-    Tool(_wrap_read_company, name="read_company"),
     Tool(_wrap_read_email, name="read_email"),
     Tool(_wrap_noop, name="noop"),
 )

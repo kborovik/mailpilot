@@ -4,10 +4,10 @@
     {
       "key": "booked",
       "label": "Positive -- wants the call",
-      "expected_branch": "Confirm warmly, share the calendar link, conclude meeting_booked (completed).",
+      "expected_branch": "Confirm warmly, share the calendar link, leave the enrollment open for calendar detection (conclude meeting_booked only when the reply says they ALREADY booked).",
       "reply_body": "Yes, this is interesting and the cost numbers look compelling. I would like to book a 30-minute call. How is next week for you?",
       "expect": {
-        "outcome": "completed",
+        "outcome": "none",
         "contact_disabled": false,
         "agent_replied": true,
         "reply_contains": ["calendar.app.google"]

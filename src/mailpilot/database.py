@@ -2189,22 +2189,29 @@ def _compute_workflow_wording_hash(
     theme: str,
     goal: str,
     instructions: str,
+    touches: int | None,
+    touch_interval_days: int | None,
 ) -> str:
-    """SHA-256 over the wording fields {template, theme, goal, instructions} (§V.134).
+    """SHA-256 over the def fields, name excluded (§V.134).
 
-    The workflow ``name`` is the join key, never a hashed field (§V.134), so it
-    is excluded here. A canonical JSON serialization (sorted keys) keeps the
-    hash stable across field order and is safe for the pipe and newline content
-    that ``instructions`` carries -- a delimiter-joined string could collide.
+    Hashes ``{template, theme, goal, instructions, touches, touch_interval_days}``
+    -- the cadence pair joined the def fields per §V.136. The workflow ``name``
+    is the join key, never a hashed field (§V.134), so it is excluded here. A
+    canonical JSON serialization (sorted keys) keeps the hash stable across field
+    order and is safe for the pipe and newline content that ``instructions``
+    carries -- a delimiter-joined string could collide. The nullable cadence
+    ints serialize as JSON numbers or ``null``.
 
     Args:
         template: Template name.
         theme: Email color theme.
         goal: Enrollment success goal.
         instructions: Workflow instructions.
+        touches: Total sends in the touch cadence, or None for single-touch.
+        touch_interval_days: Days between touches, or None for single-touch.
 
     Returns:
-        Hex SHA-256 digest of the canonical wording payload.
+        Hex SHA-256 digest of the canonical def payload.
     """
     canonical = json.dumps(
         {
@@ -2212,6 +2219,8 @@ def _compute_workflow_wording_hash(
             "theme": theme,
             "goal": goal,
             "instructions": instructions,
+            "touches": touches,
+            "touch_interval_days": touch_interval_days,
         },
         sort_keys=True,
         ensure_ascii=False,
@@ -2225,13 +2234,17 @@ def _catalog_wording_hash(entry: dict[str, Any]) -> str:
     Applies the same field defaults ``workflow import`` applies (theme -> blue,
     goal/instructions -> empty string) so an unchanged def hashes equal to the
     row it produced. ``template`` defaults to empty so a malformed def without
-    one simply fails to match any row rather than raising.
+    one simply fails to match any row rather than raising. The cadence pair has
+    no default -- an omitted ``touches`` / ``touch_interval_days`` is None,
+    matching a single-touch row's NULL columns (§V.136).
     """
     return _compute_workflow_wording_hash(
         template=str(entry.get("template") or ""),
         theme=str(entry.get("theme") or "blue"),
         goal=str(entry.get("goal") or ""),
         instructions=str(entry.get("instructions") or ""),
+        touches=entry.get("touches"),
+        touch_interval_days=entry.get("touch_interval_days"),
     )
 
 
@@ -2242,9 +2255,11 @@ def check_workflow_wording(
 ) -> WorkflowCheck:
     """Compare catalog defs against live rows by name and classify each (§V.134).
 
-    A read-only 2-way live SHA-256 over the wording fields
-    ``{template, theme, goal, instructions}`` mirroring ``db check``: no stored
-    column, both sides hashed on the fly. The globally unique ``name`` (§V.90)
+    A read-only 2-way live SHA-256 over the def fields
+    ``{template, theme, goal, instructions, touches, touch_interval_days}``
+    mirroring ``db check``: no stored column, both sides hashed on the fly. The
+    cadence pair joined the hashed set per §V.136. The globally unique ``name``
+    (§V.90)
     is the join key, so the comparison spans every account's rows. Each name
     lands in one of four states:
 
@@ -2276,6 +2291,8 @@ def check_workflow_wording(
             theme=row.theme,
             goal=row.goal,
             instructions=row.instructions,
+            touches=row.touches,
+            touch_interval_days=row.touch_interval_days,
         )
         for row in list_workflows_full(connection)
     }
@@ -2353,10 +2370,11 @@ def update_workflow(
     """Update a workflow by ID.
 
     Writable fields: the def fields ``name``, ``goal``, ``instructions``,
-    ``theme`` (import-only writers per §V.103) plus the non-def ``account_id``
-    (account re-binding, the sole field ``workflow update`` exposes). Status
-    transitions use ``activate_workflow()`` / ``pause_workflow()``. ``type`` and
-    ``template`` are immutable after creation (§V.44).
+    ``theme``, ``touches``, ``touch_interval_days`` (import-only writers per
+    §V.103, the cadence pair per §V.136) plus the non-def ``account_id`` (account
+    re-binding, the sole field ``workflow update`` exposes). Status transitions
+    use ``activate_workflow()`` / ``pause_workflow()``. ``type`` and ``template``
+    are immutable after creation (§V.44).
 
     Args:
         connection: Open database connection.
@@ -2366,7 +2384,15 @@ def update_workflow(
     Returns:
         Updated workflow, or None if not found.
     """
-    allowed = {"name", "goal", "instructions", "theme", "account_id"}
+    allowed = {
+        "name",
+        "goal",
+        "instructions",
+        "theme",
+        "touches",
+        "touch_interval_days",
+        "account_id",
+    }
     if "template" in fields:
         raise ValueError(
             "workflow.template is immutable; "
@@ -2693,6 +2719,48 @@ def list_enrollments_with_outcomes(
         {"workflow_id": workflow_id},
     ).fetchall()
     return [EnrollmentWithOutcome.model_validate(row) for row in rows]
+
+
+def get_latest_enrollment_outcome(
+    connection: psycopg.Connection[dict[str, Any]],
+    enrollment_id: str,
+) -> str | None:
+    """Return the enrollment's most recent terminal outcome, else None (§V.83).
+
+    Outcomes are timeline-only (§V.15): the newest ``enrollment_completed`` /
+    ``enrollment_failed`` activity for the enrollment is its current outcome.
+    Returns ``"completed"`` or ``"failed"`` when one exists, ``None`` when the
+    enrollment has no recorded outcome yet.
+
+    The touch pre-flight (§V.83) reads this to cancel a queued follow-up touch
+    once the sequence has concluded -- a booked meeting, opt-out, or
+    contact-later disposition -- without an LLM call.
+
+    Args:
+        connection: Open database connection.
+        enrollment_id: Enrollment FK (outcome activities carry it).
+
+    Returns:
+        ``"completed"``, ``"failed"``, or ``None``.
+    """
+    row = connection.execute(
+        """\
+        SELECT CASE type
+            WHEN 'enrollment_completed' THEN 'completed'
+            WHEN 'enrollment_failed' THEN 'failed'
+        END AS outcome
+        FROM activity
+        WHERE enrollment_id = %(enrollment_id)s
+          AND type IN ('enrollment_completed', 'enrollment_failed')
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        """,
+        {"enrollment_id": enrollment_id},
+    ).fetchone()
+    if row is None:
+        return None
+    outcome = row["outcome"]
+    return outcome if isinstance(outcome, str) else None
 
 
 def list_active_outbound_enrollments_for_contact(
@@ -3326,6 +3394,41 @@ def get_emails_by_gmail_thread_id(
         {"gmail_thread_id": gmail_thread_id},
     ).fetchall()
     return [Email.model_validate(row) for row in rows]
+
+
+def has_inbound_email_from_contact_after(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact_id: str,
+    after: datetime,
+) -> bool:
+    """Return True if the contact sent an inbound email after ``after`` (§V.83).
+
+    The touch pre-flight (§V.83) reads this to cancel a queued follow-up touch
+    when the contact has replied since the prior touch -- an engaged contact
+    must not receive the next cold touch. Complements the reply-time
+    cancellation (§V.123) by catching the touch already due when the reply
+    landed. Compares against the arrival timestamp (``received_at``, with
+    ``sent_at`` as a fallback for any row lacking it).
+
+    Args:
+        connection: Open database connection.
+        contact_id: Contact FK (set on inbound rows via sender resolution).
+        after: The prior touch's send moment -- only later inbound counts.
+
+    Returns:
+        True when at least one such inbound email exists.
+    """
+    row = connection.execute(
+        """\
+        SELECT 1 FROM email
+        WHERE contact_id = %(contact_id)s
+          AND direction = 'inbound'
+          AND COALESCE(received_at, sent_at) > %(after)s
+        LIMIT 1
+        """,
+        {"contact_id": contact_id, "after": after},
+    ).fetchone()
+    return row is not None
 
 
 def get_latest_email_in_thread(

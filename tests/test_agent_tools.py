@@ -12,7 +12,6 @@ from logfire.testing import CaptureLogfire
 
 from conftest import (
     make_test_account,
-    make_test_company,
     make_test_contact,
     make_test_enrollment,
     make_test_settings,
@@ -27,8 +26,6 @@ from mailpilot.agent.tools import (
     list_drive_markdown,
     list_enrollments,
     noop,
-    read_company,
-    read_contact,
     read_drive_markdown,
     read_email,
     reply_email,
@@ -1517,113 +1514,6 @@ def test_search_emails_filters_by_account(
     assert result[0]["account_id"] == a1.id
 
 
-# -- read_contact --------------------------------------------------------------
-
-
-def test_read_contact_found(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    contact = make_test_contact(database_connection, email="alice@example.com")
-
-    result = read_contact(connection=database_connection, email="alice@example.com")
-
-    assert result is not None
-    assert "error" not in result
-    assert result["id"] == contact.id
-    assert result["email"] == "alice@example.com"
-    assert result["notes"] == []
-    assert result["notes_total"] == 0
-    assert result["company_notes"] == []
-    assert result["company_notes_total"] == 0
-
-
-def test_read_contact_inlines_notes(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    """read_contact view ≡ load_contact_view per §V.8."""
-    from mailpilot.database import create_note
-
-    company = make_test_company(database_connection, name="Acme", domain="acme.com")
-    contact = make_test_contact(
-        database_connection, email="alice@acme.com", company_id=company.id
-    )
-    contact_note = create_note(
-        database_connection, body="Met at conference", contact_id=contact.id
-    )
-    company_note = create_note(
-        database_connection, body="Top customer", company_id=company.id
-    )
-
-    result = read_contact(connection=database_connection, email="alice@acme.com")
-
-    assert "error" not in result
-    assert len(result["notes"]) == 1
-    assert result["notes"][0]["id"] == contact_note.id
-    assert result["notes"][0]["body"] == "Met at conference"
-    assert result["notes_total"] == 1
-    assert len(result["company_notes"]) == 1
-    assert result["company_notes"][0]["id"] == company_note.id
-    assert result["company_notes_total"] == 1
-
-
-def test_read_contact_not_found(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    result = read_contact(connection=database_connection, email="nobody@example.com")
-    assert result == {
-        "error": "not_found",
-        "message": "contact not found: nobody@example.com",
-    }
-
-
-# -- read_company --------------------------------------------------------------
-
-
-def test_read_company_found(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    company = make_test_company(database_connection, name="Acme", domain="acme.com")
-
-    result = read_company(connection=database_connection, domain="acme.com")
-
-    assert result is not None
-    assert "error" not in result
-    assert result["id"] == company.id
-    assert result["domain"] == "acme.com"
-    assert result["notes"] == []
-    assert result["notes_total"] == 0
-
-
-def test_read_company_inlines_notes(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    """read_company view ≡ load_company_view per §V.8."""
-    from mailpilot.database import create_note
-
-    company = make_test_company(database_connection, name="Acme", domain="acme.com")
-    note = create_note(
-        database_connection, body="High priority lead", company_id=company.id
-    )
-
-    result = read_company(connection=database_connection, domain="acme.com")
-
-    assert "error" not in result
-    assert len(result["notes"]) == 1
-    assert result["notes"][0]["id"] == note.id
-    assert result["notes"][0]["body"] == "High priority lead"
-    assert result["notes_total"] == 1
-
-
-def test_read_company_not_found(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    result = read_company(connection=database_connection, domain="nonexistent.com")
-    assert result == {
-        "error": "not_found",
-        "message": "company not found: nonexistent.com",
-    }
-
-
 # -- read_email ----------------------------------------------------------------
 
 
@@ -2022,8 +1912,12 @@ def test_no_custom_agent_tool_spans(
     span per tool call with tool arguments. Custom spans duplicate that.
     See issue #72.
     """
-    # Exercise a representative tool that previously emitted agent.tool.read_contact.
-    read_contact(connection=database_connection, email="nobody@example.com")
+    # Exercise a representative tool that previously emitted a custom span.
+    read_email(
+        connection=database_connection,
+        account_id="01900000-0000-7000-8000-000000000000",
+        email_id="01900000-0000-7000-8000-000000000001",
+    )
 
     span_names = [s["name"] for s in capfire.exporter.exported_spans_as_dict()]
     agent_tool_spans = [n for n in span_names if n.startswith("agent.tool.")]

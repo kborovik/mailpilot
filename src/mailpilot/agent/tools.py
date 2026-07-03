@@ -17,8 +17,6 @@ Tools (see §I agent tools):
     - ``disable_contact`` -- set global contact block (bounced/unsubscribed)
     - ``search_emails`` -- query email history
     - ``list_enrollments`` -- list enrollments in workflow with status
-    - ``read_contact`` -- CRM contact lookup
-    - ``read_company`` -- CRM company lookup
     - ``read_email`` -- full email content lookup
     - ``list_drive_markdown`` -- list Markdown files in a Drive folder
     - ``read_drive_markdown`` -- read a Markdown file from Drive
@@ -626,58 +624,6 @@ def search_emails(
     """
     emails = database.search_emails(connection, query, account_id=account_id)
     return [e.model_dump() for e in emails]
-
-
-def read_contact(
-    connection: psycopg.Connection[dict[str, Any]],
-    email: str,
-) -> dict[str, Any]:
-    """Look up a contact by email address with inlined notes.
-
-    Routes through ``database.load_contact_view`` so the agent and the
-    operator (CLI ``contact view``) see byte-identical context, including
-    own notes and parent-company notes.
-
-    Args:
-        connection: Open database connection.
-        email: Contact email address.
-
-    Returns:
-        ContactView dict on success; an error dict on lookup failure.
-    """
-    contact = database.get_contact_by_email(connection, email)
-    if contact is None:
-        return {"error": "not_found", "message": f"contact not found: {email}"}
-    view = database.load_contact_view(connection, contact.id)
-    if view is None:
-        return {"error": "not_found", "message": f"contact not found: {email}"}
-    return view.model_dump(mode="json")
-
-
-def read_company(
-    connection: psycopg.Connection[dict[str, Any]],
-    domain: str,
-) -> dict[str, Any]:
-    """Look up a company by domain with inlined notes.
-
-    Routes through ``database.load_company_view`` so the agent and the
-    operator (CLI ``company view``) see byte-identical context including
-    company notes.
-
-    Args:
-        connection: Open database connection.
-        domain: Company primary domain.
-
-    Returns:
-        CompanyView dict on success; an error dict on lookup failure.
-    """
-    company = database.get_company_by_domain(connection, domain)
-    if company is None:
-        return {"error": "not_found", "message": f"company not found: {domain}"}
-    view = database.load_company_view(connection, company.id)
-    if view is None:
-        return {"error": "not_found", "message": f"company not found: {domain}"}
-    return view.model_dump(mode="json")
 
 
 def read_email(

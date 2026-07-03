@@ -30,7 +30,7 @@ Trigger when `src/mailpilot/agent/templates.py` or `src/mailpilot/agent/tools.py
 
 Agent-visible text = the composed protocol string + every registered tool's model-visible schema. pydantic-ai derives a tool's description AND per-parameter help from the registered function's full docstring (Args/Returns included), so a `§V/§T/§B.<n>` token anywhere in a registered tool's docstring leaks dead authoring metadata into the reply-agent prompt (`§B.79`: `_BASE` literal `(§V.42)`; `§B.84`: six tool-docstring Args/Returns cites). The governing invariant is cited in an adjacent code comment, never the model-visible string.
 
-Scope of "registered tool docstrings" = the source functions in `tools.py` named by `TEMPLATES[*].tools` (`send_email`, `reply_email`, `create_task`, `cancel_task`, `record_enrollment_outcome`, `disable_contact`, `list_enrollments`, `search_emails`, `read_contact`, `read_company`, `read_email`, `noop`, `list_drive_markdown`, `read_drive_markdown`, `search_drive_markdown`). Internal helpers (`_check_spec_table`) + module comments are NOT registered, so their §-cites are exempt — flag a hit only when it sits inside a registered tool's `"""docstring"""`.
+Scope of "registered tool docstrings" = the source functions in `tools.py` named by `TEMPLATES[*].tools` (`send_email`, `reply_email`, `create_task`, `cancel_task`, `record_enrollment_outcome`, `disable_contact`, `list_enrollments`, `search_emails`, `read_email`, `noop`, `list_drive_markdown`, `read_drive_markdown`, `search_drive_markdown`). Internal helpers (`_check_spec_table`) + module comments are NOT registered, so their §-cites are exempt — flag a hit only when it sits inside a registered tool's `"""docstring"""`.
 
 Mechanical checks:
 - `rg -n '§[VTB]\.[0-9]+' src/mailpilot/agent/templates.py` -> classify each hit: code comment -> exempt; composed-protocol fragment string (`_BASE`, `_DECLINE`, `_DEFERRED_TASK_*`, `_NO_FABRICATION`) -> fail (move the cite to a comment).
@@ -153,7 +153,7 @@ Mechanical checks (over the conventions file Batch-gate §):
 
 ## §V.8 — view model projections
 
-ContactView = base Contact superset + company_domain (LEFT JOIN company). CompanyView = base Company superset. MeetingView = base Meeting superset + attendee contacts (list_meeting_attendees join). All three: inline <=10 latest notes (`_INLINE_NOTES_CAP`) + total count; field set test-tracked vs base model (Pydantic `extra=ignore` silently strips fields omitted from the view model — test catches drift). `meeting list` rows carry compact attendee summary (emails or count). `meeting view` inlines full attendee list. Agent read_contact/read_company route through load_contact_view/load_company_view — agent + CLI context byte-identical.
+ContactView = base Contact superset + company_domain (LEFT JOIN company). CompanyView = base Company superset. MeetingView = base Meeting superset + attendee contacts (list_meeting_attendees join). All three: inline <=10 latest notes (`_INLINE_NOTES_CAP`) + total count; field set test-tracked vs base model (Pydantic `extra=ignore` silently strips fields omitted from the view model — test catches drift). `meeting list` rows carry compact attendee summary (emails or count). `meeting view` inlines full attendee list. Workflow-agent prompt pre-feed (`Contact record:` / `Company record:` sections, §V.135) routes through load_contact_view/load_company_view — agent + CLI context byte-identical.
 
 Trigger: `src/mailpilot/models.py` or `src/mailpilot/database.py` changed.
 - `rg 'ContactView|CompanyView|MeetingView' src/mailpilot/models.py` -> all three present
@@ -163,7 +163,7 @@ Trigger: `src/mailpilot/models.py` or `src/mailpilot/database.py` changed.
 
 ## §V.45 — protocol composition + zero SPEC cites
 
-Protocol composed `_BASE → [_SPEC_TABLE (inbound only) →] deferred branch → _MUST_SEND → _DECLINE → _NO_FABRICATION`; deferred branch selected per §V.31 (direction + trigger). `_SPEC_TABLE` = GFM pipe-table mandate for inbound product-spec; composed into inbound-general + inbound-google-drive `protocol_pre` only — outbound-general `protocol_pre` = `_BASE` alone. `_MUST_SEND` = end every trigger turn in a send or explicit noop; composed into `protocol_post` for all three templates. Every fragment is email-universal OR direction-scoped; never workflow-specific. Agent-facing text (composed protocol + registered tool docstrings) carries zero SPEC citation (`§V/§T/§B.<n>` tokens ban).
+Protocol composed `_BASE → [_SPEC_TABLE (inbound only) →] deferred branch → _MUST_SEND → _DECLINE → _NO_FABRICATION` = tool-loop shape; compose-only touch runs per §V.136; deferred branch selected per §V.31 (direction + trigger). `_SPEC_TABLE` = GFM pipe-table mandate for inbound product-spec; composed into inbound-general + inbound-google-drive `protocol_pre` only — outbound-general `protocol_pre` = `_BASE` alone. `_MUST_SEND` = end every trigger turn in a send or explicit noop; composed into `protocol_post` for all three templates. Every fragment is email-universal OR direction-scoped; never workflow-specific. Agent-facing text (composed protocol + registered tool docstrings) carries zero SPEC citation (`§V/§T/§B.<n>` tokens ban).
 
 Trigger: `src/mailpilot/agent/templates.py` or `src/mailpilot/agent/tools.py` changed.
 
@@ -173,7 +173,7 @@ Mechanical checks:
 - `rg -n 'may use Markdown' src/mailpilot/agent/templates.py` -> zero hits (permissive wording retired).
 - `_SPEC_TABLE` in inbound-general + inbound-google-drive `protocol_pre` only; outbound-general `protocol_pre` == `_BASE` alone; the composed-protocol test asserts outbound carries no `pipe table` / `flow rates` / `product specifications`.
 
-Registered tool docstring scope = functions named in `TEMPLATES[*].tools` (send_email, reply_email, create_task, cancel_task, conclude_enrollment, disable_contact, list_enrollments, search_emails, read_contact, read_company, read_email, noop, list_drive_markdown, read_drive_markdown, search_drive_markdown). Internal helpers + module comments exempt.
+Registered tool docstring scope = functions named in `TEMPLATES[*].tools` (send_email, reply_email, create_task, cancel_task, conclude_enrollment, disable_contact, list_enrollments, search_emails, read_email, noop, list_drive_markdown, read_drive_markdown, search_drive_markdown). Internal helpers + module comments exempt.
 
 ## §V.54 — CLI mutation spans + constraint codes
 
@@ -205,7 +205,7 @@ Trigger: `.claude/skills/lead-contacts/**` or `.claude/skills/lead-companies/**`
 
 ## §V.103 — workflow definition files
 
-Workflow defs = `workflows/*.toml`, 1 file/workflow, pure TOML (stdlib `tomllib`, no new dep). Fields = Workflow row 1:1: `{name, template, theme, goal, instructions}`, `instructions` = TOML multi-line literal string. `name` = canonical cross-environment key (§V.107): import enforces `name` kebab-shaped (lowercase, hyphen-separated, no dot/at-sign/UUID-shape) AND equal to the `*.toml` file stem (`{name}.toml`), globally unique — identical in dev and prod because both import the same file. `workflow import --file X.toml` → one row + shared validation (malformed/missing-required, or `name` not kebab|not file-stem → `validation_error`, no partial write). Def fields `{name, template, theme, goal, instructions}` import-only: `workflow update` mutates non-def fields only (status, account binding); rename = rename file + re-import. File = sole source of truth, so no `row_ahead` drift state (§V.134). `--file <dir>` globs `*.toml` (batch, per-row errors continue). Terminal envelope aggregates: top-level int `applied` (rows w/o `error`) + `rejected` (rows w/ `error`) on every import envelope; `applied`=0 (all rows rejected | zero rows parsed) → `import_failed` error envelope on stderr, per-row rows inlined under `workflows`, exit 1 (§V.4 error path; report-inline mirrors `db check` §V.109); `applied`>=1 → ok:true exit 0, per-row errors stay inline; `record_count` = `workflows` array len (multi-key payload, §V.4). `workflow export --account-email A --out-dir D` writes one `*.toml`/workflow (name-sorted) + JSON status envelope on stdout. Export→dir→import round-trip idempotent. `workflows/` = gitignored symlink → independent repo kborovik/workflows @ /Users/kb/github/workflows (not a submodule, no submodule pointer). Root `workflows/*.toml` (CRM defs) distinct from `.claude/workflows/*.js` (Claude Code orchestration scripts).
+Workflow defs = `workflows/*.toml`, 1 file/workflow, pure TOML (stdlib `tomllib`, no new dep). Fields = Workflow row 1:1: `{name, template, theme, goal, instructions, touches, touch_interval_days}`, `instructions` = TOML multi-line literal string; cadence pair `touches` + `touch_interval_days` int, nullable — NULL/omitted = single-touch, no auto follow-up (§V.136). `name` = canonical cross-environment key (§V.107): import enforces `name` kebab-shaped (lowercase, hyphen-separated, no dot/at-sign/UUID-shape) AND equal to the `*.toml` file stem (`{name}.toml`), globally unique — identical in dev and prod because both import the same file. `workflow import --file X.toml` → one row + shared validation (malformed/missing-required, or `name` not kebab|not file-stem → `validation_error`, no partial write). Def fields `{name, template, theme, goal, instructions, touches, touch_interval_days}` import-only: `workflow update` mutates non-def fields only (status, account binding); rename = rename file + re-import. File = sole source of truth, so no `row_ahead` drift state (§V.134). `--file <dir>` globs `*.toml` (batch, per-row errors continue). Terminal envelope aggregates: top-level int `applied` (rows w/o `error`) + `rejected` (rows w/ `error`) on every import envelope; `applied`=0 (all rows rejected | zero rows parsed) → `import_failed` error envelope on stderr, per-row rows inlined under `workflows`, exit 1 (§V.4 error path; report-inline mirrors `db check` §V.109); `applied`>=1 → ok:true exit 0, per-row errors stay inline; `record_count` = `workflows` array len (multi-key payload, §V.4). `workflow export --account-email A --out-dir D` writes one `*.toml`/workflow (name-sorted) + JSON status envelope on stdout. Export→dir→import round-trip idempotent. `workflows/` = gitignored symlink → independent repo kborovik/workflows @ /Users/kb/github/workflows (not a submodule, no submodule pointer). Root `workflows/*.toml` (CRM defs) distinct from `.claude/workflows/*.js` (Claude Code orchestration scripts).
 
 Trigger: `src/mailpilot/cli.py` or `workflows/` changed.
 - `rg 'tomllib' src/mailpilot/cli.py src/mailpilot/database.py` -> stdlib tomllib (no tomlkit/toml dep)
@@ -270,12 +270,12 @@ Trigger: `src/mailpilot/cli.py` or `src/mailpilot/database.py` changed.
 
 ## §V.120 — send-obligation guard
 
-Every send-obligated trigger turn MUST leave a `reply_email`|`send_email` ToolReturnPart without an `error` key, OR a successful `noop` ({acknowledged: true}), OR a `conclude_enrollment` terminal (§V.127). Send-obligated = inbound (`email is not None`, trigger in {email, task}) OR outbound first reach-out (trigger in {enrollment_run, enrollment_schedule}, `email is None`). `manual` trigger exempt. Guard `_sent_reply(result)` walks `result.all_messages()` after the §V.81 tool-count check; none of the above → raise `AgentCompletedWithoutReplyError`. Class is non-transient → `_handle_agent_failure` takes it terminal `failed` + `operator_event("error")`, NEVER silent completed. Prompt-side preventive = `_MUST_SEND` template fragment (§V.45).
+Every send-obligated trigger turn MUST leave a `reply_email`|`send_email` ToolReturnPart without an `error` key, OR a successful `noop` ({acknowledged: true}), OR a `conclude_enrollment` terminal (§V.127). Send-obligated (walker scope) = inbound (`email is not None`, trigger in {email, task}); outbound first reach-out (trigger in {enrollment_run, enrollment_schedule}, `email is None`) runs compose-only — harness sends the validated TouchMessage itself, obligation structural, not walker-checked (§V.136). `manual` trigger exempt. Guard `_sent_reply(result)` walks `result.all_messages()` after the §V.81 tool-count check; none of the above → raise `AgentCompletedWithoutReplyError`. Class is non-transient → `_handle_agent_failure` takes it terminal `failed` + `operator_event("error")`, NEVER silent completed. Prompt-side preventive = `_MUST_SEND` template fragment (§V.45).
 
 Trigger: `src/mailpilot/agent/invoke.py` changed.
 - `rg '_sent_reply\b' src/mailpilot/agent/invoke.py` -> guard present
 - `rg 'AgentCompletedWithoutReplyError' src/mailpilot/exceptions.py` -> exception defined
-- `rg 'enrollment_run\|enrollment_schedule' src/mailpilot/agent/invoke.py` -> outbound triggers included in guard (not inbound-only)
+- `rg 'enrollment_run\|enrollment_schedule' src/mailpilot/agent/invoke.py` -> outbound first-reach-out triggers dispatch compose-only shape (§V.136), walker scope inbound-only
 - `rg '"manual"\b.*exempt\|trigger.*manual.*exempt\|manual.*skip' src/mailpilot/agent/invoke.py` -> manual exempt
 - `rg 'conclude_enrollment.*_sent_reply\|_sent_reply.*conclude_enrollment' src/mailpilot/agent/invoke.py` -> conclude_enrollment in walker
 
@@ -291,10 +291,10 @@ Trigger: `src/mailpilot/database.py` or `src/mailpilot/cli.py` db-export/import 
 
 ## §V.123 — reply-cancels-followups
 
-Inbound reply routing to an enrollment bulk-cancels that enrollment's pending future follow-up tasks: `UPDATE task SET status='cancelled' WHERE enrollment_id=%(id)s AND status='pending' AND scheduled_at > now() AND COALESCE(context->>'trigger','') <> 'enrollment_schedule'`. First-touch exclusion: rows whose trigger = `enrollment_schedule` (§V.32) are excluded. `cancel_enrollment_followup_tasks(connection, enrollment_id)` fires from 3 sites: (1) `routing.route_email` on successful inbound match (including pre-existing enrollment, not only first-insert branch), (2) calendar booking ingestion (§V.126/§V.128), (3) `conclude_enrollment` (§V.127).
+Inbound reply routing to an enrollment bulk-cancels that enrollment's pending future follow-up tasks: `UPDATE task SET status='cancelled' WHERE enrollment_id=%(id)s AND status='pending' AND scheduled_at > now() AND COALESCE(context->>'trigger','') <> 'enrollment_schedule'`. First-touch exclusion: rows whose trigger = `enrollment_schedule` (§V.32) are excluded. `cancel_enrollment_followup_tasks(connection, enrollment_id)` fires from 4 sites: (1) `routing.route_email` on successful inbound match (including pre-existing enrollment, not only first-insert branch), (2) calendar booking ingestion (§V.126/§V.128), (3) `conclude_enrollment` (§V.127), (4) cadence sequence exhaustion — `advance_touch_cadence` final-touch conclude (§V.136).
 
-Trigger: `src/mailpilot/routing.py`, `src/mailpilot/sync.py`, or `src/mailpilot/database.py` changed.
-- `rg 'cancel_enrollment_followup_tasks' src/mailpilot/routing.py src/mailpilot/sync.py src/mailpilot/agent/invoke.py` -> present in 3 files
+Trigger: `src/mailpilot/routing.py`, `src/mailpilot/sync.py`, `src/mailpilot/agent/tools.py`, `src/mailpilot/cadence.py`, or `src/mailpilot/database.py` changed.
+- `rg 'cancel_enrollment_followup_tasks' src/mailpilot/routing.py src/mailpilot/sync.py src/mailpilot/agent/tools.py src/mailpilot/cadence.py` -> present in 4 files
 - `rg 'enrollment_schedule.*exclude\b\|exclude.*enrollment_schedule\b' src/mailpilot/database.py` -> first-touch exclusion in the query
 - `rg 'scheduled_at.*>.*now\(\)\|now\(\).*<.*scheduled_at' src/mailpilot/database.py` -> only future tasks cancelled
 
@@ -323,7 +323,7 @@ Trigger: `src/mailpilot/calendar.py` or `src/mailpilot/sync.py` changed.
 
 ## §V.127 — conclude_enrollment agent terminal
 
-`conclude_enrollment(disposition, note, reschedule_at)` = sole agent-facing terminal tool. Disposition in {meeting_booked, do_not_contact, contact_later}. System side-effects per disposition: `meeting_booked` → `record_enrollment_outcome` + `cancel_enrollment_followup_tasks` + booking note; `do_not_contact` → conclude + cancel + `disable_contact`; `contact_later` → conclude + cancel + scheduled re-enrollment task at `reschedule_at` (agent-supplied, default >=3 months out). Counts as valid send-obligation terminal (§V.120) — `_sent_reply` walker accepts it like noop. `record_enrollment_outcome` is NOT in the agent tool set — it is system-internal (§V.15, §V.124).
+`conclude_enrollment(disposition, note, reschedule_at)` = sole agent-facing terminal tool. Disposition in {meeting_booked, do_not_contact, contact_later}. System side-effects per disposition: `meeting_booked` → `record_enrollment_outcome` + `cancel_enrollment_followup_tasks` + booking note; `do_not_contact` → conclude + cancel + `disable_contact`; `contact_later` → conclude + cancel + scheduled re-enrollment task at `reschedule_at` (agent-supplied, default >=3 months out). Counts as valid send-obligation terminal (§V.120) — `_sent_reply` walker accepts it like noop. `record_enrollment_outcome` is NOT in the agent tool set — it is system-internal (§V.15, §V.124). System-internal conclusion sites call `record_enrollment_outcome` directly: calendar booking (§V.128) and cadence sequence exhaustion — after the final cadence touch the harness records `contact_later` ("sequence exhausted"), no re-enrollment task, no agent turn (§V.136).
 
 Trigger: `src/mailpilot/agent/tools.py` or `src/mailpilot/agent/invoke.py` changed.
 - `rg 'conclude_enrollment\b' src/mailpilot/agent/tools.py` -> tool present
@@ -577,7 +577,7 @@ Trigger: `src/mailpilot/schema.sql` or `src/mailpilot/database.py` changed.
 
 ## §V.128 — calendar booking concludes enrollments, no agent turn
 
-For each attendee contact (§V.125) holding an active outbound enrollment: system concludes via `record_enrollment_outcome` (§V.15) + cancels pending future follow-ups via `cancel_enrollment_followup_tasks` + writes a system booking note. Fan-out fires for EVERY active outbound enrollment the attendee holds — a booked meeting outranks any cold sequence regardless of stated goal (§V.124). `cancel_enrollment_followup_tasks` fires from three sites: inbound reply routing (§V.123), calendar booking ingestion (§V.126), `conclude_enrollment` (§V.127); first-touch exclusion (§V.32) holds at every site.
+For each attendee contact (§V.125) holding an active outbound enrollment: system concludes via `record_enrollment_outcome` (§V.15) + cancels pending future follow-ups via `cancel_enrollment_followup_tasks` + writes a system booking note. Fan-out fires for EVERY active outbound enrollment the attendee holds — a booked meeting outranks any cold sequence regardless of stated goal (§V.124). `cancel_enrollment_followup_tasks` fires from four sites: inbound reply routing (§V.123), calendar booking ingestion (§V.126), `conclude_enrollment` (§V.127), cadence sequence exhaustion (§V.136); first-touch exclusion (§V.32) holds at every site.
 
 Trigger: `src/mailpilot/calendar.py` or `src/mailpilot/sync.py` changed.
 - `rg 'record_enrollment_outcome\b' src/mailpilot/calendar.py src/mailpilot/sync.py` -> conclusion call present
@@ -652,9 +652,9 @@ Trigger: `src/mailpilot/database.py` or `src/mailpilot/cli.py` changed.
 - `rg "COALESCE.*trigger\b\|context.*trigger" src/mailpilot/database.py | grep task` -> trigger from context JSONB not description
 - `rg '"--trigger".*Choice\b' src/mailpilot/cli.py | grep task` -> trigger is a Choice (closed enum)
 
-## §V.134 — workflow check: wording-integrity states
+## §V.134 — workflow check: def-integrity states
 
-`workflow check` = read-only live 2-way SHA-256 over wording fields `{template, theme, goal, instructions}`. Join key = workflow `name` (§V.90 global-unique, NOT a hashed field). Each `workflows/*.toml` read for its `name` field (NOT file stem, §V.103); row set read from DB; joined by name. States: `in_sync` (name both sides + hash equal); `out_of_sync` (name both sides + hash differs → re-import due); `not_imported` (name in catalog def, no DB row); `orphaned` (name in DB row, no catalog def). `--file` repeatable: every passed source read + merged, last-def-wins on dup `name`. Scope: specific-file source(s) → `scope_to_catalog=True`, report iterates catalog names only so an unpassed DB row is dropped (never `orphaned`) — presents only the inquired workflows; any directory source → `scope_to_catalog=False`, report iterates catalog∪rows so an unaccounted row surfaces as `orphaned` drift (full-catalog check). Empty `--file` → `validation_error`. No `conflict` state — duplicate `name` across files is import-forbidden (§V.103 name==unique-stem), hand-edit-only. No `row_ahead` state — def fields import-only (§V.103) so any mismatch = catalog ahead only. Report-only envelope `{"workflow_check": {...}, "ok": true}` (aggregate, not a workflow row, cf §V.132); NOT a deploy gate. Import-time `name==stem` enforcement (§V.103) is separate — `workflow check` reads the TOML `name` field, not the file stem.
+`workflow check` = read-only live 2-way SHA-256 over def fields `{template, theme, goal, instructions, touches, touch_interval_days}`. Join key = workflow `name` (§V.90 global-unique, NOT a hashed field). Each `workflows/*.toml` read for its `name` field (NOT file stem, §V.103); row set read from DB; joined by name. States: `in_sync` (name both sides + hash equal); `out_of_sync` (name both sides + hash differs → re-import due); `not_imported` (name in catalog def, no DB row); `orphaned` (name in DB row, no catalog def). `--file` repeatable: every passed source read + merged, last-def-wins on dup `name`. Scope: specific-file source(s) → `scope_to_catalog=True`, report iterates catalog names only so an unpassed DB row is dropped (never `orphaned`) — presents only the inquired workflows; any directory source → `scope_to_catalog=False`, report iterates catalog∪rows so an unaccounted row surfaces as `orphaned` drift (full-catalog check). Empty `--file` → `validation_error`. No `conflict` state — duplicate `name` across files is import-forbidden (§V.103 name==unique-stem), hand-edit-only. No `row_ahead` state — def fields import-only (§V.103) so any mismatch = catalog ahead only. Report-only envelope `{"workflow_check": {...}, "ok": true}` (aggregate, not a workflow row, cf §V.132); NOT a deploy gate. Import-time `name==stem` enforcement (§V.103) is separate — `workflow check` reads the TOML `name` field, not the file stem.
 
 Trigger: `src/mailpilot/cli.py` changed.
 - `rg '"in_sync"\|"out_of_sync"\|"not_imported"\|"orphaned"' src/mailpilot/cli.py src/mailpilot/database.py` -> all 4 states present
@@ -663,3 +663,14 @@ Trigger: `src/mailpilot/cli.py` changed.
 - `rg 'workflow_check\b' src/mailpilot/cli.py` -> envelope key present
 - `rg 'sha256\b\|hashlib.*sha256' src/mailpilot/cli.py src/mailpilot/database.py | grep workflow` -> SHA-256 hash present
 - `rg 'toml.*\["name"\]\|tomllib.*name\b\|name.*toml' src/mailpilot/cli.py src/mailpilot/database.py | grep workflow_check` -> reads `name` field from TOML (not file stem)
+
+## Recipe grep-runner — mechanization candidate (not implemented)
+
+Observed 2026-07-02 (T212 build probe + §V.123/§V.128 amends): recipe `rg` lines
+hand-run repeatedly to validate check-extras bodies against code — same shape,
+different file lists. Candidate mode: script parses every backticked `rg` line
+under each `## §V.<n>` header, executes it, emits per-section {line, hit_count,
+files}; prose expectations (`-> present in N files`, `-> zero hits`) stay
+operator-judged — the runner collapses the execute step, not the verdict.
+Overlaps /sdd:check's interactive recipe runs; implement only if hand-running
+recurs. Promotion path: seed a §T row.

@@ -133,6 +133,24 @@ class ContactSummary(BaseModel):
     created_at: datetime
 
 
+class TouchMessage(BaseModel):
+    """Structured output of a compose-only outbound touch (§V.136).
+
+    A touch run (first reach-out or a system-scheduled follow-up in a
+    workflow's cadence) returns this instead of driving a tool loop: the
+    validated output *is* the action, so the compose-only agent binds zero
+    tools (§V.81 exempt). ``subject`` is the new-thread subject on the first
+    touch and ``None`` on a later follow-up that continues an existing thread
+    (the harness threads the reply and reuses the thread's subject); ``body``
+    is the plain-text message. The harness sends it via ``email_ops`` and
+    schedules the next touch -- one LLM call per touch, the send structural
+    (§V.120, §V.136).
+    """
+
+    subject: str | None = None
+    body: str
+
+
 WorkflowType = Literal["inbound", "outbound"]
 WorkflowStatus = Literal["draft", "active", "paused"]
 WorkflowTemplateName = Literal[
@@ -143,7 +161,16 @@ WorkflowTemplateName = Literal[
 
 
 class Workflow(BaseModel):
-    """Workflow binding an account to instructions and a direction."""
+    """Workflow binding an account to instructions and a direction.
+
+    ``touches`` and ``touch_interval_days`` are the system-owned cadence def
+    fields (§V.136): ``touches`` is the total number of sends in the sequence
+    and ``touch_interval_days`` is the spacing between them. They form a
+    nullable pair -- both ``None`` means single-touch (no automatic follow-up);
+    the schema CHECK forbids setting one without the other. Like the other def
+    fields they are import-only (§V.103) and covered by the ``workflow check``
+    wording hash (§V.134).
+    """
 
     id: str
     name: str
@@ -155,6 +182,8 @@ class Workflow(BaseModel):
     goal: str = ""
     instructions: str = ""
     theme: str = "blue"
+    touches: int | None = None
+    touch_interval_days: int | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -213,8 +242,9 @@ class WorkflowCheckEntry(BaseModel):
     - ``orphaned``: name in a row, no matching catalog def.
 
     ``catalog_hash`` is ``None`` when orphaned (no def) and ``row_hash`` is
-    ``None`` when not imported (no row); both are SHA-256 over the wording
-    fields ``{template, theme, goal, instructions}``.
+    ``None`` when not imported (no row); both are SHA-256 over the def fields
+    ``{template, theme, goal, instructions, touches, touch_interval_days}`` (the
+    cadence pair joined the hashed set per §V.136).
     """
 
     name: str
@@ -662,8 +692,9 @@ class MeetingView(BaseModel):
 class ContactView(BaseModel):
     """View-only projection of `Contact` with inlined notes (§V.8).
 
-    Used by both CLI ``contact view`` and agent tool ``read_contact`` so the
-    operator and the agent see byte-identical context. ``notes`` carries the
+    Used by CLI ``contact view`` and the workflow-agent prompt pre-feed
+    (``Contact record:`` section, §V.135) so the operator and the agent see
+    byte-identical context. ``notes`` carries the
     contact's own notes (full body, ORDER BY ``created_at`` DESC, capped at
     ``_INLINE_NOTES_CAP`` in ``database.py``); ``company_notes`` carries the
     parent company's notes when ``company_id`` is set, else an empty list.
@@ -698,7 +729,8 @@ class ContactView(BaseModel):
 class CompanyView(BaseModel):
     """View-only projection of `Company` with inlined notes (§V.8).
 
-    Used by both CLI ``company view`` and agent tool ``read_company``. Only
+    Used by CLI ``company view`` and the workflow-agent prompt pre-feed
+    (``Company record:`` section, §V.135). Only
     the company's own notes are inlined (capped, full body, DESC); company is
     a root entity with no parent to inherit from.
     """

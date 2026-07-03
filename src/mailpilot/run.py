@@ -8,6 +8,7 @@ primitive -- all agent invocations flow through the task queue.
 from __future__ import annotations
 
 import random
+from datetime import datetime
 from typing import Any
 
 import logfire
@@ -24,13 +25,17 @@ from mailpilot.agent.tools import (
     reply_rejection_scope,
     reply_was_emitted,
 )
+from mailpilot.cadence import resolve_touch_number
 from mailpilot.database import (
     complete_task,
     get_account,
     get_contact,
     get_email,
     get_enrollment,
+    get_latest_enrollment_outcome,
     get_workflow,
+    has_inbound_email_from_contact_after,
+    list_emails,
     reschedule_task_for_lock_contention,
     reschedule_task_for_retry,
 )
@@ -41,9 +46,12 @@ from mailpilot.settings import Settings
 
 _LOCK_CONTENTION_BACKOFF_SECONDS = 5
 _LOCK_CONTENTION_JITTER_SECONDS = 5
+# §V.136: a touch-N (N>=2) task whose workflow lost its cadence pair is pushed
+# one hour out instead of composing a malformed touch (§V.25 reschedule shape).
+_NULL_CADENCE_BACKOFF_SECONDS = 3600
 
 
-def execute_task(
+def execute_task(  # noqa: PLR0911
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
     task: Task,
@@ -136,6 +144,32 @@ def execute_task(
             )
             return
 
+        # §V.83: a queued follow-up touch (``context.touch`` set by the cadence
+        # engine) is cancelled without an LLM call once the sequence no longer
+        # warrants a cold send -- the enrollment already reached a terminal
+        # outcome, or the contact replied after the prior touch. This complements
+        # the reply-time cancellation (§V.123) by catching the touch already due
+        # when the reply landed. First reach-outs (touch 1, no ``context.touch``)
+        # are exempt: there is no prior touch to have been answered.
+        touch = task.context.get("touch") if task.context else None
+        if isinstance(touch, int):
+            cancel_reason = _touch_cancel_reason(connection, task)
+            if cancel_reason is not None:
+                logfire.info(
+                    "run.task.skip_superseded_touch",
+                    task_id=task.id,
+                    workflow_id=task.workflow_id,
+                    contact_id=task.contact_id,
+                    reason=cancel_reason,
+                )
+                complete_task(
+                    connection,
+                    task.id,
+                    status="cancelled",
+                    result={"reason": cancel_reason},
+                )
+                return
+
         email = get_email(connection, task.email_id) if task.email_id else None
 
         # §V.32: scheduled first-touch tasks carry ``trigger=enrollment_schedule``
@@ -144,6 +178,31 @@ def execute_task(
         # ``task`` for legacy task rows that pre-date scheduled enrollment.
         context_trigger = task.context.get("trigger") if task.context else None
         trigger = context_trigger if isinstance(context_trigger, str) else "task"
+
+        # §V.136 NULL-cadence belt: a scheduled touch N>=2 whose workflow has
+        # since lost its cadence pair cannot advance the sequence. Reschedule it
+        # one hour out and warn (§V.25 reschedule shape) rather than compose a
+        # touch with no follow-up context. Touch 1 (first reach-out) and
+        # single-touch workflows are unaffected -- they send and schedule nothing.
+        touch_number = resolve_touch_number(task.context, trigger)
+        if touch_number is not None and touch_number >= 2 and workflow.touches is None:
+            logfire.warn(
+                "run.task.null_cadence_touch",
+                task_id=task.id,
+                workflow_id=task.workflow_id,
+                touch=touch_number,
+            )
+            operator_event(
+                "task.null_cadence_reschedule",
+                task_id=task.id,
+                workflow_id=task.workflow_id,
+                touch=touch_number,
+            )
+            reschedule_task_for_lock_contention(
+                connection, task.id, _NULL_CADENCE_BACKOFF_SECONDS
+            )
+            return
+
         try:
             result = invoke_workflow_agent(
                 connection,
@@ -178,6 +237,56 @@ def execute_task(
             return
 
         complete_task(connection, task.id, status="completed", result=result)
+
+
+def _touch_cancel_reason(
+    connection: psycopg.Connection[dict[str, Any]],
+    task: Task,
+) -> str | None:
+    """Return why a queued touch should be cancelled, else None (§V.83).
+
+    Two deterministic conditions supersede a follow-up touch, each answerable
+    from database state with no LLM call: the enrollment already reached a
+    terminal outcome, or the contact replied after the prior touch. Returns the
+    first matching reason string, or ``None`` when the touch may proceed.
+    """
+    if get_latest_enrollment_outcome(connection, task.enrollment_id) is not None:
+        return "enrollment already concluded"
+    prior_touch_at = _prior_touch_sent_at(connection, task)
+    if prior_touch_at is not None and has_inbound_email_from_contact_after(
+        connection, task.contact_id, prior_touch_at
+    ):
+        return "contact replied after prior touch"
+    return None
+
+
+def _prior_touch_sent_at(
+    connection: psycopg.Connection[dict[str, Any]],
+    task: Task,
+) -> datetime | None:
+    """Resolve when the prior touch went out, else None (§V.83).
+
+    Prefers ``context['prior_email_id']`` -- the cadence engine threads the id
+    of touch N-1's email into a scheduled touch-N task (§V.136). Falls back to
+    the enrollment's latest outbound email for a migrated row that carries the
+    touch number but no ``prior_email_id`` (migration 010). Returns ``None``
+    when no prior outbound touch is found, so the inbound-after check is skipped.
+    """
+    prior_id = task.context.get("prior_email_id") if task.context else None
+    if isinstance(prior_id, str):
+        prior = get_email(connection, prior_id)
+        if prior is not None:
+            return prior.sent_at or prior.received_at
+    summaries = list_emails(
+        connection,
+        contact_id=task.contact_id,
+        workflow_id=task.workflow_id,
+        direction="outbound",
+        limit=1,
+    )
+    if summaries:
+        return summaries[0].sent_at or summaries[0].received_at
+    return None
 
 
 def _handle_agent_failure(

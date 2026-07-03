@@ -203,6 +203,185 @@ def test_execute_task_threads_trigger_from_context(
     )
 
 
+def test_execute_task_null_cadence_touch_reschedules_and_skips_invoke(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.136 NULL-cadence belt: a scheduled touch N>=2 whose workflow has no
+    cadence pair (touches is None) is pushed one hour out (§V.25 reschedule
+    shape) instead of invoking the agent -- it is neither invoked nor completed."""
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings()
+    task = _make_task(context={"touch": 2, "prior_email_id": "e1"})
+    workflow = _make_workflow()  # touches defaults to None
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch("mailpilot.run.invoke_workflow_agent") as mock_invoke,
+        patch("mailpilot.run.reschedule_task_for_lock_contention") as mock_reschedule,
+        patch("mailpilot.run.complete_task") as mock_complete,
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_invoke.assert_not_called()
+    mock_complete.assert_not_called()
+    mock_reschedule.assert_called_once_with(database_connection, _TASK_ID, 3600)
+
+
+def test_execute_task_touch_with_cadence_pair_proceeds_to_invoke(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.136: the NULL-cadence belt fires only when ``touches`` is None -- a
+    touch N>=2 with a live cadence pair proceeds to invoke, not rescheduled."""
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings()
+    task = _make_task(context={"touch": 2, "prior_email_id": "e1"})
+    workflow = _make_workflow(touches=3, touch_interval_days=7)
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch(
+            "mailpilot.run.invoke_workflow_agent",
+            return_value={"tool_calls": 0, "reasoning": "sent touch 2"},
+        ) as mock_invoke,
+        patch("mailpilot.run.reschedule_task_for_lock_contention") as mock_reschedule,
+        patch("mailpilot.run.complete_task"),
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_invoke.assert_called_once()
+    mock_reschedule.assert_not_called()
+
+
+def test_execute_task_touch_cancelled_when_enrollment_concluded(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.83: a queued touch is cancelled with no LLM call once the enrollment
+    has a terminal outcome -- the sequence concluded, no cold send is due."""
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings()
+    task = _make_task(context={"touch": 2, "prior_email_id": "e1"})
+    workflow = _make_workflow(touches=3, touch_interval_days=7)
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch(
+            "mailpilot.run.get_latest_enrollment_outcome",
+            return_value="failed",
+        ),
+        patch("mailpilot.run.invoke_workflow_agent") as mock_invoke,
+        patch("mailpilot.run.complete_task") as mock_complete,
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_invoke.assert_not_called()
+    mock_complete.assert_called_once_with(
+        database_connection,
+        _TASK_ID,
+        status="cancelled",
+        result={"reason": "enrollment already concluded"},
+    )
+
+
+def test_execute_task_touch_cancelled_when_contact_replied_after_prior_touch(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.83: a queued touch is cancelled with no LLM call when the contact
+    replied after the prior touch -- an engaged contact skips the cold touch."""
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings()
+    task = _make_task(context={"touch": 2, "prior_email_id": "e1"})
+    workflow = _make_workflow(touches=3, touch_interval_days=7)
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+    prior_touch = _make_email(direction="outbound", sent_at=_NOW)
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch("mailpilot.run.get_latest_enrollment_outcome", return_value=None),
+        patch("mailpilot.run.get_email", return_value=prior_touch),
+        patch(
+            "mailpilot.run.has_inbound_email_from_contact_after",
+            return_value=True,
+        ) as mock_inbound,
+        patch("mailpilot.run.invoke_workflow_agent") as mock_invoke,
+        patch("mailpilot.run.complete_task") as mock_complete,
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_invoke.assert_not_called()
+    mock_inbound.assert_called_once_with(database_connection, _CONTACT_ID, _NOW)
+    mock_complete.assert_called_once_with(
+        database_connection,
+        _TASK_ID,
+        status="cancelled",
+        result={"reason": "contact replied after prior touch"},
+    )
+
+
+def test_execute_task_touch_proceeds_when_not_superseded(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.83: with no terminal outcome and no fresh reply, the touch proceeds to
+    invoke -- the guard does not false-fire on a live sequence."""
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings()
+    task = _make_task(context={"touch": 2, "prior_email_id": "e1"})
+    workflow = _make_workflow(touches=3, touch_interval_days=7)
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+    prior_touch = _make_email(direction="outbound", sent_at=_NOW)
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch("mailpilot.run.get_latest_enrollment_outcome", return_value=None),
+        patch("mailpilot.run.get_email", return_value=prior_touch),
+        patch(
+            "mailpilot.run.has_inbound_email_from_contact_after",
+            return_value=False,
+        ),
+        patch(
+            "mailpilot.run.invoke_workflow_agent",
+            return_value={"tool_calls": 0, "reasoning": "sent touch 2"},
+        ) as mock_invoke,
+        patch("mailpilot.run.complete_task") as mock_complete,
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_invoke.assert_called_once()
+    mock_complete.assert_called_once_with(
+        database_connection,
+        _TASK_ID,
+        status="completed",
+        result={"tool_calls": 0, "reasoning": "sent touch 2"},
+    )
+
+
 def test_execute_task_default_trigger_is_task(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
