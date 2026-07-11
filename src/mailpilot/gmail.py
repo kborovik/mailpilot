@@ -60,8 +60,9 @@ _TRANSIENT_STATUS_CODES = frozenset({429, 500, 502, 503, 504, 529})
 _MAX_RETRIES = 5
 _MAX_BACKOFF = 30.0
 
-# Custom headers added to all outgoing emails.
-_MAILPILOT_VERSION = version("mailpilot")
+# Custom headers added to all outgoing emails. Distribution name is
+# mailpilot-crm; the import package stays mailpilot.
+_MAILPILOT_VERSION = version("mailpilot-crm")
 
 
 def _retry_on_transient(func: Any) -> Any:

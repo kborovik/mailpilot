@@ -69,7 +69,8 @@ from mailpilot.models import (
 from mailpilot.operator_log import operator_event
 from mailpilot.settings import SECRET_KEYS, Settings
 
-_MAILPILOT_VERSION = _pkg_version("mailpilot")
+# Distribution name is mailpilot-crm; the import package stays mailpilot.
+_MAILPILOT_VERSION = _pkg_version("mailpilot-crm")
 
 _INLINE_NOTES_CAP = 10
 
