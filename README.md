@@ -21,60 +21,70 @@ MailPilot manages contacts, companies, and communication workflows through Gmail
 - **Task scheduling** -- deferred agent work with scheduled execution for long-running processes
 - **Reporting** -- Claude Code queries the database and generates activity summaries, relationship health, and campaign effectiveness reports
 
-## Architecture
+## Install
 
-- **CLI-first** -- JSON output, meaningful exit codes, actionable errors. Designed for LLM agent consumption.
-- **PostgreSQL** -- contacts, companies, workflows, emails, activities, tags, notes. Raw SQL via psycopg, no ORM.
-- **Gmail API** -- service account domain-wide delegation. Pub/Sub for real-time notifications. History API for incremental sync.
-- **Pydantic AI** -- stateless agent invocations with tool access. Per-contact advisory locks for concurrency.
-- **Observability** -- Pydantic Logfire (OpenTelemetry-based) for tracing and logging.
+MailPilot ships on PyPI as [`mailpilot-crm`](https://pypi.org/project/mailpilot-crm/). The package installs the `mailpilot` command. Python 3.14 or later is required.
 
-## Tech Stack
+Install with uv:
 
-- Python 3.14
-- PostgreSQL 18
-- Gmail API (`google-api-python-client`)
-- Pydantic AI (agent framework)
-- Pydantic Logfire (observability)
-- Click (CLI)
-- basedpyright (strict type checking)
-- ruff (formatting and linting)
-- pytest (testing)
+```bash
+uv tool install mailpilot-crm
+```
+
+Or install with pip:
+
+```bash
+pip install mailpilot-crm
+```
+
+Verify the install:
+
+```bash
+mailpilot --version
+```
 
 ## Quick Start
 
+MailPilot needs PostgreSQL 18 and a Google service account with domain-wide delegation for the Gmail API.
+
+Create the database. MailPilot provisions the schema on first connection:
+
 ```bash
-# Install dependencies
-uv sync
+createdb mailpilot
+```
 
-# Configure
+Point MailPilot at the database:
+
+```bash
 mailpilot config set database_url postgresql://localhost/mailpilot
+```
+
+Set the Google service account credentials:
+
+```bash
 mailpilot config set google_application_credentials /path/to/service-account.json
+```
+
+Set the Anthropic API key:
+
+```bash
 mailpilot config set anthropic_api_key sk-ant-...
+```
 
-# Create an account
+Create the Gmail account MailPilot operates:
+
+```bash
 mailpilot account create --email user@example.com --display-name "User Name"
+```
 
-# Sync emails
+Sync the inbox:
+
+```bash
 mailpilot account sync
+```
 
-# Start the sync loop
+Start the event-driven sync loop:
+
+```bash
 mailpilot run
 ```
-
-## Development
-
-```bash
-make check    # lint + tests
-make lint     # ruff format + ruff check + basedpyright
-make py-test  # pytest -x
-```
-
-## Documentation
-
-- [SPEC.md](SPEC.md) -- single source of truth (goals, constraints, invariants, tasks, bugs).
-- [CLAUDE.md](CLAUDE.md) -- operator/agent guide.
-
-## License
-
-Private.
