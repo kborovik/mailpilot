@@ -2,7 +2,7 @@
 # PyPI distribution name; "mailpilot" is owned by an unrelated PyPI project.
 # The import package and CLI command stay "mailpilot" (module-name below).
 name = "mailpilot-crm"
-version = "0.17.0"
+version = "0.18.0"
 description = "Agent-operated CRM with Gmail as the comms layer"
 readme = "README.md"
 authors = [
