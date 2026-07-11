@@ -75,9 +75,9 @@ env-backup:
 # Release
 ###############################################################################
 
-build: ## Build sdist and wheel into dist/
-	$(call header,Building distribution)
-	uv build
+install: ## Install mailpilot globally as an editable uv tool
+	$(call header,Installing mailpilot via uv tool)
+	uv tool install --editable .
 
 # `make release <part>` passes the part as an extra goal; pick it out and
 # give the part words no-op recipes so make does not try to build them.
