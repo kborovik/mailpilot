@@ -10,6 +10,7 @@ When adding new commands, keep imports inside the function body.
 from __future__ import annotations
 
 import json
+from importlib.metadata import distribution
 from typing import TYPE_CHECKING, Any, NoReturn
 
 import click
@@ -426,8 +427,27 @@ def _print_skill(ctx: click.Context, param: click.Parameter, value: bool) -> Non
     ctx.exit(0)
 
 
+def _version() -> str:
+    """Render the CLI version, marking editable installs as dev builds.
+
+    A PEP 610 direct_url.json with dir_info.editable true means the package
+    was installed with `pip/uv install -e` from a checkout, so the running
+    code can differ from the released wheel; render `<version>+dev (<path>)`
+    to keep dev output from masquerading as a release. Wheel installs carry
+    no direct_url.json (or editable is absent) and render plain `<version>`.
+    """
+    dist = distribution("mailpilot-crm")
+    raw = dist.read_text("direct_url.json")
+    if raw is not None:
+        direct = json.loads(raw)
+        if direct.get("dir_info", {}).get("editable"):
+            checkout = direct.get("url", "").removeprefix("file://")
+            return f"{dist.version}+dev ({checkout})"
+    return dist.version
+
+
 @click.group()
-@click.version_option(package_name="mailpilot-crm")
+@click.version_option(version=_version(), prog_name="mailpilot")
 @click.option("--debug", is_flag=True, help="Enable debug logging.")
 @click.option(
     "--completion",

@@ -107,6 +107,28 @@ def test_version(runner: CliRunner) -> None:
     assert version("mailpilot-crm") in result.output
 
 
+def test_version_wheel_install_renders_plain_version() -> None:
+    from mailpilot import cli
+
+    dist = MagicMock()
+    dist.version = "1.2.3"
+    dist.read_text.return_value = None
+    with patch.object(cli, "distribution", return_value=dist):
+        assert cli._version() == "1.2.3"  # pyright: ignore[reportPrivateUsage]
+
+
+def test_version_editable_install_renders_dev_marker() -> None:
+    from mailpilot import cli
+
+    dist = MagicMock()
+    dist.version = "1.2.3"
+    dist.read_text.return_value = json.dumps(
+        {"url": "file:///tmp/checkout", "dir_info": {"editable": True}}
+    )
+    with patch.object(cli, "distribution", return_value=dist):
+        assert cli._version() == "1.2.3+dev (/tmp/checkout)"  # pyright: ignore[reportPrivateUsage]
+
+
 # -- --skill -------------------------------------------------------------------
 
 
