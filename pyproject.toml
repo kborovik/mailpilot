@@ -1,5 +1,7 @@
 [project]
-name = "mailpilot"
+# PyPI distribution name; "mailpilot" is owned by an unrelated PyPI project.
+# The import package and CLI command stay "mailpilot" (module-name below).
+name = "mailpilot-crm"
 version = "0.17.0"
 description = "Agent-operated CRM with Gmail as the comms layer"
 readme = "README.md"
@@ -20,12 +22,19 @@ dependencies = [
     "pydantic-settings>=2.7.0,<3.0.0",
 ]
 
+[project.urls]
+Homepage = "https://lab5.ca"
+Repository = "https://github.com/kborovik/mailpilot"
+
 [project.scripts]
 mailpilot = "mailpilot.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.11.2,<0.12.0"]
 build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "mailpilot"
 
 [dependency-groups]
 dev = [

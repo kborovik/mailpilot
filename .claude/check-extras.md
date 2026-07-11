@@ -552,9 +552,9 @@ Trigger: `src/mailpilot/cli.py` or `src/mailpilot/database.py` changed.
 Every destructive DB op (`make clean`, any `dropdb`) runs `mailpilot db export --file ~/Documents/MailPilot/snap-<ts>.json` first (single JSON snapshot = tag vocabulary + company + contact, §V.121). CLI writes the file + exits 0 before any `dropdb`. Failed export aborts the drop (fail-closed, no `|| true` swallow). Restore = `mailpilot db import --file <snap>`. Company + contact = paid live data (discovery credits §V.96/§V.113), never wiped without a durable backup. Backup dir `~/Documents/MailPilot/` is iCloud-synced (portable across macOS instances), outside the dropped DB.
 
 Trigger: `Makefile` changed.
-- `rg 'db-backup\b' Makefile` -> db-backup target present
-- `rg 'db.*export.*snap\|snap.*db.*export' Makefile` -> export-to-snap in db-backup target
-- `rg 'clean.*db-backup\|db-backup.*clean\|clean.*:.*db-backup' Makefile` -> make clean depends on db-backup
+- `rg 'db-backup\b' makefile` -> db-backup target present
+- `rg 'db.*export.*snap\|snap.*db.*export' makefile` -> export-to-snap in db-backup target
+- `rg 'clean.*db-backup\|db-backup.*clean\|clean.*:.*db-backup' makefile` -> make clean depends on db-backup
 
 ## §V.122 — campaign-test Touch 1 delivery keyed on rfc2822_message_id per scenario
 
@@ -631,15 +631,20 @@ Trigger: any `src/mailpilot/**/*.py` changed.
 - For each hit file: verify same except block has `operator_event("error"` within 5 lines
 - `rg 'test.*logfire.*exception\|logfire.*exception.*test' src/mailpilot/tests/` -> contract test present
 
-## §V.62 — /release command recipe
+## §V.62 — release flow: make target + PyPI pipeline
 
-`/release` extends `/gh:release`. Post-tag sequence: (1) push `main` + `v<x.y.z>` tag; (2) `uv build` — asserts `dist/mailpilot-<x.y.z>-py3-none-any.whl` exists; (3) `gh release create v<x.y.z> --verify-tag --notes-from-tag` attaches wheel as downloadable asset. Confirm-before-mutate gate covers push + upload (single gate before all mutations). Version source = `pyproject.toml [project].version`. Deploy = published wheel asset — a tag-only release without the wheel is not deployable.
+Release = `make release major|minor|patch`. Gates: part arg present, clean working tree. Steps: `uv version --bump <part>` (bumps `pyproject.toml` + `uv.lock`), commit `chore: release v<x.y.z>`, tag `v<x.y.z>`, push main + tags, `gh release create v<x.y.z> --generate-notes`. Publish = `.github/workflows/release.yml` on release published: ci.yml via workflow_call gates publish; tag must equal `v$(uv version --short)`; `uv build`; `pypa/gh-action-pypi-publish` w/ OIDC trusted publishing (`id-token: write`, no PyPI API token). Dist name = `mailpilot-crm` (PyPI name `mailpilot` foreign-owned); module + CLI cmd = `mailpilot` via `[tool.uv.build-backend] module-name`. Deploy = PyPI package — `uv tool install mailpilot-crm`.
 
-Trigger: `.claude/skills/release/**` changed.
-- `rg 'uv build\b' .claude/skills/release/SKILL.md` -> uv build step present
-- `rg 'gh release create\b' .claude/skills/release/SKILL.md` -> release create present
-- `rg 'confirm\b.*push\|push.*confirm\b\|confirm.*before.*mutate' .claude/skills/release/SKILL.md` -> confirm gate covers push + upload
-- `rg 'dist/mailpilot-.*\.whl\b' .claude/skills/release/SKILL.md` -> wheel artifact asserted
+Trigger: `makefile`, `.github/workflows/release.yml`, or `pyproject.toml` changed.
+- `rg 'uv version --bump' makefile` -> bump step present
+- `rg 'gh release create' makefile` -> GitHub release step present
+- `rg 'git diff --quiet' makefile` -> clean-tree gate present
+- `rg 'pypa/gh-action-pypi-publish' .github/workflows/release.yml` -> trusted-publishing action present
+- `rg 'id-token: write' .github/workflows/release.yml` -> OIDC permission present
+- `rg 'uv version --short' .github/workflows/release.yml` -> tag==version gate present
+- `rg 'workflow_call' .github/workflows/ci.yml` -> CI reusable as publish gate
+- `rg 'name = "mailpilot-crm"' pyproject.toml` -> dist name present
+- `rg 'module-name = "mailpilot"' pyproject.toml` -> module override present
 
 ## §V.133 — task stats aggregate
 

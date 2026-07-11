@@ -72,6 +72,36 @@ env-backup:
 	gpg --yes -er E4AFCA7FBB19FC029D519A524AEBB5178D5E96C1 -o .env.gpg .env
 
 ###############################################################################
+# Release
+###############################################################################
+
+build: ## Build sdist and wheel into dist/
+	$(call header,Building distribution)
+	uv build
+
+# `make release <part>` passes the part as an extra goal; pick it out and
+# give the part words no-op recipes so make does not try to build them.
+part := $(word 1,$(filter major minor patch,$(MAKECMDGOALS)))
+
+release: ## Bump version, commit, tag, and publish a GitHub release; CI publishes to PyPI (make release major|minor|patch)
+	test -n "$(part)" || { echo "usage: make release major|minor|patch"; exit 1; }
+	git diff --quiet && git diff --cached --quiet \
+		|| { echo "working tree not clean — commit or stash first"; exit 1; }
+	$(call header,Bumping $(part) version)
+	uv version --bump $(part)
+	version=$$(uv version --short)
+	git add pyproject.toml uv.lock
+	git commit -m "chore: release v$$version"
+	git tag "v$$version"
+	$(call header,Publishing v$$version to GitHub)
+	git push && git push --tags
+	gh release create "v$$version" --title "v$$version" --generate-notes
+	echo "$(green)Released v$$version — PyPI publish runs in GitHub Actions$(reset)"
+
+major minor patch:
+	@:
+
+###############################################################################
 # Colors and Headers
 ###############################################################################
 

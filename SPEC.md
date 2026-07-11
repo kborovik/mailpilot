@@ -96,7 +96,7 @@ V52: logfire.configure(environment=settings.logfire_environment) -> spans carry 
 V53: agent tool spans come from logfire.instrument_pydantic_ai() (gen_ai.tool.name attr); no logfire.span inside agent tools; agents carry explicit names mailpilot.classifier + mailpilot.workflow
 V54: CLI mutation = logfire.span + operator_event; constraint code vocabulary; SystemExit absorbed at boundary — → .claude/check-extras.md §V.54
 V55: `gen_ai.tool.call.result` span attr exempt from Logfire scrubbing; all other attrs scrubbed; scrubbing contract test drives a real instrumented tool call, never a fabricated span
-V62: /release extends /gh:release — post-tag: push main + v<x.y.z>, uv build + gh release create v<x.y.z> --verify-tag + wheel attach; confirm-before-mutate gate; version source = pyproject.toml; deploy = published wheel — → .claude/check-extras.md §V.62
+V62: release = `make release major|minor|patch` — clean-tree gate; `uv version --bump`; commit `chore: release v<x.y.z>` + tag v<x.y.z>; push main + tags; `gh release create --generate-notes`; PyPI publish = .github/workflows/release.yml on release published — ci.yml gate (workflow_call) + tag==pyproject version gate + `uv build` + OIDC trusted publishing (no API token); dist name mailpilot-crm (PyPI `mailpilot` foreign-owned), module + CLI = mailpilot — → .claude/check-extras.md §V.62
 V67: persisted outbound in_reply_to + references_header mirror wire MIME headers exactly
 V69: tick classifying >= 1 inbound -> next tick forces full sweep + wakeup_event set
 V71: per-task reply-rejection counter (reply_rejection_scope) — format_check rejections cap 3; past cap bypasses; outside scope always enforces
