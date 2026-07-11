@@ -427,7 +427,7 @@ def _print_skill(ctx: click.Context, param: click.Parameter, value: bool) -> Non
 
 
 @click.group()
-@click.version_option()
+@click.version_option(package_name="mailpilot-crm")
 @click.option("--debug", is_flag=True, help="Enable debug logging.")
 @click.option(
     "--completion",

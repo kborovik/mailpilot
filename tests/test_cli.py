@@ -99,6 +99,14 @@ def test_completion_unsupported_shell(runner: CliRunner) -> None:
     assert result.exit_code != 0
 
 
+def test_version(runner: CliRunner) -> None:
+    from importlib.metadata import version
+
+    result = runner.invoke(main, ["--version"])
+    assert result.exit_code == 0
+    assert version("mailpilot-crm") in result.output
+
+
 # -- --skill -------------------------------------------------------------------
 
 
