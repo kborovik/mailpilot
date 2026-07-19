@@ -5,6 +5,8 @@ name = "mailpilot-crm"
 version = "0.18.0"
 description = "Agent-operated CRM with Gmail as the comms layer"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [
     { name = "Konstantin Borovik", email = "github@lab5.ca" }
 ]
