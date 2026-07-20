@@ -2,9 +2,10 @@
 
 Priority (highest to lowest):
 1. Constructor kwargs (for tests)
-2. ``MAILPILOT_*`` environment variables
-3. ``~/.mailpilot/config.json`` file
-4. Field defaults
+2. Process ``MAILPILOT_*`` environment variables
+3. Cwd ``.env`` (``MAILPILOT_*`` keys only, pydantic-settings dotenv)
+4. ``~/.mailpilot/config.json`` file
+5. Field defaults
 """
 
 import json
@@ -71,7 +72,14 @@ class JsonConfigSource(PydanticBaseSettingsSource):
 class Settings(BaseSettings):
     """MailPilot configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="MAILPILOT_")
+    model_config = SettingsConfigDict(
+        env_prefix="MAILPILOT_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        # only_existing: known Settings fields only (MAILPILOT_* lookup). Default
+        # dotenv injects every .env key as an extra and fails extra=forbid.
+        dotenv_filtering="only_existing",
+    )
 
     database_url: PostgresDsn = PostgresDsn(DEFAULT_DATABASE_URL)
     logfire_token: str = DEFAULT_LOGFIRE_TOKEN
@@ -97,10 +105,12 @@ class Settings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        """Set source priority: kwargs > env vars > config file."""
+        """Set source priority: kwargs > process env > cwd .env > config file."""
+        del file_secret_settings  # unused; secrets stay in env / config / dotenv
         return (
             init_settings,
             env_settings,
+            dotenv_settings,
             JsonConfigSource(settings_cls),
         )
 

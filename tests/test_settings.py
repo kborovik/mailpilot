@@ -111,6 +111,77 @@ def test_settings_kwargs_override_env(monkeypatch: pytest.MonkeyPatch):
     assert settings.logfire_environment == "development"
 
 
+def test_dotenv_overrides_config_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cwd ``.env`` beats ``~/.mailpilot/config.json`` per §V.85."""
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"logfire_environment": "development"}))
+    monkeypatch.setattr("mailpilot.settings.CONFIG_PATH", config_path)
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    (workdir / ".env").write_text("MAILPILOT_LOGFIRE_ENVIRONMENT=production\n")
+    monkeypatch.chdir(workdir)
+
+    settings = Settings()
+    assert settings.logfire_environment == "production"
+
+
+def test_process_env_beats_dotenv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Process ``MAILPILOT_*`` env beats cwd ``.env`` per §V.85."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    (workdir / ".env").write_text("MAILPILOT_LOGFIRE_ENVIRONMENT=development\n")
+    monkeypatch.chdir(workdir)
+    monkeypatch.setenv("MAILPILOT_LOGFIRE_ENVIRONMENT", "production")
+
+    settings = Settings()
+    assert settings.logfire_environment == "production"
+
+
+def test_kwargs_beat_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Constructor kwargs beat cwd ``.env`` per §V.85."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    (workdir / ".env").write_text("MAILPILOT_LOGFIRE_ENVIRONMENT=production\n")
+    monkeypatch.chdir(workdir)
+
+    settings = Settings(logfire_environment="development")
+    assert settings.logfire_environment == "development"
+
+
+def test_missing_dotenv_is_noop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Missing cwd ``.env`` is a no-op; field defaults still apply per §V.85."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+
+    settings = Settings()
+    assert settings.logfire_environment == "development"
+    assert settings.run_interval == 60
+
+
+def test_dotenv_ignores_non_mailpilot_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-``MAILPILOT_*`` keys in ``.env`` are ignored (no crash, no field bleed)."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    (workdir / ".env").write_text(
+        "PROD_DB_HOST=db.example.com\nMAILPILOT_RUN_INTERVAL=42\n"
+    )
+    monkeypatch.chdir(workdir)
+
+    settings = Settings()
+    assert settings.run_interval == 42
+    assert not hasattr(settings, "prod_db_host")
+
+
 def test_save_and_load_settings(tmp_path: Path):
     config_path = tmp_path / "config.json"
     original = Settings(logfire_environment="production", anthropic_api_key="sk-123")

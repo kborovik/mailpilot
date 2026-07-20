@@ -71,9 +71,11 @@ error envelope.
 
 Every key may also be overridden via an environment variable of the form
 `MAILPILOT_<UPPERCASE_KEY>` (for example, `MAILPILOT_DATABASE_URL`,
-`MAILPILOT_ANTHROPIC_API_KEY`, `MAILPILOT_RUN_INTERVAL`). Priority is
-constructor kwargs (tests only), then `MAILPILOT_*` env vars, then the
-config file, then field defaults.
+`MAILPILOT_ANTHROPIC_API_KEY`, `MAILPILOT_RUN_INTERVAL`). A cwd `.env` file
+with the same `MAILPILOT_*` keys is auto-read at load (folder-local override).
+Priority is constructor kwargs (tests only), then process `MAILPILOT_*` env
+vars, then cwd `.env`, then the config file, then field defaults. Missing
+`.env` is a no-op. Non-`MAILPILOT_*` keys in `.env` are ignored.
 
 Keys:
 

@@ -214,7 +214,7 @@ T210|x|impl §V.136(+) + §V.103(∆) + §V.134(∆) + §I — cadence def field
 T211|x|impl §V.136 compose-only shape — trigger-keyed dispatch to output_type TouchMessage; harness send + next-touch schedule; retire _DEFERRED_TASK_INITIAL|V136,V31,V45,V81,V120,V42,V44,V25
 T212|x|impl §V.83(∆) — touch pre-flight guards: latest enrollment outcome terminal \| inbound from contact after prior touch -> cancel task, zero LLM calls; then strip reply-self-guard prose from workflow TOMLs (workflows repo, contingent)|V83,V123,V136
 T213|x|reconcile workflow TOMLs w/ T209-T211 landed code — strip retired-agent prose from workflows/*.toml; re-import; `workflow check` in_sync|V135,V136,V103
-T214|.|impl §V.85(∆) — re-enable dotenv source for cwd `.env` (`env_file=".env"` + `dotenv_settings` in customise_sources); process env beats .env; .env beats config.json; TDD|V85
+T214|x|impl §V.85(∆) — re-enable dotenv source for cwd `.env` (`env_file=".env"` + `dotenv_settings` in customise_sources); process env beats .env; .env beats config.json; TDD|V85
 
 ## §B BUGS
 
