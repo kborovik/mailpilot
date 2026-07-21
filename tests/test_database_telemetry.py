@@ -8,12 +8,14 @@ from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import psycopg
 import pytest
 from logfire.testing import CaptureLogfire
 
 from mailpilot.database import (
     _MAILPILOT_VERSION,  # pyright: ignore[reportPrivateUsage]
     _compute_schema_hash,  # pyright: ignore[reportPrivateUsage]
+    _connect_database,  # pyright: ignore[reportPrivateUsage]
     initialize_database,
 )
 
@@ -25,6 +27,15 @@ def _db_spans(capfire: CaptureLogfire, name: str) -> list[dict[str, Any]]:
         for span in capfire.exporter.exported_spans_as_dict()
         if span["name"] == name
     ]
+
+
+def _raise_connect_error(message: str) -> Any:
+    """Return a side_effect that raises OperationalError with ``message``."""
+
+    def _side_effect(*_args: Any, **_kwargs: Any) -> None:
+        raise psycopg.OperationalError(message)
+
+    return _side_effect
 
 
 def test_initialize_database_error_emits_error_span(capfire: CaptureLogfire):
@@ -43,7 +54,7 @@ def test_initialize_database_error_emits_operator_error_event(
     capfire: CaptureLogfire,
     capsys: pytest.CaptureFixture[str],
 ):
-    """§V.51/§B.71: connect-fail pairs ``logfire.exception`` with
+    """§V.51/§B.71 + §V.137: connect-fail pairs log with
     ``operator_event("error", source="database.connect", ...)`` on the operator
     stderr console -- not silent on DB-connect failure from ``mailpilot run``."""
     with pytest.raises(SystemExit):
@@ -52,6 +63,98 @@ def test_initialize_database_error_emits_operator_error_event(
     err = capsys.readouterr().err
     assert "event=error" in err
     assert "source=database.connect" in err
+
+
+@pytest.mark.parametrize(
+    ("error_message", "hint_substring", "forbidden_substring"),
+    [
+        (
+            'connection failed: FATAL:  role "ubuntu" does not exist',
+            "role",
+            "createdb",
+        ),
+        (
+            'connection failed: FATAL:  database "mailpilot" does not exist',
+            "createdb",
+            None,
+        ),
+        (
+            'connection failed: FATAL:  no pg_hba.conf entry for host "192.168.122.1", user "pilot", database "mailpilot", SSL encryption',
+            "pg_hba",
+            "database_url",
+        ),
+        (
+            "connection failed: failed to resolve host 'mailpilot-1.vm.internal': [Errno 8] nodename nor servname provided, or not known",
+            "resolve",
+            "database_url",
+        ),
+        (
+            'connection failed: could not translate host name "x" to address: Name or service not known',
+            "hostname",
+            "database_url",
+        ),
+        (
+            'connection failed: FATAL:  password authentication failed for user "pilot"',
+            "credential",
+            None,
+        ),
+        (
+            'connection failed: connection to server at "127.0.0.1", port 5432 failed: Connection refused',
+            "PostgreSQL running",
+            None,
+        ),
+        (
+            "connection failed: some unknown libpq failure",
+            "database_url",
+            None,
+        ),
+    ],
+)
+def test_connect_database_maps_operational_error_to_hint(
+    error_message: str,
+    hint_substring: str,
+    forbidden_substring: str | None,
+) -> None:
+    """§V.137: ordered OperationalError substring → SystemExit hint map."""
+    with (
+        patch(
+            "mailpilot.database.psycopg.connect",
+            side_effect=_raise_connect_error(error_message),
+        ),
+        pytest.raises(SystemExit) as exit_info,
+    ):
+        _connect_database("postgresql://localhost/mailpilot")
+
+    exit_text = str(exit_info.value)
+    assert "database connection failed:" in exit_text
+    assert hint_substring.lower() in exit_text.lower()
+    if forbidden_substring is not None:
+        assert forbidden_substring.lower() not in exit_text.lower()
+
+
+def test_connect_database_expected_fail_uses_logfire_error_not_exception() -> None:
+    """§V.137: expected connect fail logs via logfire.error, not exception.
+
+    logfire.exception dumps a Traceback to the operator console for controlled
+    SystemExit paths; error keeps the event without the stack dump.
+    """
+    with (
+        patch(
+            "mailpilot.database.psycopg.connect",
+            side_effect=_raise_connect_error(
+                'FATAL:  no pg_hba.conf entry for host "192.168.122.1"'
+            ),
+        ),
+        patch("mailpilot.database.logfire") as mock_logfire,
+        pytest.raises(SystemExit) as exit_info,
+    ):
+        _connect_database("postgresql://localhost/mailpilot")
+
+    mock_logfire.error.assert_called_once()
+    mock_logfire.exception.assert_not_called()
+    assert "pg_hba" in str(exit_info.value).lower()
+    hint = mock_logfire.error.call_args.kwargs["hint"]
+    assert "pg_hba" in str(hint).lower()
 
 
 def test_initialize_database_skips_schema_when_account_table_exists():

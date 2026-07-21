@@ -216,7 +216,7 @@ T211|x|impl §V.136 compose-only shape — trigger-keyed dispatch to output_type
 T212|x|impl §V.83(∆) — touch pre-flight guards: latest enrollment outcome terminal \| inbound from contact after prior touch -> cancel task, zero LLM calls; then strip reply-self-guard prose from workflow TOMLs (workflows repo, contingent)|V83,V123,V136
 T213|x|reconcile workflow TOMLs w/ T209-T211 landed code — strip retired-agent prose from workflows/*.toml; re-import; `workflow check` in_sync|V135,V136,V103
 T214|x|impl §V.85(∆) — re-enable dotenv source for cwd `.env` (`env_file=".env"` + `dotenv_settings` in customise_sources); process env beats .env; .env beats config.json; TDD|V85
-T215|.|impl §V.137 ordered connect-hint map + logfire.error (no console Traceback); extend tests/test_database_telemetry.py mocked OperationalError strings; stack #186 role/database split|V137,B125
+T215|x|impl §V.137 ordered connect-hint map + logfire.error (no console Traceback); extend tests/test_database_telemetry.py mocked OperationalError strings; stack #186 role/database split|V137,B125
 
 ## §B BUGS
 

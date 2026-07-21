@@ -346,12 +346,54 @@ def determine_schema_verdict(
     )
 
 
+def _connect_failure_hint(message: str, db_name: str) -> str:
+    """Map an OperationalError message to an ordered operator hint (§V.137).
+
+    Match order is load-bearing: role-missing must win over the generic
+    ``does not exist`` path so a missing role never suggests ``createdb``.
+
+    Args:
+        message: ``str(OperationalError)`` text from libpq / psycopg.
+        db_name: Database name segment from the connection URL (for createdb).
+
+    Returns:
+        One-line operator hint for the SystemExit message.
+    """
+    if 'role "' in message and "does not exist" in message:
+        hint = (
+            "set database_url to a URL with an existing role "
+            "(e.g. postgresql://mailpilot@localhost/mailpilot), "
+            "or run as that OS user / createuser"
+        )
+    elif 'database "' in message and "does not exist" in message:
+        hint = f"run 'createdb {db_name}' to create it"
+    elif "no pg_hba.conf entry" in message:
+        hint = "allow this client host in pg_hba.conf (or connect from an allowed host)"
+    elif (
+        "failed to resolve host" in message
+        or "nodename nor servname" in message
+        or "Name or service not known" in message
+    ):
+        hint = "hostname did not resolve; check host, VPN, or /etc/hosts"
+    elif (
+        "password authentication failed" in message
+        or "Peer authentication failed" in message
+    ):
+        hint = "check credentials / auth method in database_url and pg_hba.conf"
+    elif "Connection refused" in message:
+        hint = "is PostgreSQL running? check your system's service manager"
+    else:
+        hint = "check your database_url setting"
+    return hint
+
+
 def _connect_database(database_url: str) -> psycopg.Connection[dict[str, Any]]:
     """Open an autocommit PostgreSQL connection or dead-stop with a hint.
 
-    A connect failure is mapped to a ``SystemExit`` carrying an operator hint,
-    pairing ``logfire.exception`` with ``operator_event("error")`` per §V.51 so
-    the operator console is never silent on DB-connect failure.
+    A connect failure is mapped to a ``SystemExit`` carrying an operator hint
+    (§V.137). Expected failures log via ``logfire.error`` (not
+    ``logfire.exception``) so the operator console has no Traceback, paired
+    with ``operator_event("error")`` so the console is never silent.
 
     Args:
         database_url: PostgreSQL connection URL.
@@ -367,13 +409,8 @@ def _connect_database(database_url: str) -> psycopg.Connection[dict[str, Any]]:
         )
     except psycopg.OperationalError as exc:
         message = str(exc)
-        if "does not exist" in message:
-            hint = f"run 'createdb {db_name}' to create it"
-        elif "Connection refused" in message:
-            hint = "is PostgreSQL running? check your system's service manager"
-        else:
-            hint = "check your database_url setting"
-        logfire.exception("database connection failed", database=db_name, hint=hint)
+        hint = _connect_failure_hint(message, db_name)
+        logfire.error("database connection failed", database=db_name, hint=hint)
         operator_event("error", source="database.connect", message=str(exc))
         raise SystemExit(f"database connection failed: {hint}") from None
 
