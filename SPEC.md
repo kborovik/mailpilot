@@ -162,6 +162,7 @@ V133: task stats aggregate — single SQL, task grain, envelope {task_stats}; fi
 V134: `workflow check` = read-only def-integrity check per §V.108 shape — SHA-256 over def fields {template,theme,goal,instructions,touches,touch_interval_days} keyed by `name`; states {in_sync,out_of_sync,not_imported,orphaned}; `--file` repeatable; specific-file check scoped to passed names (no `orphaned`), dir check flags `orphaned`; report-only envelope {"workflow_check"}; not a deploy gate; → .claude/check-extras.md §V.134
 V135: mechanical context pre-feed — invoke_workflow_agent pre-loads ContactView/CompanyView via shared loaders (§V.8); read_contact/read_company absent from every roster — → .claude/check-extras.md §V.135
 V136: system-owned touch cadence — def fields touches + touch_interval_days own the sequence; cadence engine owns schedule math + touch scheduled_at; touch runs = compose-only agent (output_type TouchMessage, zero tools), harness sends + schedules next touch; final touch -> system conclude contact_later — → .claude/check-extras.md §V.136
+V137: connect-fail operator UX — `_connect_database` maps OperationalError text ordered (role-missing → role/URL not createdb; database-missing → createdb; `no pg_hba.conf entry` → client-host allowlist; resolve/`nodename nor servname`/`Name or service not known` → DNS/hostname; password|Peer auth failed → credentials/auth; Connection refused → service-running; else database_url) → SystemExit hint; expected fail → logfire.error (not exception) + operator_event("error", source="database.connect") + SystemExit — zero console Traceback (closes §B.125)
 
 ## §T TASKS
 
@@ -215,6 +216,7 @@ T211|x|impl §V.136 compose-only shape — trigger-keyed dispatch to output_type
 T212|x|impl §V.83(∆) — touch pre-flight guards: latest enrollment outcome terminal \| inbound from contact after prior touch -> cancel task, zero LLM calls; then strip reply-self-guard prose from workflow TOMLs (workflows repo, contingent)|V83,V123,V136
 T213|x|reconcile workflow TOMLs w/ T209-T211 landed code — strip retired-agent prose from workflows/*.toml; re-import; `workflow check` in_sync|V135,V136,V103
 T214|x|impl §V.85(∆) — re-enable dotenv source for cwd `.env` (`env_file=".env"` + `dotenv_settings` in customise_sources); process env beats .env; .env beats config.json; TDD|V85
+T215|.|impl §V.137 ordered connect-hint map + logfire.error (no console Traceback); extend tests/test_database_telemetry.py mocked OperationalError strings; stack #186 role/database split|V137,B125
 
 ## §B BUGS
 
@@ -254,3 +256,4 @@ B121|2026-06-29|inbound reply From local-part cased unlike enrolled (`CThorne@` 
 B122|2026-07-01|pydantic-ai v2 instr-format 5 renames tool-return attr `tool_response`→`gen_ai.tool.call.result`; path-keyed scrub exemption silently dead; fabricated-span contract test asserted the hand-set old attr so stayed green|V55
 B123|2026-07-01|`workflow import` emitted per-row rejections inside ok:true envelope + exit 0 @ zero rows applied; campaign-test setup gated on exit code -> silent no-op import, late name-lookup failure|V103
 B124|2026-07-02|deferred-task fragments encode outbound lifecycle but compose direction-blind into inbound templates — TASK branch orders conclude_enrollment the workflow TOML forbids; INITIAL branch mislabels inbound reply as initial send|V31
+B125|2026-07-20|`_connect_database` incomplete OperationalError→hint map + logfire.exception Traceback for expected connect fails (pg_hba/DNS hit generic database_url)|V137
