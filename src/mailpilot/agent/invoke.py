@@ -28,17 +28,18 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
 
-import httpx
 import logfire
 import psycopg
 from pydantic_ai import Agent, ModelRetry, RunContext
 from pydantic_ai.messages import ModelRequest, ToolReturnPart
 from pydantic_ai.models import Model
-from pydantic_ai.models.anthropic import AnthropicModel, AnthropicModelSettings
-from pydantic_ai.providers.anthropic import AnthropicProvider
 
 from mailpilot import cadence, database, email_ops
 from mailpilot.agent import tools as agent_tools
+from mailpilot.agent.model import (
+    _build_model,  # pyright: ignore[reportPrivateUsage]
+    active_model_name,
+)
 from mailpilot.drive import DriveClient
 from mailpilot.exceptions import (
     AgentCompletedWithoutReplyError,
@@ -455,59 +456,6 @@ def _build_touch_agent(workflow: Workflow) -> Agent[None, TouchMessage]:
     return agent
 
 
-def _build_anthropic_model(settings: Settings) -> AnthropicModel:
-    """Construct the AnthropicModel with §V.47 cache_control + §V.48 read-timeout.
-
-    Cache breakpoints on the system prompt and tool definitions let
-    multi-turn invocations re-bill the stable prefix as
-    ``cache_read_input_tokens`` instead of fresh input.
-
-    The HTTP client carries a 240s read-timeout (4x the httpx default of
-    60s) so long-context Anthropic calls do not surface ``TimeoutError``
-    mid-conversation, which would bubble to ``run.task.agent_failed``
-    with no retry (idempotency: tool-call mid-turn cannot be safely
-    re-driven). See SPEC.md §V.48, §B.16.
-
-    ``anthropic_base_url`` is the wire endpoint. It defaults to
-    ``api.anthropic.com``; pointing it at an Anthropic-compatible endpoint
-    (e.g. ``https://api.novita.ai/anthropic``) routes the same Messages-API
-    call to that vendor with no code change.
-
-    §V.130: ``anthropic_thinking`` and ``anthropic_effort`` are config-gated
-    reasoning controls scoped to the workflow agent. Both default active; an
-    operator opts out per knob by setting it to ''. When set, the thinking value
-    becomes an ``anthropic_thinking={'type': <value>}`` block and the effort
-    value passes through as ``anthropic_effort``. ``anthropic_max_tokens`` is
-    ALWAYS passed as ``max_tokens`` (not empty-gated) so default-active thinking
-    cannot exhaust the provider-default output budget before any reply text
-    (§B.115). The cache flags (§V.47) are unaffected. The classifier never reads
-    these settings.
-    """
-    if not settings.anthropic_api_key:
-        raise ValueError(
-            "anthropic_api_key is required for agent invocation; "
-            "set it via `mailpilot config set anthropic_api_key ...`",
-        )
-    model_settings = AnthropicModelSettings(
-        anthropic_cache_tool_definitions=True,
-        anthropic_cache_instructions=True,
-        max_tokens=settings.anthropic_max_tokens,
-    )
-    if settings.anthropic_thinking:
-        model_settings["anthropic_thinking"] = {"type": settings.anthropic_thinking}
-    if settings.anthropic_effort:
-        model_settings["anthropic_effort"] = settings.anthropic_effort
-    return AnthropicModel(
-        settings.anthropic_model,
-        provider=AnthropicProvider(
-            api_key=settings.anthropic_api_key,
-            base_url=settings.anthropic_base_url,
-            http_client=httpx.AsyncClient(timeout=httpx.Timeout(240.0)),
-        ),
-        settings=model_settings,
-    )
-
-
 # -- Prompt assembly -----------------------------------------------------------
 
 
@@ -800,12 +748,13 @@ def _run_compose_only_touch(  # noqa: PLR0913
     )
 
     usage = result.usage
-    span.set_attribute("model", settings.anthropic_model)
+    span.set_attribute("model", active_model_name(settings))
     span.set_attribute("input_tokens", usage.input_tokens)
     span.set_attribute("output_tokens", usage.output_tokens)
     span.set_attribute("total_tokens", usage.input_tokens + usage.output_tokens)
     span.set_attribute("llm_requests", usage.requests)
-    # §V.47: bubble Anthropic prompt-cache token counts to the rollup span.
+    # §V.47: bubble Anthropic prompt-cache token counts to the rollup span
+    # (xAI path reports zeros; names stay for schema stability).
     span.set_attribute("cache_read_input_tokens", usage.cache_read_tokens)
     span.set_attribute("cache_creation_input_tokens", usage.cache_write_tokens)
     # Compose-only runs bind no tools (§V.81 exempt) -- report zero for both so
@@ -955,11 +904,11 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915, C901
             ]
 
             # Resolve the model once; both the compose-only and the tool-loop
-            # path use it.
+            # path use it. §V.47: provider-aware factory.
             if model_override is not None:
                 model = model_override
             else:
-                model = _build_anthropic_model(settings)
+                model = _build_model(settings, role="workflow")
 
             gmail_client = GmailClient(account.email)
             drive_client = DriveClient(account.email)
@@ -1052,14 +1001,14 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915, C901
 
             # Usage tracking.
             usage = result.usage
-            span.set_attribute("model", settings.anthropic_model)
+            span.set_attribute("model", active_model_name(settings))
             span.set_attribute("input_tokens", usage.input_tokens)
             span.set_attribute("output_tokens", usage.output_tokens)
             span.set_attribute("total_tokens", usage.input_tokens + usage.output_tokens)
             span.set_attribute("llm_requests", usage.requests)
             # §V.47: bubble Anthropic prompt-cache token counts to the rollup
             # span. Pydantic AI's RunUsage already sums these across child
-            # chat turns, so no per-turn span walk is needed.
+            # chat turns, so no per-turn span walk is needed. xAI reports zeros.
             span.set_attribute("cache_read_input_tokens", usage.cache_read_tokens)
             span.set_attribute("cache_creation_input_tokens", usage.cache_write_tokens)
 

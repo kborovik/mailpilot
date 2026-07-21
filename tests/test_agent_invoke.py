@@ -28,13 +28,17 @@ from mailpilot.agent.invoke import (
     _advisory_lock_keys,  # pyright: ignore[reportPrivateUsage]
     _advisory_lock_keys_for_task,  # pyright: ignore[reportPrivateUsage]
     _build_agent,  # pyright: ignore[reportPrivateUsage]
-    _build_anthropic_model,  # pyright: ignore[reportPrivateUsage]
     _build_user_prompt,  # pyright: ignore[reportPrivateUsage]
     _wrap_conclude_enrollment,  # pyright: ignore[reportPrivateUsage]
     _wrap_create_task,  # pyright: ignore[reportPrivateUsage]
     _wrap_disable_contact,  # pyright: ignore[reportPrivateUsage]
     _wrap_send_email,  # pyright: ignore[reportPrivateUsage]
     invoke_workflow_agent,
+)
+from mailpilot.agent.model import (  # pyright: ignore[reportPrivateUsage]
+    _build_anthropic_model,
+    _build_model,
+    _build_xai_model,
 )
 from mailpilot.database import (
     activate_workflow,
@@ -1010,14 +1014,14 @@ def test_account_not_found_raises(
 def test_missing_api_key_raises(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """When no model_override and no anthropic_api_key, raises ValueError."""
+    """When no model_override and no active-provider API key, raises ValueError."""
     _account, contact, workflow = _setup(database_connection)
-    settings = make_test_settings(anthropic_api_key="", anthropic_model="test-model")
+    settings = make_test_settings(llm_provider="xai", xai_api_key="")
 
     with (
         patch("mailpilot.agent.invoke.GmailClient"),
         patch("mailpilot.agent.invoke.DriveClient"),
-        pytest.raises(ValueError, match="anthropic_api_key is required"),
+        pytest.raises(ValueError, match="xai_api_key is required"),
     ):
         invoke_workflow_agent(
             database_connection,
@@ -1917,82 +1921,90 @@ def test_build_anthropic_model_carries_cache_settings() -> None:
     the wire-level translation is exercised by Pydantic AI's own tests.
     """
     settings = make_test_settings(
-        anthropic_api_key="sk-test", anthropic_model="claude-sonnet-4-6"
+        llm_provider="anthropic",
+        anthropic_api_key="sk-test",
+        anthropic_model="claude-sonnet-5",
     )
-    model = _build_anthropic_model(settings)
+    model = _build_anthropic_model(settings, role="workflow")
     assert model.settings is not None
     assert model.settings.get("anthropic_cache_tool_definitions") is True
     assert model.settings.get("anthropic_cache_instructions") is True
 
 
 def test_build_anthropic_model_defaults_enable_reasoning() -> None:
-    """§V.130: default settings make the workflow agent reason.
+    """§V.47: default settings make the workflow agent reason.
 
     Both reasoning knobs default to active, so a model built from default
     settings carries ``anthropic_thinking={'type': 'adaptive'}`` and
     ``anthropic_effort='high'``.
     """
     settings = make_test_settings(
-        anthropic_api_key="sk-test", anthropic_model="claude-sonnet-4-6"
+        llm_provider="anthropic",
+        anthropic_api_key="sk-test",
+        anthropic_model="claude-sonnet-5",
     )
-    model = _build_anthropic_model(settings)
+    model = _build_anthropic_model(settings, role="workflow")
     assert model.settings is not None
     assert model.settings.get("anthropic_thinking") == {"type": "adaptive"}
     assert model.settings.get("anthropic_effort") == "high"
 
 
 def test_build_anthropic_model_omits_reasoning_keys_when_disabled() -> None:
-    """§V.130: setting both reasoning knobs to '' leaves both keys off.
+    """§V.47: setting both reasoning knobs to '' leaves both keys off.
 
     An operator opts out per knob by setting it to ''. An empty value passes no
     ``anthropic_thinking``/``anthropic_effort`` key, restoring the no-reasoning
     call shape.
     """
     settings = make_test_settings(
+        llm_provider="anthropic",
         anthropic_api_key="sk-test",
-        anthropic_model="claude-sonnet-4-6",
+        anthropic_model="claude-sonnet-5",
         anthropic_thinking="",
         anthropic_effort="",
     )
-    model = _build_anthropic_model(settings)
+    model = _build_anthropic_model(settings, role="workflow")
     assert model.settings is not None
     assert model.settings.get("anthropic_thinking") is None
     assert model.settings.get("anthropic_effort") is None
 
 
 def test_build_anthropic_model_sets_thinking_when_configured() -> None:
-    """§V.130: anthropic_thinking='adaptive' adds the thinking config block."""
+    """§V.47: anthropic_thinking='adaptive' adds the thinking config block."""
     settings = make_test_settings(
+        llm_provider="anthropic",
         anthropic_api_key="sk-test",
-        anthropic_model="claude-sonnet-4-6",
+        anthropic_model="claude-sonnet-5",
         anthropic_thinking="adaptive",
     )
-    model = _build_anthropic_model(settings)
+    model = _build_anthropic_model(settings, role="workflow")
     assert model.settings is not None
     assert model.settings.get("anthropic_thinking") == {"type": "adaptive"}
 
 
 def test_build_anthropic_model_sets_effort_when_configured() -> None:
-    """§V.130: anthropic_effort='high' threads the reasoning effort level."""
+    """§V.47: anthropic_effort='high' threads the reasoning effort level."""
     settings = make_test_settings(
+        llm_provider="anthropic",
         anthropic_api_key="sk-test",
         anthropic_model="claude-opus-4-7",
         anthropic_effort="high",
     )
-    model = _build_anthropic_model(settings)
+    model = _build_anthropic_model(settings, role="workflow")
     assert model.settings is not None
     assert model.settings.get("anthropic_effort") == "high"
 
 
 def test_build_anthropic_model_reasoning_preserves_cache_flags() -> None:
-    """§V.130 + §V.47: both reasoning keys set leaves the cache flags intact."""
+    """§V.47: both reasoning keys set leaves the cache flags intact."""
     settings = make_test_settings(
+        llm_provider="anthropic",
         anthropic_api_key="sk-test",
         anthropic_model="claude-opus-4-7",
         anthropic_thinking="adaptive",
         anthropic_effort="xhigh",
     )
-    model = _build_anthropic_model(settings)
+    model = _build_anthropic_model(settings, role="workflow")
     assert model.settings is not None
     assert model.settings.get("anthropic_thinking") == {"type": "adaptive"}
     assert model.settings.get("anthropic_effort") == "xhigh"
@@ -2001,41 +2013,45 @@ def test_build_anthropic_model_reasoning_preserves_cache_flags() -> None:
 
 
 def test_build_anthropic_model_always_passes_max_tokens() -> None:
-    """§V.130: default settings bound the output stream at max_tokens=32768.
+    """§V.47: default settings bound the output stream at max_tokens=32768.
 
     The output-token budget is always passed (not empty-gated like the
     reasoning knobs), so default-active thinking cannot exhaust the
     provider-default budget before any reply text (§B.115).
     """
     settings = make_test_settings(
-        anthropic_api_key="sk-test", anthropic_model="claude-sonnet-4-6"
+        llm_provider="anthropic",
+        anthropic_api_key="sk-test",
+        anthropic_model="claude-sonnet-5",
     )
-    model = _build_anthropic_model(settings)
+    model = _build_anthropic_model(settings, role="workflow")
     assert model.settings is not None
     assert model.settings.get("max_tokens") == 32768
 
 
 def test_build_anthropic_model_threads_max_tokens_override() -> None:
-    """§V.130: an operator-set anthropic_max_tokens flows into model settings."""
+    """§V.47: an operator-set anthropic_max_tokens flows into model settings."""
     settings = make_test_settings(
+        llm_provider="anthropic",
         anthropic_api_key="sk-test",
-        anthropic_model="claude-sonnet-4-6",
+        anthropic_model="claude-sonnet-5",
         anthropic_max_tokens=8192,
     )
-    model = _build_anthropic_model(settings)
+    model = _build_anthropic_model(settings, role="workflow")
     assert model.settings is not None
     assert model.settings.get("max_tokens") == 8192
 
 
 def test_build_anthropic_model_max_tokens_preserves_reasoning_and_cache() -> None:
-    """§V.130 + §V.47: max_tokens rides alongside the reasoning + cache flags."""
+    """§V.47: max_tokens rides alongside the reasoning + cache flags."""
     settings = make_test_settings(
+        llm_provider="anthropic",
         anthropic_api_key="sk-test",
         anthropic_model="claude-opus-4-7",
         anthropic_thinking="adaptive",
         anthropic_effort="xhigh",
     )
-    model = _build_anthropic_model(settings)
+    model = _build_anthropic_model(settings, role="workflow")
     assert model.settings is not None
     assert model.settings.get("max_tokens") == 32768
     assert model.settings.get("anthropic_thinking") == {"type": "adaptive"}
@@ -2047,10 +2063,12 @@ def test_build_anthropic_model_max_tokens_preserves_reasoning_and_cache() -> Non
 def test_build_anthropic_model_requires_api_key() -> None:
     """Missing api_key raises a clear error rather than reaching the API."""
     settings = make_test_settings(
-        anthropic_api_key="", anthropic_model="claude-sonnet-4-6"
+        llm_provider="anthropic",
+        anthropic_api_key="",
+        anthropic_model="claude-sonnet-5",
     )
     with pytest.raises(ValueError, match="anthropic_api_key"):
-        _build_anthropic_model(settings)
+        _build_anthropic_model(settings, role="workflow")
 
 
 def test_build_anthropic_model_uses_240s_read_timeout() -> None:
@@ -2063,9 +2081,11 @@ def test_build_anthropic_model_uses_240s_read_timeout() -> None:
     retry across tool calls.
     """
     settings = make_test_settings(
-        anthropic_api_key="sk-test-timeout", anthropic_model="claude-sonnet-4-6"
+        llm_provider="anthropic",
+        anthropic_api_key="sk-test-timeout",
+        anthropic_model="claude-sonnet-5",
     )
-    model = _build_anthropic_model(settings)
+    model = _build_anthropic_model(settings, role="workflow")
     http_client = model._provider.client._client  # pyright: ignore[reportPrivateUsage]
     assert http_client.timeout.read == 240.0
 
@@ -2077,10 +2097,12 @@ def test_build_anthropic_model_defaults_to_anthropic_endpoint() -> None:
     targets ``api.anthropic.com`` unless ``anthropic_base_url`` is overridden.
     """
     settings = make_test_settings(
-        anthropic_api_key="sk-test", anthropic_model="claude-sonnet-4-6"
+        llm_provider="anthropic",
+        anthropic_api_key="sk-test",
+        anthropic_model="claude-sonnet-5",
     )
     assert settings.anthropic_base_url == "https://api.anthropic.com"
-    model = _build_anthropic_model(settings)
+    model = _build_anthropic_model(settings, role="workflow")
     base_url = str(model._provider.client.base_url)  # pyright: ignore[reportPrivateUsage]
     assert "api.anthropic.com" in base_url
 
@@ -2092,13 +2114,101 @@ def test_build_anthropic_model_threads_base_url_override() -> None:
     re-targets the wire endpoint, which is the Novita switch (§I config).
     """
     settings = make_test_settings(
+        llm_provider="anthropic",
         anthropic_api_key="sk-test",
         anthropic_model="minimax/minimax-m3",
         anthropic_base_url="https://api.novita.ai/anthropic",
     )
-    model = _build_anthropic_model(settings)
+    model = _build_anthropic_model(settings, role="workflow")
     base_url = str(model._provider.client.base_url)  # pyright: ignore[reportPrivateUsage]
     assert "api.novita.ai/anthropic" in base_url
+
+
+def test_build_model_dispatches_to_xai_by_default() -> None:
+    """§V.47: default llm_provider=xai builds an XaiModel."""
+    from pydantic_ai.models.xai import XaiModel
+
+    settings = make_test_settings(xai_api_key="xai-test")
+    assert settings.llm_provider == "xai"
+    model = _build_model(settings, role="workflow")
+    assert isinstance(model, XaiModel)
+
+
+def test_build_model_dispatches_to_anthropic_when_selected() -> None:
+    """§V.47: llm_provider=anthropic builds an AnthropicModel."""
+    from pydantic_ai.models.anthropic import AnthropicModel
+
+    settings = make_test_settings(llm_provider="anthropic", anthropic_api_key="sk-test")
+    model = _build_model(settings, role="workflow")
+    assert isinstance(model, AnthropicModel)
+
+
+def test_build_xai_model_workflow_settings() -> None:
+    """§V.47: xAI workflow model always passes max_tokens + reasoning_effort."""
+    settings = make_test_settings(
+        llm_provider="xai",
+        xai_api_key="xai-test",
+        xai_model="grok-4.5",
+    )
+    model = _build_xai_model(settings, role="workflow")
+    assert model.settings is not None
+    assert model.settings.get("max_tokens") == 32768
+    assert model.settings.get("xai_reasoning_effort") == "medium"
+    assert model.settings.get("anthropic_cache_tool_definitions") is None
+    assert model.settings.get("anthropic_cache_instructions") is None
+
+
+def test_build_xai_model_threads_overrides() -> None:
+    """§V.47: operator-set xai_max_tokens + xai_reasoning_effort flow through."""
+    settings = make_test_settings(
+        llm_provider="xai",
+        xai_api_key="xai-test",
+        xai_max_tokens=8192,
+        xai_reasoning_effort="high",
+    )
+    model = _build_xai_model(settings, role="workflow")
+    assert model.settings is not None
+    assert model.settings.get("max_tokens") == 8192
+    assert model.settings.get("xai_reasoning_effort") == "high"
+
+
+def test_build_xai_model_classifier_omits_workflow_settings() -> None:
+    """§V.47: classifier xAI model carries no max_tokens / reasoning_effort."""
+    settings = make_test_settings(llm_provider="xai", xai_api_key="xai-test")
+    model = _build_xai_model(settings, role="classifier")
+    assert model.settings is None or model.settings.get("max_tokens") is None
+    assert model.settings is None or model.settings.get("xai_reasoning_effort") is None
+
+
+def test_build_xai_model_requires_api_key() -> None:
+    """Missing xai_api_key fails closed when provider is xai."""
+    settings = make_test_settings(llm_provider="xai", xai_api_key="")
+    with pytest.raises(ValueError, match="xai_api_key"):
+        _build_xai_model(settings, role="workflow")
+
+
+def test_build_xai_model_threads_api_host() -> None:
+    """§V.47: optional xai_api_host is passed when set."""
+    settings = make_test_settings(
+        llm_provider="xai",
+        xai_api_key="xai-test",
+        xai_api_host="gateway.example.com:443",
+    )
+    model = _build_xai_model(settings, role="workflow")
+    # Provider stores api_host on the SDK client; base_url stays telemetry-only.
+    assert model.model_name == "grok-4.5"
+
+
+def test_build_anthropic_classifier_omits_workflow_knobs() -> None:
+    """§V.47: Anthropic classifier has cache flags but no thinking/effort/max_tokens."""
+    settings = make_test_settings(llm_provider="anthropic", anthropic_api_key="sk-test")
+    model = _build_anthropic_model(settings, role="classifier")
+    assert model.settings is not None
+    assert model.settings.get("anthropic_cache_tool_definitions") is True
+    assert model.settings.get("anthropic_cache_instructions") is True
+    assert model.settings.get("anthropic_thinking") is None
+    assert model.settings.get("anthropic_effort") is None
+    assert model.settings.get("max_tokens") is None
 
 
 def test_invoke_span_has_cache_token_attributes(

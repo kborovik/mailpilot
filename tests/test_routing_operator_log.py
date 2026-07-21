@@ -156,7 +156,9 @@ def test_route_email_emits_no_match_when_classification_returns_none(
     assert new_email is not None
 
     settings = make_test_settings(
-        anthropic_api_key="sk-test", anthropic_model="claude-sonnet-4-6"
+        llm_provider="anthropic",
+        anthropic_api_key="sk-test",
+        anthropic_model="claude-sonnet-5",
     )
     capsys.readouterr()
     with classify_module._AGENT.override(  # pyright: ignore[reportPrivateUsage]
@@ -190,7 +192,9 @@ def test_route_email_emits_match_via_llm_when_classifier_returns_workflow(
     assert new_email is not None
 
     settings = make_test_settings(
-        anthropic_api_key="sk-test", anthropic_model="claude-sonnet-4-6"
+        llm_provider="anthropic",
+        anthropic_api_key="sk-test",
+        anthropic_model="claude-sonnet-5",
     )
     capsys.readouterr()
     with classify_module._AGENT.override(  # pyright: ignore[reportPrivateUsage]

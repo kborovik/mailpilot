@@ -256,8 +256,9 @@ def test_route_email_classifies_when_no_thread_match(
     assert new_email is not None
 
     settings = make_test_settings(
+        llm_provider="anthropic",
         anthropic_api_key="sk-test",
-        anthropic_model="claude-sonnet-4-6",
+        anthropic_model="claude-sonnet-5",
     )
     model = _function_model_returning(
         workflow_id=workflow.id,
@@ -293,8 +294,9 @@ def test_route_email_classification_no_match_stores_unrouted(
     assert new_email is not None
 
     settings = make_test_settings(
+        llm_provider="anthropic",
         anthropic_api_key="sk-test",
-        anthropic_model="claude-sonnet-4-6",
+        anthropic_model="claude-sonnet-5",
     )
     model = _function_model_returning(workflow_id=None, reasoning="no match")
 
@@ -855,8 +857,9 @@ def test_route_email_span_has_route_method_unrouted(
     assert new_email is not None
 
     settings = make_test_settings(
+        llm_provider="anthropic",
         anthropic_api_key="sk-test",
-        anthropic_model="claude-sonnet-4-6",
+        anthropic_model="claude-sonnet-5",
     )
     model = _function_model_returning(workflow_id=None, reasoning="no match")
 
@@ -1263,8 +1266,9 @@ def test_route_email_persists_route_method_classified(
     assert new_email is not None
 
     settings = make_test_settings(
+        llm_provider="anthropic",
         anthropic_api_key="sk-test",
-        anthropic_model="claude-sonnet-4-6",
+        anthropic_model="claude-sonnet-5",
     )
     model = _function_model_returning(workflow_id=workflow.id, reasoning="match")
 
@@ -1305,8 +1309,9 @@ def test_route_email_classifier_rejects_persists_null_route_method(
     assert new_email is not None
 
     settings = make_test_settings(
+        llm_provider="anthropic",
         anthropic_api_key="sk-test",
-        anthropic_model="claude-sonnet-4-6",
+        anthropic_model="claude-sonnet-5",
     )
     model = _function_model_returning(workflow_id=None, reasoning="no match")
 

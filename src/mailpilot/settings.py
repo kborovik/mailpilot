@@ -25,23 +25,34 @@ CONFIG_PATH = MAILPILOT_DIR / "config.json"
 
 LogfireEnvironment = Literal["development", "production"]
 
-# Workflow-agent reasoning controls (§V.130). '' turns a knob off (no key sent);
+# Global LLM provider switch (§V.47). Default is xAI; Anthropic is opt-in.
+LlmProvider = Literal["anthropic", "xai"]
+
+# Workflow-agent reasoning controls (§V.47). '' turns a knob off (no key sent);
 # the defaults below enable both. These gate extended thinking and reasoning
 # effort on the workflow agent only -- the classifier never reads them.
 AnthropicThinking = Literal["", "adaptive"]
 AnthropicEffort = Literal["", "low", "medium", "high", "xhigh", "max"]
+# xAI reasoning effort: closed set, no empty/none -- Grok 4.5 always reasons.
+XaiReasoningEffort = Literal["low", "medium", "high"]
 
 # Field defaults (the lowest-priority source per the module docstring). Every
 # Settings field draws its default from one of these named constants.
 DEFAULT_DATABASE_URL = "postgresql://localhost/mailpilot"
 DEFAULT_LOGFIRE_TOKEN = ""
 DEFAULT_LOGFIRE_ENVIRONMENT: LogfireEnvironment = "development"
+DEFAULT_LLM_PROVIDER: LlmProvider = "xai"
 DEFAULT_ANTHROPIC_API_KEY = ""
-DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6"
+DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5"
 DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 DEFAULT_ANTHROPIC_THINKING: AnthropicThinking = "adaptive"
 DEFAULT_ANTHROPIC_EFFORT: AnthropicEffort = "high"
 DEFAULT_ANTHROPIC_MAX_TOKENS = 32768
+DEFAULT_XAI_API_KEY = ""
+DEFAULT_XAI_MODEL = "grok-4.5"
+DEFAULT_XAI_API_HOST = ""
+DEFAULT_XAI_REASONING_EFFORT: XaiReasoningEffort = "medium"
+DEFAULT_XAI_MAX_TOKENS = 32768
 DEFAULT_GOOGLE_PUBSUB_TOPIC = "mailpilot-topic-dev"
 DEFAULT_GOOGLE_PUBSUB_SUBSCRIPTION = "mailpilot-sub-dev"
 DEFAULT_GOOGLE_APPLICATION_CREDENTIALS = ""
@@ -50,7 +61,9 @@ DEFAULT_MAX_CONCURRENT_TASKS = 10
 
 # Fields whose values must never appear in telemetry. database_url can carry
 # user:password@host credentials, so it is treated as secret too.
-SECRET_KEYS = frozenset({"anthropic_api_key", "logfire_token", "database_url"})
+SECRET_KEYS = frozenset(
+    {"anthropic_api_key", "xai_api_key", "logfire_token", "database_url"}
+)
 REDACTED = "***"
 
 
@@ -84,12 +97,18 @@ class Settings(BaseSettings):
     database_url: PostgresDsn = PostgresDsn(DEFAULT_DATABASE_URL)
     logfire_token: str = DEFAULT_LOGFIRE_TOKEN
     logfire_environment: LogfireEnvironment = DEFAULT_LOGFIRE_ENVIRONMENT
+    llm_provider: LlmProvider = DEFAULT_LLM_PROVIDER
     anthropic_api_key: str = DEFAULT_ANTHROPIC_API_KEY
     anthropic_model: str = DEFAULT_ANTHROPIC_MODEL
     anthropic_base_url: str = DEFAULT_ANTHROPIC_BASE_URL
     anthropic_thinking: AnthropicThinking = DEFAULT_ANTHROPIC_THINKING
     anthropic_effort: AnthropicEffort = DEFAULT_ANTHROPIC_EFFORT
     anthropic_max_tokens: int = DEFAULT_ANTHROPIC_MAX_TOKENS
+    xai_api_key: str = DEFAULT_XAI_API_KEY
+    xai_model: str = DEFAULT_XAI_MODEL
+    xai_api_host: str = DEFAULT_XAI_API_HOST
+    xai_reasoning_effort: XaiReasoningEffort = DEFAULT_XAI_REASONING_EFFORT
+    xai_max_tokens: int = DEFAULT_XAI_MAX_TOKENS
     google_pubsub_topic: str = DEFAULT_GOOGLE_PUBSUB_TOPIC
     google_pubsub_subscription: str = DEFAULT_GOOGLE_PUBSUB_SUBSCRIPTION
     google_application_credentials: str = DEFAULT_GOOGLE_APPLICATION_CREDENTIALS

@@ -14,28 +14,33 @@ from mailpilot.settings import Settings, load_settings, save_settings, set_setti
 def test_default_settings():
     settings = Settings()
     assert str(settings.database_url) == "postgresql://localhost/mailpilot"
-    assert settings.anthropic_model == "claude-sonnet-4-6"
+    assert settings.llm_provider == "xai"
+    assert settings.anthropic_model == "claude-sonnet-5"
     assert settings.anthropic_base_url == "https://api.anthropic.com"
+    assert settings.xai_model == "grok-4.5"
+    assert settings.xai_reasoning_effort == "medium"
+    assert settings.xai_max_tokens == 32768
+    assert settings.xai_api_host == ""
     assert settings.logfire_environment == "development"
     assert settings.google_pubsub_topic == "mailpilot-topic-dev"
 
 
 def test_anthropic_reasoning_defaults_active():
-    """§V.130: workflow agent reasons by default -- thinking='adaptive', effort='high'."""
+    """§V.47: workflow agent reasons by default -- thinking='adaptive', effort='high'."""
     settings = Settings()
     assert settings.anthropic_thinking == "adaptive"
     assert settings.anthropic_effort == "high"
 
 
 def test_anthropic_reasoning_disables_per_knob():
-    """§V.130: an operator opts out per knob by setting it to ''."""
+    """§V.47: an operator opts out per knob by setting it to ''."""
     settings = Settings(anthropic_thinking="", anthropic_effort="")
     assert settings.anthropic_thinking == ""
     assert settings.anthropic_effort == ""
 
 
 def test_set_setting_round_trips_reasoning_keys(tmp_path: Path):
-    """§V.130: config set/get persists the reasoning controls."""
+    """§V.47: config set/get persists the reasoning controls."""
     config_path = tmp_path / "config.json"
     set_setting("anthropic_thinking", "adaptive", config_path=config_path)
     set_setting("anthropic_effort", "high", config_path=config_path)
@@ -45,13 +50,13 @@ def test_set_setting_round_trips_reasoning_keys(tmp_path: Path):
 
 
 def test_anthropic_max_tokens_default():
-    """§V.130: anthropic_max_tokens defaults to 32768 (output budget bounded)."""
+    """§V.47: anthropic_max_tokens defaults to 32768 (output budget bounded)."""
     settings = Settings()
     assert settings.anthropic_max_tokens == 32768
 
 
 def test_set_setting_round_trips_max_tokens(tmp_path: Path):
-    """§V.130: config set/get persists the output-token budget override."""
+    """§V.47: config set/get persists the output-token budget override."""
     config_path = tmp_path / "config.json"
     set_setting("anthropic_max_tokens", 32768, config_path=config_path)
     reloaded = load_settings(config_path=config_path)
@@ -59,15 +64,68 @@ def test_set_setting_round_trips_max_tokens(tmp_path: Path):
 
 
 def test_anthropic_thinking_rejects_invalid_value():
-    """§V.130: anthropic_thinking is a closed Literal; an off-list value is rejected."""
+    """§V.47: anthropic_thinking is a closed Literal; an off-list value is rejected."""
     with pytest.raises(ValidationError):
         Settings(anthropic_thinking="enabled")  # pyright: ignore[reportArgumentType]
 
 
 def test_anthropic_effort_rejects_invalid_value():
-    """§V.130: anthropic_effort is a closed Literal; an off-list value is rejected."""
+    """§V.47: anthropic_effort is a closed Literal; an off-list value is rejected."""
     with pytest.raises(ValidationError):
         Settings(anthropic_effort="extreme")  # pyright: ignore[reportArgumentType]
+
+
+def test_xai_reasoning_effort_rejects_invalid_value():
+    """§V.47: xai_reasoning_effort is a closed Literal; off-list values rejected."""
+    with pytest.raises(ValidationError):
+        Settings(xai_reasoning_effort="none")  # pyright: ignore[reportArgumentType]
+    with pytest.raises(ValidationError):
+        Settings(xai_reasoning_effort="xhigh")  # pyright: ignore[reportArgumentType]
+
+
+def test_llm_provider_rejects_invalid_value():
+    """§V.47: llm_provider is a closed Literal {anthropic, xai}."""
+    with pytest.raises(ValidationError):
+        Settings(llm_provider="openai")  # pyright: ignore[reportArgumentType]
+
+
+def test_xai_api_key_env_uses_mailpilot_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """§V.47: bare XAI_API_KEY is not a mailpilot source; MAILPILOT_XAI_API_KEY is."""
+    monkeypatch.setenv("XAI_API_KEY", "bare-should-not-win")
+    monkeypatch.delenv("MAILPILOT_XAI_API_KEY", raising=False)
+    settings = Settings()
+    assert settings.xai_api_key == ""
+    monkeypatch.setenv("MAILPILOT_XAI_API_KEY", "mailpilot-key")
+    settings = Settings()
+    assert settings.xai_api_key == "mailpilot-key"
+
+
+def test_set_setting_round_trips_xai_keys(tmp_path: Path):
+    """§V.47: config set/get persists xAI knobs."""
+    config_path = tmp_path / "config.json"
+    set_setting("llm_provider", "xai", config_path=config_path)
+    set_setting("xai_model", "grok-4.5", config_path=config_path)
+    set_setting("xai_reasoning_effort", "high", config_path=config_path)
+    set_setting("xai_max_tokens", 16384, config_path=config_path)
+    reloaded = load_settings(config_path=config_path)
+    assert reloaded.llm_provider == "xai"
+    assert reloaded.xai_model == "grok-4.5"
+    assert reloaded.xai_reasoning_effort == "high"
+    assert reloaded.xai_max_tokens == 16384
+
+
+def test_set_setting_redacts_xai_api_key(
+    capfire: CaptureLogfire, tmp_path: Path
+) -> None:
+    """§V.86: xai_api_key is secret; config.set redacts old/new."""
+    config_path = tmp_path / "config.json"
+    secret = "xai-super-secret-do-not-leak"
+    set_setting("xai_api_key", secret, config_path=config_path)
+    for span in capfire.exporter.exported_spans_as_dict():
+        for attr_value in span.get("attributes", {}).values():
+            assert secret not in str(attr_value)
 
 
 def test_anthropic_base_url_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -259,7 +317,7 @@ def test_set_setting_emits_telemetry_with_value_for_non_secret(
     attrs = logs[0]["attributes"]
     assert attrs["key"] == "anthropic_model"
     assert attrs["changed"] is True
-    assert attrs["old"] == "claude-sonnet-4-6"
+    assert attrs["old"] == "claude-sonnet-5"
     assert attrs["new"] == new_model
 
 

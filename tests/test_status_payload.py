@@ -238,6 +238,21 @@ def test_anthropic_api_key_set_reports_true_and_no_value_leak(
     assert secret not in str(payload)
 
 
+def test_xai_api_key_set_reports_true_and_no_value_leak(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    secret = "xai-XYZ-do-not-leak"
+    payload = get_status_payload(
+        database_connection, make_test_settings(xai_api_key=secret)
+    )
+    config = payload["config"]
+    assert isinstance(config, dict)
+    assert config["xai_api_key_set"] is True
+    assert config["llm_provider"] == "xai"
+    assert config["xai_model"] == "grok-4.5"
+    assert secret not in str(payload)
+
+
 # -- (viii) database_url scrubber ---------------------------------------------
 
 

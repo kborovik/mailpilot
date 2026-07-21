@@ -14,8 +14,12 @@ from conftest import make_test_settings
 from mailpilot.agent import classify as classify_module
 from mailpilot.agent.classify import (
     _AGENT,  # pyright: ignore[reportPrivateUsage]
-    _get_model,  # pyright: ignore[reportPrivateUsage]
     classify_email,
+)
+from mailpilot.agent.model import (  # pyright: ignore[reportPrivateUsage]
+    _build_anthropic_model,
+    _build_model,
+    _build_xai_model,
 )
 from mailpilot.models import Workflow
 
@@ -77,8 +81,9 @@ def run_classify(
 ) -> str | None:
     """Invoke ``classify_email`` with the agent overridden to a FunctionModel."""
     settings = make_test_settings(
-        anthropic_api_key="sk-test",
-        anthropic_model="claude-sonnet-4-6",
+        llm_provider="xai",
+        xai_api_key="xai-test",
+        xai_model="grok-4.5",
     )
     with classify_module._AGENT.override(model=function_model):  # pyright: ignore[reportPrivateUsage]
         return classify_email(
@@ -176,9 +181,25 @@ def test_model_returning_unknown_id_treated_as_no_match() -> None:
 
 
 def test_missing_api_key_raises() -> None:
-    """Without an Anthropic API key, classification must fail fast."""
+    """Without the active provider API key, classification must fail fast."""
     workflow = make_workflow("wf-1", "Sales", "Pricing")
-    settings = make_test_settings(anthropic_api_key="")
+    settings = make_test_settings(llm_provider="xai", xai_api_key="")
+    with pytest.raises(ValueError, match="xai_api_key"):
+        classify_email(
+            subject="hi",
+            body="hello",
+            sender="x@example.com",
+            active_workflows=[workflow],
+            settings=settings,
+        )
+
+
+def test_missing_anthropic_api_key_raises_when_selected() -> None:
+    """Anthropic path fails closed when anthropic_api_key is empty."""
+    workflow = make_workflow("wf-1", "Sales", "Pricing")
+    settings = make_test_settings(
+        llm_provider="anthropic", anthropic_api_key="", xai_api_key="unused"
+    )
     with pytest.raises(ValueError, match="anthropic_api_key"):
         classify_email(
             subject="hi",
@@ -237,103 +258,79 @@ def test_classifier_agent_has_explicit_name_for_otel_traces() -> None:
     assert _AGENT.name == "mailpilot.classifier"
 
 
-def test_get_model_carries_cache_settings() -> None:
-    """§V.47: classifier's AnthropicModel sets cache_control breakpoints.
-
-    Pydantic AI translates ``anthropic_cache_tool_definitions`` and
-    ``anthropic_cache_instructions`` into ``cache_control`` blocks on the
-    last tool definition and last system block of the outbound Anthropic
-    request. Inspecting the bound settings is the structural contract.
-    """
-    _get_model.cache_clear()
-    model = _get_model(
-        "sk-test-cache", "claude-sonnet-4-6", "https://api.anthropic.com"
+def test_classifier_anthropic_carries_cache_settings() -> None:
+    """§V.47: classifier AnthropicModel sets cache_control breakpoints."""
+    settings = make_test_settings(
+        llm_provider="anthropic", anthropic_api_key="sk-test-cache"
     )
+    model = _build_anthropic_model(settings, role="classifier")
     assert model.settings is not None
     assert model.settings.get("anthropic_cache_tool_definitions") is True
     assert model.settings.get("anthropic_cache_instructions") is True
 
 
-def test_get_model_omits_reasoning_keys() -> None:
-    """§V.130: classifier _get_model carries no thinking/effort keys.
-
-    The classifier is a one-shot structured-output decision; its signature
-    takes no Settings, so it cannot pick up the reasoning controls. Reasoning
-    config stays scoped to the workflow agent.
-    """
-    _get_model.cache_clear()
-    model = _get_model("sk-test", "claude-sonnet-4-6", "https://api.anthropic.com")
+def test_classifier_anthropic_omits_reasoning_keys() -> None:
+    """§V.47: classifier carries no thinking/effort keys (workflow-only)."""
+    settings = make_test_settings(llm_provider="anthropic", anthropic_api_key="sk-test")
+    model = _build_anthropic_model(settings, role="classifier")
     assert model.settings is not None
     assert model.settings.get("anthropic_thinking") is None
     assert model.settings.get("anthropic_effort") is None
 
 
-def test_get_model_omits_max_tokens() -> None:
-    """§V.130: classifier _get_model carries no max_tokens key.
-
-    The output-token budget is scoped to the workflow agent; the classifier
-    is a one-shot structured-output decision and its signature takes no
-    Settings, so it cannot pick up the budget.
-    """
-    _get_model.cache_clear()
-    model = _get_model("sk-test", "claude-sonnet-4-6", "https://api.anthropic.com")
+def test_classifier_anthropic_omits_max_tokens() -> None:
+    """§V.47: classifier carries no max_tokens key (workflow-only)."""
+    settings = make_test_settings(llm_provider="anthropic", anthropic_api_key="sk-test")
+    model = _build_anthropic_model(settings, role="classifier")
     assert model.settings is not None
     assert model.settings.get("max_tokens") is None
 
 
-def test_get_model_uses_240s_read_timeout() -> None:
-    """§V.48: classifier's AnthropicProvider HTTP client carries a 240s read-timeout.
-
-    Default httpx read-timeout is 60s; under model load that intersects
-    long-context classifier latency and surfaces ``TimeoutError`` mid-call
-    (see SPEC.md §B.16). 240s = 4x headroom. No retry on timeout.
-    """
-    _get_model.cache_clear()
-    model = _get_model(
-        "sk-test-timeout", "claude-sonnet-4-6", "https://api.anthropic.com"
+def test_classifier_anthropic_uses_240s_read_timeout() -> None:
+    """§V.48: classifier AnthropicProvider HTTP client carries 240s read-timeout."""
+    settings = make_test_settings(
+        llm_provider="anthropic", anthropic_api_key="sk-test-timeout"
     )
+    model = _build_anthropic_model(settings, role="classifier")
     http_client = model._provider.client._client  # pyright: ignore[reportPrivateUsage]
     assert http_client.timeout.read == 240.0
 
 
-def test_get_model_default_base_url_targets_anthropic_endpoint() -> None:
-    """The default anthropic_base_url keeps the classifier on the Anthropic endpoint.
-
-    The settings default is the canonical Anthropic host, so threading it into
-    ``AnthropicProvider`` leaves the classifier on ``api.anthropic.com``.
-    """
-    default_base_url = make_test_settings().anthropic_base_url
-    _get_model.cache_clear()
-    model = _get_model("sk-test-default", "claude-sonnet-4-6", default_base_url)
+def test_classifier_anthropic_default_base_url() -> None:
+    """Default anthropic_base_url keeps the classifier on api.anthropic.com."""
+    settings = make_test_settings(
+        llm_provider="anthropic", anthropic_api_key="sk-test-default"
+    )
+    model = _build_anthropic_model(settings, role="classifier")
     base_url = str(model._provider.client.base_url)  # pyright: ignore[reportPrivateUsage]
     assert "api.anthropic.com" in base_url
 
 
-def test_get_model_threads_base_url_override() -> None:
-    """A set base_url routes the classifier to the override endpoint.
-
-    Threading ``settings.anthropic_base_url`` into ``AnthropicProvider``
-    re-targets the wire endpoint, which is the Novita switch (§I config).
-    """
-    _get_model.cache_clear()
-    model = _get_model(
-        "sk-test-novita", "minimax/minimax-m3", "https://api.novita.ai/anthropic"
+def test_classifier_anthropic_threads_base_url_override() -> None:
+    """A set anthropic_base_url routes the classifier to the override endpoint."""
+    settings = make_test_settings(
+        llm_provider="anthropic",
+        anthropic_api_key="sk-test-novita",
+        anthropic_model="minimax/minimax-m3",
+        anthropic_base_url="https://api.novita.ai/anthropic",
     )
+    model = _build_anthropic_model(settings, role="classifier")
     base_url = str(model._provider.client.base_url)  # pyright: ignore[reportPrivateUsage]
     assert "api.novita.ai/anthropic" in base_url
 
 
-def test_get_model_cache_key_includes_base_url() -> None:
-    """base_url rides the lru_cache key, so changing it rebuilds the model.
+def test_classifier_dispatches_default_xai() -> None:
+    """§V.47: default llm_provider=xai builds XaiModel for classifier."""
+    from pydantic_ai.models.xai import XaiModel
 
-    Without base_url in the cache key, a switch to Novita would return a model
-    still bound to the prior endpoint until cache eviction.
-    """
-    _get_model.cache_clear()
-    anthropic_model = _get_model(
-        "sk-shared", "claude-sonnet-4-6", "https://api.anthropic.com"
-    )
-    novita_model = _get_model(
-        "sk-shared", "claude-sonnet-4-6", "https://api.novita.ai/anthropic"
-    )
-    assert anthropic_model is not novita_model
+    settings = make_test_settings(xai_api_key="xai-test")
+    model = _build_model(settings, role="classifier")
+    assert isinstance(model, XaiModel)
+
+
+def test_classifier_xai_omits_workflow_settings() -> None:
+    """§V.47: classifier xAI path has no max_tokens / reasoning_effort."""
+    settings = make_test_settings(llm_provider="xai", xai_api_key="xai-test")
+    model = _build_xai_model(settings, role="classifier")
+    assert model.settings is None or model.settings.get("max_tokens") is None
+    assert model.settings is None or model.settings.get("xai_reasoning_effort") is None

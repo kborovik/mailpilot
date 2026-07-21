@@ -759,11 +759,15 @@ def _config_block(settings: Settings) -> dict[str, object]:
     rather than dropped entirely so operators can still see host/db/port.
     """
     assert "anthropic_api_key" in SECRET_KEYS
+    assert "xai_api_key" in SECRET_KEYS
     assert "logfire_token" in SECRET_KEYS
     assert "database_url" in SECRET_KEYS
     return {
+        "llm_provider": settings.llm_provider,
         "anthropic_api_key_set": bool(settings.anthropic_api_key),
         "anthropic_model": settings.anthropic_model,
+        "xai_api_key_set": bool(settings.xai_api_key),
+        "xai_model": settings.xai_model,
         "logfire_environment": settings.logfire_environment,
         "logfire_token_set": bool(settings.logfire_token),
         "google_pubsub_topic": settings.google_pubsub_topic,

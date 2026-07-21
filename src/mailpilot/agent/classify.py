@@ -1,22 +1,23 @@
 """Email classification via Pydantic AI structured output.
 
 This is NOT an agent -- it's a single-turn LLM call with no tools.
-Uses a fast/cheap model (e.g., Haiku) for routing decisions.
+Uses a fast/cheap model for routing decisions.
 Architecturally separate from the agent to keep concerns distinct.
 """
 
 from __future__ import annotations
 
 import json
-from functools import lru_cache
 from typing import TYPE_CHECKING
 
-import httpx
 import logfire
 from pydantic import BaseModel
 from pydantic_ai import Agent
-from pydantic_ai.models.anthropic import AnthropicModel, AnthropicModelSettings
-from pydantic_ai.providers.anthropic import AnthropicProvider
+
+from mailpilot.agent.model import (
+    _build_model,  # pyright: ignore[reportPrivateUsage]
+    active_model_name,
+)
 
 if TYPE_CHECKING:
     from mailpilot.models import Workflow
@@ -55,37 +56,6 @@ _AGENT: Agent[object, ClassificationResult] = Agent(
 )
 
 
-@lru_cache(maxsize=4)
-def _get_model(api_key: str, model_name: str, base_url: str) -> AnthropicModel:
-    """Cache the AnthropicModel/AnthropicProvider by api_key, model_name, base_url.
-
-    §V.47: cache_control breakpoints on the system prompt and tool
-    definitions let repeated classifier calls re-bill the stable prefix as
-    ``cache_read_input_tokens``.
-
-    §V.48: 240s read-timeout on the HTTP client (4x the httpx default of
-    60s) so long-context classifier calls do not surface ``TimeoutError``.
-    See SPEC.md §V.48, §B.16.
-
-    ``base_url`` is the wire endpoint and rides the cache key, so a base-URL
-    change rebuilds the cached model. It defaults to ``api.anthropic.com``;
-    an Anthropic-compatible endpoint (e.g. ``https://api.novita.ai/anthropic``)
-    routes the same call to that vendor.
-    """
-    return AnthropicModel(
-        model_name,
-        provider=AnthropicProvider(
-            api_key=api_key,
-            base_url=base_url,
-            http_client=httpx.AsyncClient(timeout=httpx.Timeout(240.0)),
-        ),
-        settings=AnthropicModelSettings(
-            anthropic_cache_tool_definitions=True,
-            anthropic_cache_instructions=True,
-        ),
-    )
-
-
 def classify_email(
     subject: str,
     body: str,
@@ -110,14 +80,14 @@ def classify_email(
         body: Email body (plain text).
         sender: Sender email address.
         active_workflows: Active workflows for the account (name, goal).
-        settings: Application settings; supplies ``anthropic_api_key``,
-            ``anthropic_model``, and ``anthropic_base_url``.
+        settings: Application settings; supplies ``llm_provider`` and the
+            active provider's API key + model id (§V.47).
 
     Returns:
         Workflow ID if classified, None if unrouted.
 
     Raises:
-        ValueError: If ``settings.anthropic_api_key`` is empty.
+        ValueError: If the active provider's API key is empty.
     """
     with logfire.span(
         "agent.classify_email",
@@ -128,21 +98,13 @@ def classify_email(
             span.set_attribute("result", "no_candidates")
             return None
 
-        if not settings.anthropic_api_key:
-            raise ValueError(
-                "anthropic_api_key is required for classification; "
-                "set it via `mailpilot config set anthropic_api_key ...`",
-            )
-
-        model = _get_model(
-            settings.anthropic_api_key,
-            settings.anthropic_model,
-            settings.anthropic_base_url,
-        )
+        model = _build_model(settings, role="classifier")
         prompt = _format_prompt(subject, body, sender, active_workflows)
         result = _AGENT.run_sync(prompt, model=model)
         usage = result.usage
-        span.set_attribute("model", settings.anthropic_model)
+        model_name = active_model_name(settings)
+        span.set_attribute("model", model_name)
+        span.set_attribute("llm_provider", settings.llm_provider)
         span.set_attribute("input_tokens", usage.input_tokens)
         span.set_attribute("output_tokens", usage.output_tokens)
         span.set_attribute("total_tokens", usage.input_tokens + usage.output_tokens)

@@ -217,7 +217,7 @@ T212|x|impl §V.83(∆) — touch pre-flight guards: latest enrollment outcome t
 T213|x|reconcile workflow TOMLs w/ T209-T211 landed code — strip retired-agent prose from workflows/*.toml; re-import; `workflow check` in_sync|V135,V136,V103
 T214|x|impl §V.85(∆) — re-enable dotenv source for cwd `.env` (`env_file=".env"` + `dotenv_settings` in customise_sources); process env beats .env; .env beats config.json; TDD|V85
 T215|x|impl §V.137 ordered connect-hint map + logfire.error (no console Traceback); extend tests/test_database_telemetry.py mocked OperationalError strings; stack #186 role/database split|V137,B125
-T216|.|impl §V.47 provider-aware LLM — `llm_provider` default xai; xai_* settings + `_build_model` dispatch; `pydantic-ai-slim[anthropic,xai]`; Anthropic path opt-in; effort enum reject tests; default model ids|V47,V48,V86
+T216|x|impl §V.47 provider-aware LLM — `llm_provider` default xai; xai_* settings + `_build_model` dispatch; `pydantic-ai-slim[anthropic,xai]`; Anthropic path opt-in; effort enum reject tests; default model ids|V47,V48,V86
 
 ## §B BUGS
 
