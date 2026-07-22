@@ -214,6 +214,287 @@ def output_error(
     raise SystemExit(1)
 
 
+def _batch_ok(ref: str) -> dict[str, object]:
+    """One successful row for a §V.139 stdin batch envelope."""
+    return {"ref": ref, "status": "ok"}
+
+
+def _batch_error(ref: str, code: str, message: str) -> dict[str, object]:
+    """One error row for a §V.139 stdin batch envelope."""
+    return {"ref": ref, "status": "error", "error": code, "message": message}
+
+
+def _emit_batch_results(results: list[dict[str, object]]) -> None:
+    """Emit the §V.139 results envelope; exit 1 when any row is an error.
+
+    Always writes the full stream to stdout with ``ok: true`` (partial success
+    still reports every prior row). Exit 0 iff zero error rows; exit 1 if any
+    error, without aborting mid-batch.
+    """
+    output({"results": results}, record_count=len(results))
+    if any(row.get("status") == "error" for row in results):
+        raise SystemExit(1)
+
+
+def _read_stdin_ndjson_lines() -> list[tuple[int, str]]:
+    """Read non-empty stdin lines as (1-based line number, stripped text)."""
+    import sys
+
+    lines: list[tuple[int, str]] = []
+    for line_number, raw in enumerate(sys.stdin, start=1):
+        stripped = raw.strip()
+        if stripped:
+            lines.append((line_number, stripped))
+    return lines
+
+
+def _parse_ndjson_object(
+    line_number: int, line: str
+) -> tuple[dict[str, object] | None, dict[str, object] | None]:
+    """Parse one NDJSON line into an object, or a batch error row.
+
+    Returns ``(payload, None)`` on success, ``(None, error_row)`` on failure.
+    """
+    try:
+        parsed: object = json.loads(line)
+    except json.JSONDecodeError as exc:
+        return None, _batch_error(
+            f"line:{line_number}",
+            "validation_error",
+            f"invalid JSON: {exc}",
+        )
+    if not isinstance(parsed, dict):
+        return None, _batch_error(
+            f"line:{line_number}",
+            "validation_error",
+            "NDJSON line must be a JSON object",
+        )
+    return parsed, None
+
+
+def _lookup_company_soft(connection: Any, company_ref: str) -> Company | None:
+    """Resolve company by domain or UUID without exiting on miss (§V.139 batch)."""
+    from mailpilot.database import get_company, get_company_by_domain
+
+    if _looks_like_uuid(company_ref):
+        return get_company(connection, company_ref)
+    return get_company_by_domain(connection, company_ref)
+
+
+def _required_nonempty_str(
+    payload: dict[str, object], key: str, line_number: int
+) -> tuple[str | None, str, dict[str, object] | None]:
+    """Read a required non-empty string field from an NDJSON object.
+
+    Returns ``(value, ref, None)`` on success or ``(None, ref, error_row)``
+    on failure. ``ref`` prefers the field value when present, else ``line:N``.
+    """
+    raw = payload.get(key)
+    ref = (
+        str(raw).strip()
+        if isinstance(raw, str) and raw.strip()
+        else f"line:{line_number}"
+    )
+    if not isinstance(raw, str) or not raw.strip():
+        return None, ref, _batch_error(ref, "validation_error", f"{key} is required")
+    return raw.strip(), ref, None
+
+
+def _optional_str_fields(
+    payload: dict[str, object], keys: tuple[str, ...], ref: str
+) -> tuple[dict[str, str | None] | None, dict[str, object] | None]:
+    """Read optional string fields; first type error becomes a batch error row."""
+    values: dict[str, str | None] = {}
+    for key in keys:
+        raw = payload.get(key)
+        if raw is None:
+            values[key] = None
+            continue
+        if not isinstance(raw, str):
+            return None, _batch_error(
+                ref, "validation_error", f"{key} must be a string"
+            )
+        values[key] = raw
+    return values, None
+
+
+def _company_disable_stdin_row(
+    connection: Any, line_number: int, line: str
+) -> dict[str, object]:
+    """Process one ``company disable --stdin`` NDJSON line into a result row."""
+    from mailpilot.database import disable_company
+    from mailpilot.operator_log import operator_event
+
+    payload, parse_error = _parse_ndjson_object(line_number, line)
+    if parse_error is not None:
+        return parse_error
+    assert payload is not None
+    domain, ref, domain_error = _required_nonempty_str(payload, "domain", line_number)
+    if domain_error is not None:
+        return domain_error
+    assert domain is not None
+    reason, _, reason_error = _required_nonempty_str(payload, "reason", line_number)
+    if reason_error is not None:
+        # Prefer domain as ref when reason is the only missing field.
+        return _batch_error(ref, "validation_error", "reason is required")
+    assert reason is not None
+    company = _lookup_company_soft(connection, domain)
+    if company is None:
+        return _batch_error(domain, "not_found", f"company not found: {domain}")
+    if company.disabled_reason is None:
+        updated = disable_company(connection, company.id, reason)
+        if updated is not None:
+            operator_event(
+                "company.disable",
+                entity_id=company.id,
+                changed=["disabled_reason"],
+            )
+    # Active disable, already-disabled no-op, and race no-op all report ok.
+    return _batch_ok(domain)
+
+
+def _run_company_disable_stdin() -> None:
+    """Drive ``company disable --stdin`` NDJSON batch (§V.139)."""
+    from mailpilot.database import initialize_database
+    from mailpilot.operator_log import cli_mutation
+
+    lines = _read_stdin_ndjson_lines()
+    connection = initialize_database(_database_url(), require_current_schema=True)
+    try:
+        with cli_mutation("company", "disable", mode="stdin", row_count=len(lines)):
+            results = [
+                _company_disable_stdin_row(connection, line_number, line)
+                for line_number, line in lines
+            ]
+            _emit_batch_results(results)
+    finally:
+        connection.close()
+
+
+def _parse_contact_create_fields(
+    payload: dict[str, object], line_number: int
+) -> tuple[dict[str, object] | None, dict[str, object] | None]:
+    """Validate a contact-create NDJSON object into create kwargs + ref.
+
+    Returns ``(fields, None)`` where fields includes ``ref`` and create args,
+    or ``(None, error_row)``.
+    """
+    email, ref, email_error = _required_nonempty_str(payload, "email", line_number)
+    if email_error is not None:
+        return None, email_error
+    assert email is not None
+    ref = email.lower()
+    optional, opt_error = _optional_str_fields(
+        payload,
+        ("first_name", "last_name", "title", "note", "company_domain"),
+        ref,
+    )
+    if opt_error is not None:
+        return None, opt_error
+    assert optional is not None
+    confidence_raw = payload.get("email_confidence")
+    confidence: int | None
+    if confidence_raw is None:
+        confidence = None
+    elif isinstance(confidence_raw, int) and not isinstance(confidence_raw, bool):
+        confidence = confidence_raw
+    else:
+        return None, _batch_error(
+            ref, "validation_error", "email_confidence must be an integer"
+        )
+    return {
+        "ref": ref,
+        "email": email,
+        "first_name": optional["first_name"],
+        "last_name": optional["last_name"],
+        "title": optional["title"],
+        "note": optional["note"],
+        "company_domain": optional["company_domain"],
+        "email_confidence": confidence,
+    }, None
+
+
+def _contact_create_stdin_row(
+    connection: Any, line_number: int, line: str
+) -> dict[str, object]:
+    """Process one ``contact create --stdin`` NDJSON line into a result row."""
+    from mailpilot.database import add_contact_note, create_contact
+    from mailpilot.operator_log import operator_event
+
+    payload, parse_error = _parse_ndjson_object(line_number, line)
+    if parse_error is not None:
+        return parse_error
+    assert payload is not None
+    fields, field_error = _parse_contact_create_fields(payload, line_number)
+    if field_error is not None:
+        return field_error
+    assert fields is not None
+    ref = str(fields["ref"])
+    company_domain = fields["company_domain"]
+    company_id: str | None = None
+    if isinstance(company_domain, str):
+        company = _lookup_company_soft(connection, company_domain)
+        if company is None:
+            return _batch_error(
+                ref, "not_found", f"company not found: {company_domain}"
+            )
+        company_id = company.id
+    created = create_contact(
+        connection,
+        email=str(fields["email"]),
+        first_name=fields["first_name"]
+        if isinstance(fields["first_name"], str)
+        else None,
+        last_name=fields["last_name"] if isinstance(fields["last_name"], str) else None,
+        company_id=company_id,
+        title=fields["title"] if isinstance(fields["title"], str) else None,
+        email_confidence=(
+            fields["email_confidence"]
+            if isinstance(fields["email_confidence"], int)
+            else None
+        ),
+    )
+    if created is None:
+        # Safe-idempotent: duplicate natural key -> ok skip.
+        return _batch_ok(ref)
+    changed = ["email", "first_name", "last_name", "company_id"]
+    title = fields["title"]
+    if isinstance(title, str):
+        changed.append("title")
+    if isinstance(fields["email_confidence"], int):
+        changed.append("email_confidence")
+    note = fields["note"]
+    if isinstance(note, str) and note:
+        add_contact_note(connection, created.id, note)
+        changed.append("note")
+    operator_event(
+        "contact.create",
+        entity_id=created.id,
+        email=created.email,
+        company_id=company_id,
+        changed=changed,
+    )
+    return _batch_ok(ref)
+
+
+def _run_contact_create_stdin() -> None:
+    """Drive ``contact create --stdin`` NDJSON batch (§V.139)."""
+    from mailpilot.database import initialize_database
+    from mailpilot.operator_log import cli_mutation
+
+    lines = _read_stdin_ndjson_lines()
+    connection = initialize_database(_database_url(), require_current_schema=True)
+    try:
+        with cli_mutation("contact", "create", mode="stdin", row_count=len(lines)):
+            results = [
+                _contact_create_stdin_row(connection, line_number, line)
+                for line_number, line in lines
+            ]
+            _emit_batch_results(results)
+    finally:
+        connection.close()
+
+
 def _looks_like_uuid(value: str) -> bool:
     """Return True when ``value`` has the 8-4-4-4-12 hex shape of a UUID (§V.107).
 
@@ -1150,23 +1431,58 @@ def company_update(
 
 
 @company.command("disable")
-@click.argument("company_ref")
+@click.argument("company_ref", required=False, default=None)
 @click.option(
     "--reason",
-    required=True,
-    help="Explanation written to disabled_reason.",
+    default=None,
+    help="Explanation written to disabled_reason (single-entity mode).",
 )
-def company_disable(company_ref: str, reason: str) -> None:
+@click.option(
+    "--stdin",
+    "from_stdin",
+    is_flag=True,
+    default=False,
+    help=(
+        "Batch mode: read NDJSON from stdin, one object per line with "
+        "domain and reason. Exclusive with COMPANY_REF / --reason. "
+        "Re-disable of an already-disabled company is an ok no-op. "
+        "Exit 0 when every row is ok; exit 1 if any row errors "
+        "(full results JSON still on stdout)."
+    ),
+)
+def company_disable(
+    company_ref: str | None, reason: str | None, from_stdin: bool
+) -> None:
     """Soft-disable a company by writing disabled_reason.
 
     A disabled company is hidden from `company list` unless `--include-disabled`
     is passed. Disable is reversible -- re-enable with `company enable`.
-    Disabling an already-disabled company is rejected.
+    Single-entity mode rejects an already-disabled company; ``--stdin`` batch
+    mode treats re-disable as an ok no-op so a lead pass can re-run safely.
     """
     from mailpilot.database import disable_company, initialize_database
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    if reason.strip() == "":
+    if from_stdin:
+        if company_ref is not None:
+            output_error(
+                "--stdin is exclusive with a company positional target",
+                "validation_error",
+            )
+        if reason is not None:
+            output_error(
+                "--stdin is exclusive with --reason (supply reason per NDJSON line)",
+                "validation_error",
+            )
+        _run_company_disable_stdin()
+        return
+
+    if company_ref is None:
+        output_error(
+            "COMPANY_REF is required (or pass --stdin)",
+            "validation_error",
+        )
+    if reason is None or reason.strip() == "":
         output_error("reason cannot be empty", "validation_error")
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
@@ -1350,7 +1666,7 @@ def contact() -> None:
 
 
 @contact.command("create")
-@click.option("--email", required=True, help="Email address.")
+@click.option("--email", default=None, help="Email address (single-entity mode).")
 @click.option("--first-name", default=None, help="First name.")
 @click.option("--last-name", default=None, help="Last name.")
 @click.option("--company-domain", default=None, help="Owning company (domain or ID).")
@@ -1366,16 +1682,32 @@ def contact() -> None:
     default=None,
     help="Optional first note body. Appended atomically as a `note` row.",
 )
+@click.option(
+    "--stdin",
+    "from_stdin",
+    is_flag=True,
+    default=False,
+    help=(
+        "Batch mode: read NDJSON from stdin, one object per line with "
+        "contact create fields (email required; first_name, last_name, "
+        "company_domain, title, email_confidence, note optional). "
+        "Exclusive with single-entity create options. "
+        "Duplicate email is an ok skip. "
+        "Exit 0 when every row is ok; exit 1 if any row errors "
+        "(full results JSON still on stdout)."
+    ),
+)
 def contact_create(
-    email: str,
+    email: str | None,
     first_name: str | None,
     last_name: str | None,
     company_domain: str | None,
     title: str | None,
     email_confidence: int | None,
     note: str | None,
+    from_stdin: bool,
 ) -> None:
-    """Create a new contact."""
+    """Create a new contact (single-entity or ``--stdin`` NDJSON batch)."""
     from mailpilot.database import (
         add_contact_note,
         create_contact,
@@ -1383,6 +1715,32 @@ def contact_create(
     )
     from mailpilot.operator_log import cli_mutation, operator_event
 
+    single_entity_set = any(
+        value is not None
+        for value in (
+            email,
+            first_name,
+            last_name,
+            company_domain,
+            title,
+            email_confidence,
+            note,
+        )
+    )
+    if from_stdin:
+        if single_entity_set:
+            output_error(
+                "--stdin is exclusive with single-entity create options",
+                "validation_error",
+            )
+        _run_contact_create_stdin()
+        return
+
+    if email is None:
+        output_error(
+            "--email is required (or pass --stdin)",
+            "validation_error",
+        )
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         company_id = (

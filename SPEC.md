@@ -223,7 +223,7 @@ T215|x|impl §V.137 ordered connect-hint map + logfire.error (no console Traceba
 T216|x|impl §V.47 provider-aware LLM — `llm_provider` default xai; xai_* settings + `_build_model` dispatch; `pydantic-ai-slim[anthropic,xai]`; Anthropic path opt-in; effort enum reject tests; default model ids|V47,V48,V86
 T217|x|impl §I company projection + §V.8(∆) + §V.116(∆) — CompanySummary/CompanyView tags[]; list --full profile.summary; disabled_reason always on list rows; tests + --skill docs (#188)|V8,V116,V114,V96,I.cli
 T218|x|impl §V.138(+) + §I — company list --status pipeline Enum; SQL/filter rules; compose --tag/--min-max-contacts/--include-disabled; tests per bucket; --skill/help docs (#189)|V138,V115,V114,V96,V116,I.cli
-T219|.|impl §V.139(+) + §I — company disable --stdin + contact create --stdin NDJSON batch; partial-success results envelope; exit policy; mixed ok/error tests; --skill recipes (#190)|V139,V4,V3,V16,V94,V107,I.cli
+T219|x|impl §V.139(+) + §I — company disable --stdin + contact create --stdin NDJSON batch; partial-success results envelope; exit policy; mixed ok/error tests; --skill recipes (#190)|V139,V4,V3,V16,V94,V107,I.cli
 
 ## §B BUGS
 

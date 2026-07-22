@@ -1495,6 +1495,118 @@ def test_company_disable_empty_reason(runner: CliRunner) -> None:
     assert data["error"] == "validation_error"
 
 
+def test_company_disable_stdin_mixed_ok_error(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.139: batch disable continues past errors; full results envelope."""
+    active = _make_company(domain="a.com", disabled_reason=None)
+    already = _make_company(
+        id="01234567-0000-7000-0000-0000000000bb",
+        domain="b.com",
+        disabled_reason="prior",
+    )
+    disabled = _make_company(
+        id="01234567-0000-7000-0000-0000000000aa",
+        domain="a.com",
+        disabled_reason="absorbed-brand",
+    )
+
+    def _by_domain(_conn: object, domain: str) -> Company | None:
+        return {"a.com": active, "b.com": already}.get(domain)
+
+    stdin = "\n".join(
+        [
+            json.dumps({"domain": "a.com", "reason": "absorbed-brand"}),
+            json.dumps({"domain": "missing.com", "reason": "gone"}),
+            json.dumps({"domain": "b.com", "reason": "again"}),
+            "{not-json",
+        ]
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company_by_domain", side_effect=_by_domain),
+        patch(
+            "mailpilot.database.disable_company", return_value=disabled
+        ) as mock_disable,
+    ):
+        result = runner.invoke(main, ["company", "disable", "--stdin"], input=stdin)
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 4
+    assert data["results"] == [
+        {"ref": "a.com", "status": "ok"},
+        {
+            "ref": "missing.com",
+            "status": "error",
+            "error": "not_found",
+            "message": "company not found: missing.com",
+        },
+        {"ref": "b.com", "status": "ok"},
+        {
+            "ref": "line:4",
+            "status": "error",
+            "error": "validation_error",
+            "message": data["results"][3]["message"],
+        },
+    ]
+    assert "invalid JSON" in data["results"][3]["message"]
+    mock_disable.assert_called_once_with(mock_connection, active.id, "absorbed-brand")
+
+
+def test_company_disable_stdin_all_ok_exit_0(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.139: zero error rows -> exit 0 + ok:true results envelope."""
+    company = _make_company(domain="ok.com", disabled_reason=None)
+    after = _make_company(domain="ok.com", disabled_reason="x")
+    stdin = json.dumps({"domain": "ok.com", "reason": "x"}) + "\n"
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company_by_domain", return_value=company),
+        patch("mailpilot.database.disable_company", return_value=after),
+    ):
+        result = runner.invoke(main, ["company", "disable", "--stdin"], input=stdin)
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data == {
+        "results": [{"ref": "ok.com", "status": "ok"}],
+        "record_count": 1,
+        "ok": True,
+    }
+
+
+def test_company_disable_stdin_exclusive_with_positional(
+    runner: CliRunner,
+) -> None:
+    """§V.139: --stdin exclusive with COMPANY_REF."""
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            ["company", "disable", "acme.com", "--stdin"],
+            input='{"domain":"x.com","reason":"y"}\n',
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "validation_error"
+    assert "exclusive" in data["message"]
+
+
+def test_company_disable_help_documents_stdin(runner: CliRunner) -> None:
+    """§V.139/§V.111: --help documents --stdin without SPEC cites."""
+    result = runner.invoke(main, ["company", "disable", "--help"])
+    assert result.exit_code == 0
+    assert "--stdin" in result.output
+    assert "NDJSON" in result.output
+    assert "§V." not in result.output
+
+
 def test_company_enable_happy_path(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
@@ -2021,6 +2133,126 @@ def test_contact_create_without_note_skips_note_call(
 
     assert result.exit_code == 0
     mock_note.assert_not_called()
+
+
+def test_contact_create_stdin_mixed_ok_error(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.139: batch create continues past errors; duplicate is ok skip."""
+    company = _make_company(domain="acme.com")
+    created = _make_contact(email="new@acme.com")
+
+    def _create(
+        _conn: object,
+        *,
+        email: str,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        company_id: str | None = None,
+        title: str | None = None,
+        email_confidence: int | None = None,
+    ) -> Contact | None:
+        if email == "dup@acme.com":
+            return None
+        return created
+
+    stdin = "\n".join(
+        [
+            json.dumps(
+                {
+                    "email": "new@acme.com",
+                    "first_name": "New",
+                    "company_domain": "acme.com",
+                }
+            ),
+            json.dumps({"email": "orphan@x.com", "company_domain": "missing.com"}),
+            json.dumps({"email": "dup@acme.com"}),
+            json.dumps({"first_name": "NoEmail"}),
+        ]
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.get_company_by_domain",
+            side_effect=lambda _c, d: company if d == "acme.com" else None,
+        ),
+        patch("mailpilot.database.create_contact", side_effect=_create) as mock_create,
+    ):
+        result = runner.invoke(main, ["contact", "create", "--stdin"], input=stdin)
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 4
+    assert data["results"][0] == {"ref": "new@acme.com", "status": "ok"}
+    assert data["results"][1]["status"] == "error"
+    assert data["results"][1]["error"] == "not_found"
+    assert data["results"][1]["ref"] == "orphan@x.com"
+    assert data["results"][2] == {"ref": "dup@acme.com", "status": "ok"}
+    assert data["results"][3]["status"] == "error"
+    assert data["results"][3]["error"] == "validation_error"
+    assert "email is required" in data["results"][3]["message"]
+    assert mock_create.call_count == 2
+
+
+def test_contact_create_stdin_all_ok_exit_0(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.139: zero error rows -> exit 0."""
+    contact = _make_contact(email="solo@example.com")
+    stdin = json.dumps({"email": "solo@example.com"}) + "\n"
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_contact", return_value=contact),
+    ):
+        result = runner.invoke(main, ["contact", "create", "--stdin"], input=stdin)
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data == {
+        "results": [{"ref": "solo@example.com", "status": "ok"}],
+        "record_count": 1,
+        "ok": True,
+    }
+
+
+def test_contact_create_stdin_exclusive_with_email(runner: CliRunner) -> None:
+    """§V.139: --stdin exclusive with single-entity create options."""
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            ["contact", "create", "--stdin", "--email", "a@b.com"],
+            input='{"email":"c@d.com"}\n',
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "validation_error"
+    assert "exclusive" in data["message"]
+
+
+def test_contact_create_help_documents_stdin(runner: CliRunner) -> None:
+    """§V.139/§V.111: --help documents --stdin without SPEC cites."""
+    result = runner.invoke(main, ["contact", "create", "--help"])
+    assert result.exit_code == 0
+    assert "--stdin" in result.output
+    assert "NDJSON" in result.output
+    assert "§V." not in result.output
+
+
+def test_skill_documents_batch_stdin() -> None:
+    """§V.139: packaged SKILL.md documents batch disable + contact create."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "company disable --stdin" in body
+    assert "contact create --stdin" in body
+    assert "record_count" in body
+    assert "§V." not in body
+    assert "§T." not in body
 
 
 # -- contact update ------------------------------------------------------------

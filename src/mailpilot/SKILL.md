@@ -51,7 +51,11 @@ since the row is retained.
 ## Exit codes
 
 - `0` -- success. `ok: true` payload on stdout.
-- `1` -- failure. `ok: false` envelope on stderr; stdout stays empty.
+- `1` -- failure. For most commands: `ok: false` envelope on stderr;
+  stdout stays empty. For stdin batch mutations (`company disable --stdin`,
+  `contact create --stdin`): exit 1 when any row has `status: "error"`,
+  but the full `{"results": [...], "ok": true, "record_count": N}`
+  envelope still lands on stdout (partial success is reportable).
 
 The top-level `--skill`, `--version`, `--help`, `--completion` flags emit
 plain text (not JSON) and exit `0`.
@@ -160,6 +164,55 @@ Soft-disable a contact (preserves audit history) with:
 ```
 mailpilot contact disable <CONTACT_REF> --reason "left company"
 ```
+
+### Batch disable companies (stdin NDJSON)
+
+One shell call for many soft-disables. Each stdin line is one JSON object
+with `domain` and `reason`. `--stdin` is exclusive with a company positional
+target and with `--reason`. Re-disabling an already-disabled company is an
+ok no-op. Missing domain, missing reason, unknown company, or bad JSON
+become per-row errors; the batch never aborts mid-stream without reporting
+prior rows.
+
+```
+printf '%s\n' \
+  '{"domain":"a.com","reason":"absorbed-brand"}' \
+  '{"domain":"b.com","reason":"not-a-fit"}' \
+  | mailpilot company disable --stdin
+```
+
+Envelope (always `ok: true` on stdout):
+
+```json
+{
+  "results": [
+    {"ref": "a.com", "status": "ok"},
+    {"ref": "b.com", "status": "error", "error": "not_found", "message": "..."}
+  ],
+  "record_count": 2,
+  "ok": true
+}
+```
+
+Exit 0 when every row is ok; exit 1 if any row has `status: "error"`
+(still emit the full results JSON above).
+
+### Batch create contacts (stdin NDJSON)
+
+Each stdin line is one JSON object with contact create fields. `email` is
+required; `first_name`, `last_name`, `company_domain`, `title`,
+`email_confidence`, and `note` are optional. `--stdin` is exclusive with
+single-entity create options. A duplicate email natural key is an ok skip
+(upsert is a separate feature).
+
+```
+printf '%s\n' \
+  '{"email":"ada@example.com","first_name":"Ada","company_domain":"example.com"}' \
+  '{"email":"grace@example.com","title":"CTO"}' \
+  | mailpilot contact create --stdin
+```
+
+Same `results` / `record_count` / exit policy as batch company disable.
 
 ### Company list triage
 
