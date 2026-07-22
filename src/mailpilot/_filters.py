@@ -14,7 +14,8 @@ Families:
 5. Text-match -- plain ``@click.option`` (exact on ``list``; no decorator here).
 6. Lifecycle -- ``include_disabled_option`` + ``time_window_options``.
 
-``limit_option`` adds the sole result control (alongside filters, not a filter).
+Result controls (alongside filters, not filters): ``limit_option``,
+``offset_option``, ``sort_option``, ``desc_option``.
 
 Help text in every decorator stays free of SPEC citations so the rendered
 ``--help`` surface carries no internal numbering.
@@ -23,19 +24,81 @@ Help text in every decorator stays free of SPEC citations so the rendered
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, overload
 
 import click
 
 # Direction axis shared across email + workflow + template list commands.
 DIRECTIONS = ["inbound", "outbound"]
 
+# Company list|search sort keys (closed Choice set).
+COMPANY_SORT_KEYS = ["name", "domain", "created_at", "contact_count"]
+
 _Decorator = Callable[[Callable[..., Any]], Callable[..., Any]]
 
 
-def limit_option(fn: Callable[..., Any]) -> Callable[..., Any]:
-    """Add the canonical ``--limit`` result control (default 100)."""
-    return click.option("--limit", default=100, help="Maximum results.")(fn)
+@overload
+def limit_option(fn: Callable[..., Any]) -> Callable[..., Any]: ...
+
+
+@overload
+def limit_option(*, default: int = 100) -> _Decorator: ...
+
+
+def limit_option(
+    fn: Callable[..., Any] | None = None, *, default: int = 100
+) -> Callable[..., Any] | _Decorator:
+    """Add the canonical ``--limit`` result control.
+
+    Use ``@limit_option`` (default 100) or ``@limit_option(default=500)`` for
+    noun-specific defaults (company list|search).
+    """
+
+    def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
+        return click.option("--limit", default=default, help="Maximum results.")(f)
+
+    if fn is not None:
+        return decorator(fn)
+    return decorator
+
+
+def offset_option(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Add ``--offset`` page start (default 0)."""
+    return click.option(
+        "--offset",
+        default=0,
+        type=int,
+        help="Skip this many rows before returning results.",
+    )(fn)
+
+
+def sort_option(choices: list[str], *, default: str) -> _Decorator:
+    """Build ``--sort`` as a ``click.Choice`` over ``choices``.
+
+    Args:
+        choices: Allowed sort keys.
+        default: Default key when the flag is omitted.
+    """
+
+    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+        return click.option(
+            "--sort",
+            default=default,
+            type=click.Choice(choices),
+            help=f"Sort key ({', '.join(choices)}).",
+        )(fn)
+
+    return decorator
+
+
+def desc_option(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Add ``--desc`` to flip sort order to descending."""
+    return click.option(
+        "--desc",
+        is_flag=True,
+        default=False,
+        help="Sort descending (default ascending).",
+    )(fn)
 
 
 def include_disabled_option(fn: Callable[..., Any]) -> Callable[..., Any]:

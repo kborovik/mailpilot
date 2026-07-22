@@ -1276,6 +1276,21 @@ _COMPANY_TAGS_SQL = (
 )
 """Correlated assigned-tag names for company list/search rows (§V.8 / §V.116)."""
 
+_COMPANY_SORT_SQL: dict[str, SQL] = {
+    "name": SQL("LOWER(c.name)"),
+    "domain": SQL("LOWER(c.domain)"),
+    "created_at": SQL("c.created_at"),
+    "contact_count": SQL("COUNT(ct.id)"),
+}
+"""Company list|search ORDER BY expressions keyed by ``--sort`` Choice."""
+
+
+def _company_order_by(sort: str, desc: bool) -> Composed:
+    """Build ``ORDER BY <sort> ASC|DESC, LOWER(c.name) ASC`` for stable pages."""
+    col = _COMPANY_SORT_SQL.get(sort, _COMPANY_SORT_SQL["name"])
+    direction = SQL("DESC") if desc else SQL("ASC")
+    return SQL("ORDER BY {} {}, LOWER(c.name) ASC").format(col, direction)
+
 
 def _company_pipeline_status_predicates(
     status: str | None,
@@ -1317,6 +1332,9 @@ def _company_pipeline_status_predicates(
 def list_companies(
     connection: psycopg.Connection[dict[str, Any]],
     limit: int = 100,
+    offset: int = 0,
+    sort: str = "name",
+    desc: bool = False,
     since: str | None = None,
     until: str | None = None,
     has_profile: bool | None = None,
@@ -1348,6 +1366,9 @@ def list_companies(
     Args:
         connection: Open database connection.
         limit: Maximum results.
+        offset: Rows to skip before the page (default 0).
+        sort: Order key in {name, domain, created_at, contact_count}.
+        desc: When ``True``, sort descending; default ascending.
         since: ISO datetime inclusive lower bound on ``created_at``.
         until: ISO datetime inclusive upper bound on ``created_at``.
         has_profile: ``True`` returns only rows where ``profile IS NOT NULL``;
@@ -1383,11 +1404,11 @@ def list_companies(
             (default) applies no cohort predicate.
 
     Returns:
-        List of company summaries ordered by name.
+        List of company summaries ordered by ``sort`` (default name).
     """
     conditions: list[Composed | SQL] = []
     having: list[SQL] = []
-    params: dict[str, object] = {"limit": limit}
+    params: dict[str, object] = {"limit": limit, "offset": offset}
     if since is not None:
         conditions.append(SQL("c.created_at >= %(since)s"))
         params["since"] = since
@@ -1429,17 +1450,20 @@ def list_companies(
         if full
         else SQL("")
     )
+    order_by = _company_order_by(sort, desc)
     query = SQL(
         "SELECT c.id, c.name, c.domain, (c.profile IS NOT NULL) AS has_profile, "
         "c.disabled_reason, c.created_at, COUNT(ct.id) AS contact_count, "
         "{tags}{profile} "
         "FROM company c LEFT JOIN contact ct ON ct.company_id = c.id "
-        "{where} GROUP BY c.id {having} ORDER BY LOWER(c.name) LIMIT %(limit)s"
+        "{where} GROUP BY c.id {having} {order} "
+        "LIMIT %(limit)s OFFSET %(offset)s"
     ).format(
         tags=SQL(_COMPANY_TAGS_SQL),
         profile=profile_select,
         where=where,
         having=having_clause,
+        order=order_by,
     )
     rows = connection.execute(query, params).fetchall()
     return [CompanySummary.model_validate(row) for row in rows]
@@ -1449,6 +1473,9 @@ def search_companies(
     connection: psycopg.Connection[dict[str, Any]],
     query: str,
     limit: int = 100,
+    offset: int = 0,
+    sort: str = "name",
+    desc: bool = False,
 ) -> list[CompanySummary]:
     """Search companies by name or domain.
 
@@ -1456,13 +1483,17 @@ def search_companies(
         connection: Open database connection.
         query: Search term (matched against name and domain).
         limit: Maximum number of results.
+        offset: Rows to skip before the page (default 0).
+        sort: Order key in {name, domain, created_at, contact_count}.
+        desc: When ``True``, sort descending; default ascending.
 
     Returns:
-        Matching company summaries ordered by name. Each carries
+        Matching company summaries ordered by ``sort``. Each carries
         ``contact_count`` (LEFT JOIN contact COUNT, incl. disabled per §V.96)
         and ``tags`` (assigned names, empty ok), mirroring ``list_companies``.
     """
     pattern = f"%{query}%"
+    order_by = _company_order_by(sort, desc)
     sql = SQL(
         "SELECT c.id, c.name, c.domain, (c.profile IS NOT NULL) AS has_profile, "
         "c.disabled_reason, c.created_at, COUNT(ct.id) AS contact_count, "
@@ -1477,12 +1508,12 @@ def search_companies(
         "    AND LOWER(a.domain) LIKE LOWER(%(pattern)s)"
         ") "
         "GROUP BY c.id "
-        "ORDER BY LOWER(c.name) "
-        "LIMIT %(limit)s"
-    ).format(tags=SQL(_COMPANY_TAGS_SQL))
+        "{order} "
+        "LIMIT %(limit)s OFFSET %(offset)s"
+    ).format(tags=SQL(_COMPANY_TAGS_SQL), order=order_by)
     rows = connection.execute(
         sql,
-        {"pattern": pattern, "limit": limit},
+        {"pattern": pattern, "limit": limit, "offset": offset},
     ).fetchall()
     return [CompanySummary.model_validate(row) for row in rows]
 

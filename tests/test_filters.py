@@ -6,13 +6,17 @@ import click
 from click.testing import CliRunner
 
 from mailpilot._filters import (
+    COMPANY_SORT_KEYS,
     DIRECTIONS,
+    desc_option,
     enum_option,
     include_disabled_option,
     limit_option,
+    offset_option,
     presence_option,
     range_options,
     scope_option,
+    sort_option,
     time_window_options,
 )
 
@@ -30,6 +34,56 @@ def test_limit_option_defaults_to_100() -> None:
     result = CliRunner().invoke(cmd, [])
     assert result.exit_code == 0
     assert result.output.strip() == "100"
+
+
+def test_limit_option_custom_default() -> None:
+    @click.command()
+    @limit_option(default=500)
+    def cmd(limit: int) -> None:
+        click.echo(str(limit))
+
+    result = CliRunner().invoke(cmd, [])
+    assert result.exit_code == 0
+    assert result.output.strip() == "500"
+
+
+def test_offset_option_defaults_to_0() -> None:
+    @click.command()
+    @offset_option
+    def cmd(offset: int) -> None:
+        click.echo(str(offset))
+
+    result = CliRunner().invoke(cmd, [])
+    assert result.exit_code == 0
+    assert result.output.strip() == "0"
+
+
+def test_sort_option_choice_and_default() -> None:
+    @click.command()
+    @sort_option(COMPANY_SORT_KEYS, default="name")
+    def cmd(sort: str) -> None:
+        click.echo(sort)
+
+    ok = CliRunner().invoke(cmd, [])
+    assert ok.exit_code == 0
+    assert ok.output.strip() == "name"
+    key = CliRunner().invoke(cmd, ["--sort", "domain"])
+    assert key.exit_code == 0
+    assert key.output.strip() == "domain"
+    bad = CliRunner().invoke(cmd, ["--sort", "nope"])
+    assert bad.exit_code != 0
+
+
+def test_desc_option_flag() -> None:
+    @click.command()
+    @desc_option
+    def cmd(desc: bool) -> None:
+        click.echo(str(desc))
+
+    off = CliRunner().invoke(cmd, [])
+    assert off.output.strip() == "False"
+    on = CliRunner().invoke(cmd, ["--desc"])
+    assert on.output.strip() == "True"
 
 
 def test_time_window_options_adds_since_and_until() -> None:

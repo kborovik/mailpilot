@@ -328,6 +328,50 @@ def test_list_companies(database_connection: psycopg.Connection[dict[str, Any]])
     assert companies[1].has_profile is False
 
 
+def test_list_companies_sort_domain_desc(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.148: --sort domain --desc orders by lowercased domain descending."""
+    make_test_company(database_connection, name="A Co", domain="aaa.com")
+    make_test_company(database_connection, name="Z Co", domain="zzz.com")
+    make_test_company(database_connection, name="M Co", domain="mmm.com")
+
+    rows = list_companies(database_connection, sort="domain", desc=True)
+    assert [c.domain for c in rows] == ["zzz.com", "mmm.com", "aaa.com"]
+
+
+def test_list_companies_offset_limit_page(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.148: offset+limit page over stable name order."""
+    make_test_company(database_connection, name="A", domain="a.com")
+    make_test_company(database_connection, name="B", domain="b.com")
+    make_test_company(database_connection, name="C", domain="c.com")
+
+    page = list_companies(database_connection, limit=1, offset=1, sort="name")
+    assert len(page) == 1
+    assert page[0].name == "B"
+
+
+def test_list_companies_sort_contact_count(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.148: sort by contact_count ascending."""
+    from mailpilot.database import create_contact
+
+    zero = make_test_company(database_connection, name="Zero", domain="zero.com")
+    two = make_test_company(database_connection, name="Two", domain="two.com")
+    create_contact(database_connection, email="a@two.com", company_id=two.id)
+    create_contact(database_connection, email="b@two.com", company_id=two.id)
+    _ = zero
+
+    rows = list_companies(database_connection, sort="contact_count", desc=False)
+    assert rows[0].domain == "zero.com"
+    assert rows[0].contact_count == 0
+    assert rows[-1].domain == "two.com"
+    assert rows[-1].contact_count == 2
+
+
 def test_list_companies_projects_tags(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:

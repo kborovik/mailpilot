@@ -313,11 +313,22 @@ Same `results` / `record_count` / exit policy as batch company disable.
 
 ### Company list triage
 
-`company list` lean rows always project `domain`, `name`, `has_profile`,
-`contact_count`, `tags` (assigned names, empty array ok), and
-`disabled_reason` (null when enabled; value when the row is returned via
-`--include-disabled` or `--status disabled`). One call is enough for tag /
-disable / contact-count triage — no per-domain `company view` loop.
+`company list` and `company search` lean rows always project `domain`,
+`name`, `has_profile`, `contact_count`, `tags` (assigned names, empty
+array ok), and `disabled_reason` (null when enabled; value when the row is
+returned — list needs `--include-disabled` or `--status disabled` for
+disabled rows; search returns disabled when the match hits). One call is
+enough for tag / disable / contact-count triage — no per-domain
+`company view` loop.
+
+Result controls (company list and search only):
+
+| flag | default | notes |
+| --- | --- | --- |
+| `--limit` | `500` | tag-cohort sized (other nouns keep 100) |
+| `--offset` | `0` | page start; `record_count` is page length only |
+| `--sort` | `name` | `name` \| `domain` \| `created_at` \| `contact_count` |
+| `--desc` | off | descending; default ascending |
 
 Pipeline cohort filter `--status` (AND-composes with `--tag`, `--no-tag`,
 `--min-contacts`, `--max-contacts`, `--has-profile`, `--include-disabled`):
@@ -335,6 +346,8 @@ mailpilot company list --tag acumatica-var --status ready
 mailpilot company list --tag acumatica-var --status needs_contacts
 mailpilot company list --tag acumatica-var --status needs_profile
 mailpilot company list --tag acumatica-var --status disabled
+mailpilot company list --sort domain --desc --limit 100 --offset 0
+mailpilot company search acme --sort contact_count --desc
 mailpilot company list --include-disabled
 mailpilot company list --full
 mailpilot company view <DOMAIN_OR_ID>

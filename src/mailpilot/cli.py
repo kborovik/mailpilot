@@ -16,13 +16,17 @@ from typing import TYPE_CHECKING, Any, NoReturn
 import click
 
 from mailpilot._filters import (
+    COMPANY_SORT_KEYS,
     DIRECTIONS,
+    desc_option,
     enum_option,
     include_disabled_option,
     limit_option,
+    offset_option,
     presence_option,
     range_options,
     scope_option,
+    sort_option,
     tag_filter_options,
     time_window_options,
 )
@@ -2002,14 +2006,32 @@ def company_merge(from_ref: str, into_ref: str, move_contacts: bool) -> None:
 
 @company.command("search")
 @click.argument("query")
-@click.option("--limit", default=100, help="Maximum results.")
-def company_search(query: str, limit: int) -> None:
-    """Search companies by name or domain."""
+@sort_option(COMPANY_SORT_KEYS, default="name")
+@desc_option
+@offset_option
+@limit_option(default=500)
+def company_search(
+    query: str, limit: int, offset: int, sort: str, desc: bool
+) -> None:
+    """Search companies by name or domain.
+
+    Lean rows match company list (domain, name, has_profile, contact_count,
+    tags, disabled_reason). Default --limit is 500 for tag-sized cohorts.
+    Sort keys: name (default), domain, created_at, contact_count; pass --desc
+    for descending. Use --offset with --limit for pages.
+    """
     from mailpilot.database import initialize_database, search_companies
 
     connection = initialize_database(_database_url())
     try:
-        companies = search_companies(connection, query, limit=limit)
+        companies = search_companies(
+            connection,
+            query,
+            limit=limit,
+            offset=offset,
+            sort=sort,
+            desc=desc,
+        )
         output({"companies": [c.model_dump(mode="json") for c in companies]})
     finally:
         connection.close()
@@ -2039,9 +2061,15 @@ def company_search(query: str, limit: int) -> None:
     default=False,
     help="Embed profile.summary on each row (null when no profile).",
 )
-@limit_option
+@sort_option(COMPANY_SORT_KEYS, default="name")
+@desc_option
+@offset_option
+@limit_option(default=500)
 def company_list(
     limit: int,
+    offset: int,
+    sort: str,
+    desc: bool,
     since: str | None,
     until: str | None,
     has_profile: bool | None,
@@ -2058,6 +2086,10 @@ def company_list(
     Lean rows project domain, name, has_profile, contact_count, tags,
     disabled_reason. Pass --full to embed profile.summary for triage without
     N company view calls.
+
+    Default --limit is 500 (tag-cohort sized). Sort keys: name (default),
+    domain, created_at, contact_count; pass --desc for descending. Use
+    --offset with --limit for pages (record_count is the page length).
 
     --status filters a pipeline cohort: ready (profile + at least one contact,
     not disabled), needs_contacts (profile + zero contacts, not disabled),
@@ -2076,6 +2108,9 @@ def company_list(
         companies = list_companies(
             connection,
             limit=limit,
+            offset=offset,
+            sort=sort,
+            desc=desc,
             since=since,
             until=until,
             has_profile=has_profile,

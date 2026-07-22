@@ -1222,6 +1222,9 @@ def test_company_list_with_limit(runner: CliRunner, mock_connection: MagicMock) 
     mock_list.assert_called_once_with(
         mock_connection,
         limit=5,
+        offset=0,
+        sort="name",
+        desc=False,
         since=None,
         until=None,
         has_profile=None,
@@ -1248,7 +1251,10 @@ def test_company_list_with_since(runner: CliRunner, mock_connection: MagicMock) 
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
         mock_connection,
-        limit=100,
+        limit=500,
+        offset=0,
+        sort="name",
+        desc=False,
         since="2024-01-01T00:00:00",
         until=None,
         has_profile=None,
@@ -1275,7 +1281,10 @@ def test_company_list_has_profile_flag(
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
         mock_connection,
-        limit=100,
+        limit=500,
+        offset=0,
+        sort="name",
+        desc=False,
         since=None,
         until=None,
         has_profile=True,
@@ -1302,7 +1311,10 @@ def test_company_list_no_profile_flag(
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
         mock_connection,
-        limit=100,
+        limit=500,
+        offset=0,
+        sort="name",
+        desc=False,
         since=None,
         until=None,
         has_profile=False,
@@ -1353,7 +1365,10 @@ def test_company_list_max_contacts_flag(
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
         mock_connection,
-        limit=100,
+        limit=500,
+        offset=0,
+        sort="name",
+        desc=False,
         since=None,
         until=None,
         has_profile=None,
@@ -1381,7 +1396,10 @@ def test_company_list_min_contacts_flag(
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
         mock_connection,
-        limit=100,
+        limit=500,
+        offset=0,
+        sort="name",
+        desc=False,
         since=None,
         until=None,
         has_profile=None,
@@ -1409,7 +1427,10 @@ def test_company_list_include_disabled_flag(
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
         mock_connection,
-        limit=100,
+        limit=500,
+        offset=0,
+        sort="name",
+        desc=False,
         since=None,
         until=None,
         has_profile=None,
@@ -1435,7 +1456,10 @@ def test_company_list_full_flag(runner: CliRunner, mock_connection: MagicMock) -
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
         mock_connection,
-        limit=100,
+        limit=500,
+        offset=0,
+        sort="name",
+        desc=False,
         since=None,
         until=None,
         has_profile=None,
@@ -1463,7 +1487,10 @@ def test_company_list_status_flag(
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
         mock_connection,
-        limit=100,
+        limit=500,
+        offset=0,
+        sort="name",
+        desc=False,
         since=None,
         until=None,
         has_profile=None,
@@ -1491,7 +1518,10 @@ def test_company_list_status_disabled_forces_include(
     assert result.exit_code == 0
     mock_list.assert_called_once_with(
         mock_connection,
-        limit=100,
+        limit=500,
+        offset=0,
+        sort="name",
+        desc=False,
         since=None,
         until=None,
         has_profile=None,
@@ -2227,7 +2257,9 @@ def test_company_search(runner: CliRunner, mock_connection: MagicMock) -> None:
         result = runner.invoke(main, ["company", "search", "acme"])
 
     assert result.exit_code == 0
-    mock_search.assert_called_once_with(mock_connection, "acme", limit=100)
+    mock_search.assert_called_once_with(
+        mock_connection, "acme", limit=500, offset=0, sort="name", desc=False
+    )
     data = json.loads(result.output)
     assert data["ok"] is True
     assert len(data["companies"]) == 1
@@ -2244,7 +2276,133 @@ def test_company_search_with_limit(
         result = runner.invoke(main, ["company", "search", "acme", "--limit", "10"])
 
     assert result.exit_code == 0
-    mock_search.assert_called_once_with(mock_connection, "acme", limit=10)
+    mock_search.assert_called_once_with(
+        mock_connection, "acme", limit=10, offset=0, sort="name", desc=False
+    )
+
+
+def test_company_list_default_limit_500(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.148: company list default --limit is 500 for tag cohorts."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_companies", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(main, ["company", "list"])
+
+    assert result.exit_code == 0
+    _, kwargs = mock_list.call_args
+    assert kwargs["limit"] == 500
+    assert kwargs["offset"] == 0
+    assert kwargs["sort"] == "name"
+    assert kwargs["desc"] is False
+
+
+def test_company_list_sort_desc_offset(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.148: --sort/--desc/--offset flow to list_companies."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_companies", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "list",
+                "--sort",
+                "domain",
+                "--desc",
+                "--offset",
+                "10",
+                "--limit",
+                "25",
+            ],
+        )
+
+    assert result.exit_code == 0
+    _, kwargs = mock_list.call_args
+    assert kwargs["sort"] == "domain"
+    assert kwargs["desc"] is True
+    assert kwargs["offset"] == 10
+    assert kwargs["limit"] == 25
+
+
+def test_company_list_sort_rejects_out_of_set(runner: CliRunner) -> None:
+    """§V.148/§V.115: out-of-set --sort rejected at parse time."""
+    result = runner.invoke(main, ["company", "list", "--sort", "bogus"])
+    assert result.exit_code != 0
+
+
+def test_company_list_help_documents_sort_and_defaults(runner: CliRunner) -> None:
+    """§V.148/§V.111: --help lists sort keys and limit without SPEC cites."""
+    result = runner.invoke(main, ["company", "list", "--help"])
+    assert result.exit_code == 0
+    assert "--sort" in result.output
+    assert "domain" in result.output
+    assert "contact_count" in result.output
+    assert "--offset" in result.output
+    assert "--desc" in result.output
+    assert "§V." not in result.output
+
+
+def test_company_search_sort_offset(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.148: company search accepts same sort/offset/limit controls."""
+    companies = [
+        CompanySummary(
+            id="01234567-0000-7000-0000-0000000000aa",
+            name="Acme",
+            domain="acme.com",
+            has_profile=False,
+            contact_count=0,
+            tags=["vip"],
+            disabled_reason=None,
+            created_at=_NOW,
+        )
+    ]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.search_companies", return_value=companies
+        ) as mock_search,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "search",
+                "acme",
+                "--sort",
+                "contact_count",
+                "--desc",
+                "--offset",
+                "5",
+            ],
+        )
+
+    assert result.exit_code == 0
+    mock_search.assert_called_once_with(
+        mock_connection,
+        "acme",
+        limit=500,
+        offset=5,
+        sort="contact_count",
+        desc=True,
+    )
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    row = data["companies"][0]
+    assert row["tags"] == ["vip"]
+    assert row["disabled_reason"] is None
+    assert row["contact_count"] == 0
+    assert "domain" in row
 
 
 def test_company_create_empty_domain(
