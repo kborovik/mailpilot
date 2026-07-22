@@ -218,7 +218,7 @@ T213|x|reconcile workflow TOMLs w/ T209-T211 landed code — strip retired-agent
 T214|x|impl §V.85(∆) — re-enable dotenv source for cwd `.env` (`env_file=".env"` + `dotenv_settings` in customise_sources); process env beats .env; .env beats config.json; TDD|V85
 T215|x|impl §V.137 ordered connect-hint map + logfire.error (no console Traceback); extend tests/test_database_telemetry.py mocked OperationalError strings; stack #186 role/database split|V137,B125
 T216|x|impl §V.47 provider-aware LLM — `llm_provider` default xai; xai_* settings + `_build_model` dispatch; `pydantic-ai-slim[anthropic,xai]`; Anthropic path opt-in; effort enum reject tests; default model ids|V47,V48,V86
-T217|.|impl §I company projection + §V.8(∆) + §V.116(∆) — CompanySummary/CompanyView tags[]; list --full profile.summary; disabled_reason always on list rows; tests + --skill docs (#188)|V8,V116,V114,V96,I.cli
+T217|x|impl §I company projection + §V.8(∆) + §V.116(∆) — CompanySummary/CompanyView tags[]; list --full profile.summary; disabled_reason always on list rows; tests + --skill docs (#188)|V8,V116,V114,V96,I.cli
 
 ## §B BUGS
 

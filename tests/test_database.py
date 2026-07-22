@@ -316,7 +316,57 @@ def test_list_companies(database_connection: psycopg.Connection[dict[str, Any]])
     assert len(companies) == 2
     assert companies[0].name == "Alpha"
     assert companies[0].has_profile is False
+    assert companies[0].tags == []
+    assert companies[0].disabled_reason is None
+    assert companies[0].profile is None
     assert companies[1].has_profile is False
+
+
+def test_list_companies_projects_tags(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.8/§V.116: list rows project assigned tag names (empty ok)."""
+    company = make_test_company(database_connection, name="Tagged", domain="tagged.com")
+    bare = make_test_company(database_connection, name="Bare", domain="bare.com")
+    make_test_tag_assignment(database_connection, company_id=company.id, name="vip")
+    make_test_tag_assignment(
+        database_connection, company_id=company.id, name="acumatica-var"
+    )
+
+    by_id = {c.id: c for c in list_companies(database_connection)}
+
+    assert by_id[company.id].tags == ["acumatica-var", "vip"]
+    assert by_id[bare.id].tags == []
+
+
+def test_list_companies_full_embeds_profile_summary_only(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.8: --full embeds profile.summary only; default leaves profile null."""
+    null_id, full_id, _partial_id = _seed_profile_fixture(database_connection)
+
+    lean = {c.id: c for c in list_companies(database_connection)}
+    assert lean[full_id].profile is None
+    assert lean[null_id].profile is None
+
+    full_rows = {c.id: c for c in list_companies(database_connection, full=True)}
+    assert full_rows[null_id].profile is None
+    assert full_rows[full_id].profile == {"summary": "Full Co builds widgets."}
+    assert "products" not in (full_rows[full_id].profile or {})
+
+
+def test_list_companies_disabled_reason_on_include_disabled(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.114: disabled_reason is always on list rows when the row is returned."""
+    from mailpilot.database import disable_company
+
+    company = make_test_company(database_connection, name="Gone", domain="gone.com")
+    disable_company(database_connection, company.id, reason="absorbed-brand")
+
+    rows = list_companies(database_connection, include_disabled=True)
+    by_id = {c.id: c for c in rows}
+    assert by_id[company.id].disabled_reason == "absorbed-brand"
 
 
 def _seed_profile_fixture(
@@ -622,7 +672,9 @@ def test_company_view_field_set_superset_of_base_and_summary() -> None:
 
     Recurrence guard: a view model omitting a base column is silently stripped
     from ``**company.model_dump()`` (Pydantic ``extra=ignore``), so disabled_reason
-    must live on CompanyView too or `company view` would drop it.
+    must live on CompanyView too or `company view` would drop it. tags ride both
+    list and view projections (§V.116); lean list also carries has_profile,
+    contact_count, and optional profile (``--full`` summary only).
     """
     from mailpilot.models import Company, CompanySummary, CompanyView
 
@@ -634,6 +686,11 @@ def test_company_view_field_set_superset_of_base_and_summary() -> None:
     assert "disabled_reason" in base
     assert "disabled_reason" in summary
     assert "disabled_reason" in view
+    assert "tags" in summary
+    assert "tags" in view
+    assert "has_profile" in summary
+    assert "contact_count" in summary
+    assert "profile" in summary
 
 
 def test_search_companies(database_connection: psycopg.Connection[dict[str, Any]]):
@@ -5894,6 +5951,32 @@ def test_load_company_view_surfaces_profile_field(
 
     assert view is not None
     assert view.profile == profile
+    assert view.tags == []
+
+
+def test_load_company_view_projects_tags_same_shape_as_list(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.8/§V.116: company view tags[] matches list projection (names, empty ok)."""
+    from mailpilot.database import load_company_view
+
+    company = make_test_company(database_connection, name="Acme", domain="acme.com")
+    bare = make_test_company(database_connection, name="Bare", domain="bare.com")
+    make_test_tag_assignment(database_connection, company_id=company.id, name="vip")
+    make_test_tag_assignment(
+        database_connection, company_id=company.id, name="partner"
+    )
+
+    view = load_company_view(database_connection, company.id)
+    bare_view = load_company_view(database_connection, bare.id)
+    listed = {c.id: c for c in list_companies(database_connection)}
+
+    assert view is not None
+    assert bare_view is not None
+    assert view.tags == ["partner", "vip"]
+    assert bare_view.tags == []
+    assert view.tags == listed[company.id].tags
+    assert bare_view.tags == listed[bare.id].tags
 
 
 def test_load_contact_view_carries_title_and_email_confidence(

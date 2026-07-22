@@ -1138,6 +1138,16 @@ def _exclude_tags_conditions(
     return conditions
 
 
+_COMPANY_TAGS_SQL = (
+    "COALESCE("
+    "(SELECT array_agg(t.name ORDER BY t.name) "
+    "FROM tag_assignment ta JOIN tag t ON t.id = ta.tag_id "
+    "WHERE ta.company_id = c.id), "
+    "ARRAY[]::text[]) AS tags"
+)
+"""Correlated assigned-tag names for company list/search rows (§V.8 / §V.116)."""
+
+
 def list_companies(
     connection: psycopg.Connection[dict[str, Any]],
     limit: int = 100,
@@ -1149,6 +1159,7 @@ def list_companies(
     include_disabled: bool = False,
     tag: str | None = None,
     exclude_tags: Sequence[str] | None = None,
+    full: bool = False,
 ) -> list[CompanySummary]:
     """List companies as summaries.
 
@@ -1161,6 +1172,11 @@ def list_companies(
     (§V.114) -- a company memoized as having no discoverable contacts drops
     out of the listing and so out of the lead-contacts discover set (§V.96).
     Pass ``include_disabled=True`` to surface them.
+
+    Every row projects ``tags`` (assigned names, empty ok) and
+    ``disabled_reason`` (null when enabled). Pass ``full=True`` to embed
+    lean ``profile.summary`` only — never products/target_customers/sources
+    on the list path (§V.8).
 
     Args:
         connection: Open database connection.
@@ -1189,6 +1205,9 @@ def list_companies(
             set without ``company disable``); the lead-contacts discover set
             excludes both ``no-contacts-found`` and ``contacts-exhausted``
             (§V.96).
+        full: When ``True``, embeds ``profile`` as ``{"summary": ...}`` (or
+            null when the company has no profile). Default lean list leaves
+            ``profile`` null (§V.8).
 
     Returns:
         List of company summaries ordered by name.
@@ -1225,12 +1244,27 @@ def list_companies(
     conditions.extend(_exclude_tags_conditions(exclude_tags, "company_id", params))
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     having_clause = SQL("HAVING ") + SQL(" AND ").join(having) if having else SQL("")
+    profile_select = (
+        SQL(
+            ", CASE WHEN c.profile IS NULL THEN NULL "
+            "ELSE jsonb_build_object('summary', c.profile->>'summary') "
+            "END AS profile"
+        )
+        if full
+        else SQL("")
+    )
     query = SQL(
         "SELECT c.id, c.name, c.domain, (c.profile IS NOT NULL) AS has_profile, "
-        "c.disabled_reason, c.created_at, COUNT(ct.id) AS contact_count "
+        "c.disabled_reason, c.created_at, COUNT(ct.id) AS contact_count, "
+        "{tags}{profile} "
         "FROM company c LEFT JOIN contact ct ON ct.company_id = c.id "
         "{where} GROUP BY c.id {having} ORDER BY LOWER(c.name) LIMIT %(limit)s"
-    ).format(where=where, having=having_clause)
+    ).format(
+        tags=SQL(_COMPANY_TAGS_SQL),
+        profile=profile_select,
+        where=where,
+        having=having_clause,
+    )
     rows = connection.execute(query, params).fetchall()
     return [CompanySummary.model_validate(row) for row in rows]
 
@@ -1249,22 +1283,24 @@ def search_companies(
 
     Returns:
         Matching company summaries ordered by name. Each carries
-        ``contact_count`` (LEFT JOIN contact COUNT, incl. disabled per §V.96),
-        mirroring ``list_companies``.
+        ``contact_count`` (LEFT JOIN contact COUNT, incl. disabled per §V.96)
+        and ``tags`` (assigned names, empty ok), mirroring ``list_companies``.
     """
     pattern = f"%{query}%"
+    sql = SQL(
+        "SELECT c.id, c.name, c.domain, (c.profile IS NOT NULL) AS has_profile, "
+        "c.disabled_reason, c.created_at, COUNT(ct.id) AS contact_count, "
+        "{tags} "
+        "FROM company c "
+        "LEFT JOIN contact ct ON ct.company_id = c.id "
+        "WHERE LOWER(c.name) LIKE LOWER(%(pattern)s) "
+        "OR LOWER(c.domain) LIKE LOWER(%(pattern)s) "
+        "GROUP BY c.id "
+        "ORDER BY LOWER(c.name) "
+        "LIMIT %(limit)s"
+    ).format(tags=SQL(_COMPANY_TAGS_SQL))
     rows = connection.execute(
-        """\
-        SELECT c.id, c.name, c.domain, (c.profile IS NOT NULL) AS has_profile,
-               c.disabled_reason, c.created_at, COUNT(ct.id) AS contact_count
-        FROM company c
-        LEFT JOIN contact ct ON ct.company_id = c.id
-        WHERE LOWER(c.name) LIKE LOWER(%(pattern)s)
-           OR LOWER(c.domain) LIKE LOWER(%(pattern)s)
-        GROUP BY c.id
-        ORDER BY LOWER(c.name)
-        LIMIT %(limit)s
-        """,
+        sql,
         {"pattern": pattern, "limit": limit},
     ).fetchall()
     return [CompanySummary.model_validate(row) for row in rows]
@@ -5480,14 +5516,23 @@ def load_company_view(
 
     Returns ``None`` when the company does not exist. ``notes`` capped at
     ``_INLINE_NOTES_CAP`` rows, ordered by ``created_at`` DESC, full body
-    verbatim. ``notes_total`` reflects the actual row count.
+    verbatim. ``notes_total`` reflects the actual row count. ``tags`` is the
+    assigned tag-name list (empty ok; same shape as ``CompanySummary.tags``
+    and ``db export`` company.tags, §V.116).
     """
     company = get_company(connection, company_id)
     if company is None:
         return None
     notes, notes_total = _load_notes_for_owner(connection, "company_id", company_id)
+    owner_tags = list_tags(
+        connection,
+        company_id=company_id,
+        limit=1_000_000,
+        include_disabled=True,
+    )
     return CompanyView(
         **company.model_dump(),
+        tags=[t.name for t in owner_tags],
         notes=notes,
         notes_total=notes_total,
     )

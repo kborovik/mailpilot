@@ -161,6 +161,26 @@ Soft-disable a contact (preserves audit history) with:
 mailpilot contact disable <CONTACT_REF> --reason "left company"
 ```
 
+### Company list triage
+
+`company list` lean rows always project `domain`, `name`, `has_profile`,
+`contact_count`, `tags` (assigned names, empty array ok), and
+`disabled_reason` (null when enabled; value when the row is returned via
+`--include-disabled`). One call is enough for tag / disable / contact-count
+triage — no per-domain `company view` loop.
+
+```
+mailpilot company list --tag acumatica-var
+mailpilot company list --include-disabled
+mailpilot company list --full
+mailpilot company view <DOMAIN_OR_ID>
+```
+
+`--full` embeds `profile.summary` only (`null` when the company has no
+profile); default list never ships products, target_customers, or sources.
+`company view` projects the same `tags` shape as list, plus full profile and
+inlined notes.
+
 ### Define a workflow declaratively
 
 Workflow definitions are one TOML file per workflow. Export/import is TOML-only

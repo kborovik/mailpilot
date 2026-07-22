@@ -1250,6 +1250,12 @@ def company_search(query: str, limit: int) -> None:
 @tag_filter_options
 @include_disabled_option
 @time_window_options("created_at")
+@click.option(
+    "--full",
+    is_flag=True,
+    default=False,
+    help="Embed profile.summary on each row (null when no profile).",
+)
 @limit_option
 def company_list(
     limit: int,
@@ -1261,8 +1267,14 @@ def company_list(
     include_disabled: bool,
     tag: str | None,
     no_tag: tuple[str, ...],
+    full: bool,
 ) -> None:
-    """List companies as summaries."""
+    """List companies as summaries.
+
+    Lean rows project domain, name, has_profile, contact_count, tags,
+    disabled_reason. Pass --full to embed profile.summary for triage without
+    N company view calls.
+    """
     from mailpilot.database import initialize_database, list_companies
 
     connection = initialize_database(_database_url())
@@ -1280,6 +1292,7 @@ def company_list(
             include_disabled=include_disabled,
             tag=tag_id,
             exclude_tags=exclude_tag_ids,
+            full=full,
         )
         output({"companies": [c.model_dump(mode="json") for c in companies]})
     finally:

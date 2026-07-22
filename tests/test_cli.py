@@ -17,6 +17,7 @@ from mailpilot.models import (
     Account,
     Activity,
     Company,
+    CompanySummary,
     CompanyView,
     Contact,
     ContactView,
@@ -1006,6 +1007,7 @@ def test_company_list_with_limit(runner: CliRunner, mock_connection: MagicMock) 
         include_disabled=False,
         tag=None,
         exclude_tags=[],
+        full=False,
     )
 
 
@@ -1031,6 +1033,7 @@ def test_company_list_with_since(runner: CliRunner, mock_connection: MagicMock) 
         include_disabled=False,
         tag=None,
         exclude_tags=[],
+        full=False,
     )
 
 
@@ -1056,6 +1059,7 @@ def test_company_list_has_profile_flag(
         include_disabled=False,
         tag=None,
         exclude_tags=[],
+        full=False,
     )
 
 
@@ -1081,6 +1085,7 @@ def test_company_list_no_profile_flag(
         include_disabled=False,
         tag=None,
         exclude_tags=[],
+        full=False,
     )
 
 
@@ -1130,6 +1135,7 @@ def test_company_list_max_contacts_flag(
         include_disabled=False,
         tag=None,
         exclude_tags=[],
+        full=False,
     )
 
 
@@ -1156,6 +1162,7 @@ def test_company_list_min_contacts_flag(
         include_disabled=False,
         tag=None,
         exclude_tags=[],
+        full=False,
     )
 
 
@@ -1182,7 +1189,110 @@ def test_company_list_include_disabled_flag(
         include_disabled=True,
         tag=None,
         exclude_tags=[],
+        full=False,
     )
+
+
+def test_company_list_full_flag(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.8: --full forwards full=True for lean profile.summary embed."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_companies", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(main, ["company", "list", "--full"])
+
+    assert result.exit_code == 0
+    mock_list.assert_called_once_with(
+        mock_connection,
+        limit=100,
+        since=None,
+        until=None,
+        has_profile=None,
+        max_contacts=None,
+        min_contacts=None,
+        include_disabled=False,
+        tag=None,
+        exclude_tags=[],
+        full=True,
+    )
+
+
+def test_company_list_envelope_projects_tags_and_disabled_reason(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.8/§V.116: list JSON rows include tags[] and disabled_reason."""
+    companies = [
+        CompanySummary(
+            id="01234567-0000-7000-0000-0000000000aa",
+            name="Acme",
+            domain="acme.com",
+            has_profile=True,
+            contact_count=2,
+            tags=["vip", "partner"],
+            disabled_reason=None,
+            profile=None,
+            created_at=_NOW,
+        ),
+        CompanySummary(
+            id="01234567-0000-7000-0000-0000000000bb",
+            name="Gone",
+            domain="gone.com",
+            has_profile=False,
+            contact_count=0,
+            tags=[],
+            disabled_reason="absorbed-brand",
+            profile=None,
+            created_at=_NOW,
+        ),
+    ]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_companies", return_value=companies),
+    ):
+        result = runner.invoke(main, ["company", "list", "--include-disabled"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["companies"][0]["tags"] == ["vip", "partner"]
+    assert data["companies"][0]["disabled_reason"] is None
+    assert data["companies"][1]["tags"] == []
+    assert data["companies"][1]["disabled_reason"] == "absorbed-brand"
+
+
+def test_company_list_full_envelope_embeds_profile_summary(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.8: --full list envelope embeds profile.summary only."""
+    companies = [
+        CompanySummary(
+            id="01234567-0000-7000-0000-0000000000aa",
+            name="Acme",
+            domain="acme.com",
+            has_profile=True,
+            contact_count=0,
+            tags=[],
+            disabled_reason=None,
+            profile={"summary": "Acme builds widgets."},
+            created_at=_NOW,
+        ),
+    ]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_companies", return_value=companies),
+    ):
+        result = runner.invoke(main, ["company", "list", "--full"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    row = data["companies"][0]
+    assert row["profile"] == {"summary": "Acme builds widgets."}
+    assert "products" not in (row["profile"] or {})
 
 
 # -- company disable -----------------------------------------------------------
@@ -1367,6 +1477,7 @@ def test_company_view(runner: CliRunner, mock_connection: MagicMock) -> None:
         id=company.id,
         name=company.name,
         domain=company.domain,
+        tags=["vip"],
         created_at=company.created_at,
         updated_at=company.updated_at,
         notes=[],
@@ -1386,6 +1497,7 @@ def test_company_view(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert data["company"]["id"] == company.id
     assert data["company"]["notes"] == []
     assert data["company"]["notes_total"] == 0
+    assert data["company"]["tags"] == ["vip"]
 
 
 def test_company_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:

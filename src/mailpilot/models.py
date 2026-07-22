@@ -75,6 +75,14 @@ class CompanySummary(BaseModel):
     ``--min-contacts`` filter on the child cardinality without a per-company
     N+1 probe; counting disabled rows keeps it aligned with the
     discovery-memoization rule (§V.96), not the active-only set.
+
+    ``tags`` is the assigned tag-name list (empty ok; same shape as
+    ``db export`` company.tags and ``CompanyView.tags``, §V.8 / §V.116).
+    ``disabled_reason`` is always projected (null when enabled; value when
+    the row is returned via ``--include-disabled``, §V.114). ``profile`` is
+    None on the default lean list; ``company list --full`` embeds only
+    ``{"summary": ...}`` (null when the company has no profile) so triage
+    does not require N ``company view`` calls.
     """
 
     id: str
@@ -82,7 +90,9 @@ class CompanySummary(BaseModel):
     domain: str
     has_profile: bool
     contact_count: int
+    tags: list[str] = []
     disabled_reason: str | None = None
+    profile: dict[str, Any] | None = None
     created_at: datetime
 
 
@@ -733,12 +743,16 @@ class CompanyView(BaseModel):
     (``Company record:`` section, §V.135). Only
     the company's own notes are inlined (capped, full body, DESC); company is
     a root entity with no parent to inherit from.
+
+    ``tags`` is the assigned tag-name list (empty ok; same shape as
+    ``CompanySummary.tags`` / ``db export`` company.tags, §V.116).
     """
 
     id: str
     name: str
     domain: str
     profile: dict[str, Any] | None = None
+    tags: list[str] = []
     disabled_reason: str | None = None
     notes: list[Note] = []
     notes_total: int = 0
