@@ -16,10 +16,10 @@ from mailpilot.agent.classify import (
     _AGENT,  # pyright: ignore[reportPrivateUsage]
     classify_email,
 )
-from mailpilot.agent.model import (  # pyright: ignore[reportPrivateUsage]
-    _build_anthropic_model,
-    _build_model,
-    _build_xai_model,
+from mailpilot.agent.model import (
+    _build_anthropic_model,  # pyright: ignore[reportPrivateUsage]
+    _build_model,  # pyright: ignore[reportPrivateUsage]
+    _build_xai_model,  # pyright: ignore[reportPrivateUsage]
 )
 from mailpilot.models import Workflow
 
