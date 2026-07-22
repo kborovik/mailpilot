@@ -165,6 +165,36 @@ Soft-disable a contact (preserves audit history) with:
 mailpilot contact disable <CONTACT_REF> --reason "left company"
 ```
 
+### Write a company profile
+
+Prefer file or stdin over inline JSON (avoids shell-escape footguns). Profile
+objects must include non-empty `summary`, `products`, `target_customers`, and
+`sources`; `timezone` is optional. Invalid profiles fail with
+`validation_error` and write nothing.
+
+Full replace (exclusive: one of `--profile-file`, `--profile -`, or short
+`--profile-json`):
+
+```
+mailpilot company update example.com --profile-file /tmp/profile.json
+mailpilot company update example.com --profile - < /tmp/profile.json
+```
+
+Field patch merges into the existing profile (or builds a base when profile
+is null, then validates the full object). Multi flags replace their list:
+
+```
+mailpilot company update example.com \
+  --summary "ERP reseller focused on mid-market manufacturers." \
+  --product "Acumatica" --product "Dynamics BC" \
+  --source "https://example.com/" --source "lab5-leads tracker" \
+  --timezone America/Chicago \
+  --target-customers "Mid-market manufacturers."
+```
+
+Full-replace and field-patch flags are exclusive. Keep `--name` available
+with either path. Success returns the full company entity including profile.
+
 ### Batch disable companies (stdin NDJSON)
 
 One shell call for many soft-disables. Each stdin line is one JSON object

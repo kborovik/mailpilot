@@ -1945,6 +1945,335 @@ def test_company_update_profile_validation_error_envelope(
     assert '"ok": false' in result.output
 
 
+_VALID_PROFILE = {
+    "summary": "Acme makes widgets.",
+    "products": ["Widget X"],
+    "target_customers": "Aerospace OEMs.",
+    "timezone": "America/Toronto",
+    "sources": ["https://acme.com/"],
+}
+
+
+def test_company_update_profile_file(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    """§V.140: --profile-file full-replaces via the same schema as --profile-json."""
+    before = _make_company()
+    after = before.model_copy(update={"profile": _VALID_PROFILE})
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(json.dumps(_VALID_PROFILE), encoding="utf-8")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=before),
+        patch("mailpilot.database.update_company", return_value=after) as mock_update,
+    ):
+        result = runner.invoke(
+            main,
+            ["company", "update", before.id, "--profile-file", str(profile_path)],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_update.assert_called_once_with(
+        mock_connection, before.id, profile=_VALID_PROFILE
+    )
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 1
+    assert data["company"]["profile"] == _VALID_PROFILE
+
+
+def test_company_update_profile_stdin(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.140: --profile - reads full-replace JSON from stdin."""
+    before = _make_company()
+    after = before.model_copy(update={"profile": _VALID_PROFILE})
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=before),
+        patch("mailpilot.database.update_company", return_value=after) as mock_update,
+    ):
+        result = runner.invoke(
+            main,
+            ["company", "update", before.id, "--profile", "-"],
+            input=json.dumps(_VALID_PROFILE),
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_update.assert_called_once_with(
+        mock_connection, before.id, profile=_VALID_PROFILE
+    )
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["company"]["profile"] == _VALID_PROFILE
+
+
+def test_company_update_profile_replace_options_exclusive(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    """§V.140: full-replace options are exclusive XOR."""
+    company = _make_company()
+    profile_path = tmp_path / "p.json"
+    profile_path.write_text(json.dumps(_VALID_PROFILE), encoding="utf-8")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=company),
+        patch("mailpilot.database.update_company") as mock_update,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "update",
+                company.id,
+                "--profile-json",
+                json.dumps(_VALID_PROFILE),
+                "--profile-file",
+                str(profile_path),
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "validation_error"
+    assert "exclusive" in data["message"]
+    mock_update.assert_not_called()
+
+
+def test_company_update_profile_replace_exclusive_with_patch(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.140: full-replace exclusive with any field-patch flag."""
+    company = _make_company()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=company),
+        patch("mailpilot.database.update_company") as mock_update,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "update",
+                company.id,
+                "--profile-json",
+                json.dumps(_VALID_PROFILE),
+                "--summary",
+                "patched",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "validation_error"
+    assert "exclusive" in data["message"]
+    mock_update.assert_not_called()
+
+
+def test_company_update_profile_field_patch_merge(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.140: field-patch merges into existing profile; multi flags replace lists."""
+    before = _make_company(profile=dict(_VALID_PROFILE))
+    merged = {
+        "summary": "Updated summary.",
+        "products": ["Acumatica", "Dynamics BC"],
+        "target_customers": "Aerospace OEMs.",
+        "timezone": "America/Chicago",
+        "sources": ["https://acme.com/", "lab5-leads tracker"],
+    }
+    after = before.model_copy(update={"profile": merged})
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=before),
+        patch("mailpilot.database.update_company", return_value=after) as mock_update,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "update",
+                before.id,
+                "--summary",
+                "Updated summary.",
+                "--product",
+                "Acumatica",
+                "--product",
+                "Dynamics BC",
+                "--source",
+                "https://acme.com/",
+                "--source",
+                "lab5-leads tracker",
+                "--timezone",
+                "America/Chicago",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_update.assert_called_once_with(mock_connection, before.id, profile=merged)
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 1
+    assert data["company"]["profile"] == merged
+
+
+def test_company_update_profile_patch_null_existing_incomplete(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.140/§V.72: patch on null profile still validates full object (no partial)."""
+    from pydantic import ValidationError
+
+    from mailpilot.models import CompanyProfile
+
+    before = _make_company(profile=None)
+    try:
+        CompanyProfile.model_validate({"summary": "only summary"})
+    except ValidationError as exc:
+        validation_error = exc
+    else:  # pragma: no cover
+        raise AssertionError("incomplete profile must fail validation")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=before),
+        patch("mailpilot.cli.configure_logging", lambda debug=False: None),
+        patch(
+            "mailpilot.database.update_company", side_effect=validation_error
+        ) as mock_update,
+    ):
+        result = runner.invoke(
+            main,
+            ["company", "update", before.id, "--summary", "only summary"],
+        )
+
+    mock_update.assert_called_once_with(
+        mock_connection, before.id, profile={"summary": "only summary"}
+    )
+    assert result.exit_code == 1
+    assert '"error": "validation_error"' in result.output
+    assert '"ok": false' in result.output
+
+
+def test_company_update_profile_patch_null_existing_complete(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.140: null existing + full patch fields builds a valid profile."""
+    before = _make_company(profile=None)
+    after = before.model_copy(update={"profile": _VALID_PROFILE})
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=before),
+        patch("mailpilot.database.update_company", return_value=after) as mock_update,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "update",
+                before.id,
+                "--summary",
+                _VALID_PROFILE["summary"],
+                "--product",
+                "Widget X",
+                "--target-customers",
+                _VALID_PROFILE["target_customers"],
+                "--timezone",
+                "America/Toronto",
+                "--source",
+                "https://acme.com/",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_update.assert_called_once_with(
+        mock_connection, before.id, profile=_VALID_PROFILE
+    )
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["company"]["profile"] == _VALID_PROFILE
+
+
+def test_company_update_profile_non_object_json(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.140: non-object JSON root is validation_error before DB write."""
+    company = _make_company()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=company),
+        patch("mailpilot.database.update_company") as mock_update,
+    ):
+        result = runner.invoke(
+            main,
+            ["company", "update", company.id, "--profile-json", '["not", "object"]'],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "JSON object" in data["message"]
+    mock_update.assert_not_called()
+
+
+def test_company_update_profile_flag_rejects_path(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.140: --profile only accepts '-' (use --profile-file for paths)."""
+    company = _make_company()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=company),
+        patch("mailpilot.database.update_company") as mock_update,
+    ):
+        result = runner.invoke(
+            main,
+            ["company", "update", company.id, "--profile", "/tmp/p.json"],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "--profile-file" in data["message"]
+    mock_update.assert_not_called()
+
+
+def test_company_update_help_documents_profile_paths(runner: CliRunner) -> None:
+    """§V.140/§V.111: --help documents profile write flags without SPEC cites."""
+    result = runner.invoke(main, ["company", "update", "--help"])
+    assert result.exit_code == 0
+    assert "--profile-file" in result.output
+    assert "--profile" in result.output
+    assert "--summary" in result.output
+    assert "--product" in result.output
+    assert "--source" in result.output
+    assert "--timezone" in result.output
+    assert "--target-customers" in result.output
+    assert "§V." not in result.output
+
+
+def test_skill_documents_company_profile_write() -> None:
+    """§V.140: packaged SKILL.md documents file/stdin replace + field patch."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "--profile-file" in body
+    assert "--profile -" in body
+    assert "--summary" in body
+    assert "--product" in body
+    assert "§V." not in body
+    assert "§T." not in body
+
+
 # -- contact helpers -----------------------------------------------------------
 
 

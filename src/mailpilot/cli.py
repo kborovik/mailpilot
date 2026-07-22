@@ -1382,22 +1382,146 @@ def company_create(domain: str, name: str, note: str | None) -> None:
         connection.close()
 
 
+def _parse_company_profile_json(text: str) -> dict[str, object]:
+    """Parse full-replace profile JSON text into a dict.
+
+    Invalid JSON or a non-object root becomes ``validation_error`` (no DB write).
+    """
+    try:
+        parsed: object = json.loads(text)
+    except json.JSONDecodeError as exc:
+        output_error(f"invalid JSON: {exc}", "validation_error")
+    if not isinstance(parsed, dict):
+        output_error("profile must be a JSON object", "validation_error")
+    return parsed
+
+
+def _merge_company_profile_patch(
+    existing: dict[str, Any] | None,
+    *,
+    summary: str | None,
+    products: tuple[str, ...],
+    sources: tuple[str, ...],
+    timezone: str | None,
+    target_customers: str | None,
+) -> dict[str, object]:
+    """Field-merge patch flags into an existing profile (or empty base).
+
+    Multi flags replace their list when at least one value is supplied.
+    Empty ``--timezone`` clears optional timezone to null. Result is not
+    validated here — ``update_company`` applies CompanyProfile validation.
+    """
+    base: dict[str, object] = dict(existing) if existing else {}
+    if summary is not None:
+        base["summary"] = summary
+    if products:
+        base["products"] = list(products)
+    if sources:
+        base["sources"] = list(sources)
+    if timezone is not None:
+        base["timezone"] = timezone if timezone else None
+    if target_customers is not None:
+        base["target_customers"] = target_customers
+    return base
+
+
 @company.command("update")
 @click.argument("company_ref")
 @click.option("--name", default=None, help="Company name.")
 @click.option(
     "--profile-json",
     default=None,
-    help="JSON object validated against CompanyProfile.",
+    help="Full-replace profile as an inline JSON object (prefer --profile-file or --profile -).",
+)
+@click.option(
+    "--profile-file",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Full-replace profile from a JSON file path.",
+)
+@click.option(
+    "--profile",
+    default=None,
+    help="Full-replace profile; pass '-' to read a JSON object from stdin.",
+)
+@click.option("--summary", default=None, help="Patch profile.summary (merge).")
+@click.option(
+    "--product",
+    multiple=True,
+    help="Patch profile.products (repeatable; replaces the products list).",
+)
+@click.option(
+    "--source",
+    multiple=True,
+    help="Patch profile.sources (repeatable; replaces the sources list).",
+)
+@click.option(
+    "--timezone",
+    default=None,
+    help="Patch profile.timezone (empty string clears to null).",
+)
+@click.option(
+    "--target-customers",
+    default=None,
+    help="Patch profile.target_customers (merge).",
 )
 def company_update(
-    company_ref: str, name: str | None, profile_json: str | None
+    company_ref: str,
+    name: str | None,
+    profile_json: str | None,
+    profile_file: str | None,
+    profile: str | None,
+    summary: str | None,
+    product: tuple[str, ...],
+    source: tuple[str, ...],
+    timezone: str | None,
+    target_customers: str | None,
 ) -> None:
-    """Update a company (addressed by domain or ID)."""
-    import json
+    """Update a company (addressed by domain or ID).
+
+    Profile writes: full-replace via exclusive --profile-json / --profile-file /
+    --profile - (stdin), or field-patch merge via --summary / --product /
+    --source / --timezone / --target-customers. Full-replace and field-patch
+    are exclusive. Invalid profiles fail with validation_error and no write.
+    """
+    import pathlib
+    import sys
 
     from mailpilot.database import initialize_database, update_company
     from mailpilot.operator_log import cli_mutation, operator_event
+
+    replace_flags: list[str] = []
+    if profile_json is not None:
+        replace_flags.append("--profile-json")
+    if profile_file is not None:
+        replace_flags.append("--profile-file")
+    if profile is not None:
+        replace_flags.append("--profile")
+    has_patch = any(
+        (
+            summary is not None,
+            bool(product),
+            bool(source),
+            timezone is not None,
+            target_customers is not None,
+        )
+    )
+    if len(replace_flags) > 1:
+        output_error(
+            "full-replace profile options are exclusive: "
+            + ", ".join(replace_flags),
+            "validation_error",
+        )
+    if replace_flags and has_patch:
+        output_error(
+            "full-replace profile options are exclusive with field-patch flags",
+            "validation_error",
+        )
+    if profile is not None and profile != "-":
+        output_error(
+            "--profile only accepts '-' for stdin; use --profile-file for a path",
+            "validation_error",
+        )
 
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
@@ -1407,10 +1531,22 @@ def company_update(
         if name is not None:
             fields["name"] = name
         if profile_json is not None:
-            try:
-                fields["profile"] = json.loads(profile_json)
-            except json.JSONDecodeError as exc:
-                output_error(f"invalid JSON: {exc}", "validation_error")
+            fields["profile"] = _parse_company_profile_json(profile_json)
+        elif profile_file is not None:
+            raw = pathlib.Path(profile_file).read_text(encoding="utf-8")
+            fields["profile"] = _parse_company_profile_json(raw)
+        elif profile == "-":
+            fields["profile"] = _parse_company_profile_json(sys.stdin.read())
+        elif has_patch:
+            existing = before.profile if isinstance(before.profile, dict) else None
+            fields["profile"] = _merge_company_profile_patch(
+                existing,
+                summary=summary,
+                products=product,
+                sources=source,
+                timezone=timezone,
+                target_customers=target_customers,
+            )
         with cli_mutation("company", "update", entity_id=company_id):
             updated = update_company(connection, company_id, **fields)
             if updated is None:
