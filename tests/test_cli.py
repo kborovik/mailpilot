@@ -2010,6 +2010,109 @@ def test_company_disable_empty_reason(runner: CliRunner) -> None:
     assert data["error"] == "validation_error"
 
 
+def test_company_disable_reason_file(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    """§V.149: --reason-file supplies reason text (strip one trailing newline)."""
+    reason_path = tmp_path / "reason.txt"
+    reason_path.write_text("long multi-line\nreason body\n", encoding="utf-8")
+    before = _make_company(disabled_reason=None)
+    after = _make_company(disabled_reason="long multi-line\nreason body")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company", return_value=before),
+        patch("mailpilot.database.disable_company", return_value=after) as mock_disable,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "disable",
+                before.id,
+                "--reason-file",
+                str(reason_path),
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_disable.assert_called_once_with(
+        mock_connection, before.id, "long multi-line\nreason body"
+    )
+
+
+def test_company_disable_reason_file_xor_reason(
+    runner: CliRunner, tmp_path: pathlib.Path
+) -> None:
+    """§V.149: --reason and --reason-file together are rejected."""
+    reason_path = tmp_path / "reason.txt"
+    reason_path.write_text("from-file", encoding="utf-8")
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "disable",
+                "some-id",
+                "--reason",
+                "inline",
+                "--reason-file",
+                str(reason_path),
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "only one" in data["message"]
+
+
+def test_company_disable_reason_file_missing(runner: CliRunner) -> None:
+    """§V.149: missing reason file → not_found."""
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "disable",
+                "some-id",
+                "--reason-file",
+                "/tmp/mailpilot-no-such-reason-file.txt",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+
+
+def test_company_disable_reason_file_empty(
+    runner: CliRunner, tmp_path: pathlib.Path
+) -> None:
+    """§V.149: empty reason file → validation_error."""
+    reason_path = tmp_path / "empty.txt"
+    reason_path.write_text("\n", encoding="utf-8")
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            ["company", "disable", "some-id", "--reason-file", str(reason_path)],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+
+
+def test_company_disable_missing_reason_source(runner: CliRunner) -> None:
+    """§V.149: single-entity disable needs --reason or --reason-file."""
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(main, ["company", "disable", "some-id"])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+
+
 def test_company_disable_stdin_mixed_ok_error(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
@@ -3577,9 +3680,36 @@ def test_contact_disable_empty_reason(
 
 
 def test_contact_disable_missing_reason(runner: CliRunner) -> None:
-    result = runner.invoke(main, ["contact", "disable", "any-id"])
-    assert result.exit_code != 0
-    assert "--reason" in result.output
+    """§V.149: contact disable needs --reason or --reason-file."""
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(main, ["contact", "disable", "any-id"])
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "reason" in data["message"]
+
+
+def test_contact_disable_reason_file(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    """§V.149: contact disable --reason-file XOR --reason."""
+    reason_path = tmp_path / "r.txt"
+    reason_path.write_text("left company\n", encoding="utf-8")
+    before = _make_contact(disabled_reason=None)
+    after = _make_contact(disabled_reason="left company")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_contact", return_value=before),
+        patch("mailpilot.database.disable_contact", return_value=after) as mock_disable,
+    ):
+        result = runner.invoke(
+            main,
+            ["contact", "disable", before.id, "--reason-file", str(reason_path)],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_disable.assert_called_once_with(mock_connection, before.id, "left company")
 
 
 def test_contact_disable_not_found(

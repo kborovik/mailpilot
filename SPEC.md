@@ -248,7 +248,7 @@ T224|x|impl §V.145(+) + §I — company export jsonl; list-family filters; --fu
 T225|x|impl §V.146(+) + §I — company import --from jsonl --dry-run diff buckets; filter-scoped CRM; tests; --skill (#195)|V146,V145,V138,V4,I.cli
 T226|x|impl §V.147(+) + §V.139(∆) + §I — company create --upsert + contact create --upsert; field-selective update; `created` flag; preserve non-upsert errors; stdin upsert line; tests create vs update + profile non-wipe; --skill agent recipe (#196)|V147,V139,V16,V142,V140,V90,V4,I.cli
 T227|x|impl §V.148(+) + §V.115(∆) + §I — company list|search --sort/--desc/--offset; company default limit 500; pin search lean fields; tests; --skill defaults/sort keys (#197)|V148,V115,V8,V116,V114,V96,V3,V4,I.cli
-T228|.|impl §V.149(+) + §I — company/contact disable --reason-file XOR --reason; tests empty/missing/XOR; --skill (#197)|V149,V114,V3,V4,I.cli
+T228|x|impl §V.149(+) + §I — company/contact disable --reason-file XOR --reason; tests empty/missing/XOR; --skill (#197)|V149,V114,V3,V4,I.cli
 
 ## §B BUGS
 

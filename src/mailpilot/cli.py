@@ -241,6 +241,43 @@ def _emit_batch_results(results: list[dict[str, object]]) -> None:
         raise SystemExit(1)
 
 
+def _resolve_disable_reason(reason: str | None, reason_file: str | None) -> str:
+    """Resolve single-entity disable reason from ``--reason`` XOR ``--reason-file``.
+
+    Exactly one source required. File is UTF-8; one trailing newline is stripped
+    (``\\n`` or ``\\r\\n``). Empty after resolve → ``validation_error``. Missing
+    path → ``not_found``.
+    """
+    import pathlib
+
+    if reason is not None and reason_file is not None:
+        output_error(
+            "pass only one of --reason or --reason-file",
+            "validation_error",
+        )
+    if reason is None and reason_file is None:
+        output_error(
+            "pass --reason or --reason-file",
+            "validation_error",
+        )
+    if reason_file is not None:
+        path = pathlib.Path(reason_file)
+        if not path.is_file():
+            output_error(f"reason file not found: {reason_file}", "not_found")
+        text = path.read_text(encoding="utf-8")
+        if text.endswith("\r\n"):
+            text = text[:-2]
+        elif text.endswith("\n"):
+            text = text[:-1]
+        if text.strip() == "":
+            output_error("reason cannot be empty", "validation_error")
+        return text
+    assert reason is not None
+    if reason.strip() == "":
+        output_error("reason cannot be empty", "validation_error")
+    return reason
+
+
 def _read_stdin_ndjson_lines() -> list[tuple[int, str]]:
     """Read non-empty stdin lines as (1-based line number, stripped text)."""
     import sys
@@ -1777,27 +1814,41 @@ def company_update(
     help="Explanation written to disabled_reason (single-entity mode).",
 )
 @click.option(
+    "--reason-file",
+    "reason_file",
+    default=None,
+    type=click.Path(dir_okay=False),
+    help=(
+        "Read disable reason from a UTF-8 file (single-entity; exclusive "
+        "with --reason)."
+    ),
+)
+@click.option(
     "--stdin",
     "from_stdin",
     is_flag=True,
     default=False,
     help=(
         "Batch mode: read NDJSON from stdin, one object per line with "
-        "domain and reason. Exclusive with COMPANY_REF / --reason. "
-        "Re-disable of an already-disabled company is an ok no-op. "
-        "Exit 0 when every row is ok; exit 1 if any row errors "
+        "domain and reason. Exclusive with COMPANY_REF / --reason / "
+        "--reason-file. Re-disable of an already-disabled company is an "
+        "ok no-op. Exit 0 when every row is ok; exit 1 if any row errors "
         "(full results JSON still on stdout)."
     ),
 )
 def company_disable(
-    company_ref: str | None, reason: str | None, from_stdin: bool
+    company_ref: str | None,
+    reason: str | None,
+    reason_file: str | None,
+    from_stdin: bool,
 ) -> None:
     """Soft-disable a company by writing disabled_reason.
 
     A disabled company is hidden from `company list` unless `--include-disabled`
     is passed. Disable is reversible -- re-enable with `company enable`.
-    Single-entity mode rejects an already-disabled company; ``--stdin`` batch
-    mode treats re-disable as an ok no-op so a lead pass can re-run safely.
+    Single-entity mode takes ``--reason`` or ``--reason-file`` (XOR) and
+    rejects an already-disabled company; ``--stdin`` batch mode treats
+    re-disable as an ok no-op so a lead pass can re-run safely.
     """
     from mailpilot.database import disable_company, initialize_database
     from mailpilot.operator_log import cli_mutation, operator_event
@@ -1808,9 +1859,10 @@ def company_disable(
                 "--stdin is exclusive with a company positional target",
                 "validation_error",
             )
-        if reason is not None:
+        if reason is not None or reason_file is not None:
             output_error(
-                "--stdin is exclusive with --reason (supply reason per NDJSON line)",
+                "--stdin is exclusive with --reason / --reason-file "
+                "(supply reason per NDJSON line)",
                 "validation_error",
             )
         _run_company_disable_stdin()
@@ -1821,8 +1873,7 @@ def company_disable(
             "COMPANY_REF is required (or pass --stdin)",
             "validation_error",
         )
-    if reason is None or reason.strip() == "":
-        output_error("reason cannot be empty", "validation_error")
+    resolved_reason = _resolve_disable_reason(reason, reason_file)
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         before = _resolve_company(connection, company_ref)
@@ -1834,7 +1885,7 @@ def company_disable(
                 "validation_error",
             )
         with cli_mutation("company", "disable", entity_id=company_id):
-            updated = disable_company(connection, company_id, reason)
+            updated = disable_company(connection, company_id, resolved_reason)
             if updated is None:
                 output_error(
                     f"company {company_id} is already disabled",
@@ -2640,22 +2691,35 @@ def contact_update(
 @click.argument("contact_ref")
 @click.option(
     "--reason",
-    required=True,
+    default=None,
     help="Explanation written to disabled_reason.",
 )
-def contact_disable(contact_ref: str, reason: str) -> None:
-    """Soft-disable a contact by writing disabled_reason (addressed by email or ID)."""
+@click.option(
+    "--reason-file",
+    "reason_file",
+    default=None,
+    type=click.Path(dir_okay=False),
+    help=(
+        "Read disable reason from a UTF-8 file (exclusive with --reason)."
+    ),
+)
+def contact_disable(
+    contact_ref: str, reason: str | None, reason_file: str | None
+) -> None:
+    """Soft-disable a contact by writing disabled_reason (email or ID).
+
+    Pass ``--reason`` or ``--reason-file`` (exactly one).
+    """
     from mailpilot.database import disable_contact, initialize_database
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    if reason.strip() == "":
-        output_error("reason cannot be empty", "validation_error")
+    resolved_reason = _resolve_disable_reason(reason, reason_file)
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         before = _resolve_contact(connection, contact_ref)
         contact_id = before.id
         with cli_mutation("contact", "disable", entity_id=contact_id):
-            updated = disable_contact(connection, contact_id, reason)
+            updated = disable_contact(connection, contact_id, resolved_reason)
             if updated is None:
                 output_error(f"contact not found: {contact_id}", "not_found")
             changed = (

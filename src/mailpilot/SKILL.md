@@ -171,10 +171,15 @@ mailpilot contact create --email lead@example.com \
     --company-domain <COMPANY_REF> --title "VP Sales" --upsert
 ```
 
-Soft-disable a contact (preserves audit history) with:
+Soft-disable a contact (preserves audit history) with ``--reason`` or
+``--reason-file`` (exactly one; long reasons from a file avoid shell
+quoting). Same XOR on ``company disable`` (single-entity; ``--stdin`` batch
+still supplies reason per NDJSON line):
 
 ```
 mailpilot contact disable <CONTACT_REF> --reason "left company"
+mailpilot contact disable <CONTACT_REF> --reason-file /tmp/reason.txt
+mailpilot company disable example.com --reason-file /tmp/reason.txt
 ```
 
 ### Contact verification meta (operator-only)
