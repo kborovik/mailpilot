@@ -184,13 +184,14 @@ def output(data: dict[str, Any], *, record_count: int | None = None) -> None:
     )
 
 
-def output_entity(key: str, model: Any) -> None:
+def output_entity(key: str, model: Any, **extra: object) -> None:
     """Emit a single entity wrapped under its singular key.
 
     Per SPEC §V.4: `<entity> view|create|update` -> `{"<singular>": {...}, "ok": true}`.
     Symmetric with `output({"<plural>": [...]})` used by list commands.
+    ``extra`` merges top-level fields (e.g. ``created`` for §V.147 upsert).
     """
-    output({key: model.model_dump(mode="json")})
+    output({key: model.model_dump(mode="json"), **extra})
 
 
 def output_error(
@@ -421,6 +422,15 @@ def _parse_contact_create_fields(
         return None, _batch_error(
             ref, "validation_error", "meta must be a JSON object"
         )
+    upsert_raw = payload.get("upsert")
+    if upsert_raw is None:
+        upsert = False
+    elif isinstance(upsert_raw, bool):
+        upsert = upsert_raw
+    else:
+        return None, _batch_error(
+            ref, "validation_error", "upsert must be a boolean"
+        )
     return {
         "ref": ref,
         "email": email,
@@ -431,14 +441,46 @@ def _parse_contact_create_fields(
         "company_domain": optional["company_domain"],
         "email_confidence": confidence,
         "meta": meta,
+        "upsert": upsert,
     }, None
+
+
+def _contact_upsert_fields(
+    *,
+    title: str | None,
+    email_confidence: int | None,
+    company_id: str | None,
+    company_domain_set: bool,
+    verification_meta: dict[str, object] | None,
+    meta_set: bool,
+) -> dict[str, object]:
+    """Build field-selective contact update kwargs for §V.147 upsert.
+
+    Only supplied create flags are included — omitted fields are never
+    clobbered. ``first_name`` / ``last_name`` are insert-only.
+    """
+    fields: dict[str, object] = {}
+    if title is not None:
+        fields["title"] = title
+    if email_confidence is not None:
+        fields["email_confidence"] = email_confidence
+    if company_domain_set:
+        fields["company_id"] = company_id
+    if meta_set:
+        fields["verification_meta"] = verification_meta
+    return fields
 
 
 def _contact_create_stdin_row(
     connection: Any, line_number: int, line: str
 ) -> dict[str, object]:
     """Process one ``contact create --stdin`` NDJSON line into a result row."""
-    from mailpilot.database import add_contact_note, create_contact
+    from mailpilot.database import (
+        add_contact_note,
+        create_contact,
+        get_contact_by_email,
+        update_contact,
+    )
     from mailpilot.operator_log import operator_event
 
     payload, parse_error = _parse_ndjson_object(line_number, line)
@@ -452,14 +494,17 @@ def _contact_create_stdin_row(
     ref = str(fields["ref"])
     company_domain = fields["company_domain"]
     company_id: str | None = None
-    if isinstance(company_domain, str):
-        company = _lookup_company_soft(connection, company_domain)
+    company_domain_set = isinstance(company_domain, str)
+    if company_domain_set:
+        company = _lookup_company_soft(connection, str(company_domain))
         if company is None:
             return _batch_error(
                 ref, "not_found", f"company not found: {company_domain}"
             )
         company_id = company.id
     meta = fields["meta"] if isinstance(fields["meta"], dict) else None
+    meta_set = fields["meta"] is not None
+    do_upsert = bool(fields["upsert"])
     created = create_contact(
         connection,
         email=str(fields["email"]),
@@ -477,7 +522,38 @@ def _contact_create_stdin_row(
         verification_meta=meta,
     )
     if created is None:
-        # Safe-idempotent: duplicate natural key -> ok skip.
+        if not do_upsert:
+            # Safe-idempotent: duplicate natural key -> ok skip (§V.139).
+            return _batch_ok(ref)
+        existing = get_contact_by_email(connection, str(fields["email"]))
+        if existing is None:
+            return _batch_error(
+                ref, "duplicate_key", f"contact with email={ref!r} already exists"
+            )
+        update_fields = _contact_upsert_fields(
+            title=fields["title"] if isinstance(fields["title"], str) else None,
+            email_confidence=(
+                fields["email_confidence"]
+                if isinstance(fields["email_confidence"], int)
+                else None
+            ),
+            company_id=company_id,
+            company_domain_set=company_domain_set,
+            verification_meta=meta,
+            meta_set=meta_set,
+        )
+        if update_fields:
+            updated = update_contact(connection, existing.id, **update_fields)
+            if updated is None:
+                return _batch_error(ref, "not_found", f"contact not found: {ref}")
+            operator_event(
+                "contact.upsert",
+                entity_id=updated.id,
+                email=updated.email,
+                company_id=company_id,
+                created=False,
+                changed=sorted(update_fields),
+            )
         return _batch_ok(ref)
     changed = ["email", "first_name", "last_name", "company_id"]
     title = fields["title"]
@@ -1384,15 +1460,32 @@ def company() -> None:
     default=None,
     help="Optional first note body. Appended atomically as a `note` row.",
 )
+@click.option(
+    "--upsert",
+    is_flag=True,
+    default=False,
+    help=(
+        "On natural-key conflict, update name when non-empty and register "
+        "missing aliases only (never wipe profile). Without this flag, "
+        "duplicate domain returns already_exists. Preferred agent path."
+    ),
+)
 def company_create(
-    domain: str, name: str, aliases: tuple[str, ...], note: str | None
+    domain: str,
+    name: str,
+    aliases: tuple[str, ...],
+    note: str | None,
+    upsert: bool,
 ) -> None:
     """Create a new company, optionally with alias domains."""
     from mailpilot.database import (
+        add_company_alias,
         add_company_note,
         create_company,
+        get_company_by_domain_exact,
         initialize_database,
         load_company_view,
+        update_company,
     )
     from mailpilot.operator_log import cli_mutation, operator_event
 
@@ -1400,33 +1493,76 @@ def company_create(
         output_error("domain cannot be empty", "validation_error")
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
-        with cli_mutation("company", "create", domain=domain):
-            created = create_company(
+        with cli_mutation("company", "create", domain=domain, upsert=upsert):
+            created_row = create_company(
                 connection,
                 name=name,
                 domain=domain,
                 aliases=list(aliases) if aliases else None,
             )
-            if created is None:
-                output_error(
-                    f"company domain or alias already exists: {domain!r}",
-                    "already_exists",
+            if created_row is None:
+                if not upsert:
+                    output_error(
+                        f"company domain or alias already exists: {domain!r}",
+                        "already_exists",
+                    )
+                # Canonical domain only — alias-of-other stays already_exists
+                # (never move ownership, §V.147 / §V.142).
+                existing = get_company_by_domain_exact(connection, domain)
+                if existing is None:
+                    output_error(
+                        f"company domain or alias already exists: {domain!r}",
+                        "already_exists",
+                    )
+                changed: list[str] = []
+                if name:
+                    updated = update_company(connection, existing.id, name=name)
+                    if updated is not None:
+                        existing = updated
+                        changed.append("name")
+                for alias in aliases:
+                    try:
+                        if add_company_alias(
+                            connection, existing.id, alias, commit=True
+                        ):
+                            if "aliases" not in changed:
+                                changed.append("aliases")
+                    except ValueError as exc:
+                        output_error(str(exc), "already_exists")
+                # Bare upsert never touches profile (§V.147 / §V.140).
+                operator_event(
+                    "company.upsert",
+                    entity_id=existing.id,
+                    domain=existing.domain,
+                    created=False,
+                    changed=changed or ["none"],
                 )
+                viewed = load_company_view(connection, existing.id)
+                output_entity(
+                    "company",
+                    viewed if viewed is not None else existing,
+                    created=False,
+                )
+                return
             changed = ["name", "domain"]
             if aliases:
                 changed.append("aliases")
             if note:
-                add_company_note(connection, created.id, note)
+                add_company_note(connection, created_row.id, note)
                 changed.append("note")
             operator_event(
                 "company.create",
-                entity_id=created.id,
-                domain=created.domain,
+                entity_id=created_row.id,
+                domain=created_row.domain,
                 changed=changed,
             )
             # View projection includes aliases[] (§V.8 / §V.142).
-            viewed = load_company_view(connection, created.id)
-            output_entity("company", viewed if viewed is not None else created)
+            viewed = load_company_view(connection, created_row.id)
+            output_entity(
+                "company",
+                viewed if viewed is not None else created_row,
+                created=True,
+            )
     finally:
         connection.close()
 
@@ -2233,11 +2369,22 @@ def contact() -> None:
     help=(
         "Batch mode: read NDJSON from stdin, one object per line with "
         "contact create fields (email required; first_name, last_name, "
-        "company_domain, title, email_confidence, meta, note optional). "
-        "Exclusive with single-entity create options. "
-        "Duplicate email is an ok skip. "
-        "Exit 0 when every row is ok; exit 1 if any row errors "
+        "company_domain, title, email_confidence, meta, note, upsert "
+        "optional). Exclusive with single-entity create options. "
+        "Duplicate email is an ok skip unless upsert:true (field-selective "
+        "update). Exit 0 when every row is ok; exit 1 if any row errors "
         "(full results JSON still on stdout)."
+    ),
+)
+@click.option(
+    "--upsert",
+    is_flag=True,
+    default=False,
+    help=(
+        "On natural-key conflict, update title / email_confidence / "
+        "company_domain / meta when those flags are present (never clobber "
+        "omitted fields). Without this flag, duplicate email returns "
+        "duplicate_key. Preferred agent path."
     ),
 )
 def contact_create(
@@ -2250,12 +2397,15 @@ def contact_create(
     meta_json: str | None,
     note: str | None,
     from_stdin: bool,
+    upsert: bool,
 ) -> None:
     """Create a new contact (single-entity or ``--stdin`` NDJSON batch)."""
     from mailpilot.database import (
         add_contact_note,
         create_contact,
+        get_contact_by_email,
         initialize_database,
+        update_contact,
     )
     from mailpilot.operator_log import cli_mutation, operator_event
 
@@ -2273,7 +2423,7 @@ def contact_create(
         )
     )
     if from_stdin:
-        if single_entity_set:
+        if single_entity_set or upsert:
             output_error(
                 "--stdin is exclusive with single-entity create options",
                 "validation_error",
@@ -2296,8 +2446,10 @@ def contact_create(
             if company_domain is not None
             else None
         )
-        with cli_mutation("contact", "create", email=email, company_id=company_id):
-            created = create_contact(
+        with cli_mutation(
+            "contact", "create", email=email, company_id=company_id, upsert=upsert
+        ):
+            created_row = create_contact(
                 connection,
                 email=email,
                 first_name=first_name,
@@ -2307,11 +2459,45 @@ def contact_create(
                 email_confidence=email_confidence,
                 verification_meta=verification_meta,
             )
-            if created is None:
-                output_error(
-                    f"contact with email={email!r} already exists",
-                    "duplicate_key",
+            if created_row is None:
+                if not upsert:
+                    output_error(
+                        f"contact with email={email!r} already exists",
+                        "duplicate_key",
+                    )
+                existing = get_contact_by_email(connection, email)
+                if existing is None:
+                    output_error(
+                        f"contact with email={email!r} already exists",
+                        "duplicate_key",
+                    )
+                update_fields = _contact_upsert_fields(
+                    title=title,
+                    email_confidence=email_confidence,
+                    company_id=company_id,
+                    company_domain_set=company_domain is not None,
+                    verification_meta=verification_meta,
+                    meta_set=meta_json is not None,
                 )
+                contact_out = existing
+                if update_fields:
+                    updated = update_contact(connection, existing.id, **update_fields)
+                    if updated is None:
+                        output_error(
+                            f"contact with email={email!r} already exists",
+                            "duplicate_key",
+                        )
+                    contact_out = updated
+                operator_event(
+                    "contact.upsert",
+                    entity_id=contact_out.id,
+                    email=contact_out.email,
+                    company_id=company_id,
+                    created=False,
+                    changed=sorted(update_fields) if update_fields else ["none"],
+                )
+                output_entity("contact", contact_out, created=False)
+                return
             changed = ["email", "first_name", "last_name", "company_id"]
             if title is not None:
                 changed.append("title")
@@ -2320,16 +2506,16 @@ def contact_create(
             if verification_meta is not None:
                 changed.append("verification_meta")
             if note:
-                add_contact_note(connection, created.id, note)
+                add_contact_note(connection, created_row.id, note)
                 changed.append("note")
             operator_event(
                 "contact.create",
-                entity_id=created.id,
-                email=created.email,
+                entity_id=created_row.id,
+                email=created_row.email,
                 company_id=company_id,
                 changed=changed,
             )
-            output_entity("contact", created)
+            output_entity("contact", created_row, created=True)
     finally:
         connection.close()
 

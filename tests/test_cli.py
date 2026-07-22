@@ -895,8 +895,86 @@ def test_company_create(runner: CliRunner, mock_connection: MagicMock) -> None:
     )
     data = json.loads(result.output)
     assert data["ok"] is True
+    assert data["created"] is True
     assert data["company"]["domain"] == "acme.com"
     assert data["company"]["name"] == "Acme Corp"
+
+
+def test_company_create_duplicate_without_upsert(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.147: without --upsert, natural-key conflict stays already_exists."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_company", return_value=None),
+    ):
+        result = runner.invoke(
+            main, ["company", "create", "--domain", "acme.com", "--name", "Acme"]
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "already_exists"
+
+
+def test_company_create_upsert_updates_name_preserves_profile(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.147: second create --upsert updates name; never passes profile."""
+    existing = _make_company(
+        name="Old Name",
+        profile={
+            "summary": "Keep me",
+            "products": ["Acumatica"],
+            "target_customers": "Mid-market",
+            "sources": ["https://acme.com"],
+        },
+    )
+    updated = _make_company(name="New Name", profile=existing.profile)
+    view = CompanyView(
+        id=updated.id,
+        name=updated.name,
+        domain=updated.domain,
+        aliases=[],
+        profile=updated.profile,
+        created_at=updated.created_at,
+        updated_at=updated.updated_at,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_company", return_value=None),
+        patch(
+            "mailpilot.database.get_company_by_domain_exact", return_value=existing
+        ),
+        patch(
+            "mailpilot.database.update_company", return_value=updated
+        ) as mock_update,
+        patch("mailpilot.database.load_company_view", return_value=view),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "create",
+                "--domain",
+                "acme.com",
+                "--name",
+                "New Name",
+                "--upsert",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_update.assert_called_once_with(mock_connection, existing.id, name="New Name")
+    assert "profile" not in mock_update.call_args.kwargs
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["created"] is False
+    assert data["company"]["name"] == "New Name"
+    assert data["company"]["profile"]["summary"] == "Keep me"
+    assert data["record_count"] == 1
 
 
 def test_company_create_domain_only(
@@ -2731,8 +2809,83 @@ def test_contact_create(runner: CliRunner, mock_connection: MagicMock) -> None:
     )
     data = json.loads(result.output)
     assert data["ok"] is True
+    assert data["created"] is True
     assert data["contact"]["email"] == "alice@example.com"
     assert data["contact"]["first_name"] == "Alice"
+
+
+def test_contact_create_duplicate_without_upsert(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.147: without --upsert, natural-key conflict stays duplicate_key."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_contact", return_value=None),
+    ):
+        result = runner.invoke(
+            main, ["contact", "create", "--email", "alice@example.com"]
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "duplicate_key"
+
+
+def test_contact_create_upsert_updates_supplied_fields(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.147: second create --upsert updates title/confidence; skips omitted."""
+    existing = _make_contact(
+        first_name="Alice",
+        last_name="Smith",
+        title="Analyst",
+        email_confidence=50,
+    )
+    updated = _make_contact(
+        first_name="Alice",
+        last_name="Smith",
+        title="VP Sales",
+        email_confidence=90,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_contact", return_value=None),
+        patch("mailpilot.database.get_contact_by_email", return_value=existing),
+        patch(
+            "mailpilot.database.update_contact", return_value=updated
+        ) as mock_update,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "contact",
+                "create",
+                "--email",
+                "alice@example.com",
+                "--title",
+                "VP Sales",
+                "--email-confidence",
+                "90",
+                "--upsert",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_update.assert_called_once_with(
+        mock_connection,
+        existing.id,
+        title="VP Sales",
+        email_confidence=90,
+    )
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["created"] is False
+    assert data["contact"]["title"] == "VP Sales"
+    assert data["contact"]["email_confidence"] == 90
+    assert data["contact"]["first_name"] == "Alice"
+    assert data["record_count"] == 1
 
 
 def test_contact_create_email_only(
@@ -3057,6 +3210,59 @@ def test_skill_documents_batch_stdin() -> None:
     assert "company disable --stdin" in body
     assert "contact create --stdin" in body
     assert "record_count" in body
+    assert "§V." not in body
+    assert "§T." not in body
+
+
+def test_contact_create_stdin_upsert_updates(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.147/§V.139: stdin upsert:true field-selective update on duplicate."""
+    existing = _make_contact(email="dup@acme.com", title="Old")
+    updated = _make_contact(email="dup@acme.com", title="New")
+
+    def _create(
+        _conn: object,
+        *,
+        email: str,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        company_id: str | None = None,
+        title: str | None = None,
+        email_confidence: int | None = None,
+        verification_meta: dict[str, object] | None = None,
+    ) -> Contact | None:
+        return None
+
+    stdin = json.dumps({"email": "dup@acme.com", "title": "New", "upsert": True}) + "\n"
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_contact", side_effect=_create),
+        patch("mailpilot.database.get_contact_by_email", return_value=existing),
+        patch(
+            "mailpilot.database.update_contact", return_value=updated
+        ) as mock_update,
+    ):
+        result = runner.invoke(main, ["contact", "create", "--stdin"], input=stdin)
+
+    assert result.exit_code == 0, result.output
+    mock_update.assert_called_once_with(
+        mock_connection, existing.id, title="New"
+    )
+    data = json.loads(result.output)
+    assert data["results"] == [{"ref": "dup@acme.com", "status": "ok"}]
+
+
+def test_skill_documents_create_upsert() -> None:
+    """§V.147: packaged SKILL.md documents create --upsert as preferred path."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "company create" in body
+    assert "--upsert" in body
+    assert "created: true" in body or "created: true" in body.replace(" ", "")
+    assert "Preferred agent path" in body or "preferred agent path" in body.lower()
     assert "§V." not in body
     assert "§T." not in body
 

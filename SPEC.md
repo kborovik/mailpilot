@@ -243,7 +243,7 @@ T222|x|impl §V.142(+) + §V.143(+) + §I — company domain aliases + merge int
 T223|x|impl §V.144(+) + §V.8(∆) + §I — contact verification_meta JSONB; create|update --meta-json; view --include-meta; agent allowlist + context-builder tests; migration; --skill docs (#194)|V144,V8,V95,V135,V4,I.cli
 T224|x|impl §V.145(+) + §I — company export jsonl; list-family filters; --full profile; --out status envelope or stdout stream; shape tests; --skill (#195)|V145,V138,V116,V114,V96,V3,V4,I.cli
 T225|x|impl §V.146(+) + §I — company import --from jsonl --dry-run diff buckets; filter-scoped CRM; tests; --skill (#195)|V146,V145,V138,V4,I.cli
-T226|.|impl §V.147(+) + §V.139(∆) + §I — company create --upsert + contact create --upsert; field-selective update; `created` flag; preserve non-upsert errors; stdin upsert line; tests create vs update + profile non-wipe; --skill agent recipe (#196)|V147,V139,V16,V142,V140,V90,V4,I.cli
+T226|x|impl §V.147(+) + §V.139(∆) + §I — company create --upsert + contact create --upsert; field-selective update; `created` flag; preserve non-upsert errors; stdin upsert line; tests create vs update + profile non-wipe; --skill agent recipe (#196)|V147,V139,V16,V142,V140,V90,V4,I.cli
 
 ## §B BUGS
 

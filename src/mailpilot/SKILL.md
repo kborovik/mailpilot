@@ -153,10 +153,22 @@ Pub/Sub deltas.
 
 ### Create a contact and company
 
+Preferred agent path uses `--upsert` so a second create on the same natural
+key updates allowed fields and exits 0 (no view→create→update loop). Without
+`--upsert`, duplicate email returns `duplicate_key` and duplicate company
+domain/alias returns `already_exists` (unchanged).
+
+Success envelopes include top-level `created: true` (insert) or
+`created: false` (update). Contact upsert updates only flags present on the
+call (`title`, `email_confidence`, `company_domain`, `--meta-json`); omitted
+fields are not clobbered. Company upsert updates non-empty `--name` and
+registers missing `--alias` values only — it never wipes profile.
+
 ```
-mailpilot company create --domain example.com --name "Example Co"
+mailpilot company create --domain example.com --name "Example Co" --upsert
 mailpilot contact create --email lead@example.com \
-    --first-name "Ada" --last-name "Lovelace" --company-domain <COMPANY_REF>
+    --first-name "Ada" --last-name "Lovelace" \
+    --company-domain <COMPANY_REF> --title "VP Sales" --upsert
 ```
 
 Soft-disable a contact (preserves audit history) with:
@@ -285,14 +297,15 @@ Exit 0 when every row is ok; exit 1 if any row has `status: "error"`
 
 Each stdin line is one JSON object with contact create fields. `email` is
 required; `first_name`, `last_name`, `company_domain`, `title`,
-`email_confidence`, `meta` (JSON object), and `note` are optional.
-`--stdin` is exclusive with single-entity create options. A duplicate email
-natural key is an ok skip (upsert is a separate feature).
+`email_confidence`, `meta` (JSON object), `note`, and `upsert` (boolean)
+are optional. `--stdin` is exclusive with single-entity create options. A
+duplicate email natural key is an ok skip unless the line sets
+`"upsert": true` (then field-selective update of supplied fields).
 
 ```
 printf '%s\n' \
-  '{"email":"ada@example.com","first_name":"Ada","company_domain":"example.com"}' \
-  '{"email":"grace@example.com","title":"CTO","meta":{"source":"hunter"}}' \
+  '{"email":"ada@example.com","first_name":"Ada","company_domain":"example.com","upsert":true}' \
+  '{"email":"grace@example.com","title":"CTO","meta":{"source":"hunter"},"upsert":true}' \
   | mailpilot contact create --stdin
 ```
 
