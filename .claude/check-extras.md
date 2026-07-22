@@ -253,7 +253,7 @@ Six families, each with fixed naming + semantics:
 5. Text-match: field-named, exact only on `list`, case-fold per natural-key semantics; substring/fuzzy → `search` verb only.
 6. Lifecycle: `--include-disabled` (is_flag False) + `--since`/`--until <ISO>` closed inclusive interval over one declared column.
 
-`--limit <int>` (default 100) = sole result control (no `--offset`/`--order-by`/`--desc`). `--direction` = canonical inbound/outbound axis across email + workflow + template. Families realized as shared Click decorators (`limit_option`, `time_window_options(col)`, `include_disabled_option`, `scope_option`, `enum_option`, `range_options`, `presence_option`) composed fixed-order in `cli.py`/`_filters.py`. New list flag = new vocabulary decorator or spec change.
+Result-control set (not filters): `--limit <int>` (default 100 unless noun opts higher — company list|search default 500 per §V.148), `--offset <int>` (default 0), `--sort` (noun-declared Choice; absent → noun default order), `--desc` (is_flag; flips ASC→DESC). `record_count` = page length only (no total/has_more MVP). `--direction` = canonical inbound/outbound axis across email + workflow + template. Families realized as shared Click decorators (`limit_option`, `time_window_options(col)`, `include_disabled_option`, `scope_option`, `enum_option`, `range_options`, `presence_option`; plus `offset_option`/`sort_option` when §V.148 lands) composed fixed-order in `cli.py`/`_filters.py`. New list flag = new vocabulary decorator or spec change.
 
 Trigger: `src/mailpilot/cli.py` or `src/mailpilot/_filters.py` changed.
 - `rg 'limit_option|time_window_options|include_disabled_option|scope_option|enum_option|range_options|presence_option' src/mailpilot/` -> all 7 decorator names present
