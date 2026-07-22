@@ -281,6 +281,15 @@ def _lookup_company_soft(connection: Any, company_ref: str) -> Company | None:
     return get_company_by_domain(connection, company_ref)
 
 
+def _lookup_contact_soft(connection: Any, contact_ref: str) -> Contact | None:
+    """Resolve contact by email or UUID without exiting on miss (§V.139 batch)."""
+    from mailpilot.database import get_contact, get_contact_by_email
+
+    if _looks_like_uuid(contact_ref):
+        return get_contact(connection, contact_ref)
+    return get_contact_by_email(connection, contact_ref)
+
+
 def _required_nonempty_str(
     payload: dict[str, object], key: str, line_number: int
 ) -> tuple[str | None, str, dict[str, object] | None]:
@@ -2684,15 +2693,31 @@ def tag_enable(name: str) -> None:
 @click.option(
     "--tag", "tag_name", required=True, help="Defined tag to link (name or ID)."
 )
-@click.option("--contact-email", default=None, help="Owner contact (email or ID).")
-@click.option("--company-domain", default=None, help="Owner company (domain or ID).")
+@click.option(
+    "--contact-email",
+    "contact_emails",
+    multiple=True,
+    help="Owner contact (email or ID); repeatable. XOR with --company-domain.",
+)
+@click.option(
+    "--company-domain",
+    "company_domains",
+    multiple=True,
+    help="Owner company (domain or ID); repeatable. XOR with --contact-email.",
+)
 def tag_add(
-    tag_name: str, contact_email: str | None, company_domain: str | None
+    tag_name: str,
+    contact_emails: tuple[str, ...],
+    company_domains: tuple[str, ...],
 ) -> None:
-    """Link a defined tag to a contact or company.
+    """Link a defined tag to one or more contacts or companies.
 
-    Errors `not_found` when the tag is undefined -- `tag add` never creates the
-    tag as a side effect (define vocabulary with `tag create`).
+    Pass repeatable ``--company-domain`` or repeatable ``--contact-email``
+    (owner-kind XOR, at least one owner). One owner returns a
+    ``tag_assignment`` entity envelope; multiple owners return a ``results``
+    batch envelope (already-linked rows are ok skips). Errors ``not_found``
+    when the tag is undefined -- never creates the tag as a side effect
+    (define vocabulary with ``tag create``).
     """
     from mailpilot.database import (
         assign_tag_to_company,
@@ -2701,43 +2726,207 @@ def tag_add(
     )
     from mailpilot.operator_log import cli_mutation, operator_event
 
+    has_contacts = len(contact_emails) > 0
+    has_companies = len(company_domains) > 0
+    if has_contacts and has_companies:
+        output_error(
+            "pass --contact-email or --company-domain, not both",
+            "validation_error",
+        )
+    if not has_contacts and not has_companies:
+        output_error(
+            "at least one --contact-email or --company-domain is required",
+            "validation_error",
+        )
+    owner_kind = "contact" if has_contacts else "company"
+    owner_refs = contact_emails if has_contacts else company_domains
+    connection = initialize_database(_database_url(), require_current_schema=True)
+    try:
+        tag_row = _resolve_tag(connection, tag_name)
+        if len(owner_refs) == 1:
+            ref = owner_refs[0]
+            if owner_kind == "contact":
+                owner_id = _resolve_contact(connection, ref).id
+            else:
+                owner_id = _resolve_company(connection, ref).id
+            with cli_mutation(
+                "tag",
+                "add",
+                name=tag_row.name,
+                owner_type=owner_kind,
+                owner_id=owner_id,
+            ):
+                if owner_kind == "contact":
+                    created = assign_tag_to_contact(
+                        connection, tag_id=tag_row.id, contact_id=owner_id
+                    )
+                else:
+                    created = assign_tag_to_company(
+                        connection, tag_id=tag_row.id, company_id=owner_id
+                    )
+                if created is None:
+                    output_error(
+                        f"tag '{tag_row.name}' already on {owner_kind} {owner_id}",
+                        "already_exists",
+                    )
+                operator_event(
+                    "tag.add",
+                    name=tag_row.name,
+                    owner_type=owner_kind,
+                    owner_id=owner_id,
+                    changed=["tag_id"],
+                )
+                output_entity("tag_assignment", created)
+            return
+
+        with cli_mutation(
+            "tag",
+            "add",
+            name=tag_row.name,
+            owner_type=owner_kind,
+            owner_count=len(owner_refs),
+        ):
+            results: list[dict[str, object]] = []
+            for ref in owner_refs:
+                if owner_kind == "contact":
+                    owner = _lookup_contact_soft(connection, ref)
+                else:
+                    owner = _lookup_company_soft(connection, ref)
+                if owner is None:
+                    results.append(
+                        _batch_error(
+                            ref,
+                            "not_found",
+                            f"{owner_kind} not found: {ref}",
+                        )
+                    )
+                    continue
+                if owner_kind == "contact":
+                    created = assign_tag_to_contact(
+                        connection, tag_id=tag_row.id, contact_id=owner.id
+                    )
+                else:
+                    created = assign_tag_to_company(
+                        connection, tag_id=tag_row.id, company_id=owner.id
+                    )
+                if created is not None:
+                    operator_event(
+                        "tag.add",
+                        name=tag_row.name,
+                        owner_type=owner_kind,
+                        owner_id=owner.id,
+                        changed=["tag_id"],
+                    )
+                # Already-linked multi row is status ok skip (§V.141).
+                results.append(_batch_ok(ref))
+            _emit_batch_results(results)
+    finally:
+        connection.close()
+
+
+@tag.command("set")
+@click.option(
+    "--contact-email",
+    default=None,
+    help="Owner contact (email or ID). XOR with --company-domain.",
+)
+@click.option(
+    "--company-domain",
+    default=None,
+    help="Owner company (domain or ID). XOR with --contact-email.",
+)
+@click.option(
+    "--tags",
+    "tags_csv",
+    required=True,
+    help="Comma-separated defined tag names; empty string clears all assignments.",
+)
+def tag_set(
+    contact_email: str | None,
+    company_domain: str | None,
+    tags_csv: str,
+) -> None:
+    """Replace an owner's full tag assignment set.
+
+    Pass exactly one of ``--company-domain`` or ``--contact-email`` plus
+    ``--tags a,b,c``. Empty ``--tags`` clears every assignment. Undefined
+    names error ``not_found`` with zero writes. Company success returns the
+    company entity (including final ``tags``); contact success returns the
+    contact entity. Vocabulary is never auto-created -- define names with
+    ``tag create`` first.
+    """
+    from mailpilot.database import (
+        get_tag_by_name,
+        initialize_database,
+        load_company_view,
+        set_company_tags,
+        set_contact_tags,
+    )
+    from mailpilot.operator_log import cli_mutation, operator_event
+
     if (contact_email is None) == (company_domain is None):
         output_error(
             "exactly one of --contact-email or --company-domain is required",
             "validation_error",
         )
+    raw_names = [part.strip() for part in tags_csv.split(",")]
+    tag_names = [name for name in raw_names if name]
+    # Empty CSV ("") or whitespace-only is a clear; bare commas with no names too.
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
-        tag_row = _resolve_tag(connection, tag_name)
-        if contact_email is not None:
-            owner = ("contact", _resolve_contact(connection, contact_email).id)
+        tag_ids: list[str] = []
+        for name in tag_names:
+            try:
+                tag_row = get_tag_by_name(connection, name)
+            except ValueError:
+                tag_row = None
+            if tag_row is None:
+                output_error(f"tag not found: {name}", "not_found")
+            tag_ids.append(tag_row.id)
+        if company_domain is not None:
+            company = _resolve_company(connection, company_domain)
+            with cli_mutation(
+                "tag",
+                "set",
+                owner_type="company",
+                owner_id=company.id,
+                tag_count=len(tag_ids),
+            ):
+                final_names = set_company_tags(
+                    connection, company_id=company.id, tag_ids=tag_ids
+                )
+                operator_event(
+                    "tag.set",
+                    owner_type="company",
+                    owner_id=company.id,
+                    changed=["tags"],
+                    tags=",".join(final_names),
+                )
+                view = load_company_view(connection, company.id)
+                if view is None:
+                    output_error(f"company not found: {company.id}", "not_found")
+                output_entity("company", view)
         else:
-            assert company_domain is not None
-            owner = ("company", _resolve_company(connection, company_domain).id)
-        with cli_mutation(
-            "tag", "add", name=tag_row.name, owner_type=owner[0], owner_id=owner[1]
-        ):
-            if owner[0] == "contact":
-                created = assign_tag_to_contact(
-                    connection, tag_id=tag_row.id, contact_id=owner[1]
+            assert contact_email is not None
+            contact = _resolve_contact(connection, contact_email)
+            with cli_mutation(
+                "tag",
+                "set",
+                owner_type="contact",
+                owner_id=contact.id,
+                tag_count=len(tag_ids),
+            ):
+                final_names = set_contact_tags(
+                    connection, contact_id=contact.id, tag_ids=tag_ids
                 )
-            else:
-                created = assign_tag_to_company(
-                    connection, tag_id=tag_row.id, company_id=owner[1]
+                operator_event(
+                    "tag.set",
+                    owner_type="contact",
+                    owner_id=contact.id,
+                    changed=["tags"],
+                    tags=",".join(final_names),
                 )
-            if created is None:
-                output_error(
-                    f"tag '{tag_row.name}' already on {owner[0]} {owner[1]}",
-                    "already_exists",
-                )
-            operator_event(
-                "tag.add",
-                name=tag_row.name,
-                owner_type=owner[0],
-                owner_id=owner[1],
-                changed=["tag_id"],
-            )
-            output_entity("tag_assignment", created)
+                output_entity("contact", contact)
     finally:
         connection.close()
 

@@ -4938,6 +4938,226 @@ def remove_tag_from_company(
     return TagAssignment.model_validate(deleted_row)
 
 
+def _tag_names_by_id(
+    connection: psycopg.Connection[dict[str, Any]],
+    tag_ids: Sequence[str],
+) -> dict[str, str]:
+    """Map tag ids to vocabulary names; missing ids are omitted."""
+    if not tag_ids:
+        return {}
+    rows = connection.execute(
+        "SELECT id, name FROM tag WHERE id = ANY(%s)",
+        (list(tag_ids),),
+    ).fetchall()
+    return {str(row["id"]): str(row["name"]) for row in rows}
+
+
+def set_company_tags(
+    connection: psycopg.Connection[dict[str, Any]],
+    company_id: str,
+    tag_ids: Sequence[str],
+) -> list[str]:
+    """Replace a company's full tag assignment set in one transaction (§V.141).
+
+    Adds missing links, removes extras, and writes ``tag_added`` /
+    ``tag_removed`` activity per change (§V.14). Empty ``tag_ids`` clears every
+    assignment. Caller must pre-resolve vocabulary names so undefined tags never
+    reach this function (zero partial writes on undefined). Returns the final
+    assigned tag names sorted.
+
+    Raises:
+        ValueError: If the company does not exist, or a ``tag_id`` is unknown.
+    """
+    if (
+        connection.execute(
+            "SELECT 1 FROM company WHERE id = %s", (company_id,)
+        ).fetchone()
+        is None
+    ):
+        raise ValueError(f"company not found: {company_id}")
+    # Preserve first-seen order while dropping duplicates.
+    desired_ids = list(dict.fromkeys(tag_ids))
+    name_by_id = _tag_names_by_id(connection, desired_ids)
+    missing = [tid for tid in desired_ids if tid not in name_by_id]
+    if missing:
+        raise ValueError(f"tag not found: {missing[0]}")
+    current_rows = connection.execute(
+        "SELECT tag_id FROM tag_assignment WHERE company_id = %s",
+        (company_id,),
+    ).fetchall()
+    current_ids = {str(row["tag_id"]) for row in current_rows}
+    desired_set = set(desired_ids)
+    to_add = [tid for tid in desired_ids if tid not in current_ids]
+    to_remove = sorted(current_ids - desired_set)
+    if to_remove:
+        remove_names = _tag_names_by_id(connection, to_remove)
+        for tag_id in to_remove:
+            connection.execute(
+                """\
+                DELETE FROM tag_assignment
+                WHERE tag_id = %(tag_id)s AND company_id = %(company_id)s
+                """,
+                {"tag_id": tag_id, "company_id": company_id},
+            )
+            tag_name = remove_names.get(tag_id, tag_id)
+            connection.execute(
+                """\
+                INSERT INTO activity (
+                    id, contact_id, company_id, type, summary, detail
+                )
+                VALUES (
+                    %(id)s, NULL, %(company_id)s,
+                    'tag_removed', %(summary)s, %(detail)s
+                )
+                """,
+                {
+                    "id": _new_id(),
+                    "company_id": company_id,
+                    "summary": f"Untagged {tag_name}",
+                    "detail": Json({"tag": tag_name}),
+                },
+            )
+    for tag_id in to_add:
+        tag_name = name_by_id[tag_id]
+        connection.execute(
+            """\
+            INSERT INTO tag_assignment (id, tag_id, contact_id, company_id)
+            VALUES (%(id)s, %(tag_id)s, NULL, %(company_id)s)
+            ON CONFLICT DO NOTHING
+            """,
+            {"id": _new_id(), "tag_id": tag_id, "company_id": company_id},
+        )
+        connection.execute(
+            """\
+            INSERT INTO activity (
+                id, contact_id, company_id, type, summary, detail
+            )
+            VALUES (
+                %(id)s, NULL, %(company_id)s,
+                'tag_added', %(summary)s, %(detail)s
+            )
+            """,
+            {
+                "id": _new_id(),
+                "company_id": company_id,
+                "summary": f"Tagged as {tag_name}",
+                "detail": Json({"tag": tag_name}),
+            },
+        )
+    connection.commit()
+    final_names = [
+        t.name
+        for t in list_tags(
+            connection,
+            company_id=company_id,
+            limit=1_000_000,
+            include_disabled=True,
+        )
+    ]
+    return final_names
+
+
+def set_contact_tags(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact_id: str,
+    tag_ids: Sequence[str],
+) -> list[str]:
+    """Replace a contact's full tag assignment set in one transaction (§V.141).
+
+    Mirrors ``set_company_tags``: add missing, remove extras, activity per
+    change (§V.14), empty ``tag_ids`` clears. Returns final tag names sorted.
+
+    Raises:
+        ValueError: If the contact does not exist, or a ``tag_id`` is unknown.
+    """
+    contact_row = connection.execute(
+        "SELECT company_id FROM contact WHERE id = %s", (contact_id,)
+    ).fetchone()
+    if contact_row is None:
+        raise ValueError(f"contact not found: {contact_id}")
+    parent_company_id = contact_row["company_id"]
+    desired_ids = list(dict.fromkeys(tag_ids))
+    name_by_id = _tag_names_by_id(connection, desired_ids)
+    missing = [tid for tid in desired_ids if tid not in name_by_id]
+    if missing:
+        raise ValueError(f"tag not found: {missing[0]}")
+    current_rows = connection.execute(
+        "SELECT tag_id FROM tag_assignment WHERE contact_id = %s",
+        (contact_id,),
+    ).fetchall()
+    current_ids = {str(row["tag_id"]) for row in current_rows}
+    desired_set = set(desired_ids)
+    to_add = [tid for tid in desired_ids if tid not in current_ids]
+    to_remove = sorted(current_ids - desired_set)
+    if to_remove:
+        remove_names = _tag_names_by_id(connection, to_remove)
+        for tag_id in to_remove:
+            connection.execute(
+                """\
+                DELETE FROM tag_assignment
+                WHERE tag_id = %(tag_id)s AND contact_id = %(contact_id)s
+                """,
+                {"tag_id": tag_id, "contact_id": contact_id},
+            )
+            tag_name = remove_names.get(tag_id, tag_id)
+            connection.execute(
+                """\
+                INSERT INTO activity (
+                    id, contact_id, company_id, type, summary, detail
+                )
+                VALUES (
+                    %(id)s, %(contact_id)s, %(company_id)s,
+                    'tag_removed', %(summary)s, %(detail)s
+                )
+                """,
+                {
+                    "id": _new_id(),
+                    "contact_id": contact_id,
+                    "company_id": parent_company_id,
+                    "summary": f"Untagged {tag_name}",
+                    "detail": Json({"tag": tag_name}),
+                },
+            )
+    for tag_id in to_add:
+        tag_name = name_by_id[tag_id]
+        connection.execute(
+            """\
+            INSERT INTO tag_assignment (id, tag_id, contact_id, company_id)
+            VALUES (%(id)s, %(tag_id)s, %(contact_id)s, NULL)
+            ON CONFLICT DO NOTHING
+            """,
+            {"id": _new_id(), "tag_id": tag_id, "contact_id": contact_id},
+        )
+        connection.execute(
+            """\
+            INSERT INTO activity (
+                id, contact_id, company_id, type, summary, detail
+            )
+            VALUES (
+                %(id)s, %(contact_id)s, %(company_id)s,
+                'tag_added', %(summary)s, %(detail)s
+            )
+            """,
+            {
+                "id": _new_id(),
+                "contact_id": contact_id,
+                "company_id": parent_company_id,
+                "summary": f"Tagged as {tag_name}",
+                "detail": Json({"tag": tag_name}),
+            },
+        )
+    connection.commit()
+    return [
+        t.name
+        for t in list_tags(
+            connection,
+            contact_id=contact_id,
+            limit=1_000_000,
+            include_disabled=True,
+        )
+    ]
+
+
 # -- Note ----------------------------------------------------------------------
 
 

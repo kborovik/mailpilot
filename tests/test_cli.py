@@ -6864,6 +6864,314 @@ def test_tag_add_no_owner(runner: CliRunner, mock_connection: MagicMock) -> None
     assert data["error"] == "validation_error"
 
 
+def test_tag_add_mixed_owner_kinds_rejected(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.141: owner-kind XOR — cannot mix company and contact owners."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "tag",
+                "add",
+                "--tag",
+                "prospect",
+                "--company-domain",
+                "a.com",
+                "--contact-email",
+                "x@y.com",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "not both" in data["message"]
+
+
+def test_tag_add_multi_company_results_envelope(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.141: one tag on multiple companies → results envelope, exit 0."""
+    tag = _make_tag(name="acumatica-var")
+    company_a = _make_company(id=_TAG_COMPANY_ID, domain="a.com")
+    company_b_id = "01234567-0000-7000-0000-0000000000b2"
+    company_b = _make_company(id=company_b_id, domain="b.com")
+    assignment = _make_tag_assignment(contact_id=None, company_id=_TAG_COMPANY_ID)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_tag_by_name", return_value=tag),
+        patch(
+            "mailpilot.database.get_company_by_domain",
+            side_effect=lambda _c, domain: {
+                "a.com": company_a,
+                "b.com": company_b,
+            }.get(domain),
+        ),
+        patch(
+            "mailpilot.database.assign_tag_to_company", return_value=assignment
+        ) as mock_assign,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "tag",
+                "add",
+                "--tag",
+                "acumatica-var",
+                "--company-domain",
+                "a.com",
+                "--company-domain",
+                "b.com",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 2
+    assert data["results"] == [
+        {"ref": "a.com", "status": "ok"},
+        {"ref": "b.com", "status": "ok"},
+    ]
+    assert mock_assign.call_count == 2
+    mock_assign.assert_any_call(
+        mock_connection, tag_id=_TAG_ID, company_id=_TAG_COMPANY_ID
+    )
+    mock_assign.assert_any_call(
+        mock_connection, tag_id=_TAG_ID, company_id=company_b_id
+    )
+
+
+def test_tag_add_multi_already_linked_ok_skip(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.141: multi-owner already-linked row is status ok skip, not error."""
+    tag = _make_tag(name="vip")
+    company_a = _make_company(id=_TAG_COMPANY_ID, domain="a.com")
+    company_b_id = "01234567-0000-7000-0000-0000000000b2"
+    company_b = _make_company(id=company_b_id, domain="b.com")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_tag_by_name", return_value=tag),
+        patch(
+            "mailpilot.database.get_company_by_domain",
+            side_effect=lambda _c, domain: {
+                "a.com": company_a,
+                "b.com": company_b,
+            }.get(domain),
+        ),
+        patch(
+            "mailpilot.database.assign_tag_to_company",
+            side_effect=[None, _make_tag_assignment(contact_id=None, company_id=company_b_id)],
+        ),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "tag",
+                "add",
+                "--tag",
+                "vip",
+                "--company-domain",
+                "a.com",
+                "--company-domain",
+                "b.com",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["results"] == [
+        {"ref": "a.com", "status": "ok"},
+        {"ref": "b.com", "status": "ok"},
+    ]
+
+
+def test_tag_add_multi_partial_not_found_exit_1(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.141/§V.139: multi partial not_found still emits full results, exit 1."""
+    tag = _make_tag(name="vip")
+    company_a = _make_company(id=_TAG_COMPANY_ID, domain="a.com")
+    assignment = _make_tag_assignment(contact_id=None, company_id=_TAG_COMPANY_ID)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_tag_by_name", return_value=tag),
+        patch(
+            "mailpilot.database.get_company_by_domain",
+            side_effect=lambda _c, domain: {
+                "a.com": company_a,
+            }.get(domain),
+        ),
+        patch("mailpilot.database.assign_tag_to_company", return_value=assignment),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "tag",
+                "add",
+                "--tag",
+                "vip",
+                "--company-domain",
+                "a.com",
+                "--company-domain",
+                "ghost.com",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 2
+    assert data["results"][0] == {"ref": "a.com", "status": "ok"}
+    assert data["results"][1]["ref"] == "ghost.com"
+    assert data["results"][1]["status"] == "error"
+    assert data["results"][1]["error"] == "not_found"
+
+
+# -- tag set -------------------------------------------------------------------
+
+
+def test_tag_set_company_returns_entity_with_tags(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.141: tag set company replaces set; company envelope carries final tags[]."""
+    from mailpilot.models import CompanyView
+
+    company = _make_company(id=_TAG_COMPANY_ID, domain="a.com")
+    tag_a = _make_tag(id=_TAG_ID, name="acumatica-var")
+    tag_b = _make_tag(
+        id="01234567-0000-7000-0000-0000000000t2", name="dynamics-365-var"
+    )
+    view = CompanyView(
+        **company.model_dump(),
+        tags=["acumatica-var", "dynamics-365-var"],
+        notes=[],
+        notes_total=0,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company_by_domain", return_value=company),
+        patch(
+            "mailpilot.database.get_tag_by_name",
+            side_effect=lambda _c, name: {
+                "acumatica-var": tag_a,
+                "dynamics-365-var": tag_b,
+            }.get(name),
+        ),
+        patch(
+            "mailpilot.database.set_company_tags",
+            return_value=["acumatica-var", "dynamics-365-var"],
+        ) as mock_set,
+        patch("mailpilot.database.load_company_view", return_value=view),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "tag",
+                "set",
+                "--company-domain",
+                "a.com",
+                "--tags",
+                "acumatica-var,dynamics-365-var",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_set.assert_called_once_with(
+        mock_connection,
+        company_id=_TAG_COMPANY_ID,
+        tag_ids=[_TAG_ID, tag_b.id],
+    )
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 1
+    assert data["company"]["domain"] == "a.com"
+    assert data["company"]["tags"] == ["acumatica-var", "dynamics-365-var"]
+
+
+def test_tag_set_company_empty_clears(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.141: empty --tags clears all company assignments."""
+    from mailpilot.models import CompanyView
+
+    company = _make_company(id=_TAG_COMPANY_ID, domain="a.com")
+    view = CompanyView(
+        **company.model_dump(), tags=[], notes=[], notes_total=0
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company_by_domain", return_value=company),
+        patch(
+            "mailpilot.database.set_company_tags", return_value=[]
+        ) as mock_set,
+        patch("mailpilot.database.load_company_view", return_value=view),
+    ):
+        result = runner.invoke(
+            main,
+            ["tag", "set", "--company-domain", "a.com", "--tags", ""],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_set.assert_called_once_with(
+        mock_connection, company_id=_TAG_COMPANY_ID, tag_ids=[]
+    )
+    data = json.loads(result.output)
+    assert data["company"]["tags"] == []
+
+
+def test_tag_set_undefined_tag_not_found_zero_writes(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.141/§V.116: undefined name in set → not_found, set_company_tags not called."""
+    company = _make_company(id=_TAG_COMPANY_ID, domain="a.com")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company_by_domain", return_value=company),
+        patch("mailpilot.database.get_tag_by_name", return_value=None),
+        patch("mailpilot.database.set_company_tags") as mock_set,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "tag",
+                "set",
+                "--company-domain",
+                "a.com",
+                "--tags",
+                "ghost-var",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+    mock_set.assert_not_called()
+
+
+def test_tag_set_no_owner(runner: CliRunner, mock_connection: MagicMock) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(main, ["tag", "set", "--tags", "vip"])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+
+
 # -- tag remove ----------------------------------------------------------------
 
 

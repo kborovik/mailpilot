@@ -17,9 +17,9 @@ Nouns: `account`, `company`, `contact`, `workflow`, `enrollment`, `task`,
 `email`, `activity`, `tag`, `note`, `template`, `db`.
 
 Verbs: `list`, `search`, `view`, `create`, `update`, `disable`, `enable`,
-`add`, `remove`, `reply`, `send`, `start`, `stop`, `cancel`, `retry`, `run`,
-`sync`, `export`, `import`, `init`, `migrate`, `check`. Not every verb applies
-to every noun -- use
+`add`, `remove`, `set`, `reply`, `send`, `start`, `stop`, `cancel`, `retry`,
+`run`, `sync`, `export`, `import`, `init`, `migrate`, `check`. Not every verb
+applies to every noun -- use
 `mailpilot <noun> --help` to enumerate. `config` exposes the `get` and `set`
 subverbs for reading and writing persistent configuration.
 
@@ -344,19 +344,44 @@ mailpilot email reply --account-email <ADDR> --email-id <EMAIL_ID> --body "..."
 
 ### Tag, note, and audit
 
+Tags are a controlled vocabulary: `tag create` defines a name first;
+`tag add` never auto-creates. `tag add` links one defined tag to one or
+more owners (repeatable `--company-domain` or repeatable `--contact-email`,
+owner-kind XOR). One owner returns a `tag_assignment` entity; multiple
+owners return a `results` batch envelope (already-linked multi rows are
+ok skips; exit 0 only when every row is ok).
+
 ```
 mailpilot tag create vip
+mailpilot tag create acumatica-var
+mailpilot tag create dynamics-365-var
 mailpilot tag add --tag vip --contact-email <ADDR>
+mailpilot tag add --tag acumatica-var \
+  --company-domain a.com --company-domain b.com
 mailpilot tag remove --tag vip --contact-email <ADDR>
 mailpilot tag disable vip --reason "<text>"
+```
+
+Replace a company's full tag set with `tag set` (empty `--tags` clears):
+
+```
+mailpilot tag set --company-domain a.com \
+  --tags acumatica-var,dynamics-365-var
+mailpilot tag set --company-domain a.com --tags ""
+mailpilot company view a.com
+```
+
+Company success for `tag set` returns the company entity including final
+`tags` (same shape as `company list` / `company view`). Undefined names
+error `not_found` with zero writes.
+
+```
 mailpilot note add --contact-email <ADDR> --body "Met at conf 2026."
 mailpilot activity list --contact-email <ADDR>
 ```
 
-Tags are a controlled vocabulary: `tag create` defines a name, `tag add`
-links it to a contact or company, `tag remove` unlinks, and `tag disable`
-retires the name. A note attaches to exactly one of `contact_id` or
-`company_id`. Activities may attach to either, both, or neither.
+A note attaches to exactly one of `contact_id` or `company_id`. Activities
+may attach to either, both, or neither.
 
 ### Task queue
 

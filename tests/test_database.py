@@ -3453,6 +3453,89 @@ def test_remove_tag_from_company(
     assert "tag_removed" in types
 
 
+def test_set_company_tags_replaces_with_activity(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.141/§V.14: set_company_tags adds missing, removes extras, one txn."""
+    from mailpilot.database import create_tag, set_company_tags
+
+    company = make_test_company(database_connection)
+    keep = create_tag(database_connection, name="acumatica-var")
+    drop = create_tag(database_connection, name="stale-var")
+    add = create_tag(database_connection, name="dynamics-365-var")
+    assert keep is not None and drop is not None and add is not None
+    make_test_tag_assignment(
+        database_connection, company_id=company.id, name="acumatica-var"
+    )
+    make_test_tag_assignment(
+        database_connection, company_id=company.id, name="stale-var"
+    )
+
+    final = set_company_tags(
+        database_connection,
+        company_id=company.id,
+        tag_ids=[keep.id, add.id],
+    )
+
+    assert final == ["acumatica-var", "dynamics-365-var"]
+    assert [t.name for t in list_tags(database_connection, company_id=company.id)] == [
+        "acumatica-var",
+        "dynamics-365-var",
+    ]
+    activities = list_activities(database_connection, company_id=company.id)
+    types = {a.type for a in activities}
+    assert "tag_added" in types
+    assert "tag_removed" in types
+    assert any(
+        a.type == "tag_removed" and a.summary == "Untagged stale-var"
+        for a in activities
+    )
+    assert any(
+        a.type == "tag_added" and a.summary == "Tagged as dynamics-365-var"
+        for a in activities
+    )
+
+
+def test_set_company_tags_empty_clears(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.141: empty tag_ids clears every company assignment."""
+    from mailpilot.database import set_company_tags
+
+    company = make_test_company(database_connection)
+    make_test_tag_assignment(database_connection, company_id=company.id, name="vip")
+    make_test_tag_assignment(
+        database_connection, company_id=company.id, name="partner"
+    )
+
+    final = set_company_tags(database_connection, company_id=company.id, tag_ids=[])
+
+    assert final == []
+    assert list_tags(database_connection, company_id=company.id) == []
+
+
+def test_set_contact_tags_replaces(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.141: set_contact_tags mirrors company replace semantics."""
+    from mailpilot.database import create_tag, set_contact_tags
+
+    contact = make_test_contact(database_connection)
+    a = create_tag(database_connection, name="hot")
+    b = create_tag(database_connection, name="warm")
+    assert a is not None and b is not None
+    make_test_tag_assignment(database_connection, contact_id=contact.id, name="hot")
+
+    final = set_contact_tags(
+        database_connection, contact_id=contact.id, tag_ids=[b.id]
+    )
+
+    assert final == ["warm"]
+    assert [t.name for t in list_tags(database_connection, contact_id=contact.id)] == [
+        "warm"
+    ]
+
+
 # -- membership filters on company/contact list (§V.116) -----------------------
 
 
