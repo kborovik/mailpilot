@@ -871,10 +871,19 @@ def _make_company(**overrides: Any) -> Company:
 
 def test_company_create(runner: CliRunner, mock_connection: MagicMock) -> None:
     company = _make_company()
+    view = CompanyView(
+        id=company.id,
+        name=company.name,
+        domain=company.domain,
+        aliases=[],
+        created_at=company.created_at,
+        updated_at=company.updated_at,
+    )
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.create_company", return_value=company) as mock_create,
+        patch("mailpilot.database.load_company_view", return_value=view),
     ):
         result = runner.invoke(
             main, ["company", "create", "--domain", "acme.com", "--name", "Acme Corp"]
@@ -882,7 +891,7 @@ def test_company_create(runner: CliRunner, mock_connection: MagicMock) -> None:
 
     assert result.exit_code == 0
     mock_create.assert_called_once_with(
-        mock_connection, name="Acme Corp", domain="acme.com"
+        mock_connection, name="Acme Corp", domain="acme.com", aliases=None
     )
     data = json.loads(result.output)
     assert data["ok"] is True
@@ -894,15 +903,70 @@ def test_company_create_domain_only(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     company = _make_company(name="")
+    view = CompanyView(
+        id=company.id,
+        name="",
+        domain=company.domain,
+        aliases=[],
+        created_at=company.created_at,
+        updated_at=company.updated_at,
+    )
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.create_company", return_value=company) as mock_create,
+        patch("mailpilot.database.load_company_view", return_value=view),
     ):
         result = runner.invoke(main, ["company", "create", "--domain", "acme.com"])
 
     assert result.exit_code == 0
-    mock_create.assert_called_once_with(mock_connection, name="", domain="acme.com")
+    mock_create.assert_called_once_with(
+        mock_connection, name="", domain="acme.com", aliases=None
+    )
+
+
+def test_company_create_with_aliases(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.142: create --alias registers aliases and view projects them."""
+    company = _make_company()
+    view = CompanyView(
+        id=company.id,
+        name=company.name,
+        domain=company.domain,
+        aliases=["consulting.acme.com"],
+        created_at=company.created_at,
+        updated_at=company.updated_at,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_company", return_value=company) as mock_create,
+        patch("mailpilot.database.load_company_view", return_value=view),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "create",
+                "--domain",
+                "acme.com",
+                "--name",
+                "Acme",
+                "--alias",
+                "consulting.acme.com",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_create.assert_called_once_with(
+        mock_connection,
+        name="Acme",
+        domain="acme.com",
+        aliases=["consulting.acme.com"],
+    )
+    data = json.loads(result.output)
+    assert data["company"]["aliases"] == ["consulting.acme.com"]
 
 
 def test_company_create_with_note_appends_note_atomically(
@@ -910,10 +974,18 @@ def test_company_create_with_note_appends_note_atomically(
 ) -> None:
     """`--note STR` writes a note row under the same cli_mutation span."""
     company = _make_company()
+    view = CompanyView(
+        id=company.id,
+        name=company.name,
+        domain=company.domain,
+        created_at=company.created_at,
+        updated_at=company.updated_at,
+    )
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.create_company", return_value=company),
+        patch("mailpilot.database.load_company_view", return_value=view),
         patch("mailpilot.database.add_company_note") as mock_note,
     ):
         result = runner.invoke(
@@ -938,10 +1010,18 @@ def test_company_create_without_note_skips_note_call(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     company = _make_company()
+    view = CompanyView(
+        id=company.id,
+        name=company.name,
+        domain=company.domain,
+        created_at=company.created_at,
+        updated_at=company.updated_at,
+    )
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.create_company", return_value=company),
+        patch("mailpilot.database.load_company_view", return_value=view),
         patch("mailpilot.database.add_company_note") as mock_note,
     ):
         result = runner.invoke(
@@ -950,6 +1030,71 @@ def test_company_create_without_note_skips_note_call(
 
     assert result.exit_code == 0
     mock_note.assert_not_called()
+
+
+def test_company_merge_cli(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.143: merge CLI absorbs source into survivor and returns view."""
+    source = _make_company(id="from-id", domain="nexvue.com", name="Nexvue")
+    survivor = _make_company(id="into-id", domain="netatwork.com", name="Net@Work")
+    view = CompanyView(
+        id=survivor.id,
+        name=survivor.name,
+        domain=survivor.domain,
+        aliases=["nexvue.com"],
+        created_at=survivor.created_at,
+        updated_at=survivor.updated_at,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.get_company_by_domain_exact", return_value=source
+        ),
+        patch("mailpilot.database.get_company_by_domain", return_value=survivor),
+        patch("mailpilot.database.merge_companies", return_value=survivor) as mock_merge,
+        patch("mailpilot.database.load_company_view", return_value=view),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "merge",
+                "--from",
+                "nexvue.com",
+                "--into",
+                "netatwork.com",
+                "--move-contacts",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_merge.assert_called_once_with(
+        mock_connection,
+        source.id,
+        survivor.id,
+        move_contacts=True,
+        original_from_domain="nexvue.com",
+    )
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["company"]["domain"] == "netatwork.com"
+    assert data["company"]["aliases"] == ["nexvue.com"]
+
+
+def test_skill_documents_company_aliases_and_merge() -> None:
+    """§V.142/§V.143: packaged SKILL.md documents alias + merge recipes."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "--alias" in body
+    assert "company merge" in body
+    assert "--move-contacts" in body
+    assert "merged:into" in body
+    assert "aliases" in body
+    assert "§V." not in body
+    assert "§T." not in body
 
 
 # -- company list --------------------------------------------------------------

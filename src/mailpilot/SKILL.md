@@ -17,9 +17,9 @@ Nouns: `account`, `company`, `contact`, `workflow`, `enrollment`, `task`,
 `email`, `activity`, `tag`, `note`, `template`, `db`.
 
 Verbs: `list`, `search`, `view`, `create`, `update`, `disable`, `enable`,
-`add`, `remove`, `set`, `reply`, `send`, `start`, `stop`, `cancel`, `retry`,
-`run`, `sync`, `export`, `import`, `init`, `migrate`, `check`. Not every verb
-applies to every noun -- use
+`add`, `remove`, `set`, `merge`, `reply`, `send`, `start`, `stop`, `cancel`,
+`retry`, `run`, `sync`, `export`, `import`, `init`, `migrate`, `check`. Not
+every verb applies to every noun -- use
 `mailpilot <noun> --help` to enumerate. `config` exposes the `get` and `set`
 subverbs for reading and writing persistent configuration.
 
@@ -31,8 +31,8 @@ diagnostics go to stderr and never to stdout.
 - `list`, `search`, `sync`, `export`, `import`:
   `{"<plural>": [...], "record_count": <int>, "ok": true}`
 - `view`, `create`, `update`, `disable`, `enable`, `add`, `remove`,
-  `reply`, `send`, `start`, `stop`, `cancel`, `retry`, `init`, `migrate`,
-  `check`:
+  `merge`, `reply`, `send`, `start`, `stop`, `cancel`, `retry`, `init`,
+  `migrate`, `check`:
   `{"<singular>": {...}, "record_count": 1, "ok": true}`
 - error: `{"error": "<code>", "message": "<text>", "ok": false}`
 
@@ -165,6 +165,37 @@ Soft-disable a contact (preserves audit history) with:
 mailpilot contact disable <CONTACT_REF> --reason "left company"
 ```
 
+### Company domain aliases and merge
+
+Register alternate domains when creating a company (repeatable `--alias`).
+Every domain string is either a canonical `company.domain` or an alias —
+never both, never two owners. View and contact create resolve aliases to the
+canonical company. Create of a domain that is already a company domain or an
+alias fails with `already_exists` (no silent second firm).
+
+```
+mailpilot company create --domain sva.com --name "SVA Consulting" \
+  --alias consulting.sva.com
+mailpilot company view consulting.sva.com
+mailpilot contact create --email lead@consulting.sva.com \
+  --company-domain consulting.sva.com
+```
+
+`company view` projects `aliases` (sorted lowercased domains, empty array
+ok). Lean `company list` omits aliases.
+
+Absorb an absorbed brand into a survivor with `company merge`. The source
+domain becomes an alias on the survivor; the source is soft-disabled with
+reason `merged:into <survivor.domain>`. Pass `--move-contacts` to reassign
+contacts; omit it to leave contacts on the disabled source. Re-running the
+same merge is an ok no-op.
+
+```
+mailpilot company merge --from nexvue.com --into netatwork.com
+mailpilot company merge --from nexvue.com --into netatwork.com --move-contacts
+mailpilot company view nexvue.com
+```
+
 ### Write a company profile
 
 Prefer file or stdin over inline JSON (avoids shell-escape footguns). Profile
@@ -275,8 +306,8 @@ mailpilot company view <DOMAIN_OR_ID>
 
 `--full` embeds `profile.summary` only (`null` when the company has no
 profile); default list never ships products, target_customers, or sources.
-`company view` projects the same `tags` shape as list, plus full profile and
-inlined notes.
+`company view` projects the same `tags` shape as list, plus `aliases`
+(sorted alternate domains), full profile, and inlined notes.
 
 ### Define a workflow declaratively
 

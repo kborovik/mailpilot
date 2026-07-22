@@ -985,8 +985,8 @@ def test_company_create_duplicate_emits_duplicate_key_envelope(
     assert result.stdout == ""
     err = result.stderr
     envelope = _envelope_from_stderr(err)
-    assert envelope["error"] == "duplicate_key"
-    assert envelope["message"] == "company with domain='lab5.ca' already exists"
+    assert envelope["error"] == "already_exists"
+    assert "lab5.ca" in envelope["message"]
     assert envelope["ok"] is False
     assert _spans_named(capfire, "company.create")
     assert not _spans_named(capfire, "company.create.failed")

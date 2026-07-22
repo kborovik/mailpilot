@@ -746,6 +746,8 @@ class CompanyView(BaseModel):
 
     ``tags`` is the assigned tag-name list (empty ok; same shape as
     ``CompanySummary.tags`` / ``db export`` company.tags, §V.116).
+    ``aliases`` is the sorted lowercased alternate-domain list (empty ok;
+    view-only — lean list omits, §V.142).
     """
 
     id: str
@@ -753,6 +755,7 @@ class CompanyView(BaseModel):
     domain: str
     profile: dict[str, Any] | None = None
     tags: list[str] = []
+    aliases: list[str] = []
     disabled_reason: str | None = None
     notes: list[Note] = []
     notes_total: int = 0

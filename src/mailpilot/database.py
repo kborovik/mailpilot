@@ -1044,26 +1044,146 @@ def enable_account(
 # -- Company -------------------------------------------------------------------
 
 
+def _normalize_company_domain(domain: str) -> str:
+    """Lowercase + strip a company domain natural key (§V.90 / §V.142)."""
+    return domain.strip().lower()
+
+
+def _merged_into_reason(into_domain: str) -> str:
+    """Structured soft-disable reason written by ``merge_companies`` (§V.143)."""
+    return f"merged:into {_normalize_company_domain(into_domain)}"
+
+
+def _tombstone_merged_domain(company_id: str) -> str:
+    """Unique domain left on an absorbed company after merge (§V.142 space)."""
+    return f"__merged__.{company_id}"
+
+
+def domain_in_use(
+    connection: psycopg.Connection[dict[str, Any]],
+    domain: str,
+) -> bool:
+    """True when *domain* is a canonical company.domain or an alias (§V.142)."""
+    normalized = _normalize_company_domain(domain)
+    if not normalized:
+        return False
+    row = connection.execute(
+        """\
+        SELECT EXISTS (
+            SELECT 1 FROM company WHERE domain = %(domain)s
+            UNION ALL
+            SELECT 1 FROM company_alias WHERE domain = %(domain)s
+        ) AS taken
+        """,
+        {"domain": normalized},
+    ).fetchone()
+    return bool(row and row["taken"])
+
+
+def list_company_aliases(
+    connection: psycopg.Connection[dict[str, Any]],
+    company_id: str,
+) -> list[str]:
+    """Return sorted lowercased alias domains for a company (§V.142)."""
+    rows = connection.execute(
+        """\
+        SELECT domain FROM company_alias
+        WHERE company_id = %(company_id)s
+        ORDER BY domain
+        """,
+        {"company_id": company_id},
+    ).fetchall()
+    return [str(r["domain"]) for r in rows]
+
+
+def add_company_alias(
+    connection: psycopg.Connection[dict[str, Any]],
+    company_id: str,
+    domain: str,
+    *,
+    commit: bool = True,
+) -> bool:
+    """Register one alias domain for a company (§V.142).
+
+    Returns ``True`` when a row was inserted, ``False`` when the alias already
+    pointed at this company (idempotent skip). Raises ``ValueError`` when the
+    domain collides with another company.domain or another owner's alias.
+    """
+    normalized = _normalize_company_domain(domain)
+    if not normalized:
+        raise ValueError("alias domain cannot be empty")
+    company = get_company(connection, company_id)
+    if company is None:
+        raise ValueError(f"company not found: {company_id}")
+    if normalized == company.domain:
+        raise ValueError(f"alias {normalized!r} equals company domain")
+    existing = connection.execute(
+        "SELECT company_id FROM company_alias WHERE domain = %(domain)s",
+        {"domain": normalized},
+    ).fetchone()
+    if existing is not None:
+        if existing["company_id"] == company_id:
+            return False
+        raise ValueError(f"domain {normalized!r} is already an alias of another company")
+    if connection.execute(
+        "SELECT 1 FROM company WHERE domain = %(domain)s",
+        {"domain": normalized},
+    ).fetchone() is not None:
+        raise ValueError(f"domain {normalized!r} is already a company domain")
+    connection.execute(
+        """\
+        INSERT INTO company_alias (domain, company_id)
+        VALUES (%(domain)s, %(company_id)s)
+        """,
+        {"domain": normalized, "company_id": company_id},
+    )
+    if commit:
+        connection.commit()
+    return True
+
+
 def create_company(
     connection: psycopg.Connection[dict[str, Any]],
     name: str,
     domain: str,
+    *,
+    aliases: Sequence[str] | None = None,
 ) -> Company | None:
-    """Create a new company.
+    """Create a new company, optionally with alias domains (§V.142).
 
     Uses ``ON CONFLICT (domain) DO NOTHING`` per §V.16(+) so callers can
     safely re-invoke without catching ``UniqueViolation``. Returns ``None``
-    when the row already exists.
+    when the canonical domain already exists as a company row or is already
+    an alias (shared domain space). Alias domains are lowercased and
+    registered in the same transaction.
 
     Args:
         connection: Open database connection.
         name: Company name.
         domain: Primary domain.
+        aliases: Optional alternate domains (repeatable CLI ``--alias``).
 
     Returns:
-        Created company, or ``None`` if a company with this domain already
-        existed.
+        Created company, or ``None`` if the domain space was already taken.
     """
+    normalized = _normalize_company_domain(domain)
+    if not normalized:
+        return None
+    alias_list = sorted(
+        {
+            _normalize_company_domain(a)
+            for a in (aliases or ())
+            if _normalize_company_domain(a)
+        }
+    )
+    if normalized in alias_list:
+        return None
+    if domain_in_use(connection, normalized):
+        return None
+    for alias in alias_list:
+        if domain_in_use(connection, alias):
+            return None
+    company_id = _new_id()
     row = connection.execute(
         """\
         INSERT INTO company (id, name, domain)
@@ -1071,11 +1191,20 @@ def create_company(
         ON CONFLICT (domain) DO NOTHING
         RETURNING *
         """,
-        {"id": _new_id(), "name": name, "domain": domain},
+        {"id": company_id, "name": name, "domain": normalized},
     ).fetchone()
-    connection.commit()
     if row is None:
+        connection.commit()
         return None
+    for alias in alias_list:
+        connection.execute(
+            """\
+            INSERT INTO company_alias (domain, company_id)
+            VALUES (%(domain)s, %(company_id)s)
+            """,
+            {"domain": alias, "company_id": company_id},
+        )
+    connection.commit()
     return Company.model_validate(row)
 
 
@@ -1342,6 +1471,11 @@ def search_companies(
         "LEFT JOIN contact ct ON ct.company_id = c.id "
         "WHERE LOWER(c.name) LIKE LOWER(%(pattern)s) "
         "OR LOWER(c.domain) LIKE LOWER(%(pattern)s) "
+        "OR EXISTS ("
+        "  SELECT 1 FROM company_alias a "
+        "  WHERE a.company_id = c.id "
+        "    AND LOWER(a.domain) LIKE LOWER(%(pattern)s)"
+        ") "
         "GROUP BY c.id "
         "ORDER BY LOWER(c.name) "
         "LIMIT %(limit)s"
@@ -1353,26 +1487,161 @@ def search_companies(
     return [CompanySummary.model_validate(row) for row in rows]
 
 
-def get_company_by_domain(
+def get_company_by_domain_exact(
     connection: psycopg.Connection[dict[str, Any]],
     domain: str,
 ) -> Company | None:
-    """Get a company by primary domain.
+    """Get a company by canonical domain only (no alias resolve).
 
-    Args:
-        connection: Open database connection.
-        domain: Company domain (exact match on UNIQUE column).
-
-    Returns:
-        Company if found, None otherwise.
+    Used by merge ``--from`` so an already-absorbed brand alias is not
+    mistaken for a live source row (§V.143 idempotent path).
     """
+    normalized = _normalize_company_domain(domain)
+    if not normalized:
+        return None
     row = connection.execute(
         "SELECT * FROM company WHERE domain = %(domain)s",
-        {"domain": domain},
+        {"domain": normalized},
     ).fetchone()
     if row is None:
         return None
     return Company.model_validate(row)
+
+
+def get_company_by_domain(
+    connection: psycopg.Connection[dict[str, Any]],
+    domain: str,
+) -> Company | None:
+    """Get a company by primary domain or alias (§V.142).
+
+    Args:
+        connection: Open database connection.
+        domain: Company domain or registered alias (case-insensitive).
+
+    Returns:
+        Canonical company if found, None otherwise.
+    """
+    normalized = _normalize_company_domain(domain)
+    if not normalized:
+        return None
+    row = connection.execute(
+        "SELECT * FROM company WHERE domain = %(domain)s",
+        {"domain": normalized},
+    ).fetchone()
+    if row is not None:
+        return Company.model_validate(row)
+    row = connection.execute(
+        """\
+        SELECT c.*
+        FROM company_alias a
+        JOIN company c ON c.id = a.company_id
+        WHERE a.domain = %(domain)s
+        """,
+        {"domain": normalized},
+    ).fetchone()
+    if row is None:
+        return None
+    return Company.model_validate(row)
+
+
+def merge_companies(
+    connection: psycopg.Connection[dict[str, Any]],
+    from_company_id: str,
+    into_company_id: str,
+    *,
+    move_contacts: bool = False,
+    original_from_domain: str | None = None,
+) -> Company | None:
+    """Absorb *from* into *into* (§V.143).
+
+    Records ``original_from_domain`` (or the source's current domain) as an
+    alias on the survivor, soft-disables the source with
+    ``merged:into <into.domain>``, and rewrites the source domain to a
+    tombstone so the shared domain space stays unique (§V.142). Optional
+    contact reassignment runs in the same transaction.
+
+    Idempotent when the source is already disabled with the matching reason
+    and the original domain is already an alias of the survivor.
+
+    Returns:
+        The survivor company, or ``None`` if either id is missing.
+    """
+    if from_company_id == into_company_id:
+        raise ValueError("cannot merge a company into itself")
+    source = get_company(connection, from_company_id)
+    survivor = get_company(connection, into_company_id)
+    if source is None or survivor is None:
+        return None
+    if survivor.disabled_reason is not None:
+        raise ValueError(
+            f"survivor company is disabled (reason: {survivor.disabled_reason})"
+        )
+    absorbed_domain = _normalize_company_domain(
+        original_from_domain if original_from_domain is not None else source.domain
+    )
+    expected_reason = _merged_into_reason(survivor.domain)
+    existing_alias = connection.execute(
+        """\
+        SELECT company_id FROM company_alias
+        WHERE domain = %(domain)s
+        """,
+        {"domain": absorbed_domain},
+    ).fetchone()
+    if (
+        source.disabled_reason == expected_reason
+        and existing_alias is not None
+        and existing_alias["company_id"] == survivor.id
+    ):
+        return survivor
+    if source.disabled_reason is not None and source.disabled_reason != expected_reason:
+        raise ValueError(
+            f"source company is disabled (reason: {source.disabled_reason})"
+        )
+    tombstone = _tombstone_merged_domain(source.id)
+    # Free the canonical domain before inserting the alias (shared space).
+    if source.domain == absorbed_domain or not source.domain.startswith("__merged__."):
+        connection.execute(
+            """\
+            UPDATE company
+            SET domain = %(tombstone)s,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = %(id)s
+            """,
+            {"tombstone": tombstone, "id": source.id},
+        )
+    if existing_alias is None:
+        connection.execute(
+            """\
+            INSERT INTO company_alias (domain, company_id)
+            VALUES (%(domain)s, %(company_id)s)
+            """,
+            {"domain": absorbed_domain, "company_id": survivor.id},
+        )
+    elif existing_alias["company_id"] != survivor.id:
+        raise ValueError(
+            f"domain {absorbed_domain!r} is already an alias of another company"
+        )
+    connection.execute(
+        """\
+        UPDATE company
+        SET disabled_reason = %(reason)s,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = %(id)s
+        """,
+        {"reason": expected_reason, "id": source.id},
+    )
+    if move_contacts:
+        connection.execute(
+            """\
+            UPDATE contact
+            SET company_id = %(into_id)s,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE company_id = %(from_id)s
+            """,
+            {"into_id": survivor.id, "from_id": source.id},
+        )
+    connection.commit()
+    return get_company(connection, survivor.id)
 
 
 def update_company(
@@ -1465,6 +1734,10 @@ def enable_company(
     match, so the call returns ``None``. A re-enabled company reappears in the
     default ``company list``.
 
+    Raises ``ValueError`` when this company's domain is registered as an
+    alias of a different company (§V.143 — cannot revive a domain that
+    still belongs to a survivor's alias set).
+
     Args:
         connection: Open database connection.
         company_id: Company ID.
@@ -1473,6 +1746,17 @@ def enable_company(
         Updated company, or ``None`` when no disabled company with that id
         exists -- i.e. missing or already active.
     """
+    current = get_company(connection, company_id)
+    if current is None:
+        return None
+    alias_owner = connection.execute(
+        "SELECT company_id FROM company_alias WHERE domain = %(domain)s",
+        {"domain": current.domain},
+    ).fetchone()
+    if alias_owner is not None and alias_owner["company_id"] != company_id:
+        raise ValueError(
+            f"company domain {current.domain!r} is an alias of another company"
+        )
     row = connection.execute(
         """\
         UPDATE company
@@ -5800,6 +6084,7 @@ def load_company_view(
     return CompanyView(
         **company.model_dump(),
         tags=[t.name for t in owner_tags],
+        aliases=list_company_aliases(connection, company_id),
         notes=notes,
         notes_total=notes_total,
     )
@@ -5966,6 +6251,7 @@ def export_snapshot(
                 "profile": company.profile,
                 "disabled_reason": company.disabled_reason,
                 "tags": [t.name for t in owner_tags],
+                "aliases": list_company_aliases(connection, summary.id),
             }
         )
 
@@ -6126,6 +6412,30 @@ def _restore_companies(
             _restore_tag_assignment(
                 connection, tag_name, domain, errors, company_id=company.id
             )
+        for alias in entry.get("aliases", []):
+            if not isinstance(alias, str):
+                errors.append(
+                    {
+                        "entity": "company_alias",
+                        "key": domain,
+                        "error": "validation_error",
+                        "message": f"alias must be a string for company {domain!r}",
+                    }
+                )
+                continue
+            try:
+                add_company_alias(connection, company.id, alias, commit=False)
+            except ValueError as exc:
+                errors.append(
+                    {
+                        "entity": "company_alias",
+                        "key": domain,
+                        "error": "already_exists",
+                        "message": str(exc),
+                    }
+                )
+                continue
+        connection.commit()
         restored += 1
     return restored
 

@@ -53,6 +53,7 @@ from mailpilot.database import (
     get_account_by_email,
     get_company,
     get_company_by_domain,
+    get_company_by_domain_exact,
     get_contact,
     get_contact_by_email,
     get_contacts_by_emails,
@@ -80,6 +81,7 @@ from mailpilot.database import (
     list_active_outbound_enrollments_for_contact,
     list_activities,
     list_companies,
+    list_company_aliases,
     list_contacts,
     list_emails,
     list_enrollments_detailed,
@@ -90,7 +92,9 @@ from mailpilot.database import (
     list_tasks,
     list_workflows,
     list_workflows_full,
+    load_company_view,
     manual_retry_task,
+    merge_companies,
     pause_workflow,
     record_enrollment_outcome,
     reschedule_task_for_retry,
@@ -796,6 +800,8 @@ def test_company_view_field_set_superset_of_base_and_summary() -> None:
     assert "disabled_reason" in view
     assert "tags" in summary
     assert "tags" in view
+    assert "aliases" in view
+    assert "aliases" not in summary
     assert "has_profile" in summary
     assert "contact_count" in summary
     assert "profile" in summary
@@ -6278,6 +6284,169 @@ def test_create_company_returns_none_on_duplicate_domain(
     assert second is None
 
 
+def test_company_alias_resolve_view_and_contact_link(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.142: alias resolve on get/view; contact --company-domain alias links."""
+    company = create_company(
+        database_connection,
+        name="SVA Consulting",
+        domain="sva.com",
+        aliases=["consulting.sva.com", "SVA.COM.ALIAS"],
+    )
+    assert company is not None
+    assert company.domain == "sva.com"
+    assert list_company_aliases(database_connection, company.id) == [
+        "consulting.sva.com",
+        "sva.com.alias",
+    ]
+
+    by_alias = get_company_by_domain(database_connection, "consulting.sva.com")
+    assert by_alias is not None
+    assert by_alias.id == company.id
+    assert by_alias.domain == "sva.com"
+
+    # Case-insensitive resolve.
+    by_case = get_company_by_domain(database_connection, "Consulting.SVA.com")
+    assert by_case is not None
+    assert by_case.id == company.id
+
+    view = load_company_view(database_connection, company.id)
+    assert view is not None
+    assert view.aliases == ["consulting.sva.com", "sva.com.alias"]
+
+    contact = create_contact(
+        database_connection,
+        email="lead@sva.com",
+        company_id=by_alias.id,
+    )
+    assert contact is not None
+    assert contact.company_id == company.id
+
+    # Exact lookup does not follow alias.
+    assert get_company_by_domain_exact(database_connection, "consulting.sva.com") is None
+
+
+def test_create_company_rejects_domain_already_alias(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.142: no silent second firm when domain is a known alias."""
+    first = create_company(
+        database_connection,
+        name="SVA",
+        domain="sva.com",
+        aliases=["consulting.sva.com"],
+    )
+    assert first is not None
+    second = create_company(
+        database_connection,
+        name="Fake SVA",
+        domain="consulting.sva.com",
+    )
+    assert second is None
+    third = create_company(
+        database_connection,
+        name="Other",
+        domain="other.com",
+        aliases=["sva.com"],
+    )
+    assert third is None
+
+
+def test_search_companies_matches_alias(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.142: search by alias domain finds the canonical company."""
+    company = create_company(
+        database_connection,
+        name="Stellar",
+        domain="stellarone.io",
+        aliases=["stellarone.com"],
+    )
+    assert company is not None
+    results = search_companies(database_connection, "stellarone.com")
+    assert len(results) == 1
+    assert results[0].id == company.id
+    assert results[0].domain == "stellarone.io"
+
+
+def test_merge_companies_disables_source_and_optional_contact_move(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.143: merge aliases source domain, disables source, moves contacts."""
+    survivor = create_company(
+        database_connection, name="Net@Work", domain="netatwork.com"
+    )
+    source = create_company(database_connection, name="Nexvue", domain="nexvue.com")
+    assert survivor is not None
+    assert source is not None
+    contact = create_contact(
+        database_connection, email="a@nexvue.com", company_id=source.id
+    )
+    assert contact is not None
+
+    merged = merge_companies(
+        database_connection,
+        source.id,
+        survivor.id,
+        move_contacts=True,
+        original_from_domain="nexvue.com",
+    )
+    assert merged is not None
+    assert merged.id == survivor.id
+    assert "nexvue.com" in list_company_aliases(database_connection, survivor.id)
+
+    source_after = get_company(database_connection, source.id)
+    assert source_after is not None
+    assert source_after.disabled_reason == "merged:into netatwork.com"
+    assert source_after.domain.startswith("__merged__.")
+
+    contact_after = get_contact(database_connection, contact.id)
+    assert contact_after is not None
+    assert contact_after.company_id == survivor.id
+
+    # Alias resolve hits survivor.
+    resolved = get_company_by_domain(database_connection, "nexvue.com")
+    assert resolved is not None
+    assert resolved.id == survivor.id
+
+    # Idempotent re-merge.
+    again = merge_companies(
+        database_connection,
+        source.id,
+        survivor.id,
+        move_contacts=False,
+        original_from_domain="nexvue.com",
+    )
+    assert again is not None
+    assert again.id == survivor.id
+
+
+def test_merge_companies_without_move_leaves_contacts(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.143: omit --move-contacts leaves contacts on disabled source."""
+    survivor = create_company(database_connection, name="Into", domain="into.com")
+    source = create_company(database_connection, name="From", domain="from.com")
+    assert survivor is not None
+    assert source is not None
+    contact = create_contact(
+        database_connection, email="stay@from.com", company_id=source.id
+    )
+    assert contact is not None
+
+    merge_companies(
+        database_connection,
+        source.id,
+        survivor.id,
+        move_contacts=False,
+        original_from_domain="from.com",
+    )
+    contact_after = get_contact(database_connection, contact.id)
+    assert contact_after is not None
+    assert contact_after.company_id == source.id
+
+
 def test_create_contact_returns_none_on_duplicate_email(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
@@ -6467,6 +6636,7 @@ def test_export_snapshot_bundle_shape(
     assert company_entry["domain"] == "acme.com"
     assert company_entry["profile"]["summary"] == _FULL_PROFILE["summary"]
     assert set(company_entry["tags"]) == {"customer", "lead"}
+    assert company_entry["aliases"] == []
     # No source-DB UUID is forwarded (§B.104).
     assert "id" not in company_entry
     assert "company_id" not in company_entry

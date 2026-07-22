@@ -1356,13 +1356,29 @@ def company() -> None:
 @click.option("--domain", required=True, help="Primary domain.")
 @click.option("--name", default="", help="Company name.")
 @click.option(
+    "--alias",
+    "aliases",
+    multiple=True,
+    help=(
+        "Alternate domain that resolves to this company (repeatable). "
+        "Shared domain space: cannot match another company domain or alias."
+    ),
+)
+@click.option(
     "--note",
     default=None,
     help="Optional first note body. Appended atomically as a `note` row.",
 )
-def company_create(domain: str, name: str, note: str | None) -> None:
-    """Create a new company."""
-    from mailpilot.database import add_company_note, create_company, initialize_database
+def company_create(
+    domain: str, name: str, aliases: tuple[str, ...], note: str | None
+) -> None:
+    """Create a new company, optionally with alias domains."""
+    from mailpilot.database import (
+        add_company_note,
+        create_company,
+        initialize_database,
+        load_company_view,
+    )
     from mailpilot.operator_log import cli_mutation, operator_event
 
     if not domain.strip():
@@ -1370,13 +1386,20 @@ def company_create(domain: str, name: str, note: str | None) -> None:
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         with cli_mutation("company", "create", domain=domain):
-            created = create_company(connection, name=name, domain=domain)
+            created = create_company(
+                connection,
+                name=name,
+                domain=domain,
+                aliases=list(aliases) if aliases else None,
+            )
             if created is None:
                 output_error(
-                    f"company with domain={domain!r} already exists",
-                    "duplicate_key",
+                    f"company domain or alias already exists: {domain!r}",
+                    "already_exists",
                 )
             changed = ["name", "domain"]
+            if aliases:
+                changed.append("aliases")
             if note:
                 add_company_note(connection, created.id, note)
                 changed.append("note")
@@ -1386,7 +1409,9 @@ def company_create(domain: str, name: str, note: str | None) -> None:
                 domain=created.domain,
                 changed=changed,
             )
-            output_entity("company", created)
+            # View projection includes aliases[] (§V.8 / §V.142).
+            viewed = load_company_view(connection, created.id)
+            output_entity("company", viewed if viewed is not None else created)
     finally:
         connection.close()
 
@@ -1662,7 +1687,8 @@ def company_enable(company_ref: str) -> None:
     """Re-enable a soft-disabled company by clearing disabled_reason.
 
     The company reappears in the default `company list`. Enabling a company
-    that is not disabled is rejected.
+    that is not disabled is rejected. Enabling a company whose domain is an
+    alias of another company is rejected (`invalid_state`).
     """
     from mailpilot.database import enable_company, initialize_database
     from mailpilot.operator_log import cli_mutation, operator_event
@@ -1677,7 +1703,10 @@ def company_enable(company_ref: str) -> None:
                 "validation_error",
             )
         with cli_mutation("company", "enable", entity_id=company_id):
-            updated = enable_company(connection, company_id)
+            try:
+                updated = enable_company(connection, company_id)
+            except ValueError as exc:
+                output_error(str(exc), "invalid_state")
             if updated is None:
                 output_error(
                     f"company {company_id} is not disabled",
@@ -1689,6 +1718,119 @@ def company_enable(company_ref: str) -> None:
                 changed=["disabled_reason"],
             )
             output_entity("company", updated)
+    finally:
+        connection.close()
+
+
+@company.command("merge")
+@click.option(
+    "--from",
+    "from_ref",
+    required=True,
+    help="Source company to absorb (domain or ID).",
+)
+@click.option(
+    "--into",
+    "into_ref",
+    required=True,
+    help="Survivor company (domain or ID).",
+)
+@click.option(
+    "--move-contacts",
+    is_flag=True,
+    default=False,
+    help="Reassign all contacts from the source company to the survivor.",
+)
+def company_merge(from_ref: str, into_ref: str, move_contacts: bool) -> None:
+    """Absorb a source company into a survivor brand.
+
+    Records the source domain as an alias on the survivor, soft-disables the
+    source with reason `merged:into <survivor.domain>`, and optionally moves
+    contacts. Re-running the same merge is an ok no-op.
+    """
+    from mailpilot.database import (
+        get_company,
+        get_company_by_domain,
+        get_company_by_domain_exact,
+        initialize_database,
+        load_company_view,
+        merge_companies,
+    )
+    from mailpilot.operator_log import cli_mutation, operator_event
+
+    connection = initialize_database(_database_url(), require_current_schema=True)
+    try:
+        # Survivor resolves aliases (canonical firm).
+        into_company = _resolve_company(connection, into_ref)
+        if into_company.disabled_reason is not None:
+            output_error(
+                f"survivor company is disabled (reason: {into_company.disabled_reason})",
+                "invalid_state",
+            )
+
+        # Source: exact domain first so an already-merged alias is not treated
+        # as a second live firm. UUID still resolves by id.
+        original_from_domain: str | None = None
+        if _looks_like_uuid(from_ref):
+            from_company = get_company(connection, from_ref)
+            if from_company is None:
+                output_error(f"company not found: {from_ref}", "not_found")
+            original_from_domain = from_company.domain
+            if from_company.domain.startswith("__merged__."):
+                # After merge the row keeps a tombstone domain; absorb key is
+                # recovered from the survivor alias list when possible.
+                original_from_domain = None
+        else:
+            from_company = get_company_by_domain_exact(connection, from_ref)
+            if from_company is None:
+                # Idempotent: --from is already an alias of the survivor.
+                alias_hit = get_company_by_domain(connection, from_ref)
+                if alias_hit is not None and alias_hit.id == into_company.id:
+                    viewed = load_company_view(connection, into_company.id)
+                    output_entity(
+                        "company", viewed if viewed is not None else into_company
+                    )
+                    return
+                output_error(f"company not found: {from_ref}", "not_found")
+            original_from_domain = from_ref
+
+        if from_company.id == into_company.id:
+            output_error("cannot merge a company into itself", "invalid_state")
+
+        with cli_mutation(
+            "company",
+            "merge",
+            entity_id=into_company.id,
+            from_id=from_company.id,
+        ):
+            try:
+                merged = merge_companies(
+                    connection,
+                    from_company.id,
+                    into_company.id,
+                    move_contacts=move_contacts,
+                    original_from_domain=original_from_domain,
+                )
+            except ValueError as exc:
+                message = str(exc)
+                code = (
+                    "invalid_state"
+                    if "disabled" in message or "itself" in message
+                    else "validation_error"
+                )
+                output_error(message, code)
+            if merged is None:
+                output_error("merge failed: company not found", "not_found")
+            operator_event(
+                "company.merge",
+                entity_id=merged.id,
+                from_id=from_company.id,
+                move_contacts=move_contacts,
+                changed=["aliases", "disabled_reason"]
+                + (["contacts"] if move_contacts else []),
+            )
+            viewed = load_company_view(connection, merged.id)
+            output_entity("company", viewed if viewed is not None else merged)
     finally:
         connection.close()
 
