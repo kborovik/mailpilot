@@ -5963,9 +5963,7 @@ def test_load_company_view_projects_tags_same_shape_as_list(
     company = make_test_company(database_connection, name="Acme", domain="acme.com")
     bare = make_test_company(database_connection, name="Bare", domain="bare.com")
     make_test_tag_assignment(database_connection, company_id=company.id, name="vip")
-    make_test_tag_assignment(
-        database_connection, company_id=company.id, name="partner"
-    )
+    make_test_tag_assignment(database_connection, company_id=company.id, name="partner")
 
     view = load_company_view(database_connection, company.id)
     bare_view = load_company_view(database_connection, bare.id)

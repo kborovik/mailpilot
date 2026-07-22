@@ -1193,9 +1193,7 @@ def test_company_list_include_disabled_flag(
     )
 
 
-def test_company_list_full_flag(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
+def test_company_list_full_flag(runner: CliRunner, mock_connection: MagicMock) -> None:
     """§V.8: --full forwards full=True for lean profile.summary embed."""
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
