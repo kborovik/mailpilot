@@ -1785,6 +1785,7 @@ def create_contact(
     last_name: str | None = None,
     title: str | None = None,
     email_confidence: int | None = None,
+    verification_meta: dict[str, Any] | None = None,
 ) -> Contact | None:
     """Create a new contact.
 
@@ -1802,6 +1803,8 @@ def create_contact(
         title: Optional role label (lead-metadata, §V.95).
         email_confidence: Optional deliverability score 0-100; ``None`` =
             Bouncer-unknown (§V.95). Schema CHECK enforces the range.
+        verification_meta: Optional operator-only verification audit object
+            (§V.144). Never injected into agent prompts.
 
     Returns:
         Created contact, or ``None`` if a contact with this email already
@@ -1814,10 +1817,10 @@ def create_contact(
     row = connection.execute(
         """\
         INSERT INTO contact (id, email, company_id, first_name, last_name,
-                             title, email_confidence)
+                             title, email_confidence, verification_meta)
         VALUES (%(id)s, %(email)s, %(company_id)s,
                 %(first_name)s, %(last_name)s,
-                %(title)s, %(email_confidence)s)
+                %(title)s, %(email_confidence)s, %(verification_meta)s)
         ON CONFLICT (email) DO NOTHING
         RETURNING *
         """,
@@ -1829,6 +1832,9 @@ def create_contact(
             "last_name": last_name,
             "title": title,
             "email_confidence": email_confidence,
+            "verification_meta": (
+                Json(verification_meta) if verification_meta is not None else None
+            ),
         },
     ).fetchone()
     connection.commit()
@@ -2179,6 +2185,8 @@ def update_contact(
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return get_contact(connection, contact_id)
+    if "verification_meta" in updates and updates["verification_meta"] is not None:
+        updates["verification_meta"] = Json(updates["verification_meta"])
     updates["id"] = contact_id
     query = _build_update("contact", updates, SQL("id = %(id)s"))
     row = connection.execute(query, updates).fetchone()
@@ -6030,10 +6038,12 @@ def load_contact_view(
     count, not the cap. ``company_notes`` is always ``[]`` when the contact
     has no parent company.
 
-    The projection is a base-entity superset per §V.8: every ``Contact``
-    column is forwarded via ``**contact.model_dump()`` and ``company_domain``
-    is fetched from the parent company (LEFT JOIN semantics, NULL when the
-    contact has no company).
+    The projection is a base-entity superset of agent-facing columns per
+    §V.8: every ``Contact`` column except operator-only
+    ``verification_meta`` (§V.144) is forwarded, and ``company_domain`` is
+    fetched from the parent company (LEFT JOIN semantics, NULL when the
+    contact has no company). Meta is never on this path — operators use
+    ``contact view --include-meta``.
     """
     contact = get_contact(connection, contact_id)
     if contact is None:
@@ -6049,8 +6059,10 @@ def load_contact_view(
         company_domain = None
         company_notes = []
         company_notes_total = 0
+    # Strip operator-only meta so agent prompt + default CLI stay byte-identical
+    # and never carry verification trails (§V.144 / §V.8).
     return ContactView(
-        **contact.model_dump(),
+        **contact.model_dump(exclude={"verification_meta"}),
         company_domain=company_domain,
         notes=notes,
         notes_total=notes_total,

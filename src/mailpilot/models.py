@@ -107,6 +107,10 @@ class Contact(BaseModel):
     ``title`` (role label) and ``email_confidence`` are flat lead-metadata
     columns per §V.95; ``email_confidence`` is the sole email-risk score
     (0-100, low = high risk), ``None`` when Bouncer has no signal.
+
+    ``verification_meta`` is operator-only durable verification audit (§V.144)
+    (e.g. Bouncer status, source). It is never part of the agent prompt
+    allowlist; default ``ContactView`` / ``load_contact_view`` omit it.
     """
 
     id: str
@@ -116,6 +120,7 @@ class Contact(BaseModel):
     last_name: str | None = None
     title: str | None = None
     email_confidence: int | None = None
+    verification_meta: dict[str, Any] | None = None
     disabled_reason: str | None = None
     created_at: datetime
     updated_at: datetime
@@ -702,21 +707,21 @@ class MeetingView(BaseModel):
 class ContactView(BaseModel):
     """View-only projection of `Contact` with inlined notes (§V.8).
 
-    Used by CLI ``contact view`` and the workflow-agent prompt pre-feed
-    (``Contact record:`` section, §V.135) so the operator and the agent see
-    byte-identical context. ``notes`` carries the
-    contact's own notes (full body, ORDER BY ``created_at`` DESC, capped at
+    Used by CLI ``contact view`` (default) and the workflow-agent prompt
+    pre-feed (``Contact record:`` section, §V.135) so the operator and the
+    agent see byte-identical context. ``notes`` carries the contact's own
+    notes (full body, ORDER BY ``created_at`` DESC, capped at
     ``_INLINE_NOTES_CAP`` in ``database.py``); ``company_notes`` carries the
     parent company's notes when ``company_id`` is set, else an empty list.
     Totals reflect the actual row count in the database, not the cap.
 
-    Per §V.8 the projection is a base-entity superset: it carries every
-    ``Contact`` column (including the ``title`` + ``email_confidence`` lead
-    metadata per §V.95) plus ``company_domain`` (LEFT JOIN company per §V.5,
-    NULL when ``company_id`` is NULL), so ``contact view`` carries every
-    ``contact list`` field and the singular ``{"contact": {...}}`` field set
-    stays verb-invariant. Omitting a base column would let Pydantic
-    ``extra=ignore`` silently strip it from ``**contact.model_dump()`` (§B.94).
+    Per §V.8 the projection is a base-entity superset of agent-facing
+    columns: every ``Contact`` column except operator-only
+    ``verification_meta`` (§V.144; opt-in via ``contact view --include-meta``)
+    plus ``company_domain`` (LEFT JOIN company per §V.5, NULL when
+    ``company_id`` is NULL). Omitting an agent-facing base column would let
+    Pydantic ``extra=ignore`` silently strip it from ``**contact.model_dump()``
+    (§B.94).
     """
 
     id: str

@@ -165,6 +165,29 @@ Soft-disable a contact (preserves audit history) with:
 mailpilot contact disable <CONTACT_REF> --reason "left company"
 ```
 
+### Contact verification meta (operator-only)
+
+Store Bouncer status, source, and other verification trails as structured
+meta — never as a contact note, and never in the workflow agent prompt.
+
+Agent-facing contact fields (prompt allowlist): `name` / first+last,
+`title`, `email`, `email_confidence`, company profile, lean notes. Meta is
+outside that allowlist.
+
+```
+mailpilot contact create --email lead@example.com \
+  --email-confidence 98 \
+  --meta-json '{"bouncer_status":"deliverable","source":"hunter_pattern"}'
+mailpilot contact update lead@example.com \
+  --meta-json '{"bouncer_status":"risky","source":"manual"}'
+mailpilot contact view lead@example.com
+mailpilot contact view lead@example.com --include-meta
+```
+
+Default `contact view` (and the agent context builder) omit
+`verification_meta`. Pass `--include-meta` for operator audit. Stdin batch
+create accepts optional object field `meta` with the same shape.
+
 ### Company domain aliases and merge
 
 Register alternate domains when creating a company (repeatable `--alias`).
@@ -262,14 +285,14 @@ Exit 0 when every row is ok; exit 1 if any row has `status: "error"`
 
 Each stdin line is one JSON object with contact create fields. `email` is
 required; `first_name`, `last_name`, `company_domain`, `title`,
-`email_confidence`, and `note` are optional. `--stdin` is exclusive with
-single-entity create options. A duplicate email natural key is an ok skip
-(upsert is a separate feature).
+`email_confidence`, `meta` (JSON object), and `note` are optional.
+`--stdin` is exclusive with single-entity create options. A duplicate email
+natural key is an ok skip (upsert is a separate feature).
 
 ```
 printf '%s\n' \
   '{"email":"ada@example.com","first_name":"Ada","company_domain":"example.com"}' \
-  '{"email":"grace@example.com","title":"CTO"}' \
+  '{"email":"grace@example.com","title":"CTO","meta":{"source":"hunter"}}' \
   | mailpilot contact create --stdin
 ```
 

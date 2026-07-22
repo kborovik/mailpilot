@@ -79,7 +79,8 @@ CREATE TABLE IF NOT EXISTS contact (
     email_confidence      INT CHECK (email_confidence BETWEEN 0 AND 100),
     disabled_reason       TEXT,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    verification_meta     JSONB
 );
 
 CREATE INDEX IF NOT EXISTS idx_contact_company_id ON contact(company_id);

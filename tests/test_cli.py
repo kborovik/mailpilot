@@ -2465,6 +2465,7 @@ def test_contact_create(runner: CliRunner, mock_connection: MagicMock) -> None:
         company_id=None,
         title=None,
         email_confidence=None,
+        verification_meta=None,
     )
     data = json.loads(result.output)
     assert data["ok"] is True
@@ -2494,6 +2495,7 @@ def test_contact_create_email_only(
         company_id=None,
         title=None,
         email_confidence=None,
+        verification_meta=None,
     )
 
 
@@ -2530,10 +2532,77 @@ def test_contact_create_with_lead_metadata(
         company_id=None,
         title="VP Sales",
         email_confidence=88,
+        verification_meta=None,
     )
     data = json.loads(result.output)
     assert data["contact"]["title"] == "VP Sales"
     assert data["contact"]["email_confidence"] == 88
+
+
+def test_contact_create_with_verification_meta(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.144: --meta-json stores operator-only verification_meta."""
+    meta = {"bouncer_status": "deliverable", "source": "hunter_pattern"}
+    contact = _make_contact(email_confidence=98, verification_meta=meta)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_contact", return_value=contact) as mock_create,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "contact",
+                "create",
+                "--email",
+                "alice@example.com",
+                "--email-confidence",
+                "98",
+                "--meta-json",
+                json.dumps(meta),
+            ],
+        )
+
+    assert result.exit_code == 0
+    mock_create.assert_called_once_with(
+        mock_connection,
+        email="alice@example.com",
+        first_name=None,
+        last_name=None,
+        company_id=None,
+        title=None,
+        email_confidence=98,
+        verification_meta=meta,
+    )
+    data = json.loads(result.output)
+    assert data["contact"]["verification_meta"] == meta
+
+
+def test_contact_create_meta_json_must_be_object(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.144: --meta-json array/non-object fails validation_error."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "contact",
+                "create",
+                "--email",
+                "alice@example.com",
+                "--meta-json",
+                '["not","object"]',
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "object" in data["message"]
 
 
 def test_contact_create_company_not_found(
@@ -2625,6 +2694,7 @@ def test_contact_create_stdin_mixed_ok_error(
         company_id: str | None = None,
         title: str | None = None,
         email_confidence: int | None = None,
+        verification_meta: dict[str, object] | None = None,
     ) -> Contact | None:
         if email == "dup@acme.com":
             return None
@@ -3352,6 +3422,57 @@ def test_contact_view(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert data["contact"]["notes_total"] == 0
     assert data["contact"]["company_notes"] == []
     assert data["contact"]["company_notes_total"] == 0
+    assert "verification_meta" not in data["contact"]
+
+
+def test_contact_view_include_meta(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.144: --include-meta projects operator-only verification_meta."""
+    meta = {"bouncer_status": "deliverable", "source": "hunter_pattern"}
+    contact = _make_contact(verification_meta=meta)
+    view = ContactView(
+        id=contact.id,
+        email=contact.email,
+        company_id=contact.company_id,
+        first_name=contact.first_name,
+        last_name=contact.last_name,
+        disabled_reason=contact.disabled_reason,
+        created_at=contact.created_at,
+        updated_at=contact.updated_at,
+        notes=[],
+        notes_total=0,
+        company_notes=[],
+        company_notes_total=0,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.load_contact_view", return_value=view),
+        patch("mailpilot.database.get_contact", return_value=contact) as mock_get,
+    ):
+        result = runner.invoke(
+            main, ["contact", "view", contact.id, "--include-meta"]
+        )
+
+    assert result.exit_code == 0
+    mock_get.assert_called_once_with(mock_connection, contact.id)
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["contact"]["verification_meta"] == meta
+
+
+def test_skill_documents_contact_verification_meta() -> None:
+    """§V.144: packaged SKILL.md documents meta write + --include-meta allowlist."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "--meta-json" in body
+    assert "--include-meta" in body
+    assert "verification_meta" in body
+    assert "email_confidence" in body
+    assert "§V." not in body
+    assert "§T." not in body
 
 
 def test_contact_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:

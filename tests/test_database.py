@@ -6200,6 +6200,49 @@ def test_load_contact_view_carries_title_and_email_confidence(
     assert view.email_confidence == 87
 
 
+def test_create_contact_stores_verification_meta(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.144: verification_meta JSONB round-trips on Contact row."""
+    from mailpilot.database import create_contact, get_contact
+
+    meta = {"bouncer_status": "deliverable", "source": "hunter_pattern"}
+    contact = create_contact(
+        database_connection,
+        email="meta@example.com",
+        email_confidence=98,
+        verification_meta=meta,
+    )
+    assert contact is not None
+    assert contact.verification_meta == meta
+
+    reloaded = get_contact(database_connection, contact.id)
+    assert reloaded is not None
+    assert reloaded.verification_meta == meta
+
+
+def test_load_contact_view_omits_verification_meta(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.144/§V.8: default ContactView never projects verification_meta."""
+    from mailpilot.database import create_contact, load_contact_view
+    from mailpilot.models import ContactView
+
+    meta = {"bouncer_status": "risky", "source": "manual"}
+    contact = create_contact(
+        database_connection,
+        email="view-meta@example.com",
+        verification_meta=meta,
+    )
+    assert contact is not None
+
+    view = load_contact_view(database_connection, contact.id)
+    assert view is not None
+    assert "verification_meta" not in ContactView.model_fields
+    assert "verification_meta" not in view.model_dump()
+    assert "bouncer_status" not in view.model_dump_json()
+
+
 def test_load_contact_view_carries_company_domain(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:

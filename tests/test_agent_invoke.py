@@ -940,6 +940,47 @@ def test_build_user_prompt_omits_company_record_without_company_view(
     assert "Company record:" not in prompt
 
 
+def test_build_user_prompt_omits_verification_meta(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.144 / §V.135: agent context builder never carries verification_meta.
+
+    Operator audit trails (Bouncer status, source) are durable on the Contact
+    row but outside the prompt allowlist. load_contact_view strips them so the
+    Contact record: section matches default CLI view (byte-identical, no meta).
+    """
+    from mailpilot.database import create_contact, load_contact_view
+
+    _account, _c, workflow = _setup(database_connection)
+    meta = {"bouncer_status": "deliverable", "source": "hunter_pattern"}
+    contact = create_contact(
+        database_connection,
+        email="meta-agent@example.com",
+        email_confidence=91,
+        verification_meta=meta,
+    )
+    assert contact is not None
+    assert contact.verification_meta == meta
+
+    contact_view = load_contact_view(database_connection, contact.id)
+    assert contact_view is not None
+
+    prompt = _build_user_prompt(
+        workflow=workflow,
+        contact=contact,
+        email_history=[],
+        contact_view=contact_view,
+    )
+
+    assert "Contact record:" in prompt
+    assert "verification_meta" not in prompt
+    assert "bouncer_status" not in prompt
+    assert "hunter_pattern" not in prompt
+    # Agent-facing lead metadata remains.
+    assert "email_confidence" in prompt
+    assert "91" in prompt
+
+
 def test_invoke_prefeeds_contact_and_company_records(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:

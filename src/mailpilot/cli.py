@@ -411,6 +411,16 @@ def _parse_contact_create_fields(
         return None, _batch_error(
             ref, "validation_error", "email_confidence must be an integer"
         )
+    meta_raw = payload.get("meta")
+    meta: dict[str, object] | None
+    if meta_raw is None:
+        meta = None
+    elif isinstance(meta_raw, dict):
+        meta = meta_raw
+    else:
+        return None, _batch_error(
+            ref, "validation_error", "meta must be a JSON object"
+        )
     return {
         "ref": ref,
         "email": email,
@@ -420,6 +430,7 @@ def _parse_contact_create_fields(
         "note": optional["note"],
         "company_domain": optional["company_domain"],
         "email_confidence": confidence,
+        "meta": meta,
     }, None
 
 
@@ -448,6 +459,7 @@ def _contact_create_stdin_row(
                 ref, "not_found", f"company not found: {company_domain}"
             )
         company_id = company.id
+    meta = fields["meta"] if isinstance(fields["meta"], dict) else None
     created = create_contact(
         connection,
         email=str(fields["email"]),
@@ -462,6 +474,7 @@ def _contact_create_stdin_row(
             if isinstance(fields["email_confidence"], int)
             else None
         ),
+        verification_meta=meta,
     )
     if created is None:
         # Safe-idempotent: duplicate natural key -> ok skip.
@@ -472,6 +485,8 @@ def _contact_create_stdin_row(
         changed.append("title")
     if isinstance(fields["email_confidence"], int):
         changed.append("email_confidence")
+    if meta is not None:
+        changed.append("verification_meta")
     note = fields["note"]
     if isinstance(note, str) and note:
         add_contact_note(connection, created.id, note)
@@ -1430,6 +1445,20 @@ def _parse_company_profile_json(text: str) -> dict[str, object]:
     return parsed
 
 
+def _parse_verification_meta_json(text: str) -> dict[str, object]:
+    """Parse operator-only verification meta JSON into a dict (§V.144).
+
+    Invalid JSON or a non-object root becomes ``validation_error`` (no DB write).
+    """
+    try:
+        parsed: object = json.loads(text)
+    except json.JSONDecodeError as exc:
+        output_error(f"invalid JSON: {exc}", "validation_error")
+    if not isinstance(parsed, dict):
+        output_error("meta must be a JSON object", "validation_error")
+    return parsed
+
+
 def _merge_company_profile_patch(
     existing: dict[str, Any] | None,
     *,
@@ -1965,6 +1994,14 @@ def contact() -> None:
     help="Deliverability score 0-100; low = high risk (lead-metadata).",
 )
 @click.option(
+    "--meta-json",
+    default=None,
+    help=(
+        "Operator-only verification meta as a JSON object "
+        "(e.g. bouncer_status, source). Never injected into agent prompts."
+    ),
+)
+@click.option(
     "--note",
     default=None,
     help="Optional first note body. Appended atomically as a `note` row.",
@@ -1977,7 +2014,7 @@ def contact() -> None:
     help=(
         "Batch mode: read NDJSON from stdin, one object per line with "
         "contact create fields (email required; first_name, last_name, "
-        "company_domain, title, email_confidence, note optional). "
+        "company_domain, title, email_confidence, meta, note optional). "
         "Exclusive with single-entity create options. "
         "Duplicate email is an ok skip. "
         "Exit 0 when every row is ok; exit 1 if any row errors "
@@ -1991,6 +2028,7 @@ def contact_create(
     company_domain: str | None,
     title: str | None,
     email_confidence: int | None,
+    meta_json: str | None,
     note: str | None,
     from_stdin: bool,
 ) -> None:
@@ -2011,6 +2049,7 @@ def contact_create(
             company_domain,
             title,
             email_confidence,
+            meta_json,
             note,
         )
     )
@@ -2028,6 +2067,9 @@ def contact_create(
             "--email is required (or pass --stdin)",
             "validation_error",
         )
+    verification_meta = (
+        _parse_verification_meta_json(meta_json) if meta_json is not None else None
+    )
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         company_id = (
@@ -2044,6 +2086,7 @@ def contact_create(
                 company_id=company_id,
                 title=title,
                 email_confidence=email_confidence,
+                verification_meta=verification_meta,
             )
             if created is None:
                 output_error(
@@ -2055,6 +2098,8 @@ def contact_create(
                 changed.append("title")
             if email_confidence is not None:
                 changed.append("email_confidence")
+            if verification_meta is not None:
+                changed.append("verification_meta")
             if note:
                 add_contact_note(connection, created.id, note)
                 changed.append("note")
@@ -2083,6 +2128,14 @@ def contact_create(
     default=None,
     help="Deliverability score 0-100; low = high risk (lead-metadata).",
 )
+@click.option(
+    "--meta-json",
+    default=None,
+    help=(
+        "Operator-only verification meta as a JSON object "
+        "(replaces existing meta; never injected into agent prompts)."
+    ),
+)
 def contact_update(
     contact_ref: str,
     email: str | None,
@@ -2091,6 +2144,7 @@ def contact_update(
     company_domain: str | None,
     title: str | None,
     email_confidence: int | None,
+    meta_json: str | None,
 ) -> None:
     """Update a contact (addressed by email or ID)."""
     from mailpilot.database import initialize_database, update_contact
@@ -2113,6 +2167,8 @@ def contact_update(
             fields["title"] = title
         if email_confidence is not None:
             fields["email_confidence"] = email_confidence
+        if meta_json is not None:
+            fields["verification_meta"] = _parse_verification_meta_json(meta_json)
         with cli_mutation("contact", "update", entity_id=contact_id):
             updated = update_contact(connection, contact_id, **fields)
             if updated is None:
@@ -2126,6 +2182,7 @@ def contact_update(
                     "company_id",
                     "title",
                     "email_confidence",
+                    "verification_meta",
                 )
                 if getattr(before, field) != getattr(updated, field)
             ]
@@ -2293,9 +2350,18 @@ def contact_list(
 
 @contact.command("view")
 @click.argument("contact_ref")
-def contact_view(contact_ref: str) -> None:
+@click.option(
+    "--include-meta",
+    is_flag=True,
+    default=False,
+    help=(
+        "Project operator-only verification_meta (null when unset). "
+        "Default view and the agent prompt path omit meta."
+    ),
+)
+def contact_view(contact_ref: str, include_meta: bool) -> None:
     """Show a contact by email or ID with inlined notes (own + parent company)."""
-    from mailpilot.database import initialize_database, load_contact_view
+    from mailpilot.database import get_contact, initialize_database, load_contact_view
 
     connection = initialize_database(_database_url())
     try:
@@ -2303,7 +2369,16 @@ def contact_view(contact_ref: str) -> None:
         found = load_contact_view(connection, contact_id)
         if found is None:
             output_error(f"contact not found: {contact_ref}", "not_found")
-        output_entity("contact", found)
+        if not include_meta:
+            output_entity("contact", found)
+            return
+        # Default ContactView is agent-safe; merge meta only when operator asks.
+        payload = found.model_dump(mode="json")
+        row = get_contact(connection, contact_id)
+        payload["verification_meta"] = (
+            row.verification_meta if row is not None else None
+        )
+        output({"contact": payload})
     finally:
         connection.close()
 

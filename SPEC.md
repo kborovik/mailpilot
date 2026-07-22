@@ -235,7 +235,7 @@ T219|x|impl §V.139(+) + §I — company disable --stdin + contact create --stdi
 T220|x|impl §V.140(+) + §I — company update --profile-file/--profile - full-replace + field-patch flags (summary/product/source/timezone/target-customers); merge vs replace; validation_error no partial; tests + --skill (#191)|V140,V72,V4,V54,I.cli
 T221|x|impl §V.141(+) + §V.116(∆) + §I — multi-owner tag add (repeatable --company-domain|--contact-email) + tag set replace; multi results envelope; tests multi-add + company view tags always; --skill docs (#192)|V141,V116,V8,V14,V4,V94,I.cli
 T222|x|impl §V.142(+) + §V.143(+) + §I — company domain aliases + merge into survivor; migration 011 company_alias; resolve on view/contact; create --alias; merge --move-contacts; export aliases[]; tests + --skill (#193)|V142,V143,V8,V90,V107,V114,V121,V16,V4,V94,I.cli
-T223|.|impl §V.144(+) + §V.8(∆) + §I — contact verification_meta JSONB; create|update --meta-json; view --include-meta; agent allowlist + context-builder tests; migration; --skill docs (#194)|V144,V8,V95,V135,V4,I.cli
+T223|x|impl §V.144(+) + §V.8(∆) + §I — contact verification_meta JSONB; create|update --meta-json; view --include-meta; agent allowlist + context-builder tests; migration; --skill docs (#194)|V144,V8,V95,V135,V4,I.cli
 
 ## §B BUGS
 
