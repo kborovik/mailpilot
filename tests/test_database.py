@@ -618,6 +618,114 @@ def test_list_companies_excludes_disabled_by_default(
     assert by_id[active.id].disabled_reason is None
 
 
+_PIPELINE_PROFILE: dict[str, Any] = {
+    "summary": "Pipeline test company.",
+    "products": ["widget"],
+    "target_customers": "Enterprise.",
+    "sources": ["https://example.com/"],
+}
+
+
+def _seed_pipeline_cohort_companies(
+    connection: psycopg.Connection[dict[str, Any]],
+) -> dict[str, str]:
+    """Seed one company per pipeline status bucket; return domain->id map."""
+    from mailpilot.database import create_contact
+
+    ready = make_test_company(connection, name="Ready Co", domain="ready.com")
+    update_company(connection, ready.id, profile=_PIPELINE_PROFILE)
+    create_contact(connection, email="a@ready.com", company_id=ready.id)
+
+    needs_contacts = make_test_company(
+        connection, name="Needs Contacts", domain="needs-contacts.com"
+    )
+    update_company(connection, needs_contacts.id, profile=_PIPELINE_PROFILE)
+
+    needs_profile = make_test_company(
+        connection, name="Needs Profile", domain="needs-profile.com"
+    )
+
+    disabled = make_test_company(
+        connection, name="Disabled Co", domain="disabled-co.com"
+    )
+    update_company(connection, disabled.id, profile=_PIPELINE_PROFILE)
+    create_contact(connection, email="a@disabled-co.com", company_id=disabled.id)
+    disable_company(connection, disabled.id, "absorbed-brand")
+
+    return {
+        "ready": ready.id,
+        "needs_contacts": needs_contacts.id,
+        "needs_profile": needs_profile.id,
+        "disabled": disabled.id,
+    }
+
+
+def test_list_companies_status_ready(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.138: status=ready = profile + contact_count >= 1 + not disabled."""
+    ids = _seed_pipeline_cohort_companies(database_connection)
+    surfaced = list_companies(database_connection, status="ready")
+    assert {c.id for c in surfaced} == {ids["ready"]}
+
+
+def test_list_companies_status_needs_contacts(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.138: status=needs_contacts = profile + contact_count = 0 + not disabled."""
+    ids = _seed_pipeline_cohort_companies(database_connection)
+    surfaced = list_companies(database_connection, status="needs_contacts")
+    assert {c.id for c in surfaced} == {ids["needs_contacts"]}
+
+
+def test_list_companies_status_needs_profile(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.138: status=needs_profile = no profile + not disabled."""
+    ids = _seed_pipeline_cohort_companies(database_connection)
+    surfaced = list_companies(database_connection, status="needs_profile")
+    assert {c.id for c in surfaced} == {ids["needs_profile"]}
+
+
+def test_list_companies_status_disabled(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.138: status=disabled = disabled_reason set; overrides default hide."""
+    ids = _seed_pipeline_cohort_companies(database_connection)
+    # Without include_disabled — status alone surfaces the disabled row.
+    surfaced = list_companies(database_connection, status="disabled")
+    assert {c.id for c in surfaced} == {ids["disabled"]}
+    assert surfaced[0].disabled_reason == "absorbed-brand"
+
+
+def test_list_companies_status_composes_with_tag_and_min_contacts(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.138: status AND-composes with --tag and --min-contacts."""
+    from mailpilot.database import create_contact
+
+    ids = _seed_pipeline_cohort_companies(database_connection)
+    # Second ready company without the tag — status=ready alone would include it.
+    other_ready = make_test_company(
+        database_connection, name="Other Ready", domain="other-ready.com"
+    )
+    update_company(database_connection, other_ready.id, profile=_PIPELINE_PROFILE)
+    create_contact(
+        database_connection, email="a@other-ready.com", company_id=other_ready.id
+    )
+    assignment = make_test_tag_assignment(
+        database_connection, company_id=ids["ready"], name="vip"
+    )
+
+    surfaced = list_companies(
+        database_connection,
+        status="ready",
+        tag=assignment.tag_id,
+        min_contacts=1,
+    )
+    assert {c.id for c in surfaced} == {ids["ready"]}
+
+
 def test_disable_company_reenable_via_update(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:

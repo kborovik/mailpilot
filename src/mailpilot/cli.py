@@ -77,6 +77,13 @@ _TASK_STATUSES = ["pending", "completed", "failed", "cancelled"]
 # `task list --trigger` and `task stats --trigger`.
 _TASK_TRIGGERS = ["enrollment_run", "enrollment_schedule", "task", "email", "manual"]
 _MEETING_STATUSES = ["scheduled", "completed", "cancelled", "no_show"]
+# Company list pipeline cohort filter (§V.138); derived, not a schema CHECK.
+_COMPANY_PIPELINE_STATUSES = [
+    "ready",
+    "needs_contacts",
+    "needs_profile",
+    "disabled",
+]
 
 
 def _database_url() -> str:
@@ -1241,6 +1248,14 @@ def company_search(query: str, limit: int) -> None:
 
 
 @company.command("list")
+@enum_option(
+    "--status",
+    "status",
+    _COMPANY_PIPELINE_STATUSES,
+    "Pipeline cohort: ready (profile + >=1 contact), needs_contacts "
+    "(profile + 0 contacts), needs_profile (no profile), disabled "
+    "(has disabled_reason; forces include). Composes with other filters.",
+)
 @presence_option("profile", "Filter on presence of a company profile.")
 @range_options(
     "contacts",
@@ -1268,12 +1283,19 @@ def company_list(
     tag: str | None,
     no_tag: tuple[str, ...],
     full: bool,
+    status: str | None,
 ) -> None:
     """List companies as summaries.
 
     Lean rows project domain, name, has_profile, contact_count, tags,
     disabled_reason. Pass --full to embed profile.summary for triage without
     N company view calls.
+
+    --status filters a pipeline cohort: ready (profile + at least one contact,
+    not disabled), needs_contacts (profile + zero contacts, not disabled),
+    needs_profile (no profile, not disabled), disabled (disabled_reason set;
+    overrides the default hide). Status AND-composes with --tag, --no-tag,
+    --min/max-contacts, --has-profile, and --include-disabled.
     """
     from mailpilot.database import initialize_database, list_companies
 
@@ -1281,6 +1303,8 @@ def company_list(
     try:
         tag_id = _resolve_tag(connection, tag).id if tag is not None else None
         exclude_tag_ids = [_resolve_tag(connection, name).id for name in no_tag]
+        # --status disabled overrides the default hide of disabled rows.
+        effective_include_disabled = include_disabled or status == "disabled"
         companies = list_companies(
             connection,
             limit=limit,
@@ -1289,10 +1313,11 @@ def company_list(
             has_profile=has_profile,
             max_contacts=max_contacts,
             min_contacts=min_contacts,
-            include_disabled=include_disabled,
+            include_disabled=effective_include_disabled,
             tag=tag_id,
             exclude_tags=exclude_tag_ids,
             full=full,
+            status=status,
         )
         output({"companies": [c.model_dump(mode="json") for c in companies]})
     finally:

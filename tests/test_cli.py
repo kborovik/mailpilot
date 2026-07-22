@@ -1008,6 +1008,7 @@ def test_company_list_with_limit(runner: CliRunner, mock_connection: MagicMock) 
         tag=None,
         exclude_tags=[],
         full=False,
+        status=None,
     )
 
 
@@ -1034,6 +1035,7 @@ def test_company_list_with_since(runner: CliRunner, mock_connection: MagicMock) 
         tag=None,
         exclude_tags=[],
         full=False,
+        status=None,
     )
 
 
@@ -1060,6 +1062,7 @@ def test_company_list_has_profile_flag(
         tag=None,
         exclude_tags=[],
         full=False,
+        status=None,
     )
 
 
@@ -1086,6 +1089,7 @@ def test_company_list_no_profile_flag(
         tag=None,
         exclude_tags=[],
         full=False,
+        status=None,
     )
 
 
@@ -1136,6 +1140,7 @@ def test_company_list_max_contacts_flag(
         tag=None,
         exclude_tags=[],
         full=False,
+        status=None,
     )
 
 
@@ -1163,6 +1168,7 @@ def test_company_list_min_contacts_flag(
         tag=None,
         exclude_tags=[],
         full=False,
+        status=None,
     )
 
 
@@ -1190,6 +1196,7 @@ def test_company_list_include_disabled_flag(
         tag=None,
         exclude_tags=[],
         full=False,
+        status=None,
     )
 
 
@@ -1215,7 +1222,101 @@ def test_company_list_full_flag(runner: CliRunner, mock_connection: MagicMock) -
         tag=None,
         exclude_tags=[],
         full=True,
+        status=None,
     )
+
+
+def test_company_list_status_flag(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.138: --status ready flows to list_companies."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_companies", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(main, ["company", "list", "--status", "ready"])
+
+    assert result.exit_code == 0
+    mock_list.assert_called_once_with(
+        mock_connection,
+        limit=100,
+        since=None,
+        until=None,
+        has_profile=None,
+        max_contacts=None,
+        min_contacts=None,
+        include_disabled=False,
+        tag=None,
+        exclude_tags=[],
+        full=False,
+        status="ready",
+    )
+
+
+def test_company_list_status_disabled_forces_include(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.138: --status disabled forces include_disabled=True."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_companies", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(main, ["company", "list", "--status", "disabled"])
+
+    assert result.exit_code == 0
+    mock_list.assert_called_once_with(
+        mock_connection,
+        limit=100,
+        since=None,
+        until=None,
+        has_profile=None,
+        max_contacts=None,
+        min_contacts=None,
+        include_disabled=True,
+        tag=None,
+        exclude_tags=[],
+        full=False,
+        status="disabled",
+    )
+
+
+def test_company_list_status_rejects_out_of_set(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.115/§V.138: out-of-set --status is rejected at parse time."""
+    result = runner.invoke(main, ["company", "list", "--status", "bogus"])
+    assert result.exit_code != 0
+
+
+def test_company_list_help_documents_status_rules(
+    runner: CliRunner,
+) -> None:
+    """§V.138/§V.111: --help documents cohort rules without SPEC cites."""
+    result = runner.invoke(main, ["company", "list", "--help"])
+    assert result.exit_code == 0
+    assert "--status" in result.output
+    assert "ready" in result.output
+    assert "needs_contacts" in result.output
+    assert "needs_profile" in result.output
+    assert "disabled" in result.output
+    assert "§V." not in result.output
+    assert "§T." not in result.output
+
+
+def test_skill_documents_company_pipeline_status() -> None:
+    """§V.138: packaged SKILL.md documents --status cohort rules."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "--status" in body
+    assert "ready" in body
+    assert "needs_contacts" in body
+    assert "needs_profile" in body
+    assert "disabled_reason" in body
+    assert "§V." not in body
+    assert "§T." not in body
 
 
 def test_company_list_envelope_projects_tags_and_disabled_reason(

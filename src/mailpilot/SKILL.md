@@ -166,11 +166,25 @@ mailpilot contact disable <CONTACT_REF> --reason "left company"
 `company list` lean rows always project `domain`, `name`, `has_profile`,
 `contact_count`, `tags` (assigned names, empty array ok), and
 `disabled_reason` (null when enabled; value when the row is returned via
-`--include-disabled`). One call is enough for tag / disable / contact-count
-triage — no per-domain `company view` loop.
+`--include-disabled` or `--status disabled`). One call is enough for tag /
+disable / contact-count triage — no per-domain `company view` loop.
+
+Pipeline cohort filter `--status` (AND-composes with `--tag`, `--no-tag`,
+`--min-contacts`, `--max-contacts`, `--has-profile`, `--include-disabled`):
+
+| status | rule |
+| --- | --- |
+| `ready` | has profile, contact_count at least 1, not disabled |
+| `needs_contacts` | has profile, contact_count is 0, not disabled |
+| `needs_profile` | no profile, not disabled |
+| `disabled` | `disabled_reason` is set (forces include of disabled rows) |
 
 ```
 mailpilot company list --tag acumatica-var
+mailpilot company list --tag acumatica-var --status ready
+mailpilot company list --tag acumatica-var --status needs_contacts
+mailpilot company list --tag acumatica-var --status needs_profile
+mailpilot company list --tag acumatica-var --status disabled
 mailpilot company list --include-disabled
 mailpilot company list --full
 mailpilot company view <DOMAIN_OR_ID>

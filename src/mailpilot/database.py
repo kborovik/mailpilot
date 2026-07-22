@@ -1148,6 +1148,43 @@ _COMPANY_TAGS_SQL = (
 """Correlated assigned-tag names for company list/search rows (§V.8 / §V.116)."""
 
 
+def _company_pipeline_status_predicates(
+    status: str | None,
+    include_disabled: bool,
+) -> tuple[list[SQL], list[SQL]]:
+    """Build WHERE/HAVING predicates for the company pipeline cohort filter.
+
+    Args:
+        status: Pipeline cohort name (``ready`` / ``needs_contacts`` /
+            ``needs_profile`` / ``disabled``) or ``None``.
+        include_disabled: When ``status`` is unset, controls the default
+            soft-disable hide (§V.114).
+
+    Returns:
+        ``(conditions, having)`` SQL fragments. Active cohort buckets force
+        not-disabled; ``disabled`` selects only disabled rows and overrides
+        the default hide (§V.138).
+    """
+    conditions: list[SQL] = []
+    having: list[SQL] = []
+    if status == "ready":
+        conditions.append(SQL("c.profile IS NOT NULL"))
+        conditions.append(SQL("c.disabled_reason IS NULL"))
+        having.append(SQL("COUNT(ct.id) >= 1"))
+    elif status == "needs_contacts":
+        conditions.append(SQL("c.profile IS NOT NULL"))
+        conditions.append(SQL("c.disabled_reason IS NULL"))
+        having.append(SQL("COUNT(ct.id) = 0"))
+    elif status == "needs_profile":
+        conditions.append(SQL("c.profile IS NULL"))
+        conditions.append(SQL("c.disabled_reason IS NULL"))
+    elif status == "disabled":
+        conditions.append(SQL("c.disabled_reason IS NOT NULL"))
+    elif not include_disabled:
+        conditions.append(SQL("c.disabled_reason IS NULL"))
+    return conditions, having
+
+
 def list_companies(
     connection: psycopg.Connection[dict[str, Any]],
     limit: int = 100,
@@ -1160,6 +1197,7 @@ def list_companies(
     tag: str | None = None,
     exclude_tags: Sequence[str] | None = None,
     full: bool = False,
+    status: str | None = None,
 ) -> list[CompanySummary]:
     """List companies as summaries.
 
@@ -1208,6 +1246,12 @@ def list_companies(
         full: When ``True``, embeds ``profile`` as ``{"summary": ...}`` (or
             null when the company has no profile). Default lean list leaves
             ``profile`` null (§V.8).
+        status: Pipeline cohort filter (§V.138). One of ``ready`` (profile +
+            contact_count >= 1 + not disabled), ``needs_contacts`` (profile +
+            contact_count = 0 + not disabled), ``needs_profile`` (no profile +
+            not disabled), ``disabled`` (disabled_reason set; overrides the
+            default hide). AND-composes with the other filters. ``None``
+            (default) applies no cohort predicate.
 
     Returns:
         List of company summaries ordered by name.
@@ -1225,8 +1269,11 @@ def list_companies(
         conditions.append(SQL("c.profile IS NOT NULL"))
     elif has_profile is False:
         conditions.append(SQL("c.profile IS NULL"))
-    if not include_disabled:
-        conditions.append(SQL("c.disabled_reason IS NULL"))
+    status_conditions, status_having = _company_pipeline_status_predicates(
+        status, include_disabled
+    )
+    conditions.extend(status_conditions)
+    having.extend(status_having)
     if max_contacts is not None:
         having.append(SQL("COUNT(ct.id) <= %(max_contacts)s"))
         params["max_contacts"] = max_contacts
