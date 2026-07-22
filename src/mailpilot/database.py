@@ -1487,6 +1487,172 @@ def search_companies(
     return [CompanySummary.model_validate(row) for row in rows]
 
 
+def export_companies(
+    connection: psycopg.Connection[dict[str, Any]],
+    has_profile: bool | None = None,
+    max_contacts: int | None = None,
+    min_contacts: int | None = None,
+    include_disabled: bool = False,
+    tag: str | None = None,
+    exclude_tags: Sequence[str] | None = None,
+    status: str | None = None,
+    full: bool = False,
+) -> list[dict[str, Any]]:
+    """Export companies as tracker NDJSON-ready dicts (§V.145).
+
+    Stable keys: ``domain``, ``name``, ``tags``, ``has_profile``,
+    ``contact_count``, ``disabled_reason``. Domains are lowercased; tags are
+    sorted; rows ordered by domain ASC. No result-limit (unlike ``list``).
+    Filters match the company list family (§V.138/§V.116/§V.114/§V.96).
+    Pass ``full=True`` to embed the full ``profile`` object (or null).
+
+    Args:
+        connection: Open database connection.
+        has_profile: Presence filter; ``None`` means no filter.
+        max_contacts: Inclusive upper bound on contact_count.
+        min_contacts: Inclusive lower bound on contact_count.
+        include_disabled: When ``True``, includes disabled companies.
+        tag: Resolved tag id membership filter.
+        exclude_tags: Resolved tag ids excluded via NOT EXISTS.
+        status: Pipeline cohort filter (§V.138).
+        full: When ``True``, embed full profile JSON (or null).
+
+    Returns:
+        List of tracker-shaped dicts ordered by domain ASC.
+    """
+    conditions: list[Composed | SQL] = []
+    having: list[SQL] = []
+    params: dict[str, object] = {}
+    if has_profile is True:
+        conditions.append(SQL("c.profile IS NOT NULL"))
+    elif has_profile is False:
+        conditions.append(SQL("c.profile IS NULL"))
+    status_conditions, status_having = _company_pipeline_status_predicates(
+        status, include_disabled
+    )
+    conditions.extend(status_conditions)
+    having.extend(status_having)
+    if max_contacts is not None:
+        having.append(SQL("COUNT(ct.id) <= %(max_contacts)s"))
+        params["max_contacts"] = max_contacts
+    if min_contacts is not None:
+        having.append(SQL("COUNT(ct.id) >= %(min_contacts)s"))
+        params["min_contacts"] = min_contacts
+    if tag is not None:
+        conditions.append(
+            SQL(
+                "EXISTS (SELECT 1 FROM tag_assignment ta "
+                "WHERE ta.company_id = c.id AND ta.tag_id = %(tag_id)s)"
+            )
+        )
+        params["tag_id"] = tag
+    conditions.extend(_exclude_tags_conditions(exclude_tags, "company_id", params))
+    where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
+    having_clause = SQL("HAVING ") + SQL(" AND ").join(having) if having else SQL("")
+    profile_select = SQL(", c.profile") if full else SQL("")
+    query = SQL(
+        "SELECT LOWER(c.domain) AS domain, c.name, "
+        "(c.profile IS NOT NULL) AS has_profile, "
+        "c.disabled_reason, COUNT(ct.id) AS contact_count, "
+        "{tags}{profile} "
+        "FROM company c LEFT JOIN contact ct ON ct.company_id = c.id "
+        "{where} GROUP BY c.id {having} ORDER BY LOWER(c.domain)"
+    ).format(
+        tags=SQL(_COMPANY_TAGS_SQL),
+        profile=profile_select,
+        where=where,
+        having=having_clause,
+    )
+    rows = connection.execute(query, params).fetchall()
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        entry: dict[str, Any] = {
+            "domain": row["domain"],
+            "name": row["name"],
+            "tags": list(row["tags"] or []),
+            "has_profile": bool(row["has_profile"]),
+            "contact_count": int(row["contact_count"]),
+            "disabled_reason": row["disabled_reason"],
+        }
+        if full:
+            entry["profile"] = row["profile"]
+        results.append(entry)
+    return results
+
+
+def company_import_diff(
+    connection: psycopg.Connection[dict[str, Any]],
+    file_domains: set[str],
+    has_profile: bool | None = None,
+    max_contacts: int | None = None,
+    min_contacts: int | None = None,
+    include_disabled: bool = False,
+    tag: str | None = None,
+    exclude_tags: Sequence[str] | None = None,
+    status: str | None = None,
+) -> dict[str, Any]:
+    """Compare tracker file domains to CRM scope (dry-run only, §V.146).
+
+    CRM side is filtered with the same list-family flags as export. Bucket
+    lists are sorted lowercased domains. ``record_count`` is the size of the
+    union of file domains and CRM-scope domains.
+
+    Args:
+        connection: Open database connection.
+        file_domains: Lowercased domains from the tracker NDJSON file.
+        has_profile: Presence filter on CRM scope.
+        max_contacts: Inclusive upper bound on contact_count.
+        min_contacts: Inclusive lower bound on contact_count.
+        include_disabled: When ``True``, includes disabled CRM companies.
+        tag: Resolved tag id membership filter.
+        exclude_tags: Resolved tag ids excluded via NOT EXISTS.
+        status: Pipeline cohort filter (§V.138).
+
+    Returns:
+        Diff dict with ``missing_in_crm``, ``missing_profile``,
+        ``zero_contacts``, ``disabled``, ``extra_in_crm``, and
+        ``record_count``.
+    """
+    crm_rows = export_companies(
+        connection,
+        has_profile=has_profile,
+        max_contacts=max_contacts,
+        min_contacts=min_contacts,
+        include_disabled=include_disabled,
+        tag=tag,
+        exclude_tags=exclude_tags,
+        status=status,
+        full=False,
+    )
+    crm_by_domain = {str(row["domain"]).lower(): row for row in crm_rows}
+    crm_domains = set(crm_by_domain)
+    file_set = {d.lower() for d in file_domains}
+
+    missing_in_crm = sorted(file_set - crm_domains)
+    extra_in_crm = sorted(crm_domains - file_set)
+    missing_profile = sorted(
+        domain
+        for domain, row in crm_by_domain.items()
+        if not row["has_profile"]
+    )
+    zero_contacts = sorted(
+        domain for domain, row in crm_by_domain.items() if row["contact_count"] == 0
+    )
+    disabled = sorted(
+        domain
+        for domain, row in crm_by_domain.items()
+        if row["disabled_reason"] is not None
+    )
+    return {
+        "missing_in_crm": missing_in_crm,
+        "missing_profile": missing_profile,
+        "zero_contacts": zero_contacts,
+        "disabled": disabled,
+        "extra_in_crm": extra_in_crm,
+        "record_count": len(file_set | crm_domains),
+    }
+
+
 def get_company_by_domain_exact(
     connection: psycopg.Connection[dict[str, Any]],
     domain: str,

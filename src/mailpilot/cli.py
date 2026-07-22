@@ -1973,6 +1973,225 @@ def company_view(company_ref: str) -> None:
         connection.close()
 
 
+@company.command("export")
+@enum_option(
+    "--status",
+    "status",
+    _COMPANY_PIPELINE_STATUSES,
+    "Pipeline cohort filter (same rules as company list --status).",
+)
+@presence_option("profile", "Filter on presence of a company profile.")
+@range_options(
+    "contacts",
+    "Return only companies with contact_count >= N (composes with --max).",
+    "Return only companies with contact_count <= N (inclusive).",
+)
+@tag_filter_options
+@include_disabled_option
+@click.option(
+    "--full",
+    is_flag=True,
+    default=False,
+    help="Embed full profile object on each row (null when no profile).",
+)
+@click.option(
+    "--format",
+    "export_format",
+    type=click.Choice(["jsonl"]),
+    default="jsonl",
+    show_default=True,
+    help="Output format (jsonl only).",
+)
+@click.option(
+    "--out",
+    "out_path",
+    default=None,
+    type=click.Path(dir_okay=False),
+    help=(
+        "Write NDJSON to this path; stdout emits a JSON status envelope. "
+        "Omit to stream NDJSON lines on stdout."
+    ),
+)
+def company_export(
+    has_profile: bool | None,
+    max_contacts: int | None,
+    min_contacts: int | None,
+    include_disabled: bool,
+    tag: str | None,
+    no_tag: tuple[str, ...],
+    full: bool,
+    status: str | None,
+    export_format: str,
+    out_path: str | None,
+) -> None:
+    """Export companies as tracker NDJSON (one company object per line).
+
+    Stable keys: domain, name, tags, has_profile, contact_count,
+    disabled_reason. Domains are lowercased; tags sorted; rows ordered by
+    domain. Filters compose with the company list family. Pass --full to
+    embed the full profile object (or null). With --out, write the file and
+    print a company_export status envelope on stdout; without --out, stream
+    NDJSON on stdout (no envelope). Empty set yields zero lines / empty file.
+    Not the same as db export (full CRM snapshot).
+    """
+    import pathlib
+
+    from mailpilot.database import export_companies, initialize_database
+
+    del export_format  # only jsonl is accepted; Choice already enforced
+    connection = initialize_database(_database_url())
+    try:
+        tag_id = _resolve_tag(connection, tag).id if tag is not None else None
+        exclude_tag_ids = [_resolve_tag(connection, name).id for name in no_tag]
+        effective_include_disabled = include_disabled or status == "disabled"
+        rows = export_companies(
+            connection,
+            has_profile=has_profile,
+            max_contacts=max_contacts,
+            min_contacts=min_contacts,
+            include_disabled=effective_include_disabled,
+            tag=tag_id,
+            exclude_tags=exclude_tag_ids,
+            full=full,
+            status=status,
+        )
+    finally:
+        connection.close()
+
+    lines = [json.dumps(row, ensure_ascii=False, separators=(",", ":")) for row in rows]
+    body = "\n".join(lines) + ("\n" if lines else "")
+    if out_path is not None:
+        pathlib.Path(out_path).write_text(body, encoding="utf-8")
+        output(
+            {
+                "company_export": {
+                    "path": out_path,
+                    "format": "jsonl",
+                    "record_count": len(rows),
+                }
+            },
+            record_count=len(rows),
+        )
+        return
+    # Stream exclusion: NDJSON body on stdout, no single-object envelope.
+    if body:
+        click.echo(body, nl=False)
+    else:
+        click.echo("", nl=False)
+
+
+@company.command("import")
+@click.option(
+    "--from",
+    "from_path",
+    required=True,
+    type=click.Path(dir_okay=False),
+    help="Path to tracker NDJSON (one company object per line).",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Report domain parity only; no writes (required for now).",
+)
+@enum_option(
+    "--status",
+    "status",
+    _COMPANY_PIPELINE_STATUSES,
+    "Scope CRM side to this pipeline cohort (same as company list).",
+)
+@presence_option("profile", "Scope CRM side by profile presence.")
+@range_options(
+    "contacts",
+    "Scope CRM side: contact_count >= N.",
+    "Scope CRM side: contact_count <= N (inclusive).",
+)
+@tag_filter_options
+@include_disabled_option
+def company_import(
+    from_path: str,
+    dry_run: bool,
+    has_profile: bool | None,
+    max_contacts: int | None,
+    min_contacts: int | None,
+    include_disabled: bool,
+    tag: str | None,
+    no_tag: tuple[str, ...],
+    status: str | None,
+) -> None:
+    """Compare a tracker NDJSON file to CRM domains (dry-run only).
+
+    Reads one JSON object per line; each line must carry a domain. Optional
+    filters scope the CRM side the same way as company export. Report buckets:
+    missing_in_crm, missing_profile, zero_contacts, disabled, extra_in_crm.
+    Apply writes are not supported yet -- pass --dry-run.
+    """
+    import pathlib
+
+    from mailpilot.database import company_import_diff, initialize_database
+
+    if not dry_run:
+        output_error(
+            "company import apply is not supported; pass --dry-run",
+            "validation_error",
+        )
+
+    path = pathlib.Path(from_path)
+    if not path.is_file():
+        output_error(f"tracker file not found: {from_path}", "not_found")
+
+    file_domains: set[str] = set()
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        output_error(f"cannot read tracker file: {exc}", "validation_error")
+    for line_no, line in enumerate(raw.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            obj = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            output_error(
+                f"invalid NDJSON on line {line_no}: {exc}",
+                "validation_error",
+            )
+        if not isinstance(obj, dict):
+            output_error(
+                f"invalid NDJSON on line {line_no}: expected object",
+                "validation_error",
+            )
+        domain = obj.get("domain")
+        if not isinstance(domain, str) or not domain.strip():
+            output_error(
+                f"invalid NDJSON on line {line_no}: missing domain",
+                "validation_error",
+            )
+        file_domains.add(domain.strip().lower())
+
+    connection = initialize_database(_database_url())
+    try:
+        tag_id = _resolve_tag(connection, tag).id if tag is not None else None
+        exclude_tag_ids = [_resolve_tag(connection, name).id for name in no_tag]
+        effective_include_disabled = include_disabled or status == "disabled"
+        diff = company_import_diff(
+            connection,
+            file_domains,
+            has_profile=has_profile,
+            max_contacts=max_contacts,
+            min_contacts=min_contacts,
+            include_disabled=effective_include_disabled,
+            tag=tag_id,
+            exclude_tags=exclude_tag_ids,
+            status=status,
+        )
+    finally:
+        connection.close()
+
+    record_count = int(diff.pop("record_count"))
+    output({"company_import_diff": diff}, record_count=record_count)
+
+
 # -- Contact commands ----------------------------------------------------------
 
 

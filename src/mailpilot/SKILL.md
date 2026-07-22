@@ -332,6 +332,68 @@ profile); default list never ships products, target_customers, or sources.
 `company view` projects the same `tags` shape as list, plus `aliases`
 (sorted alternate domains), full profile, and inlined notes.
 
+### Company tracker export and dry-run import
+
+Export a filterable company cohort as NDJSON for external trackers (not the
+`db export` CRM snapshot). Stable keys per line: `domain`, `name`, `tags`,
+`has_profile`, `contact_count`, `disabled_reason`. Domains are lowercased;
+tags sorted; rows ordered by domain. Pass `--full` to embed the full
+`profile` object (or `null`). Filters match `company list`
+(`--tag` / `--no-tag` / `--status` / `--include-disabled` / `--has-profile`
+/ `--min-contacts` / `--max-contacts`).
+
+```
+mailpilot company export --tag acumatica-var --status ready
+mailpilot company export --full --out /tmp/companies.jsonl
+```
+
+Without `--out`, NDJSON lines stream on stdout (no JSON envelope — pipe-friendly).
+With `--out`, the file is written and stdout carries:
+
+```json
+{
+  "company_export": {
+    "path": "/tmp/companies.jsonl",
+    "format": "jsonl",
+    "record_count": 12
+  },
+  "record_count": 12,
+  "ok": true
+}
+```
+
+Compare a tracker file to CRM domains with dry-run import (no apply writes):
+
+```
+mailpilot company import --from /tmp/companies.jsonl --dry-run
+mailpilot company import --from /tmp/companies.jsonl --dry-run \
+  --tag acumatica-var --include-disabled
+```
+
+`--dry-run` is required. Optional filters scope the CRM side the same way
+as export. Envelope:
+
+```json
+{
+  "company_import_diff": {
+    "missing_in_crm": ["newco.com"],
+    "missing_profile": ["partial.com"],
+    "zero_contacts": ["lonely.com"],
+    "disabled": ["gone.com"],
+    "extra_in_crm": ["stale.com"]
+  },
+  "record_count": 5,
+  "ok": true
+}
+```
+
+Buckets: `missing_in_crm` (file not CRM), `missing_profile` (CRM, no
+profile), `zero_contacts` (CRM contact_count 0), `disabled` (CRM
+disabled_reason set — needs `--include-disabled` or `--status disabled` to
+surface), `extra_in_crm` (CRM scope not in file). `record_count` is the
+union size of file domains and CRM-scope domains. Missing file →
+`not_found`; invalid NDJSON line → `validation_error`.
+
 ### Define a workflow declaratively
 
 Workflow definitions are one TOML file per workflow. Export/import is TOML-only

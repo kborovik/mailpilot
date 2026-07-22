@@ -1464,6 +1464,268 @@ def test_skill_documents_company_pipeline_status() -> None:
     assert "§T." not in body
 
 
+# -- company export / import (tracker) -----------------------------------------
+
+
+def test_company_export_stdout_ndjson(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.145: without --out, stream NDJSON lines on stdout (no envelope)."""
+    rows = [
+        {
+            "domain": "alpha.com",
+            "name": "Alpha",
+            "tags": [],
+            "has_profile": False,
+            "contact_count": 0,
+            "disabled_reason": None,
+        },
+        {
+            "domain": "beta.com",
+            "name": "Beta",
+            "tags": ["vip"],
+            "has_profile": True,
+            "contact_count": 2,
+            "disabled_reason": None,
+        },
+    ]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.export_companies", return_value=rows) as mock_export,
+    ):
+        result = runner.invoke(main, ["company", "export"])
+
+    assert result.exit_code == 0, result.output
+    mock_export.assert_called_once()
+    lines = [line for line in result.output.splitlines() if line.strip()]
+    assert len(lines) == 2
+    first = json.loads(lines[0])
+    assert first["domain"] == "alpha.com"
+    assert first["tags"] == []
+    assert "ok" not in result.output
+    assert "company_export" not in result.output
+
+
+def test_company_export_out_status_envelope(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    """§V.145: --out writes NDJSON file + company_export status envelope."""
+    rows = [
+        {
+            "domain": "a.com",
+            "name": "A",
+            "tags": [],
+            "has_profile": False,
+            "contact_count": 0,
+            "disabled_reason": None,
+        }
+    ]
+    out = tmp_path / "companies.jsonl"
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.export_companies", return_value=rows),
+    ):
+        result = runner.invoke(main, ["company", "export", "--out", str(out)])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 1
+    assert data["company_export"]["path"] == str(out)
+    assert data["company_export"]["format"] == "jsonl"
+    assert data["company_export"]["record_count"] == 1
+    file_lines = out.read_text(encoding="utf-8").strip().splitlines()
+    assert len(file_lines) == 1
+    assert json.loads(file_lines[0])["domain"] == "a.com"
+
+
+def test_company_export_empty_stdout(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.145: empty set streams zero lines (no envelope)."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.export_companies", return_value=[]),
+    ):
+        result = runner.invoke(main, ["company", "export"])
+
+    assert result.exit_code == 0
+    assert result.output.strip() == ""
+
+
+def test_company_export_full_and_filters_flow(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.145: --full and list-family filters flow to export_companies."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.export_companies", return_value=[]) as mock_export,
+        patch(
+            "mailpilot.database.get_tag_by_name",
+            return_value=Tag(id="tag-1", name="vip", created_at=_NOW),
+        ),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "export",
+                "--full",
+                "--status",
+                "ready",
+                "--has-profile",
+                "--min-contacts",
+                "1",
+                "--tag",
+                "vip",
+                "--include-disabled",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    kwargs = mock_export.call_args.kwargs
+    assert kwargs["full"] is True
+    assert kwargs["status"] == "ready"
+    assert kwargs["has_profile"] is True
+    assert kwargs["min_contacts"] == 1
+    assert kwargs["include_disabled"] is True
+    assert kwargs["tag"] == "tag-1"
+
+
+def test_company_export_help_no_spec_cites(runner: CliRunner) -> None:
+    """§V.111: company export --help has zero SPEC citations."""
+    result = runner.invoke(main, ["company", "export", "--help"])
+    assert result.exit_code == 0
+    assert "§V." not in result.output
+    assert "§T." not in result.output
+    assert "--out" in result.output
+    assert "--full" in result.output
+    assert "jsonl" in result.output
+
+
+def test_company_import_dry_run(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    """§V.146: --from + --dry-run emits company_import_diff envelope."""
+    tracker = tmp_path / "tracker.jsonl"
+    tracker.write_text(
+        '{"domain":"ready.com","name":"Ready"}\n'
+        '{"domain":"missing.com","name":"Missing"}\n',
+        encoding="utf-8",
+    )
+    diff = {
+        "missing_in_crm": ["missing.com"],
+        "missing_profile": [],
+        "zero_contacts": [],
+        "disabled": [],
+        "extra_in_crm": ["extra.com"],
+        "record_count": 3,
+    }
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.company_import_diff", return_value=diff
+        ) as mock_diff,
+    ):
+        result = runner.invoke(
+            main,
+            ["company", "import", "--from", str(tracker), "--dry-run"],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 3
+    assert data["company_import_diff"]["missing_in_crm"] == ["missing.com"]
+    assert data["company_import_diff"]["extra_in_crm"] == ["extra.com"]
+    file_domains = mock_diff.call_args.args[1]
+    assert file_domains == {"ready.com", "missing.com"}
+
+
+def test_company_import_requires_dry_run(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    """§V.146: apply path rejected without --dry-run."""
+    tracker = tmp_path / "tracker.jsonl"
+    tracker.write_text('{"domain":"a.com"}\n', encoding="utf-8")
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main, ["company", "import", "--from", str(tracker)]
+        )
+
+    assert result.exit_code == 1
+    err = json.loads(result.stderr)
+    assert err["ok"] is False
+    assert err["error"] == "validation_error"
+    assert "dry-run" in err["message"]
+
+
+def test_company_import_missing_file(runner: CliRunner) -> None:
+    """§V.146: missing tracker file -> not_found."""
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "import",
+                "--from",
+                "/no/such/tracker.jsonl",
+                "--dry-run",
+            ],
+        )
+
+    assert result.exit_code == 1
+    err = json.loads(result.stderr)
+    assert err["error"] == "not_found"
+
+
+def test_company_import_invalid_ndjson(
+    runner: CliRunner, tmp_path: pathlib.Path
+) -> None:
+    """§V.146: bad NDJSON line -> validation_error."""
+    tracker = tmp_path / "bad.jsonl"
+    tracker.write_text("not-json\n", encoding="utf-8")
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            ["company", "import", "--from", str(tracker), "--dry-run"],
+        )
+
+    assert result.exit_code == 1
+    err = json.loads(result.stderr)
+    assert err["error"] == "validation_error"
+
+
+def test_company_import_help_no_spec_cites(runner: CliRunner) -> None:
+    """§V.111: company import --help has zero SPEC citations."""
+    result = runner.invoke(main, ["company", "import", "--help"])
+    assert result.exit_code == 0
+    assert "§V." not in result.output
+    assert "§T." not in result.output
+    assert "--dry-run" in result.output
+    assert "--from" in result.output
+
+
+def test_skill_documents_company_tracker_export_import() -> None:
+    """§V.145/§V.146: packaged SKILL.md documents tracker export + dry-run import."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "company export" in body
+    assert "company import" in body
+    assert "--dry-run" in body
+    assert "jsonl" in body
+    assert "missing_in_crm" in body
+    assert "company_import_diff" in body
+    assert "§V." not in body
+    assert "§T." not in body
+
+
 def test_company_list_envelope_projects_tags_and_disabled_reason(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:

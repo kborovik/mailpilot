@@ -80,6 +80,8 @@ from mailpilot.database import (
     list_accounts,
     list_active_outbound_enrollments_for_contact,
     list_activities,
+    company_import_diff,
+    export_companies,
     list_companies,
     list_company_aliases,
     list_contacts,
@@ -728,6 +730,115 @@ def test_list_companies_status_composes_with_tag_and_min_contacts(
         min_contacts=1,
     )
     assert {c.id for c in surfaced} == {ids["ready"]}
+
+
+def test_export_companies_stable_shape_and_domain_order(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.145: tracker export keys, domain ASC, tags sorted, no limit."""
+    beta = make_test_company(database_connection, name="Beta Co", domain="beta.com")
+    make_test_company(database_connection, name="Alpha Co", domain="alpha.com")
+    make_test_tag_assignment(database_connection, company_id=beta.id, name="vip")
+    make_test_tag_assignment(
+        database_connection, company_id=beta.id, name="acumatica-var"
+    )
+
+    rows = export_companies(database_connection)
+
+    assert [r["domain"] for r in rows] == ["alpha.com", "beta.com"]
+    assert set(rows[0].keys()) == {
+        "domain",
+        "name",
+        "tags",
+        "has_profile",
+        "contact_count",
+        "disabled_reason",
+    }
+    assert rows[0]["name"] == "Alpha Co"
+    assert rows[0]["has_profile"] is False
+    assert rows[0]["contact_count"] == 0
+    assert rows[0]["disabled_reason"] is None
+    assert rows[0]["tags"] == []
+    assert rows[1]["tags"] == ["acumatica-var", "vip"]
+    assert "profile" not in rows[0]
+    assert "id" not in rows[0]
+
+
+def test_export_companies_full_embeds_full_profile(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.145: --full embeds full profile object or null (not summary-only)."""
+    _seed_profile_fixture(database_connection)
+    rows = {r["domain"]: r for r in export_companies(database_connection, full=True)}
+    assert rows["null.com"]["profile"] is None
+    profile = rows["full.com"]["profile"]
+    assert profile is not None
+    assert profile["summary"] == "Full Co builds widgets."
+    assert profile["products"] == ["Widget A", "Widget B"]
+    assert "sources" in profile
+
+
+def test_export_companies_filters_status_and_hides_disabled(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.145/§V.138: filters compose; default hides disabled."""
+    from mailpilot.database import create_contact, disable_company
+
+    ready = make_test_company(database_connection, name="Ready", domain="ready.com")
+    update_company(database_connection, ready.id, profile=_PIPELINE_PROFILE)
+    create_contact(database_connection, email="a@ready.com", company_id=ready.id)
+    bare = make_test_company(database_connection, name="Bare", domain="bare.com")
+    disable_company(database_connection, bare.id, reason="absorbed-brand")
+
+    default = export_companies(database_connection)
+    assert {r["domain"] for r in default} == {"ready.com"}
+
+    cohort = export_companies(database_connection, status="ready")
+    assert [r["domain"] for r in cohort] == ["ready.com"]
+
+    with_disabled = export_companies(database_connection, include_disabled=True)
+    assert {r["domain"] for r in with_disabled} == {"ready.com", "bare.com"}
+
+
+def test_company_import_diff_buckets(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.146: dry-run diff buckets by domain parity and CRM attributes."""
+    from mailpilot.database import create_contact, disable_company
+
+    ready = make_test_company(database_connection, name="Ready", domain="ready.com")
+    update_company(database_connection, ready.id, profile=_PIPELINE_PROFILE)
+    create_contact(database_connection, email="a@ready.com", company_id=ready.id)
+
+    make_test_company(
+        database_connection, name="No Profile", domain="noprofile.com"
+    )
+    zero = make_test_company(database_connection, name="Zero", domain="zero.com")
+    update_company(database_connection, zero.id, profile=_PIPELINE_PROFILE)
+
+    disabled = make_test_company(
+        database_connection, name="Disabled", domain="disabled.com"
+    )
+    disable_company(database_connection, disabled.id, reason="absorbed-brand")
+
+    # File has ready + missing + disabled; CRM also has noprofile/zero (extra
+    # when not in file). Include disabled so that bucket can populate.
+    diff = company_import_diff(
+        database_connection,
+        {"ready.com", "missing.com", "disabled.com"},
+        include_disabled=True,
+    )
+
+    assert diff["missing_in_crm"] == ["missing.com"]
+    assert "noprofile.com" in diff["missing_profile"]
+    assert "zero.com" in diff["zero_contacts"]
+    assert diff["disabled"] == ["disabled.com"]
+    assert "noprofile.com" in diff["extra_in_crm"]
+    assert "zero.com" in diff["extra_in_crm"]
+    assert "ready.com" not in diff["extra_in_crm"]
+    assert "ready.com" not in diff["missing_in_crm"]
+    # Union: ready, missing, disabled, noprofile, zero
+    assert diff["record_count"] == 5
 
 
 def test_disable_company_reenable_via_update(
