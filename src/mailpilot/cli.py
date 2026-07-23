@@ -5034,8 +5034,35 @@ def _maybe_schedule_first_touch(
 
 
 @enrollment.command("add")
-@click.option("--workflow-id", required=True, help="Workflow ID.")
-@click.option("--contact-email", required=True, help="Contact (email or ID).")
+@click.option(
+    "--workflow-id",
+    "workflow_ref",
+    required=True,
+    help="Workflow name or ID.",
+)
+@click.option(
+    "--contact-email",
+    default=None,
+    help="Contact (email or ID). Required when not using --tag --dry-run.",
+)
+@click.option(
+    "--tag",
+    "tag_ref",
+    default=None,
+    help="Company-tag cohort dry-run path (requires --dry-run).",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Preview company-tag cohort enrollments; no writes (requires --tag).",
+)
+@click.option(
+    "--min-contacts",
+    type=int,
+    default=None,
+    help="Dry-run only: include companies with at least N contacts.",
+)
 @click.option(
     "--scheduled-at",
     "scheduled_at",
@@ -5046,15 +5073,20 @@ def _maybe_schedule_first_touch(
     ),
 )
 def enrollment_add(
-    workflow_id: str, contact_email: str, scheduled_at: str | None
+    workflow_ref: str,
+    contact_email: str | None,
+    tag_ref: str | None,
+    dry_run: bool,
+    min_contacts: int | None,
+    scheduled_at: str | None,
 ) -> None:
-    """Enroll a contact in a workflow.
+    """Enroll a contact, or dry-run a company-tag cohort preview.
 
-    When ``--scheduled-at`` is given on an outbound workflow, a pending
-    task is inserted so the run loop dispatches the initial outbound
-    message at that time. Re-running against an enrollment that already
-    has a pending first-touch task is a no-op (idempotent). Inbound
-    workflows reject ``--scheduled-at`` -- inbound is reactive.
+    Single-contact path: ``--workflow-id`` + ``--contact-email``. When
+    ``--scheduled-at`` is given on an outbound workflow, a pending task is
+    inserted for the run loop. Tag cohort path (MVP dry-run only):
+    ``--workflow-id`` + ``--tag`` + ``--dry-run`` [optional ``--min-contacts``]
+    returns an ``enrollment_preview`` with no writes.
     """
     from datetime import datetime
 
@@ -5065,8 +5097,42 @@ def enrollment_add(
         get_enrollment,
         get_workflow,
         initialize_database,
+        preview_enrollment_tag_cohort,
     )
     from mailpilot.operator_log import cli_mutation, operator_event
+
+    if tag_ref is not None and contact_email is not None:
+        output_error(
+            "--tag is exclusive with --contact-email",
+            "validation_error",
+        )
+    if tag_ref is not None and not dry_run:
+        output_error(
+            "--tag requires --dry-run (cohort apply not implemented)",
+            "validation_error",
+        )
+    if dry_run and tag_ref is None:
+        output_error(
+            "--dry-run requires --tag",
+            "validation_error",
+        )
+    if min_contacts is not None and not dry_run:
+        output_error(
+            "--min-contacts is only valid with --tag --dry-run",
+            "validation_error",
+        )
+    if min_contacts is not None and min_contacts < 0:
+        output_error("--min-contacts must be >= 0", "validation_error")
+    if dry_run and scheduled_at is not None:
+        output_error(
+            "--scheduled-at is exclusive with --dry-run",
+            "validation_error",
+        )
+    if tag_ref is None and contact_email is None:
+        output_error(
+            "--contact-email is required (or --tag --dry-run for cohort preview)",
+            "validation_error",
+        )
 
     scheduled_iso: str | None = None
     if scheduled_at is not None:
@@ -5077,14 +5143,35 @@ def enrollment_add(
 
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
+        workflow_id = _resolve_workflow_id(connection, workflow_ref)
         workflow = get_workflow(connection, workflow_id)
         if workflow is None:
-            output_error(f"workflow not found: {workflow_id}", "not_found")
+            output_error(f"workflow not found: {workflow_ref}", "not_found")
+
+        if dry_run:
+            assert tag_ref is not None
+            tag = _resolve_tag(connection, tag_ref)
+            account = get_account(connection, workflow.account_id)
+            account_email = account.email if account is not None else None
+            preview = preview_enrollment_tag_cohort(
+                connection,
+                workflow,
+                tag,
+                min_contacts=min_contacts,
+                account_email=account_email,
+            )
+            output(
+                {"enrollment_preview": preview.model_dump(mode="json")},
+                record_count=preview.count,
+            )
+            return
+
         if scheduled_iso is not None and workflow.type != "outbound":
             output_error(
                 "--scheduled-at only valid for outbound workflows",
                 "invalid_state",
             )
+        assert contact_email is not None
         contact = _resolve_contact(connection, contact_email)
         contact_id = contact.id
         account = get_account(connection, workflow.account_id)

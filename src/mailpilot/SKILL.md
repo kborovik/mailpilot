@@ -461,10 +461,10 @@ before trusting a batch.
 
 `enrollment add` constructs the binding from `--workflow-id` + `--contact-email`
 and returns the freshly-minted scalar `id`; every other verb takes that id
-as a single positional argument.
+as a single positional argument. `--workflow-id` accepts workflow name or UUID.
 
 ```
-mailpilot enrollment add --workflow-id <WID> --contact-email <CONTACT_REF>
+mailpilot enrollment add --workflow-id <WID_OR_NAME> --contact-email <CONTACT_REF>
 mailpilot enrollment run <ENROLLMENT_ID>                            # manual kick
 mailpilot enrollment view <ENROLLMENT_ID>
 mailpilot enrollment disable <ENROLLMENT_ID> --reason "left company"
@@ -481,6 +481,50 @@ never re-enables an enrollment. Terminal outcomes (`completed`, `failed`) are
 recorded as activity-log entries by the agent, not as enrollment status
 changes.
 
+### Preview a tag-cohort enrollment (dry-run)
+
+Before mass-enrolling, preview which contacts would enroll for companies
+carrying a vocabulary tag. Dry-run only (no apply writes). Requires
+`--tag` and `--dry-run` together. Optional `--min-contacts N` filters
+companies before expand. Disabled companies are excluded by default and
+counted under `excluded.disabled_companies`. Candidates drop already-
+enrolled contacts for the workflow, self-loop contacts (email matches the
+workflow account), and disabled contacts.
+
+```
+mailpilot enrollment add --workflow-id acumatica-outreach \
+  --tag acumatica-var --dry-run
+mailpilot enrollment add --workflow-id acumatica-outreach \
+  --tag acumatica-var --dry-run --min-contacts 1
+```
+
+Envelope (no writes):
+
+```json
+{
+  "enrollment_preview": {
+    "workflow": "acumatica-outreach",
+    "tag": "acumatica-var",
+    "count": 2,
+    "contacts": [
+      {"email": "ada@a.com", "company_domain": "a.com"},
+      {"email": "grace@b.com", "company_domain": "b.com"}
+    ],
+    "excluded": {
+      "disabled_companies": 1,
+      "already_enrolled": 0,
+      "self_loop": 0,
+      "disabled_contacts": 0
+    }
+  },
+  "record_count": 2,
+  "ok": true
+}
+```
+
+Undefined tag → `not_found`. Zero candidates → ok empty (`record_count` 0).
+`--tag` without `--dry-run` → `validation_error`. `--dry-run` without
+`--tag` → `validation_error`.
 ### Send and reply by hand
 
 ```

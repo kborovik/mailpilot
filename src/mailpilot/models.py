@@ -380,6 +380,36 @@ class EnrollmentWithOutcome(BaseModel):
     latest_outcome_at: datetime | None = None
 
 
+class EnrollmentPreviewContact(BaseModel):
+    """One candidate contact in a tag-cohort enrollment dry-run (§V.150)."""
+
+    email: str
+    company_domain: str | None
+
+
+class EnrollmentPreviewExcluded(BaseModel):
+    """Drop counters for a tag-cohort enrollment dry-run (§V.150)."""
+
+    disabled_companies: int = 0
+    already_enrolled: int = 0
+    self_loop: int = 0
+    disabled_contacts: int = 0
+
+
+class EnrollmentPreview(BaseModel):
+    """Read-only enrollment dry-run report for a company-tag cohort (§V.150).
+
+    No rows are written. ``count`` equals ``len(contacts)`` and is the
+    ``record_count`` the CLI envelope reports.
+    """
+
+    workflow: str
+    tag: str
+    count: int
+    contacts: list[EnrollmentPreviewContact]
+    excluded: EnrollmentPreviewExcluded
+
+
 EmailDirection = Literal["inbound", "outbound"]
 
 

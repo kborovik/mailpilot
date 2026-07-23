@@ -42,6 +42,9 @@ from mailpilot.models import (
     Email,
     EmailSummary,
     Enrollment,
+    EnrollmentPreview,
+    EnrollmentPreviewContact,
+    EnrollmentPreviewExcluded,
     EnrollmentSummary,
     EnrollmentWithOutcome,
     Meeting,
@@ -3283,6 +3286,84 @@ def list_enrollments(
     ).format(status_filter)
     rows = connection.execute(query, params).fetchall()
     return [Enrollment.model_validate(row) for row in rows]
+
+
+def preview_enrollment_tag_cohort(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow: Workflow,
+    tag: Tag,
+    *,
+    min_contacts: int | None = None,
+    account_email: str | None = None,
+) -> EnrollmentPreview:
+    """Dry-run company-tag enrollment cohort for one workflow (§V.150).
+
+    Read-only: expands companies carrying ``tag`` (disabled companies excluded
+    from candidates but counted), then enabled contacts on those companies.
+    Drops already-enrolled contacts for the workflow, self-loop contacts
+    (§V.33: contact email matches the workflow account email), and disabled
+    contacts. Optional ``min_contacts`` filters companies before expand
+    (same contact_count grain as ``list_companies``, incl. disabled children).
+
+    Args:
+        connection: Open database connection.
+        workflow: Resolved workflow row (name projected into the report).
+        tag: Resolved vocabulary tag row.
+        min_contacts: Inclusive lower bound on company contact_count.
+        account_email: Workflow account email for self-loop exclusion; when
+            None, the self-loop branch never fires.
+
+    Returns:
+        ``EnrollmentPreview`` with candidate contacts + exclusion counters.
+    """
+    companies = list_companies(
+        connection,
+        tag=tag.id,
+        min_contacts=min_contacts,
+        include_disabled=True,
+        limit=100_000,
+        sort="domain",
+    )
+    enrolled_ids = {e.contact_id for e in list_enrollments(connection, workflow.id)}
+    account_email_lower = account_email.lower() if account_email is not None else None
+    excluded = EnrollmentPreviewExcluded()
+    contacts: list[EnrollmentPreviewContact] = []
+    for company in companies:
+        if company.disabled_reason is not None:
+            excluded.disabled_companies += 1
+            continue
+        for contact in list_contacts(
+            connection,
+            company_id=company.id,
+            include_disabled=True,
+            limit=100_000,
+        ):
+            if contact.disabled_reason is not None:
+                excluded.disabled_contacts += 1
+                continue
+            if (
+                account_email_lower is not None
+                and contact.email.lower() == account_email_lower
+            ):
+                excluded.self_loop += 1
+                continue
+            if contact.id in enrolled_ids:
+                excluded.already_enrolled += 1
+                continue
+            contacts.append(
+                EnrollmentPreviewContact(
+                    email=contact.email,
+                    company_domain=company.domain,
+                )
+            )
+    contacts.sort(key=lambda c: (c.company_domain or "", c.email))
+    return EnrollmentPreview(
+        workflow=workflow.name,
+        tag=tag.name,
+        count=len(contacts),
+        contacts=contacts,
+        excluded=excluded,
+    )
 
 
 def list_enrollments_with_outcomes(

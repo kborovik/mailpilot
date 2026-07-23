@@ -9320,6 +9320,177 @@ def test_enrollment_add(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert data["enrollment"]["status"] == "active"
 
 
+def test_enrollment_add_tag_dry_run_preview(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.150: --tag --dry-run returns enrollment_preview, no writes."""
+    from mailpilot.models import (
+        EnrollmentPreview,
+        EnrollmentPreviewContact,
+        EnrollmentPreviewExcluded,
+    )
+
+    workflow = _make_workflow(name="cohort-wf")
+    tag = Tag(
+        id="01234567-0000-7000-0000-0000000000t1",
+        name="acumatica-var",
+        created_at=_NOW,
+    )
+    preview = EnrollmentPreview(
+        workflow="cohort-wf",
+        tag="acumatica-var",
+        count=1,
+        contacts=[
+            EnrollmentPreviewContact(
+                email="ada@a.com", company_domain="a.com"
+            )
+        ],
+        excluded=EnrollmentPreviewExcluded(disabled_companies=1),
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=workflow),
+        patch("mailpilot.database.get_tag_by_name", return_value=tag),
+        patch("mailpilot.database.get_account", return_value=_make_account()),
+        patch(
+            "mailpilot.database.preview_enrollment_tag_cohort",
+            return_value=preview,
+        ) as mock_preview,
+        patch("mailpilot.database.create_enrollment") as mock_create,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--tag",
+                "acumatica-var",
+                "--dry-run",
+            ],
+        )
+
+    assert result.exit_code == 0
+    mock_create.assert_not_called()
+    mock_preview.assert_called_once()
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 1
+    assert data["enrollment_preview"]["workflow"] == "cohort-wf"
+    assert data["enrollment_preview"]["tag"] == "acumatica-var"
+    assert data["enrollment_preview"]["count"] == 1
+    assert data["enrollment_preview"]["contacts"][0]["email"] == "ada@a.com"
+    assert data["enrollment_preview"]["excluded"]["disabled_companies"] == 1
+
+
+def test_enrollment_add_tag_without_dry_run_errors(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_enrollment") as mock_create,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--tag",
+                "acumatica-var",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "--dry-run" in data["message"]
+    mock_create.assert_not_called()
+
+
+def test_enrollment_add_dry_run_without_tag_errors(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--dry-run",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "--tag" in data["message"]
+
+
+def test_enrollment_add_tag_exclusive_with_contact(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--tag",
+                "acumatica-var",
+                "--dry-run",
+                "--contact-email",
+                "a@b.com",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+
+
+def test_enrollment_add_tag_undefined_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=_make_workflow()),
+        patch("mailpilot.database.get_tag_by_name", return_value=None),
+        patch("mailpilot.database.get_tag", return_value=None),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--tag",
+                "missing-tag",
+                "--dry-run",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+
+
 def test_enrollment_add_idempotent(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:

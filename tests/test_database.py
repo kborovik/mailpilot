@@ -4303,6 +4303,180 @@ def test_create_enrollment_defaults_to_active(
     assert enrollment.status == "active"
 
 
+def test_preview_enrollment_tag_cohort_includes_enabled_contacts(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.150: dry-run expands tagged companies to enabled contacts."""
+    from mailpilot.database import preview_enrollment_tag_cohort
+
+    account = make_test_account(database_connection, email="outbound@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="cohort-wf"
+    )
+    tag = make_test_tag(database_connection, name="acumatica-var")
+    co_a = make_test_company(database_connection, domain="a-cohort.test", name="A")
+    co_b = make_test_company(database_connection, domain="b-cohort.test", name="B")
+    make_test_tag_assignment(database_connection, company_id=co_a.id, name=tag.name)
+    make_test_tag_assignment(database_connection, company_id=co_b.id, name=tag.name)
+    c1 = make_test_contact(
+        database_connection, email="ada@a-cohort.test", company_id=co_a.id
+    )
+    c2 = make_test_contact(
+        database_connection, email="grace@b-cohort.test", company_id=co_b.id
+    )
+
+    preview = preview_enrollment_tag_cohort(
+        database_connection,
+        workflow,
+        tag,
+        account_email=account.email,
+    )
+
+    assert preview.workflow == "cohort-wf"
+    assert preview.tag == "acumatica-var"
+    assert preview.count == 2
+    emails = {c.email for c in preview.contacts}
+    assert emails == {c1.email, c2.email}
+    assert preview.excluded.disabled_companies == 0
+    assert preview.excluded.already_enrolled == 0
+    assert preview.excluded.self_loop == 0
+    assert preview.excluded.disabled_contacts == 0
+
+
+def test_preview_enrollment_tag_cohort_excludes_disabled_already_self_loop(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.150/§V.33/§V.114: disabled firms, enrolled, self-loop, disabled contacts."""
+    from mailpilot.database import preview_enrollment_tag_cohort
+
+    account = make_test_account(database_connection, email="sender@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="exclude-wf"
+    )
+    tag = make_test_tag(database_connection, name="cohort-tag")
+    live = make_test_company(database_connection, domain="live-cohort.test", name="Live")
+    dead = make_test_company(database_connection, domain="dead-cohort.test", name="Dead")
+    make_test_tag_assignment(database_connection, company_id=live.id, name=tag.name)
+    make_test_tag_assignment(database_connection, company_id=dead.id, name=tag.name)
+    disable_company(database_connection, dead.id, "merged")
+
+    cand = make_test_contact(
+        database_connection, email="cand@live-cohort.test", company_id=live.id
+    )
+    enrolled = make_test_contact(
+        database_connection, email="enrolled@live-cohort.test", company_id=live.id
+    )
+    make_test_enrollment(database_connection, workflow.id, enrolled.id)
+    make_test_contact(
+        database_connection, email="sender@lab5.test", company_id=live.id
+    )
+    disabled_c = make_test_contact(
+        database_connection, email="gone@live-cohort.test", company_id=live.id
+    )
+    disable_contact(database_connection, disabled_c.id, "left")
+
+    preview = preview_enrollment_tag_cohort(
+        database_connection,
+        workflow,
+        tag,
+        account_email=account.email,
+    )
+
+    assert preview.count == 1
+    assert preview.contacts[0].email == cand.email
+    assert preview.contacts[0].company_domain == "live-cohort.test"
+    assert preview.excluded.disabled_companies == 1
+    assert preview.excluded.already_enrolled == 1
+    assert preview.excluded.self_loop == 1
+    assert preview.excluded.disabled_contacts == 1
+
+
+def test_preview_enrollment_tag_cohort_min_contacts(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.150: --min-contacts filters companies before expand."""
+    from mailpilot.database import preview_enrollment_tag_cohort
+
+    account = make_test_account(database_connection, email="min@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="min-wf"
+    )
+    tag = make_test_tag(database_connection, name="min-tag")
+    lonely = make_test_company(
+        database_connection, domain="lonely-cohort.test", name="Lonely"
+    )
+    packed = make_test_company(
+        database_connection, domain="packed-cohort.test", name="Packed"
+    )
+    make_test_tag_assignment(database_connection, company_id=lonely.id, name=tag.name)
+    make_test_tag_assignment(database_connection, company_id=packed.id, name=tag.name)
+    make_test_contact(
+        database_connection, email="only@lonely-cohort.test", company_id=lonely.id
+    )
+    make_test_contact(
+        database_connection, email="a@packed-cohort.test", company_id=packed.id
+    )
+    make_test_contact(
+        database_connection, email="b@packed-cohort.test", company_id=packed.id
+    )
+
+    preview = preview_enrollment_tag_cohort(
+        database_connection,
+        workflow,
+        tag,
+        min_contacts=2,
+        account_email=account.email,
+    )
+
+    assert preview.count == 2
+    assert all(c.company_domain == "packed-cohort.test" for c in preview.contacts)
+
+
+def test_preview_enrollment_tag_cohort_empty(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    from mailpilot.database import preview_enrollment_tag_cohort
+
+    account = make_test_account(database_connection, email="empty@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="empty-wf"
+    )
+    tag = make_test_tag(database_connection, name="empty-tag")
+
+    preview = preview_enrollment_tag_cohort(
+        database_connection, workflow, tag, account_email=account.email
+    )
+
+    assert preview.count == 0
+    assert preview.contacts == []
+
+
+def test_preview_enrollment_tag_cohort_no_writes(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.150: dry-run never inserts enrollment rows."""
+    from mailpilot.database import list_enrollments, preview_enrollment_tag_cohort
+
+    account = make_test_account(database_connection, email="nowrite@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="nowrite-wf"
+    )
+    tag = make_test_tag(database_connection, name="nowrite-tag")
+    company = make_test_company(
+        database_connection, domain="nowrite-cohort.test", name="NW"
+    )
+    make_test_tag_assignment(database_connection, company_id=company.id, name=tag.name)
+    make_test_contact(
+        database_connection, email="x@nowrite-cohort.test", company_id=company.id
+    )
+
+    preview_enrollment_tag_cohort(
+        database_connection, workflow, tag, account_email=account.email
+    )
+
+    assert list_enrollments(database_connection, workflow_id=workflow.id) == []
+
+
 def test_enrollment_row_carries_parent_denorm_fields(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
