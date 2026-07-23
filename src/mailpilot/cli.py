@@ -5033,6 +5033,153 @@ def _maybe_schedule_first_touch(
     changed.append("scheduled_first_send")
 
 
+def _validate_enrollment_add_args(
+    contact_email: str | None,
+    tag_ref: str | None,
+    dry_run: bool,
+    min_contacts: int | None,
+    scheduled_at: str | None,
+) -> str | None:
+    """Validate flag combinations for ``enrollment add``; return scheduled ISO."""
+    from datetime import datetime
+
+    if tag_ref is not None and contact_email is not None:
+        output_error(
+            "--tag is exclusive with --contact-email",
+            "validation_error",
+        )
+    if tag_ref is not None and not dry_run:
+        output_error(
+            "--tag requires --dry-run (cohort apply not implemented)",
+            "validation_error",
+        )
+    if dry_run and tag_ref is None:
+        output_error(
+            "--dry-run requires --tag",
+            "validation_error",
+        )
+    if min_contacts is not None and not dry_run:
+        output_error(
+            "--min-contacts is only valid with --tag --dry-run",
+            "validation_error",
+        )
+    if min_contacts is not None and min_contacts < 0:
+        output_error("--min-contacts must be >= 0", "validation_error")
+    if dry_run and scheduled_at is not None:
+        output_error(
+            "--scheduled-at is exclusive with --dry-run",
+            "validation_error",
+        )
+    if tag_ref is None and contact_email is None:
+        output_error(
+            "--contact-email is required (or --tag --dry-run for cohort preview)",
+            "validation_error",
+        )
+    if scheduled_at is None:
+        return None
+    try:
+        return datetime.fromisoformat(scheduled_at).isoformat()
+    except ValueError as exc:
+        output_error(f"invalid --scheduled-at value: {exc}", "validation_error")
+
+
+def _enrollment_add_tag_preview(
+    connection: Any,
+    workflow: Any,
+    tag_ref: str,
+    min_contacts: int | None,
+) -> None:
+    """Dry-run company-tag cohort enrollment preview (no writes)."""
+    from mailpilot.database import get_account, preview_enrollment_tag_cohort
+
+    tag = _resolve_tag(connection, tag_ref)
+    account = get_account(connection, workflow.account_id)
+    account_email = account.email if account is not None else None
+    preview = preview_enrollment_tag_cohort(
+        connection,
+        workflow,
+        tag,
+        min_contacts=min_contacts,
+        account_email=account_email,
+    )
+    output(
+        {"enrollment_preview": preview.model_dump(mode="json")},
+        record_count=preview.count,
+    )
+
+
+def _enrollment_add_contact(
+    connection: Any,
+    workflow: Any,
+    contact_email: str,
+    scheduled_iso: str | None,
+) -> None:
+    """Enroll a single contact, optionally scheduling first touch."""
+    from mailpilot.database import (
+        create_activity,
+        create_enrollment,
+        get_account,
+        get_enrollment,
+    )
+    from mailpilot.operator_log import cli_mutation, operator_event
+
+    if scheduled_iso is not None and workflow.type != "outbound":
+        output_error(
+            "--scheduled-at only valid for outbound workflows",
+            "invalid_state",
+        )
+    contact = _resolve_contact(connection, contact_email)
+    contact_id = contact.id
+    workflow_id = workflow.id
+    account = get_account(connection, workflow.account_id)
+    _reject_enrollment_self_loop(account, contact, workflow.name)
+    mutation_attrs: dict[str, Any] = {
+        "workflow_id": workflow_id,
+        "contact_id": contact_id,
+    }
+    if scheduled_iso is not None:
+        mutation_attrs["scheduled_at"] = scheduled_iso
+    with cli_mutation("enrollment", "add", **mutation_attrs):
+        created = create_enrollment(connection, workflow_id, contact_id)
+        if created is not None:
+            create_activity(
+                connection,
+                contact_id=contact_id,
+                activity_type="enrollment_added",
+                summary=f"Assigned to {workflow.name}",
+                detail={"workflow_name": workflow.name},
+                company_id=contact.company_id,
+                workflow_id=workflow_id,
+                enrollment_id=created.id,
+            )
+            target = created
+            changed = ["status"]
+        else:
+            existing = get_enrollment(connection, workflow_id, contact_id)
+            if existing is None:
+                return
+            target = existing
+            changed = []
+        _maybe_schedule_first_touch(
+            connection,
+            target.id,
+            workflow_id,
+            contact_id,
+            scheduled_iso,
+            changed,
+        )
+        event_fields: dict[str, Any] = {
+            "enrollment_id": target.id,
+            "workflow_id": workflow_id,
+            "contact_id": contact_id,
+        }
+        if scheduled_iso is not None:
+            event_fields["scheduled_at"] = scheduled_iso
+        event_fields["changed"] = changed
+        operator_event("enrollment.add", **event_fields)
+        output_entity("enrollment", target)
+
+
 @enrollment.command("add")
 @click.option(
     "--workflow-id",
@@ -5088,139 +5235,23 @@ def enrollment_add(
     ``--workflow-id`` + ``--tag`` + ``--dry-run`` [optional ``--min-contacts``]
     returns an ``enrollment_preview`` with no writes.
     """
-    from datetime import datetime
+    from mailpilot.database import get_workflow, initialize_database
 
-    from mailpilot.database import (
-        create_activity,
-        create_enrollment,
-        get_account,
-        get_enrollment,
-        get_workflow,
-        initialize_database,
-        preview_enrollment_tag_cohort,
+    scheduled_iso = _validate_enrollment_add_args(
+        contact_email, tag_ref, dry_run, min_contacts, scheduled_at
     )
-    from mailpilot.operator_log import cli_mutation, operator_event
-
-    if tag_ref is not None and contact_email is not None:
-        output_error(
-            "--tag is exclusive with --contact-email",
-            "validation_error",
-        )
-    if tag_ref is not None and not dry_run:
-        output_error(
-            "--tag requires --dry-run (cohort apply not implemented)",
-            "validation_error",
-        )
-    if dry_run and tag_ref is None:
-        output_error(
-            "--dry-run requires --tag",
-            "validation_error",
-        )
-    if min_contacts is not None and not dry_run:
-        output_error(
-            "--min-contacts is only valid with --tag --dry-run",
-            "validation_error",
-        )
-    if min_contacts is not None and min_contacts < 0:
-        output_error("--min-contacts must be >= 0", "validation_error")
-    if dry_run and scheduled_at is not None:
-        output_error(
-            "--scheduled-at is exclusive with --dry-run",
-            "validation_error",
-        )
-    if tag_ref is None and contact_email is None:
-        output_error(
-            "--contact-email is required (or --tag --dry-run for cohort preview)",
-            "validation_error",
-        )
-
-    scheduled_iso: str | None = None
-    if scheduled_at is not None:
-        try:
-            scheduled_iso = datetime.fromisoformat(scheduled_at).isoformat()
-        except ValueError as exc:
-            output_error(f"invalid --scheduled-at value: {exc}", "validation_error")
-
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         workflow_id = _resolve_workflow_id(connection, workflow_ref)
         workflow = get_workflow(connection, workflow_id)
         if workflow is None:
             output_error(f"workflow not found: {workflow_ref}", "not_found")
-
         if dry_run:
             assert tag_ref is not None
-            tag = _resolve_tag(connection, tag_ref)
-            account = get_account(connection, workflow.account_id)
-            account_email = account.email if account is not None else None
-            preview = preview_enrollment_tag_cohort(
-                connection,
-                workflow,
-                tag,
-                min_contacts=min_contacts,
-                account_email=account_email,
-            )
-            output(
-                {"enrollment_preview": preview.model_dump(mode="json")},
-                record_count=preview.count,
-            )
+            _enrollment_add_tag_preview(connection, workflow, tag_ref, min_contacts)
             return
-
-        if scheduled_iso is not None and workflow.type != "outbound":
-            output_error(
-                "--scheduled-at only valid for outbound workflows",
-                "invalid_state",
-            )
         assert contact_email is not None
-        contact = _resolve_contact(connection, contact_email)
-        contact_id = contact.id
-        account = get_account(connection, workflow.account_id)
-        _reject_enrollment_self_loop(account, contact, workflow.name)
-        mutation_attrs: dict[str, Any] = {
-            "workflow_id": workflow_id,
-            "contact_id": contact_id,
-        }
-        if scheduled_iso is not None:
-            mutation_attrs["scheduled_at"] = scheduled_iso
-        with cli_mutation("enrollment", "add", **mutation_attrs):
-            created = create_enrollment(connection, workflow_id, contact_id)
-            if created is not None:
-                create_activity(
-                    connection,
-                    contact_id=contact_id,
-                    activity_type="enrollment_added",
-                    summary=f"Assigned to {workflow.name}",
-                    detail={"workflow_name": workflow.name},
-                    company_id=contact.company_id,
-                    workflow_id=workflow_id,
-                    enrollment_id=created.id,
-                )
-                target = created
-                changed = ["status"]
-            else:
-                existing = get_enrollment(connection, workflow_id, contact_id)
-                if existing is None:
-                    return
-                target = existing
-                changed = []
-            _maybe_schedule_first_touch(
-                connection,
-                target.id,
-                workflow_id,
-                contact_id,
-                scheduled_iso,
-                changed,
-            )
-            event_fields: dict[str, Any] = {
-                "enrollment_id": target.id,
-                "workflow_id": workflow_id,
-                "contact_id": contact_id,
-            }
-            if scheduled_iso is not None:
-                event_fields["scheduled_at"] = scheduled_iso
-            event_fields["changed"] = changed
-            operator_event("enrollment.add", **event_fields)
-            output_entity("enrollment", target)
+        _enrollment_add_contact(connection, workflow, contact_email, scheduled_iso)
     finally:
         connection.close()
 

@@ -4354,8 +4354,12 @@ def test_preview_enrollment_tag_cohort_excludes_disabled_already_self_loop(
         database_connection, account_id=account.id, name="exclude-wf"
     )
     tag = make_test_tag(database_connection, name="cohort-tag")
-    live = make_test_company(database_connection, domain="live-cohort.test", name="Live")
-    dead = make_test_company(database_connection, domain="dead-cohort.test", name="Dead")
+    live = make_test_company(
+        database_connection, domain="live-cohort.test", name="Live"
+    )
+    dead = make_test_company(
+        database_connection, domain="dead-cohort.test", name="Dead"
+    )
     make_test_tag_assignment(database_connection, company_id=live.id, name=tag.name)
     make_test_tag_assignment(database_connection, company_id=dead.id, name=tag.name)
     disable_company(database_connection, dead.id, "merged")
@@ -4367,9 +4371,7 @@ def test_preview_enrollment_tag_cohort_excludes_disabled_already_self_loop(
         database_connection, email="enrolled@live-cohort.test", company_id=live.id
     )
     make_test_enrollment(database_connection, workflow.id, enrolled.id)
-    make_test_contact(
-        database_connection, email="sender@lab5.test", company_id=live.id
-    )
+    make_test_contact(database_connection, email="sender@lab5.test", company_id=live.id)
     disabled_c = make_test_contact(
         database_connection, email="gone@live-cohort.test", company_id=live.id
     )

@@ -83,7 +83,7 @@ install: ## Install mailpilot globally as an editable uv tool
 # give the part words no-op recipes so make does not try to build them.
 part := $(word 1,$(filter major minor patch,$(MAKECMDGOALS)))
 
-release: ## Bump version, commit, tag, and publish a GitHub release; CI publishes to PyPI (make release major|minor|patch)
+release: check ## Bump version, commit, tag, and publish a GitHub release; CI publishes to PyPI (make release major|minor|patch)
 	test -n "$(part)" || { echo "usage: make release major|minor|patch"; exit 1; }
 	git diff --quiet && git diff --cached --quiet \
 		|| { echo "working tree not clean — commit or stash first"; exit 1; }

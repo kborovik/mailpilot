@@ -166,7 +166,7 @@ def _release_advisory_lock(
 # standalone tool functions in agent/tools.py.
 
 
-def _wrap_send_email(  # noqa: PLR0913
+def _wrap_send_email(  # noqa: PLR0913  # pyright: ignore[reportUnusedFunction]
     ctx: RunContext[AgentDeps],
     to: str,
     subject: str,
@@ -196,7 +196,7 @@ def _wrap_send_email(  # noqa: PLR0913
     )
 
 
-def _wrap_reply_email(
+def _wrap_reply_email(  # pyright: ignore[reportUnusedFunction]
     ctx: RunContext[AgentDeps],
     email_id: str,
     body: str,
@@ -217,7 +217,7 @@ def _wrap_reply_email(
     )
 
 
-def _wrap_create_task(
+def _wrap_create_task(  # pyright: ignore[reportUnusedFunction]
     ctx: RunContext[AgentDeps],
     description: str,
     scheduled_at: str,
@@ -237,7 +237,7 @@ def _wrap_create_task(
     )
 
 
-def _wrap_cancel_task(
+def _wrap_cancel_task(  # pyright: ignore[reportUnusedFunction]
     ctx: RunContext[AgentDeps],
     task_id: str,
 ) -> dict[str, str]:
@@ -248,7 +248,7 @@ def _wrap_cancel_task(
     )
 
 
-def _wrap_conclude_enrollment(
+def _wrap_conclude_enrollment(  # pyright: ignore[reportUnusedFunction]
     ctx: RunContext[AgentDeps],
     disposition: str,
     note: str,
@@ -271,7 +271,7 @@ def _wrap_conclude_enrollment(
     )
 
 
-def _wrap_disable_contact(
+def _wrap_disable_contact(  # pyright: ignore[reportUnusedFunction]
     ctx: RunContext[AgentDeps],
     reason: str,
 ) -> dict[str, str]:
@@ -289,7 +289,7 @@ def _wrap_disable_contact(
     )
 
 
-def _wrap_list_enrollments(
+def _wrap_list_enrollments(  # pyright: ignore[reportUnusedFunction]
     ctx: RunContext[AgentDeps],
 ) -> list[dict[str, Any]]:
     """List enrollments in the current workflow with their outcome status."""
@@ -299,7 +299,7 @@ def _wrap_list_enrollments(
     )
 
 
-def _wrap_search_emails(
+def _wrap_search_emails(  # pyright: ignore[reportUnusedFunction]
     ctx: RunContext[AgentDeps],
     query: str,
 ) -> list[dict[str, Any]]:
@@ -311,7 +311,7 @@ def _wrap_search_emails(
     )
 
 
-def _wrap_read_email(
+def _wrap_read_email(  # pyright: ignore[reportUnusedFunction]
     ctx: RunContext[AgentDeps],
     email_id: str,
 ) -> dict[str, Any] | None:
@@ -323,7 +323,7 @@ def _wrap_read_email(
     )
 
 
-def _wrap_list_drive_markdown(
+def _wrap_list_drive_markdown(  # pyright: ignore[reportUnusedFunction]
     ctx: RunContext[AgentDeps],
     folder_id: str,
 ) -> list[dict[str, str]] | dict[str, str]:
@@ -334,7 +334,7 @@ def _wrap_list_drive_markdown(
     )
 
 
-def _wrap_read_drive_markdown(
+def _wrap_read_drive_markdown(  # pyright: ignore[reportUnusedFunction]
     ctx: RunContext[AgentDeps],
     file_id: str,
 ) -> dict[str, str]:
@@ -345,7 +345,7 @@ def _wrap_read_drive_markdown(
     )
 
 
-def _wrap_search_drive_markdown(
+def _wrap_search_drive_markdown(  # pyright: ignore[reportUnusedFunction]
     ctx: RunContext[AgentDeps],
     folder_id: str,
     query: str,
@@ -358,7 +358,7 @@ def _wrap_search_drive_markdown(
     )
 
 
-def _wrap_noop(
+def _wrap_noop(  # pyright: ignore[reportUnusedFunction]
     ctx: RunContext[AgentDeps],
     reason: str,
 ) -> dict[str, Any]:
@@ -403,7 +403,7 @@ def _build_agent(workflow: Workflow, trigger: str = "manual") -> Agent[AgentDeps
     # (§V.47) -- so the static protocol prefix still caches across same-day
     # runs. The model-visible string carries no SPEC citation (§V.45).
     @agent.instructions
-    def _ground_current_date() -> str:
+    def _ground_current_date() -> str:  # pyright: ignore[reportUnusedFunction]
         return (
             f"The current date is {date.today().isoformat()}. "
             "Ground every relative schedule on this date and never guess the year."
@@ -437,14 +437,16 @@ def _build_touch_agent(workflow: Workflow) -> Agent[None, TouchMessage]:
     )
 
     @agent.instructions
-    def _ground_current_date() -> str:
+    def _ground_current_date() -> str:  # pyright: ignore[reportUnusedFunction]
         return (
             f"The current date is {date.today().isoformat()}. "
             "Ground every relative reference on this date and never guess the year."
         )
 
     @agent.output_validator
-    def _lint_spec_table(output: TouchMessage) -> TouchMessage:
+    def _lint_spec_table(  # pyright: ignore[reportUnusedFunction]
+        output: TouchMessage,
+    ) -> TouchMessage:
         # §V.42: the format lint is the compose-only output validator. A body
         # that renders product specs as space-aligned text triggers a bounded
         # ModelRetry (capped by ``retries``) instead of reaching the recipient.

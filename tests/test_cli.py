@@ -8920,9 +8920,7 @@ def test_note_remove_bulk_contact_with_yes(
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_contact_by_email", return_value=contact),
-        patch(
-            "mailpilot.database.delete_notes", return_value=ids
-        ) as mock_bulk,
+        patch("mailpilot.database.delete_notes", return_value=ids) as mock_bulk,
     ):
         result = runner.invoke(
             main,
@@ -9340,11 +9338,7 @@ def test_enrollment_add_tag_dry_run_preview(
         workflow="cohort-wf",
         tag="acumatica-var",
         count=1,
-        contacts=[
-            EnrollmentPreviewContact(
-                email="ada@a.com", company_domain="a.com"
-            )
-        ],
+        contacts=[EnrollmentPreviewContact(email="ada@a.com", company_domain="a.com")],
         excluded=EnrollmentPreviewExcluded(disabled_companies=1),
     )
     with (
@@ -9667,6 +9661,7 @@ def test_enrollment_add_scheduled_at_inbound_rejected(
 def test_enrollment_add_workflow_not_found(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
+    missing_id = "01234567-0000-7000-0000-0000000000fe"
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
@@ -9678,7 +9673,7 @@ def test_enrollment_add_workflow_not_found(
                 "enrollment",
                 "add",
                 "--workflow-id",
-                "wf-missing",
+                missing_id,
                 "--contact-email",
                 _CONTACT_ID,
             ],

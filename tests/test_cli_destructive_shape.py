@@ -107,9 +107,7 @@ def test_remove_commands_not_owner_only() -> None:
             isinstance(param, click.Option) and param.name in {"yes", "confirmed"}
             for param in command.params
         )
-        if not (
-            has_positional_id or has_required_discriminator or has_yes_confirm
-        ):
+        if not (has_positional_id or has_required_discriminator or has_yes_confirm):
             offenders.append(path)
     assert not offenders, (
         "§I / §V.14: a `remove` must name one row (positional id / required "
