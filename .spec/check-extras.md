@@ -263,14 +263,16 @@ Trigger: `src/mailpilot/cli.py` or `src/mailpilot/operator_log.py` changed.
 - `rg -n 'except.*SystemExit|re-raise' src/mailpilot/operator_log.py` -> SystemExit absorbed + re-raised inside span
 - Telemetry test: `account.create` duplicate-key span carries no `exception.escaped=True` on the parent span.
 
-## §V62 — release flow: make target + PyPI pipeline
+## §V62 — release flow: make target + CI-gated GH release + PyPI
 
-Release = `make release major|minor|patch`. Gates: part arg present, clean working tree. Steps: `uv version --bump <part>` (bumps `pyproject.toml` + `uv.lock`), commit `chore: release v<x.y.z>`, tag `v<x.y.z>`, push main + tags, `gh release create v<x.y.z> --generate-notes`. Publish = `.github/workflows/release.yml` on release published: ci.yml via workflow_call gates publish; tag must equal `v$(uv version --short)`; `uv build`; `pypa/gh-action-pypi-publish` w/ OIDC trusted publishing (`id-token: write`, no PyPI API token). Dist name = `mailpilot-crm` (PyPI name `mailpilot` foreign-owned); module + CLI cmd = `mailpilot` via `[tool.uv.build-backend] module-name`. Deploy = PyPI package — `uv tool install mailpilot-crm`.
+Release = `make release major|minor|patch`. Local gates: part arg present, clean working tree, `make check`. Steps: `uv version --bump <part>` (bumps `pyproject.toml` + `uv.lock`), commit `chore: release v<x.y.z>`, tag `v<x.y.z>`, push main + tags only — no local `gh release create`. Publish = `.github/workflows/release.yml` on push tags `v*`: `check` job calls ci.yml via workflow_call (make check equivalent); only on success does `publish` run: tag must equal `v$(uv version --short)`; `uv build`; `pypa/gh-action-pypi-publish` w/ OIDC (`id-token: write`, no PyPI API token); then `gh release create --generate-notes` (`contents: write`). GH release + PyPI only after CI passes. Dist name = `mailpilot-crm` (PyPI name `mailpilot` foreign-owned); module + CLI cmd = `mailpilot` via `[tool.uv.build-backend] module-name`. Deploy = PyPI package — `uv tool install mailpilot-crm`.
 
 Trigger: `makefile`, `.github/workflows/release.yml`, or `pyproject.toml` changed.
 - `rg 'uv version --bump' makefile` -> bump step present
-- `rg 'gh release create' makefile` -> GitHub release step present
+- `rg 'gh release create' makefile` -> zero hits (local make does not create GH release)
+- `rg 'gh release create' .github/workflows/release.yml` -> CI creates GH release after check
 - `rg 'git diff --quiet' makefile` -> clean-tree gate present
+- `rg 'needs: check' .github/workflows/release.yml` -> publish gated on CI
 - `rg 'pypa/gh-action-pypi-publish' .github/workflows/release.yml` -> trusted-publishing action present
 - `rg 'id-token: write' .github/workflows/release.yml` -> OIDC permission present
 - `rg 'uv version --short' .github/workflows/release.yml` -> tag==version gate present

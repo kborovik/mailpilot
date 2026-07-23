@@ -83,7 +83,7 @@ install: ## Install mailpilot globally as an editable uv tool
 # give the part words no-op recipes so make does not try to build them.
 part := $(word 1,$(filter major minor patch,$(MAKECMDGOALS)))
 
-release: check ## Bump version, commit, tag, and publish a GitHub release; CI publishes to PyPI (make release major|minor|patch)
+release: check ## Bump version, commit, tag, and push; GitHub Actions runs check then publishes GH release + PyPI (make release major|minor|patch)
 	test -n "$(part)" || { echo "usage: make release major|minor|patch"; exit 1; }
 	git diff --quiet && git diff --cached --quiet \
 		|| { echo "working tree not clean — commit or stash first"; exit 1; }
@@ -93,10 +93,9 @@ release: check ## Bump version, commit, tag, and publish a GitHub release; CI pu
 	git add pyproject.toml uv.lock
 	git commit -m "chore: release v$$version"
 	git tag "v$$version"
-	$(call header,Publishing v$$version to GitHub)
+	$(call header,Pushing v$$version tag (CI will check, then publish GH release + PyPI))
 	git push && git push --tags
-	gh release create "v$$version" --title "v$$version" --generate-notes
-	echo "$(green)Released v$$version — PyPI publish runs in GitHub Actions$(reset)"
+	echo "$(green)Tagged v$$version — GitHub Actions runs make check, then publishes release + PyPI$(reset)"
 
 major minor patch:
 	@:
