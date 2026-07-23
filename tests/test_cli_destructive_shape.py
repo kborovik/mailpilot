@@ -1,19 +1,17 @@
 """§I CLI API standard (§V.107, §V.115, §V.116) + §V.14: destructive-shape guardrail.
 
-Prevents the §B118 / §T199 regression where ``note remove`` keyed on an owner
-selector (``--contact-email`` / ``--company-domain``) and bulk-deleted every note
-the owner held. The §I CLI API standard fixes two rules this sweep enforces by
-walking the live Click command tree, so a reintroduced bulk-delete fails CI
-before it ships:
+Prevents the §B118 regression where ``note remove`` keyed on an owner selector
+alone bulk-deleted every note the owner held without an explicit confirm.
+The §I CLI API standard fixes two rules this sweep enforces by walking the
+live Click command tree:
 
   1. Closed verb vocabulary -- every leaf command name is a §I verb. A
      ``delete`` / ``purge`` / ``clear`` / ``wipe`` verb never reaches the tree
-     (§I line 25, "no `delete`").
-  2. A ``remove`` command names exactly one row -- via a positional id argument
-     (``note remove <note_id>``, the sole hard-delete §V.14) or a required
-     non-owner discriminator (``tag remove --tag`` identifies one link). Owner
-     selectors alone never satisfy a ``remove``, so no destructive verb can fan
-     out across an owner's rows again.
+     (§I, "no `delete`").
+  2. A ``remove`` is never satisfiable by owner selectors alone. Allowed
+     shapes: positional id (``note remove <note_id>``, ``tag remove`` with
+     required non-owner discriminator), or owner bulk gated by ``--yes``
+     (§V.14 dual-mode). Owner selectors alone without confirm = §B118 class.
 """
 
 from collections.abc import Iterator
@@ -22,7 +20,7 @@ import click
 
 from mailpilot.cli import main
 
-# §I line 25 entity verbs + the top-level / config verbs of §I line 26.
+# §I entity verbs + the top-level / config verbs of §I.
 ALLOWED_VERBS = {
     "list",
     "search",
@@ -72,7 +70,7 @@ def _leaf_commands(
 
 
 def test_cli_verbs_are_closed_vocabulary() -> None:
-    """§I line 25: every leaf command name is a known verb. Bars a `delete` /
+    """§I: every leaf command name is a known verb. Bars a `delete` /
     `purge` / `clear` / `wipe` verb from ever entering the tree."""
     offenders = [
         f"`{path}` -> {command.name!r}"
@@ -85,10 +83,12 @@ def test_cli_verbs_are_closed_vocabulary() -> None:
     )
 
 
-def test_remove_commands_name_a_single_row() -> None:
-    """§I / §V.14: a `remove` command names exactly one row -- a positional id
-    or a required non-owner discriminator. A `remove` satisfiable by owner
-    selectors alone would bulk-delete every row the owner holds (§B118)."""
+def test_remove_commands_not_owner_only() -> None:
+    """§I / §V.14: a `remove` is never satisfiable by owner selectors alone.
+
+    Allowed: positional id, required non-owner discriminator, or an explicit
+    ``--yes`` confirm flag (owner bulk path). Owner selectors alone = §B118.
+    """
     offenders: list[str] = []
     for path, command in _leaf_commands(main):
         if command.name != "remove":
@@ -102,10 +102,17 @@ def test_remove_commands_name_a_single_row() -> None:
             and param.name not in OWNER_SELECTORS
             for param in command.params
         )
-        if not has_positional_id and not has_required_discriminator:
+        # Click is_flag options are never .required; name the confirm flag.
+        has_yes_confirm = any(
+            isinstance(param, click.Option) and param.name in {"yes", "confirmed"}
+            for param in command.params
+        )
+        if not (
+            has_positional_id or has_required_discriminator or has_yes_confirm
+        ):
             offenders.append(path)
     assert not offenders, (
-        "§I / §V.14: a `remove` must name one row via a positional id or a "
-        "required non-owner discriminator; these are satisfiable by owner "
-        "selectors alone and could bulk-delete: " + "; ".join(offenders)
+        "§I / §V.14: a `remove` must name one row (positional id / required "
+        "non-owner discriminator) or gate owner bulk with --yes; these are "
+        "satisfiable by owner selectors alone: " + "; ".join(offenders)
     )

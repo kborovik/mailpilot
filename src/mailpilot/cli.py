@@ -3841,28 +3841,108 @@ def note_add(contact_email: str | None, company_domain: str | None, body: str) -
 
 
 @note.command("remove")
-@click.argument("note_id")
-def note_remove(note_id: str) -> None:
-    """Delete a single note by ID (the sole note hard-delete).
+@click.argument("note_id", required=False, default=None)
+@click.option("--contact-email", default=None, help="Bulk: all notes on contact.")
+@click.option("--company-domain", default=None, help="Bulk: all notes on company.")
+@click.option(
+    "--yes",
+    "confirmed",
+    is_flag=True,
+    default=False,
+    help="Required for owner bulk remove (confirmation gate).",
+)
+def note_remove(
+    note_id: str | None,
+    contact_email: str | None,
+    company_domain: str | None,
+    confirmed: bool,
+) -> None:
+    """Delete one note by ID, or all notes on an owner with --yes.
 
-    Removes only the named note row; the owner's other notes and the note_added
-    activity trail stay intact. Operator-only -- the agent never deletes notes.
+    Single-id: ``note remove <note_id>``. Owner bulk: exactly one of
+    ``--contact-email`` / ``--company-domain`` plus required ``--yes``.
+    Deletes note rows only; the note_added activity trail stays intact.
+    Operator-only -- the agent never deletes notes.
     """
-    # Single-note delete is the sole CLI hard-delete per §V.14; the owner's other
-    # notes survive and the activity trail stays append-only per §V.91.
-    # Operator-only, never an agent tool.
-    from mailpilot.database import delete_note, get_note, initialize_database
+    # Dual-mode hard-delete per §V.14: single-id or owner bulk with --yes.
+    # Activity trail stays append-only. Operator-only, never an agent tool.
+    from mailpilot.database import (
+        delete_note,
+        delete_notes,
+        get_note,
+        initialize_database,
+    )
     from mailpilot.operator_log import cli_mutation, operator_event
+
+    has_owner = contact_email is not None or company_domain is not None
+    if note_id is not None and has_owner:
+        output_error(
+            "NOTE_ID is exclusive with --contact-email / --company-domain",
+            "validation_error",
+        )
+    if note_id is None and not has_owner:
+        output_error(
+            "NOTE_ID or --contact-email / --company-domain is required",
+            "validation_error",
+        )
+    if has_owner:
+        if (contact_email is None) == (company_domain is None):
+            output_error(
+                "exactly one of --contact-email or --company-domain is required",
+                "validation_error",
+            )
+        if not confirmed:
+            output_error(
+                "owner bulk remove requires --yes",
+                "validation_error",
+            )
 
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
-        found = get_note(connection, note_id)
-        if found is None:
-            output_error(f"note {note_id} not found", "not_found")
-        with cli_mutation("note", "remove", entity_id=note_id):
-            delete_note(connection, note_id)
-            operator_event("note.remove", entity_id=note_id)
-            output_entity("note", found)
+        if note_id is not None:
+            found = get_note(connection, note_id)
+            if found is None:
+                output_error(f"note {note_id} not found", "not_found")
+            with cli_mutation("note", "remove", entity_id=note_id):
+                delete_note(connection, note_id)
+                operator_event("note.remove", entity_id=note_id)
+                output_entity("note", found)
+            return
+
+        if contact_email is not None:
+            owner = _resolve_contact(connection, contact_email)
+            owner_key: dict[str, object] = {"contact_email": owner.email}
+            owner_kwargs: dict[str, str] = {"contact_id": owner.id}
+            mutation_attrs: dict[str, object] = {
+                "owner_type": "contact",
+                "owner_id": owner.id,
+            }
+        else:
+            assert company_domain is not None
+            company = _resolve_company(connection, company_domain)
+            owner_key = {"company_domain": company.domain}
+            owner_kwargs = {"company_id": company.id}
+            mutation_attrs = {
+                "owner_type": "company",
+                "owner_id": company.id,
+            }
+        with cli_mutation("note", "remove", **mutation_attrs):
+            note_ids = delete_notes(connection, **owner_kwargs)
+            operator_event(
+                "note.remove",
+                removed_count=len(note_ids),
+                **mutation_attrs,
+            )
+            output(
+                {
+                    "notes_removed": {
+                        "owner": owner_key,
+                        "removed_count": len(note_ids),
+                        "note_ids": note_ids,
+                    }
+                },
+                record_count=len(note_ids),
+            )
     finally:
         connection.close()
 

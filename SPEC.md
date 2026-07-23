@@ -252,7 +252,7 @@ T225|x|impl §V.146(+) + §I — company import --from jsonl --dry-run diff buck
 T226|x|impl §V.147(+) + §V.139(∆) + §I — company create --upsert + contact create --upsert; field-selective update; `created` flag; preserve non-upsert errors; stdin upsert line; tests create vs update + profile non-wipe; --skill agent recipe (#196)|V147,V139,V16,V142,V140,V90,V4,I.cli
 T227|x|impl §V.148(+) + §V.115(∆) + §I — company list|search --sort/--desc/--offset; company default limit 500; pin search lean fields; tests; --skill defaults/sort keys (#197)|V148,V115,V8,V116,V114,V96,V3,V4,I.cli
 T228|x|impl §V.149(+) + §I — company/contact disable --reason-file XOR --reason; tests empty/missing/XOR; --skill (#197)|V149,V114,V3,V4,I.cli
-T229|.|impl §V.14(∆) + §I — note remove owner bulk (--company-domain|--contact-email + required --yes); single-id path unchanged; delete_notes fn; tests empty/missing-yes/XOR; --skill (#198)|V14,I.cli
+T229|x|impl §V.14(∆) + §I — note remove owner bulk (--company-domain|--contact-email + required --yes); single-id path unchanged; delete_notes fn; tests empty/missing-yes/XOR; --skill (#198)|V14,I.cli
 T230|.|impl §V.150(+) + §I — enrollment add --tag --dry-run company-tag cohort preview; disabled companies out; exclude enrolled + self-loop; optional --min-contacts; envelope + tests; --skill (#198)|V150,V33,V114,V116,V107,V4,I.cli
 
 ## §B BUGS

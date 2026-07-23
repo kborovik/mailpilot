@@ -524,11 +524,37 @@ error `not_found` with zero writes.
 
 ```
 mailpilot note add --contact-email <ADDR> --body "Met at conf 2026."
+mailpilot note list --company-domain example.com
+mailpilot note list --contact-email <ADDR>
+mailpilot note remove <NOTE_ID>
+mailpilot note remove --company-domain example.com --yes
+mailpilot note remove --contact-email <ADDR> --yes
 mailpilot activity list --contact-email <ADDR>
 ```
 
 A note attaches to exactly one of `contact_id` or `company_id`. Activities
 may attach to either, both, or neither.
+
+`note list` is the note surface for a company or contact (no full entity-view
+scrape). `note remove <NOTE_ID>` deletes one note. Owner bulk remove needs
+exactly one of `--company-domain` / `--contact-email` plus required `--yes`
+(confirmation gate). Bulk success envelope:
+
+```json
+{
+  "notes_removed": {
+    "owner": {"company_domain": "example.com"},
+    "removed_count": 2,
+    "note_ids": ["...", "..."]
+  },
+  "record_count": 2,
+  "ok": true
+}
+```
+
+Zero notes is an ok no-op (`record_count` 0). Deletes write no activity;
+prior `note_added` rows stay as the audit trail. Operator-only — never an
+agent tool.
 
 ### Task queue
 

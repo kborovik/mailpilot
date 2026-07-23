@@ -8907,6 +8907,164 @@ def test_note_remove_not_found(runner: CliRunner, mock_connection: MagicMock) ->
     mock_delete.assert_not_called()
 
 
+def test_note_remove_bulk_contact_with_yes(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.14: owner bulk requires --yes; returns notes_removed envelope."""
+    contact = _make_contact(email="bulk@acme.test")
+    ids = [
+        "01234567-0000-7000-0000-0000000000a1",
+        "01234567-0000-7000-0000-0000000000a2",
+    ]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_contact_by_email", return_value=contact),
+        patch(
+            "mailpilot.database.delete_notes", return_value=ids
+        ) as mock_bulk,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "note",
+                "remove",
+                "--contact-email",
+                contact.email,
+                "--yes",
+            ],
+        )
+
+    assert result.exit_code == 0
+    mock_bulk.assert_called_once_with(mock_connection, contact_id=contact.id)
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 2
+    assert data["notes_removed"]["removed_count"] == 2
+    assert data["notes_removed"]["note_ids"] == ids
+    assert data["notes_removed"]["owner"] == {"contact_email": contact.email}
+
+
+def test_note_remove_bulk_company_with_yes(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    company = _make_company(domain="bulkco.test")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company_by_domain", return_value=company),
+        patch("mailpilot.database.delete_notes", return_value=[]) as mock_bulk,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "note",
+                "remove",
+                "--company-domain",
+                company.domain,
+                "--yes",
+            ],
+        )
+
+    assert result.exit_code == 0
+    mock_bulk.assert_called_once_with(mock_connection, company_id=company.id)
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 0
+    assert data["notes_removed"]["removed_count"] == 0
+    assert data["notes_removed"]["note_ids"] == []
+    assert data["notes_removed"]["owner"] == {"company_domain": company.domain}
+
+
+def test_note_remove_bulk_missing_yes(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.delete_notes") as mock_bulk,
+    ):
+        result = runner.invoke(
+            main,
+            ["note", "remove", "--contact-email", "bulk@acme.test"],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "--yes" in data["message"]
+    mock_bulk.assert_not_called()
+
+
+def test_note_remove_bulk_xor_owners(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.delete_notes") as mock_bulk,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "note",
+                "remove",
+                "--contact-email",
+                "a@b.test",
+                "--company-domain",
+                "c.test",
+                "--yes",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    mock_bulk.assert_not_called()
+
+
+def test_note_remove_id_exclusive_with_owner(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.delete_note") as mock_one,
+        patch("mailpilot.database.delete_notes") as mock_bulk,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "note",
+                "remove",
+                "01234567-0000-7000-0000-0000000000ff",
+                "--contact-email",
+                "a@b.test",
+                "--yes",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    mock_one.assert_not_called()
+    mock_bulk.assert_not_called()
+
+
+def test_note_remove_requires_target(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(main, ["note", "remove"])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+
+
 # -- note list -----------------------------------------------------------------
 
 

@@ -5840,7 +5840,7 @@ def delete_note(
 ) -> bool:
     """Delete a single note by id; return whether a row was deleted.
 
-    The sole note hard-delete per §V.14 -- removes one `note` row only, never
+    Single-id hard-delete path per §V.14 -- removes one `note` row only, never
     its owner's other notes. The `note_added` activity trail stays append-only
     and intact (§V.91). Operator-only, never an agent tool.
 
@@ -5854,6 +5854,44 @@ def delete_note(
     cursor = connection.execute("DELETE FROM note WHERE id = %(id)s", {"id": note_id})
     connection.commit()
     return cursor.rowcount > 0
+
+
+def delete_notes(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact_id: str | None = None,
+    company_id: str | None = None,
+) -> list[str]:
+    """Delete every note owned by a contact or company; return deleted ids.
+
+    Owner-bulk hard-delete path per §V.14 -- one transaction, note rows only.
+    The `note_added` activity trail stays append-only and intact. Zero notes
+    is a no-op returning ``[]``. Operator-only, never an agent tool.
+
+    Args:
+        connection: Open database connection.
+        contact_id: Delete all notes on this contact (XOR with company_id).
+        company_id: Delete all notes on this company (XOR with contact_id).
+
+    Returns:
+        Deleted note ids (order undefined / DB-dependent), empty when none.
+
+    Raises:
+        ValueError: If neither or both of contact_id/company_id are set.
+    """
+    if (contact_id is None) == (company_id is None):
+        raise ValueError("exactly one of contact_id or company_id is required")
+    if contact_id is not None:
+        rows = connection.execute(
+            "DELETE FROM note WHERE contact_id = %(id)s RETURNING id",
+            {"id": contact_id},
+        ).fetchall()
+    else:
+        rows = connection.execute(
+            "DELETE FROM note WHERE company_id = %(id)s RETURNING id",
+            {"id": company_id},
+        ).fetchall()
+    connection.commit()
+    return [str(row["id"]) for row in rows]
 
 
 # -- Meeting -------------------------------------------------------------------

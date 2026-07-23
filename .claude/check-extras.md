@@ -688,12 +688,13 @@ Trigger: `src/mailpilot/cli.py` changed.
 
 ## §V.14 — activity append-only + note lifecycle
 
-Activity = INSERT only — no update/delete fns for activity rows. Note = INSERT + single-note hard-delete `note remove <note_id>` (§I): one note row per call, no bulk-clear, no note update; operator-only, NOT an agent tool. Tag/note mutation + its activity row commit in one txn — both or neither. `note remove` deletes the note row only, writes no activity — prior `note_added` rows survive as the append-only trail.
+Activity = INSERT only — no update/delete fns for activity rows. Note = INSERT + dual-mode hard-delete `note remove` (§I): (a) single-id `note remove <note_id>`; (b) owner bulk `note remove --company-domain|--contact-email <ref> --yes` (XOR owner, `--yes` required). Operator-only, NOT an agent tool. Tag/note mutation + its activity row commit in one txn — both or neither. `note remove` deletes note row(s) only, writes no activity — prior `note_added` rows survive as the append-only trail. Bulk envelope `{"notes_removed":{owner, removed_count, note_ids[]}}`; zero notes = ok no-op record_count=0.
 
 Trigger: `src/mailpilot/database.py` or `src/mailpilot/cli.py` changed.
 - `rg 'def update_activity\|def delete_activity' src/mailpilot/database.py` -> zero hits (activity append-only)
 - `rg 'def delete_note\b' src/mailpilot/database.py` -> single-note hard-delete fn present
-- `rg 'def delete_notes\b' src/mailpilot/database.py` -> zero hits (owner bulk-clear retired)
+- `rg 'def delete_notes\b' src/mailpilot/database.py` -> owner bulk hard-delete fn present
+- `rg 'notes_removed' src/mailpilot/cli.py` -> bulk envelope key present
 - `rg 'note_added' src/mailpilot/database.py` -> note INSERT pairs its activity row in one txn
 
 ## §V.18 — schema drift definition
