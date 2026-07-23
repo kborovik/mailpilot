@@ -56,6 +56,20 @@ T163|x|impl §V.116(+) tag controlled vocabulary — `tag` + `tag_assignment` tw
 T164|x|sweep lead-pipeline skills + `scripts/seed_companies.py` onto the standard — domain resolution -> exact `company view <domain>` (drop fuzzy `company search "<arg>" --limit 1` + `fetch_owner_name` client filter), propagate renamed flags into skill prose|V112,V96,V99
 T165|x|impl §V.117(+) per §B.98 — `references/lead-pipeline-conventions.md` Batch-gate §: state distinct-batch-option rule + drop `First 25` when stale-count <= 25; sibling SKILL.md cap-example prose stays aligned per §V.100|V117,V100
 T166|x|align lead-pipeline create-duplicate detection to §V.3 per §B.99 — error envelope (duplicate_key/already_exists) rides stderr not stdout: seed_companies.py classify the duplicate by exit 1 + stderr envelope not proc.stdout, correct lead-pipeline-conventions.md + contact-finder.md + sibling SKILL.md prose (drop "envelope on stdout" + "capture stdout only" for the error case)|V3,B99
+T167|x|impl §V.10/§V.15/§V.80/§V.114 — `enable_company`/`enable_contact`/`enable_tag`/`enable_enrollment` in database.py + cli.py verbs; contact enable clears any reason (operator-only)|V10,V15,V80,V114,B100
+T168|x|collapse enrollment to {active, disabled} — drop paused; migration 004; remove `enrollment update` + toggle path|V15,V83,V108,V88
+T169|x|impl §V.118(+) + §V.79(∆) — `disable_account`/`enable_account` in database.py; disabled gate in sync loop + send/reply + `account list`|V79
+T170|x|drop dead `tag_disabled` activity.type — schema.sql + models.py + migration 005|V10,V17,V108
+T171|x|impl §V.96(∆) + §V.116(∆) — typed `reason_code` enum; `contacts-exhausted` tag; `--no-tag` repeatable|V96,V116,B101
+T172|x|impl §V.119 — `make db-backup` target; `make clean` depends on db-backup|V119
+T173|x|impl §V.105(∆) — split brittle qa-in-015 token; add `_is_brittle_inscope_token` atomicity guard|V105,B102
+T174|x|impl §V.120(+) — `_sent_reply` + `AgentCompletedWithoutReplyError`; inbound-trigger enforcement|V120,B103
+T175|x|impl §V.45(∆) — `_MUST_SEND` fragment in templates.py; compose into protocol_post for all three templates|V45,V120
+T176|x|impl §V.121(+) + §V.119(∆) — `db export`/`db import` snapshot bundle; drop per-entity export/import|V121,V119,B104
+T177|x|impl §V.75(∆) — classify 429|5xx mid-batch as retained+retried; checkpoint never advances past unstored messages|V75,B105
+T178|x|impl §V.120(∆) — widen send-guard to outbound first reach-out triggers|V120,B106
+T179|x|impl §V.54(∆) — absorb controlled SystemExit at `cli_mutation` boundary; parent span stays clean|V54,B107
+T180|x|impl §V.7(∆) + §V.122(+) — `recipients` in EmailSummary; verify_delivery.py alias-keyed delivery verification|V7,V122,B108
 
 ## §B BUGS
 
