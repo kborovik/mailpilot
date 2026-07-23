@@ -945,12 +945,8 @@ def test_company_create_upsert_updates_name_preserves_profile(
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.create_company", return_value=None),
-        patch(
-            "mailpilot.database.get_company_by_domain_exact", return_value=existing
-        ),
-        patch(
-            "mailpilot.database.update_company", return_value=updated
-        ) as mock_update,
+        patch("mailpilot.database.get_company_by_domain_exact", return_value=existing),
+        patch("mailpilot.database.update_company", return_value=updated) as mock_update,
         patch("mailpilot.database.load_company_view", return_value=view),
     ):
         result = runner.invoke(
@@ -1110,9 +1106,7 @@ def test_company_create_without_note_skips_note_call(
     mock_note.assert_not_called()
 
 
-def test_company_merge_cli(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
+def test_company_merge_cli(runner: CliRunner, mock_connection: MagicMock) -> None:
     """§V.143: merge CLI absorbs source into survivor and returns view."""
     source = _make_company(id="from-id", domain="nexvue.com", name="Nexvue")
     survivor = _make_company(id="into-id", domain="netatwork.com", name="Net@Work")
@@ -1127,11 +1121,11 @@ def test_company_merge_cli(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch(
-            "mailpilot.database.get_company_by_domain_exact", return_value=source
-        ),
+        patch("mailpilot.database.get_company_by_domain_exact", return_value=source),
         patch("mailpilot.database.get_company_by_domain", return_value=survivor),
-        patch("mailpilot.database.merge_companies", return_value=survivor) as mock_merge,
+        patch(
+            "mailpilot.database.merge_companies", return_value=survivor
+        ) as mock_merge,
         patch("mailpilot.database.load_company_view", return_value=view),
     ):
         result = runner.invoke(
@@ -1736,9 +1730,7 @@ def test_company_import_dry_run(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch(
-            "mailpilot.database.company_import_diff", return_value=diff
-        ) as mock_diff,
+        patch("mailpilot.database.company_import_diff", return_value=diff) as mock_diff,
     ):
         result = runner.invoke(
             main,
@@ -1762,9 +1754,7 @@ def test_company_import_requires_dry_run(
     tracker = tmp_path / "tracker.jsonl"
     tracker.write_text('{"domain":"a.com"}\n', encoding="utf-8")
     with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
-        result = runner.invoke(
-            main, ["company", "import", "--from", str(tracker)]
-        )
+        result = runner.invoke(main, ["company", "import", "--from", str(tracker)])
 
     assert result.exit_code == 1
     err = json.loads(result.stderr)
@@ -2926,11 +2916,11 @@ def test_company_update_profile_patch_null_existing_complete(
                 "update",
                 before.id,
                 "--summary",
-                _VALID_PROFILE["summary"],
+                "Acme makes widgets.",
                 "--product",
                 "Widget X",
                 "--target-customers",
-                _VALID_PROFILE["target_customers"],
+                "Aerospace OEMs.",
                 "--timezone",
                 "America/Toronto",
                 "--source",
@@ -3114,9 +3104,7 @@ def test_contact_create_upsert_updates_supplied_fields(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.create_contact", return_value=None),
         patch("mailpilot.database.get_contact_by_email", return_value=existing),
-        patch(
-            "mailpilot.database.update_contact", return_value=updated
-        ) as mock_update,
+        patch("mailpilot.database.update_contact", return_value=updated) as mock_update,
     ):
         result = runner.invoke(
             main,
@@ -3501,16 +3489,12 @@ def test_contact_create_stdin_upsert_updates(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.create_contact", side_effect=_create),
         patch("mailpilot.database.get_contact_by_email", return_value=existing),
-        patch(
-            "mailpilot.database.update_contact", return_value=updated
-        ) as mock_update,
+        patch("mailpilot.database.update_contact", return_value=updated) as mock_update,
     ):
         result = runner.invoke(main, ["contact", "create", "--stdin"], input=stdin)
 
     assert result.exit_code == 0, result.output
-    mock_update.assert_called_once_with(
-        mock_connection, existing.id, title="New"
-    )
+    mock_update.assert_called_once_with(mock_connection, existing.id, title="New")
     data = json.loads(result.output)
     assert data["results"] == [{"ref": "dup@acme.com", "status": "ok"}]
 
@@ -4207,9 +4191,7 @@ def test_contact_view_include_meta(
         patch("mailpilot.database.load_contact_view", return_value=view),
         patch("mailpilot.database.get_contact", return_value=contact) as mock_get,
     ):
-        result = runner.invoke(
-            main, ["contact", "view", contact.id, "--include-meta"]
-        )
+        result = runner.invoke(main, ["contact", "view", contact.id, "--include-meta"])
 
     assert result.exit_code == 0
     mock_get.assert_called_once_with(mock_connection, contact.id)
@@ -7990,7 +7972,10 @@ def test_tag_add_multi_already_linked_ok_skip(
         ),
         patch(
             "mailpilot.database.assign_tag_to_company",
-            side_effect=[None, _make_tag_assignment(contact_id=None, company_id=company_b_id)],
+            side_effect=[
+                None,
+                _make_tag_assignment(contact_id=None, company_id=company_b_id),
+            ],
         ),
     ):
         result = runner.invoke(
@@ -8127,16 +8112,12 @@ def test_tag_set_company_empty_clears(
     from mailpilot.models import CompanyView
 
     company = _make_company(id=_TAG_COMPANY_ID, domain="a.com")
-    view = CompanyView(
-        **company.model_dump(), tags=[], notes=[], notes_total=0
-    )
+    view = CompanyView(**company.model_dump(), tags=[], notes=[], notes_total=0)
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_company_by_domain", return_value=company),
-        patch(
-            "mailpilot.database.set_company_tags", return_value=[]
-        ) as mock_set,
+        patch("mailpilot.database.set_company_tags", return_value=[]) as mock_set,
         patch("mailpilot.database.load_company_view", return_value=view),
     ):
         result = runner.invoke(

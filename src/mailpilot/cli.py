@@ -242,10 +242,10 @@ def _emit_batch_results(results: list[dict[str, object]]) -> None:
 
 
 def _resolve_disable_reason(reason: str | None, reason_file: str | None) -> str:
-    """Resolve single-entity disable reason from ``--reason`` XOR ``--reason-file``.
+    r"""Resolve single-entity disable reason from ``--reason`` XOR ``--reason-file``.
 
     Exactly one source required. File is UTF-8; one trailing newline is stripped
-    (``\\n`` or ``\\r\\n``). Empty after resolve → ``validation_error``. Missing
+    (``\n`` or ``\r\n``). Empty after resolve → ``validation_error``. Missing
     path → ``not_found``.
     """
     import pathlib
@@ -460,18 +460,14 @@ def _parse_contact_create_fields(
     elif isinstance(meta_raw, dict):
         meta = meta_raw
     else:
-        return None, _batch_error(
-            ref, "validation_error", "meta must be a JSON object"
-        )
+        return None, _batch_error(ref, "validation_error", "meta must be a JSON object")
     upsert_raw = payload.get("upsert")
     if upsert_raw is None:
         upsert = False
     elif isinstance(upsert_raw, bool):
         upsert = upsert_raw
     else:
-        return None, _batch_error(
-            ref, "validation_error", "upsert must be a boolean"
-        )
+        return None, _batch_error(ref, "validation_error", "upsert must be a boolean")
     return {
         "ref": ref,
         "email": email,
@@ -512,7 +508,7 @@ def _contact_upsert_fields(
     return fields
 
 
-def _contact_create_stdin_row(
+def _contact_create_stdin_row(  # noqa: C901, PLR0911, PLR0912
     connection: Any, line_number: int, line: str
 ) -> dict[str, object]:
     """Process one ``contact create --stdin`` NDJSON line into a result row."""
@@ -1511,7 +1507,7 @@ def company() -> None:
         "duplicate domain returns already_exists. Preferred agent path."
     ),
 )
-def company_create(
+def company_create(  # noqa: C901
     domain: str,
     name: str,
     aliases: tuple[str, ...],
@@ -1563,11 +1559,13 @@ def company_create(
                         changed.append("name")
                 for alias in aliases:
                     try:
-                        if add_company_alias(
-                            connection, existing.id, alias, commit=True
+                        if (
+                            add_company_alias(
+                                connection, existing.id, alias, commit=True
+                            )
+                            and "aliases" not in changed
                         ):
-                            if "aliases" not in changed:
-                                changed.append("aliases")
+                            changed.append("aliases")
                     except ValueError as exc:
                         output_error(str(exc), "already_exists")
                 # Bare upsert never touches profile (§V.147 / §V.140).
@@ -1671,7 +1669,10 @@ def _merge_company_profile_patch(
 @click.option(
     "--profile-json",
     default=None,
-    help="Full-replace profile as an inline JSON object (prefer --profile-file or --profile -).",
+    help=(
+        "Full-replace profile as an inline JSON object "
+        "(prefer --profile-file or --profile -)."
+    ),
 )
 @click.option(
     "--profile-file",
@@ -1705,7 +1706,7 @@ def _merge_company_profile_patch(
     default=None,
     help="Patch profile.target_customers (merge).",
 )
-def company_update(
+def company_update(  # noqa: C901, PLR0912
     company_ref: str,
     name: str | None,
     profile_json: str | None,
@@ -1748,8 +1749,7 @@ def company_update(
     )
     if len(replace_flags) > 1:
         output_error(
-            "full-replace profile options are exclusive: "
-            + ", ".join(replace_flags),
+            "full-replace profile options are exclusive: " + ", ".join(replace_flags),
             "validation_error",
         )
     if replace_flags and has_patch:
@@ -1983,8 +1983,9 @@ def company_merge(from_ref: str, into_ref: str, move_contacts: bool) -> None:
         # Survivor resolves aliases (canonical firm).
         into_company = _resolve_company(connection, into_ref)
         if into_company.disabled_reason is not None:
+            reason = into_company.disabled_reason
             output_error(
-                f"survivor company is disabled (reason: {into_company.disabled_reason})",
+                f"survivor company is disabled (reason: {reason})",
                 "invalid_state",
             )
 
@@ -2061,9 +2062,7 @@ def company_merge(from_ref: str, into_ref: str, move_contacts: bool) -> None:
 @desc_option
 @offset_option
 @limit_option(default=500)
-def company_search(
-    query: str, limit: int, offset: int, sort: str, desc: bool
-) -> None:
+def company_search(query: str, limit: int, offset: int, sort: str, desc: bool) -> None:
     """Search companies by name or domain.
 
     Lean rows match company list (domain, name, has_profile, contact_count,
@@ -2473,7 +2472,7 @@ def contact() -> None:
         "duplicate_key. Preferred agent path."
     ),
 )
-def contact_create(
+def contact_create(  # noqa: C901, PLR0912
     email: str | None,
     first_name: str | None,
     last_name: str | None,
@@ -2699,9 +2698,7 @@ def contact_update(
     "reason_file",
     default=None,
     type=click.Path(dir_okay=False),
-    help=(
-        "Read disable reason from a UTF-8 file (exclusive with --reason)."
-    ),
+    help=("Read disable reason from a UTF-8 file (exclusive with --reason)."),
 )
 def contact_disable(
     contact_ref: str, reason: str | None, reason_file: str | None
@@ -3426,7 +3423,7 @@ def tag_enable(name: str) -> None:
     multiple=True,
     help="Owner company (domain or ID); repeatable. XOR with --contact-email.",
 )
-def tag_add(
+def tag_add(  # noqa: C901, PLR0912
     tag_name: str,
     contact_emails: tuple[str, ...],
     company_domains: tuple[str, ...],

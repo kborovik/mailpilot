@@ -311,6 +311,7 @@ def test_company_create_emits_span_and_event(
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.create_company", return_value=company),
+        patch("mailpilot.database.load_company_view", return_value=company),
     ):
         result = runner.invoke(
             main, ["company", "create", "--domain", "acme.test", "--name", "Acme"]
@@ -355,6 +356,7 @@ def test_company_create_with_note_includes_note_in_changed(
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.create_company", return_value=company),
+        patch("mailpilot.database.load_company_view", return_value=company),
         patch("mailpilot.database.add_company_note"),
     ):
         result = runner.invoke(

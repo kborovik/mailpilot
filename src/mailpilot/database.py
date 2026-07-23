@@ -1124,11 +1124,16 @@ def add_company_alias(
     if existing is not None:
         if existing["company_id"] == company_id:
             return False
-        raise ValueError(f"domain {normalized!r} is already an alias of another company")
-    if connection.execute(
-        "SELECT 1 FROM company WHERE domain = %(domain)s",
-        {"domain": normalized},
-    ).fetchone() is not None:
+        raise ValueError(
+            f"domain {normalized!r} is already an alias of another company"
+        )
+    if (
+        connection.execute(
+            "SELECT 1 FROM company WHERE domain = %(domain)s",
+            {"domain": normalized},
+        ).fetchone()
+        is not None
+    ):
         raise ValueError(f"domain {normalized!r} is already a company domain")
     connection.execute(
         """\
@@ -1662,9 +1667,7 @@ def company_import_diff(
     missing_in_crm = sorted(file_set - crm_domains)
     extra_in_crm = sorted(crm_domains - file_set)
     missing_profile = sorted(
-        domain
-        for domain, row in crm_by_domain.items()
-        if not row["has_profile"]
+        domain for domain, row in crm_by_domain.items() if not row["has_profile"]
     )
     zero_contacts = sorted(
         domain for domain, row in crm_by_domain.items() if row["contact_count"] == 0
@@ -6578,7 +6581,7 @@ def _restore_tags(
     return restored
 
 
-def _restore_companies(
+def _restore_companies(  # noqa: C901
     connection: psycopg.Connection[dict[str, Any]],
     entries: Iterable[Any],
     errors: list[dict[str, Any]],

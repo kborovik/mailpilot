@@ -25,6 +25,7 @@ from mailpilot.database import (
     cancel_enrollment_followup_tasks,
     cancel_task,
     check_workflow_wording,
+    company_import_diff,
     complete_task,
     create_account,
     create_activity,
@@ -47,6 +48,7 @@ from mailpilot.database import (
     enable_account,
     enable_company,
     enable_enrollment,
+    export_companies,
     export_snapshot,
     find_pending_first_touch_task,
     get_account,
@@ -80,8 +82,6 @@ from mailpilot.database import (
     list_accounts,
     list_active_outbound_enrollments_for_contact,
     list_activities,
-    company_import_diff,
-    export_companies,
     list_companies,
     list_company_aliases,
     list_contacts,
@@ -854,9 +854,7 @@ def test_company_import_diff_buckets(
     update_company(database_connection, ready.id, profile=_PIPELINE_PROFILE)
     create_contact(database_connection, email="a@ready.com", company_id=ready.id)
 
-    make_test_company(
-        database_connection, name="No Profile", domain="noprofile.com"
-    )
+    make_test_company(database_connection, name="No Profile", domain="noprofile.com")
     zero = make_test_company(database_connection, name="Zero", domain="zero.com")
     update_company(database_connection, zero.id, profile=_PIPELINE_PROFILE)
 
@@ -3624,7 +3622,9 @@ def test_set_company_tags_replaces_with_activity(
     keep = create_tag(database_connection, name="acumatica-var")
     drop = create_tag(database_connection, name="stale-var")
     add = create_tag(database_connection, name="dynamics-365-var")
-    assert keep is not None and drop is not None and add is not None
+    assert keep is not None
+    assert drop is not None
+    assert add is not None
     make_test_tag_assignment(
         database_connection, company_id=company.id, name="acumatica-var"
     )
@@ -3665,9 +3665,7 @@ def test_set_company_tags_empty_clears(
 
     company = make_test_company(database_connection)
     make_test_tag_assignment(database_connection, company_id=company.id, name="vip")
-    make_test_tag_assignment(
-        database_connection, company_id=company.id, name="partner"
-    )
+    make_test_tag_assignment(database_connection, company_id=company.id, name="partner")
 
     final = set_company_tags(database_connection, company_id=company.id, tag_ids=[])
 
@@ -3684,12 +3682,11 @@ def test_set_contact_tags_replaces(
     contact = make_test_contact(database_connection)
     a = create_tag(database_connection, name="hot")
     b = create_tag(database_connection, name="warm")
-    assert a is not None and b is not None
+    assert a is not None
+    assert b is not None
     make_test_tag_assignment(database_connection, contact_id=contact.id, name="hot")
 
-    final = set_contact_tags(
-        database_connection, contact_id=contact.id, tag_ids=[b.id]
-    )
+    final = set_contact_tags(database_connection, contact_id=contact.id, tag_ids=[b.id])
 
     assert final == ["warm"]
     assert [t.name for t in list_tags(database_connection, contact_id=contact.id)] == [
@@ -6423,21 +6420,27 @@ def test_load_contact_view_carries_company_domain(
 
 
 def test_contact_view_field_set_superset_of_base_and_summary() -> None:
-    """§V.8/§B.94: ContactView field set ⊇ Contact columns + ContactSummary denorm.
+    """§V.8/§B.94: ContactView field set ⊇ agent-facing Contact + ContactSummary.
 
     Recurrence guard: a view model omitting a base column is silently stripped
     from ``**contact.model_dump()`` (Pydantic ``extra=ignore``), so the field
     set is tracked against both the base entity and the list/search summary.
+
+    ``verification_meta`` is operator-only (§V.144) and intentionally omitted
+    from the default view (opt-in via ``contact view --include-meta``).
     """
     from mailpilot.models import Contact, ContactSummary, ContactView
 
-    base = set(Contact.model_fields)
+    # Operator-only columns excluded from the agent-facing view projection.
+    operator_only = {"verification_meta"}
+    base = set(Contact.model_fields) - operator_only
     summary = set(ContactSummary.model_fields)
     view = set(ContactView.model_fields)
 
     assert base <= view, f"ContactView missing base columns: {base - view}"
     assert summary <= view, f"ContactView missing summary denorm: {summary - view}"
     assert {"title", "email_confidence", "company_domain"} <= view
+    assert "verification_meta" not in view
 
 
 # -- _BASE template fragment carries §V.8 directive --------------------------
@@ -6522,7 +6525,9 @@ def test_company_alias_resolve_view_and_contact_link(
     assert contact.company_id == company.id
 
     # Exact lookup does not follow alias.
-    assert get_company_by_domain_exact(database_connection, "consulting.sva.com") is None
+    assert (
+        get_company_by_domain_exact(database_connection, "consulting.sva.com") is None
+    )
 
 
 def test_create_company_rejects_domain_already_alias(

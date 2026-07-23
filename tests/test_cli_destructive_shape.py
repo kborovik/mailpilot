@@ -34,6 +34,7 @@ ALLOWED_VERBS = {
     "enable",
     "add",
     "remove",
+    "merge",
     "reply",
     "send",
     "start",
