@@ -36,7 +36,24 @@ db-backup: ## Back up tags, companies and contacts to ~/Documents/MailPilot/ (ti
 	mkdir -p $(DOCUMENTS_DIR)
 	mailpilot db export --file $(DOCUMENTS_DIR)/snap-$(TS).json > /dev/null
 
-clean: db-backup ## Back up data, re-create database
+kill-run: ## Force-kill runaway mailpilot run processes (SIGTERM then SIGKILL)
+	$(call header,Force-killing mailpilot run processes)
+	pids=$$(pgrep -f 'mailpilot run' 2>/dev/null || true)
+	if [[ -n "$$pids" ]]; then
+		echo "Sending SIGTERM to pid(s): $$pids"
+		kill -TERM $$pids 2>/dev/null || true
+		sleep 1
+		still=$$(pgrep -f 'mailpilot run' 2>/dev/null || true)
+		if [[ -n "$$still" ]]; then
+			echo "Sending SIGKILL to pid(s): $$still"
+			kill -KILL $$still 2>/dev/null || true
+		fi
+		echo "$(green)mailpilot run processes cleared$(reset)"
+	else
+		echo "No mailpilot run processes found"
+	fi
+
+clean: kill-run db-backup ## Kill runaway run processes, back up data, re-create database
 	$(call header,Re-creating database)
 	dropdb --if-exists mailpilot
 	createdb mailpilot
