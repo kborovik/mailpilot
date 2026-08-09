@@ -10,8 +10,12 @@ settings. Out of scope: database schema, internal agent / template wiring.
 ```
 mailpilot <noun> <verb> [args]
 mailpilot run | status | config get|set
-mailpilot --version | --help | --completion <shell> | --skill | --debug
+mailpilot --version | --help | --completion <shell> | --debug
 ```
+
+Top-level `--help` prints this skill body (agent reference). There is no
+`--skill` flag. Subcommand and verb `--help` stay Click-rendered for
+command-scoped flag discovery.
 
 Nouns: `account`, `company`, `contact`, `workflow`, `enrollment`, `task`,
 `email`, `activity`, `tag`, `note`, `template`, `db`.
@@ -57,8 +61,8 @@ since the row is retained.
   but the full `{"results": [...], "ok": true, "record_count": N}`
   envelope still lands on stdout (partial success is reportable).
 
-The top-level `--skill`, `--version`, `--help`, `--completion` flags emit
-plain text (not JSON) and exit `0`.
+The top-level `--help`, `--version`, and `--completion` flags emit plain
+text (not JSON) and exit `0`. Top-level `--help` is this document.
 
 ## Settings
 
@@ -621,6 +625,7 @@ invokes the agent on routed inbound mail. Stderr emits one
 
 ## Discovery
 
-Every command supports `--help`. The top-level `--help` lists noun groups;
+Top-level `mailpilot --help` prints this skill document (grammar, envelope,
+exit codes, settings, recipes). Subcommand help stays Click-rendered:
 `mailpilot <noun> --help` lists verbs; `mailpilot <noun> <verb> --help`
 lists flags. When uncertain, prefer `--help` over guessing.

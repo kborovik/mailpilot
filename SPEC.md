@@ -240,7 +240,7 @@ T227|x|impl §V.148(+) + §V.115(∆) + §I — company list|search --sort/--des
 T228|x|impl §V.149(+) + §I — company/contact disable --reason-file XOR --reason; tests empty/missing/XOR; --skill (#197)|V149,V114,V3,V4,I.cli
 T229|x|impl §V.14(∆) + §I — note remove owner bulk (--company-domain|--contact-email + required --yes); single-id path unchanged; delete_notes fn; tests empty/missing-yes/XOR; --skill (#198)|V14,I.cli
 T230|x|impl §V.150(+) + §I — enrollment add --tag --dry-run company-tag cohort preview; disabled companies out; exclude enrolled + self-loop; optional --min-contacts; envelope + tests; --skill (#198)|V150,V33,V114,V116,V107,V4,I.cli
-T231|.|impl §V.111(∆)+§I — top-level `--help` emits SKILL.md body; drop `--skill` flag; SKILL Grammar/Discovery; tests (body==package; tree zero §-cites)|V111,I.cli
+T231|x|impl §V.111(∆)+§I — top-level `--help` emits SKILL.md body; drop `--skill` flag; SKILL Grammar/Discovery; tests (body==package; tree zero §-cites)|V111,I.cli
 
 ## §B BUGS
 

@@ -4,11 +4,15 @@ Operator-facing twin of §V.45 (agent-prompt text). Click derives a command's
 rendered help from its function docstring (long + truncated short help) and from
 each option's ``help=`` string; a literal ``§V/§T/§B.<n>`` token there is dead
 authoring metadata leaking to a CLI operator who has no SPEC.md (closes §B.91).
-The sweep walks the whole command tree and scans every rendered ``--help``.
+
+Top-level ``mailpilot --help`` is the packaged SKILL.md body (not Click
+help); this sweep walks subcommand/verb ``--help`` only (not root). SKILL.md
+itself is checked separately for zero §-cites.
 """
 
 import re
 from collections.abc import Iterator
+from importlib.resources import files
 
 import click
 
@@ -30,12 +34,14 @@ def _walk_commands(
 
 
 def test_cli_help_carries_no_spec_citation() -> None:
-    """§V.111 / §B.91: every Click command/group ``--help`` renders free of a
+    """§V.111 / §B.91: every subcommand/verb Click ``--help`` renders free of a
     ``§V/§T/§B.<n>`` token -- docstring-derived help and option ``help=`` text
-    alike. The governing invariant is cited in a non-rendered code comment
-    instead, never in operator-visible help."""
+    alike. Root is excluded: top-level ``--help`` emits SKILL.md instead."""
     offenders: list[str] = []
     for command_path, command, context in _walk_commands(main):
+        # Root help is SKILL.md (tested elsewhere); only Click-rendered help.
+        if command is main:
+            continue
         help_text = command.get_help(context)
         match = _SPEC_CITE.search(help_text)
         if match is not None:
@@ -45,3 +51,10 @@ def test_cli_help_carries_no_spec_citation() -> None:
         "(docstring-derived help + option help= text); offenders: "
         + "; ".join(offenders)
     )
+
+
+def test_skill_md_carries_no_spec_citation() -> None:
+    """§V.111: packaged SKILL.md body has zero §V/§T/§B.<n> tokens."""
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    match = _SPEC_CITE.search(body)
+    assert match is None, f"SKILL.md carries SPEC cite {match.group()!r}"

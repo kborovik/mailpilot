@@ -830,12 +830,13 @@ def _print_completion(
     ctx.exit(0)
 
 
-def _print_skill(ctx: click.Context, param: click.Parameter, value: bool) -> None:
-    """Eager callback: emit the packaged SKILL.md body verbatim and exit.
+def _print_skill_help(ctx: click.Context, param: click.Parameter, value: bool) -> None:
+    """Eager callback: emit the packaged SKILL.md body as top-level --help.
 
-    Runs before Click validates that a subcommand was given, so
-    ``mailpilot --skill`` works without supplying a subcommand. Hard-fails
-    with a stderr diagnostic when the package data is missing.
+    Replaces Click's default root help. Runs before Click validates that a
+    subcommand was given, so ``mailpilot --help`` works alone. Hard-fails
+    with a stderr diagnostic when the package data is missing. Subcommand
+    and verb ``--help`` stay Click-rendered (this callback is only on root).
     """
     if not value or ctx.resilient_parsing:
         return
@@ -871,7 +872,7 @@ def _version() -> str:
     return dist.version
 
 
-@click.group()
+@click.group(add_help_option=False)
 @click.version_option(version=_version(), prog_name="mailpilot")
 @click.option("--debug", is_flag=True, help="Enable debug logging.")
 @click.option(
@@ -884,12 +885,12 @@ def _version() -> str:
     help="Print shell completion script and exit.",
 )
 @click.option(
-    "--skill",
+    "--help",
     is_flag=True,
     default=False,
     is_eager=True,
     expose_value=False,
-    callback=_print_skill,
+    callback=_print_skill_help,
     help="Print the packaged SKILL.md body and exit.",
 )
 @click.pass_context

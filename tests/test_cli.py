@@ -130,17 +130,26 @@ def test_version_editable_install_renders_dev_marker() -> None:
         assert cli._version() == "1.2.3+dev (/tmp/checkout)"  # pyright: ignore[reportPrivateUsage]
 
 
-# -- --skill -------------------------------------------------------------------
+# -- top-level --help emits SKILL.md (§V.111) ----------------------------------
 
 
-def test_skill_prints_packaged_body_verbatim() -> None:
+def test_top_level_help_prints_packaged_skill_body_verbatim() -> None:
+    """§V.111: mailpilot --help stdout is byte-identical to package SKILL.md."""
     from importlib.resources import files
 
     expected = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
-    result = CliRunner().invoke(main, ["--skill"])
+    result = CliRunner().invoke(main, ["--help"])
     assert result.exit_code == 0
     assert result.stdout == expected
     assert result.stderr == ""
+
+
+def test_top_level_has_no_skill_flag() -> None:
+    """§V.111: --skill is retired; content lives only under top-level --help."""
+    param_names = {p.name for p in main.params}
+    assert "skill" not in param_names
+    result = CliRunner().invoke(main, ["--skill"])
+    assert result.exit_code != 0
 
 
 def test_skill_resource_path_resolves() -> None:
@@ -150,12 +159,12 @@ def test_skill_resource_path_resolves() -> None:
     assert skill_path.is_file()
 
 
-def test_skill_missing_file_hard_fails() -> None:
+def test_top_level_help_missing_skill_hard_fails() -> None:
     mock_resource = MagicMock()
     mock_resource.read_text.side_effect = FileNotFoundError("no SKILL.md")
     with patch("importlib.resources.files") as mock_files:
         mock_files.return_value.joinpath.return_value = mock_resource
-        result = CliRunner().invoke(main, ["--skill"])
+        result = CliRunner().invoke(main, ["--help"])
     assert result.exit_code == 1
     assert result.stdout == ""
     assert "SKILL.md missing" in result.stderr
