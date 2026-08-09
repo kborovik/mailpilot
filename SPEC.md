@@ -24,7 +24,7 @@ Agent-operated CRM. Gmail = comms layer. Claude Code = strategist; internal Pyda
 - cli: `mailpilot <noun> <verb> [args]` -> JSON on stdout, exit code 0 or 1, errors to stderr.
   - nouns: `account`, `company`, `contact`, `workflow`, `enrollment`, `task`, `email`, `meeting`, `activity`, `tag`, `note`, `template`, `db`.
   - verbs: `list|search|view|stats|create|update|disable|enable|add|remove|set|merge|reply|send|start|stop|cancel|retry|run|sync|export|import|init|migrate|check`.
-  - top-level: `run` (sync & task loop), `status`, `config get|set`, global `--version|--debug|--completion|--skill`.
+  - top-level: `run` (sync & task loop), `status`, `config get|set`, global `--version|--debug|--completion`; top-level `--help` emits packaged `SKILL.md` body (LLM-agent reference, plain text, exit 0); no `--skill` flag; subcommand/verb `--help` stays Click-rendered (command-scoped discovery).
   - envelope: `list|search|sync|export|import` -> `{"<plural>": [...], "ok": true}` (`db export|import` exception -> `{"db": {...}, "ok": true}` status object like other `db` verbs, §V.121); `view|create|update|disable|enable|add|remove|merge|reply|send|start|stop|cancel|retry|init|migrate|check|stats` -> `{"<singular>": {...}, "ok": true}` (`workflow stats` exception -> `{"workflow_stats": {...}, "ok": true}` §V.132; `workflow check` exception -> `{"workflow_check": {...}, "ok": true}` §V.134; `task stats` exception -> `{"task_stats": {...}, "ok": true}` §V.133; aggregate not entity row); err -> `{"error": CODE, "message": TEXT, "ok": false}`. Every `ok:true` envelope also carries top-level `record_count` (int) = records displayed: array-bearing payload (`list`/`search`/`sync`/`export`/`import`) -> array len; single-object payload (single-entity verbs + aggregate `stats`/`check` + `status`) -> 1; err omits `record_count` (§V.4).
   - email projection: `email view|list` ! project `route_method` in {`classified`, `thread_match`, `rfc_message_id_match`, `skipped_outside_window`, `skipped_no_workflows`, `skipped_predates_workflows`, `skipped_no_inbound_workflows`} so operator audits routing decision from CLI w/o Logfire.
   - contact projection: `contact list|search` ! project `title` + `company_domain` (company denorm per §V.5) so operator reads role + org from CLI w/o a separate company lookup; default list|search|view omit `verification_meta` (operator-only §V.144); `contact view --include-meta` projects `verification_meta` (null when unset); `contact create|update` accept `--meta-json '<object>'`; `contact create --stdin` line schema ? optional `meta` object (same validation).
@@ -147,7 +147,7 @@ V107: CLI entity = natural key (§V.90) or UUID; polymorphic resolver: UUIDv7-sh
 V108: `migrations/NNN_*.sql` forward-only (monotonic prefix, no down-migrations); `db migrate` each own txn + re-stamps `schema_hash` on success; `schema.sql` = canonical declarative full-schema; identity invariant: fresh `db init` == apply-all-migrations-from-zero (test-enforced); → .spec/check-extras.md §V108
 V109: three-state schema verdict in {current, pending, drift} + tiered gate; run+mutations dead-stop on drift/pending — → .spec/check-extras.md §V109
 V110: initialize_database = connect + verify, not provision; empty-DB auto-provision data-loss-free; populated DB never mutates as side-effect — → .spec/check-extras.md §V110
-V111: CLI --help carries zero SPEC citation; guard walks command tree — → .spec/check-extras.md §V111
+V111: CLI help agent surface — top-level `--help` emits packaged SKILL.md; Click tree `--help` zero SPEC cites — → .spec/check-extras.md §V111
 V112: lead-companies scoped enrich-scope; domain/URL arg enriches only rows seeded this run, never global backlog — → .spec/check-extras.md §V112
 V113: Bouncer single GET /v1.1/email/verify?email= per contact; POST /email/verify/batch/sync absent — → .spec/check-extras.md §V113
 V114: company soft-disable — disabled_reason TEXT NULL, uniform disable/enable verb pairing — → .spec/check-extras.md §V114
@@ -240,6 +240,7 @@ T227|x|impl §V.148(+) + §V.115(∆) + §I — company list|search --sort/--des
 T228|x|impl §V.149(+) + §I — company/contact disable --reason-file XOR --reason; tests empty/missing/XOR; --skill (#197)|V149,V114,V3,V4,I.cli
 T229|x|impl §V.14(∆) + §I — note remove owner bulk (--company-domain|--contact-email + required --yes); single-id path unchanged; delete_notes fn; tests empty/missing-yes/XOR; --skill (#198)|V14,I.cli
 T230|x|impl §V.150(+) + §I — enrollment add --tag --dry-run company-tag cohort preview; disabled companies out; exclude enrolled + self-loop; optional --min-contacts; envelope + tests; --skill (#198)|V150,V33,V114,V116,V107,V4,I.cli
+T231|.|impl §V.111(∆)+§I — top-level `--help` emits SKILL.md body; drop `--skill` flag; SKILL Grammar/Discovery; tests (body==package; tree zero §-cites)|V111,I.cli
 
 ## §B BUGS
 

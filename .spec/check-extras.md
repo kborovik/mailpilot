@@ -543,13 +543,15 @@ Trigger: `src/mailpilot/database.py` changed.
 - `rg 'information_schema.*account\b\|table.*account.*exist' src/mailpilot/database.py` -> empty-DB gate on `account` table absence
 - `rg '_provision_schema\b' src/mailpilot/database.py` -> provision fn separate from initialize
 
-## §V111 — CLI --help zero SPEC citations
+## §V111 — CLI help agent surface
 
-Every Click command/group `--help` (docstring-derived help + option `help=` strings) renders free of `§V/§T/§B.<n>`. Guard walks the command tree, renders each `--help`, greps for `§[VTB].[0-9]+` → zero hits. Operator-facing twin of §V.45 (agent-prompt text).
+Top-level `mailpilot --help` emits packaged `src/mailpilot/SKILL.md` body verbatim (plain text stdout, exit 0). Missing package data → stderr hard-fail exit 1. No `--skill` flag (retired — content lives only under top-level `--help`). SKILL.md = LLM-agent CLI reference (grammar, JSON envelope, exit codes, settings, recipes); register dense agent prose, zero SPEC §-cites in the body. Subcommand/verb `--help` stays Click-rendered (docstring + option `help=`). Every Click command/group `--help` renders free of `§V/§T/§B.<n>` (operator-facing twin of §V.45 agent-prompt text).
 
-Trigger: `src/mailpilot/cli.py` changed.
+Trigger: `src/mailpilot/cli.py` or `src/mailpilot/SKILL.md` changed.
+- Top-level: render `mailpilot --help` → stdout byte-identical to package `SKILL.md`; exit 0; no `--skill` option on root group
 - `rg '§[VTB]\.[0-9]+' src/mailpilot/cli.py | grep -v '^\s*#'` -> classify each hit: in a Click `help=` string or docstring → fail; in a `#` comment → exempt
-- Full guard: render `mailpilot --help` recursively (each sub-command), grep rendered output for `§[VTB]` pattern → zero hits
+- `rg '§[VTB]\.[0-9]+' src/mailpilot/SKILL.md` -> zero hits
+- Full guard: walk Click tree (each sub-command `--help`, not root), grep rendered output for `§[VTB]` pattern → zero hits
 
 ## §V112 — lead-companies scoped enrich-scope
 
