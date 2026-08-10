@@ -5843,7 +5843,7 @@ def enrollment_list(
             desc=desc,
             stuck=stuck,
         )
-        exclude = None if use_full else ENROLLMENT_FULL_FIELDS
+        exclude = None if use_full else set(ENROLLMENT_FULL_FIELDS)
         dumped = [r.model_dump(mode="json", exclude=exclude) for r in rows]
         if output_format.lower() == "json":
             output({"enrollments": dumped})

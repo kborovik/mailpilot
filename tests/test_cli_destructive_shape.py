@@ -26,6 +26,7 @@ ALLOWED_VERBS = {
     "search",
     "view",
     "stats",
+    "report",
     "create",
     "update",
     "disable",

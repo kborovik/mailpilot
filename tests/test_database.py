@@ -3208,9 +3208,7 @@ def test_list_activities_with_limit(
 def test_list_activities_requires_filter(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    with pytest.raises(
-        ValueError, match="contact_id, company_id, or workflow_id"
-    ):
+    with pytest.raises(ValueError, match="contact_id, company_id, or workflow_id"):
         list_activities(database_connection)
 
 
