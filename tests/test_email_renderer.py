@@ -141,7 +141,7 @@ def test_render_signature_html_empty_returns_empty():
 
 
 def test_render_signature_html_lab5_palette():
-    """§V.151: fixed lab5 colors; body theme does not recolor signature."""
+    """§V.151: fixed lab5 mark palette; body theme does not recolor signature."""
     sig = AccountSignature(
         full_name="Ada Lovelace",
         title="Engineer",
@@ -149,26 +149,86 @@ def test_render_signature_html_lab5_palette():
         phone="+1-555-0100",
     )
     html = render_signature_html(sig)
-    assert "#1f2328" in html
-    assert "#424a53" in html
+    # Name / body / label / title + four-colour bar.
+    assert "#101820" in html
+    assert "#8A939B" in html
     assert "#0969da" in html
-    assert "#d1d9e0" in html
-    assert "border-top:1px solid #d1d9e0" in html
+    assert "#cf222e" in html
+    assert "#f9c513" in html
+    assert "#1f883d" in html
     assert "Ada Lovelace" in html
     assert "Engineer" in html
     assert 'href="https://lab5.ca"' in html
     assert "+1-555-0100" in html
-    # No background band.
-    assert "background" not in html.lower()
     # Body theme primary (blue #2563eb) must not appear.
     assert "#2563eb" not in html
+
+
+def test_render_signature_html_mark_layout():
+    """§V.151: table chrome = logo + colour bar + stacked detail rows."""
+    sig = AccountSignature(
+        full_name="Ada Lovelace",
+        title="Engineer",
+        website="https://lab5.ca",
+        phone="+1-555-0100",
+    )
+    html = render_signature_html(sig)
+    assert 'role="presentation"' in html
+    assert "data:image/png;base64," in html
+    assert 'alt="lab5.ca"' in html
+    assert "width:60px" in html
+    assert "text-transform:uppercase" in html
+    assert "font-weight:bold" in html
+    assert "web&nbsp;&nbsp;" in html
+    assert "cell&nbsp;&nbsp;" in html
+    # Display host without scheme; href keeps absolute URL.
+    assert ">lab5.ca<" in html
+    assert 'href="https://lab5.ca"' in html
+    # No pipe-separator layout.
+    assert ">|<" not in html
+    # Name precedes title, website precedes phone.
+    assert html.index("Ada Lovelace") < html.index("Engineer")
+    assert html.index("lab5.ca") < html.index("+1-555-0100")
+
+
+def test_render_signature_html_phone_is_tel_link():
+    html = render_signature_html(AccountSignature(phone="+1-416-670-0621"))
+    assert 'href="tel:+14166700621"' in html
+    assert "+1-416-670-0621" in html
+    assert "cell&nbsp;&nbsp;" in html
+    # Brand chrome still present for a non-empty signature.
+    assert "data:image/png;base64," in html
 
 
 def test_render_signature_html_omits_empty_fields():
     html = render_signature_html(AccountSignature(full_name="Only Name"))
     assert "Only Name" in html
+    assert "web&nbsp;&nbsp;" not in html
+    assert "cell&nbsp;&nbsp;" not in html
+    assert "text-transform:uppercase" not in html
+    # Logo chrome remains; no contact hrefs.
+    assert "data:image/png;base64," in html
     assert "href=" not in html
-    assert "#0969da" not in html
+
+
+def test_render_signature_html_partial_contact():
+    """Missing title/phone must not leave orphan labels or empty rows."""
+    html = render_signature_html(
+        AccountSignature(full_name="Ada", website="https://lab5.ca")
+    )
+    assert "Ada" in html
+    assert "web&nbsp;&nbsp;" in html
+    assert "cell&nbsp;&nbsp;" not in html
+    assert "text-transform:uppercase" not in html
+    assert ">lab5.ca<" in html
+
+
+def test_render_signature_html_name_and_title_only():
+    html = render_signature_html(AccountSignature(full_name="Ada", title="Engineer"))
+    assert "Ada" in html
+    assert "Engineer" in html
+    assert "web&nbsp;&nbsp;" not in html
+    assert "cell&nbsp;&nbsp;" not in html
 
 
 def test_render_signature_html_escapes_content():
@@ -195,9 +255,14 @@ def test_render_signature_text_lines():
         phone="+1-555-0100",
     )
     text = render_signature_text(sig)
-    assert text == "Ada Lovelace\nEngineer\nhttps://lab5.ca\n+1-555-0100"
+    assert text == "Ada Lovelace\nEngineer\nweb  lab5.ca\ncell  +1-555-0100"
 
 
 def test_render_signature_text_partial():
     text = render_signature_text(AccountSignature(full_name="Ada", phone="+1"))
-    assert text == "Ada\n+1"
+    assert text == "Ada\ncell  +1"
+
+
+def test_render_signature_text_name_and_title_only():
+    text = render_signature_text(AccountSignature(full_name="Ada", title="Engineer"))
+    assert text == "Ada\nEngineer"

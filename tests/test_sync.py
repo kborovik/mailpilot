@@ -1339,10 +1339,13 @@ def test_send_email_appends_signature_to_mime_not_body(
     html_text = html.decode("utf-8")
 
     assert "Hello prospect" in plain_text
-    assert "\n\n--\nAda Lovelace\nEngineer\nhttps://lab5.ca\n+1-555-0100" in plain_text
+    assert (
+        "\n\n--\nAda Lovelace\nEngineer\nweb  lab5.ca\ncell  +1-555-0100" in plain_text
+    )
     assert "Ada Lovelace" in html_text
-    assert "#1f2328" in html_text
+    assert "#101820" in html_text
     assert "#0969da" in html_text
+    assert "data:image/png;base64," in html_text
     assert "https://lab5.ca" in html_text
     # display_name is From only, not in signature block as alias
     assert msg["from"] == "From Only <sig-sender@example.com>"
@@ -1377,7 +1380,8 @@ def test_send_email_no_signature_when_empty(
     html_text = html.decode("utf-8")
     assert plain_text == "Just body"
     assert "\n\n--" not in plain_text
-    assert "#1f2328" not in html_text
+    assert "#101820" not in html_text
+    assert "data:image/png;base64," not in html_text
     assert "border-top:1px solid #d1d9e0" not in html_text
 
 
