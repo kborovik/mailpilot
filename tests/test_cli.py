@@ -4480,7 +4480,8 @@ def test_email_list(runner: CliRunner, mock_connection: MagicMock) -> None:
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.list_emails", return_value=[email]) as mock_list,
     ):
-        result = runner.invoke(main, ["email", "list"])
+        # §V.154: at least one scope/filter required (no unbounded dump)
+        result = runner.invoke(main, ["email", "list", "--direction", "outbound"])
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data["ok"] is True
@@ -4493,7 +4494,7 @@ def test_email_list(runner: CliRunner, mock_connection: MagicMock) -> None:
         since=None,
         until=None,
         thread_id=None,
-        direction=None,
+        direction="outbound",
         workflow_id=None,
         status=None,
         sender=None,
@@ -4508,7 +4509,7 @@ def test_email_list_empty(runner: CliRunner, mock_connection: MagicMock) -> None
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.list_emails", return_value=[]),
     ):
-        result = runner.invoke(main, ["email", "list"])
+        result = runner.invoke(main, ["email", "list", "--direction", "outbound"])
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data["emails"] == []
@@ -4660,7 +4661,7 @@ def test_email_list_body_text_with_newlines_is_valid_json(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.list_emails", return_value=[email]),
     ):
-        result = runner.invoke(main, ["email", "list"])
+        result = runner.invoke(main, ["email", "list", "--direction", "outbound"])
 
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
@@ -7740,11 +7741,12 @@ def test_activity_list_with_filters(
         limit=5,
         since="2024-01-01T00:00:00Z",
         until=None,
+        workflow_id=None,
     )
 
 
 def test_activity_list_no_filter(runner: CliRunner, mock_connection: MagicMock) -> None:
-    """activity list without --contact-email or --company-domain should error."""
+    """activity list without contact, company, or workflow scope should error."""
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
@@ -10353,6 +10355,7 @@ def test_enrollment_list(runner: CliRunner, mock_connection: MagicMock) -> None:
         touch=None,
         sort="updated_at",
         desc=False,
+        stuck=False,
     )
     data = json.loads(result.output)
     assert data["ok"] is True
@@ -10399,6 +10402,7 @@ def test_enrollment_list_with_status(
         touch=None,
         sort="updated_at",
         desc=False,
+        stuck=False,
     )
 
 
@@ -10439,6 +10443,7 @@ def test_enrollment_list_with_limit(
         touch=None,
         sort="updated_at",
         desc=False,
+        stuck=False,
     )
 
 
@@ -10475,6 +10480,7 @@ def test_enrollment_list_filters_by_contact(
         touch=None,
         sort="updated_at",
         desc=False,
+        stuck=False,
     )
 
 
@@ -10595,6 +10601,7 @@ def test_task_list(runner: CliRunner, mock_connection: MagicMock) -> None:
         limit=100,
         since=None,
         until=None,
+        overdue=False,
     )
     data = json.loads(result.output)
     assert len(data["tasks"]) == 1
@@ -10639,6 +10646,7 @@ def test_task_list_with_filters(runner: CliRunner, mock_connection: MagicMock) -
         limit=10,
         since=None,
         until=None,
+        overdue=False,
     )
 
 
@@ -12197,3 +12205,113 @@ def test_meeting_cancel_not_found(
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["error"] == "not_found"
+
+
+def test_workflow_report_envelope(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.153: workflow report ships under workflow_report key."""
+    from mailpilot.models import (
+        TaskStats,
+        TouchStageCounts,
+        WorkflowReport,
+        WorkflowReportMeta,
+        WorkflowStats,
+    )
+
+    report = WorkflowReport(
+        workflow=WorkflowReportMeta(
+            name="Demo", touches=3, touch_interval_days=3, status="active"
+        ),
+        funnel=WorkflowStats(
+            workflow_id=_WORKFLOW_ID,
+            workflow_name="Demo",
+            enrolled=1,
+            sent=0,
+            bounced=0,
+            replied=0,
+            meeting_booked=0,
+            contact_later=0,
+            do_not_contact=0,
+            active=1,
+            touches={"1": TouchStageCounts()},
+            awaiting_first_touch=1,
+            disabled=0,
+        ),
+        tasks=TaskStats(
+            total=0,
+            pending=0,
+            completed=0,
+            failed=0,
+            cancelled=0,
+            distinct_scheduled_days=0,
+            first_scheduled_at=None,
+            last_scheduled_at=None,
+        ),
+        enrollments=[],
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow_report", return_value=report),
+    ):
+        result = runner.invoke(main, ["workflow", "report", _WORKFLOW_ID])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert "workflow_report" in data
+    assert data["workflow_report"]["workflow"]["name"] == "Demo"
+
+
+def test_workflow_status_envelope(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.157: workflow status ships under workflow_status key."""
+    from mailpilot.models import WorkflowReportMeta, WorkflowStatusHealth
+
+    health = WorkflowStatusHealth(
+        workflow=WorkflowReportMeta(name="Demo", status="active"),
+        wording="unknown",
+        run_loop="stopped",
+        overdue_tasks=0,
+        failed_tasks_24h=0,
+        enrollments_never_sent=1,
+        funnel_active=1,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow_status_health", return_value=health),
+    ):
+        result = runner.invoke(main, ["workflow", "status", _WORKFLOW_ID])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["workflow_status"]["run_loop"] == "stopped"
+
+
+def test_activity_list_requires_scope(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.154: activity list without scope exits missing_filter."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(main, ["activity", "list"])
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "missing_filter"
+
+
+def test_email_list_requires_scope(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.154: email list without scope exits missing_filter."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(main, ["email", "list"])
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "missing_filter"

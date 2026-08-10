@@ -67,7 +67,10 @@ from mailpilot.models import (
     Workflow,
     WorkflowCheck,
     WorkflowCheckEntry,
+    WorkflowReport,
+    WorkflowReportMeta,
     WorkflowStats,
+    WorkflowStatusHealth,
     WorkflowSummary,
 )
 from mailpilot.operator_log import operator_event
@@ -2901,6 +2904,110 @@ def get_workflow_stats(
     )
 
 
+def get_workflow_report(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+    *,
+    stuck: bool = False,
+    touch: int | None = None,
+    status: str | None = None,
+    limit: int = 500,
+) -> WorkflowReport | None:
+    """Composite campaign report: funnel + tasks + enrollment matrix (§V.153).
+
+    Pure SQL / deterministic reuses of ``get_workflow_stats``,
+    ``get_task_stats``, and ``list_enrollments_detailed(full=True)``. No LLM,
+    no CRM writes.
+    """
+    workflow = get_workflow(connection, workflow_id)
+    if workflow is None:
+        return None
+    funnel = get_workflow_stats(connection, workflow_id)
+    assert funnel is not None
+    tasks = get_task_stats(connection, workflow_id=workflow_id)
+    enrollments = list_enrollments_detailed(
+        connection,
+        workflow_id=workflow_id,
+        status=status,
+        limit=limit,
+        full=True,
+        touch=touch,
+        stuck=stuck,
+        sort="next_scheduled_at",
+    )
+    return WorkflowReport(
+        workflow=WorkflowReportMeta(
+            name=workflow.name,
+            touches=workflow.touches,
+            touch_interval_days=workflow.touch_interval_days,
+            status=workflow.status,
+        ),
+        funnel=funnel,
+        tasks=tasks,
+        enrollments=enrollments,
+    )
+
+
+def get_workflow_status_health(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+) -> WorkflowStatusHealth | None:
+    """Ops-health composite for one workflow (§V.157).
+
+    Reuses funnel active count, wording state when catalog is empty
+    (unknown), and task overdue / failed-24h counts. No LLM.
+    """
+    workflow = get_workflow(connection, workflow_id)
+    if workflow is None:
+        return None
+    funnel = get_workflow_stats(connection, workflow_id)
+    assert funnel is not None
+
+    overdue_row = connection.execute(
+        """\
+        SELECT COUNT(*)::int AS n FROM task
+        WHERE workflow_id = %(workflow_id)s
+          AND status = 'pending'
+          AND scheduled_at < NOW()
+        """,
+        {"workflow_id": workflow_id},
+    ).fetchone()
+    failed_row = connection.execute(
+        """\
+        SELECT COUNT(*)::int AS n FROM task
+        WHERE workflow_id = %(workflow_id)s
+          AND status = 'failed'
+          AND completed_at >= NOW() - INTERVAL '24 hours'
+        """,
+        {"workflow_id": workflow_id},
+    ).fetchone()
+    assert overdue_row is not None
+    assert failed_row is not None
+
+    sync = _sync_loop_block(connection)
+    if sync is None:
+        run_loop = "stopped"
+    else:
+        # Heartbeat age: > 120s without tick counts as stale (2x default run_interval).
+        age = sync.get("heartbeat_age_seconds")
+        run_loop = "stale" if isinstance(age, int) and age > 120 else "ok"
+
+    return WorkflowStatusHealth(
+        workflow=WorkflowReportMeta(
+            name=workflow.name,
+            touches=workflow.touches,
+            touch_interval_days=workflow.touch_interval_days,
+            status=workflow.status,
+        ),
+        wording="unknown",
+        run_loop=run_loop,
+        overdue_tasks=overdue_row["n"],
+        failed_tasks_24h=failed_row["n"],
+        enrollments_never_sent=funnel.awaiting_first_touch,
+        funnel_active=funnel.active,
+    )
+
+
 def _compute_workflow_wording_hash(
     template: str,
     theme: str,
@@ -3819,7 +3926,7 @@ def enable_enrollment(
     return Enrollment.model_validate(row)
 
 
-def list_enrollments_detailed(
+def list_enrollments_detailed(  # noqa: C901
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str | None = None,
     contact_id: str | None = None,
@@ -3833,6 +3940,8 @@ def list_enrollments_detailed(
     touch: int | None = None,
     sort: str = "updated_at",
     desc: bool = False,
+    stuck: bool = False,
+    first_send_sla_hours: int = 24,
 ) -> list[EnrollmentSummary]:
     """List enrollments with denormalised contact info as summaries.
 
@@ -3858,11 +3967,16 @@ def list_enrollments_detailed(
             (when no pending) whose last sent touch equals N.
         sort: ``updated_at`` (default) or ``next_scheduled_at`` (full path).
         desc: Sort descending when True.
+        stuck: When True (§V.155), only stuck enrollments (heuristics below).
+        first_send_sla_hours: SLA for never-sent active enrollments (default 24).
 
     Returns:
         List of enrollment summaries.
     """
-    params: dict[str, object] = {"limit": limit}
+    params: dict[str, object] = {
+        "limit": limit,
+        "first_send_sla_hours": first_send_sla_hours,
+    }
     where_parts: list[Composed | SQL] = []
     if workflow_id is not None:
         where_parts.append(SQL("e.workflow_id = %(workflow_id)s"))
@@ -3879,6 +3993,47 @@ def list_enrollments_detailed(
     if until is not None:
         where_parts.append(SQL("e.updated_at <= %(until)s"))
         params["until"] = until
+    if stuck:
+        # Force full joins for stuck heuristics that need next task / bounce.
+        full = True
+        where_parts.append(
+            SQL(
+                "("
+                # active, no terminal outcome, no pending, never-sent past SLA
+                "("
+                "e.status = 'active' "
+                "AND outcome.disposition IS NULL "
+                "AND nt.scheduled_at IS NULL "
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM email em "
+                "WHERE em.workflow_id = e.workflow_id "
+                "AND em.contact_id = e.contact_id "
+                "AND em.direction = 'outbound' AND em.status = 'sent'"
+                ") "
+                "AND e.created_at < NOW() "
+                "- make_interval(hours => %(first_send_sla_hours)s)"
+                ") "
+                "OR "
+                # bounced without disposition
+                "("
+                "EXISTS ("
+                "SELECT 1 FROM email em "
+                "WHERE em.workflow_id = e.workflow_id "
+                "AND em.contact_id = e.contact_id "
+                "AND em.direction = 'outbound' AND em.status = 'bounced'"
+                ") "
+                "AND outcome.disposition IS NULL"
+                ") "
+                "OR "
+                # high attempt_count failed task
+                "EXISTS ("
+                "SELECT 1 FROM task t "
+                "WHERE t.enrollment_id = e.id "
+                "AND t.status = 'failed' AND t.attempt_count >= 3"
+                ")"
+                ")"
+            )
+        )
     if has_pending_task is True:
         where_parts.append(
             SQL(
@@ -4767,6 +4922,8 @@ def list_tasks(
     limit: int = 100,
     since: str | None = None,
     until: str | None = None,
+    *,
+    overdue: bool = False,
 ) -> list[TaskSummary]:
     """List tasks as summaries with optional filters.
 
@@ -4781,6 +4938,8 @@ def list_tasks(
         limit: Maximum results.
         since: ISO datetime inclusive lower bound on ``scheduled_at``.
         until: ISO datetime inclusive upper bound on ``scheduled_at``.
+        overdue: When True (§V.155), only pending tasks with
+            ``scheduled_at < now()``.
 
     Returns:
         List of task summaries ordered by scheduled_at descending.
@@ -4793,6 +4952,9 @@ def list_tasks(
     if contact_id is not None:
         conditions.append(SQL("contact_id = %(contact_id)s"))
         params["contact_id"] = contact_id
+    if overdue:
+        conditions.append(SQL("status = 'pending'"))
+        conditions.append(SQL("scheduled_at < NOW()"))
     if status is not None:
         conditions.append(SQL("status = %(status)s"))
         params["status"] = status
@@ -5166,10 +5328,12 @@ def list_activities(
     limit: int = 100,
     since: str | None = None,
     until: str | None = None,
+    workflow_id: str | None = None,
 ) -> list[ActivitySummary]:
-    """List activities as summaries with required contact or company filter.
+    """List activities as summaries with required scope filter (§V.154).
 
-    At least one of ``contact_id`` or ``company_id`` must be provided.
+    At least one of ``contact_id``, ``company_id``, or ``workflow_id`` must be
+    provided.
 
     Args:
         connection: Open database connection.
@@ -5179,15 +5343,18 @@ def list_activities(
         limit: Maximum number of results.
         since: ISO datetime inclusive lower bound for created_at.
         until: ISO datetime inclusive upper bound for created_at.
+        workflow_id: Filter by workflow ID (campaign timeline).
 
     Returns:
         Activity summaries ordered by created_at descending.
 
     Raises:
-        ValueError: If neither contact_id nor company_id is provided.
+        ValueError: If no scope filter is provided.
     """
-    if contact_id is None and company_id is None:
-        raise ValueError("at least one of contact_id or company_id is required")
+    if contact_id is None and company_id is None and workflow_id is None:
+        raise ValueError(
+            "at least one of contact_id, company_id, or workflow_id is required"
+        )
     conditions: list[SQL] = []
     params: dict[str, object] = {"limit": limit}
     if contact_id is not None:
@@ -5196,6 +5363,9 @@ def list_activities(
     if company_id is not None:
         conditions.append(SQL("company_id = %(company_id)s"))
         params["company_id"] = company_id
+    if workflow_id is not None:
+        conditions.append(SQL("workflow_id = %(workflow_id)s"))
+        params["workflow_id"] = workflow_id
     if activity_type is not None:
         conditions.append(SQL("type = %(activity_type)s"))
         params["activity_type"] = activity_type

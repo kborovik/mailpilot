@@ -198,6 +198,75 @@ def output_entity(key: str, model: Any, **extra: object) -> None:
     output({key: model.model_dump(mode="json"), **extra})
 
 
+def _emit_formatted(
+    envelope_key: str,
+    payload: dict[str, Any],
+    *,
+    rows: list[dict[str, Any]],
+    output_format: str,
+    out_path: str | None,
+) -> None:
+    """Emit JSON envelope (default) or opt-in table/csv/ndjson (§V.156).
+
+    ``csv`` / ``ndjson`` prefer ``--out`` (file write + status envelope on
+    stdout). Without ``--out``, stream rows to stdout. ``table`` is always
+    human columns on stdout.
+    """
+    fmt = output_format.lower()
+    if fmt == "json":
+        output({envelope_key: payload})
+        return
+    if fmt == "table":
+        if not rows:
+            click.echo("(no rows)")
+            return
+        headers = list(rows[0].keys())
+        click.echo("\t".join(headers))
+        for row in rows:
+            click.echo(
+                "\t".join(
+                    "" if row.get(h) is None else str(row.get(h)) for h in headers
+                )
+            )
+        return
+    # csv / ndjson
+    import csv
+    import pathlib
+
+    if fmt == "ndjson":
+        lines = [json.dumps(r, default=str, ensure_ascii=False) for r in rows]
+        body = "\n".join(lines) + ("\n" if lines else "")
+    elif not rows:
+        body = ""
+    else:
+        headers = list(rows[0].keys())
+        from io import StringIO
+
+        buf = StringIO()
+        writer = csv.DictWriter(buf, fieldnames=headers, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {h: "" if row.get(h) is None else row.get(h) for h in headers}
+            )
+        body = buf.getvalue()
+    if out_path is not None:
+        path = pathlib.Path(out_path)
+        path.write_text(body, encoding="utf-8")
+        output(
+            {
+                envelope_key: {
+                    "path": str(path),
+                    "format": fmt,
+                    "record_count": len(rows),
+                }
+            },
+            record_count=len(rows),
+        )
+        return
+    click.echo(body, nl=False)
+
+
 def output_error(
     message: str, code: str, extra: dict[str, object] | None = None
 ) -> NoReturn:
@@ -3057,13 +3126,32 @@ def email_list(
     recipient: str | None,
     route_method: str | None,
 ) -> None:
-    """List emails with optional filters."""
+    """List emails with optional filters (requires at least one scope filter)."""
     from mailpilot.database import (
         get_workflow,
         initialize_database,
         list_emails,
     )
 
+    if (
+        contact_email is None
+        and account_email is None
+        and workflow_id is None
+        and thread_id is None
+        and sender is None
+        and recipient is None
+        and direction is None
+        and status is None
+        and route_method is None
+        and since is None
+        and until is None
+    ):
+        output_error(
+            "at least one scope or filter is required "
+            "(--contact-email, --account-email, --workflow-id, --thread-id, "
+            "--from, --to, --direction, --status, --route-method, or time window)",
+            "missing_filter",
+        )
     connection = initialize_database(_database_url())
     try:
         contact_id = (
@@ -3335,26 +3423,29 @@ def activity_add(
 @activity.command("list")
 @scope_option("--contact-email", "contact_email", "Filter by contact (email or ID).")
 @scope_option("--company-domain", "company_domain", "Filter by company (domain or ID).")
+@scope_option("--workflow-id", "workflow_id", "Filter by workflow (name or ID).")
 @enum_option("--type", "activity_type", _ACTIVITY_TYPES, "Filter by activity type.")
 @time_window_options("created_at")
 @limit_option
 def activity_list(
     contact_email: str | None,
     company_domain: str | None,
+    workflow_id: str | None,
     activity_type: str | None,
     limit: int,
     since: str | None,
     until: str | None,
 ) -> None:
-    """List activities (requires --contact-email or --company-domain)."""
+    """List activities (requires contact, company, or workflow scope)."""
     from mailpilot.database import (
         initialize_database,
         list_activities,
     )
 
-    if contact_email is None and company_domain is None:
+    if contact_email is None and company_domain is None and workflow_id is None:
         output_error(
-            "at least one of --contact-email or --company-domain is required",
+            "at least one of --contact-email, --company-domain, or --workflow-id "
+            "is required",
             "missing_filter",
         )
     connection = initialize_database(_database_url())
@@ -3369,6 +3460,11 @@ def activity_list(
             if company_domain is not None
             else None
         )
+        resolved_workflow_id: str | None = (
+            _resolve_workflow_id(connection, workflow_id)
+            if workflow_id is not None
+            else None
+        )
         activities = list_activities(
             connection,
             contact_id=contact_id,
@@ -3377,6 +3473,7 @@ def activity_list(
             limit=limit,
             since=since,
             until=until,
+            workflow_id=resolved_workflow_id,
         )
         output({"activities": [a.model_dump(mode="json") for a in activities]})
     finally:
@@ -4453,6 +4550,91 @@ def workflow_stats(workflow_ref: str) -> None:
         if stats is None:
             output_error(f"workflow not found: {workflow_ref}", "not_found")
         output({"workflow_stats": stats.model_dump(mode="json")})
+    finally:
+        connection.close()
+
+
+@workflow.command("report")
+@click.argument("workflow_ref")
+@click.option(
+    "--stuck",
+    is_flag=True,
+    default=False,
+    help="Only enrollments matching stuck heuristics.",
+)
+@click.option(
+    "--touch",
+    type=int,
+    default=None,
+    help="Filter enrollment matrix by touch number.",
+)
+@enum_option("--status", "status", _ENROLLMENT_STATUSES, "Filter enrollment matrix.")
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["json", "table", "csv", "ndjson"], case_sensitive=False),
+    default="json",
+    show_default=True,
+    help="Output format (default JSON envelope).",
+)
+@click.option(
+    "--out",
+    "out_path",
+    type=click.Path(dir_okay=False, writable=True, path_type=str),
+    default=None,
+    help="Write csv/ndjson to this path (status envelope on stdout).",
+)
+@limit_option(default=500)
+def workflow_report(
+    workflow_ref: str,
+    stuck: bool,
+    touch: int | None,
+    status: str | None,
+    output_format: str,
+    out_path: str | None,
+    limit: int,
+) -> None:
+    """Composite campaign report: funnel + tasks + enrollment matrix."""
+    from mailpilot.database import get_workflow_report, initialize_database
+
+    connection = initialize_database(_database_url())
+    try:
+        workflow_id = _resolve_workflow_id(connection, workflow_ref)
+        report = get_workflow_report(
+            connection,
+            workflow_id,
+            stuck=stuck,
+            touch=touch,
+            status=status,
+            limit=limit,
+        )
+        if report is None:
+            output_error(f"workflow not found: {workflow_ref}", "not_found")
+        payload = report.model_dump(mode="json")
+        _emit_formatted(
+            "workflow_report",
+            payload,
+            rows=payload.get("enrollments", []),
+            output_format=output_format,
+            out_path=out_path,
+        )
+    finally:
+        connection.close()
+
+
+@workflow.command("status")
+@click.argument("workflow_ref")
+def workflow_status_cmd(workflow_ref: str) -> None:
+    """Ops-health for a workflow (wording, run loop, overdue/failed tasks)."""
+    from mailpilot.database import get_workflow_status_health, initialize_database
+
+    connection = initialize_database(_database_url())
+    try:
+        workflow_id = _resolve_workflow_id(connection, workflow_ref)
+        health = get_workflow_status_health(connection, workflow_id)
+        if health is None:
+            output_error(f"workflow not found: {workflow_ref}", "not_found")
+        output({"workflow_status": health.model_dump(mode="json")})
     finally:
         connection.close()
 
@@ -5576,6 +5758,12 @@ def enrollment_view(enrollment_id: str) -> None:
     default=False,
     help="Denser projection: company, touch progress, next send, disposition.",
 )
+@click.option(
+    "--stuck",
+    is_flag=True,
+    default=False,
+    help="Only enrollments matching stuck heuristics (implies denser fields).",
+)
 @presence_option("pending-task", "Filter on presence of a pending follow-up task.")
 @click.option(
     "--touch",
@@ -5585,6 +5773,21 @@ def enrollment_view(enrollment_id: str) -> None:
 )
 @sort_option(["updated_at", "next_scheduled_at"], default="updated_at")
 @desc_option
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["json", "table", "csv", "ndjson"], case_sensitive=False),
+    default="json",
+    show_default=True,
+    help="Output format (default JSON envelope).",
+)
+@click.option(
+    "--out",
+    "out_path",
+    type=click.Path(dir_okay=False, writable=True, path_type=str),
+    default=None,
+    help="Write csv/ndjson to this path (status envelope on stdout).",
+)
 @time_window_options("updated_at")
 @limit_option
 def enrollment_list(
@@ -5592,10 +5795,13 @@ def enrollment_list(
     contact_email: str | None,
     status: str | None,
     full: bool,
+    stuck: bool,
     has_pending_task: bool | None,
     touch: int | None,
     sort: str,
     desc: bool,
+    output_format: str,
+    out_path: str | None,
     limit: int,
     since: str | None,
     until: str | None,
@@ -5621,6 +5827,7 @@ def enrollment_list(
             if contact_email is not None
             else None
         )
+        use_full = full or stuck
         rows = list_enrollments_detailed(
             connection,
             workflow_id=workflow_id,
@@ -5629,16 +5836,25 @@ def enrollment_list(
             limit=limit,
             since=since,
             until=until,
-            full=full,
+            full=use_full,
             has_pending_task=has_pending_task,
             touch=touch,
             sort=sort,
             desc=desc,
+            stuck=stuck,
         )
-        exclude = None if full else ENROLLMENT_FULL_FIELDS
-        output(
-            {"enrollments": [r.model_dump(mode="json", exclude=exclude) for r in rows]}
-        )
+        exclude = None if use_full else ENROLLMENT_FULL_FIELDS
+        dumped = [r.model_dump(mode="json", exclude=exclude) for r in rows]
+        if output_format.lower() == "json":
+            output({"enrollments": dumped})
+        else:
+            _emit_formatted(
+                "enrollments",
+                {"enrollments": dumped},
+                rows=dumped,
+                output_format=output_format,
+                out_path=out_path,
+            )
     finally:
         connection.close()
 
@@ -5656,6 +5872,12 @@ def task() -> None:
 @scope_option("--contact-email", "contact_email", "Filter by contact (email or ID).")
 @enum_option("--status", "status", _TASK_STATUSES, "Filter by task status.")
 @enum_option("--trigger", "trigger", _TASK_TRIGGERS, "Filter by task trigger.")
+@click.option(
+    "--overdue",
+    is_flag=True,
+    default=False,
+    help="Only pending tasks with scheduled_at in the past.",
+)
 @time_window_options("scheduled_at")
 @limit_option
 def task_list(
@@ -5663,6 +5885,7 @@ def task_list(
     contact_email: str | None,
     status: str | None,
     trigger: str | None,
+    overdue: bool,
     limit: int,
     since: str | None,
     until: str | None,
@@ -5692,6 +5915,7 @@ def task_list(
             limit=limit,
             since=since,
             until=until,
+            overdue=overdue,
         )
         output({"tasks": [t.model_dump(mode="json") for t in tasks]})
     finally:

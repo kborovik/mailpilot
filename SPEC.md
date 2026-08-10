@@ -266,11 +266,11 @@ T239|x|signature two-line redesign (§V.151) — `Name | Title`/`website | phone
 T240|x|signature mark layout redesign (§V.151) — table chrome: embedded lab5 logo data-URI + four-colour rule + stacked name/title/web/cell rows (bold name, uppercase mono title, muted labels); text stacked mirror; fields model unchanged; tests|V151
 T241|x|impl §V.152(+) + §I — enrollment list|view --full execution projection + filters/sort; tests + SKILL (#200)|V152,V5,V8,V15,V107,V115,V4,I.cli
 T242|x|impl §V.132(∆) + §I — workflow stats touch slices + awaiting_first_touch + disabled; tests + SKILL (#201)|V132,V136,V107,V4,I.cli
-T243|.|impl §V.153(+) + §I — workflow report funnel+tasks+enrollment matrix + --stuck/--touch/--status; tests + SKILL (#202)|V153,V152,V132,V133,V155,V107,V4,I.cli
-T244|.|impl §V.154(+) + §I — activity list --workflow-id + required scope (contact|company|workflow); email list scope gate; tests + SKILL (#203)|V154,V17,V107,V115,V4,I.cli
-T245|.|impl §V.155(+) + §I — task list --overdue + enrollment/report --stuck heuristics; docs SLA; tests + SKILL (#204)|V155,V153,V152,V115,V4,I.cli
-T246|.|impl §V.156(+) + §V.3(∆) + §I — --format table|csv|ndjson on report/list; default JSON; tests + SKILL (#205)|V156,V3,V4,V153,V152,I.cli
-T247|.|impl §V.157(+) + §I — workflow status ops-health composite; tests + SKILL (#206)|V157,V134,V11,V132,V107,V4,I.cli
+T243|x|impl §V.153(+) + §I — workflow report funnel+tasks+enrollment matrix + --stuck/--touch/--status; tests + SKILL (#202)|V153,V152,V132,V133,V155,V107,V4,I.cli
+T244|x|impl §V.154(+) + §I — activity list --workflow-id + required scope (contact|company|workflow); email list scope gate; tests + SKILL (#203)|V154,V17,V107,V115,V4,I.cli
+T245|x|impl §V.155(+) + §I — task list --overdue + enrollment/report --stuck heuristics; docs SLA; tests + SKILL (#204)|V155,V153,V152,V115,V4,I.cli
+T246|x|impl §V.156(+) + §V.3(∆) + §I — --format table|csv|ndjson on report/list; default JSON; tests + SKILL (#205)|V156,V3,V4,V153,V152,I.cli
+T247|x|impl §V.157(+) + §I — workflow status ops-health composite; tests + SKILL (#206)|V157,V134,V11,V132,V107,V4,I.cli
 
 ## §B BUGS
 

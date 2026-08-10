@@ -160,6 +160,48 @@ bounced, replied, meeting_booked, contact_later, do_not_contact, active) plus
 `touches` map (`"1"/{sent,pending}`, ... for def `touches`), `awaiting_first_touch`,
 and `disabled`. Pure SQL; no LLM.
 
+### Workflow report and status
+
+```
+mailpilot workflow report <NAME_OR_ID>
+mailpilot workflow report <NAME_OR_ID> --stuck --touch 2 --status active
+mailpilot workflow report <NAME_OR_ID> --format table
+mailpilot workflow report <NAME_OR_ID> --format csv --out /tmp/report.csv
+mailpilot workflow status <NAME_OR_ID>
+```
+
+`workflow report` returns funnel + task aggregate + enrollment matrix under
+`workflow_report` (pure SQL). `--stuck` applies stuck heuristics (never-sent
+past 24h SLA, bounced without disposition, high-attempt failed tasks).
+
+`workflow status` is ops health (not funnel): wording, run_loop, overdue_tasks,
+failed_tasks_24h, enrollments_never_sent, funnel_active pointer.
+
+Default output is JSON. Optional `--format table|csv|ndjson` on report and
+enrollment list; `csv`/`ndjson` prefer `--out` (file + status envelope).
+
+### Stuck and overdue
+
+```
+mailpilot task list --overdue
+mailpilot enrollment list --workflow-id <NAME_OR_ID> --stuck
+mailpilot workflow report <NAME_OR_ID> --stuck
+```
+
+`--overdue` = pending tasks with `scheduled_at` in the past. Stuck filters are
+read-only; mutate with `task retry` / `enrollment disable`.
+
+### Campaign activity and email timeline
+
+```
+mailpilot activity list --workflow-id <NAME_OR_ID> --since 2026-01-01T00:00:00Z
+mailpilot email list --workflow-id <NAME_OR_ID> --direction outbound
+```
+
+`activity list` requires at least one of `--contact-email`, `--company-domain`,
+or `--workflow-id`. `email list` requires at least one scope or filter (no
+unbounded full-table dump).
+
 ### Provision and migrate the schema
 
 ```

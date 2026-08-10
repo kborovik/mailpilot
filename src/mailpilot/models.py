@@ -644,6 +644,36 @@ class TaskStats(BaseModel):
     last_scheduled_at: datetime | None
 
 
+class WorkflowReportMeta(BaseModel):
+    """Workflow identity + cadence for ``workflow report`` (§V.153)."""
+
+    name: str
+    touches: int | None = None
+    touch_interval_days: int | None = None
+    status: WorkflowStatus
+
+
+class WorkflowReport(BaseModel):
+    """Composite campaign report: funnel + tasks + enrollment matrix (§V.153)."""
+
+    workflow: WorkflowReportMeta
+    funnel: WorkflowStats
+    tasks: TaskStats
+    enrollments: list[EnrollmentSummary]
+
+
+class WorkflowStatusHealth(BaseModel):
+    """Ops-health composite for ``workflow status`` (§V.157), not funnel."""
+
+    workflow: WorkflowReportMeta
+    wording: str  # in_sync | out_of_sync | not_imported | orphaned | unknown
+    run_loop: str  # ok | stale | stopped
+    overdue_tasks: int
+    failed_tasks_24h: int
+    enrollments_never_sent: int
+    funnel_active: int | None = None
+
+
 ActivityType = Literal[
     "email_sent",
     "email_received",

@@ -3208,7 +3208,9 @@ def test_list_activities_with_limit(
 def test_list_activities_requires_filter(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    with pytest.raises(ValueError, match="contact_id or company_id"):
+    with pytest.raises(
+        ValueError, match="contact_id, company_id, or workflow_id"
+    ):
         list_activities(database_connection)
 
 
@@ -6233,7 +6235,8 @@ def test_enrollment_list_summary_drops_reason_and_created_at(
     rows = list_enrollments_detailed(database_connection, workflow_id=workflow.id)
     assert isinstance(rows[0], EnrollmentSummary)
     assert not hasattr(rows[0], "reason")
-    assert not hasattr(rows[0], "created_at")
+    # Lean path leaves §V.152 full fields unset (None); CLI dump excludes them.
+    assert rows[0].created_at is None
 
 
 def test_email_list_summary_get_full(
@@ -7994,3 +7997,90 @@ def test_check_workflow_wording_scope_to_catalog_suppresses_orphaned(
     unscoped_by_name = {entry.name: entry for entry in unscoped.workflows}
     assert unscoped_by_name["other-db-flow"].state == "orphaned"
     assert unscoped.orphaned == 1
+
+
+def test_get_workflow_report_matrix(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.153: report composes funnel + tasks + full enrollment rows."""
+    from mailpilot.database import get_workflow_report
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection, email="rep@testcorp.com")
+    make_test_enrollment(database_connection, workflow.id, contact.id)
+    report = get_workflow_report(database_connection, workflow.id)
+    assert report is not None
+    assert report.workflow.name == workflow.name
+    assert report.funnel.enrolled == 1
+    assert report.tasks.total >= 0
+    assert len(report.enrollments) == 1
+
+
+def test_list_activities_by_workflow(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.154: activity list accepts workflow_id scope alone."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection, email="act@testcorp.com")
+    make_test_enrollment(database_connection, workflow.id, contact.id)
+    create_activity(
+        database_connection,
+        activity_type="enrollment_added",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        summary="enrolled",
+    )
+    rows = list_activities(database_connection, workflow_id=workflow.id)
+    assert len(rows) >= 1
+    assert all(r.workflow_id == workflow.id for r in rows)
+
+
+def test_list_tasks_overdue(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.155: --overdue selects pending tasks with scheduled_at in the past."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection, email="od@testcorp.com")
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="overdue touch",
+        scheduled_at="2020-01-01T00:00:00+00:00",
+        context={"touch": 1},
+    )
+    create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="future touch",
+        scheduled_at="2099-01-01T00:00:00+00:00",
+        context={"touch": 2},
+    )
+    rows = list_tasks(database_connection, workflow_id=workflow.id, overdue=True)
+    assert len(rows) == 1
+    assert rows[0].description == "overdue touch"
+
+
+def test_get_workflow_status_health(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.157: status health reports overdue + never-sent + run_loop."""
+    from mailpilot.database import get_workflow_status_health
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection, email="st@testcorp.com")
+    make_test_enrollment(database_connection, workflow.id, contact.id)
+    health = get_workflow_status_health(database_connection, workflow.id)
+    assert health is not None
+    assert health.workflow.name == workflow.name
+    assert health.run_loop in {"ok", "stale", "stopped"}
+    assert health.enrollments_never_sent == 1
+    assert health.funnel_active == 1
