@@ -42,7 +42,7 @@ REQUIRED_OUTBOUND_SIGNATURE: dict[str, str] = {
     "full_name": "Konstantin Borovik",
     "title": "DevOps Engineer",
     "website": "https://lab5.ca",
-    "phone": "+1-416-670-0621",
+    "phone": "416-670-0621",
 }
 
 # The prospect mailbox AND the prospect contact's email. The agent sends Touch 1

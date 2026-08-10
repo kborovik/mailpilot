@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -17,10 +18,11 @@ _SCRIPTS = (
 )
 
 
-def _load(name: str):
+def _load(name: str) -> types.ModuleType:
     path = _SCRIPTS / f"{name}.py"
     spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
+    assert spec is not None
+    assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     # Sibling imports inside scripts use bare `from _common import ...`.
     sys.path.insert(0, str(_SCRIPTS))
@@ -32,22 +34,22 @@ def _load(name: str):
 
 
 @pytest.fixture(scope="module")
-def preflight():
+def preflight() -> types.ModuleType:
     return _load("preflight")
 
 
 @pytest.fixture(scope="module")
-def common():
+def common() -> types.ModuleType:
     return _load("_common")
 
 
-def test_required_outbound_signature_fields(common):
+def test_required_outbound_signature_fields(common: types.ModuleType) -> None:
     required = common.REQUIRED_OUTBOUND_SIGNATURE
     assert required == {
         "full_name": "Konstantin Borovik",
         "title": "DevOps Engineer",
         "website": "https://lab5.ca",
-        "phone": "+1-416-670-0621",
+        "phone": "416-670-0621",
     }
     assert common.REQUIRED_OUTBOUND_DISPLAY_NAME == "Konstantin Borovik"
     # Spelling guard: never the truncated Borovi form.
@@ -55,7 +57,7 @@ def test_required_outbound_signature_fields(common):
     assert required["full_name"].endswith("Borovik")
 
 
-def test_check_outbound_signature_missing_blocks(preflight):
+def test_check_outbound_signature_missing_blocks(preflight: types.ModuleType) -> None:
     result: dict[str, object] = {}
     issues: list[str] = []
     preflight._check_outbound_signature(
@@ -67,7 +69,9 @@ def test_check_outbound_signature_missing_blocks(preflight):
     assert any("signature missing" in i for i in issues)
 
 
-def test_check_outbound_signature_mismatch_blocks(preflight, common):
+def test_check_outbound_signature_mismatch_blocks(
+    preflight: types.ModuleType, common: types.ModuleType
+) -> None:
     result: dict[str, object] = {}
     issues: list[str] = []
     bad = dict(common.REQUIRED_OUTBOUND_SIGNATURE)
@@ -81,7 +85,9 @@ def test_check_outbound_signature_mismatch_blocks(preflight, common):
     assert any("signature mismatch" in i for i in issues)
 
 
-def test_check_outbound_signature_match_ok(preflight, common):
+def test_check_outbound_signature_match_ok(
+    preflight: types.ModuleType, common: types.ModuleType
+) -> None:
     result: dict[str, object] = {}
     issues: list[str] = []
     preflight._check_outbound_signature(
@@ -97,7 +103,9 @@ def test_check_outbound_signature_match_ok(preflight, common):
     assert issues == []
 
 
-def test_check_outbound_display_name_missing_blocks(preflight, common):
+def test_check_outbound_display_name_missing_blocks(
+    preflight: types.ModuleType, common: types.ModuleType
+) -> None:
     result: dict[str, object] = {}
     issues: list[str] = []
     preflight._check_outbound_display_name(
@@ -109,7 +117,9 @@ def test_check_outbound_display_name_missing_blocks(preflight, common):
     assert any("display_name" in i for i in issues)
 
 
-def test_check_outbound_display_name_mismatch_blocks(preflight, common):
+def test_check_outbound_display_name_mismatch_blocks(
+    preflight: types.ModuleType, common: types.ModuleType
+) -> None:
     result: dict[str, object] = {}
     issues: list[str] = []
     preflight._check_outbound_display_name(
@@ -126,7 +136,9 @@ def test_check_outbound_display_name_mismatch_blocks(preflight, common):
     assert common.REQUIRED_OUTBOUND_DISPLAY_NAME in issues[0]
 
 
-def test_check_outbound_display_name_match_ok(preflight, common):
+def test_check_outbound_display_name_match_ok(
+    preflight: types.ModuleType, common: types.ModuleType
+) -> None:
     result: dict[str, object] = {}
     issues: list[str] = []
     preflight._check_outbound_display_name(

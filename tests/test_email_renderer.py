@@ -118,15 +118,15 @@ def test_render_soft_newlines_become_br():
         "Konstantin Borovik\n"
         "DevOps Engineer\n"
         "https://lab5.ca\n"
-        "+1-416-670-0621"
+        "416-670-0621"
     )
     html = render_email_html(body, get_theme("blue"))
     assert "<br" in html
     # Signature lines stay distinct; must not collapse to one space-joined run.
     assert "Konstantin Borovik" in html
     assert "DevOps Engineer" in html
-    assert "+1-416-670-0621" in html
-    collapsed = "Konstantin Borovik DevOps Engineer https://lab5.ca +1-416-670-0621"
+    assert "416-670-0621" in html
+    collapsed = "Konstantin Borovik DevOps Engineer https://lab5.ca 416-670-0621"
     assert collapsed not in html
     # Bare URL list lines also hard-wrapped.
     assert html.count("<br") >= 5
@@ -192,9 +192,9 @@ def test_render_signature_html_mark_layout():
 
 
 def test_render_signature_html_phone_is_tel_link():
-    html = render_signature_html(AccountSignature(phone="+1-416-670-0621"))
+    html = render_signature_html(AccountSignature(phone="416-670-0621"))
     assert 'href="tel:+14166700621"' in html
-    assert "+1-416-670-0621" in html
+    assert "416-670-0621" in html
     assert "cell&nbsp;&nbsp;" in html
     # Brand chrome still present for a non-empty signature.
     assert "data:image/png;base64," in html

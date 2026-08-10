@@ -73,7 +73,7 @@ Required fields (exact match):
 | signature.full_name | Konstantin Borovik |
 | signature.title | DevOps Engineer |
 | signature.website | https://lab5.ca |
-| signature.phone | +1-416-670-0621 |
+| signature.phone | 416-670-0621 |
 
 ```bash
 uv run mailpilot account update outbound@lab5.ca \
@@ -81,7 +81,7 @@ uv run mailpilot account update outbound@lab5.ca \
   --signature-full-name "Konstantin Borovik" \
   --signature-title "DevOps Engineer" \
   --signature-website "https://lab5.ca" \
-  --signature-phone "+1-416-670-0621"
+  --signature-phone "416-670-0621"
 ```
 
 Idempotent field-selective update. Preflight (step 1) **blocks** if
