@@ -64,16 +64,16 @@ Agent-operated CRM. Gmail = comms layer. Claude Code = strategist; internal Pyda
 
 V1: every CLI cmd loads settings first; DB + network init after (settings-first)
 V2: cli.py module-level imports = click only; heavy deps lazy-import inside cmd fns
-V3: stdout = strict JSON only by default (all flags, incl --debug); opt-in non-JSON via `--format` per §V.156 only; operator lifecycle + errors -> stderr; Logfire console exporter ! target stderr (ConsoleOptions output=sys.stderr), never stdout — output unset defaults stdout so console lines corrupt JSON envelope
+V3: stdout = strict JSON default; opt-in `--format` non-JSON §V.156; lifecycle+errors+Logfire console → stderr — → .spec/check-extras.md §V3
 V4: every cmd output ! match §I.cli envelope; ok:true carries top-level int record_count; error -> {"error","message","ok":false} + exit 1 — → .spec/check-extras.md §V4
 V5: list/view rows carry parent denorm joined at fetch — → .spec/check-extras.md §V5
 V7: EmailSummary projection includes gmail_thread_id, is_routed, route_method, recipients — → .spec/check-extras.md §V7
-V8: contact/company/meeting views inline <=10 latest notes (`_INLINE_NOTES_CAP`); ContactView/CompanyView/MeetingView = base superset; CompanySummary + CompanyView ! carry `tags[]` (assigned names, empty ok; list/view same shape); CompanyView ! carry `aliases[]` (sorted lowercased alias domains, empty ok; view-only — list lean omits); ContactView ! project `verification_meta` by default (operator-only via `contact view --include-meta` §V.144); company list `--full` ? `profile.summary` only; field set test-tracked vs base (no silent Pydantic-strip drift); workflow-agent prompt pre-feed routes through load_contact_view/load_company_view (§V.135) — prompt + default CLI view byte-identical (meta opt-in = CLI-only, never agent path); → .spec/check-extras.md §V8
+V8: view model projections — notes cap, tags[], aliases[], verification_meta opt-in, agent pre-feed loaders — → .spec/check-extras.md §V8
 V10: tag soft-disable — disabled_reason TEXT NULL, reversible via `tag enable`; vocabulary-tag disable/enable write no activity — → .spec/check-extras.md §V10
 V11: status payload = fixed envelope {version, schema, sync_loop, accounts, tasks, config, counts} — → .spec/check-extras.md §V11
 V12: IDs minted client-side via _new_id() -> UUIDv7; enrollment addressed by scalar id
 V13: tag + note target = XOR — exactly one of {contact_id, company_id} set (schema CHECK)
-V14: activity append-only — INSERT only; sole hard-delete = `note remove` operator-only (never agent tool) dual-mode XOR: (a) positional `<note_id>` → one note row; (b) owner scope `--company-domain` XOR `--contact-email` + required `--yes` → all notes on owner one txn; owner mode w/o `--yes` → `validation_error`; zero notes → ok no-op record_count=0; bulk envelope `{"notes_removed":{owner, removed_count, note_ids[]},"ok":true,"record_count":N}`; delete writes no activity (prior `note_added` trail intact); tag/note INSERT + activity row one txn — → .spec/check-extras.md §V14
+V14: activity append-only; sole hard-delete = `note remove` operator-only dual-mode (id | owner+`--yes`); no activity on delete — → .spec/check-extras.md §V14
 V15: enrollment.status in {active, disabled}; outcomes on activity timeline via record_enrollment_outcome — → .spec/check-extras.md §V15
 V16: race-safe create — UNIQUE-bearing create_X uses ON CONFLICT DO NOTHING -> None to race loser, exactly 1 row persists; bulk variants converge to shared ids; CLI surfaces duplicate_key envelope
 V17: activity targets >= 1 of {contact_id, company_id}, both allowed (multi-target); list_activities enforces same
@@ -86,40 +86,40 @@ V23: task drain = bounded pool <= max_concurrent_tasks; atomic claim; each worke
 V24: main loop never blocks on task futures — reaper collects on later ticks + emits task.drain
 V25: advisory locks 2-tier — coarse (workflow_id, contact_id) + task-scoped; acquired before agent.invoke span opens; contention -> reschedule w/o attempt_count bump — → .spec/check-extras.md §V25
 V26: agent.invoke span trigger attr in {enrollment_run, enrollment_schedule, task, email, manual} = caller path
-V27: routing pipeline order RFC message-id match -> thread match -> LLM classify, all account-scoped; Message-ID preferred when In-Reply-To/References present (Gmail same-subject merge must not rebind replies across multi-workflow enrollments); every outcome marks is_routed=TRUE w/ distinct route_method — → .spec/check-extras.md §V27
+V27: routing order RFC message-id → thread → LLM classify; account-scoped; is_routed + distinct route_method — → .spec/check-extras.md §V27
 V28: task.enrollment_id NOT NULL; workflow_id + contact_id denorm retained for filters; enrollment guaranteed @ route time via _ensure_enrollment — ON CONFLICT once, enrollment_added activity on first insert only
 V29: trigger email body inlined once under "New inbound email:"; excluded from email_history — no prompt duplicate
 V30: prompt framing follows trigger — first-reach-out (enrollment_run + enrollment_schedule byte-identical) vs deferred-task vs inbound; inbound email present -> email framing wins; no synthesized task_description
-V31: protocol deferred branch direction-aware — outbound task trigger -> terminal-outcome fragment; inbound -> reply-once fragment, templates bind neither conclude_enrollment nor create_task — → .spec/check-extras.md §V31
+V31: deferred branch direction-aware — outbound → terminal-outcome; inbound → reply-once; templates bind neither conclude nor create_task — → .spec/check-extras.md §V31
 V32: enrollment_schedule = distinct trigger label (observability split from enrollment_run); --scheduled-at -> pending first-touch task (email_id NULL), idempotent, rejected for inbound workflows
 V33: enrollment self-loop rejected — contact.email == workflow account email, case-insensitive
 V34: every Drive call carries Shared-Drive flags — corpora="allDrives", supportsAllDrives=True, includeItemsFromAllDrives=True
 V35: Drive KB isolation = per-account impersonation (DWD with_subject); account reads only files its identity can read; list/search filter mimeType text/markdown + trashed=false; content decoded UTF-8 errors=replace
 V37: auth = service account + domain-wide delegation; file creds -> with_subject(email); ADC -> iam.Signer credentials w/ subject=email; no OAuth user login
-V38: Drive tools registered sequential=True (shared httplib2.Http thread-unsafe); transport faults (HttpError, TimeoutError, OSError) → structured drive_unavailable dict, never bare raise; → .spec/check-extras.md §V38
+V38: Drive tools sequential=True; transport faults → structured drive_unavailable dict, never bare raise — → .spec/check-extras.md §V38
 V39: agent tool failure -> error dict {error, message}, never exception to agent; agent re-drafts via tool-error path
 V40: protocol fragment naming tools ! name >= 2 distinct tools, never exactly 1
 V41: KB grounding rules live in the workflow def `instructions` field (§V.103), never a code-defined template protocol fragment — → .spec/check-extras.md §V41
 V42: email body format lint + _SPEC_TABLE inbound pipe-table mandate — → .spec/check-extras.md §V42
 V44: agent shape owned by code-defined template registry; workflow.template + type immutable post-create, type derived from template — → .spec/check-extras.md §V44
-V45: protocol composed `_BASE → [_SPEC_TABLE (inbound only) →] deferred branch → _MUST_SEND → _DECLINE → _NO_FABRICATION` = tool-loop shape; compose-only touch runs per §V.136; deferred branch per §V.31 (direction+trigger); every fragment email-universal OR direction-scoped, never workflow-specific; agent-facing text carries zero SPEC citation; → .spec/check-extras.md §V45
+V45: protocol compose order tool-loop; compose-only touch §V.136; deferred §V.31; zero SPEC cites agent-facing — → .spec/check-extras.md §V45
 V46: template name = <direction>-<data-system>; prefix == direction field
-V47: provider-aware model config — `llm_provider` dispatches `_build_model` (role in {classifier, workflow}); Anthropic branch: caching flags both call sites + thinking/effort/max_tokens workflow-only; xAI branch: `XaiProvider`+`XaiModel`, reasoning_effort+max_tokens workflow-only, no Anthropic cache flags; effort enums settings-validated; cache telemetry names Anthropic-only — → .spec/check-extras.md §V47
-V48: provider transport timeout = 240s — Anthropic HTTP 240s (`APITimeoutError` + `httpx.ReadTimeout` terminal); xAI `XaiProvider(timeout=240)` hard-coded (no operator setting); xAI/gRPC timeouts terminal same spirit; mid-turn tool side-effects make retry unsafe
+V47: provider-aware model config — llm_provider dispatches `_build_model`; Anthropic cache/thinking/effort; xAI reasoning_effort; enums validated — → .spec/check-extras.md §V47
+V48: provider transport timeout = 240s terminal (Anthropic HTTP + xAI `XaiProvider`); mid-turn tool side-effects → retry unsafe — → .spec/check-extras.md §V48
 V49: bounded auto-retry — 4 attempts, execute_task per-task classification, manual retry = failed/cancelled only — retry matrix → .spec/check-extras.md §V49
 V51: every logfire.exception site reachable from `mailpilot run` ! paired operator_event("error", source=..., message=...); contract test sweeps run-reachable modules; → .spec/check-extras.md §V51
 V52: logfire.configure(environment=settings.logfire_environment) -> spans carry deployment_environment; cloud queries filter by env
 V53: agent tool spans come from logfire.instrument_pydantic_ai() (gen_ai.tool.name attr); no logfire.span inside agent tools; agents carry explicit names mailpilot.classifier + mailpilot.workflow
 V54: CLI mutation = logfire.span + operator_event; constraint code vocabulary; SystemExit absorbed at boundary — → .spec/check-extras.md §V54
 V55: `gen_ai.tool.call.result` span attr exempt from Logfire scrubbing; all other attrs scrubbed; scrubbing contract test drives a real instrumented tool call, never a fabricated span
-V62: release = `make release major|minor|patch` — local `make check` + clean-tree gate; `uv version --bump`; commit `chore: release v<x.y.z>` + tag v<x.y.z>; push main + tags only (no local `gh release create`); publish = .github/workflows/release.yml on push tags `v*` — ci.yml gate (workflow_call / make check) then `publish` job: tag==pyproject version + `uv build` + OIDC PyPI + `gh release create --generate-notes` (GH release + PyPI only after CI passes); dist name mailpilot-crm (PyPI `mailpilot` foreign-owned), module + CLI = mailpilot — → .spec/check-extras.md §V62
+V62: release = `make release` + CI-gated GH release + PyPI (OIDC); dist mailpilot-crm; module/CLI mailpilot — → .spec/check-extras.md §V62
 V67: persisted outbound in_reply_to + references_header mirror wire MIME headers exactly
 V69: tick classifying >= 1 inbound -> next tick forces full sweep + wakeup_event set
 V71: per-task reply-rejection counter (reply_rejection_scope) — format_check rejections cap 3; past cap bypasses; outside scope always enforces
 V72: company.profile JSONB validated vs CompanyProfile — required {summary, products, target_customers, sources} non-empty; timezone optional, null on multi-zone; malformed -> validation_error
 V73: skill-body-embedded Workflow snippet runnable as authored — (a) zero free vars; (b) args-as-collection guard; (c) prose-matches-dispatch; (d) saved-workflow byte-identical — recipe → .spec/check-extras.md §V73
 V74: CSV ingestion uses RFC-4180 parser (csv module / csv.DictReader); redirect resolution = hop-agnostic curl -sL; scope .claude/skills/**; .claude/workflows/*.js excluded — recipe → .spec/check-extras.md §V74
-V75: sync incremental via History API from gmail_history_id; 404 → full INBOX re-sync; first sync (last_synced_at NULL) → full INBOX; mid-batch 429|5xx → bounded backoff retry, NEVER dropped; checkpoint advances only past persisted messages; → .spec/check-extras.md §V75
+V75: sync incremental History API; 404 → full INBOX; first sync full; mid-batch 429|5xx backoff never drop; checkpoint past persisted only — → .spec/check-extras.md §V75
 V76: routing eligibility window — received_at older than 7 days, zero active workflows, or predates earliest active workflow -> is_routed=TRUE w/ matching skipped_* route_method, no LLM call
 V77: outbound email row persists only after Gmail accepts send; orphan recovery via get_email_by_gmail_message_id on conflict — → .spec/check-extras.md §V77
 V78: outbound MIME headers (X-MailPilot-*) + thread_id threading via send path — → .spec/check-extras.md §V78
@@ -140,45 +140,45 @@ V93: operator_event -> stderr single line "HH:MM:SS event=NAME k=v ..."; newline
 V94: CLI FK validation precedes mutation — referenced entity missing -> error envelope, no partial write
 V95: contact lead-metadata flat cols: title TEXT, email_confidence INT; NULL = high risk; --max-email-confidence includes NULL — → .spec/check-extras.md §V95
 V96: lead-contacts discover set + negative-verdict memoization on typed reason_code — → .spec/check-extras.md §V96
-V97: lead-companies + lead-contacts run-summary completeness — batch gate capping below stale-count -> run summary carries deferred = stale-count - processed (rows left profile/contact-NULL for a follow-up run); all stale processed -> deferred 0 or omitted; bare created|enriched|seeded counts never the sole remainder signal
-V98: lead-companies seed collision visibility — resolved-apex duplicate_key recorded in run-summary collapsed when incoming CSV display name diverges from the owning company's name; fires intra-batch AND onto a previously-seeded row; same-name re-seed stays silent existing; bare existing:N never the sole entity-merge signal
+V97: lead-* run-summary completeness — batch-gate under-process → deferred = stale-count - processed; bare created|enriched|seeded never sole remainder — → .spec/check-extras.md §V97
+V98: lead-companies seed collision visibility — name-divergent apex merge → collapsed in run-summary; bare existing:N never sole merge signal — → .spec/check-extras.md §V98
 V99: every path `.claude/skills/**` cites resolves on disk; cited-but-absent = erroring recovery instruction — recipe → .spec/check-extras.md §V99
 V100: skill-body progressive-disclosure — live procedure inline; rarely-loaded material + sibling shared prose in `references/*.md`; body >~500 lines -> extract — recipe → .spec/check-extras.md §V100
-V101: skill-body obligation vocabulary — `.claude/skills/**` prose marks a hard requirement w/ an explicit word (`MUST` / `required`), never bare ` ! ` as must; backticked shell (`[ ! -f ]`, `!=`) + SPEC.md/telegraph register exempt. Scope = `.claude/skills/**/*.md` prose, grep ` ! ` -> zero must-sense hits — recipe → .spec/check-extras.md §V101
+V101: skill-body obligation vocabulary — MUST/required never bare ` ! ` as must; scope `.claude/skills/**` prose — → .spec/check-extras.md §V101
 V102: project-skill frontmatter hygiene — allowed-tools + argument-hint required; zero-body-use grant banned — → .spec/check-extras.md §V102
-V103: workflow defs = `workflows/*.toml`, 1 file/workflow, pure TOML (stdlib tomllib); import enforces `name` = kebab file-stem, globally unique, def fields import-only; `workflow import/export` TOML-only (! JSON, ! stdin); `workflows/` = gitignored symlink → kborovik/workflows @ /Users/kb/github/workflows (! submodule); → .spec/check-extras.md §V103
+V103: workflow defs workflows/*.toml; name=kebab stem; import-only def fields; TOML-only import/export; gitignored symlink — → .spec/check-extras.md §V103
 V104: reply-test reply-loop guard — outbound@lab5.ca has no active workflow (test precondition) — → .spec/check-extras.md §V104
 V105: in-scope cases graded deterministically, false-PASS-at-worst; atomicity enforced test-time by allowlist — → .spec/check-extras.md §V105
 V106: Drive search whitespace-tokenized OR-joined fullText predicates; never whole-phrase — → .spec/check-extras.md §V106
-V107: CLI entity = natural key (§V.90) or UUID; polymorphic resolver: UUIDv7-shaped → id, else natural key; unknown key → `not_found`; single-entity target = positional `<key>` arg, never `--<entity>-id`; `--account-email` = sole account-requiring cmd option (polymorphic); → .spec/check-extras.md §V107
-V108: `migrations/NNN_*.sql` forward-only (monotonic prefix, no down-migrations); `db migrate` each own txn + re-stamps `schema_hash` on success; `schema.sql` = canonical declarative full-schema; identity invariant: fresh `db init` == apply-all-migrations-from-zero (test-enforced); → .spec/check-extras.md §V108
+V107: CLI entity = natural key or UUID polymorphic; single-entity target positional `<key>`; `--account-email` sole account option — → .spec/check-extras.md §V107
+V108: migrations/NNN_*.sql forward-only; db migrate own-txn + re-stamp schema_hash; schema.sql canonical; init == migrate-from-zero — → .spec/check-extras.md §V108
 V109: three-state schema verdict in {current, pending, drift} + tiered gate; run+mutations dead-stop on drift/pending — → .spec/check-extras.md §V109
 V110: initialize_database = connect + verify, not provision; empty-DB auto-provision data-loss-free; populated DB never mutates as side-effect — → .spec/check-extras.md §V110
 V111: CLI help agent surface — top-level `--help` emits packaged SKILL.md; Click tree `--help` zero SPEC cites — → .spec/check-extras.md §V111
 V112: lead-companies scoped enrich-scope; domain/URL arg enriches only rows seeded this run, never global backlog — → .spec/check-extras.md §V112
 V113: Bouncer single GET /v1.1/email/verify?email= per contact; POST /email/verify/batch/sync absent — → .spec/check-extras.md §V113
 V114: company soft-disable — disabled_reason TEXT NULL, uniform disable/enable verb pairing — → .spec/check-extras.md §V114
-V115: `list` filter flag = six-family closed taxonomy {Scope, Enum, Range, Presence, Text-match, Lifecycle}; result-control set = {`--limit` (default 100 unless noun opts higher), `--offset` (default 0), `--sort`, `--desc`} not limit-alone; `--direction` = canonical direction axis; shared Click decorators composed fixed-order in `cli.py`/`_filters.py`; company list|search sort/limit policy → §V.148; → .spec/check-extras.md §V115
-V116: tags = `tag` vocabulary table + `tag_assignment` link table; `tag add` errors `not_found` on undefined (never auto-creates); multi-owner `tag add` + `tag set` replace → §V.141; `company|contact list --tag <name>` / `--no-tag <name>` (repeatable) membership filters; `company list|view` ! project assigned tags as `tags[]` names (empty ok; list/view same shape); → .spec/check-extras.md §V116
+V115: list filter six-family taxonomy + result-control {limit,offset,sort,desc}; company policy → §V.148 — → .spec/check-extras.md §V115
+V116: tag vocabulary + tag_assignment; never auto-create; multi-owner/set → §V.141; list --tag/--no-tag; company tags[] — → .spec/check-extras.md §V116
 V117: batch-gate option distinctness — fixed cap suppressed when stale-count <= cap — → .spec/check-extras.md §V117
 V119: destructive DB op backs up first via `mailpilot db export`; failed export aborts drop (fail-closed) — → .spec/check-extras.md §V119
-V120: tool-loop trigger run MUST leave a `reply_email`|`send_email` ToolReturnPart w/o `error` key OR a successful `noop` OR `conclude_enrollment`; send-obligated = inbound (`email is not None`); outbound first reach-out = compose-only touch run — send structural, harness sends the validated output (§V.136); `_sent_reply` walker + `AgentCompletedWithoutReplyError` guard; `manual` exempt; → .spec/check-extras.md §V120
-V121: db snapshot bundle = `{schema_version, exported_at, tags, companies, contacts}` JSON; each company object ! carry `aliases[]` (sorted lowercased domains, empty ok; §V.142); `db export`/`db import` by natural key (never source-DB UUID); import restores aliases after companies; drift|pending dead-stops import; export→import round-trip field-identical (test-enforced); → .spec/check-extras.md §V121
-V122: campaign-test Touch 1 delivery identified by `rfc2822_message_id` per scenario, not agent-written subject; `send_touch1.py` captures `outbound_email_id` + `rfc2822_message_id` per enrollment; `inject_replies.py` matches received Touch 1 by Message-ID (subject fallback only); single prospect `inbound@lab5.ca`, no per-sequence aliases — → .spec/check-extras.md §V122
-V123: inbound reply routing bulk-cancels enrollment's pending future follow-up tasks (excluding first-touch `enrollment_schedule` trigger); `cancel_enrollment_followup_tasks` fires from 4 sites: routing.route_email + calendar booking + conclude_enrollment + cadence sequence exhaustion (§V.136); → .spec/check-extras.md §V123
-V124: workflow.goal = observable enrollment success outcome; one field, two readers: conclude_enrollment disposition gate + classify.py semantic-match key; `_DEFERRED_TASK_TASK` fragment names the goal; `record_enrollment_outcome` is system-internal; → .spec/check-extras.md §V124
+V120: tool-loop send-obligation — reply_email|send_email|noop|conclude_enrollment; compose-only touch exempt via harness (§V.136); manual exempt — → .spec/check-extras.md §V120
+V121: db snapshot export/import natural-key; company.aliases[]; drift|pending dead-stop; round-trip field-identical — → .spec/check-extras.md §V121
+V122: campaign-test Touch 1 keyed by rfc2822_message_id; single prospect inbound@lab5.ca; no per-sequence aliases — → .spec/check-extras.md §V122
+V123: inbound reply cancels pending follow-ups (excl enrollment_schedule); 4 call sites incl cadence exhaustion — → .spec/check-extras.md §V123
+V124: workflow.goal = observable enrollment success; conclude_enrollment gate + classify semantic key; record_enrollment_outcome system-internal — → .spec/check-extras.md §V124
 V125: meeting + meeting_attendee schema; status gates nothing; ingest owns row creation — → .spec/check-extras.md §V125
-V126: CalendarClient mirrors GmailClient/DriveClient shape; `_poll_account_calendar(connection, account)` helper fires from run-interval tick + `account sync`; idempotent upsert on google_event_id; per-account errors isolated (logged, never raised); read-only; → .spec/check-extras.md §V126
-V127: `conclude_enrollment(disposition, note, reschedule_at)` = sole agent terminal; disposition in {meeting_booked, do_not_contact, contact_later}; system side-effects per disposition; counts as send-obligation terminal (§V.120); `record_enrollment_outcome` NOT in agent tool set — system-internal conclusion sites: calendar booking (§V.128), cadence sequence exhaustion (§V.136); → .spec/check-extras.md §V127
+V126: CalendarClient mirrors Gmail/Drive; poll from run-interval + account sync; upsert google_event_id; read-only; errors isolated — → .spec/check-extras.md §V126
+V127: conclude_enrollment = sole agent terminal; disposition enum; system side-effects; record_enrollment_outcome not agent tool — → .spec/check-extras.md §V127
 V128: calendar booking concludes active outbound enrollments + cancels follow-ups, no agent turn — → .spec/check-extras.md §V128
-V129: agent-supplied timestamps: grounded (current-date injected per run via `@agent.instructions`) + future-checked at boundary (create_task + conclude_enrollment.reschedule_at reject past timestamps); guard NOT in database.create_task; → .spec/check-extras.md §V129
-V131: terminal inbound agent failure sends one `_FALLBACK_ACKNOWLEDGEMENT` fixed reply — gate: inbound `email_id` set AND reply-emitted contextvar unset; outbound first-touch stays silent; fallback-send failure logs error + marks task failed; → .spec/check-extras.md §V131
-V132: workflow stats funnel — single SQL aggregate (or fixed small query set), enrollment grain, envelope {workflow_stats}; 8 stages + touch-level `touches.{N}.{sent,pending}` for def touches + `awaiting_first_touch` + `disabled`; no LLM — → .spec/check-extras.md §V132
-V133: task stats aggregate — single SQL, task grain, envelope {task_stats}; filters --workflow-id (§V.107) + --trigger (§V.26); returns per-status {pending,completed,failed,cancelled}+total + distinct_scheduled_days + first/last scheduled_at; → .spec/check-extras.md §V133
-V134: `workflow check` = read-only def-integrity check per §V.108 shape — SHA-256 over def fields {template,theme,goal,instructions,touches,touch_interval_days} keyed by `name`; states {in_sync,out_of_sync,not_imported,orphaned}; `--file` repeatable; specific-file check scoped to passed names (no `orphaned`), dir check flags `orphaned`; report-only envelope {"workflow_check"}; not a deploy gate; → .spec/check-extras.md §V134
+V129: agent timestamps grounded (current-date inject) + future-checked at create_task + conclude_enrollment.reschedule_at — → .spec/check-extras.md §V129
+V131: terminal inbound agent failure → one `_FALLBACK_ACKNOWLEDGEMENT`; outbound first-touch silent; fallback-send fail → task failed — → .spec/check-extras.md §V131
+V132: workflow stats funnel single-SQL enrollment grain; 8 stages + touch slices + awaiting_first_touch + disabled; no LLM — → .spec/check-extras.md §V132
+V133: task stats aggregate single-SQL; filters --workflow-id + --trigger; per-status counts + scheduled day buckets — → .spec/check-extras.md §V133
+V134: workflow check = read-only def-integrity SHA-256; states {in_sync,out_of_sync,not_imported,orphaned}; report-only — → .spec/check-extras.md §V134
 V135: mechanical context pre-feed — invoke_workflow_agent pre-loads ContactView/CompanyView via shared loaders (§V.8); read_contact/read_company absent from every roster — → .spec/check-extras.md §V135
-V136: system-owned touch cadence — def fields touches + touch_interval_days own the sequence; cadence engine owns schedule math + touch scheduled_at; touch runs = compose-only agent (output_type TouchMessage, zero tools), harness sends + schedules next touch; final touch -> system conclude contact_later — → .spec/check-extras.md §V136
-V137: connect-fail operator UX — `_connect_database` maps OperationalError → SystemExit hint; expected fail → logfire.error + operator_event, zero console Traceback (closes §B.125) — → .spec/check-extras.md §V137
+V136: system-owned touch cadence — def touches+interval; compose-only agent; harness send+schedule; final → contact_later — → .spec/check-extras.md §V136
+V137: connect-fail operator UX — OperationalError → SystemExit hint; expected fail → logfire.error + operator_event, zero console Traceback — → .spec/check-extras.md §V137
 V138: company cohort pipeline status — `company list --status` Enum ∈ {ready, needs_contacts, needs_profile, disabled}; AND-composes w/ list filters; no `company audit` verb — → .spec/check-extras.md §V138
 V139: stdin NDJSON batch mutation — selected Mutate verbs accept `--stdin`; results envelope + partial-success exit policy; MVP `company disable --stdin` + `contact create --stdin` — → .spec/check-extras.md §V139
 V140: company profile write paths — `company update` full-replace XOR profile flags + field-patch merge; CompanyProfile validation; no partial write — → .spec/check-extras.md §V140
@@ -192,35 +192,18 @@ V147: company/contact create upsert — `--upsert` field-selective update + top-
 V148: company list/search order + page — `--sort`/`--desc`/`--offset`; company default `--limit` 500; lean row fields pinned — → .spec/check-extras.md §V148
 V149: disable reason-file — `company|contact disable` `--reason-file` XOR `--reason`; empty/missing/XOR validation — → .spec/check-extras.md §V149
 V150: enrollment tag-cohort dry-run — `enrollment add --tag --dry-run` company-tag preview; disabled/enrolled/self-loop excluded — → .spec/check-extras.md §V150
-V151: account email signature — per-account AccountSignature fields {full_name, title, website, phone} = nullable TEXT cols `signature_full_name|title|website|phone` on account; `display_name` = From only (not aliased); CLI create|update flags `--signature-full-name|--signature-title|--signature-website|--signature-phone` field-selective (omit=leave, empty str clears); website ! absolute http(s) URL else `validation_error` (no auto-prefix); list|view|create|update project nested `signature:{full_name,title,website,phone}` or null when all empty; harness `render_signature_html` + `render_signature_text` after §V.92 body render, before MIME; wire HTML = body_html + signature — table mark layout: 60px embedded lab5 logo (PNG data-URI constant) + 18px spacer + 2px four-colour vertical rule (`#0969da|#cf222e|#f9c513|#1f883d`) + 18px spacer + detail rows (name bold `#101820` 16px Helvetica; title monospace `#0969da` 11px uppercase letter-spacing; `web  ` + host link `#101820` monospace 12px, href=absolute website; `cell  ` + phone `tel:` link `#101820`; muted labels `#8A939B`; font families Helvetica/Consolas stack; `margin-top:20px` on outer table; inline styles only; empty fields omit their rows, all-empty → no block/no logo); text/plain mirrors stacked lines = body + `--` + name/title/`web  host`/`cell  phone` (scheme stripped from web display; empty fields omitted); ! persist signature HTML into `email.body` (§C plain-text body holds); every outbound path (`email send|reply`, agent send/reply tools, cadence touch send, §V.131 fallback); agent never drafts signature; body theme (§V.92 THEMES) does not recolor signature; migration + schema.sql
-V152: enrollment execution projection — default list lean; `--full` denser {company_domain, company_name, emails_sent, last_touch, next_scheduled_at, next_touch, disposition, created_at}; filters `--has-pending-task` / `--touch N`; sort next_scheduled_at; envelope `enrollments`; entity refs name|UUID (§V.107)
-V153: workflow report — pure-SQL composite `workflow report <ref>`: meta + funnel (§V.132) + task aggregate (§V.133) + enrollment matrix (§V.152); filters `--stuck` (§V.155) / `--touch` / `--status`; envelope `{workflow_report}`; no LLM, no CRM write
-V154: workflow-scoped activity/email list — `activity list` ≥1 of contact|company|workflow else `missing_filter`; `email list` ≥1 scope filter (no unbounded dump); `--workflow-id` composes w/ existing filters; lean rows + limit
-V155: stuck/overdue filters — `task list --overdue` = pending + scheduled_at < now; enrollment/report `--stuck` heuristics (active no pending no terminal + never-sent past SLA or cadence lag; bounced w/o disposition; high attempt_count fails); default first-send SLA 24h; read-only
-V156: CLI output format modes — `--format json|table|csv|ndjson` on report/list surfaces (default json = §V.4 envelope); table human stdout; csv|ndjson prefer `--out`; JSON-path errors/exits unchanged; exclusion from strict-JSON-only §V.3
-V157: workflow status ops-health — `workflow status <ref>`: meta + wording (§V.134) + run_loop heartbeat + overdue_tasks + failed_tasks_24h + enrollments_never_sent + optional funnel_active; envelope `{workflow_status}`; not funnel (funnel stays stats/report); no LLM
+V151: account email signature — AccountSignature cols + nested CLI projection + harness HTML/text render all outbound MIME; agent never drafts; ! persist into email.body — → .spec/check-extras.md §V151
+V152: enrollment execution projection — list lean default; `--full` denser + filters/sort; envelope enrollments — → .spec/check-extras.md §V152
+V153: workflow report — pure-SQL composite meta+funnel+tasks+enrollment matrix; filters stuck/touch/status; no LLM — → .spec/check-extras.md §V153
+V154: activity/email list require ≥1 scope filter; `--workflow-id` composes; no unbounded dump — → .spec/check-extras.md §V154
+V155: stuck/overdue filters — task `--overdue`; enrollment/report `--stuck` heuristics; first-send SLA 24h; read-only — → .spec/check-extras.md §V155
+V156: CLI `--format` json|table|csv|ndjson on report/list; default json §V.4; table/csv/ndjson opt-in — → .spec/check-extras.md §V156
+V157: workflow status ops-health composite (meta+wording+run_loop+overdue/failed/never-sent); not funnel; no LLM — → .spec/check-extras.md §V157
 
 ## §T TASKS
 
-## archived: §T.109..§T.180 → SPEC.archive.md (67 rows)
+## archived: §T.109..§T.197 → SPEC.archive.md (84 rows)
 id|status|task|cites
-T181|x|impl §V.105(∆) — flip `_is_brittle_inscope_token` to allowlist; atomize qa-in-006 + qa-in-009 tokens|V105,B109
-T182|x|impl §V.123(+) — `cancel_enrollment_followup_tasks`; call from routing.route_email on inbound match|V123,B110,V28,V32
-T183|x|impl §V.78(∆) — expose optional `thread_id` on `send_email` agent tool; outbound thread-continuation|V78
-T184|x|impl §V.124(+) + §V.103(∆) — rename `workflow.objective` → `goal`; migration 006; update classify.py + invoke.py + TOML files|V124,V103,V108
-T185|x|impl §V.125(+) — `meeting` + `meeting_attendee` tables; migration 007; database.py CRUD|V125,V108
-T186|x|impl §V.126(+) + §V.128(+) — CalendarClient; sync-loop poll + upsert meetings + booking-conclusion fan-out|V126,V128,V21
-T187|x|impl §V.127(+) + §V.120(∆) — `conclude_enrollment` agent tool; drop `record_enrollment_outcome` from tool set|V127,V120,V15
-T188|x|impl §V.125/§I — `meeting` CLI noun: list|view|add|update|cancel|V125,V126
-T189|x|impl §V.126(∆) — `_poll_account_calendar` helper; wire into `account sync` per-account calendar pass|V126,V125,V128,V107
-T190|x|impl §V.129(+) — date-grounding in `@agent.instructions`; past-date guard at create_task + conclude_enrollment.reschedule_at|V129,B111,V127,V32
-T191|x|impl §V.8(∆) — `list_meeting_attendees`; MeetingView superset; list_meetings compact attendee summary|V8,B112,V125,V96
-T192|x|impl §V.130(+) — `anthropic_thinking` + `anthropic_effort` settings; thread into `_build_anthropic_model`|V47
-T193|x|impl §V.42(∆) + §V.45(∆) — extract `_SPEC_TABLE` fragment; inbound-templates-only composition|V42,V45,B114
-T194|x|impl §V.130(∆) — `anthropic_max_tokens` setting; always-passed in `_build_anthropic_model`|V47,B115
-T195|x|impl §V.131(+) — `_FALLBACK_ACKNOWLEDGEMENT` + reply-emitted flag; fallback send in `_handle_agent_failure` for inbound failures|V131,B116,V48,V49,V71
-T196|x|impl §V.132 disposition persistence — record_enrollment_outcome disposition param writes detail.disposition; conclude_enrollment forwards disposition + booking-conclusion passes meeting_booked; JSONB key no migration|V132,V127,V128,V15
-T197|x|impl §V.132 + §I — `workflow stats` funnel: single-SQL aggregation fn in database.py + CLI `workflow stats` verb + `{"workflow_stats"}` envelope|V132,V107,V4,V54
 T198|x|impl §V.14(∆) + §I — `delete_notes` fn + CLI `note remove --contact-email|--company-domain` (clear an owner's notes); campaign-test setup clears prospect notes pre-Touch-1 + send_touch1 re-enables prospect between scenarios|V14,B118
 T199|x|redesign §V.14(∆) — `note remove <note_id>` single-note hard-delete; `delete_note(note_id)` fn; campaign-test reset loops `note list` + remove-by-id via `clear_contact_notes`|V14
 T200|x|impl §V.90(∆) — lowercase `email` natural key in create_contact/get_contact_by_email/create_or_get_contact_by_email/create_contacts_bulk/get_contacts_by_emails before match+insert; migration merges existing case-variant duplicate contacts onto canonical lowercase row|V90,B121
@@ -258,7 +241,7 @@ T231|x|impl §V.111(∆)+§I — top-level `--help` emits SKILL.md body; drop `-
 T232|x|drop tests/test_contact_finder_verify.py — sole non-package pytest (detached contact-finder.md); V113 stays via .spec/check-extras lead-contacts greps|V113
 T233|x|enable mistune hard_wrap=True in render_email_html + regression test multi-line signature soft newlines -> br|V92,B126
 T234|x|impl §V.151(+) + §I — account signature cols (migration) + nested CLI projection + render_signature_html/text lab5 palette + harness append all outbound MIME paths + tests|V151,V92,V78,V108,I.cli
-T235|x|init `.grok/skills/mailpilot-campaign-test/` SKILL.md — Grok-native simplified port of Claude mailpilot-campaign-test; reuse `.claude/.../scripts`+`references`; Grok tools; default `--workflow-file` `/Users/kb/github/lab5-leads/workflows/acumatica-var-outbound.toml`; Next-block; safety = outbound@lab5.ca↔inbound@lab5.ca only|V122,V100,V102
+T235|x|init `.grok/skills/mailpilot-campaign-test/` SKILL.md — Grok-native campaign-test port; reuse `.claude/.../scripts`+`references`; default workflow acumatica-var-outbound; safety outbound@lab5.ca↔inbound@lab5.ca only|V122,V100,V102
 T236|x|skill setup/preflight — ensure `outbound@lab5.ca` signature {Konstantin Borovik, DevOps Engineer, https://lab5.ca, +1-416-670-0621} + `display_name=Konstantin Borovik` via `account create|update` flags (§V.151); idempotent; block run if missing/mismatched|V151,V122
 T237|x|smoke campaign-test on acumatica-var-outbound — full send→reply→verify path; report under `reports/campaign-test/<run_id>/`; cleanup always|V122,V151
 T238|x|fix campaign-test required outbound identity — `signature.full_name` Borovi→Borovik; ensure+preflight-block `display_name=Konstantin Borovik`; skill step 0c + REQUIRED_OUTBOUND_* + tests|V151,V122,T236

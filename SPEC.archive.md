@@ -71,6 +71,23 @@ T178|x|impl §V.120(∆) — widen send-guard to outbound first reach-out trigge
 T179|x|impl §V.54(∆) — absorb controlled SystemExit at `cli_mutation` boundary; parent span stays clean|V54,B107
 T180|x|impl §V.7(∆) + §V.122(+) — `recipients` in EmailSummary; verify_delivery.py alias-keyed delivery verification|V7,V122,B108
 
+T181|x|impl §V.105(∆) — flip `_is_brittle_inscope_token` to allowlist; atomize qa-in-006 + qa-in-009 tokens|V105,B109
+T182|x|impl §V.123(+) — `cancel_enrollment_followup_tasks`; call from routing.route_email on inbound match|V123,B110,V28,V32
+T183|x|impl §V.78(∆) — expose optional `thread_id` on `send_email` agent tool; outbound thread-continuation|V78
+T184|x|impl §V.124(+) + §V.103(∆) — rename `workflow.objective` → `goal`; migration 006; update classify.py + invoke.py + TOML files|V124,V103,V108
+T185|x|impl §V.125(+) — `meeting` + `meeting_attendee` tables; migration 007; database.py CRUD|V125,V108
+T186|x|impl §V.126(+) + §V.128(+) — CalendarClient; sync-loop poll + upsert meetings + booking-conclusion fan-out|V126,V128,V21
+T187|x|impl §V.127(+) + §V.120(∆) — `conclude_enrollment` agent tool; drop `record_enrollment_outcome` from tool set|V127,V120,V15
+T188|x|impl §V.125/§I — `meeting` CLI noun: list|view|add|update|cancel|V125,V126
+T189|x|impl §V.126(∆) — `_poll_account_calendar` helper; wire into `account sync` per-account calendar pass|V126,V125,V128,V107
+T190|x|impl §V.129(+) — date-grounding in `@agent.instructions`; past-date guard at create_task + conclude_enrollment.reschedule_at|V129,B111,V127,V32
+T191|x|impl §V.8(∆) — `list_meeting_attendees`; MeetingView superset; list_meetings compact attendee summary|V8,B112,V125,V96
+T192|x|impl §V.130(+) — `anthropic_thinking` + `anthropic_effort` settings; thread into `_build_anthropic_model`|V47
+T193|x|impl §V.42(∆) + §V.45(∆) — extract `_SPEC_TABLE` fragment; inbound-templates-only composition|V42,V45,B114
+T194|x|impl §V.130(∆) — `anthropic_max_tokens` setting; always-passed in `_build_anthropic_model`|V47,B115
+T195|x|impl §V.131(+) — `_FALLBACK_ACKNOWLEDGEMENT` + reply-emitted flag; fallback send in `_handle_agent_failure` for inbound failures|V131,B116,V48,V49,V71
+T196|x|impl §V.132 disposition persistence — record_enrollment_outcome disposition param writes detail.disposition; conclude_enrollment forwards disposition + booking-conclusion passes meeting_booked; JSONB key no migration|V132,V127,V128,V15
+T197|x|impl §V.132 + §I — `workflow stats` funnel: single-SQL aggregation fn in database.py + CLI `workflow stats` verb + `{"workflow_stats"}` envelope|V132,V107,V4,V54
 ## §B BUGS
 
 id|date|cause|fix

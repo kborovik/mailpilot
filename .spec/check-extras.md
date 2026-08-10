@@ -57,7 +57,7 @@ Trigger: `src/mailpilot/database.py` or `src/mailpilot/models.py` changed.
 
 ## §V8 — view model projections
 
-ContactView = base Contact superset + company_domain (LEFT JOIN company). CompanyView = base Company superset + `tags` (assigned tag names, empty ok; same shape as CompanySummary.tags / `db export` company.tags §V.121). CompanySummary lean list row carries `tags` + `disabled_reason` (null when enabled) + `contact_count`/`has_profile`; `--full` opts in `profile.summary` only (null when no profile) — never default full profile. MeetingView = base Meeting superset + attendee contacts (list_meeting_attendees join). All three views: inline <=10 latest notes (`_INLINE_NOTES_CAP`) + total count; field set test-tracked vs base model (Pydantic `extra=ignore` silently strips fields omitted from the view model — test catches drift). `meeting list` rows carry compact attendee summary (emails or count). `meeting view` inlines full attendee list. Workflow-agent prompt pre-feed (`Contact record:` / `Company record:` sections, §V.135) routes through load_contact_view/load_company_view — agent + CLI context byte-identical.
+ContactView = base Contact superset + company_domain (LEFT JOIN company). CompanyView = base Company superset + `tags` (assigned tag names, empty ok; same shape as CompanySummary.tags / `db export` company.tags §V.121). CompanySummary lean list row carries `tags` + `disabled_reason` (null when enabled) + `contact_count`/`has_profile`; `--full` opts in `profile.summary` only (null when no profile) — never default full profile. CompanyView carries `aliases[]` (sorted lowercased alias domains, empty ok; view-only — list lean omits). ContactView omits `verification_meta` by default (operator-only via `contact view --include-meta` §V.144; meta opt-in = CLI-only, never agent path). MeetingView = base Meeting superset + attendee contacts (list_meeting_attendees join). All three views: inline <=10 latest notes (`_INLINE_NOTES_CAP`) + total count; field set test-tracked vs base model (Pydantic `extra=ignore` silently strips fields omitted from the view model — test catches drift). `meeting list` rows carry compact attendee summary (emails or count). `meeting view` inlines full attendee list. Workflow-agent prompt pre-feed (`Contact record:` / `Company record:` sections, §V.135) routes through load_contact_view/load_company_view — agent + CLI context byte-identical.
 
 Trigger: `src/mailpilot/models.py` or `src/mailpilot/database.py` changed.
 - `rg 'ContactView|CompanyView|MeetingView' src/mailpilot/models.py` -> all three present
@@ -865,3 +865,84 @@ disable reason-file — `company disable` + `contact disable` accept `--reason-f
 ## §V150
 
 enrollment tag-cohort dry-run — `enrollment add --workflow-id <ref> --tag <name> --dry-run` [optional `--min-contacts N`]; company-tag path only MVP; dry-run required for tag path (tag w/o dry-run → `validation_error`; dry-run w/o tag → `validation_error`); single-contact `--contact-email` path unchanged (no dry-run needed); expand: companies w/ tag (disabled excluded by default §V.114) → enabled contacts; drop already-enrolled for workflow + self-loop contacts (§V.33) + disabled contacts; optional `--min-contacts N` filters companies before expand; envelope `{"enrollment_preview":{workflow, tag, count, contacts:[{email, company_domain}], excluded:{disabled_companies, already_enrolled, self_loop, disabled_contacts}},"ok":true,"record_count":count}` (aggregate not enrollment row); undefined tag → `not_found`; zero candidates → ok empty record_count=0; no writes; --skill cohort recipe; help zero SPEC cites §V.111
+
+## §V3 — stdout strict JSON + stderr lifecycle
+
+stdout = strict JSON only by default (all flags, incl --debug); opt-in non-JSON via `--format` per §V.156 only; operator lifecycle + errors -> stderr; Logfire console exporter ! target stderr (ConsoleOptions output=sys.stderr), never stdout — output unset defaults stdout so console lines corrupt JSON envelope
+
+Trigger: `src/mailpilot/cli.py` or logging config changed.
+- `rg 'ConsoleOptions' src/mailpilot/ --type py` -> console exporter targets stderr
+- `rg 'format.*table|table.*csv|ndjson' src/mailpilot/cli.py` -> opt-in --format surface present
+
+## §V48 — provider transport timeout 240s
+
+provider transport timeout = 240s — Anthropic HTTP 240s (`APITimeoutError` + `httpx.ReadTimeout` terminal); xAI `XaiProvider(timeout=240)` hard-coded (no operator setting); xAI/gRPC timeouts terminal same spirit; mid-turn tool side-effects make retry unsafe
+
+Trigger: `src/mailpilot/agent/` model build changed.
+- `rg 'timeout.?=.?240|timeout=240' src/mailpilot/` -> 240s timeout sites
+- `rg 'APITimeoutError|ReadTimeout' src/mailpilot/` -> Anthropic timeout terminal class
+
+## §V97 — lead-* run-summary deferred completeness
+
+lead-companies + lead-contacts run-summary completeness — batch gate capping below stale-count -> run summary carries deferred = stale-count - processed (rows left profile/contact-NULL for a follow-up run); all stale processed -> deferred 0 or omitted; bare created|enriched|seeded counts never the sole remainder signal
+
+Trigger: `.claude/skills/lead-companies/**` or `lead-contacts/**` changed.
+- `rg 'deferred' .claude/skills/lead-companies/ .claude/skills/lead-contacts/` -> deferred field in run-summary prose
+
+## §V98 — lead-companies seed collision visibility
+
+lead-companies seed collision visibility — resolved-apex duplicate_key recorded in run-summary collapsed when incoming CSV display name diverges from the owning company's name; fires intra-batch AND onto a previously-seeded row; same-name re-seed stays silent existing; bare existing:N never the sole entity-merge signal
+
+Trigger: lead-companies seed path changed.
+- `rg 'collapsed' .claude/skills/lead-companies/ --type py -g '*.py' 2>/dev/null; rg 'collapsed' .claude/skills/lead-companies/` -> name-divergent collapse signal
+
+## §V151 — account email signature
+
+account email signature — per-account AccountSignature fields {full_name, title, website, phone} = nullable TEXT cols `signature_full_name|title|website|phone` on account; `display_name` = From only (not aliased); CLI create|update flags `--signature-full-name|--signature-title|--signature-website|--signature-phone` field-selective (omit=leave, empty str clears); website ! absolute http(s) URL else `validation_error` (no auto-prefix); list|view|create|update project nested `signature:{full_name,title,website,phone}` or null when all empty; harness `render_signature_html` + `render_signature_text` after §V.92 body render, before MIME; wire HTML = body_html + signature — table mark layout: 60px embedded lab5 logo (PNG data-URI constant) + 18px spacer + 2px four-colour vertical rule (`#0969da|#cf222e|#f9c513|#1f883d`) + 18px spacer + detail rows (name bold `#101820` 16px Helvetica; title monospace `#0969da` 11px uppercase letter-spacing; `web  ` + host link `#101820` monospace 12px, href=absolute website; `cell  ` + phone `tel:` link `#101820`; muted labels `#8A939B`; font families Helvetica/Consolas stack; `margin-top:20px` on outer table; inline styles only; empty fields omit their rows, all-empty → no block/no logo); text/plain mirrors stacked lines = body + `--` + name/title/`web  host`/`cell  phone` (scheme stripped from web display; empty fields omitted); ! persist signature HTML into `email.body` (§C plain-text body holds); every outbound path (`email send|reply`, agent send/reply tools, cadence touch send, §V.131 fallback); agent never drafts signature; body theme (§V.92 THEMES) does not recolor signature; migration + schema.sql
+
+Trigger: `src/mailpilot/` account/signature/render paths changed.
+- `rg 'signature_full_name|render_signature_html|render_signature_text' src/mailpilot/` -> cols + renderers present
+- `rg 'AccountSignature|signature:' src/mailpilot/models.py src/mailpilot/cli.py` -> nested projection
+- `rg 'lab5|data:image/png|0969da' src/mailpilot/` -> mark layout constants
+
+## §V152 — enrollment execution projection
+
+enrollment execution projection — default list lean; `--full` denser {company_domain, company_name, emails_sent, last_touch, next_scheduled_at, next_touch, disposition, created_at}; filters `--has-pending-task` / `--touch N`; sort next_scheduled_at; envelope `enrollments`; entity refs name|UUID (§V.107)
+
+Trigger: enrollment list/view projection changed.
+- `rg 'next_scheduled_at|emails_sent|last_touch|--full' src/mailpilot/cli.py src/mailpilot/database.py` -> denser projection fields
+
+## §V153 — workflow report composite
+
+workflow report — pure-SQL composite `workflow report <ref>`: meta + funnel (§V.132) + task aggregate (§V.133) + enrollment matrix (§V.152); filters `--stuck` (§V.155) / `--touch` / `--status`; envelope `{workflow_report}`; no LLM, no CRM write
+
+Trigger: workflow report path changed.
+- `rg 'workflow_report|def .*workflow_report' src/mailpilot/` -> composite report surface
+
+## §V154 — workflow-scoped activity/email list
+
+workflow-scoped activity/email list — `activity list` ≥1 of contact|company|workflow else `missing_filter`; `email list` ≥1 scope filter (no unbounded dump); `--workflow-id` composes w/ existing filters; lean rows + limit
+
+Trigger: activity/email list filters changed.
+- `rg 'missing_filter|workflow_id' src/mailpilot/cli.py` -> scope gate present
+
+## §V155 — stuck/overdue filters
+
+stuck/overdue filters — `task list --overdue` = pending + scheduled_at < now; enrollment/report `--stuck` heuristics (active no pending no terminal + never-sent past SLA or cadence lag; bounced w/o disposition; high attempt_count fails); default first-send SLA 24h; read-only
+
+Trigger: stuck/overdue filter paths changed.
+- `rg 'overdue|--stuck|first.send|24' src/mailpilot/cli.py src/mailpilot/database.py` -> overdue/stuck surfaces
+
+## §V156 — CLI output format modes
+
+CLI output format modes — `--format json|table|csv|ndjson` on report/list surfaces (default json = §V.4 envelope); table human stdout; csv|ndjson prefer `--out`; JSON-path errors/exits unchanged; exclusion from strict-JSON-only §V.3
+
+Trigger: CLI format output path changed.
+- `rg 'table|csv|ndjson|--format' src/mailpilot/cli.py` -> format modes present
+
+## §V157 — workflow status ops-health
+
+workflow status ops-health — `workflow status <ref>`: meta + wording (§V.134) + run_loop heartbeat + overdue_tasks + failed_tasks_24h + enrollments_never_sent + optional funnel_active; envelope `{workflow_status}`; not funnel (funnel stays stats/report); no LLM
+
+Trigger: workflow status path changed.
+- `rg 'workflow_status|overdue_tasks|enrollments_never_sent' src/mailpilot/` -> ops-health envelope
