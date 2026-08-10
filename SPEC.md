@@ -128,7 +128,7 @@ V87: cross-account isolation — thread + RFC message-id lookups scoped to accou
 V88: entity enums enforced by schema CHECK — workflow.template/type/status, enrollment.status, email.direction/status/route_method, task.status, activity.type; value sets authoritative in schema.sql
 V89: singleton rows — schema_metadata id=1, sync_status id='singleton'
 V90: natural-key UNIQUE constraints = canonical CLI identifiers; unknown key -> not_found — → .spec/check-extras.md §V90
-V92: email render = Markdown -> HTML inline styles only, no stylesheet; THEMES = {blue, green, orange, purple, red, slate}; None/unknown theme -> blue fallback
+V92: email render = Markdown -> HTML inline styles only, no stylesheet; hard_wrap=True (soft newlines -> <br>); THEMES = {blue, green, orange, purple, red, slate}; None/unknown theme -> blue fallback
 V93: operator_event -> stderr single line "HH:MM:SS event=NAME k=v ..."; newlines collapsed to space; whitespace values double-quoted, inner quotes escaped
 V94: CLI FK validation precedes mutation — referenced entity missing -> error envelope, no partial write
 V95: contact lead-metadata flat cols: title TEXT, email_confidence INT; NULL = high risk; --max-email-confidence includes NULL — → .spec/check-extras.md §V95
@@ -242,6 +242,7 @@ T229|x|impl §V.14(∆) + §I — note remove owner bulk (--company-domain|--con
 T230|x|impl §V.150(+) + §I — enrollment add --tag --dry-run company-tag cohort preview; disabled companies out; exclude enrolled + self-loop; optional --min-contacts; envelope + tests; --skill (#198)|V150,V33,V114,V116,V107,V4,I.cli
 T231|x|impl §V.111(∆)+§I — top-level `--help` emits SKILL.md body; drop `--skill` flag; SKILL Grammar/Discovery; tests (body==package; tree zero §-cites)|V111,I.cli
 T232|x|drop tests/test_contact_finder_verify.py — sole non-package pytest (detached contact-finder.md); V113 stays via .spec/check-extras lead-contacts greps|V113
+T233|.|enable mistune hard_wrap=True in render_email_html + regression test multi-line signature soft newlines -> br|V92,B126
 
 ## §B BUGS
 
@@ -282,3 +283,4 @@ B122|2026-07-01|pydantic-ai v2 instr-format 5 renames tool-return attr `tool_res
 B123|2026-07-01|`workflow import` emitted per-row rejections inside ok:true envelope + exit 0 @ zero rows applied; campaign-test setup gated on exit code -> silent no-op import, late name-lookup failure|V103
 B124|2026-07-02|deferred-task fragments encode outbound lifecycle but compose direction-blind into inbound templates — TASK branch orders conclude_enrollment the workflow TOML forbids; INITIAL branch mislabels inbound reply as initial send|V31
 B125|2026-07-20|`_connect_database` incomplete OperationalError→hint map + logfire.exception Traceback for expected connect fails (pg_hba/DNS hit generic database_url)|V137
+B126|2026-08-10|mistune hard_wrap=False leaves soft newlines as whitespace inside `<p>`; HTML collapses signature + URL list to one line|V92
