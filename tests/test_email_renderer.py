@@ -193,7 +193,8 @@ def test_render_signature_html_mark_layout():
 
 def test_render_signature_html_phone_is_tel_link():
     html = render_signature_html(AccountSignature(phone="416-670-0621"))
-    assert 'href="tel:+14166700621"' in html
+    # Display form has no leading +; tel: keeps digits only (no auto country code).
+    assert 'href="tel:4166700621"' in html
     assert "416-670-0621" in html
     assert "cell&nbsp;&nbsp;" in html
     # Brand chrome still present for a non-empty signature.
