@@ -246,7 +246,7 @@ T231|x|impl §V.111(∆)+§I — top-level `--help` emits SKILL.md body; drop `-
 T232|x|drop tests/test_contact_finder_verify.py — sole non-package pytest (detached contact-finder.md); V113 stays via .spec/check-extras lead-contacts greps|V113
 T233|x|enable mistune hard_wrap=True in render_email_html + regression test multi-line signature soft newlines -> br|V92,B126
 T234|x|impl §V.151(+) + §I — account signature cols (migration) + nested CLI projection + render_signature_html/text lab5 palette + harness append all outbound MIME paths + tests|V151,V92,V78,V108,I.cli
-T235|.|init `.grok/skills/mailpilot-campaign-test/` SKILL.md — Grok-native simplified port of Claude mailpilot-campaign-test; reuse `.claude/.../scripts`+`references`; Grok tools; default `--workflow-file` `/Users/kb/github/lab5-leads/workflows/acumatica-var-outbound.toml`; Next-block; safety = outbound@lab5.ca↔inbound@lab5.ca only|V122,V100,V102
+T235|x|init `.grok/skills/mailpilot-campaign-test/` SKILL.md — Grok-native simplified port of Claude mailpilot-campaign-test; reuse `.claude/.../scripts`+`references`; Grok tools; default `--workflow-file` `/Users/kb/github/lab5-leads/workflows/acumatica-var-outbound.toml`; Next-block; safety = outbound@lab5.ca↔inbound@lab5.ca only|V122,V100,V102
 T236|.|skill setup/preflight — ensure `outbound@lab5.ca` signature {Konstantin Borovi, DevOps Engineer, https://lab5.ca, +1-416-670-0621} via `account create|update` flags (§V.151); idempotent; block run if missing/mismatched|V151,V122
 T237|.|smoke campaign-test on acumatica-var-outbound — full send→reply→verify path; report under `reports/campaign-test/<run_id>/`; cleanup always|V122,V151
 
