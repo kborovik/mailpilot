@@ -79,10 +79,19 @@ def _received_index(window_start: str) -> dict[str, str]:
 
 
 def _match(send: dict, index: dict[str, str]) -> str | None:
-    """Return the received Touch 1 email id for a scenario send, or None."""
+    """Return the received Touch 1 email id for a scenario send, or None.
+
+    Message-ID is authoritative (§V.122). Subject fallback only when Message-ID
+    was never captured -- and never when multiple scenarios share a subject
+    (Gmail merges + setdefault would attach the wrong Touch 1).
+    """
     msgid = send.get("rfc2822_message_id")
     if msgid and msgid in index:
         return index[msgid]
+    if msgid:
+        # Captured Message-ID not in the index yet -- wait for sync; do not
+        # fall back to collision-prone subjects while the real row is pending.
+        return None
     subjects = json.loads(index.get("__subjects__", "{}"))
     return subjects.get(send.get("subject"))
 

@@ -19,9 +19,11 @@ auto-reply to genuine mail):
 Because all scenarios share one prospect contact, an opt-out / wrong-person
 branch disables that contact globally, which would make a later scenario's task
 skip (a disabled contact is not actioned). So scenarios are handled one at a
-time: the contact is re-enabled before each, its disabled state is snapshotted
-right after (that snapshot is the branch signal the verify step reads), then it
-is re-enabled again for the next scenario. Writes ``handled.json``.
+time: the contact is re-enabled before each, its notes from a prior branch's
+``conclude_enrollment`` are cleared (pre-fed grounding must not carry another
+branch's outcome), its disabled state is snapshotted right after (that snapshot
+is the branch signal the verify step reads), then it is re-enabled again for
+the next scenario. Writes ``handled.json``.
 
 Usage:
     uv run python scripts/handle_replies.py --run-id <id> [--timeout N] [--poll N]
@@ -38,6 +40,7 @@ from datetime import datetime
 from _common import (
     PROSPECT_EMAIL,
     SENDER_EMAIL,
+    clear_contact_notes,
     mp,
     read_json,
     repo_root,
@@ -134,7 +137,9 @@ def _handle_scenario(
     """Invoke the agent on one scenario's reply and snapshot the result.
 
     Re-enables the prospect contact before running (a prior branch may have
-    disabled it), then snapshots its disabled state right after -- that snapshot
+    disabled it), clears notes left by a prior branch's conclude_enrollment
+    (shared prospect contact; notes would poison pre-fed grounding like §B.118
+    but mid-run), then snapshots disabled state right after -- that snapshot
     is the branch signal the verify step reads.
     """
     import psycopg
@@ -161,6 +166,8 @@ def _handle_scenario(
 
     record["task_id"] = task.id
     _ensure_enabled()
+    # Shared prospect: prior branch may have written a conclude_enrollment note.
+    clear_contact_notes(PROSPECT_EMAIL)
     worker_conn = psycopg.connect(database_url, row_factory=dict_row)
     try:
         execute_task(worker_conn, settings, task)

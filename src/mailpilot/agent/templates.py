@@ -131,13 +131,24 @@ _SPEC_TABLE = (
     "substitute; such spec blocks are rejected by the format lint.\n"
 )
 
+# meeting_booked is the "I already booked" reply path only (§V.127 tool docs +
+# §V.128 calendar detection). Mere interest or sharing a calendar link is NOT
+# goal-met -- leave the enrollment open so calendar ingest can conclude. A
+# looser "when the goal is met" line made agents stamp meeting_booked on
+# "I'd like to book" replies and fail campaign-test booked scenarios.
 _DEFERRED_TASK_TASK = (
     "After achieving the workflow goal for a contact, conclude the enrollment "
-    "by calling conclude_enrollment with a disposition -- meeting_booked when "
-    "the goal is met, do_not_contact when the contact asks not to be reached, "
-    "or contact_later to defer (optionally pass reschedule_at) -- and a brief "
-    "note. If work cannot complete now but should resume later, schedule a "
-    "deferred task via create_task with a future scheduled_at.\n"
+    "by calling conclude_enrollment with a disposition and a brief note. Use "
+    "meeting_booked only when the contact confirms they already booked or the "
+    "meeting is already scheduled -- sharing a calendar link or receiving mere "
+    "interest is not enough; leave the enrollment open so calendar detection "
+    "can record the booking. When the contact wants to talk or asks for times, "
+    "reply_email with the calendar link (or offered times) and leave the "
+    "enrollment open -- still end the turn with a tool call; do not stop "
+    "without tools. Use do_not_contact when the contact asks not to be reached. "
+    "Use contact_later to defer (optionally pass reschedule_at). If work cannot "
+    "complete now but should resume later, schedule a deferred task via "
+    "create_task with a future scheduled_at.\n"
 )
 
 # _TOUCH_COMPOSE is the compose-only touch protocol (§V.136). An outbound touch

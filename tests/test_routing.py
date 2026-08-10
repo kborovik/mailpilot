@@ -1080,11 +1080,15 @@ def test_route_email_span_has_route_method_rfc_message_id_match(
     assert spans[0]["attributes"]["workflow_id"] == workflow.id
 
 
-def test_route_email_thread_match_takes_precedence_over_rfc(
+def test_route_email_rfc_match_takes_precedence_over_thread(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """When both signals are present, thread match wins (cheaper, no
-    cross-side ambiguity)."""
+    """When both signals are present, Message-ID wins over Gmail thread.
+
+    Gmail may merge same-subject conversations across distinct outbound
+    sends to one contact; In-Reply-To is the authoritative parent, so
+    RFC match must beat thread match when they disagree (§V.27).
+    """
     account = make_test_account(database_connection, email="prec@example.com")
     workflow_thread = make_test_workflow(
         database_connection,
@@ -1101,7 +1105,7 @@ def test_route_email_thread_match_takes_precedence_over_rfc(
     _activate_workflow(database_connection, workflow_thread.id)
     _activate_workflow(database_connection, workflow_rfc.id)
 
-    # Same Gmail thread -> thread WF.
+    # Same Gmail thread -> thread WF (wrong parent under a merge).
     create_email(
         database_connection,
         account_id=account.id,
@@ -1138,7 +1142,8 @@ def test_route_email_thread_match_takes_precedence_over_rfc(
         database_connection, reply, "alice@example.com", make_test_settings()
     )
 
-    assert routed.workflow_id == workflow_thread.id
+    assert routed.workflow_id == workflow_rfc.id
+    assert routed.route_method == "rfc_message_id_match"
 
 
 def test_route_email_rfc_match_no_referenced_ids_falls_through(

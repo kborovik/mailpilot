@@ -145,10 +145,10 @@ Trigger: `src/mailpilot/agent/invoke.py` or `src/mailpilot/database.py` changed.
 
 ## §V27 — routing pipeline order + classifier bounds
 
-Routing pipeline order: thread match -> RFC message-id match -> LLM classify; every stage account-scoped. Classifier = single-turn, no tools; body truncated @ 16384 chars; hallucinated workflow_id coerced to None; zero active inbound workflows -> no LLM call. Every outcome marks is_routed=TRUE w/ a distinct route_method (§V.20 enum).
+Routing pipeline order: RFC message-id match -> thread match -> LLM classify; every stage account-scoped. Message-ID preferred when In-Reply-To/References present (Gmail same-subject merge must not rebind replies across multi-workflow enrollments). Classifier = single-turn, no tools; body truncated @ 16384 chars; hallucinated workflow_id coerced to None; zero active inbound workflows -> no LLM call. Every outcome marks is_routed=TRUE w/ a distinct route_method (§V.20 enum).
 
 Trigger: `src/mailpilot/routing.py` or `src/mailpilot/agent/classify.py` changed.
-- `rg 'rfc_message_id' src/mailpilot/routing.py` -> RFC message-id stage after thread match
+- `rg '_try_rfc_message_id_match' src/mailpilot/routing.py` -> RFC message-id stage before thread match
 - `rg '16384' src/mailpilot/agent/classify.py` -> body truncation bound
 - `rg 'is_routed' src/mailpilot/routing.py` -> every outcome marks routed
 

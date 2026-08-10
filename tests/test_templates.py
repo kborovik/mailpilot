@@ -349,7 +349,25 @@ def test_non_drive_templates_protocol_excludes_grounding() -> None:
 _CONCLUDE_INSTRUCTION = (
     "After achieving the workflow goal for a contact, conclude the enrollment"
 )
+_MEETING_BOOKED_ALREADY = "only when the contact confirms they already booked"
+_MEETING_BOOKED_NOT_INTEREST = "mere interest is not enough"
 _INBOUND_INSTRUCTION = "Reply to the inbound email once, then stop"
+
+
+def test_outbound_deferred_meeting_booked_requires_already_booked() -> None:
+    """§V.127 / §V.128: meeting_booked is the already-booked path only.
+
+    Mere interest or sharing a calendar link must leave the enrollment open
+    for calendar detection -- not stamp meeting_booked. Interest still requires
+    a reply_email tool call (leave-open is not a silent no-tool turn).
+    """
+    fragment = templates_module._DEFERRED_TASK_TASK  # pyright: ignore[reportPrivateUsage]
+    assert _MEETING_BOOKED_ALREADY in fragment
+    assert _MEETING_BOOKED_NOT_INTEREST in fragment
+    assert "calendar detection" in fragment
+    assert "reply_email" in fragment
+    assert fragment.isascii()
+    assert _SPEC_CITE.search(fragment) is None
 
 
 @pytest.mark.parametrize(

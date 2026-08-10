@@ -80,7 +80,7 @@ V23: task drain = bounded pool <= max_concurrent_tasks; atomic claim; each worke
 V24: main loop never blocks on task futures — reaper collects on later ticks + emits task.drain
 V25: advisory locks 2-tier — coarse (workflow_id, contact_id) + task-scoped; acquired before agent.invoke span opens; contention -> reschedule w/o attempt_count bump — → .spec/check-extras.md §V25
 V26: agent.invoke span trigger attr in {enrollment_run, enrollment_schedule, task, email, manual} = caller path
-V27: routing pipeline order thread match -> RFC message-id match -> LLM classify, all account-scoped; every outcome marks is_routed=TRUE w/ distinct route_method — → .spec/check-extras.md §V27
+V27: routing pipeline order RFC message-id match -> thread match -> LLM classify, all account-scoped; Message-ID preferred when In-Reply-To/References present (Gmail same-subject merge must not rebind replies across multi-workflow enrollments); every outcome marks is_routed=TRUE w/ distinct route_method — → .spec/check-extras.md §V27
 V28: task.enrollment_id NOT NULL; workflow_id + contact_id denorm retained for filters; enrollment guaranteed @ route time via _ensure_enrollment — ON CONFLICT once, enrollment_added activity on first insert only
 V29: trigger email body inlined once under "New inbound email:"; excluded from email_history — no prompt duplicate
 V30: prompt framing follows trigger — first-reach-out (enrollment_run + enrollment_schedule byte-identical) vs deferred-task vs inbound; inbound email present -> email framing wins; no synthesized task_description
@@ -248,7 +248,7 @@ T233|x|enable mistune hard_wrap=True in render_email_html + regression test mult
 T234|x|impl §V.151(+) + §I — account signature cols (migration) + nested CLI projection + render_signature_html/text lab5 palette + harness append all outbound MIME paths + tests|V151,V92,V78,V108,I.cli
 T235|x|init `.grok/skills/mailpilot-campaign-test/` SKILL.md — Grok-native simplified port of Claude mailpilot-campaign-test; reuse `.claude/.../scripts`+`references`; Grok tools; default `--workflow-file` `/Users/kb/github/lab5-leads/workflows/acumatica-var-outbound.toml`; Next-block; safety = outbound@lab5.ca↔inbound@lab5.ca only|V122,V100,V102
 T236|x|skill setup/preflight — ensure `outbound@lab5.ca` signature {Konstantin Borovik, DevOps Engineer, https://lab5.ca, +1-416-670-0621} + `display_name=Konstantin Borovik` via `account create|update` flags (§V.151); idempotent; block run if missing/mismatched|V151,V122
-T237|.|smoke campaign-test on acumatica-var-outbound — full send→reply→verify path; report under `reports/campaign-test/<run_id>/`; cleanup always|V122,V151
+T237|x|smoke campaign-test on acumatica-var-outbound — full send→reply→verify path; report under `reports/campaign-test/<run_id>/`; cleanup always|V122,V151
 T238|.|fix campaign-test required outbound identity — `signature.full_name` Borovi→Borovik; ensure+preflight-block `display_name=Konstantin Borovik`; skill step 0c + REQUIRED_OUTBOUND_* + tests|V151,V122,T236
 
 ## §B BUGS

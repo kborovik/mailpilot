@@ -17,7 +17,7 @@
       "key": "question",
       "label": "Question -- interested, not ready",
       "expected_branch": "Answer briefly, re-offer the calendar link, do NOT conclude; enrollment stays active.",
-      "reply_body": "Before we set up a call, can you tell me roughly what one sourced reply costs to run, and how MailPilot avoids guessing when a question is out of scope?",
+      "reply_body": "Before we set up a call, is the calendar link still the best next step, or would you rather I reply with two times that work for me next week?",
       "expect": {
         "outcome": "none",
         "contact_disabled": false,

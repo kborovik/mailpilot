@@ -2,11 +2,13 @@
 
 Pipeline that assigns inbound emails to the correct workflow:
 
-1. **Thread match** -- prior email in same Gmail thread has a workflow_id
-2. **RFC 2822 message-id match** -- inbound In-Reply-To / References headers
-   cite a stored email's ``rfc2822_message_id`` (covers Gmail recipient-side
-   re-threading, where the same conversation has different ``threadId`` on
-   each side)
+1. **RFC 2822 message-id match** -- inbound In-Reply-To / References headers
+   cite a stored email's ``rfc2822_message_id``. Authoritative for replies:
+   Gmail may merge same-subject threads across distinct outbound sends to one
+   contact (campaign-test multi-scenario; multi-workflow enrollments), so a
+   shared ``threadId`` is not a safe workflow key when Message-ID is present.
+2. **Thread match** -- prior email in same Gmail thread has a workflow_id
+   (used when no threading headers / Message-ID miss).
 3. **LLM classification** -- single-turn call against active inbound workflows
 4. **Unrouted** -- classifier ran on real candidates and rejected all of them
 5. **Skipped, no inbound workflows** -- account has zero active inbound
@@ -66,8 +68,8 @@ def route_email(
     """Route an inbound email through the §V.27 pipeline.
 
     Runs bounce detection, then the three-step routing pipeline
-    (thread match -> LLM classification -> unrouted). Creates a
-    ``enrollment`` entry when routing to a workflow.
+    (RFC message-id match -> thread match -> LLM classification -> unrouted).
+    Creates an ``enrollment`` entry when routing to a workflow.
 
     Idempotent: emails with ``is_routed=True`` are returned unchanged.
 
@@ -94,14 +96,17 @@ def route_email(
                 span.set_attribute("result", "bounce")
                 return _handle_bounce(connection, email)
 
-            workflow_id = _try_thread_match(connection, email)
+            # Prefer Message-ID when In-Reply-To/References are present: Gmail
+            # may merge distinct same-subject threads, so thread_id can point at
+            # the wrong workflow for multi-enrollment / multi-scenario sends.
+            workflow_id = _try_rfc_message_id_match(connection, email)
             route_method: str
             if workflow_id is not None:
-                route_method = "thread_match"
+                route_method = "rfc_message_id_match"
             else:
-                workflow_id = _try_rfc_message_id_match(connection, email)
+                workflow_id = _try_thread_match(connection, email)
                 if workflow_id is not None:
-                    route_method = "rfc_message_id_match"
+                    route_method = "thread_match"
                 else:
                     workflow_id, route_method = _try_classify(
                         connection, email, sender_email, settings
@@ -225,7 +230,7 @@ def _try_thread_match(
     connection: psycopg.Connection[dict[str, Any]],
     email: Email,
 ) -> str | None:
-    """Step 1: match via Gmail thread ID.
+    """Step 2: match via Gmail thread ID (when Message-ID stage misses).
 
     If a prior email in the same thread has a non-null ``workflow_id``,
     return the most recent such workflow. Works regardless of workflow
@@ -251,14 +256,13 @@ def _try_rfc_message_id_match(
     connection: psycopg.Connection[dict[str, Any]],
     email: Email,
 ) -> str | None:
-    """Step 1b: match via RFC 2822 In-Reply-To / References headers.
+    """Step 1: match via RFC 2822 In-Reply-To / References headers.
 
-    Gmail re-threads on the recipient side: a reply that lands on the
-    outbound mailbox can have a fresh ``threadId`` even though it cites
-    our original send via ``In-Reply-To`` and ``References``. When the
-    Gmail-thread lookup returns no match, walk the cited message-ids and
-    look them up against ``email.rfc2822_message_id`` within the same
-    account.
+    Walk cited message-ids and look them up against
+    ``email.rfc2822_message_id`` within the same account. Prefer this over
+    Gmail thread match: recipient-side re-thread and same-subject merge can
+    attach a reply to the wrong conversation when one contact has multiple
+    outbound threads.
 
     Returns the matching email's ``workflow_id`` or ``None``. Scope is
     intentionally restricted to the inbound email's own ``account_id`` so
