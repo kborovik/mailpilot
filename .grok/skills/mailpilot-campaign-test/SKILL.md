@@ -8,7 +8,7 @@ description: >-
   wants to test, smoke-test, dry-run, or validate a campaign / outreach
   workflow before real sends, or runs /mailpilot-campaign-test.
 argument-hint: "[--workflow-file <path>] [--company-domain <domain>] [--min-confidence N]"
-allowed-tools: run_terminal_command, read_file, spawn_subagent, search_tool, use_tool
+allowed-tools: run_terminal_command, spawn_subagent
 ---
 
 # mailpilot-campaign-test
