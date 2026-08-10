@@ -1184,30 +1184,96 @@ def account() -> None:
     """Manage Gmail accounts."""
 
 
+def _validate_signature_website(website: str | None) -> str | None:
+    """Validate signature website as absolute http(s) URL (§V.151).
+
+    Empty string clears the field (returned as empty for caller to store NULL).
+    Non-empty values must be absolute ``http://`` or ``https://``; no auto-prefix.
+    """
+    if website is None:
+        return None
+    if website == "":
+        return ""
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(website)
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        output_error(
+            f"signature website must be an absolute http(s) URL (got {website!r})",
+            "validation_error",
+        )
+    return website
+
+
 @account.command("create")
 @click.option("--email", required=True, help="Gmail address.")
-@click.option("--display-name", default="", help="Display name.")
-def account_create(email: str, display_name: str) -> None:
+@click.option("--display-name", default="", help="Display name (From header only).")
+@click.option(
+    "--signature-full-name",
+    default=None,
+    help="Signature full name (optional).",
+)
+@click.option(
+    "--signature-title",
+    default=None,
+    help="Signature title (optional).",
+)
+@click.option(
+    "--signature-website",
+    default=None,
+    help="Signature website absolute http(s) URL (optional).",
+)
+@click.option(
+    "--signature-phone",
+    default=None,
+    help="Signature phone (optional).",
+)
+def account_create(
+    email: str,
+    display_name: str,
+    signature_full_name: str | None,
+    signature_title: str | None,
+    signature_website: str | None,
+    signature_phone: str | None,
+) -> None:
     """Create a new Gmail account."""
     from mailpilot.database import create_account, initialize_database
     from mailpilot.operator_log import cli_mutation, operator_event
 
     if not email.strip():
         output_error("email cannot be empty", "validation_error")
+    signature_website = _validate_signature_website(signature_website)
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         with cli_mutation("account", "create", email=email):
-            created = create_account(connection, email=email, display_name=display_name)
+            created = create_account(
+                connection,
+                email=email,
+                display_name=display_name,
+                signature_full_name=signature_full_name,
+                signature_title=signature_title,
+                signature_website=signature_website,
+                signature_phone=signature_phone,
+            )
             if created is None:
                 output_error(
                     f"account with email={email!r} already exists",
                     "duplicate_key",
                 )
+            changed = ["email", "display_name"]
+            for field in (
+                "signature_full_name",
+                "signature_title",
+                "signature_website",
+                "signature_phone",
+            ):
+                if getattr(created, field) is not None:
+                    changed.append(field)
             operator_event(
                 "account.create",
                 entity_id=created.id,
                 email=created.email,
-                changed=["email", "display_name"],
+                changed=changed,
             )
             output_entity("account", created)
     finally:
@@ -1253,12 +1319,48 @@ def account_view(account_ref: str) -> None:
 
 @account.command("update")
 @click.argument("account_ref")
-@click.option("--display-name", default=None, help="Display name.")
-def account_update(account_ref: str, display_name: str | None) -> None:
-    """Update a Gmail account (addressed by email or ID)."""
+@click.option(
+    "--display-name",
+    default=None,
+    help="Display name (From header only).",
+)
+@click.option(
+    "--signature-full-name",
+    default=None,
+    help="Signature full name (empty string clears).",
+)
+@click.option(
+    "--signature-title",
+    default=None,
+    help="Signature title (empty string clears).",
+)
+@click.option(
+    "--signature-website",
+    default=None,
+    help="Signature website absolute http(s) URL (empty string clears).",
+)
+@click.option(
+    "--signature-phone",
+    default=None,
+    help="Signature phone (empty string clears).",
+)
+def account_update(
+    account_ref: str,
+    display_name: str | None,
+    signature_full_name: str | None,
+    signature_title: str | None,
+    signature_website: str | None,
+    signature_phone: str | None,
+) -> None:
+    """Update a Gmail account (addressed by email or ID).
+
+    Signature flags are field-selective: omit leaves the field unchanged;
+    empty string clears it. Website must be absolute http(s) when non-empty.
+    """
     from mailpilot.database import initialize_database, update_account
     from mailpilot.operator_log import cli_mutation, operator_event
 
+    signature_website = _validate_signature_website(signature_website)
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         before = _resolve_account(connection, account_ref)
@@ -1266,13 +1368,27 @@ def account_update(account_ref: str, display_name: str | None) -> None:
         fields: dict[str, object] = {}
         if display_name is not None:
             fields["display_name"] = display_name
+        if signature_full_name is not None:
+            fields["signature_full_name"] = signature_full_name
+        if signature_title is not None:
+            fields["signature_title"] = signature_title
+        if signature_website is not None:
+            fields["signature_website"] = signature_website
+        if signature_phone is not None:
+            fields["signature_phone"] = signature_phone
         with cli_mutation("account", "update", entity_id=account_id):
             updated = update_account(connection, account_id, **fields)
             if updated is None:
                 output_error(f"account not found: {account_id}", "not_found")
             changed = [
                 field
-                for field in ("display_name",)
+                for field in (
+                    "display_name",
+                    "signature_full_name",
+                    "signature_title",
+                    "signature_website",
+                    "signature_phone",
+                )
                 if getattr(before, field) != getattr(updated, field)
             ]
             operator_event(

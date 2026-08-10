@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import dataclasses
+import html
 from typing import cast
 
 import mistune
+
+from mailpilot.models import Account, AccountSignature
 
 
 @dataclasses.dataclass(frozen=True)
@@ -152,7 +155,7 @@ _CONTAINER_STYLE = (
 
 
 def render_email_html(markdown_body: str, theme: EmailTheme) -> str:
-    """Convert Markdown to email-safe HTML with inline styles.
+    r"""Convert Markdown to email-safe HTML with inline styles.
 
     Args:
         markdown_body: Markdown source from the LLM agent.
@@ -161,7 +164,7 @@ def render_email_html(markdown_body: str, theme: EmailTheme) -> str:
     Returns:
         Complete HTML string with inline styles, wrapped in a container div.
 
-    Soft newlines (single ``\\n`` inside a paragraph) become ``<br>`` via
+    Soft newlines (single ``\n`` inside a paragraph) become ``<br>`` via
     mistune ``hard_wrap=True`` so signatures and bare URL lists keep their
     line structure in HTML email clients (§V.92, closes §B.126).
     """
@@ -173,3 +176,99 @@ def render_email_html(markdown_body: str, theme: EmailTheme) -> str:
     )
     content = cast(str, md(markdown_body))
     return f'<div style="{_CONTAINER_STYLE}">{content}</div>'
+
+
+# Lab5 signature palette (§V.151) — fixed; body THEMES never recolor these.
+_SIG_NAME_COLOR = "#1f2328"
+_SIG_MUTED_COLOR = "#424a53"
+_SIG_LINK_COLOR = "#0969da"
+_SIG_BORDER_COLOR = "#d1d9e0"
+
+
+def _signature_fields(
+    signature: Account | AccountSignature | None,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    """Extract normalized signature fields from Account or AccountSignature."""
+    if signature is None:
+        return None, None, None, None
+    if isinstance(signature, Account):
+        nested = signature.account_signature()
+        if nested is None:
+            return None, None, None, None
+        return nested.full_name, nested.title, nested.website, nested.phone
+    return signature.full_name, signature.title, signature.website, signature.phone
+
+
+def render_signature_html(
+    signature: Account | AccountSignature | None,
+) -> str:
+    """Render account signature as HTML block for wire MIME (§V.151).
+
+    Lab5 palette constants (not body theme): name ``#1f2328``, title/phone
+    ``#424a53``, website link ``#0969da``, border-top ``#d1d9e0``. Inline
+    styles only; no background band. Empty fields omitted; all-empty returns
+    empty string (no block, no separator).
+    """
+    full_name, title, website, phone = _signature_fields(signature)
+    if full_name is None and title is None and website is None and phone is None:
+        return ""
+
+    lines: list[str] = []
+    if full_name is not None:
+        safe = html.escape(full_name)
+        lines.append(
+            f'<div style="color:{_SIG_NAME_COLOR}; font-size:14px; '
+            f'font-weight:600; line-height:1.4; margin:0 0 2px 0">'
+            f"{safe}</div>"
+        )
+    if title is not None:
+        safe = html.escape(title)
+        lines.append(
+            f'<div style="color:{_SIG_MUTED_COLOR}; font-size:13px; '
+            f'line-height:1.4; margin:0 0 2px 0">{safe}</div>'
+        )
+    if website is not None:
+        safe_url = html.escape(website, quote=True)
+        safe_text = html.escape(website)
+        lines.append(
+            f'<div style="font-size:13px; line-height:1.4; margin:0 0 2px 0">'
+            f'<a href="{safe_url}" style="color:{_SIG_LINK_COLOR}; '
+            f'text-decoration:none">{safe_text}</a></div>'
+        )
+    if phone is not None:
+        safe = html.escape(phone)
+        lines.append(
+            f'<div style="color:{_SIG_MUTED_COLOR}; font-size:13px; '
+            f'line-height:1.4; margin:0">{safe}</div>'
+        )
+
+    block_style = (
+        f"margin-top:24px; padding-top:16px; "
+        f"border-top:1px solid {_SIG_BORDER_COLOR}; "
+        f"font-family:Arial,'Helvetica Neue',Helvetica,sans-serif"
+    )
+    return f'<div style="{block_style}">{"".join(lines)}</div>'
+
+
+def render_signature_text(
+    signature: Account | AccountSignature | None,
+) -> str:
+    """Render account signature as plain-text block for wire MIME (§V.151).
+
+    Returns lines joined by newlines without a leading delimiter. Caller
+    prepends the classic ``--`` separator when appending to the body.
+    All-empty returns empty string.
+    """
+    full_name, title, website, phone = _signature_fields(signature)
+    if full_name is None and title is None and website is None and phone is None:
+        return ""
+    lines: list[str] = []
+    if full_name is not None:
+        lines.append(full_name)
+    if title is not None:
+        lines.append(title)
+    if website is not None:
+        lines.append(website)
+    if phone is not None:
+        lines.append(phone)
+    return "\n".join(lines)

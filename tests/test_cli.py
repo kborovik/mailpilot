@@ -280,12 +280,19 @@ def test_account_create(runner: CliRunner, mock_connection: MagicMock) -> None:
 
     assert result.exit_code == 0
     mock_create.assert_called_once_with(
-        mock_connection, email="test@example.com", display_name="Test Account"
+        mock_connection,
+        email="test@example.com",
+        display_name="Test Account",
+        signature_full_name=None,
+        signature_title=None,
+        signature_website=None,
+        signature_phone=None,
     )
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["account"]["email"] == "test@example.com"
     assert data["account"]["display_name"] == "Test Account"
+    assert data["account"]["signature"] is None
 
 
 def test_account_create_email_only(
@@ -303,7 +310,13 @@ def test_account_create_email_only(
 
     assert result.exit_code == 0
     mock_create.assert_called_once_with(
-        mock_connection, email="test@example.com", display_name=""
+        mock_connection,
+        email="test@example.com",
+        display_name="",
+        signature_full_name=None,
+        signature_title=None,
+        signature_website=None,
+        signature_phone=None,
     )
 
 
@@ -320,6 +333,85 @@ def test_account_create_empty_email(
     data = json.loads(result.output)
     assert data["error"] == "validation_error"
     assert "email" in data["message"]
+
+
+def test_account_create_with_signature(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.151: create accepts signature flags; projects nested signature."""
+    account = _make_account(
+        signature_full_name="Ada Lovelace",
+        signature_title="Engineer",
+        signature_website="https://lab5.ca",
+        signature_phone="+1-555-0100",
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_account", return_value=account) as mock_create,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "account",
+                "create",
+                "--email",
+                "test@example.com",
+                "--signature-full-name",
+                "Ada Lovelace",
+                "--signature-title",
+                "Engineer",
+                "--signature-website",
+                "https://lab5.ca",
+                "--signature-phone",
+                "+1-555-0100",
+            ],
+        )
+
+    assert result.exit_code == 0
+    mock_create.assert_called_once_with(
+        mock_connection,
+        email="test@example.com",
+        display_name="",
+        signature_full_name="Ada Lovelace",
+        signature_title="Engineer",
+        signature_website="https://lab5.ca",
+        signature_phone="+1-555-0100",
+    )
+    data = json.loads(result.output)
+    assert data["account"]["signature"] == {
+        "full_name": "Ada Lovelace",
+        "title": "Engineer",
+        "website": "https://lab5.ca",
+        "phone": "+1-555-0100",
+    }
+    assert "signature_full_name" not in data["account"]
+
+
+def test_account_create_invalid_signature_website(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.151: website must be absolute http(s); no auto-prefix."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "account",
+                "create",
+                "--email",
+                "test@example.com",
+                "--signature-website",
+                "lab5.ca",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "http" in data["message"].lower()
 
 
 # -- account list --------------------------------------------------------------
@@ -462,6 +554,110 @@ def test_account_update_display_name(
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["account"]["display_name"] == "New Name"
+
+
+def test_account_update_signature_field_selective(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.151: update only the flags passed; empty string clears."""
+    before = _make_account(
+        signature_full_name="Ada",
+        signature_title="Eng",
+        signature_website="https://lab5.ca",
+        signature_phone="+1",
+    )
+    updated = _make_account(
+        signature_full_name="Ada",
+        signature_title=None,
+        signature_website="https://lab5.ca",
+        signature_phone="+1",
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=before),
+        patch("mailpilot.database.update_account", return_value=updated) as mock_update,
+    ):
+        result = runner.invoke(
+            main,
+            ["account", "update", before.id, "--signature-title", ""],
+        )
+
+    assert result.exit_code == 0
+    mock_update.assert_called_once_with(mock_connection, before.id, signature_title="")
+    data = json.loads(result.output)
+    assert data["account"]["signature"]["title"] is None
+    assert data["account"]["signature"]["full_name"] == "Ada"
+
+
+def test_account_update_invalid_signature_website(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    account = _make_account()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "account",
+                "update",
+                account.id,
+                "--signature-website",
+                "ftp://lab5.ca",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+
+
+def test_account_list_projects_nested_signature(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.151: list projects nested signature or null."""
+    from mailpilot.models import AccountSummary
+
+    accounts = [
+        AccountSummary(
+            id="id-1",
+            email="a@example.com",
+            display_name="A",
+            last_synced_at=None,
+            signature_full_name="Ada",
+            signature_title=None,
+            signature_website=None,
+            signature_phone=None,
+            created_at=_NOW,
+        ),
+        AccountSummary(
+            id="id-2",
+            email="b@example.com",
+            display_name="B",
+            last_synced_at=None,
+            created_at=_NOW,
+        ),
+    ]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_accounts", return_value=accounts),
+    ):
+        result = runner.invoke(main, ["account", "list"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["accounts"][0]["signature"] == {
+        "full_name": "Ada",
+        "title": None,
+        "website": None,
+        "phone": None,
+    }
+    assert data["accounts"][1]["signature"] is None
+    assert "signature_full_name" not in data["accounts"][0]
 
 
 def test_account_update_no_fields(

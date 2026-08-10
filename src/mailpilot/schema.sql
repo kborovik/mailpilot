@@ -7,7 +7,11 @@ CREATE TABLE IF NOT EXISTS account (
     last_synced_at       TIMESTAMPTZ,
     disabled_reason      TEXT,
     created_at           TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at           TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    signature_full_name  TEXT,
+    signature_title      TEXT,
+    signature_website    TEXT,
+    signature_phone      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS company (

@@ -813,10 +813,22 @@ def get_status_payload(
 # -- Account -------------------------------------------------------------------
 
 
+def _empty_to_none(value: str | None) -> str | None:
+    """Map empty strings to NULL for optional TEXT columns."""
+    if value is None or value == "":
+        return None
+    return value
+
+
 def create_account(
     connection: psycopg.Connection[dict[str, Any]],
     email: str,
     display_name: str = "",
+    *,
+    signature_full_name: str | None = None,
+    signature_title: str | None = None,
+    signature_website: str | None = None,
+    signature_phone: str | None = None,
 ) -> Account | None:
     """Create a new account.
 
@@ -824,10 +836,18 @@ def create_account(
     safely re-invoke without catching ``UniqueViolation``. Returns ``None``
     when the row already exists.
 
+    Signature fields (§V.151) are optional; empty strings store as NULL.
+    ``display_name`` is From-header only and is not aliased to
+    ``signature_full_name``.
+
     Args:
         connection: Open database connection.
         email: Gmail address.
-        display_name: Display name for the account.
+        display_name: Display name for the account (From header).
+        signature_full_name: Signature name line (optional).
+        signature_title: Signature title line (optional).
+        signature_website: Signature website absolute http(s) URL (optional).
+        signature_phone: Signature phone line (optional).
 
     Returns:
         Created account, or ``None`` if an account with this email already
@@ -835,12 +855,28 @@ def create_account(
     """
     row = connection.execute(
         """\
-        INSERT INTO account (id, email, display_name)
-        VALUES (%(id)s, %(email)s, %(display_name)s)
+        INSERT INTO account (
+            id, email, display_name,
+            signature_full_name, signature_title,
+            signature_website, signature_phone
+        )
+        VALUES (
+            %(id)s, %(email)s, %(display_name)s,
+            %(signature_full_name)s, %(signature_title)s,
+            %(signature_website)s, %(signature_phone)s
+        )
         ON CONFLICT (email) DO NOTHING
         RETURNING *
         """,
-        {"id": _new_id(), "email": email, "display_name": display_name},
+        {
+            "id": _new_id(),
+            "email": email,
+            "display_name": display_name,
+            "signature_full_name": _empty_to_none(signature_full_name),
+            "signature_title": _empty_to_none(signature_title),
+            "signature_website": _empty_to_none(signature_website),
+            "signature_phone": _empty_to_none(signature_phone),
+        },
     ).fetchone()
     connection.commit()
     if row is None:
@@ -912,7 +948,9 @@ def list_accounts(
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
         "SELECT id, email, display_name, last_synced_at, disabled_reason, "
-        "created_at FROM account {where} ORDER BY created_at LIMIT %(limit)s"
+        "signature_full_name, signature_title, signature_website, "
+        "signature_phone, created_at "
+        "FROM account {where} ORDER BY created_at LIMIT %(limit)s"
     ).format(where=where)
     rows = connection.execute(query, params).fetchall()
     return [AccountSummary.model_validate(row) for row in rows]
@@ -947,6 +985,9 @@ def update_account(
 ) -> Account | None:
     """Update an account by ID.
 
+    Signature fields (§V.151) accept empty string to clear (stored as NULL).
+    ``display_name`` is From-header only and is not aliased to signature name.
+
     Args:
         connection: Open database connection.
         account_id: Account ID.
@@ -959,6 +1000,14 @@ def update_account(
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return get_account(connection, account_id)
+    for key in (
+        "signature_full_name",
+        "signature_title",
+        "signature_website",
+        "signature_phone",
+    ):
+        if key in updates and isinstance(updates[key], str):
+            updates[key] = _empty_to_none(updates[key])  # type: ignore[arg-type]
     updates["id"] = account_id
     query = _build_update("account", updates, SQL("id = %(id)s"))
     row = connection.execute(query, updates).fetchone()

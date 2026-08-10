@@ -1,10 +1,13 @@
-"""Tests for Markdown-to-HTML email rendering."""
+"""Tests for Markdown-to-HTML email rendering and account signatures."""
 
 from mailpilot.email_renderer import (
     THEMES,
     get_theme,
     render_email_html,
+    render_signature_html,
+    render_signature_text,
 )
+from mailpilot.models import AccountSignature
 
 
 def test_themes_contains_six_palettes():
@@ -127,3 +130,74 @@ def test_render_soft_newlines_become_br():
     assert collapsed not in html
     # Bare URL list lines also hard-wrapped.
     assert html.count("<br") >= 5
+
+
+# -- Account signature (§V.151) ------------------------------------------------
+
+
+def test_render_signature_html_empty_returns_empty():
+    assert render_signature_html(None) == ""
+    assert render_signature_html(AccountSignature()) == ""
+
+
+def test_render_signature_html_lab5_palette():
+    """§V.151: fixed lab5 colors; body theme does not recolor signature."""
+    sig = AccountSignature(
+        full_name="Ada Lovelace",
+        title="Engineer",
+        website="https://lab5.ca",
+        phone="+1-555-0100",
+    )
+    html = render_signature_html(sig)
+    assert "#1f2328" in html
+    assert "#424a53" in html
+    assert "#0969da" in html
+    assert "#d1d9e0" in html
+    assert "border-top:1px solid #d1d9e0" in html
+    assert "Ada Lovelace" in html
+    assert "Engineer" in html
+    assert 'href="https://lab5.ca"' in html
+    assert "+1-555-0100" in html
+    # No background band.
+    assert "background" not in html.lower()
+    # Body theme primary (blue #2563eb) must not appear.
+    assert "#2563eb" not in html
+
+
+def test_render_signature_html_omits_empty_fields():
+    html = render_signature_html(AccountSignature(full_name="Only Name"))
+    assert "Only Name" in html
+    assert "href=" not in html
+    assert "#0969da" not in html
+
+
+def test_render_signature_html_escapes_content():
+    html = render_signature_html(
+        AccountSignature(
+            full_name="<script>x</script>", website="https://a.com/?q=1&b=2"
+        )
+    )
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html
+    assert "q=1&amp;b=2" in html or "q=1&b=2" in html
+
+
+def test_render_signature_text_empty_returns_empty():
+    assert render_signature_text(None) == ""
+    assert render_signature_text(AccountSignature()) == ""
+
+
+def test_render_signature_text_lines():
+    sig = AccountSignature(
+        full_name="Ada Lovelace",
+        title="Engineer",
+        website="https://lab5.ca",
+        phone="+1-555-0100",
+    )
+    text = render_signature_text(sig)
+    assert text == "Ada Lovelace\nEngineer\nhttps://lab5.ca\n+1-555-0100"
+
+
+def test_render_signature_text_partial():
+    text = render_signature_text(AccountSignature(full_name="Ada", phone="+1"))
+    assert text == "Ada\n+1"

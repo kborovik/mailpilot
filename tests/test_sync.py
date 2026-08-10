@@ -1297,6 +1297,90 @@ def test_send_email_formats_from_header_with_display_name(
     assert msg["from"] == "Alice Sender <sender@example.com>"
 
 
+def test_send_email_appends_signature_to_mime_not_body(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.151: wire MIME carries signature; persisted body_text does not."""
+    from mailpilot.database import create_account
+
+    account = create_account(
+        database_connection,
+        email="sig-sender@example.com",
+        display_name="From Only",
+        signature_full_name="Ada Lovelace",
+        signature_title="Engineer",
+        signature_website="https://lab5.ca",
+        signature_phone="+1-555-0100",
+    )
+    assert account is not None
+    client, service = _make_send_client(account.email)
+
+    email = send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Hi",
+        body="Hello prospect",
+    )
+
+    # Persisted body is content only (no signature).
+    assert email.body_text == "Hello prospect"
+    assert "Ada Lovelace" not in email.body_text
+    assert "--" not in email.body_text
+
+    msg, parts = _get_sent_mime(service)
+    plain = parts[0].get_payload(decode=True)
+    html = parts[1].get_payload(decode=True)
+    assert isinstance(plain, bytes)
+    assert isinstance(html, bytes)
+    plain_text = plain.decode("utf-8")
+    html_text = html.decode("utf-8")
+
+    assert "Hello prospect" in plain_text
+    assert "\n\n--\nAda Lovelace\nEngineer\nhttps://lab5.ca\n+1-555-0100" in plain_text
+    assert "Ada Lovelace" in html_text
+    assert "#1f2328" in html_text
+    assert "#0969da" in html_text
+    assert "https://lab5.ca" in html_text
+    # display_name is From only, not in signature block as alias
+    assert msg["from"] == "From Only <sig-sender@example.com>"
+
+
+def test_send_email_no_signature_when_empty(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.151: all-empty signature -> no block, no separator in MIME."""
+    account = make_test_account(
+        database_connection,
+        email="nosig@example.com",
+    )
+    client, service = _make_send_client(account.email)
+
+    send_email(
+        database_connection,
+        account=account,
+        gmail_client=client,
+        settings=make_test_settings(),
+        to="recipient@example.com",
+        subject="Hi",
+        body="Just body",
+    )
+
+    _msg, parts = _get_sent_mime(service)
+    plain = parts[0].get_payload(decode=True)
+    html = parts[1].get_payload(decode=True)
+    assert isinstance(plain, bytes)
+    assert isinstance(html, bytes)
+    plain_text = plain.decode("utf-8")
+    html_text = html.decode("utf-8")
+    assert plain_text == "Just body"
+    assert "\n\n--" not in plain_text
+    assert "#1f2328" not in html_text
+    assert "border-top:1px solid #d1d9e0" not in html_text
+
+
 def test_send_email_from_header_falls_back_to_email_only(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):

@@ -240,6 +240,77 @@ def test_update_account(database_connection: psycopg.Connection[dict[str, Any]])
     assert updated.updated_at > account.updated_at
 
 
+def test_create_account_with_signature(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.151: create_account persists signature cols; empty -> NULL."""
+    account = create_account(
+        database_connection,
+        email="sig@example.com",
+        display_name="From Name",
+        signature_full_name="Ada Lovelace",
+        signature_title="Engineer",
+        signature_website="https://lab5.ca",
+        signature_phone="+1-555-0100",
+    )
+    assert account is not None
+    assert account.display_name == "From Name"
+    assert account.signature_full_name == "Ada Lovelace"
+    assert account.signature_title == "Engineer"
+    assert account.signature_website == "https://lab5.ca"
+    assert account.signature_phone == "+1-555-0100"
+    # Nested projection via model_dump
+    dumped = account.model_dump(mode="json")
+    assert dumped["signature"] == {
+        "full_name": "Ada Lovelace",
+        "title": "Engineer",
+        "website": "https://lab5.ca",
+        "phone": "+1-555-0100",
+    }
+    assert "signature_full_name" not in dumped
+    # display_name is not aliased to full_name
+    assert dumped["display_name"] == "From Name"
+
+
+def test_update_account_signature_clear(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.151: empty string clears signature field (stored NULL)."""
+    account = create_account(
+        database_connection,
+        email="clear@example.com",
+        signature_full_name="Ada",
+        signature_title="Eng",
+    )
+    assert account is not None
+    updated = update_account(
+        database_connection,
+        account.id,
+        signature_title="",
+    )
+    assert updated is not None
+    assert updated.signature_full_name == "Ada"
+    assert updated.signature_title is None
+    dumped = updated.model_dump(mode="json")
+    assert dumped["signature"]["title"] is None
+    assert dumped["signature"]["full_name"] == "Ada"
+
+
+def test_list_accounts_includes_signature(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.151: list_accounts projects signature fields on summaries."""
+    create_account(
+        database_connection,
+        email="list-sig@example.com",
+        signature_full_name="Ada",
+    )
+    accounts = list_accounts(database_connection)
+    match = next(a for a in accounts if a.email == "list-sig@example.com")
+    assert match.signature_full_name == "Ada"
+    assert match.model_dump(mode="json")["signature"]["full_name"] == "Ada"
+
+
 def test_update_account_not_found(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):

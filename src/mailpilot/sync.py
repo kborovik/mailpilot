@@ -1382,7 +1382,12 @@ def send_email(  # noqa: PLR0913
         from email.mime.text import MIMEText
 
         from mailpilot.database import get_workflow
-        from mailpilot.email_renderer import get_theme, render_email_html
+        from mailpilot.email_renderer import (
+            get_theme,
+            render_email_html,
+            render_signature_html,
+            render_signature_text,
+        )
 
         from_header = (
             formataddr((account.display_name, account.email))
@@ -1403,13 +1408,19 @@ def send_email(  # noqa: PLR0913
         # ``strip_markdown`` reduction stripped table borders and bold
         # markers, leaving recipients on text/plain-only clients with
         # tab-soup tables.
+        # Body content only is persisted (§C plain-text body); harness
+        # appends account signature to wire MIME only (§V.151).
         html_body = render_email_html(body, theme)
         plain_body = strip_control_chars(body)
+        sig_html = render_signature_html(account)
+        sig_text = render_signature_text(account)
+        wire_html = html_body + sig_html if sig_html else html_body
+        wire_plain = f"{plain_body}\n\n--\n{sig_text}" if sig_text else plain_body
 
         # Build multipart/alternative MIME
         mime_message = MIMEMultipart("alternative")
-        mime_message.attach(MIMEText(plain_body, "plain", "utf-8"))
-        mime_message.attach(MIMEText(html_body, "html", "utf-8"))
+        mime_message.attach(MIMEText(wire_plain, "plain", "utf-8"))
+        mime_message.attach(MIMEText(wire_html, "html", "utf-8"))
 
         # Resolve threading headers. When the caller supplied an explicit
         # in_reply_to (agent reply_email path) we honour it verbatim;

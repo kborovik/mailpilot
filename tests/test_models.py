@@ -25,6 +25,38 @@ def test_account_required_fields():
     assert account.email == "a@b.com"
     assert account.display_name == ""
     assert account.gmail_history_id is None
+    assert account.signature_full_name is None
+    assert account.signature_title is None
+    assert account.signature_website is None
+    assert account.signature_phone is None
+    assert account.account_signature() is None
+    dumped = account.model_dump(mode="json")
+    assert dumped["signature"] is None
+    assert "signature_full_name" not in dumped
+
+
+def test_account_signature_nested_projection():
+    """§V.151: model_dump nests signature; flat cols stay off the wire dump."""
+    account = Account(
+        id="1",
+        email="a@b.com",
+        display_name="From Name",
+        signature_full_name="Ada",
+        signature_title="Eng",
+        signature_website="https://lab5.ca",
+        signature_phone=None,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    assert account.account_signature() is not None
+    dumped = account.model_dump(mode="json")
+    assert dumped["display_name"] == "From Name"
+    assert dumped["signature"] == {
+        "full_name": "Ada",
+        "title": "Eng",
+        "website": "https://lab5.ca",
+        "phone": None,
+    }
 
 
 def test_account_missing_required_raises():

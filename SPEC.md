@@ -245,7 +245,7 @@ T230|x|impl §V.150(+) + §I — enrollment add --tag --dry-run company-tag coho
 T231|x|impl §V.111(∆)+§I — top-level `--help` emits SKILL.md body; drop `--skill` flag; SKILL Grammar/Discovery; tests (body==package; tree zero §-cites)|V111,I.cli
 T232|x|drop tests/test_contact_finder_verify.py — sole non-package pytest (detached contact-finder.md); V113 stays via .spec/check-extras lead-contacts greps|V113
 T233|x|enable mistune hard_wrap=True in render_email_html + regression test multi-line signature soft newlines -> br|V92,B126
-T234|.|impl §V.151(+) + §I — account signature cols (migration) + nested CLI projection + render_signature_html/text lab5 palette + harness append all outbound MIME paths + tests|V151,V92,V78,V108,I.cli
+T234|x|impl §V.151(+) + §I — account signature cols (migration) + nested CLI projection + render_signature_html/text lab5 palette + harness append all outbound MIME paths + tests|V151,V92,V78,V108,I.cli
 
 ## §B BUGS
 

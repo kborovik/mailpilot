@@ -2,10 +2,62 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_serializer
+
+
+class AccountSignature(BaseModel):
+    """Nested account email signature projection (§V.151).
+
+    CLI list|view|create|update emit this under ``signature`` (or ``null``
+    when every field is empty). Flat DB columns stay on ``Account`` /
+    ``AccountSummary`` for SQL row mapping.
+    """
+
+    full_name: str | None = None
+    title: str | None = None
+    website: str | None = None
+    phone: str | None = None
+
+
+def _normalize_signature_field(value: str | None) -> str | None:
+    """Collapse empty strings to ``None`` for nested projection."""
+    if value is None or value == "":
+        return None
+    return value
+
+
+def signature_from_fields(
+    full_name: str | None = None,
+    title: str | None = None,
+    website: str | None = None,
+    phone: str | None = None,
+) -> AccountSignature | None:
+    """Build nested signature or ``None`` when all fields are empty (§V.151)."""
+    fn = _normalize_signature_field(full_name)
+    ti = _normalize_signature_field(title)
+    we = _normalize_signature_field(website)
+    ph = _normalize_signature_field(phone)
+    if fn is None and ti is None and we is None and ph is None:
+        return None
+    return AccountSignature(full_name=fn, title=ti, website=we, phone=ph)
+
+
+def _serialize_with_nested_signature(
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    """Replace flat signature_* keys with nested ``signature`` (§V.151)."""
+    sig = signature_from_fields(
+        full_name=data.pop("signature_full_name", None),
+        title=data.pop("signature_title", None),
+        website=data.pop("signature_website", None),
+        phone=data.pop("signature_phone", None),
+    )
+    data["signature"] = sig.model_dump(mode="json") if sig is not None else None
+    return data
 
 
 class Account(BaseModel):
@@ -18,8 +70,27 @@ class Account(BaseModel):
     watch_expiration: datetime | None = None
     last_synced_at: datetime | None = None
     disabled_reason: str | None = None
+    signature_full_name: str | None = None
+    signature_title: str | None = None
+    signature_website: str | None = None
+    signature_phone: str | None = None
     created_at: datetime
     updated_at: datetime
+
+    @model_serializer(mode="wrap")
+    def _serialize(
+        self, handler: Callable[[Account], dict[str, Any]]
+    ) -> dict[str, Any]:
+        return _serialize_with_nested_signature(handler(self))
+
+    def account_signature(self) -> AccountSignature | None:
+        """Nested signature for harness render (§V.151)."""
+        return signature_from_fields(
+            self.signature_full_name,
+            self.signature_title,
+            self.signature_website,
+            self.signature_phone,
+        )
 
 
 class AccountSummary(BaseModel):
@@ -28,6 +99,8 @@ class AccountSummary(BaseModel):
     Carries ``disabled_reason`` (``None`` when active) so ``account list
     --include-disabled`` surfaces the operator-supplied reason without a
     per-account ``account view`` probe (§V.118, mirror of `CompanySummary`).
+
+    Nested ``signature`` projected the same as full Account (§V.151).
     """
 
     id: str
@@ -35,7 +108,17 @@ class AccountSummary(BaseModel):
     display_name: str
     last_synced_at: datetime | None
     disabled_reason: str | None = None
+    signature_full_name: str | None = None
+    signature_title: str | None = None
+    signature_website: str | None = None
+    signature_phone: str | None = None
     created_at: datetime
+
+    @model_serializer(mode="wrap")
+    def _serialize(
+        self, handler: Callable[[AccountSummary], dict[str, Any]]
+    ) -> dict[str, Any]:
+        return _serialize_with_nested_signature(handler(self))
 
 
 class CompanyProfile(BaseModel):
