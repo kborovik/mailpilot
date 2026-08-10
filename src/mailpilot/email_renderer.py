@@ -160,8 +160,16 @@ def render_email_html(markdown_body: str, theme: EmailTheme) -> str:
 
     Returns:
         Complete HTML string with inline styles, wrapped in a container div.
+
+    Soft newlines (single ``\\n`` inside a paragraph) become ``<br>`` via
+    mistune ``hard_wrap=True`` so signatures and bare URL lists keep their
+    line structure in HTML email clients (§V.92, closes §B.126).
     """
     renderer = EmailRenderer(theme)
-    md = mistune.create_markdown(renderer=renderer, plugins=["table"])
+    md = mistune.create_markdown(
+        renderer=renderer,
+        plugins=["table"],
+        hard_wrap=True,
+    )
     content = cast(str, md(markdown_body))
     return f'<div style="{_CONTAINER_STYLE}">{content}</div>'

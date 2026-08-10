@@ -242,7 +242,7 @@ T229|x|impl §V.14(∆) + §I — note remove owner bulk (--company-domain|--con
 T230|x|impl §V.150(+) + §I — enrollment add --tag --dry-run company-tag cohort preview; disabled companies out; exclude enrolled + self-loop; optional --min-contacts; envelope + tests; --skill (#198)|V150,V33,V114,V116,V107,V4,I.cli
 T231|x|impl §V.111(∆)+§I — top-level `--help` emits SKILL.md body; drop `--skill` flag; SKILL Grammar/Discovery; tests (body==package; tree zero §-cites)|V111,I.cli
 T232|x|drop tests/test_contact_finder_verify.py — sole non-package pytest (detached contact-finder.md); V113 stays via .spec/check-extras lead-contacts greps|V113
-T233|.|enable mistune hard_wrap=True in render_email_html + regression test multi-line signature soft newlines -> br|V92,B126
+T233|x|enable mistune hard_wrap=True in render_email_html + regression test multi-line signature soft newlines -> br|V92,B126
 
 ## §B BUGS
 

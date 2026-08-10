@@ -102,3 +102,28 @@ def test_render_inline_code():
     html = render_email_html("Use `cmd` here", get_theme("blue"))
     assert "<code" in html
     assert "cmd" in html
+
+
+def test_render_soft_newlines_become_br():
+    """Soft newlines in signatures/URL lists must become <br>, not spaces (§V.92)."""
+    body = (
+        "A few places that show the work:\n"
+        "https://lab5.ca/services/tenant-configuration-as-code/\n"
+        "https://lab5.ca/blog/acumatica-live-company-to-rebuildable-uat/\n"
+        "\n"
+        "---\n"
+        "Konstantin Borovik\n"
+        "DevOps Engineer\n"
+        "https://lab5.ca\n"
+        "+1-416-670-0621"
+    )
+    html = render_email_html(body, get_theme("blue"))
+    assert "<br" in html
+    # Signature lines stay distinct; must not collapse to one space-joined run.
+    assert "Konstantin Borovik" in html
+    assert "DevOps Engineer" in html
+    assert "+1-416-670-0621" in html
+    collapsed = "Konstantin Borovik DevOps Engineer https://lab5.ca +1-416-670-0621"
+    assert collapsed not in html
+    # Bare URL list lines also hard-wrapped.
+    assert html.count("<br") >= 5
