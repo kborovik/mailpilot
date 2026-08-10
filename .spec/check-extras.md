@@ -745,7 +745,7 @@ Trigger: `src/mailpilot/run.py` or `src/mailpilot/agent/templates.py` changed.
 
 ## §V132 — workflow stats funnel
 
-`workflow stats <workflow>` = read-only per-campaign funnel, 1 workflow by entity ref (§V.107), single deterministic SQL aggregate (no LLM). Envelope `{"workflow_stats": {...}, "ok": true}` (aggregate not a workflow entity row — singular-key exception cf `db export` §V.121). 8 stages at enrollment grain (contact-distinct, multi-touch never double-counts):
+`workflow stats <workflow>` = read-only per-campaign funnel, 1 workflow by entity ref (§V.107), single deterministic SQL aggregate or fixed small query set (no LLM). Envelope `{"workflow_stats": {...}, "ok": true}` (aggregate not a workflow entity row — singular-key exception cf `db export` §V.121). 8 stages at enrollment grain (contact-distinct, multi-touch never double-counts):
 - `enrolled` = workflow's enrollment rows
 - `sent` = enrollments with at least 1 outbound `status='sent'` email
 - `bounced` = enrollments with at least 1 outbound `status='bounced'` email
@@ -754,6 +754,11 @@ Trigger: `src/mailpilot/run.py` or `src/mailpilot/agent/templates.py` changed.
 - `contact_later` / `do_not_contact` = latest-outcome `enrollment_failed` split by `detail->>'disposition'`
 - `active` = `status='active'` enrollment with no terminal outcome
 
+Touch-level + execution slices (additive; still enrollment grain where applicable):
+- `touches` = map touch-number string → `{sent, pending}` for each configured def `touches` N (outbound sent count vs pending task.context.touch)
+- `awaiting_first_touch` = active enrollments with no outbound email for this workflow
+- `disabled` = enrollments with `status='disabled'`
+
 Disposition persistence: `record_enrollment_outcome` writes `detail.disposition` in {meeting_booked, do_not_contact, contact_later} from `conclude_enrollment.disposition` (§V.127) + booking-conclusion `meeting_booked` (§V.128). JSONB key, no migration. Pre-change failed rows lack disposition (legacy gap; forward campaigns are exact).
 
 Trigger: `src/mailpilot/database.py` or `src/mailpilot/cli.py` changed.
@@ -761,6 +766,7 @@ Trigger: `src/mailpilot/database.py` or `src/mailpilot/cli.py` changed.
 - `rg 'meeting_booked\|contact_later\|do_not_contact' src/mailpilot/database.py | grep stats` -> disposition stages
 - `rg '"workflow_stats"' src/mailpilot/cli.py` -> envelope key correct
 - `rg 'DISTINCT.*contact_id\b' src/mailpilot/database.py | grep stats` -> enrollment grain aggregate
+- `rg 'awaiting_first_touch\|touches' src/mailpilot/database.py src/mailpilot/models.py` -> touch-level fields present
 
 ## §V133 — task stats aggregate
 
