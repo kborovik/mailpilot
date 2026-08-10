@@ -24,6 +24,7 @@ from _common import (
     DEFAULT_WORKFLOW_FILE,
     PROSPECT_EMAIL,
     PROSPECT_MAILBOX,
+    REQUIRED_OUTBOUND_SIGNATURE,
     SENDER_EMAIL,
     mp,
     repo_root,
@@ -66,6 +67,46 @@ def _resolve_workflow(
         )
 
 
+def _check_outbound_signature(
+    sender: dict[str, object] | None, result: dict[str, object], issues: list[str]
+) -> None:
+    """Block when outbound@ signature missing or mismatches §V.151 required fields.
+
+    Skill step 0c sets the fields via ``account create|update``; preflight only
+    verifies. Nested ``signature`` keys match AccountSignature projection.
+    """
+    required = REQUIRED_OUTBOUND_SIGNATURE
+    result["required_outbound_signature"] = dict(required)
+    if not sender:
+        result["outbound_signature"] = None
+        result["outbound_signature_ok"] = False
+        return
+    sig = sender.get("signature")
+    result["outbound_signature"] = sig if isinstance(sig, dict) else None
+    if not isinstance(sig, dict):
+        issues.append(
+            f"sending account {SENDER_EMAIL} signature missing; set via "
+            "`mailpilot account update` --signature-full-name/title/website/phone "
+            "(§V.151); campaign-test requires exact lab5 signature"
+        )
+        result["outbound_signature_ok"] = False
+        return
+    mismatches: list[str] = []
+    for key, expected in required.items():
+        actual = sig.get(key)
+        if actual != expected:
+            mismatches.append(f"{key}={actual!r} (want {expected!r})")
+    if mismatches:
+        issues.append(
+            f"sending account {SENDER_EMAIL} signature mismatch: "
+            + "; ".join(mismatches)
+            + " — re-run skill step 0c (account update signature flags)"
+        )
+        result["outbound_signature_ok"] = False
+    else:
+        result["outbound_signature_ok"] = True
+
+
 def _resolve_accounts(result: dict[str, object], issues: list[str]) -> None:
     sender = resolve_account(SENDER_EMAIL)
     mailbox = resolve_account(PROSPECT_MAILBOX)
@@ -80,6 +121,7 @@ def _resolve_accounts(result: dict[str, object], issues: list[str]) -> None:
             f"sending account {SENDER_EMAIL} is disabled "
             f"({sender['disabled_reason']}); send and reply are blocked (§V.79)"
         )
+    _check_outbound_signature(sender, result, issues)
     if not mailbox:
         issues.append(
             f"prospect mailbox {PROSPECT_MAILBOX} not found "

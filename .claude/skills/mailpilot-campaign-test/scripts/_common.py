@@ -34,6 +34,15 @@ from typing import Any
 # Source account for every Touch 1 send.
 SENDER_EMAIL = "outbound@lab5.ca"
 
+# Required outbound account signature for campaign-test sends (§V.151).
+# Nested account.signature fields; preflight blocks on missing/mismatch.
+REQUIRED_OUTBOUND_SIGNATURE: dict[str, str] = {
+    "full_name": "Konstantin Borovi",
+    "title": "DevOps Engineer",
+    "website": "https://lab5.ca",
+    "phone": "+1-416-670-0621",
+}
+
 # The prospect mailbox AND the prospect contact's email. The agent sends Touch 1
 # to this address (so no real prospect is reached), and the test replies from
 # this same mailbox, so the reply's From maps the inbound reply back to this one
