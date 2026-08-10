@@ -5580,6 +5580,105 @@ def test_get_workflow_stats_multi_touch_not_double_counted(
     assert stats.sent == 1
 
 
+def test_get_workflow_stats_touch_slices_and_awaiting(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.132: touches map + awaiting_first_touch + disabled counts."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="outbound"
+    )
+    database_connection.execute(
+        "UPDATE workflow SET touches = 3, touch_interval_days = 3 WHERE id = %(id)s",
+        {"id": workflow.id},
+    )
+    database_connection.commit()
+
+    awaiting = make_test_contact(database_connection, email="await@testcorp.com")
+    make_test_enrollment(database_connection, workflow.id, awaiting.id)
+
+    sent_once = make_test_contact(database_connection, email="t1@testcorp.com")
+    e_sent = make_test_enrollment(database_connection, workflow.id, sent_once.id)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        status="sent",
+        contact_id=sent_once.id,
+        workflow_id=workflow.id,
+    )
+    create_task(
+        database_connection,
+        enrollment_id=e_sent.id,
+        workflow_id=workflow.id,
+        contact_id=sent_once.id,
+        description="Touch 2",
+        scheduled_at="2099-01-01T00:00:00+00:00",
+        context={"touch": 2},
+    )
+
+    disabled_c = make_test_contact(database_connection, email="off@testcorp.com")
+    e_off = make_test_enrollment(database_connection, workflow.id, disabled_c.id)
+    disable_enrollment(database_connection, e_off.id, "paused")
+
+    stats = get_workflow_stats(database_connection, workflow.id)
+    assert stats is not None
+    assert stats.awaiting_first_touch == 1
+    assert stats.disabled == 1
+    assert "1" in stats.touches
+    assert "2" in stats.touches
+    assert "3" in stats.touches
+    assert stats.touches["1"].sent == 1
+    assert stats.touches["2"].pending == 1
+
+
+def test_list_enrollments_detailed_full_execution_fields(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.152: full=True projects company + touch + next task + disposition."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    company = make_test_company(database_connection, domain="acme.com", name="Acme Co")
+    contact = make_test_contact(
+        database_connection, email="lead@acme.com", company_id=company.id
+    )
+    update_contact(
+        database_connection, contact.id, first_name="Lead", last_name="Person"
+    )
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        status="sent",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+    )
+    create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="Touch 2",
+        scheduled_at="2099-06-01T12:00:00+00:00",
+        context={"touch": 2},
+    )
+
+    rows = list_enrollments_detailed(
+        database_connection, workflow_id=workflow.id, full=True
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.company_domain == "acme.com"
+    assert row.company_name == "Acme Co"
+    assert row.emails_sent == 1
+    assert row.last_touch == 1
+    assert row.next_touch == 2
+    assert row.next_scheduled_at is not None
+    assert row.created_at is not None
+    assert row.disposition is None
+
+
 # -- list_active_outbound_enrollments_for_contact (§V.128) ---------------------
 
 

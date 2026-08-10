@@ -6,7 +6,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, model_serializer
+from pydantic import BaseModel, Field, model_serializer
 
 
 class AccountSignature(BaseModel):
@@ -299,6 +299,13 @@ class WorkflowSummary(BaseModel):
     created_at: datetime
 
 
+class TouchStageCounts(BaseModel):
+    """Per-touch sent/pending counts inside ``WorkflowStats.touches`` (§V.132)."""
+
+    sent: int = 0
+    pending: int = 0
+
+
 class WorkflowStats(BaseModel):
     """Per-campaign funnel for one workflow at enrollment grain (§V.132).
 
@@ -306,6 +313,9 @@ class WorkflowStats(BaseModel):
     the workflow's enrollments -- no LLM. The enrollment row (one per contact)
     is the grain, so every count is contact-distinct: a multi-touch outbound
     sequence never double-counts.
+
+    Touch-level slices (``touches``, ``awaiting_first_touch``, ``disabled``)
+    are additive execution fields for multi-touch cadence triage.
 
     ``workflow_id`` and ``workflow_name`` carry the parent identity (§V.5) so
     the CLI envelope names the campaign without a separate lookup. The envelope
@@ -323,6 +333,9 @@ class WorkflowStats(BaseModel):
     contact_later: int
     do_not_contact: int
     active: int
+    touches: dict[str, TouchStageCounts] = Field(default_factory=dict)
+    awaiting_first_touch: int = 0
+    disabled: int = 0
 
 
 WorkflowCheckState = Literal["in_sync", "out_of_sync", "not_imported", "orphaned"]
@@ -427,7 +440,13 @@ class Enrollment(BaseModel):
 
 
 class EnrollmentSummary(BaseModel):
-    """List-view projection of `Enrollment` joined with workflow and contact."""
+    """List-view projection of `Enrollment` joined with workflow and contact.
+
+    Lean fields are always populated. Execution fields (company, touch progress,
+    next send, disposition, created_at) are populated only when the caller
+    requests ``full=True`` per §V.152; lean dumps exclude them so agent payloads
+    stay small.
+    """
 
     id: str
     workflow_id: str
@@ -437,6 +456,30 @@ class EnrollmentSummary(BaseModel):
     contact_name: str
     status: EnrollmentStatus
     updated_at: datetime
+    # §V.152 --full denser projection (None when lean)
+    company_domain: str | None = None
+    company_name: str | None = None
+    emails_sent: int | None = None
+    last_touch: int | None = None
+    next_scheduled_at: datetime | None = None
+    next_touch: int | None = None
+    disposition: str | None = None
+    created_at: datetime | None = None
+
+
+# Fields present only on ``--full`` enrollment list/view projections (§V.152).
+ENROLLMENT_FULL_FIELDS: frozenset[str] = frozenset(
+    {
+        "company_domain",
+        "company_name",
+        "emails_sent",
+        "last_touch",
+        "next_scheduled_at",
+        "next_touch",
+        "disposition",
+        "created_at",
+    }
+)
 
 
 EnrollmentOutcome = Literal["completed", "failed"]

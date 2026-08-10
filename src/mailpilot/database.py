@@ -63,6 +63,7 @@ from mailpilot.models import (
     Task,
     TaskStats,
     TaskSummary,
+    TouchStageCounts,
     Workflow,
     WorkflowCheck,
     WorkflowCheckEntry,
@@ -2833,12 +2834,56 @@ def get_workflow_stats(
             ) AS do_not_contact,
             COUNT(*) FILTER (
                 WHERE status = 'active' AND latest_outcome IS NULL
-            ) AS active
+            ) AS active,
+            COUNT(*) FILTER (
+                WHERE status = 'active'
+                  AND latest_outcome IS NULL
+                  AND NOT has_sent
+            ) AS awaiting_first_touch,
+            COUNT(*) FILTER (WHERE status = 'disabled') AS disabled
         FROM per_enrollment
         """,
         {"workflow_id": workflow_id},
     ).fetchone()
     assert row is not None  # aggregate over a present workflow always returns 1 row
+
+    touches: dict[str, TouchStageCounts] = {}
+    configured_touches = workflow.touches
+    if configured_touches is not None and configured_touches >= 1:
+        touch_rows = connection.execute(
+            """\
+            WITH touch_nums AS (
+                SELECT generate_series(1, %(touches)s) AS touch
+            )
+            SELECT
+                tn.touch::text AS touch_key,
+                (
+                    SELECT COUNT(*)::int FROM enrollment e
+                    WHERE e.workflow_id = %(workflow_id)s
+                      AND (
+                          SELECT COUNT(*)::int FROM email
+                          WHERE email.workflow_id = e.workflow_id
+                            AND email.contact_id = e.contact_id
+                            AND email.direction = 'outbound'
+                            AND email.status = 'sent'
+                      ) >= tn.touch
+                ) AS sent,
+                (
+                    SELECT COUNT(*)::int FROM task t
+                    WHERE t.workflow_id = %(workflow_id)s
+                      AND t.status = 'pending'
+                      AND (t.context->>'touch')::int = tn.touch
+                ) AS pending
+            FROM touch_nums tn
+            ORDER BY tn.touch
+            """,
+            {"workflow_id": workflow_id, "touches": configured_touches},
+        ).fetchall()
+        for tr in touch_rows:
+            touches[tr["touch_key"]] = TouchStageCounts(
+                sent=tr["sent"], pending=tr["pending"]
+            )
+
     return WorkflowStats(
         workflow_id=workflow.id,
         workflow_name=workflow.name,
@@ -2850,6 +2895,9 @@ def get_workflow_stats(
         contact_later=row["contact_later"],
         do_not_contact=row["do_not_contact"],
         active=row["active"],
+        touches=touches,
+        awaiting_first_touch=row["awaiting_first_touch"],
+        disabled=row["disabled"],
     )
 
 
@@ -3779,6 +3827,12 @@ def list_enrollments_detailed(
     limit: int = 100,
     since: str | None = None,
     until: str | None = None,
+    *,
+    full: bool = False,
+    has_pending_task: bool | None = None,
+    touch: int | None = None,
+    sort: str = "updated_at",
+    desc: bool = False,
 ) -> list[EnrollmentSummary]:
     """List enrollments with denormalised contact info as summaries.
 
@@ -3786,6 +3840,9 @@ def list_enrollments_detailed(
     ``list_enrollments`` to avoid breaking agent tools which expect
     ``list[Enrollment]``. Both ``workflow_id`` and ``contact_id`` are
     optional independent filters; either or both can be supplied.
+
+    When ``full=True`` (§V.152), also projects company, touch progress,
+    next pending task, disposition, and ``created_at``.
 
     Args:
         connection: Open database connection.
@@ -3795,6 +3852,12 @@ def list_enrollments_detailed(
         limit: Maximum results.
         since: ISO datetime inclusive lower bound on ``e.updated_at``.
         until: ISO datetime inclusive upper bound on ``e.updated_at``.
+        full: When True, denser execution projection (§V.152).
+        has_pending_task: When True/False, filter by presence of pending task.
+        touch: Filter to enrollments whose next pending touch equals N, or
+            (when no pending) whose last sent touch equals N.
+        sort: ``updated_at`` (default) or ``next_scheduled_at`` (full path).
+        desc: Sort descending when True.
 
     Returns:
         List of enrollment summaries.
@@ -3816,22 +3879,126 @@ def list_enrollments_detailed(
     if until is not None:
         where_parts.append(SQL("e.updated_at <= %(until)s"))
         params["until"] = until
+    if has_pending_task is True:
+        where_parts.append(
+            SQL(
+                "EXISTS ("
+                "SELECT 1 FROM task t "
+                "WHERE t.enrollment_id = e.id AND t.status = 'pending'"
+                ")"
+            )
+        )
+    elif has_pending_task is False:
+        where_parts.append(
+            SQL(
+                "NOT EXISTS ("
+                "SELECT 1 FROM task t "
+                "WHERE t.enrollment_id = e.id AND t.status = 'pending'"
+                ")"
+            )
+        )
+    if touch is not None:
+        params["touch"] = touch
+        where_parts.append(
+            SQL(
+                "("
+                "EXISTS ("
+                "SELECT 1 FROM task t "
+                "WHERE t.enrollment_id = e.id AND t.status = 'pending' "
+                "AND (t.context->>'touch')::int = %(touch)s"
+                ") "
+                "OR ("
+                "NOT EXISTS ("
+                "SELECT 1 FROM task t "
+                "WHERE t.enrollment_id = e.id AND t.status = 'pending'"
+                ") "
+                "AND ("
+                "SELECT COUNT(*)::int FROM email em "
+                "WHERE em.workflow_id = e.workflow_id "
+                "AND em.contact_id = e.contact_id "
+                "AND em.direction = 'outbound' AND em.status = 'sent'"
+                ") = %(touch)s"
+                ")"
+                ")"
+            )
+        )
     where_clause = (
         SQL("WHERE ") + SQL(" AND ").join(where_parts) if where_parts else SQL("")
     )
-    query = SQL(
-        "SELECT e.id, e.workflow_id, w.name AS workflow_name, "
-        "e.contact_id, e.status, e.updated_at, "
-        "c.email AS contact_email, "
-        "TRIM(COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '')) "
-        "AS contact_name "
-        "FROM enrollment e "
-        "JOIN workflow w ON w.id = e.workflow_id "
-        "JOIN contact c ON c.id = e.contact_id "
-        "{} "
-        "ORDER BY e.updated_at "
-        "LIMIT %(limit)s"
-    ).format(where_clause)
+    if full:
+        select_cols = SQL(
+            "SELECT e.id, e.workflow_id, w.name AS workflow_name, "
+            "e.contact_id, e.status, e.updated_at, e.created_at, "
+            "c.email AS contact_email, "
+            "TRIM(COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '')) "
+            "AS contact_name, "
+            "co.domain AS company_domain, "
+            "co.name AS company_name, "
+            "("
+            "SELECT COUNT(*)::int FROM email em "
+            "WHERE em.workflow_id = e.workflow_id "
+            "AND em.contact_id = e.contact_id "
+            "AND em.direction = 'outbound' AND em.status = 'sent'"
+            ") AS emails_sent, "
+            "("
+            "SELECT COUNT(*)::int FROM email em "
+            "WHERE em.workflow_id = e.workflow_id "
+            "AND em.contact_id = e.contact_id "
+            "AND em.direction = 'outbound' AND em.status = 'sent'"
+            ") AS last_touch, "
+            "nt.scheduled_at AS next_scheduled_at, "
+            "CASE WHEN nt.context ? 'touch' "
+            "THEN (nt.context->>'touch')::int ELSE NULL END AS next_touch, "
+            "outcome.disposition AS disposition "
+        )
+        from_joins = SQL(
+            "FROM enrollment e "
+            "JOIN workflow w ON w.id = e.workflow_id "
+            "JOIN contact c ON c.id = e.contact_id "
+            "LEFT JOIN company co ON co.id = c.company_id "
+            "LEFT JOIN LATERAL ("
+            "SELECT t.scheduled_at, t.context FROM task t "
+            "WHERE t.enrollment_id = e.id AND t.status = 'pending' "
+            "ORDER BY t.scheduled_at ASC NULLS LAST LIMIT 1"
+            ") nt ON TRUE "
+            "LEFT JOIN LATERAL ("
+            "SELECT a.detail->>'disposition' AS disposition "
+            "FROM activity a "
+            "WHERE a.contact_id = e.contact_id "
+            "AND a.workflow_id = e.workflow_id "
+            "AND a.type IN ('enrollment_completed', 'enrollment_failed') "
+            "ORDER BY a.created_at DESC LIMIT 1"
+            ") outcome ON TRUE "
+        )
+    else:
+        select_cols = SQL(
+            "SELECT e.id, e.workflow_id, w.name AS workflow_name, "
+            "e.contact_id, e.status, e.updated_at, "
+            "c.email AS contact_email, "
+            "TRIM(COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '')) "
+            "AS contact_name "
+        )
+        from_joins = SQL(
+            "FROM enrollment e "
+            "JOIN workflow w ON w.id = e.workflow_id "
+            "JOIN contact c ON c.id = e.contact_id "
+        )
+    order_col = (
+        SQL("nt.scheduled_at")
+        if full and sort == "next_scheduled_at"
+        else SQL("e.updated_at")
+    )
+    order_dir = SQL("DESC") if desc else SQL("ASC")
+    query = (
+        select_cols
+        + from_joins
+        + where_clause
+        + SQL(" ORDER BY ")
+        + order_col
+        + SQL(" ")
+        + order_dir
+        + SQL(" NULLS LAST LIMIT %(limit)s")
+    )
     rows = connection.execute(query, params).fetchall()
     return [EnrollmentSummary.model_validate(row) for row in rows]
 

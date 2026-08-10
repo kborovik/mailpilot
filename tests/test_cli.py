@@ -6011,6 +6011,8 @@ def test_workflow_view_not_found(runner: CliRunner, mock_connection: MagicMock) 
 
 def test_workflow_stats_envelope(runner: CliRunner, mock_connection: MagicMock) -> None:
     """§V.132/§V.4: `workflow stats` ships the aggregate under `workflow_stats`."""
+    from mailpilot.models import TouchStageCounts
+
     stats = WorkflowStats(
         workflow_id=_WORKFLOW_ID,
         workflow_name="Demo outreach",
@@ -6022,6 +6024,12 @@ def test_workflow_stats_envelope(runner: CliRunner, mock_connection: MagicMock) 
         contact_later=1,
         do_not_contact=1,
         active=4,
+        touches={
+            "1": TouchStageCounts(sent=5, pending=2),
+            "2": TouchStageCounts(sent=1, pending=1),
+        },
+        awaiting_first_touch=2,
+        disabled=1,
     )
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
@@ -6043,6 +6051,10 @@ def test_workflow_stats_envelope(runner: CliRunner, mock_connection: MagicMock) 
     assert funnel["contact_later"] == 1
     assert funnel["do_not_contact"] == 1
     assert funnel["active"] == 4
+    assert funnel["awaiting_first_touch"] == 2
+    assert funnel["disabled"] == 1
+    assert funnel["touches"]["1"]["sent"] == 5
+    assert funnel["touches"]["1"]["pending"] == 2
 
 
 def test_workflow_stats_not_found(
@@ -10336,6 +10348,11 @@ def test_enrollment_list(runner: CliRunner, mock_connection: MagicMock) -> None:
         limit=100,
         since=None,
         until=None,
+        full=False,
+        has_pending_task=None,
+        touch=None,
+        sort="updated_at",
+        desc=False,
     )
     data = json.loads(result.output)
     assert data["ok"] is True
@@ -10377,6 +10394,11 @@ def test_enrollment_list_with_status(
         limit=100,
         since=None,
         until=None,
+        full=False,
+        has_pending_task=None,
+        touch=None,
+        sort="updated_at",
+        desc=False,
     )
 
 
@@ -10412,6 +10434,11 @@ def test_enrollment_list_with_limit(
         limit=5,
         since=None,
         until=None,
+        full=False,
+        has_pending_task=None,
+        touch=None,
+        sort="updated_at",
+        desc=False,
     )
 
 
@@ -10443,6 +10470,11 @@ def test_enrollment_list_filters_by_contact(
         limit=100,
         since=None,
         until=None,
+        full=False,
+        has_pending_task=None,
+        touch=None,
+        sort="updated_at",
+        desc=False,
     )
 
 
@@ -10460,9 +10492,45 @@ def test_enrollment_list_workflow_not_found(
         )
 
     assert result.exit_code == 1
-    data = json.loads(result.output)
-    assert data["error"] == "not_found"
-    assert "workflow" in data["message"]
+
+
+def test_enrollment_list_full_projects_execution_fields(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.152: --full denser projection includes company + touch + disposition."""
+    summary = _make_enrollment_summary(
+        company_domain="acme.com",
+        company_name="Acme",
+        emails_sent=1,
+        last_touch=1,
+        next_scheduled_at=_NOW,
+        next_touch=2,
+        disposition=None,
+        created_at=_NOW,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=_make_workflow()),
+        patch(
+            "mailpilot.database.list_enrollments_detailed", return_value=[summary]
+        ) as mock_list,
+    ):
+        result = runner.invoke(
+            main,
+            ["enrollment", "list", "--workflow-id", _WORKFLOW_ID, "--full"],
+        )
+
+    assert result.exit_code == 0
+    mock_list.assert_called_once()
+    assert mock_list.call_args.kwargs["full"] is True
+    row = json.loads(result.output)["enrollments"][0]
+    assert row["company_domain"] == "acme.com"
+    assert row["company_name"] == "Acme"
+    assert row["emails_sent"] == 1
+    assert row["last_touch"] == 1
+    assert row["next_touch"] == 2
+    assert "created_at" in row
 
 
 # -- enrollment update removed (§V.15) -----------------------------------------

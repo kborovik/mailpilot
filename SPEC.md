@@ -264,8 +264,8 @@ T237|x|smoke campaign-test on acumatica-var-outbound — full send→reply→ver
 T238|x|fix campaign-test required outbound identity — `signature.full_name` Borovi→Borovik; ensure+preflight-block `display_name=Konstantin Borovik`; skill step 0c + REQUIRED_OUTBOUND_* + tests|V151,V122,T236
 T239|x|signature two-line redesign (§V.151) — `Name | Title`/`website | phone`, muted-pipe separators, color+size ! bold, drop border-top rule, `tel:` phone link, no dangling separator on missing fields; text mirrors HTML; tests|V151
 T240|x|signature mark layout redesign (§V.151) — table chrome: embedded lab5 logo data-URI + four-colour rule + stacked name/title/web/cell rows (bold name, uppercase mono title, muted labels); text stacked mirror; fields model unchanged; tests|V151
-T241|.|impl §V.152(+) + §I — enrollment list|view --full execution projection + filters/sort; tests + SKILL (#200)|V152,V5,V8,V15,V107,V115,V4,I.cli
-T242|.|impl §V.132(∆) + §I — workflow stats touch slices + awaiting_first_touch + disabled; tests + SKILL (#201)|V132,V136,V107,V4,I.cli
+T241|x|impl §V.152(+) + §I — enrollment list|view --full execution projection + filters/sort; tests + SKILL (#200)|V152,V5,V8,V15,V107,V115,V4,I.cli
+T242|x|impl §V.132(∆) + §I — workflow stats touch slices + awaiting_first_touch + disabled; tests + SKILL (#201)|V132,V136,V107,V4,I.cli
 T243|.|impl §V.153(+) + §I — workflow report funnel+tasks+enrollment matrix + --stuck/--touch/--status; tests + SKILL (#202)|V153,V152,V132,V133,V155,V107,V4,I.cli
 T244|.|impl §V.154(+) + §I — activity list --workflow-id + required scope (contact|company|workflow); email list scope gate; tests + SKILL (#203)|V154,V17,V107,V115,V4,I.cli
 T245|.|impl §V.155(+) + §I — task list --overdue + enrollment/report --stuck heuristics; docs SLA; tests + SKILL (#204)|V155,V153,V152,V115,V4,I.cli

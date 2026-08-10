@@ -20,10 +20,10 @@ command-scoped flag discovery.
 Nouns: `account`, `company`, `contact`, `workflow`, `enrollment`, `task`,
 `email`, `activity`, `tag`, `note`, `template`, `db`.
 
-Verbs: `list`, `search`, `view`, `create`, `update`, `disable`, `enable`,
-`add`, `remove`, `set`, `merge`, `reply`, `send`, `start`, `stop`, `cancel`,
-`retry`, `run`, `sync`, `export`, `import`, `init`, `migrate`, `check`. Not
-every verb applies to every noun -- use
+Verbs: `list`, `search`, `view`, `stats`, `report`, `create`, `update`,
+`disable`, `enable`, `add`, `remove`, `set`, `merge`, `reply`, `send`,
+`start`, `stop`, `cancel`, `retry`, `run`, `sync`, `export`, `import`,
+`init`, `migrate`, `check`. Not every verb applies to every noun -- use
 `mailpilot <noun> --help` to enumerate. `config` exposes the `get` and `set`
 subverbs for reading and writing persistent configuration.
 
@@ -126,9 +126,39 @@ mailpilot status
 mailpilot account list
 mailpilot workflow list --account-email <ACCOUNT_REF>
 mailpilot enrollment list --workflow-id <ID>
+mailpilot enrollment list --workflow-id <NAME_OR_ID> --full
+mailpilot workflow stats <NAME_OR_ID>
 mailpilot task list --status pending
 mailpilot email list --account-email <ACCOUNT_REF> --limit 50
 ```
+
+### Campaign enrollment triage
+
+Default `enrollment list` rows stay lean (email, name, status, updated_at).
+Pass `--full` for company, touch progress, next send, and disposition:
+
+```
+mailpilot enrollment list --workflow-id acumatica-var-outbound --full
+mailpilot enrollment list --workflow-id acumatica-var-outbound --full \
+  --has-pending-task --touch 2 --sort next_scheduled_at
+```
+
+`--full` fields: `company_domain`, `company_name`, `emails_sent`, `last_touch`,
+`next_scheduled_at`, `next_touch`, `disposition`, `created_at`. Filters
+`--has-pending-task` / `--no-pending-task` and `--touch N` compose with
+workflow/contact/status scopes. Sort keys: `updated_at` (default),
+`next_scheduled_at`.
+
+### Workflow stats (funnel + touch slices)
+
+```
+mailpilot workflow stats acumatica-var-outbound
+```
+
+Envelope key `workflow_stats`. Eight enrollment-grain stages (enrolled, sent,
+bounced, replied, meeting_booked, contact_later, do_not_contact, active) plus
+`touches` map (`"1"/{sent,pending}`, ... for def `touches`), `awaiting_first_touch`,
+and `disabled`. Pure SQL; no LLM.
 
 ### Provision and migrate the schema
 

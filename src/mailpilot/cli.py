@@ -5569,22 +5569,48 @@ def enrollment_view(enrollment_id: str) -> None:
 @scope_option("--workflow-id", "workflow_id", "Filter by workflow ID.")
 @scope_option("--contact-email", "contact_email", "Filter by contact (email or ID).")
 @enum_option("--status", "status", _ENROLLMENT_STATUSES, "Filter by enrollment status.")
+@click.option(
+    "--full",
+    "full",
+    is_flag=True,
+    default=False,
+    help="Denser projection: company, touch progress, next send, disposition.",
+)
+@presence_option("pending-task", "Filter on presence of a pending follow-up task.")
+@click.option(
+    "--touch",
+    type=int,
+    default=None,
+    help="Filter by next pending touch number (or last sent when none pending).",
+)
+@sort_option(["updated_at", "next_scheduled_at"], default="updated_at")
+@desc_option
 @time_window_options("updated_at")
 @limit_option
 def enrollment_list(
     workflow_id: str | None,
     contact_email: str | None,
     status: str | None,
+    full: bool,
+    has_pending_task: bool | None,
+    touch: int | None,
+    sort: str,
+    desc: bool,
     limit: int,
     since: str | None,
     until: str | None,
 ) -> None:
-    """List enrollments as summaries. Filter by workflow, contact, or both."""
+    """List enrollments as summaries. Filter by workflow, contact, or both.
+
+    Default rows stay lean. Pass --full for company, touch progress, next send,
+    and disposition fields used in campaign triage.
+    """
     from mailpilot.database import (
         get_workflow,
         initialize_database,
         list_enrollments_detailed,
     )
+    from mailpilot.models import ENROLLMENT_FULL_FIELDS
 
     connection = initialize_database(_database_url())
     try:
@@ -5603,8 +5629,16 @@ def enrollment_list(
             limit=limit,
             since=since,
             until=until,
+            full=full,
+            has_pending_task=has_pending_task,
+            touch=touch,
+            sort=sort,
+            desc=desc,
         )
-        output({"enrollments": [r.model_dump(mode="json") for r in rows]})
+        exclude = None if full else ENROLLMENT_FULL_FIELDS
+        output(
+            {"enrollments": [r.model_dump(mode="json", exclude=exclude) for r in rows]}
+        )
     finally:
         connection.close()
 
