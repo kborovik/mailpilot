@@ -1,4 +1,4 @@
-"""Campaign-test preflight enforces outbound@lab5.ca signature (§V.151 / §V.122)."""
+"""Campaign-test preflight enforces outbound@lab5.ca identity (§V.151 / §V.122)."""
 
 from __future__ import annotations
 
@@ -44,11 +44,15 @@ def common():
 def test_required_outbound_signature_fields(common):
     required = common.REQUIRED_OUTBOUND_SIGNATURE
     assert required == {
-        "full_name": "Konstantin Borovi",
+        "full_name": "Konstantin Borovik",
         "title": "DevOps Engineer",
         "website": "https://lab5.ca",
         "phone": "+1-416-670-0621",
     }
+    assert common.REQUIRED_OUTBOUND_DISPLAY_NAME == "Konstantin Borovik"
+    # Spelling guard: never the truncated Borovi form.
+    assert "Borovi" not in required["full_name"] or required["full_name"].endswith("k")
+    assert required["full_name"].endswith("Borovik")
 
 
 def test_check_outbound_signature_missing_blocks(preflight):
@@ -90,4 +94,49 @@ def test_check_outbound_signature_match_ok(preflight, common):
         issues,
     )
     assert result["outbound_signature_ok"] is True
+    assert issues == []
+
+
+def test_check_outbound_display_name_missing_blocks(preflight, common):
+    result: dict[str, object] = {}
+    issues: list[str] = []
+    preflight._check_outbound_display_name(
+        {"id": "x", "email": "outbound@lab5.ca", "display_name": None},
+        result,
+        issues,
+    )
+    assert result["outbound_display_name_ok"] is False
+    assert any("display_name" in i for i in issues)
+
+
+def test_check_outbound_display_name_mismatch_blocks(preflight, common):
+    result: dict[str, object] = {}
+    issues: list[str] = []
+    preflight._check_outbound_display_name(
+        {
+            "id": "x",
+            "email": "outbound@lab5.ca",
+            "display_name": "MailPilot Outbound",
+        },
+        result,
+        issues,
+    )
+    assert result["outbound_display_name_ok"] is False
+    assert any("display_name" in i for i in issues)
+    assert common.REQUIRED_OUTBOUND_DISPLAY_NAME in issues[0]
+
+
+def test_check_outbound_display_name_match_ok(preflight, common):
+    result: dict[str, object] = {}
+    issues: list[str] = []
+    preflight._check_outbound_display_name(
+        {
+            "id": "x",
+            "email": "outbound@lab5.ca",
+            "display_name": common.REQUIRED_OUTBOUND_DISPLAY_NAME,
+        },
+        result,
+        issues,
+    )
+    assert result["outbound_display_name_ok"] is True
     assert issues == []

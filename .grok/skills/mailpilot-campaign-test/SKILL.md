@@ -63,27 +63,30 @@ uv run mailpilot account view inbound@lab5.ca >/dev/null 2>&1 || \
 Idempotent. Never `make clean` here (live CRM). Disabled accounts need
 `mailpilot account enable` -- this step cannot re-enable them.
 
-### 0c. Ensure outbound signature (§V.151)
+### 0c. Ensure outbound identity (§V.151)
 
 Required fields (exact match):
 
 | field | value |
 |---|---|
-| full_name | Konstantin Borovi |
-| title | DevOps Engineer |
-| website | https://lab5.ca |
-| phone | +1-416-670-0621 |
+| display_name (From) | Konstantin Borovik |
+| signature.full_name | Konstantin Borovik |
+| signature.title | DevOps Engineer |
+| signature.website | https://lab5.ca |
+| signature.phone | +1-416-670-0621 |
 
 ```bash
 uv run mailpilot account update outbound@lab5.ca \
-  --signature-full-name "Konstantin Borovi" \
+  --display-name "Konstantin Borovik" \
+  --signature-full-name "Konstantin Borovik" \
   --signature-title "DevOps Engineer" \
   --signature-website "https://lab5.ca" \
   --signature-phone "+1-416-670-0621"
 ```
 
-Idempotent field-selective update. Preflight (step 1) **blocks** if the nested
-`signature` on `outbound@lab5.ca` is missing or any field mismatches.
+Idempotent field-selective update. Preflight (step 1) **blocks** if
+`display_name` or nested `signature` on `outbound@lab5.ca` is missing or any
+field mismatches.
 
 ### 1. Preflight
 
@@ -218,7 +221,7 @@ After FAIL:
 
 - Working DB (`mailpilot config get database_url`)
 - `outbound@lab5.ca` + `inbound@lab5.ca` (step 0b creates if missing)
-- Outbound signature set (step 0c; preflight enforces)
+- Outbound identity set (step 0c: display_name + signature; preflight enforces)
 - `google_application_credentials` configured
 - Workflow file present
 - At least one real (non-infra) contact for grounding

@@ -156,7 +156,7 @@ wherever `$RUN_ID` appears below. Separate tool calls do not share shell state. 
 
 ### 0b. Ensure the test accounts exist -- create if missing
 ```bash
-uv run mailpilot account view outbound@lab5.ca >/dev/null 2>&1 || uv run mailpilot account create --email outbound@lab5.ca --display-name "MailPilot Outbound"
+uv run mailpilot account view outbound@lab5.ca >/dev/null 2>&1 || uv run mailpilot account create --email outbound@lab5.ca --display-name "Konstantin Borovik"
 uv run mailpilot account view inbound@lab5.ca  >/dev/null 2>&1 || uv run mailpilot account create --email inbound@lab5.ca  --display-name "MailPilot Inbound"
 ```
 The `account view` guard makes this idempotent. Never run `make clean` here --
@@ -165,15 +165,37 @@ company and contact rows (§V.119). The guard cannot re-enable a disabled accoun
 if preflight reports an account disabled, re-enable it with `mailpilot account
 enable`.
 
+### 0c. Ensure outbound identity (§V.151)
+Required exact match on `outbound@lab5.ca`:
+
+| field | value |
+|---|---|
+| display_name (From) | Konstantin Borovik |
+| signature.full_name | Konstantin Borovik |
+| signature.title | DevOps Engineer |
+| signature.website | https://lab5.ca |
+| signature.phone | +1-416-670-0621 |
+
+```bash
+uv run mailpilot account update outbound@lab5.ca \
+  --display-name "Konstantin Borovik" \
+  --signature-full-name "Konstantin Borovik" \
+  --signature-title "DevOps Engineer" \
+  --signature-website "https://lab5.ca" \
+  --signature-phone "+1-416-670-0621"
+```
+Idempotent field-selective update. Preflight (step 1) **blocks** if
+`display_name` or nested `signature` is missing or any field mismatches.
+
 ### 1. Preflight
 ```bash
 uv run python .claude/skills/mailpilot-campaign-test/scripts/preflight.py --run-id $RUN_ID [--workflow-file <path>]
 ```
 Validates the workflow TOML, resolves the `outbound@lab5.ca` sender and the
 `inbound@lab5.ca` prospect mailbox, confirms neither account is disabled,
-confirms Google credentials, and counts the real contacts available for
-grounding. **Stop the run** if `verdict != "ok"`. A `WARNING` line is not
-blocking.
+confirms outbound identity (display_name + signature, step 0c), confirms Google
+credentials, and counts the real contacts available for grounding. **Stop the
+run** if `verdict != "ok"`. A `WARNING` line is not blocking.
 
 ### 2. Select the grounding contact
 ```bash
@@ -349,6 +371,8 @@ After a failing run:
 - The `outbound@lab5.ca` and `inbound@lab5.ca` accounts present and neither
   disabled. Step 0b creates either if missing but cannot re-enable a disabled one
   -- use `mailpilot account enable`.
+- Outbound identity set (step 0c: `display_name=Konstantin Borovik` + signature
+  with full_name Borovik; preflight enforces).
 - `google_application_credentials` set (the live send and replies need Gmail
   auth).
 - The workflow file present (the `workflows/` symlink points at

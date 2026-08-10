@@ -24,6 +24,7 @@ from _common import (
     DEFAULT_WORKFLOW_FILE,
     PROSPECT_EMAIL,
     PROSPECT_MAILBOX,
+    REQUIRED_OUTBOUND_DISPLAY_NAME,
     REQUIRED_OUTBOUND_SIGNATURE,
     SENDER_EMAIL,
     mp,
@@ -107,6 +108,33 @@ def _check_outbound_signature(
         result["outbound_signature_ok"] = True
 
 
+def _check_outbound_display_name(
+    sender: dict[str, object] | None, result: dict[str, object], issues: list[str]
+) -> None:
+    """Block when outbound@ From display_name mismatches required identity.
+
+    ``display_name`` is the From-header name (§V.151), distinct from
+    signature.full_name. Skill step 0c sets both; preflight verifies both.
+    """
+    required = REQUIRED_OUTBOUND_DISPLAY_NAME
+    result["required_outbound_display_name"] = required
+    if not sender:
+        result["outbound_display_name"] = None
+        result["outbound_display_name_ok"] = False
+        return
+    actual = sender.get("display_name")
+    result["outbound_display_name"] = actual
+    if actual != required:
+        issues.append(
+            f"sending account {SENDER_EMAIL} display_name={actual!r} "
+            f"(want {required!r}); set via `mailpilot account update "
+            f"--display-name {required!r}` — re-run skill step 0c"
+        )
+        result["outbound_display_name_ok"] = False
+    else:
+        result["outbound_display_name_ok"] = True
+
+
 def _resolve_accounts(result: dict[str, object], issues: list[str]) -> None:
     sender = resolve_account(SENDER_EMAIL)
     mailbox = resolve_account(PROSPECT_MAILBOX)
@@ -122,6 +150,7 @@ def _resolve_accounts(result: dict[str, object], issues: list[str]) -> None:
             f"({sender['disabled_reason']}); send and reply are blocked (§V.79)"
         )
     _check_outbound_signature(sender, result, issues)
+    _check_outbound_display_name(sender, result, issues)
     if not mailbox:
         issues.append(
             f"prospect mailbox {PROSPECT_MAILBOX} not found "

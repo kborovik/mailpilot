@@ -34,10 +34,12 @@ from typing import Any
 # Source account for every Touch 1 send.
 SENDER_EMAIL = "outbound@lab5.ca"
 
-# Required outbound account signature for campaign-test sends (§V.151).
-# Nested account.signature fields; preflight blocks on missing/mismatch.
+# Required outbound identity for campaign-test sends (§V.151 / §V.122).
+# Nested account.signature fields + From-header display_name; preflight blocks
+# on missing/mismatch. full_name spelling is Borovik (not Borovi).
+REQUIRED_OUTBOUND_DISPLAY_NAME = "Konstantin Borovik"
 REQUIRED_OUTBOUND_SIGNATURE: dict[str, str] = {
-    "full_name": "Konstantin Borovi",
+    "full_name": "Konstantin Borovik",
     "title": "DevOps Engineer",
     "website": "https://lab5.ca",
     "phone": "+1-416-670-0621",

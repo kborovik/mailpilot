@@ -249,7 +249,7 @@ T234|x|impl §V.151(+) + §I — account signature cols (migration) + nested CLI
 T235|x|init `.grok/skills/mailpilot-campaign-test/` SKILL.md — Grok-native simplified port of Claude mailpilot-campaign-test; reuse `.claude/.../scripts`+`references`; Grok tools; default `--workflow-file` `/Users/kb/github/lab5-leads/workflows/acumatica-var-outbound.toml`; Next-block; safety = outbound@lab5.ca↔inbound@lab5.ca only|V122,V100,V102
 T236|x|skill setup/preflight — ensure `outbound@lab5.ca` signature {Konstantin Borovik, DevOps Engineer, https://lab5.ca, +1-416-670-0621} + `display_name=Konstantin Borovik` via `account create|update` flags (§V.151); idempotent; block run if missing/mismatched|V151,V122
 T237|x|smoke campaign-test on acumatica-var-outbound — full send→reply→verify path; report under `reports/campaign-test/<run_id>/`; cleanup always|V122,V151
-T238|.|fix campaign-test required outbound identity — `signature.full_name` Borovi→Borovik; ensure+preflight-block `display_name=Konstantin Borovik`; skill step 0c + REQUIRED_OUTBOUND_* + tests|V151,V122,T236
+T238|x|fix campaign-test required outbound identity — `signature.full_name` Borovi→Borovik; ensure+preflight-block `display_name=Konstantin Borovik`; skill step 0c + REQUIRED_OUTBOUND_* + tests|V151,V122,T236
 
 ## §B BUGS
 
