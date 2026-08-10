@@ -55,7 +55,7 @@ uv run python .claude/skills/mailpilot-campaign-test/scripts/new_run_id.py
 
 ```bash
 uv run mailpilot account view outbound@lab5.ca >/dev/null 2>&1 || \
-  uv run mailpilot account create --email outbound@lab5.ca --display-name "MailPilot Outbound"
+  uv run mailpilot account create --email outbound@lab5.ca --display-name "Konstantin Borovik"
 uv run mailpilot account view inbound@lab5.ca >/dev/null 2>&1 || \
   uv run mailpilot account create --email inbound@lab5.ca --display-name "MailPilot Inbound"
 ```
