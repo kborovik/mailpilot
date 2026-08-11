@@ -8,7 +8,7 @@ description: >-
   wants to test, smoke-test, dry-run, or validate a campaign / outreach
   workflow before real sends, or runs /mailpilot-campaign-test.
 argument-hint: "[--workflow-file <path>] [--company-domain <domain>] [--min-confidence N]"
-allowed-tools: run_terminal_command, spawn_subagent
+allowed-tools: run_terminal_command, spawn_subagent, search_tool, use_tool
 ---
 
 # mailpilot-campaign-test
@@ -33,6 +33,84 @@ Every command runs from the **repo root** via `uv run python` / `uv run mailpilo
 - Never send to any other address. Never start `mailpilot run`.
 - Real contacts are grounding data only; their address is never a recipient.
 - Always run cleanup (step 10) before finishing, even on failure.
+
+## Logfire real-time error watch (required when MCP available)
+
+Agent-active steps emit live spans to Logfire (`project: mailpilot`,
+environment `development`). **Watch for errors while those steps run** — do not
+wait until step 11.
+
+### When
+
+| Phase | After which steps | Why |
+|---|---|---|
+| Start window | Note UTC start just before step 4 | Touch 1 agent.invoke + gmail.send |
+| Mid-run poll | After step 4, after step 5, after step 6 | Catch exceptions / tool errors / 429s early |
+| Final digest | Step 11 | Full window write-up → `logfire_report.md` |
+
+If a step runs long (scripts often 1–5+ min), poll Logfire once mid-wait when
+practical (background command still running), then again when it finishes.
+
+### How (Logfire MCP)
+
+1. `search_tool` for `logfire query` if schemas are not already loaded.
+2. Prefer `logfire__query_run` (call `logfire__query_schema_reference` first when
+   writing non-trivial SQL). Project: `mailpilot`.
+3. Time range: `start_timestamp` = run window start (step-4 start, or
+   `touch1.json` `window_start` minus 1m once written); `end_timestamp` = now.
+4. Error-focused queries (DataFusion / Postgres-like). Example shapes:
+
+```sql
+-- exceptions + error-level records since window start
+SELECT start_timestamp, span_name, message, level, is_exception,
+       exception_type, exception_message
+FROM records
+WHERE (is_exception = true OR level IN ('error', 'fatal'))
+ORDER BY start_timestamp DESC
+LIMIT 50
+```
+
+```sql
+-- agent tool failures
+SELECT start_timestamp, span_name, attributes
+FROM records
+WHERE span_name = 'agent.tool_errors'
+ORDER BY start_timestamp DESC
+LIMIT 30
+```
+
+```sql
+-- Gmail rate limits during sync (routing miss signal, not workflow branch fail)
+SELECT start_timestamp, span_name, message, attributes
+FROM records
+WHERE span_name = 'gmail batch message error'
+ORDER BY start_timestamp DESC
+LIMIT 20
+```
+
+Optional UI handoff: `logfire__project_logfire_ui_link` with
+`query` like `level='error' OR is_exception` and `since` = window start.
+
+### What to surface
+
+On **any** hit, tell the user immediately (one short block):
+
+- timestamp + span_name
+- exception type/message or tool error
+- classification:
+  - **agent/tool failure** — may explain a later branch FAIL
+  - **429 / batch message error** — sync drop; missing Touch 1 / unrouted often
+    means mailbox had mail but sync lost it — **not** a workflow wording fail
+  - **other** — note and continue
+
+Do **not** auto-abort the campaign test for Logfire hits (still finish verify +
+cleanup). Do **not** gate the branch verdict on telemetry alone. If MCP or token
+is unavailable, say so once and continue — same as step 11.
+
+### Useful span names
+
+`agent.invoke` / `invoke_agent %`, `agent.tool_errors`, `gmail.send_message`,
+`gmail batch message error`, `execute_tool %`.
 
 ## Arguments
 
@@ -118,11 +196,14 @@ From here on, always run cleanup before finish.
 
 ### 4. Send Touch 1
 
+**Start the Logfire error-watch window** (record UTC now). Then:
+
 ```bash
 uv run python .claude/skills/mailpilot-campaign-test/scripts/send_touch1.py --run-id $RUN_ID
 ```
 
 Captures `rfc2822_message_id` per scenario (§V.122). Show the user one sent body.
+**Poll Logfire for errors** (see Logfire real-time error watch) after this step.
 
 ### 5. Inject replies
 
@@ -131,6 +212,7 @@ uv run python .claude/skills/mailpilot-campaign-test/scripts/inject_replies.py -
 ```
 
 Matches received Touch 1 by Message-ID; subject is fallback only.
+**Poll Logfire** after this step (429 / sync drops often show up here).
 
 ### 6. Handle replies
 
@@ -139,6 +221,7 @@ uv run python .claude/skills/mailpilot-campaign-test/scripts/handle_replies.py -
 ```
 
 Scoped route + agent invoke per scenario; re-enables prospect between scenarios.
+**Poll Logfire** after this step (agent.tool_errors + exceptions peak here).
 
 ### 7. Verify branches
 
@@ -175,14 +258,17 @@ Present `reports/campaign-test/$RUN_ID/report.md`. PASS only when every scenario
 uv run python .claude/skills/mailpilot-campaign-test/scripts/cleanup.py --run-id $RUN_ID
 ```
 
-### 11. Logfire telemetry (optional)
+### 11. Logfire telemetry (digest)
 
-If Logfire MCP is available, query `development` spans for the run window
+If Logfire MCP is available, query the full run window for a final digest
 (`touch1.json` `window_start` minus 1m through handle end + a few minutes).
-Write `logfire_report.md`. Skip if unavailable -- never gates verdict.
+Write `reports/campaign-test/$RUN_ID/logfire_report.md`. Fold in anything
+already surfaced by the real-time error watch. Skip if unavailable -- never
+gates verdict.
 
-Useful span names: `agent.invoke` / `invoke_agent %`, `agent.tool_errors`,
-`gmail.send_message`, `gmail batch message error` (429 = sync drop, not workflow).
+Include: model + token use (`agent.invoke` / `invoke_agent %`), tool errors,
+send results (`gmail.send_message`), 429 sync drops, any `is_exception` rows.
+Present a three-line summary: model/tokens, tool-error pattern, 429s yes/no.
 
 ## Artifacts
 
@@ -225,3 +311,5 @@ After FAIL:
 - `google_application_credentials` configured
 - Workflow file present
 - At least one real (non-infra) contact for grounding
+- Logfire MCP connected (preferred) for real-time error watch + step 11 digest;
+  skill continues without it
