@@ -177,7 +177,7 @@ V132: workflow stats funnel single-SQL enrollment grain; 8 stages + touch slices
 V133: task stats aggregate single-SQL; filters --workflow-id + --trigger; per-status counts + scheduled day buckets — → .spec/check-extras.md §V133
 V134: workflow check = read-only def-integrity SHA-256; states {in_sync,out_of_sync,not_imported,orphaned}; report-only — → .spec/check-extras.md §V134
 V135: mechanical context pre-feed — invoke_workflow_agent pre-loads ContactView/CompanyView via shared loaders (§V.8); read_contact/read_company absent from every roster — → .spec/check-extras.md §V135
-V136: system-owned touch cadence — def touches+interval; compose-only agent; harness send+schedule; final → contact_later — → .spec/check-extras.md §V136
+V136: system-owned touch cadence — def touches+interval; compose-only agent; first-touch subject ! non-empty; harness send+schedule; final → contact_later — → .spec/check-extras.md §V136
 V137: connect-fail operator UX — OperationalError → SystemExit hint; expected fail → logfire.error + operator_event, zero console Traceback — → .spec/check-extras.md §V137
 V138: company cohort pipeline status — `company list --status` Enum ∈ {ready, needs_contacts, needs_profile, disabled}; AND-composes w/ list filters; no `company audit` verb — → .spec/check-extras.md §V138
 V139: stdin NDJSON batch mutation — selected Mutate verbs accept `--stdin`; results envelope + partial-success exit policy; MVP `company disable --stdin` + `contact create --stdin` — → .spec/check-extras.md §V139
@@ -254,6 +254,7 @@ T244|x|impl §V.154(+) + §I — activity list --workflow-id + required scope (c
 T245|x|impl §V.155(+) + §I — task list --overdue + enrollment/report --stuck heuristics; docs SLA; tests + SKILL (#204)|V155,V153,V152,V115,V4,I.cli
 T246|x|impl §V.156(+) + §V.3(∆) + §I — --format table|csv|ndjson on report/list; default JSON; tests + SKILL (#205)|V156,V3,V4,V153,V152,I.cli
 T247|x|impl §V.157(+) + §I — workflow status ops-health composite; tests + SKILL (#206)|V157,V134,V11,V132,V107,V4,I.cli
+T248|.|impl §V.136 first-touch subject require — compose-only output validator ModelRetry on empty/None/whitespace subject for new-thread touch; follow-up may leave subject empty; unit tests empty/None/whitespace reject + non-empty accept + follow-up None ok|V136,B127
 
 ## §B BUGS
 
@@ -295,3 +296,4 @@ B123|2026-07-01|`workflow import` emitted per-row rejections inside ok:true enve
 B124|2026-07-02|deferred-task fragments encode outbound lifecycle but compose direction-blind into inbound templates — TASK branch orders conclude_enrollment the workflow TOML forbids; INITIAL branch mislabels inbound reply as initial send|V31
 B125|2026-07-20|`_connect_database` incomplete OperationalError→hint map + logfire.exception Traceback for expected connect fails (pg_hba/DNS hit generic database_url)|V137
 B126|2026-08-10|mistune hard_wrap=False leaves soft newlines as whitespace inside `<p>`; HTML collapses signature + URL list to one line|V92
+B127|2026-08-11|compose-only first-touch accepts empty/None TouchMessage.subject → Gmail (no subject); body often packs subject\|body as pipe table|V136
