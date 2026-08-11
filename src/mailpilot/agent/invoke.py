@@ -459,11 +459,11 @@ def _build_touch_agent(
     loop: the agent binds zero tools and its validated output *is* the action, so
     the §V.81 tool-count check and the §V.120 reply walker do not apply and the
     harness sends the message itself. The workflow's ``_TOUCH_COMPOSE`` protocol
-    plus its ``instructions`` frame the compose task. Output validators with a
-    bounded ``ModelRetry`` (capped by the agent retry budget): (1) §V.42
-    space-aligned spec-table body lint; (2) §V.136 first-touch subject require
-    when ``require_subject`` is true (new-thread only). The date-grounding
-    instruction (§V.129) and the model-visible protocol carry no SPEC cite (§V.45).
+    plus its ``instructions`` frame the compose task. Output validator with a
+    bounded ``ModelRetry`` (capped by the agent retry budget): §V.136 first-touch
+    subject require when ``require_subject`` is true (new-thread only). Body
+    format lint retired (§V.42 / §B.128). The date-grounding instruction
+    (§V.129) and the model-visible protocol carry no SPEC cite (§V.45).
     """
     from mailpilot.agent.templates import (
         _TOUCH_COMPOSE,  # pyright: ignore[reportPrivateUsage]
@@ -489,11 +489,6 @@ def _build_touch_agent(
     ) -> TouchMessage:
         # §V.136 / §B.127: new-thread touch must have a non-empty subject.
         _validate_touch_subject(output.subject, require_subject=require_subject)
-        # §V.42: space-aligned product-spec body triggers a bounded ModelRetry
-        # instead of reaching the recipient.
-        format_error = agent_tools._check_spec_table(output.body)  # pyright: ignore[reportPrivateUsage]
-        if format_error is not None:
-            raise ModelRetry(format_error["message"])
         return output
 
     return agent

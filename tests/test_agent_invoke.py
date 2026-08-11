@@ -1642,53 +1642,24 @@ def test_compose_only_prior_email_falls_back_to_latest_outbound(
     assert call_kwargs["thread_id"] == "thread-latest"
 
 
-def _touch_model_spec_then_clean() -> FunctionModel:
-    """FunctionModel returning a space-aligned spec block first, clean second.
-
-    Exercises the §V.42 lint as the compose-only output validator: the first
-    output trips the spec-table lint (a bounded ModelRetry), the retry recovers.
-    """
-    call_count = 0
-
-    def _respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        del messages, info
-        nonlocal call_count
-        call_count += 1
-        body = (
-            "Model AX-100  50 GPM\nFlow Rate  50 GPM\nWeight  9 kg"
-            if call_count == 1
-            else "Hi there -- a quick note about your setup."
-        )
-        return ModelResponse(
-            parts=[
-                ToolCallPart(
-                    tool_name="final_result",
-                    args={"subject": "Specs", "body": body},
-                )
-            ]
-        )
-
-    return FunctionModel(_respond)
-
-
-def test_compose_only_spec_block_output_validator_retries(
+def test_compose_only_space_aligned_body_sends_without_format_retry(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.42 / §V.136: the format lint runs as the compose-only output validator.
-    A space-aligned spec block triggers a bounded ModelRetry; the retry produces
-    a clean body and only that reaches Gmail (one send)."""
+    """§V.42 / §B.128: compose-only no longer format-lints the body.
+    A space-aligned label/value block reaches Gmail on the first try."""
     _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
     settings = make_test_settings(
         anthropic_api_key="sk-test", anthropic_model="test-model"
     )
+    body = "Model AX-100  50 GPM\nFlow Rate  50 GPM\nWeight  9 kg"
     with (
         patch("mailpilot.agent.invoke.GmailClient") as mock_cls,
         patch("mailpilot.agent.invoke.DriveClient"),
     ):
         mock_client = MagicMock()
         mock_client.send_message.return_value = {
-            "id": "sent-retry",
-            "threadId": "thread-retry",
+            "id": "sent-spec",
+            "threadId": "thread-spec",
             "labelIds": ["SENT"],
         }
         mock_cls.return_value = mock_client
@@ -1698,22 +1669,18 @@ def test_compose_only_spec_block_output_validator_retries(
             workflow,
             contact,
             trigger="enrollment_run",
-            model_override=_touch_model_spec_then_clean(),
+            model_override=_touch_model("Specs for you", body),
         )
 
     assert result is not None
     assert result["status"] == "completed"
-    # Only the clean retry body was sent (the spec block was rejected before any
-    # send). Exactly one message reached Gmail, and the persisted row carries the
-    # clean body, not the space-aligned spec block.
     mock_client.send_message.assert_called_once()
     sent = database_connection.execute(
         "SELECT body_text FROM email WHERE workflow_id = %s AND direction = 'outbound'",
         (workflow.id,),
     ).fetchone()
     assert sent is not None
-    assert "Model AX-100" not in sent["body_text"]
-    assert "quick note" in sent["body_text"]
+    assert "Model AX-100" in sent["body_text"]
 
 
 # -- §V.136 / §B.127 first-touch subject require --------------------------------

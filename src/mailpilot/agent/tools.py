@@ -25,13 +25,11 @@ Tools (see §I agent tools):
 from __future__ import annotations
 
 import contextvars
-import re
 from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Any
 
-import logfire
 import psycopg
 
 from mailpilot import database, email_ops
@@ -39,84 +37,8 @@ from mailpilot.drive import DriveClient
 from mailpilot.models import Account
 from mailpilot.settings import Settings
 
-# §V.71: per-agent-invocation reply-rejection counter (root cause §B.57).
-# ``run.execute_task`` enters ``reply_rejection_scope`` to install a fresh
-# counter for each task; ``reply_email`` and ``send_email`` increment the
-# counter on every ``_check_spec_table`` (format) hit and bypass the check
-# once the counter reaches ``_REPLY_REJECTION_CAP``. Bounds worst-case latency
-# under prompt-fidelity loops (B7 17 calls / 195s, C burst 35 calls / 495s
-# observed in §B.57). Outside a scope (legacy / CLI paths without a task row)
-# the counter stays ``None`` and the check behaves as before.
-
-
-class _ReplyRejectionCounter:
-    __slots__ = ("count",)
-
-    def __init__(self) -> None:
-        self.count: int = 0
-
-
-_REPLY_REJECTIONS: contextvars.ContextVar[_ReplyRejectionCounter | None] = (
-    contextvars.ContextVar("mailpilot.reply_rejections", default=None)
-)
-_REPLY_REJECTION_CAP = 3
-
-
-@contextmanager
-def reply_rejection_scope() -> Generator[None]:
-    """Install a fresh per-invocation reply-rejection counter (§V.71).
-
-    Wrap each task-drained ``agent.invoke`` so successive ``reply_email`` /
-    ``send_email`` calls from the same task share a counter. The cap kicks in
-    after ``_REPLY_REJECTION_CAP`` consecutive format-lint rejections; further
-    calls bypass the check and emit a ``logfire.warn`` so the regression is
-    observable instead of silently looping.
-    """
-    token = _REPLY_REJECTIONS.set(_ReplyRejectionCounter())
-    try:
-        yield
-    finally:
-        _REPLY_REJECTIONS.reset(token)
-
-
-def _consume_reply_rejection(
-    *,
-    tool: str,
-    rejection_type: Literal["format"],
-    workflow_id: str,
-    email_id: str | None,
-) -> bool:
-    """Record a rejection; return ``True`` when the caller MUST bypass the check.
-
-    Returns ``False`` outside a ``reply_rejection_scope`` (legacy path) so the
-    caller surfaces the error to the agent as before. Inside a scope,
-    increments the counter and returns ``True`` once it reaches the cap,
-    emitting the ``cap_reached`` warn span on the transition with the
-    rejection type that triggered the bypass.
-    """
-    counter = _REPLY_REJECTIONS.get()
-    if counter is None:
-        return False
-    counter.count += 1
-    if counter.count < _REPLY_REJECTION_CAP:
-        return False
-    # Per §V.71: a stable span name keeps Logfire alerts grep-able across tools
-    # and rejection types; ``tool`` and ``rejection_type`` ride as attributes
-    # so the bypass site and trigger class stay identifiable.
-    logfire.warn(
-        "reply_email.reply_rejection.cap_reached",
-        tool=tool,
-        rejection_type=rejection_type,
-        attempt=counter.count,
-        workflow_id=workflow_id,
-        email_id=email_id,
-    )
-    return True
-
-
-# §V.131: per-task reply-emitted flag, sibling of the §V.71 reply-rejection
-# counter. ``run.execute_task`` enters ``reply_emitted_scope`` alongside
-# ``reply_rejection_scope`` so a successful ``reply_email`` / ``send_email`` this
+# §V.131: per-task reply-emitted flag. ``run.execute_task`` enters
+# ``reply_emitted_scope`` so a successful ``reply_email`` / ``send_email`` this
 # task flips the flag. The run-loop terminal branch reads it via
 # ``reply_was_emitted`` to decide whether a terminal inbound failure still owes
 # the sender a fallback acknowledgement -- the ``connection.rollback()`` at the
@@ -125,8 +47,10 @@ def _consume_reply_rejection(
 # (blocks a double-reply when a non-transient class raised after a successful
 # send). The flag is a mutable object, not a re-bound value, so a mark inside a
 # worker thread's copied context -- Pydantic AI dispatches sync tools via
-# asyncio.to_thread -- mutates the shared object the main thread reads back
-# (mirrors ``_ReplyRejectionCounter``). Outside a scope the flag stays ``None``.
+# asyncio.to_thread -- mutates the shared object the main thread reads back.
+# Outside a scope the flag stays ``None``.
+# (§V.42 retired the format-lint / reply-rejection counter path — no body
+# format check remains on send/reply/compose.)
 
 
 class _ReplyEmittedFlag:
@@ -175,59 +99,6 @@ def reply_was_emitted() -> bool:
     return flag is not None and flag.emitted
 
 
-# Per §V.42: detect spec-shape rows (label + any whitespace + non-whitespace
-# value, length capped at 80 chars) on lines that do not use Markdown
-# pipe-table syntax. Three or more *consecutive* such lines without a
-# `|---|` separator anywhere in the body indicates a spec sheet rendered as
-# space-aligned text rather than a proper pipe-table. Recurring drift per
-# §B.5 / §B.9 / §B.14 / §B.36 that prompt-only fixes did not hold;
-# numeric-only matching pre-§B.14 missed non-numeric KDF rows like
-# "Mesh Size  20x50"; the 2-space floor pre-§B.36 missed the single-space
-# `**label** *value*` cluster shape. Consecutive tracking preserves prose
-# immunity under the widened `\s+` floor: short greetings or `Best,`/`Thanks!`
-# closers separated from each other by blank or non-matching lines never
-# accumulate to the trigger threshold. ASCII rule-line runs (`-{6,}`, `={6,}`,
-# `_{6,}` on a standalone line) do NOT count as a pipe-table separator --
-# only `|---|` does -- so an agent emitting `------` between key/value rows
-# still trips the lint.
-_SPEC_ROW_RE = re.compile(r"^[^|]{1,80}\s+\S.*$")
-_PIPE_SEPARATOR_RE = re.compile(r"\|\s*-{3,}\s*\|")
-
-
-def _check_spec_table(body: str) -> dict[str, str] | None:
-    """Lint email body for spec rows missing a pipe-table separator (§V.42).
-
-    Returns the format error dict when the body has >=3 consecutive lines
-    matching the spec-row shape (1-80 non-pipe chars, one-or-more spaces,
-    non-whitespace) without any pipe character on those lines, and no
-    Markdown pipe-table separator (``|---|`` / ``| --- |``) anywhere in
-    the body. Non-matching lines reset the consecutive counter so prose
-    paragraphs (short greetings, blank-line-separated sentences) do not
-    accumulate to the trigger threshold. Returns ``None`` otherwise so the
-    caller can proceed to send.
-    """
-    if _PIPE_SEPARATOR_RE.search(body):
-        return None
-    consecutive = 0
-    for line in body.splitlines():
-        if "|" in line:
-            consecutive = 0
-            continue
-        if _SPEC_ROW_RE.match(line):
-            consecutive += 1
-            if consecutive >= 3:
-                return {
-                    "error": "format",
-                    "message": (
-                        "spec body MUST use Markdown pipe-table w/ "
-                        "|---| header separator"
-                    ),
-                }
-        else:
-            consecutive = 0
-    return None
-
-
 def send_email(  # noqa: PLR0913
     connection: psycopg.Connection[dict[str, Any]],
     account: Account,
@@ -250,16 +121,6 @@ def send_email(  # noqa: PLR0913
     the ``gmail_thread_id`` returned by the first touch so later touches
     thread natively.
     """
-    format_error = _check_spec_table(body)
-    if format_error is not None:
-        bypass = _consume_reply_rejection(
-            tool="send_email",
-            rejection_type="format",
-            workflow_id=workflow_id,
-            email_id=None,
-        )
-        if not bypass:
-            return format_error
     try:
         # thread_id forwards outbound thread-continuation per §V.78.
         email = email_ops.send_email(
@@ -303,16 +164,6 @@ def reply_email(  # noqa: PLR0913
 
     Converts typed policy exceptions into the LLM-facing error dict.
     """
-    format_error = _check_spec_table(body)
-    if format_error is not None:
-        bypass = _consume_reply_rejection(
-            tool="reply_email",
-            rejection_type="format",
-            workflow_id=workflow_id,
-            email_id=email_id,
-        )
-        if not bypass:
-            return format_error
     try:
         email = email_ops.reply_email(
             connection,

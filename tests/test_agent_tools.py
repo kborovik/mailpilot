@@ -30,7 +30,6 @@ from mailpilot.agent.tools import (
     read_email,
     reply_email,
     reply_emitted_scope,
-    reply_rejection_scope,
     reply_was_emitted,
     search_drive_markdown,
     search_emails,
@@ -407,12 +406,13 @@ def test_reply_email_blocked_contact(
     gmail_client.send_message.assert_not_called()
 
 
-# -- _check_spec_table (§V.42) -------------------------------------------------
+# -- send/reply body path (§V.42: no format lint) ------------------------------
 
 
 def test_send_email_pure_prose_passes(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
+    """§V.42: multi-line ready-copy prose reaches Gmail with no format lint."""
     account = make_test_account(database_connection)
     make_test_contact(database_connection, email="recipient@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
@@ -441,43 +441,10 @@ def test_send_email_pure_prose_passes(
     gmail_client.send_message.assert_called_once()
 
 
-def test_send_email_pipe_table_passes(
+def test_send_email_space_aligned_spec_rows_pass(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    account = make_test_account(database_connection)
-    make_test_contact(database_connection, email="recipient@example.com")
-    workflow = make_test_workflow(database_connection, account_id=account.id)
-    _activate(database_connection, workflow.id)
-    gmail_client = _make_gmail_client(account)
-
-    body = (
-        "Here are the specs you asked about:\n\n"
-        "| Specification | Value |\n"
-        "|---|---|\n"
-        "| Continuous Flow Rate | 110 GPM |\n"
-        "| Peak Flow Rate | 165 GPM |\n"
-        "| Resin Volume | 36 cu ft |\n\n"
-        "Let me know if you need anything else."
-    )
-
-    result = send_email(
-        connection=database_connection,
-        account=account,
-        gmail_client=gmail_client,
-        settings=make_test_settings(),
-        workflow_id=workflow.id,
-        to="recipient@example.com",
-        subject="Specs",
-        body=body,
-    )
-
-    assert "error" not in result
-    gmail_client.send_message.assert_called_once()
-
-
-def test_send_email_spec_shape_no_table_rejects(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
+    """§V.42 / §B.128: space-aligned label/value rows no longer format-reject."""
     account = make_test_account(database_connection)
     make_test_contact(database_connection, email="recipient@example.com")
     workflow = make_test_workflow(database_connection, account_id=account.id)
@@ -502,9 +469,8 @@ def test_send_email_spec_shape_no_table_rejects(
         body=body,
     )
 
-    assert result["error"] == "format"
-    assert "|---|" in result["message"]
-    gmail_client.send_message.assert_not_called()
+    assert "error" not in result
+    gmail_client.send_message.assert_called_once()
 
 
 def test_reply_email_decline_body_passes(
@@ -541,363 +507,6 @@ def test_reply_email_decline_body_passes(
         settings=make_test_settings(),
         workflow_id=workflow.id,
         email_id=inbound.id,
-        body=body,
-    )
-
-    assert "error" not in result
-    gmail_client.send_message.assert_called_once()
-
-
-def test_reply_email_format_lint_cap_reached_bypasses(
-    capfire: CaptureLogfire,
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    """§V.71 / §T.86 / §B.57: inside ``reply_rejection_scope`` (the per-task
-    scope installed by ``run.execute_task``), three consecutive ``reply_email``
-    calls with a body that trips ``_check_spec_table`` must reject the first
-    two and accept the third, emitting a
-    ``reply_email.reply_rejection.cap_reached`` warn span on the bypass.
-    Bounds the runaway prompt-fidelity loops seen in the 2026-06-06 smoke run
-    (17 calls for B7 compare, 35 calls in C burst).
-    """
-    account = make_test_account(database_connection)
-    contact = make_test_contact(database_connection, email="sender@example.com")
-    workflow = make_test_workflow(database_connection, account_id=account.id)
-    _activate(database_connection, workflow.id)
-    inbound = create_email(
-        database_connection,
-        account_id=account.id,
-        direction="inbound",
-        subject="WS36-600-2 specs?",
-        contact_id=contact.id,
-        workflow_id=workflow.id,
-        gmail_message_id="inbound-cap",
-        gmail_thread_id="thread-cap",
-    )
-    assert inbound is not None
-
-    gmail_client = _make_gmail_client(account)
-    body = (
-        "Here are the WS36-600-2 specs you asked about:\n\n"
-        "Continuous Flow Rate  110 GPM\n"
-        "Peak Flow Rate  165 GPM\n"
-        "Resin Volume  36 cu ft\n"
-    )
-
-    settings = make_test_settings()
-    with reply_rejection_scope():
-        first = reply_email(
-            connection=database_connection,
-            account=account,
-            gmail_client=gmail_client,
-            settings=settings,
-            workflow_id=workflow.id,
-            email_id=inbound.id,
-            body=body,
-        )
-        second = reply_email(
-            connection=database_connection,
-            account=account,
-            gmail_client=gmail_client,
-            settings=settings,
-            workflow_id=workflow.id,
-            email_id=inbound.id,
-            body=body,
-        )
-        third = reply_email(
-            connection=database_connection,
-            account=account,
-            gmail_client=gmail_client,
-            settings=settings,
-            workflow_id=workflow.id,
-            email_id=inbound.id,
-            body=body,
-        )
-
-    assert first["error"] == "format"
-    assert second["error"] == "format"
-    assert "error" not in third
-    gmail_client.send_message.assert_called_once()
-
-    cap_span = next(
-        (
-            s
-            for s in capfire.exporter.exported_spans_as_dict()
-            if s["name"] == "reply_email.reply_rejection.cap_reached"
-        ),
-        None,
-    )
-    assert cap_span is not None
-    assert cap_span["attributes"]["rejection_type"] == "format"
-
-
-def test_send_email_format_lint_cap_outside_scope_unchanged(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    """§V.71: outside ``reply_rejection_scope`` (CLI ``enrollment run`` paths
-    and legacy direct calls), repeated lint hits keep returning the format
-    error -- the bypass MUST only kick in when ``run.execute_task`` installed
-    the counter. Asserts the wrapper preserves prior behaviour outside the
-    scope.
-    """
-    account = make_test_account(database_connection)
-    make_test_contact(database_connection, email="recipient@example.com")
-    workflow = make_test_workflow(database_connection, account_id=account.id)
-    _activate(database_connection, workflow.id)
-    gmail_client = _make_gmail_client(account)
-
-    body = (
-        "Here are the specs:\n\n"
-        "Continuous Flow Rate  110 GPM\n"
-        "Peak Flow Rate  165 GPM\n"
-        "Resin Volume  36 cu ft\n"
-    )
-
-    settings = make_test_settings()
-    for _ in range(5):
-        result = send_email(
-            connection=database_connection,
-            account=account,
-            gmail_client=gmail_client,
-            settings=settings,
-            workflow_id=workflow.id,
-            to="recipient@example.com",
-            subject="Specs",
-            body=body,
-        )
-        assert result["error"] == "format"
-
-    gmail_client.send_message.assert_not_called()
-
-
-def test_reply_email_spec_shape_no_table_rejects(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    """§B.48 / §V.42: an inbound-reply body with >=3 consecutive spec-row
-    lines and no pipe-table separator must trip the lint on the reply path
-    just as it does on the send path. Smoke run 2026-06-05 observed
-    ``_check_spec_table`` firing on one ``reply_email`` attempt but not on
-    four sibling attempts whose stored ``body_text`` would have tripped the
-    lint on replay. Locks the contract at the wrapper layer for both arms."""
-    account = make_test_account(database_connection)
-    contact = make_test_contact(database_connection, email="sender@example.com")
-    workflow = make_test_workflow(database_connection, account_id=account.id)
-    _activate(database_connection, workflow.id)
-    inbound = create_email(
-        database_connection,
-        account_id=account.id,
-        direction="inbound",
-        subject="WS36-600-2 flow rates?",
-        contact_id=contact.id,
-        workflow_id=workflow.id,
-        gmail_message_id="inbound-spec-q",
-        gmail_thread_id="thread-spec-q",
-    )
-    assert inbound is not None
-
-    gmail_client = _make_gmail_client(account)
-
-    body = (
-        "Here are the WS36-600-2 specs you asked about:\n\n"
-        "Continuous Flow Rate  110 GPM\n"
-        "Peak Flow Rate  165 GPM\n"
-        "Resin Volume  36 cu ft\n"
-    )
-
-    result = reply_email(
-        connection=database_connection,
-        account=account,
-        gmail_client=gmail_client,
-        settings=make_test_settings(),
-        workflow_id=workflow.id,
-        email_id=inbound.id,
-        body=body,
-    )
-
-    assert result["error"] == "format"
-    assert "|---|" in result["message"]
-    gmail_client.send_message.assert_not_called()
-
-
-def test_send_email_non_numeric_specs_rejects(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    """§B.14 regression: KDF specs with non-numeric values (e.g. `Mesh Size
-    20x50`, `Type  Granular`) must trip the lint even though the value field
-    is not a number."""
-
-    account = make_test_account(database_connection)
-    make_test_contact(database_connection, email="recipient@example.com")
-    workflow = make_test_workflow(database_connection, account_id=account.id)
-    _activate(database_connection, workflow.id)
-    gmail_client = _make_gmail_client(account)
-
-    body = (
-        "Here are the KDF media specs:\n\n"
-        "Type  Granular Activated Carbon\n"
-        "Mesh Size  20x50\n"
-        "Color  Black\n"
-    )
-
-    result = send_email(
-        connection=database_connection,
-        account=account,
-        gmail_client=gmail_client,
-        settings=make_test_settings(),
-        workflow_id=workflow.id,
-        to="recipient@example.com",
-        subject="Specs",
-        body=body,
-    )
-
-    assert result["error"] == "format"
-    assert "|---|" in result["message"]
-    gmail_client.send_message.assert_not_called()
-
-
-def test_send_email_ascii_rule_line_separator_rejects(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    """§B.14 regression: ASCII rule-line (`---...`) standalone separators
-    between spec rows do NOT count as a pipe-table separator -- only `|---|`
-    does -- so an agent using `------` as a faux separator still trips the
-    lint."""
-
-    account = make_test_account(database_connection)
-    make_test_contact(database_connection, email="recipient@example.com")
-    workflow = make_test_workflow(database_connection, account_id=account.id)
-    _activate(database_connection, workflow.id)
-    gmail_client = _make_gmail_client(account)
-
-    body = (
-        "Section A\n"
-        "Continuous Flow Rate  110 GPM\n"
-        "Peak Flow Rate  165 GPM\n"
-        "------------------------------\n"
-        "Section B\n"
-        "Resin Volume  36 cu ft\n"
-    )
-
-    result = send_email(
-        connection=database_connection,
-        account=account,
-        gmail_client=gmail_client,
-        settings=make_test_settings(),
-        workflow_id=workflow.id,
-        to="recipient@example.com",
-        subject="Specs",
-        body=body,
-    )
-
-    assert result["error"] == "format"
-    assert "|---|" in result["message"]
-    gmail_client.send_message.assert_not_called()
-
-
-def test_send_email_single_space_bold_label_cluster_rejects(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    """§B.36 regression: `**label** *value*` cluster rendered with a single
-    space between the bold label and italic value -- the smoke-test
-    2026-05-28 B4 / B7 shape that slipped past the pre-§T.62 `\\s{2,}`
-    floor."""
-    account = make_test_account(database_connection)
-    make_test_contact(database_connection, email="recipient@example.com")
-    workflow = make_test_workflow(database_connection, account_id=account.id)
-    _activate(database_connection, workflow.id)
-    gmail_client = _make_gmail_client(account)
-
-    body = (
-        "Hi -- here are the specs:\n\n"
-        "**Peak Flow Rate** *26.6 GPM*\n"
-        "**Pressure Loss** *15 psi*\n"
-        "**Pipe Connection** *2 inch NPT*\n\n"
-        "Let me know."
-    )
-
-    result = send_email(
-        connection=database_connection,
-        account=account,
-        gmail_client=gmail_client,
-        settings=make_test_settings(),
-        workflow_id=workflow.id,
-        to="recipient@example.com",
-        subject="Specs",
-        body=body,
-    )
-
-    assert result["error"] == "format"
-    assert "|---|" in result["message"]
-    gmail_client.send_message.assert_not_called()
-
-
-def test_send_email_prose_with_incidental_short_line_passes(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    """§V.42 prose immunity: a multi-clause prose body with one incidental
-    short line broken between long sentences must NOT trip the lint.
-    Consecutive tracking resets on the short line (no internal whitespace)
-    so the surrounding long lines never reach the 3-consecutive threshold."""
-    account = make_test_account(database_connection)
-    make_test_contact(database_connection, email="recipient@example.com")
-    workflow = make_test_workflow(database_connection, account_id=account.id)
-    _activate(database_connection, workflow.id)
-    gmail_client = _make_gmail_client(account)
-
-    body = (
-        "We completed the migration to the new system and validated all the "
-        "data integrity checks across both clusters this morning.\n"
-        "OK?\n"
-        "Remaining work involves user training and documentation updates "
-        "over the next two weeks before the public launch.\n"
-        "Thanks!"
-    )
-
-    result = send_email(
-        connection=database_connection,
-        account=account,
-        gmail_client=gmail_client,
-        settings=make_test_settings(),
-        workflow_id=workflow.id,
-        to="recipient@example.com",
-        subject="Update",
-        body=body,
-    )
-
-    assert "error" not in result
-    gmail_client.send_message.assert_called_once()
-
-
-def test_send_email_mixed_body_with_separator_passes(
-    database_connection: psycopg.Connection[dict[str, Any]],
-):
-    account = make_test_account(database_connection)
-    make_test_contact(database_connection, email="recipient@example.com")
-    workflow = make_test_workflow(database_connection, account_id=account.id)
-    _activate(database_connection, workflow.id)
-    gmail_client = _make_gmail_client(account)
-
-    # Body has spec-shape lines mixed with at least one pipe-table separator
-    # somewhere -- the separator presence short-circuits the heuristic.
-    body = (
-        "Quick numbers below.\n\n"
-        "Continuous Flow Rate  110 GPM\n"
-        "Peak Flow Rate  165 GPM\n"
-        "Resin Volume  36 cu ft\n\n"
-        "Detailed table:\n\n"
-        "| Spec | Value |\n"
-        "|---|---|\n"
-        "| Salt Usage | 12 lb |\n"
-    )
-
-    result = send_email(
-        connection=database_connection,
-        account=account,
-        gmail_client=gmail_client,
-        settings=make_test_settings(),
-        workflow_id=workflow.id,
-        to="recipient@example.com",
-        subject="Mixed",
         body=body,
     )
 

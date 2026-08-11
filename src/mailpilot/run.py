@@ -22,7 +22,6 @@ from mailpilot.agent.templates import (
 )
 from mailpilot.agent.tools import (
     reply_emitted_scope,
-    reply_rejection_scope,
     reply_was_emitted,
 )
 from mailpilot.cadence import resolve_touch_number
@@ -70,13 +69,6 @@ def execute_task(  # noqa: PLR0911
             workflow_id=task.workflow_id,
             contact_id=task.contact_id,
         ),
-        # §V.71: install a per-task reply-rejection counter so
-        # ``reply_email`` / ``send_email`` calls share the cap across one
-        # ``agent.invoke``. The counter covers format-lint rejections so the
-        # rejection class cannot loop unbounded. Outside this scope (CLI
-        # ``enrollment run``, etc.) the counter is absent and the check
-        # behaves as before.
-        reply_rejection_scope(),
         # §V.131: install a per-task reply-emitted flag so a successful
         # ``reply_email`` / ``send_email`` this task is recorded in memory.
         # ``_handle_agent_failure`` reads it to suppress a duplicate fallback
