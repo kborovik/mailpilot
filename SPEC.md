@@ -115,7 +115,7 @@ V55: `gen_ai.tool.call.result` span attr exempt from Logfire scrubbing; all othe
 V62: release = `make release` + CI-gated GH release + PyPI (OIDC); dist mailpilot-crm; module/CLI mailpilot — → .spec/check-extras.md §V62
 V67: persisted outbound in_reply_to + references_header mirror wire MIME headers exactly
 V69: tick classifying >= 1 inbound -> next tick forces full sweep + wakeup_event set
-V71: per-task reply-rejection counter (reply_rejection_scope) — format_check rejections cap 3; past cap bypasses; outside scope always enforces
+V71: no format-rejection path — send_email|reply_email|compose body never format-reject; no reply_rejection_scope / cap / bypass
 V72: company.profile JSONB validated vs CompanyProfile — required {summary, products, target_customers, sources} non-empty; timezone optional, null on multi-zone; malformed -> validation_error
 V73: skill-body-embedded Workflow snippet runnable as authored — (a) zero free vars; (b) args-as-collection guard; (c) prose-matches-dispatch; (d) saved-workflow byte-identical — recipe → .spec/check-extras.md §V73
 V74: CSV ingestion uses RFC-4180 parser (csv module / csv.DictReader); redirect resolution = hop-agnostic curl -sL; scope .claude/skills/**; .claude/workflows/*.js excluded — recipe → .spec/check-extras.md §V74
