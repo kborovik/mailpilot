@@ -150,7 +150,7 @@ class EmailRenderer(mistune.HTMLRenderer):  # type: ignore[misc]
 
 _CONTAINER_STYLE = (
     "font-family:Arial,'Helvetica Neue',Helvetica,sans-serif; "
-    "font-size:16px; line-height:1.5; color:#333333; max-width:600px"
+    "font-size:16px; line-height:1.5; color:#333333"
 )
 
 

@@ -41,7 +41,8 @@ def test_get_theme_none_falls_back_to_blue():
 def test_render_wraps_in_container_div():
     html = render_email_html("Hello", get_theme("blue"))
     assert html.startswith('<div style="')
-    assert "max-width:600px" in html
+    assert "font-family:Arial" in html
+    assert "max-width" not in html
     assert html.endswith("</div>")
 
 
