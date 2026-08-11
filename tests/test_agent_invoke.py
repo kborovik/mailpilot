@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import psycopg
 import pytest
 from logfire.testing import CaptureLogfire
+from pydantic_ai import ModelRetry
 from pydantic_ai.messages import (
     ModelMessage,
     ModelResponse,
@@ -24,8 +25,6 @@ from conftest import (
     make_test_settings,
     make_test_workflow,
 )
-from pydantic_ai import ModelRetry
-
 from mailpilot.agent.invoke import (
     _SUBJECT_REQUIRED_RETRY,  # pyright: ignore[reportPrivateUsage]
     _advisory_lock_keys,  # pyright: ignore[reportPrivateUsage]
