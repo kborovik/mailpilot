@@ -54,8 +54,10 @@ practical (background command still running), then again when it finishes.
 ### How (Logfire MCP)
 
 1. `search_tool` for `logfire query` if schemas are not already loaded.
-2. Prefer `logfire__query_run` (call `logfire__query_schema_reference` first when
-   writing non-trivial SQL). Project: `mailpilot`.
+2. Invoke every Logfire MCP tool via `use_tool` (qualified `logfire__*` name +
+   `tool_input`). Prefer `logfire__query_run` (call
+   `logfire__query_schema_reference` first when writing non-trivial SQL).
+   Project: `mailpilot`.
 3. Time range: `start_timestamp` = run window start (step-4 start, or
    `touch1.json` `window_start` minus 1m once written); `end_timestamp` = now.
 4. Error-focused queries (DataFusion / Postgres-like). Example shapes:
@@ -88,7 +90,7 @@ ORDER BY start_timestamp DESC
 LIMIT 20
 ```
 
-Optional UI handoff: `logfire__project_logfire_ui_link` with
+Optional UI handoff via `use_tool`: `logfire__project_logfire_ui_link` with
 `query` like `level='error' OR is_exception` and `since` = window start.
 
 ### What to surface

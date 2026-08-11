@@ -6,12 +6,16 @@ Agent-operated CRM with Gmail as the communication layer.
 
 ## Overview
 
-MailPilot manages contacts, companies, and communication workflows through Gmail API. It is designed to be operated by AI agents -- Claude Code as the strategic orchestrator and an internal Pydantic AI agent for real-time reactive work.
+MailPilot manages contacts, companies, and communication workflows through Gmail API.
+It is designed to be operated by AI agents -- Claude Code as the strategic orchestrator and an internal Pydantic AI agent for real-time reactive work.
 
 ### Two-Layer Intelligence
 
-1. **Claude Code** -- strategic orchestrator. Creates workflows, assigns contacts, reviews outcomes, generates reports. Operates the system via CLI.
-2. **Internal Pydantic AI agent** -- subordinate tactical executor. Handles inbound email classification, auto-replies, and follow-up scheduling within workflows.
+1. **Claude Code** -- strategic orchestrator.
+   Creates workflows, assigns contacts, reviews outcomes, generates reports.
+   Operates the system via CLI.
+2. **Internal Pydantic AI agent** -- subordinate tactical executor.
+   Handles inbound email classification, auto-replies, and follow-up scheduling within workflows.
 
 ### Key Capabilities
 
@@ -23,7 +27,9 @@ MailPilot manages contacts, companies, and communication workflows through Gmail
 
 ## Install
 
-MailPilot ships on PyPI as [`mailpilot-crm`](https://pypi.org/project/mailpilot-crm/). The package installs the `mailpilot` command. Python 3.14 or later is required.
+MailPilot ships on PyPI as [`mailpilot-crm`](https://pypi.org/project/mailpilot-crm/).
+The package installs the `mailpilot` command.
+Python 3.14 or later is required.
 
 Install with uv:
 
@@ -47,7 +53,8 @@ mailpilot --version
 
 MailPilot needs PostgreSQL 18 and a Google service account with domain-wide delegation for the Gmail API.
 
-Create the database. MailPilot provisions the schema on first connection:
+Create the database.
+MailPilot provisions the schema on first connection:
 
 ```bash
 createdb mailpilot
@@ -93,4 +100,5 @@ mailpilot run
 
 Copyright 2026 Konstantin Borovik.
 
-Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the full text.
+Licensed under the Apache License, Version 2.0.
+See [LICENSE](LICENSE) for the full text.
