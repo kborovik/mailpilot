@@ -178,17 +178,20 @@ Trigger: `src/mailpilot/agent/templates.py` or `workflows/*.toml` changed.
 - `rg -i 'search-first\|search first\|2-search' src/mailpilot/agent/templates.py` -> zero hits (no grounding fragment in code)
 - `rg 'list_drive_markdown' src/mailpilot/agent/templates.py` -> Drive tool set bound on inbound-google-drive
 
-## §V42 — Email body format-check rejection algorithm
+## §V42 — Agent email body structure: lists only; no table lint
 
 Trigger when `src/mailpilot/agent/` or `src/mailpilot/email_renderer.py` changed.
 
-Rejection condition: >= 3 consecutive spec-shape lines (short label + whitespace + value) in reply body w/o `|---|` separator -> `format_check_mismatch`. ASCII rule-lines (`---`, `===`, `___`) not treated as separators.
+Agent-facing text (composed protocol fragments, compose-only instructions, registered tool docstrings, ModelRetry / tool-error fix messages that reach the model) bans Markdown tables: no GFM pipe-table mandate, no `|---|` separator instruction, no "pipe table" / "Markdown table" wording. Multi-row structure = plain-text lines or `-` lists only.
 
-_SPEC_TABLE requirement: MUST explicitly mandate GFM pipe table w/ header row + `|---|` separator for spec rows (model numbers, flow rates, dimensions, capacities); the prompt mandate lives in the _SPEC_TABLE fragment composed into inbound templates' protocol_pre only (inbound-general + inbound-google-drive), NOT outbound-general; "may use Markdown tables" (permissive) alone insufficient — format-lint is backstop, not primary enforcement. _check_spec_table stays email-universal core (§V.45 format glue) — fires on send_email + reply_email both; §V.71 caps any retry loop.
+`_check_spec_table` retired: no format-check rejection on `send_email` / `reply_email` / compose-only `TouchMessage` validators. No ModelRetry or tool-error that teaches pipe-table formatting.
+
+`_SPEC_TABLE` fragment retired: not composed into any template `protocol_pre`. Product facts in agent-facing text use list or prose shape, never a table mandate.
 
 Mechanical check:
-- `rg -n 'may use Markdown' src/mailpilot/agent/templates.py` -> zero hits (permissive wording retired).
-- _SPEC_TABLE composed into inbound-general + inbound-google-drive protocol_pre only; outbound-general protocol_pre = _BASE alone (no pipe-table mandate) — read the TEMPLATES dict in templates.py; the composed-protocol test asserts outbound carries no `pipe table` / `flow rates` / `product specifications`.
+- `rg -n '_check_spec_table|_SPEC_TABLE|_SPEC_ROW_RE|_PIPE_SEPARATOR_RE' src/mailpilot/` → zero hits
+- `rg -ni 'pipe table|Markdown table|\|---\|' src/mailpilot/agent/templates.py` → zero hits in string literals (code comments ok)
+- compose-only output validators + `send_email` / `reply_email` carry no body format-lint call
 
 ## §V44 — template registry owns agent shape
 
@@ -205,13 +208,13 @@ Trigger when `src/mailpilot/agent/templates.py` or `src/mailpilot/agent/tools.py
 
 Agent-visible text = the composed protocol string + every registered tool's model-visible schema. pydantic-ai derives a tool's description AND per-parameter help from the registered function's full docstring (Args/Returns included), so a `§V/§T/§B.<n>` token anywhere in a registered tool's docstring leaks dead authoring metadata into the reply-agent prompt (`§B.79`: `_BASE` literal `(§V.42)`; `§B.84`: six tool-docstring Args/Returns cites). The governing invariant is cited in an adjacent code comment, never the model-visible string.
 
-Scope of "registered tool docstrings" = the source functions in `tools.py` named by `TEMPLATES[*].tools` (`send_email`, `reply_email`, `create_task`, `cancel_task`, `record_enrollment_outcome`, `disable_contact`, `list_enrollments`, `search_emails`, `read_email`, `noop`, `list_drive_markdown`, `read_drive_markdown`, `search_drive_markdown`). Internal helpers (`_check_spec_table`) + module comments are NOT registered, so their §-cites are exempt — flag a hit only when it sits inside a registered tool's `"""docstring"""`.
+Scope of "registered tool docstrings" = the source functions in `tools.py` named by `TEMPLATES[*].tools` (`send_email`, `reply_email`, `create_task`, `cancel_task`, `record_enrollment_outcome`, `disable_contact`, `list_enrollments`, `search_emails`, `read_email`, `noop`, `list_drive_markdown`, `read_drive_markdown`, `search_drive_markdown`). Internal helpers + module comments are NOT registered, so their §-cites are exempt — flag a hit only when it sits inside a registered tool's `"""docstring"""`.
 
 Mechanical checks:
 - `rg -n '§[VTB]\.[0-9]+' src/mailpilot/agent/templates.py` -> classify each hit: code comment -> exempt; composed-protocol fragment string (`_BASE`, `_DECLINE`, `_DEFERRED_TASK_*`, `_NO_FABRICATION`) -> fail (move the cite to a comment).
 - `rg -n '§[VTB]\.[0-9]+' src/mailpilot/agent/tools.py` -> classify each hit: comment / helper docstring -> exempt; inside a registered tool's docstring (per the roster above) -> fail (move the cite to a comment or drop it).
 
-Protocol composed `_BASE → [_SPEC_TABLE (inbound only) →] deferred branch → _MUST_SEND → _DECLINE → _NO_FABRICATION` = tool-loop shape; compose-only touch runs per §V.136; deferred branch selected per §V.31 (direction + trigger). `_SPEC_TABLE` = GFM pipe-table mandate for inbound product-spec; composed into inbound-general + inbound-google-drive `protocol_pre` only — outbound-general `protocol_pre` = `_BASE` alone. `_MUST_SEND` = end every trigger turn in a send or explicit noop; composed into `protocol_post` for all three templates. Every fragment is email-universal OR direction-scoped; never workflow-specific. Agent-facing text (composed protocol + registered tool docstrings) carries zero SPEC citation (`§V/§T/§B.<n>` tokens ban).
+Protocol composed `_BASE → deferred branch → _MUST_SEND → _DECLINE → _NO_FABRICATION` = tool-loop shape; compose-only touch runs per §V.136; deferred branch selected per §V.31 (direction + trigger). No `_SPEC_TABLE` fragment (retired §V.42). `_MUST_SEND` = end every trigger turn in a send or explicit noop; composed into `protocol_post` for all three templates. Every fragment is email-universal OR direction-scoped; never workflow-specific. Agent-facing text (composed protocol + registered tool docstrings) carries zero SPEC citation (`§V/§T/§B.<n>` tokens ban). Table bans for agent-facing structure → §V.42.
 
 Trigger: `src/mailpilot/agent/templates.py` or `src/mailpilot/agent/tools.py` changed.
 
@@ -219,7 +222,7 @@ Mechanical checks:
 - `rg -n '§[VTB]\.[0-9]+' src/mailpilot/agent/templates.py` -> classify each hit: code comment → exempt; inside a fragment string → fail.
 - `rg -n '§[VTB]\.[0-9]+' src/mailpilot/agent/tools.py` -> classify each hit: comment / helper docstring → exempt; inside a registered tool docstring → fail.
 - `rg -n 'may use Markdown' src/mailpilot/agent/templates.py` -> zero hits (permissive wording retired).
-- `_SPEC_TABLE` in inbound-general + inbound-google-drive `protocol_pre` only; outbound-general `protocol_pre` == `_BASE` alone; the composed-protocol test asserts outbound carries no `pipe table` / `flow rates` / `product specifications`.
+- `rg -n '_SPEC_TABLE' src/mailpilot/` -> zero hits (fragment retired §V.42).
 
 Registered tool docstring scope = functions named in `TEMPLATES[*].tools` (send_email, reply_email, create_task, cancel_task, conclude_enrollment, disable_contact, list_enrollments, search_emails, read_email, noop, list_drive_markdown, read_drive_markdown, search_drive_markdown). Internal helpers + module comments exempt.
 

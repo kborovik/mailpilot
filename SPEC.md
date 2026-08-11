@@ -100,7 +100,7 @@ V38: Drive tools sequential=True; transport faults → structured drive_unavaila
 V39: agent tool failure -> error dict {error, message}, never exception to agent; agent re-drafts via tool-error path
 V40: protocol fragment naming tools ! name >= 2 distinct tools, never exactly 1
 V41: KB grounding rules live in the workflow def `instructions` field (§V.103), never a code-defined template protocol fragment — → .spec/check-extras.md §V41
-V42: email body format lint + _SPEC_TABLE inbound pipe-table mandate — → .spec/check-extras.md §V42
+V42: agent-facing text bans Markdown/pipe tables (lists only); drop `_check_spec_table` — → .spec/check-extras.md §V42
 V44: agent shape owned by code-defined template registry; workflow.template + type immutable post-create, type derived from template — → .spec/check-extras.md §V44
 V45: protocol compose order tool-loop; compose-only touch §V.136; deferred §V.31; zero SPEC cites agent-facing — → .spec/check-extras.md §V45
 V46: template name = <direction>-<data-system>; prefix == direction field
@@ -255,6 +255,8 @@ T245|x|impl §V.155(+) + §I — task list --overdue + enrollment/report --stuck
 T246|x|impl §V.156(+) + §V.3(∆) + §I — --format table|csv|ndjson on report/list; default JSON; tests + SKILL (#205)|V156,V3,V4,V153,V152,I.cli
 T247|x|impl §V.157(+) + §I — workflow status ops-health composite; tests + SKILL (#206)|V157,V134,V11,V132,V107,V4,I.cli
 T248|x|impl §V.136 first-touch subject require — compose-only output validator ModelRetry on empty/None/whitespace subject for new-thread touch; follow-up may leave subject empty; unit tests empty/None/whitespace reject + non-empty accept + follow-up None ok|V136,B127
+T249|.|drop `_check_spec_table` + call sites (send_email, reply_email, compose `_lint_touch_output`); drop format-rejection path + tests|V42,B128
+T250|.|drop `_SPEC_TABLE`; ban agent-facing Markdown/pipe-table language; structure as lists; rewrite template/check-extras tests|V42,V45,B128
 
 ## §B BUGS
 
@@ -297,3 +299,4 @@ B124|2026-07-02|deferred-task fragments encode outbound lifecycle but compose di
 B125|2026-07-20|`_connect_database` incomplete OperationalError→hint map + logfire.exception Traceback for expected connect fails (pg_hba/DNS hit generic database_url)|V137
 B126|2026-08-10|mistune hard_wrap=False leaves soft newlines as whitespace inside `<p>`; HTML collapses signature + URL list to one line|V92
 B127|2026-08-11|compose-only first-touch accepts empty/None TouchMessage.subject → Gmail (no subject); body often packs subject\|body as pipe table|V136
+B128|2026-08-11|`_check_spec_table` false-positive on multi-line ready-copy prose; ModelRetry teaches pipe-table; compose packs subject\|body as table or exhausts retries|V42
