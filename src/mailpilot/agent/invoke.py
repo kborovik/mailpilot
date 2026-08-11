@@ -59,10 +59,14 @@ from mailpilot.models import (
 from mailpilot.operator_log import operator_event
 from mailpilot.settings import Settings
 
-# §V.42 lint runs as the compose-only output validator with a bounded ModelRetry
-# so a space-aligned spec block is re-drafted a capped number of times before the
-# run fails terminally (mirrors the §V.71 tool-path rejection cap).
+# Compose-only output validators (§V.42 body lint + §V.136 first-touch subject)
+# use a bounded ModelRetry so a bad draft is re-composed a capped number of
+# times before the run fails terminally (mirrors the §V.71 tool-path rejection
+# cap).
 _TOUCH_VALIDATION_RETRIES = 2
+
+# §V.136 / §B.127: ModelRetry message when a new-thread touch omits subject.
+_SUBJECT_REQUIRED_RETRY = "subject required for new thread"
 
 
 @dataclass
@@ -412,7 +416,42 @@ def _build_agent(workflow: Workflow, trigger: str = "manual") -> Agent[AgentDeps
     return agent
 
 
-def _build_touch_agent(workflow: Workflow) -> Agent[None, TouchMessage]:
+def _validate_touch_subject(
+    subject: str | None,
+    *,
+    require_subject: bool,
+) -> None:
+    """Raise ``ModelRetry`` when a new-thread touch lacks a non-empty subject.
+
+    §V.136 / §B.127: first-touch (new-thread) compose-only output must carry a
+    subject after strip; ``None`` / ``""`` / whitespace-only triggers a bounded
+    ModelRetry. Follow-ups that continue an existing thread may leave subject
+    empty -- the harness reply keeps the thread subject.
+    """
+    if not require_subject:
+        return
+    if subject is None or not subject.strip():
+        raise ModelRetry(_SUBJECT_REQUIRED_RETRY)
+
+
+def _is_new_thread_touch(prior_email: Email | None) -> bool:
+    """True when the harness will open a new thread (subject required, §V.136).
+
+    Mirrors ``_send_touch_message``: a prior outbound with thread + contact is
+    replied on; anything else opens a new cold thread.
+    """
+    return not (
+        prior_email is not None
+        and prior_email.gmail_thread_id is not None
+        and prior_email.contact_id is not None
+    )
+
+
+def _build_touch_agent(
+    workflow: Workflow,
+    *,
+    require_subject: bool,
+) -> Agent[None, TouchMessage]:
     """Build the compose-only touch agent for an outbound touch run (§V.136).
 
     A touch run (first reach-out or a system-scheduled follow-up in a workflow's
@@ -420,9 +459,10 @@ def _build_touch_agent(workflow: Workflow) -> Agent[None, TouchMessage]:
     loop: the agent binds zero tools and its validated output *is* the action, so
     the §V.81 tool-count check and the §V.120 reply walker do not apply and the
     harness sends the message itself. The workflow's ``_TOUCH_COMPOSE`` protocol
-    plus its ``instructions`` frame the compose task. The §V.42 spec-table lint
-    runs as an output validator with a bounded ``ModelRetry`` so a space-aligned
-    spec block is re-drafted, capped by the agent retry budget. The date-grounding
+    plus its ``instructions`` frame the compose task. Output validators with a
+    bounded ``ModelRetry`` (capped by the agent retry budget): (1) §V.42
+    space-aligned spec-table body lint; (2) §V.136 first-touch subject require
+    when ``require_subject`` is true (new-thread only). The date-grounding
     instruction (§V.129) and the model-visible protocol carry no SPEC cite (§V.45).
     """
     from mailpilot.agent.templates import (
@@ -444,12 +484,13 @@ def _build_touch_agent(workflow: Workflow) -> Agent[None, TouchMessage]:
         )
 
     @agent.output_validator
-    def _lint_spec_table(  # pyright: ignore[reportUnusedFunction]
+    def _lint_touch_output(  # pyright: ignore[reportUnusedFunction]
         output: TouchMessage,
     ) -> TouchMessage:
-        # §V.42: the format lint is the compose-only output validator. A body
-        # that renders product specs as space-aligned text triggers a bounded
-        # ModelRetry (capped by ``retries``) instead of reaching the recipient.
+        # §V.136 / §B.127: new-thread touch must have a non-empty subject.
+        _validate_touch_subject(output.subject, require_subject=require_subject)
+        # §V.42: space-aligned product-spec body triggers a bounded ModelRetry
+        # instead of reaching the recipient.
         format_error = agent_tools._check_spec_table(output.body)  # pyright: ignore[reportPrivateUsage]
         if format_error is not None:
             raise ModelRetry(format_error["message"])
@@ -716,20 +757,25 @@ def _run_compose_only_touch(  # noqa: PLR0913
 ) -> dict[str, Any]:
     """Run one compose-only outbound touch: compose, send, advance cadence (§V.136).
 
-    One LLM call yields a validated ``TouchMessage`` (the §V.42 lint runs as its
-    output validator). The harness sends it via ``email_ops`` -- a follow-up
-    threads on the prior touch, the first touch opens a new thread -- then the
-    cadence engine schedules the next touch or, after the final one, concludes
-    the enrollment ``contact_later`` system-internally (§V.127, §V.128). No tool
-    loop, so §V.81 / §V.120 do not apply; the send is structural. Returns the
-    same completed-run result dict shape as the tool-loop path, plus the sent
-    email id and the touch number.
+    One LLM call yields a validated ``TouchMessage`` (output validators: §V.42
+    body lint + §V.136 first-touch subject require). The harness sends it via
+    ``email_ops`` -- a follow-up threads on the prior touch, the first touch
+    opens a new thread -- then the cadence engine schedules the next touch or,
+    after the final one, concludes the enrollment ``contact_later``
+    system-internally (§V.127, §V.128). No tool loop, so §V.81 / §V.120 do not
+    apply; the send is structural. Returns the same completed-run result dict
+    shape as the tool-loop path, plus the sent email id and the touch number.
     """
-    touch_agent = _build_touch_agent(workflow)
+    # Resolve prior outbound before the LLM call so the subject validator knows
+    # whether this touch opens a new thread (§V.136 / §B.127).
+    prior_email = _resolve_prior_touch_email(connection, task_context, email_history)
+    touch_agent = _build_touch_agent(
+        workflow,
+        require_subject=_is_new_thread_touch(prior_email),
+    )
     result = touch_agent.run_sync(prompt, model=model)
     touch_message = result.output
 
-    prior_email = _resolve_prior_touch_email(connection, task_context, email_history)
     sent_email = _send_touch_message(
         connection,
         account,

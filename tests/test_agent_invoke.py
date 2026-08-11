@@ -24,11 +24,16 @@ from conftest import (
     make_test_settings,
     make_test_workflow,
 )
+from pydantic_ai import ModelRetry
+
 from mailpilot.agent.invoke import (
+    _SUBJECT_REQUIRED_RETRY,  # pyright: ignore[reportPrivateUsage]
     _advisory_lock_keys,  # pyright: ignore[reportPrivateUsage]
     _advisory_lock_keys_for_task,  # pyright: ignore[reportPrivateUsage]
     _build_agent,  # pyright: ignore[reportPrivateUsage]
     _build_user_prompt,  # pyright: ignore[reportPrivateUsage]
+    _is_new_thread_touch,  # pyright: ignore[reportPrivateUsage]
+    _validate_touch_subject,  # pyright: ignore[reportPrivateUsage]
     _wrap_conclude_enrollment,  # pyright: ignore[reportPrivateUsage]
     _wrap_create_task,  # pyright: ignore[reportPrivateUsage]
     _wrap_disable_contact,  # pyright: ignore[reportPrivateUsage]
@@ -1710,6 +1715,120 @@ def test_compose_only_spec_block_output_validator_retries(
     assert sent is not None
     assert "Model AX-100" not in sent["body_text"]
     assert "quick note" in sent["body_text"]
+
+
+# -- §V.136 / §B.127 first-touch subject require --------------------------------
+
+
+@pytest.mark.parametrize(
+    "subject",
+    [None, "", "   ", "\t\n"],
+)
+def test_compose_only_first_touch_subject_required_rejects(
+    subject: str | None,
+) -> None:
+    """§V.136 / §B.127: new-thread compose-only rejects empty/None/whitespace subject."""
+    with pytest.raises(ModelRetry, match=_SUBJECT_REQUIRED_RETRY):
+        _validate_touch_subject(subject, require_subject=True)
+
+
+def test_compose_only_first_touch_subject_required_accepts_non_empty() -> None:
+    """§V.136: a non-empty (after strip) subject is accepted for new-thread touch."""
+    _validate_touch_subject("Quick question", require_subject=True)
+    _validate_touch_subject("  padded  ", require_subject=True)
+
+
+def test_compose_only_follow_up_subject_none_ok() -> None:
+    """§V.136: follow-up that continues a thread may leave subject empty/None."""
+    _validate_touch_subject(None, require_subject=False)
+    _validate_touch_subject("", require_subject=False)
+    _validate_touch_subject("   ", require_subject=False)
+
+
+def test_is_new_thread_touch_true_without_prior() -> None:
+    """No prior outbound → new thread → subject required."""
+    assert _is_new_thread_touch(None) is True
+
+
+def test_is_new_thread_touch_false_with_replyable_prior(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Prior outbound with thread + contact → reply path → subject not required."""
+    account, contact, workflow = _setup(database_connection, workflow_type="outbound")
+    from mailpilot.database import create_email
+
+    prior = create_email(
+        database_connection,
+        gmail_message_id="msg-prior-nt",
+        gmail_thread_id="thread-prior-nt",
+        rfc2822_message_id="<prior-nt@mail>",
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        direction="outbound",
+        subject="Opening",
+        body_text="touch 1",
+    )
+    assert prior is not None
+    assert _is_new_thread_touch(prior) is False
+
+
+def _touch_model_empty_subject_then_ok() -> FunctionModel:
+    """First yield empty subject (ModelRetry), then a non-empty subject."""
+    call_count = 0
+
+    def _respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        del messages, info
+        nonlocal call_count
+        call_count += 1
+        subject = None if call_count == 1 else "Recovered subject"
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="final_result",
+                    args={"subject": subject, "body": "Body text after retry."},
+                )
+            ]
+        )
+
+    return FunctionModel(_respond)
+
+
+def test_compose_only_first_touch_subject_required(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.136 / §B.127: empty subject on first-touch triggers ModelRetry; retry
+    with a non-empty subject reaches Gmail once (closes empty-subject path)."""
+    _account, contact, workflow = _setup(database_connection, workflow_type="outbound")
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    with (
+        patch("mailpilot.agent.invoke.GmailClient") as mock_cls,
+        patch("mailpilot.agent.invoke.DriveClient"),
+    ):
+        mock_client = MagicMock()
+        mock_client.send_message.return_value = {
+            "id": "sent-subj-retry",
+            "threadId": "thread-subj-retry",
+            "labelIds": ["SENT"],
+        }
+        mock_cls.return_value = mock_client
+        result = invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            trigger="enrollment_run",
+            model_override=_touch_model_empty_subject_then_ok(),
+        )
+
+    assert result is not None
+    assert result["status"] == "completed"
+    mock_client.send_message.assert_called_once()
+    call_kwargs = mock_client.send_message.call_args.kwargs
+    assert call_kwargs["subject"] == "Recovered subject"
+    assert call_kwargs.get("thread_id") is None
 
 
 def test_outbound_reply_conclude_enrollment_satisfies_send_guard(
