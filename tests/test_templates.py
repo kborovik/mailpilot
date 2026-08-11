@@ -90,50 +90,43 @@ class TestUniversalTemplateInvariants:
         assert "No markdown" not in template.protocol
 
 
-def test_spec_table_mandates_pipe_table_for_spec_rows() -> None:
-    """§V.42 / §B.78 / §B.114: the GFM pipe-table mandate for product-spec rows
-    lives in the _SPEC_TABLE fragment so the format lint is a backstop, not the
-    primary enforcement. A permissive "may use Markdown tables" alone is the bug
-    §B.78 records -- the agent emits a space-aligned spec block first, the lint
-    rejects, the agent retries (7/8 invocations under burst, retry_rate 0.875 >>
-    the §V.70 0.05 ceiling). Product-spec answering is an inbound knowledge-base
-    concern (§B.114), so the fragment composes into the inbound templates only."""
-    spec_table = templates_module._SPEC_TABLE  # pyright: ignore[reportPrivateUsage]
-    # Marked as a hard requirement, not a permissive suggestion.
-    assert "MUST" in spec_table
-    # The mandated rendering is a pipe table with a |---| header separator.
-    assert "pipe table" in spec_table
-    assert "|---|" in spec_table
-    # Scoped to product-spec rows per §V.42 (model numbers, flow rates, ...).
-    assert "model numbers" in spec_table
-    # The mandate flows into the inbound templates only (§V.42, §V.45).
-    for name in ("inbound-general", "inbound-google-drive"):
-        assert "pipe table" in TEMPLATES[name].protocol
-        assert "|---|" in TEMPLATES[name].protocol
+def test_agent_facing_bans_pipe_table_language() -> None:
+    """§V.42 / §B.128: agent-facing protocol fragments ban Markdown/pipe-table
+    wording. Multi-row product facts use list or prose shape only; the retired
+    _SPEC_TABLE mandate and runtime format lint both taught table layouts."""
+    # Fragment name and symbols must be gone (check-extras §V.42 mechanical).
+    assert not hasattr(templates_module, "_SPEC_TABLE")
+    product_specs = templates_module._PRODUCT_SPECS  # pyright: ignore[reportPrivateUsage]
+    # Positive list structure for product facts (inbound-only fragment).
+    assert "model numbers" in product_specs
+    assert "bullet list" in product_specs or "- " in product_specs
+    # Banned table language absent from every composed protocol string.
+    banned = ("pipe table", "markdown table", "|---|")
+    for template in TEMPLATES.values():
+        protocol_lower = template.protocol.lower()
+        for marker in banned:
+            assert marker not in protocol_lower, (
+                f"template {template.name!r} protocol embeds banned "
+                f"table language {marker!r}"
+            )
+        assert "|---|" not in template.protocol
 
 
-def test_outbound_excludes_spec_table_mandate() -> None:
-    """§V.42 / §V.45 / §B.114: the product-spec pipe-table mandate is an inbound
-    knowledge-base concern, so outbound-general carries none of it -- its
-    protocol_pre is _BASE alone, and the composed protocol names no product-spec
-    / pipe-table / flow-rate text. Outbound scaffolding stays on-topic."""
+def test_outbound_excludes_product_specs_fragment() -> None:
+    """§V.42 / §V.45 / §B.114: product-spec list guidance is inbound-only;
+    outbound-general protocol_pre is _BASE alone."""
     outbound = TEMPLATES["outbound-general"]
     assert outbound.protocol_pre == templates_module._BASE  # pyright: ignore[reportPrivateUsage]
-    protocol = outbound.protocol
-    for marker in ("pipe table", "|---|", "product specification", "flow rate"):
-        assert marker not in protocol, (
-            f"§B.114: product-spec marker {marker!r} leaked into the "
-            f"outbound-general protocol -- the _SPEC_TABLE mandate is inbound-only"
-        )
+    product_specs = templates_module._PRODUCT_SPECS  # pyright: ignore[reportPrivateUsage]
+    assert product_specs not in outbound.protocol
+    # Inbound templates compose the list-structure fragment.
+    for name in ("inbound-general", "inbound-google-drive"):
+        assert product_specs in TEMPLATES[name].protocol_pre
 
 
 def test_base_strips_permissive_markdown_wording() -> None:
-    """§V.42 / §B.83: the permissive "may use Markdown" line must be gone from
-    _BASE. T128 added the pipe-table mandate but left the permissive wording
-    beside it; the agent reads the soft phrasing first, emits a space-aligned
-    spec block, the lint rejects, and it retries (the §B.78 retry class §B.83
-    re-opened). The check-extras §V.42 recipe greps for this exact phrase, so
-    the mandate must stand alone."""
+    """§V.42 / §B.83: the permissive 'may use Markdown' line must stay gone
+    from _BASE and every composed protocol (check-extras §V.42 recipe)."""
     base = templates_module._BASE  # pyright: ignore[reportPrivateUsage]
     assert "may use Markdown" not in base
     for template in TEMPLATES.values():
@@ -601,8 +594,8 @@ def test_registered_tool_source_docstrings_carry_no_spec_citation() -> None:
     Returns line of a source-function docstring (create_task, conclude_enrollment,
     list_enrollments, read_email, read_drive_markdown)
     leaked to the model unaudited. Sweep the full source docstring of every
-    registered tool. Internal helpers (_check_spec_table) are out of scope --
-    they are never registered, so the model never sees them."""
+    registered tool. Internal helpers are out of scope -- they are never
+    registered, so the model never sees them."""
     for template in TEMPLATES.values():
         for tool in template.tools:
             source_fn = getattr(agent_tools_module, tool.name)

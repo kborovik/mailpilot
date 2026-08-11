@@ -114,21 +114,16 @@ _BASE = (
     "company that are not supported by their records.\n"
 )
 
-# _SPEC_TABLE mandates a GFM pipe table for product-spec rows. Product-spec
+# Product-spec multi-row facts use list/prose shape only (§V.42). Product-spec
 # answering is an inbound knowledge-base concern (§B.114), so this fragment is
 # composed into the inbound templates' protocol_pre only, never outbound-general
-# (§V.42, §V.45). The _check_spec_table lint (tools.py) stays email-universal
-# core and rejects space-aligned spec blocks on send + reply both -- the
-# pipe-table mandate is the primary enforcement on the inbound path, the lint a
-# backstop (§V.42); §V.71 caps any retry loop. Per §V.45 the model-visible
-# string carries no §-cite.
-_SPEC_TABLE = (
+# (§V.45). No table mandate; runtime body format lint retired (§B.128). Per
+# §V.45 the model-visible string carries no §-cite.
+_PRODUCT_SPECS = (
     "When the reply body carries product specifications (model numbers, flow "
-    "rates, dimensions, capacities), you MUST present them as a "
-    "GitHub-flavored Markdown pipe table with a header row and a |---| "
-    "separator -- e.g. `| Specification | Value |` then `|---|---|` and one "
-    "row per spec. Do not use space-aligned or single-spaced lines as a "
-    "substitute; such spec blocks are rejected by the format lint.\n"
+    "rates, dimensions, capacities), present each fact as its own plain-text "
+    "line or bullet list item (start the line with '- '). Keep one fact per "
+    "line.\n"
 )
 
 # meeting_booked is the "I already booked" reply path only (§V.127 tool docs +
@@ -305,7 +300,7 @@ TEMPLATES: dict[WorkflowTemplateName, WorkflowTemplate] = {
         name="inbound-general",
         direction="inbound",
         description="Inbound auto-reply workflow without external knowledge base.",
-        protocol_pre=_BASE + _SPEC_TABLE,
+        protocol_pre=_BASE + _PRODUCT_SPECS,
         protocol_post=_MUST_SEND + _DECLINE + _NO_FABRICATION,
         tools=_INBOUND_CORE,
     ),
@@ -315,7 +310,7 @@ TEMPLATES: dict[WorkflowTemplateName, WorkflowTemplate] = {
         description=(
             "Inbound auto-reply grounded in a Google Drive Markdown knowledge base."
         ),
-        protocol_pre=_BASE + _SPEC_TABLE,
+        protocol_pre=_BASE + _PRODUCT_SPECS,
         protocol_post=_MUST_SEND + _DECLINE + _NO_FABRICATION,
         tools=_INBOUND_CORE + _DRIVE,
     ),
