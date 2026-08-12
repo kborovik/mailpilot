@@ -204,6 +204,9 @@ mailpilot activity list --workflow-id <NAME_OR_ID> --since 2026-01-01T00:00:00Z
 mailpilot email list --workflow-id <NAME_OR_ID> --direction outbound
 ```
 
+`--workflow-id` on `activity list` and `email list` accepts workflow name or UUID
+(same polymorphic resolve as enrollment/task list).
+
 `activity list` requires at least one of `--contact-email`, `--company-domain`,
 or `--workflow-id`. `email list` requires at least one scope or filter (no
 unbounded full-table dump).

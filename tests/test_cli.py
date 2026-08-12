@@ -4658,17 +4658,76 @@ def test_email_list_with_new_filters(
 def test_email_list_workflow_not_found(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
+    """§V.107: unknown workflow UUID exits not_found."""
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow", return_value=None),
     ):
-        result = runner.invoke(main, ["email", "list", "--workflow-id", "wf-missing"])
+        result = runner.invoke(
+            main,
+            ["email", "list", "--workflow-id", "01234567-0000-7000-0000-0000000000fe"],
+        )
 
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["error"] == "not_found"
     assert "workflow" in data["message"]
+
+
+def test_email_list_by_workflow_name(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.107: --workflow-id accepts workflow name and resolves to UUID."""
+    workflow = _make_workflow(name="var-sales-coclose")
+    email = _make_email()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow_by_name", return_value=workflow),
+        patch("mailpilot.database.get_workflow", return_value=workflow),
+        patch("mailpilot.database.list_emails", return_value=[email]) as mock_list,
+    ):
+        result = runner.invoke(
+            main,
+            ["email", "list", "--workflow-id", "var-sales-coclose"],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_list.assert_called_once()
+    assert mock_list.call_args.kwargs["workflow_id"] == _WORKFLOW_ID
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 1
+    assert len(data["emails"]) == 1
+
+
+def test_email_list_help_workflow_id_name_or_id(runner: CliRunner) -> None:
+    """§V.107: help text states --workflow-id accepts name or ID."""
+    result = runner.invoke(main, ["email", "list", "--help"])
+    assert result.exit_code == 0
+    assert "name or ID" in result.output
+
+
+def test_email_list_unknown_workflow_name_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.107/§V.90: unknown workflow name exits not_found."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow_by_name", return_value=None),
+    ):
+        result = runner.invoke(
+            main,
+            ["email", "list", "--workflow-id", "no-such-workflow"],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "not_found"
+    assert "no-such-workflow" in data["message"]
 
 
 def test_email_view(runner: CliRunner, mock_connection: MagicMock) -> None:

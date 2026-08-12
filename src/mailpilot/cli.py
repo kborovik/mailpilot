@@ -3145,7 +3145,7 @@ def email_search(query: str, limit: int) -> None:
 @email.command("list")
 @scope_option("--contact-email", "contact_email", "Filter by contact (email or ID).")
 @scope_option("--account-email", "account_email", "Filter by account (email or ID).")
-@scope_option("--workflow-id", "workflow_id", "Filter by workflow ID.")
+@scope_option("--workflow-id", "workflow_id", "Filter by workflow (name or ID).")
 @scope_option("--thread-id", "thread_id", "Filter by Gmail thread ID.")
 @enum_option("--direction", "direction", DIRECTIONS, "Filter by direction.")
 @enum_option("--status", "status", _EMAIL_STATUSES, "Filter by email status.")
@@ -3213,8 +3213,13 @@ def email_list(
             if account_email is not None
             else None
         )
-        if workflow_id is not None and get_workflow(connection, workflow_id) is None:
-            output_error(f"workflow not found: {workflow_id}", "not_found")
+        # Polymorphic name|UUID resolve (§V.107/§V.154); UUID existence still
+        # validated so unknown ids stay not_found (same envelope as task list).
+        resolved_workflow_id: str | None = None
+        if workflow_id is not None:
+            resolved_workflow_id = _resolve_workflow_id(connection, workflow_id)
+            if get_workflow(connection, resolved_workflow_id) is None:
+                output_error(f"workflow not found: {workflow_id}", "not_found")
         emails = list_emails(
             connection,
             limit=limit,
@@ -3224,7 +3229,7 @@ def email_list(
             until=until,
             thread_id=thread_id,
             direction=direction,
-            workflow_id=workflow_id,
+            workflow_id=resolved_workflow_id,
             status=status,
             sender=sender,
             recipient=recipient,
