@@ -261,7 +261,7 @@ T248|x|impl §V.136 first-touch subject require — compose-only output validato
 T249|x|drop `_check_spec_table` + call sites (send_email, reply_email, compose `_lint_touch_output`); drop format-rejection path + tests|V42,B128
 T250|x|drop `_SPEC_TABLE`; ban agent-facing Markdown/pipe-table language; structure as lists; rewrite template/check-extras tests|V42,V45,B128
 T251|x|impl §V.107(∆)+§V.152(∆) — enrollment list --workflow-id name|UUID via _resolve_workflow_id; help "name or ID"; UUID still not_found when missing; tests name+uuid+unknown; SKILL/help; no enroll/disable change (#207)|V107,V152,V90,V4,I.cli
-T252|.|impl §V.158(+) + §I — contact search full-name + multi-token AND; SKILL/help; tests full-name, multi-token, single-token regression, disabled hit (#208)|V158,V90,V4,I.cli
+T252|x|impl §V.158(+) + §I — contact search full-name + multi-token AND; SKILL/help; tests full-name, multi-token, single-token regression, disabled hit (#208)|V158,V90,V4,I.cli
 T253|.|impl §V.159(+) + §I — contact view --timeline dossier; bounds; tests fixture send+inbound+enrollment fail; bare view omits timeline keys (#209)|V159,V8,V4,I.cli
 T254|.|impl §V.160(+) + §V.152(∆) + §I — enrollment list --disposition; validation_error allowed set; SKILL/help; tests match/empty/invalid (#210)|V160,V152,V127,V115,V4,I.cli
 

@@ -2388,37 +2388,67 @@ def search_contacts(
     query: str,
     limit: int = 100,
 ) -> list[ContactSummary]:
-    """Search contacts by email or name.
+    """Search contacts by email, name, or title (§V.158).
 
     Args:
         connection: Open database connection.
-        query: Search term.
+        query: Search term (single-token or multi-token).
         limit: Maximum number of results.
 
     Returns:
         Matching contact summaries ordered by email. Each carries
         ``title`` + ``company_domain`` (LEFT JOIN company per §V.5),
-        mirroring ``list_contacts``. Substring matching covers email, name,
-        and ``title`` -- the fuzzy half of the exact ``contact list --title``
-        filter (§V.115 family 5).
+        mirroring ``list_contacts``.
+
+    Match rules (§V.158):
+        - Single-token: per-field LIKE on email / first_name / last_name /
+          title (status quo).
+        - Full-name: order-preserving match on
+          ``TRIM(first_name || ' ' || last_name)`` for the whole query string.
+        - Multi-token (whitespace-split): every token AND-matches at least one
+          of the same fields (no flood from partial noise).
+        - Disabled contacts remain searchable (forensics).
     """
-    pattern = f"%{query}%"
-    rows = connection.execute(
+    tokens = [t for t in query.strip().split() if t]
+    if not tokens:
+        return []
+
+    # Whole-query full-name pattern (covers "David Drouin" as one string).
+    params: dict[str, object] = {
+        "full_pattern": f"%{query.strip()}%",
+        "limit": limit,
+    }
+    token_clauses: list[Composable] = []
+    for i, token in enumerate(tokens):
+        key = f"tok_{i}"
+        params[key] = f"%{token}%"
+        token_clauses.append(
+            SQL(
+                "(LOWER(c.email) LIKE LOWER(%({k})s)"
+                " OR LOWER(COALESCE(c.first_name, '')) LIKE LOWER(%({k})s)"
+                " OR LOWER(COALESCE(c.last_name, '')) LIKE LOWER(%({k})s)"
+                " OR LOWER(COALESCE(c.title, '')) LIKE LOWER(%({k})s))"
+            ).format(k=SQL(key))
+        )
+    multi_and = SQL(" AND ").join(token_clauses)
+    full_name = SQL(
+        "LOWER(TRIM(COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, ''))) "
+        "LIKE LOWER(%(full_pattern)s)"
+    )
+    where = SQL("({}) OR ({})").format(full_name, multi_and)
+    query_sql = SQL(
         """\
         SELECT c.id, c.email, c.first_name, c.last_name, c.title,
                c.company_id, co.domain AS company_domain,
                c.email_confidence, c.disabled_reason, c.created_at
         FROM contact c
         LEFT JOIN company co ON c.company_id = co.id
-        WHERE LOWER(c.email) LIKE LOWER(%(pattern)s)
-           OR LOWER(COALESCE(c.first_name, '')) LIKE LOWER(%(pattern)s)
-           OR LOWER(COALESCE(c.last_name, '')) LIKE LOWER(%(pattern)s)
-           OR LOWER(COALESCE(c.title, '')) LIKE LOWER(%(pattern)s)
+        WHERE {}
         ORDER BY c.email
         LIMIT %(limit)s
-        """,
-        {"pattern": pattern, "limit": limit},
-    ).fetchall()
+        """
+    ).format(where)
+    rows = connection.execute(query_sql, params).fetchall()
     return [ContactSummary.model_validate(row) for row in rows]
 
 

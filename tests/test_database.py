@@ -1504,6 +1504,93 @@ def test_search_contacts_matches_title_substring(
     assert {c.id for c in results} == {vp.id}
 
 
+def test_search_contacts_full_name_match(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.158: full-name query hits first+last order-preserving concat."""
+    hit = create_contact(
+        database_connection,
+        email="ddrouin@velosio.com",
+        first_name="David",
+        last_name="Drouin",
+    )
+    create_contact(
+        database_connection,
+        email="other@example.com",
+        first_name="David",
+        last_name="Smith",
+    )
+    assert hit is not None
+
+    results = search_contacts(database_connection, "David Drouin")
+    assert {c.id for c in results} == {hit.id}
+
+
+def test_search_contacts_multi_token_and(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.158: multi-token requires every token to match at least one field."""
+    hit = create_contact(
+        database_connection,
+        email="ada@example.com",
+        first_name="Ada",
+        last_name="Lovelace",
+        title="VP Engineering",
+    )
+    create_contact(
+        database_connection,
+        email="bob@example.com",
+        first_name="Bob",
+        last_name="Smith",
+        title="VP Sales",
+    )
+    assert hit is not None
+
+    # title token + last-name token both required.
+    results = search_contacts(database_connection, "Engineering Lovelace")
+    assert {c.id for c in results} == {hit.id}
+    # Partial noise (token only on Bob) does not flood when AND'd with Ada token.
+    assert search_contacts(database_connection, "Ada Sales") == []
+
+
+def test_search_contacts_single_token_regression(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.158: single-token email local-part / last name still work."""
+    contact = create_contact(
+        database_connection,
+        email="ddrouin@velosio.com",
+        first_name="David",
+        last_name="Drouin",
+    )
+    assert contact is not None
+
+    by_local = search_contacts(database_connection, "ddrouin")
+    assert {c.id for c in by_local} == {contact.id}
+    by_last = search_contacts(database_connection, "Drouin")
+    assert {c.id for c in by_last} == {contact.id}
+
+
+def test_search_contacts_includes_disabled(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.158: disabled contacts remain searchable (forensics)."""
+    contact = create_contact(
+        database_connection,
+        email="gone@example.com",
+        first_name="Gone",
+        last_name="Person",
+    )
+    assert contact is not None
+    disabled = disable_contact(database_connection, contact.id, "left company")
+    assert disabled is not None
+    assert disabled.disabled_reason is not None
+
+    results = search_contacts(database_connection, "Gone Person")
+    assert {c.id for c in results} == {contact.id}
+    assert results[0].disabled_reason is not None
+
+
 def test_list_contacts_until_upper_bounds_created_at(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):

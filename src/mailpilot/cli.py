@@ -2962,7 +2962,13 @@ def contact_enable(contact_ref: str) -> None:
 @click.argument("query")
 @click.option("--limit", default=100, help="Maximum results.")
 def contact_search(query: str, limit: int) -> None:
-    """Search contacts by email, name, or domain."""
+    """Search contacts by email, name, or title.
+
+    Single-token: substring match on email, first_name, last_name, or title.
+    Full name (e.g. "David Drouin"): order-preserving match on first+last.
+    Multi-token: every token must match at least one of those fields (AND).
+    Disabled contacts remain searchable.
+    """
     from mailpilot.database import initialize_database, search_contacts
 
     connection = initialize_database(_database_url())

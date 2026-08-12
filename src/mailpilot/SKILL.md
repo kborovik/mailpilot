@@ -258,6 +258,20 @@ mailpilot contact disable <CONTACT_REF> --reason-file /tmp/reason.txt
 mailpilot company disable example.com --reason-file /tmp/reason.txt
 ```
 
+### Contact search (full name and multi-token)
+
+```
+mailpilot contact search alice
+mailpilot contact search "David Drouin"
+mailpilot contact search "VP Engineering"
+```
+
+Single-token queries substring-match email, first_name, last_name, or title.
+A quoted full name matches `first last` in order (e.g. first=David,
+last=Drouin). Multi-word queries require every token to match at least one
+of those fields (AND), so partial noise does not flood results. Disabled
+contacts stay searchable for forensics.
+
 ### Contact verification meta (operator-only)
 
 Store Bouncer status, source, and other verification trails as structured
