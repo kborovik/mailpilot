@@ -10886,6 +10886,61 @@ def test_task_list_workflow_not_found(
     assert data["error"] == "not_found"
 
 
+def test_task_list_by_workflow_name(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.107: --workflow-id accepts workflow name and resolves to UUID."""
+    workflow = _make_workflow(name="var-sales-coclose")
+    tasks = [_make_task()]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow_by_name", return_value=workflow),
+        patch("mailpilot.database.get_workflow", return_value=workflow),
+        patch("mailpilot.database.list_tasks", return_value=tasks) as mock_list,
+    ):
+        result = runner.invoke(
+            main,
+            ["task", "list", "--workflow-id", "var-sales-coclose"],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_list.assert_called_once()
+    assert mock_list.call_args.kwargs["workflow_id"] == _WORKFLOW_ID
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 1
+    assert len(data["tasks"]) == 1
+
+
+def test_task_list_help_workflow_id_name_or_id(runner: CliRunner) -> None:
+    """§V.107: help text states --workflow-id accepts name or ID."""
+    result = runner.invoke(main, ["task", "list", "--help"])
+    assert result.exit_code == 0
+    assert "name or ID" in result.output
+
+
+def test_task_list_unknown_workflow_name_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.107/§V.90: unknown workflow name exits not_found."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow_by_name", return_value=None),
+    ):
+        result = runner.invoke(
+            main,
+            ["task", "list", "--workflow-id", "no-such-workflow"],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "not_found"
+    assert "no-such-workflow" in data["message"]
+
+
 # -- task stats ----------------------------------------------------------------
 
 
@@ -10983,6 +11038,64 @@ def test_task_stats_unknown_workflow_not_found(
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["error"] == "not_found"
+
+
+def test_task_stats_by_workflow_name(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.107/§V.133: --workflow-id accepts workflow name and resolves to UUID."""
+    workflow = _make_workflow(name="var-sales-coclose")
+    stats = _make_task_stats()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow_by_name", return_value=workflow),
+        patch("mailpilot.database.get_workflow", return_value=workflow),
+        patch("mailpilot.database.get_task_stats", return_value=stats) as mock_stats,
+    ):
+        result = runner.invoke(
+            main,
+            ["task", "stats", "--workflow-id", "var-sales-coclose"],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_stats.assert_called_once_with(
+        mock_connection,
+        workflow_id=_WORKFLOW_ID,
+        trigger=None,
+        bucket_tz="UTC",
+    )
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 1
+
+
+def test_task_stats_help_workflow_id_name_or_id(runner: CliRunner) -> None:
+    """§V.107: help text states --workflow-id accepts name or ID."""
+    result = runner.invoke(main, ["task", "stats", "--help"])
+    assert result.exit_code == 0
+    assert "name or ID" in result.output
+
+
+def test_task_stats_unknown_workflow_name_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.107/§V.90: unknown workflow name exits not_found."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow_by_name", return_value=None),
+    ):
+        result = runner.invoke(
+            main,
+            ["task", "stats", "--workflow-id", "no-such-workflow"],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "not_found"
+    assert "no-such-workflow" in data["message"]
 
 
 def test_task_stats_invalid_bucket_tz_validation_error(

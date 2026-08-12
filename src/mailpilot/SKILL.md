@@ -128,7 +128,8 @@ mailpilot workflow list --account-email <ACCOUNT_REF>
 mailpilot enrollment list --workflow-id <NAME_OR_ID>
 mailpilot enrollment list --workflow-id <NAME_OR_ID> --full
 mailpilot workflow stats <NAME_OR_ID>
-mailpilot task list --status pending
+mailpilot task list --workflow-id <NAME_OR_ID> --status pending
+mailpilot task stats --workflow-id <NAME_OR_ID>
 mailpilot email list --account-email <ACCOUNT_REF> --limit 50
 ```
 
@@ -712,8 +713,15 @@ agent tool.
 
 ### Task queue
 
+`--workflow-id` on `task list` and `task stats` accepts workflow name or UUID
+(same polymorphic resolve as enrollment/activity list).
+
 ```
 mailpilot task list --status pending
+mailpilot task list --workflow-id <NAME_OR_ID>
+mailpilot task list --workflow-id <NAME_OR_ID> --overdue
+mailpilot task stats --workflow-id <NAME_OR_ID>
+mailpilot task stats --workflow-id <NAME_OR_ID> --trigger enrollment_schedule
 mailpilot task view <TID>
 mailpilot task cancel <TID>
 mailpilot task retry <TID>     # only on failed or cancelled rows

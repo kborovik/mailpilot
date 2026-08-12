@@ -5940,7 +5940,7 @@ def task() -> None:
 
 
 @task.command("list")
-@scope_option("--workflow-id", "workflow_id", "Filter by workflow ID.")
+@scope_option("--workflow-id", "workflow_id", "Filter by workflow (name or ID).")
 @scope_option("--contact-email", "contact_email", "Filter by contact (email or ID).")
 @enum_option("--status", "status", _TASK_STATUSES, "Filter by task status.")
 @enum_option("--trigger", "trigger", _TASK_TRIGGERS, "Filter by task trigger.")
@@ -5971,8 +5971,13 @@ def task_list(
 
     connection = initialize_database(_database_url())
     try:
-        if workflow_id is not None and get_workflow(connection, workflow_id) is None:
-            output_error(f"workflow not found: {workflow_id}", "not_found")
+        # Polymorphic name|UUID resolve (§V.107); UUID existence still
+        # validated so unknown ids stay not_found (same envelope as today).
+        resolved_workflow_id: str | None = None
+        if workflow_id is not None:
+            resolved_workflow_id = _resolve_workflow_id(connection, workflow_id)
+            if get_workflow(connection, resolved_workflow_id) is None:
+                output_error(f"workflow not found: {workflow_id}", "not_found")
         contact_id = (
             _resolve_contact(connection, contact_email).id
             if contact_email is not None
@@ -5980,7 +5985,7 @@ def task_list(
         )
         tasks = list_tasks(
             connection,
-            workflow_id=workflow_id,
+            workflow_id=resolved_workflow_id,
             contact_id=contact_id,
             status=status,
             trigger=trigger,
@@ -5995,7 +6000,7 @@ def task_list(
 
 
 @task.command("stats")
-@scope_option("--workflow-id", "workflow_id", "Filter by workflow ID.")
+@scope_option("--workflow-id", "workflow_id", "Filter by workflow (name or ID).")
 @enum_option("--trigger", "trigger", _TASK_TRIGGERS, "Filter by task trigger.")
 @click.option(
     "--bucket-tz",
@@ -6018,15 +6023,20 @@ def task_stats(
 
     connection = initialize_database(_database_url())
     try:
-        if workflow_id is not None and get_workflow(connection, workflow_id) is None:
-            output_error(f"workflow not found: {workflow_id}", "not_found")
+        # Polymorphic name|UUID resolve (§V.107); UUID existence still
+        # validated so unknown ids stay not_found (same envelope as today).
+        resolved_workflow_id: str | None = None
+        if workflow_id is not None:
+            resolved_workflow_id = _resolve_workflow_id(connection, workflow_id)
+            if get_workflow(connection, resolved_workflow_id) is None:
+                output_error(f"workflow not found: {workflow_id}", "not_found")
         try:
             ZoneInfo(bucket_tz)
         except ZoneInfoNotFoundError, ValueError:
             output_error(f"unknown timezone: {bucket_tz}", "validation_error")
         stats = get_task_stats(
             connection,
-            workflow_id=workflow_id,
+            workflow_id=resolved_workflow_id,
             trigger=trigger,
             bucket_tz=bucket_tz,
         )
