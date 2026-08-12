@@ -202,6 +202,7 @@ V157: workflow status ops-health composite (meta+wording+run_loop+overdue/failed
 V158: contact search multi-token — full-name TRIM(first||' '||last); multi-token AND across {email,first,last,title}; single-token per-field LIKE retained; disabled searchable — → .spec/check-extras.md §V158
 V159: contact view --timeline — opt-in bounded dossier (notes+enrollments+emails+activities); bare view notes-only; default N=10 + hard cap — → .spec/check-extras.md §V159
 V160: enrollment list --disposition — filter terminal disposition ∈ {do_not_contact, contact_later, meeting_booked}; composes w/ existing filters; unknown → validation_error + allowed set — → .spec/check-extras.md §V160
+V161: address-change auto-reply hard-stop — active outbound enrollment + inbound address-change / "update your records" / hard email-redirect auto-reply → conclude do_not_contact (cancel follow-ups + disable old contact); note ! carry redirect + new email when present (campaign-review referral); agent never enrolls new address; ! OOO pause-once (noop, no terminal)
 
 ## §T TASKS
 
@@ -266,6 +267,7 @@ T253|x|impl §V.159(+) + §I — contact view --timeline dossier; bounds; tests 
 T254|x|impl §V.160(+) + §V.152(∆) + §I — enrollment list --disposition; validation_error allowed set; SKILL/help; tests match/empty/invalid (#210)|V160,V152,V127,V115,V4,I.cli
 T255|x|impl §V.107(∆) — task list|stats --workflow-id name|UUID via _resolve_workflow_id; help "name or ID"; UUID still works; not_found when missing; tests name+uuid+unknown; SKILL/help (#211)|V107,V133,V90,V4,I.cli
 T256|x|impl §V.107 — email list --workflow-id name|UUID via _resolve_workflow_id; help "name or ID"; UUID still works; not_found when missing; tests name+uuid+unknown; SKILL/help (#213)|V107,V154,V90,V4,I.cli
+T257|.|impl §V.161(+) — address-change auto-reply hard-stop: protocol/tool guidance + campaign-test scenario + fixture/test; note records new email when present; distinct from OOO auto_reply scenario (#212)|V161,V127,V123,B131
 
 ## §B BUGS
 
@@ -311,3 +313,4 @@ B127|2026-08-11|compose-only first-touch accepts empty/None TouchMessage.subject
 B128|2026-08-11|`_check_spec_table` false-positive on multi-line ready-copy prose; ModelRetry teaches pipe-table; compose packs subject\|body as table or exhausts retries|V42
 B129|2026-08-12|contact search per-field LIKE only; multi-word full name never hits first+last|V158
 B130|2026-08-12|email list --workflow-id UUID-only get_workflow; name → not_found while enrollment/task resolve name|V107
+B131|2026-08-12|address-change auto-reply left outbound enrollment active (no disposition; next touch still scheduled); left-company path correctly do_not_contact|V161
