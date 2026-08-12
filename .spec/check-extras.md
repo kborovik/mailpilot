@@ -266,14 +266,20 @@ Trigger: `src/mailpilot/cli.py` or `src/mailpilot/operator_log.py` changed.
 - `rg -n 'except.*SystemExit|re-raise' src/mailpilot/operator_log.py` -> SystemExit absorbed + re-raised inside span
 - Telemetry test: `account.create` duplicate-key span carries no `exception.escaped=True` on the parent span.
 
-## §V62 — release flow: make target + CI-gated GH release + PyPI
+## §V62 — release flow: make target + Keep-a-Changelog + CI-gated GH release + PyPI
 
-Release = `make release major|minor|patch`. Local gates: part arg present, clean working tree, `make check`. Steps: `uv version --bump <part>` (bumps `pyproject.toml` + `uv.lock`), commit `chore: release v<x.y.z>`, tag `v<x.y.z>`, push main + tags only — no local `gh release create`. Publish = `.github/workflows/release.yml` on push tags `v*`: `check` job calls ci.yml via workflow_call (make check equivalent); only on success does `publish` run: tag must equal `v$(uv version --short)`; `uv build`; `pypa/gh-action-pypi-publish` w/ OIDC (`id-token: write`, no PyPI API token); then `gh release create --generate-notes` (`contents: write`). GH release + PyPI only after CI passes. Dist name = `mailpilot-crm` (PyPI name `mailpilot` foreign-owned); module + CLI cmd = `mailpilot` via `[tool.uv.build-backend] module-name`. Deploy = PyPI package — `uv tool install mailpilot-crm`.
+Release = `make release major|minor|patch` sole path. Local gates: part arg present, clean working tree, `make check`, `scripts/changelog check` (empty/`## Unreleased` no `- ` bullets → hard fail before pyproject mutates). Steps: `uv version --bump <part>` (bumps `pyproject.toml` + `uv.lock`); `scripts/changelog promote <ver>` (Unreleased body → `## [vX.Y.Z] - YYYY-MM-DD`, leave empty `## Unreleased`); commit `CHANGELOG.md` + `pyproject.toml` + `uv.lock` together as `chore: release v<x.y.z>`; tag `v<x.y.z>`; push main + tags only — no local `gh release create`. Keep-a-Changelog root `CHANGELOG.md`: user-facing work appends under `## Unreleased` (`### Added` / `### Changed` / `### Fixed`) during development. Publish = `.github/workflows/release.yml` on push tags `v*`: `check` job calls ci.yml via workflow_call (make check equivalent); only on success does `publish` run: tag must equal `v$(uv version --short)`; `uv build`; `pypa/gh-action-pypi-publish` w/ OIDC (`id-token: write`, no PyPI API token); `scripts/changelog notes <tag>` → `gh release create --notes-file` + `dist/*` (`contents: write`); not sole `--generate-notes`. GH release + PyPI only after CI passes. Dist name = `mailpilot-crm` (PyPI name `mailpilot` foreign-owned); module + CLI cmd = `mailpilot` via `[tool.uv.build-backend] module-name`. Deploy = PyPI package — `uv tool install mailpilot-crm`.
 
-Trigger: `makefile`, `.github/workflows/release.yml`, or `pyproject.toml` changed.
+Trigger: `makefile`, `.github/workflows/release.yml`, `CHANGELOG.md`, `scripts/changelog`, or `pyproject.toml` changed.
 - `rg 'uv version --bump' makefile` -> bump step present
+- `rg 'scripts/changelog check' makefile` -> Unreleased hard-fail before bump
+- `rg 'scripts/changelog promote' makefile` -> promote step present
+- `rg 'CHANGELOG.md' makefile` -> release commit includes CHANGELOG
 - `rg 'gh release create' makefile` -> zero hits (local make does not create GH release)
 - `rg 'gh release create' .github/workflows/release.yml` -> CI creates GH release after check
+- `rg 'scripts/changelog notes' .github/workflows/release.yml` -> notes from CHANGELOG section
+- `rg -- '--notes-file' .github/workflows/release.yml` -> notes-file not generate-notes
+- `rg -- '--generate-notes' .github/workflows/release.yml` -> zero hits
 - `rg 'git diff --quiet' makefile` -> clean-tree gate present
 - `rg 'needs: check' .github/workflows/release.yml` -> publish gated on CI
 - `rg 'pypa/gh-action-pypi-publish' .github/workflows/release.yml` -> trusted-publishing action present

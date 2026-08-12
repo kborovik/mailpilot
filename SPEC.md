@@ -59,6 +59,7 @@ Agent-operated CRM. Gmail = comms layer. Claude Code = strategist; internal Pyda
 - config (`src/mailpilot/settings.py`): `llm_provider` (default `xai`; in {`anthropic`, `xai`}; global switch for classifier + workflow agent; default-xai break — Anthropic-only hosts ! set `llm_provider=anthropic` or supply `xai_api_key`), `database_url`, `anthropic_api_key` (env `MAILPILOT_ANTHROPIC_API_KEY` / config only; bare `ANTHROPIC_API_KEY` not a mailpilot source), `anthropic_model` (default `claude-sonnet-5`), `anthropic_base_url` (default `https://api.anthropic.com`; override -> Anthropic-compatible endpoint e.g. `https://api.novita.ai/anthropic`; not secret per §V.86), `anthropic_thinking` (default `adaptive`; in {unset, `adaptive`}; workflow agent only; Anthropic branch per §V.47), `anthropic_effort` (default `high`; closed enum {unset, `low`, `medium`, `high`, `xhigh`, `max`}; settings-reject invalid; workflow agent only; `xhigh` Opus 4.7+ only), `anthropic_max_tokens` (default `32768`; int; workflow agent only; always-passed per §V.47), `xai_api_key` (env `MAILPILOT_XAI_API_KEY` / config only; bare `XAI_API_KEY` not a mailpilot source; secret per §V.86), `xai_model` (default `grok-4.5`), `xai_api_host` (? hostname for gateway/proxy; not secret; omit -> SDK default), `xai_reasoning_effort` (default `medium`; closed enum {`low`, `medium`, `high`}; no `none` — Grok 4.5 always reasons; settings-reject invalid; workflow agent only), `xai_max_tokens` (default `32768`; int; workflow agent only; always-passed when provider=xai), `google_application_credentials`, `google_pubsub_topic`, `google_pubsub_subscription`, `logfire_token`, `logfire_environment` in {`development`, `production`}, `run_interval` (default 60s), `max_concurrent_tasks` (default 10). cwd `.env` auto-read @ load (`MAILPILOT_*` keys only); process env beats `.env`; `.env` beats `~/.mailpilot/config.json` (precedence §V.85). Active-provider API key ! present @ model build; inactive-provider keys unchecked until selected.
 - module: `src/mailpilot/gmail.py` -> `GmailClient`; `src/mailpilot/drive.py` -> `DriveClient`; `src/mailpilot/calendar.py` -> `CalendarClient` (§V.126). Mirror shape.
 - entrypoint: `mailpilot = "mailpilot.cli:main"`.
+- pkg: dist `mailpilot-crm` (PyPI; module/CLI `mailpilot`); human notes = root `CHANGELOG.md` (Keep-a-Changelog: `## Unreleased` + versioned `## [vX.Y.Z] - date`); `make release <part>` sole path; GitHub Actions `release.yml` on tag `v*` after reusable CI check: `uv build` + PyPI OIDC + GH release notes from CHANGELOG version section (not sole `--generate-notes`)
 
 ## §V INVARIANTS
 
@@ -112,7 +113,7 @@ V52: logfire.configure(environment=settings.logfire_environment) -> spans carry 
 V53: agent tool spans come from logfire.instrument_pydantic_ai() (gen_ai.tool.name attr); no logfire.span inside agent tools; agents carry explicit names mailpilot.classifier + mailpilot.workflow
 V54: CLI mutation = logfire.span + operator_event; constraint code vocabulary; SystemExit absorbed at boundary — → .spec/check-extras.md §V54
 V55: `gen_ai.tool.call.result` span attr exempt from Logfire scrubbing; all other attrs scrubbed; scrubbing contract test drives a real instrumented tool call, never a fabricated span
-V62: release = `make release` + CI-gated GH release + PyPI (OIDC); dist mailpilot-crm; module/CLI mailpilot — → .spec/check-extras.md §V62
+V62: release pipeline — `make release <part>` sole path; Keep-a-Changelog Unreleased (empty hard-fail; promote → `## [vX.Y.Z] - date`); tag `v*` → release.yml notes from CHANGELOG + PyPI (OIDC); dist mailpilot-crm; module/CLI mailpilot — → .spec/check-extras.md §V62
 V67: persisted outbound in_reply_to + references_header mirror wire MIME headers exactly
 V69: tick classifying >= 1 inbound -> next tick forces full sweep + wakeup_event set
 V71: no format-rejection path — send_email|reply_email|compose body never format-reject; no reply_rejection_scope / cap / bypass
@@ -275,6 +276,9 @@ T258|x|swap mailpilot-campaign-test default workflow → `/Users/kb/github/lab5-
 T259|x|impl §V.162(+) — SQL touch parse (stats + enrollment --full/--touch) + resolve_touch_number accept 2 and "T2"; new OOO-resume writes numeric; regression pending context.touch="T2"; workflow stats|report|status + enrollment --full JSON (#214)|V162,V132,V152,V136,V157,V153
 T260|x|impl §V.163(+) — bounce handler conclude do_not_contact + cancel follow-ups on every active outbound enrollment; test bounced T1 → no pending T2 (#215)|V163,V80,V123,V127,B133
 T261|x|impl §V.164(+) — thread-bound inbound binds enrolled contact when From local-part differs; ! auto-enroll alias; left-company/retired auto-reply concludes original + cancels T2; fixture T1 a@domain reply afull@domain (#216)|V164,V161,V27,V123,B134
+T262|.|`scripts/changelog` check/promote/notes + root CHANGELOG.md; `make release` empty-Unreleased hard-fail + promote; commit CHANGELOG w/ pyproject; offline tests|V62,I.pkg
+T263|.|`release.yml` GH notes from CHANGELOG version section via `scripts/changelog notes`; not sole `--generate-notes`; keep PyPI OIDC|V62,I.pkg,T262
+T264|.|README release path + CHANGELOG Unreleased duty for user-facing work|V62,T262
 
 ## §B BUGS
 
