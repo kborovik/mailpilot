@@ -42,8 +42,11 @@ from mailpilot.database import (
     get_contact,
     get_emails_by_gmail_thread_id,
     get_enrollment,
+    get_latest_enrollment_outcome,
     get_workflow,
+    list_active_outbound_enrollments_for_contact,
     list_workflows,
+    record_enrollment_outcome,
     update_email,
 )
 from mailpilot.models import Email
@@ -178,7 +181,9 @@ def _handle_bounce(
     """Process a bounce notification.
 
     Finds the original outbound email in the same thread, marks it as
-    bounced, and disables the original recipient contact. The bounce
+    bounced, and disables the original recipient contact (§V.80). Then
+    concludes every active outbound enrollment for that contact with
+    ``do_not_contact`` and cancels pending follow-ups (§V.163). The bounce
     notification itself is marked as routed.
     """
     with logfire.span(
@@ -202,10 +207,14 @@ def _handle_bounce(
                 original = outbound[0]
                 update_email(connection, original.id, status="bounced")
                 if original.contact_id is not None:
+                    reason = f"bounced: detected on email {original.id}"
                     disable_contact(
                         connection,
                         original.contact_id,
-                        reason=f"bounced: detected on email {original.id}",
+                        reason=reason,
+                    )
+                    _conclude_outbound_enrollments_for_bounce(
+                        connection, original.contact_id, reason
                     )
             else:
                 logfire.warn(
@@ -221,6 +230,32 @@ def _handle_bounce(
 
         updated = update_email(connection, email.id, is_routed=True)
         return updated if updated is not None else email
+
+
+def _conclude_outbound_enrollments_for_bounce(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact_id: str,
+    reason: str,
+) -> None:
+    """Conclude every active outbound enrollment for a bounced contact (§V.163).
+
+    Records ``failed`` / ``do_not_contact`` on the timeline and cancels
+    pending follow-ups. Already-terminal enrollments are skipped. The
+    enrollment row stays ``active`` (§V.15). Contact disable stays in
+    ``_handle_bounce`` (§V.80).
+    """
+    enrollments = list_active_outbound_enrollments_for_contact(connection, contact_id)
+    for enrollment in enrollments:
+        if get_latest_enrollment_outcome(connection, enrollment.id) is not None:
+            continue
+        record_enrollment_outcome(
+            connection,
+            enrollment.id,
+            outcome="failed",
+            reason=reason,
+            disposition="do_not_contact",
+        )
+        cancel_enrollment_followup_tasks(connection, enrollment.id)
 
 
 # -- Three-step routing pipeline -----------------------------------------------

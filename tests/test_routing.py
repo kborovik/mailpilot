@@ -21,15 +21,21 @@ from mailpilot.database import (
     activate_workflow,
     create_email,
     create_task,
+    get_contact,
     get_email,
     get_enrollment,
+    get_latest_enrollment_outcome,
     get_task,
+    record_enrollment_outcome,
     update_workflow,
 )
 from mailpilot.routing import (
     _is_bounce,  # pyright: ignore[reportPrivateUsage]
     route_email,
 )
+
+_FAR_FUTURE = "2099-12-31T00:00:00Z"
+
 
 # -- Helpers -------------------------------------------------------------------
 
@@ -422,8 +428,6 @@ def test_route_email_bounce_marks_original_outbound_bounced(
 def test_route_email_bounce_disables_original_contact(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    from mailpilot.database import get_contact
-
     account = make_test_account(database_connection, email="bdisable@example.com")
     contact = make_test_contact(database_connection, email="bounced@example.com")
 
@@ -524,6 +528,188 @@ def test_route_email_bounce_no_outbound_in_thread_still_marks_routed(
     )
 
     assert routed.is_routed is True
+
+
+def test_route_email_bounce_concludes_outbound_and_cancels_t2(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.163 / §B.133: bounced T1 records do_not_contact + cancels pending T2."""
+    account = make_test_account(database_connection, email="bounce-t2@example.com")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="outbound"
+    )
+    contact = make_test_contact(database_connection, email="bounce-t2@prospect.com")
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    outbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="Touch 1",
+        gmail_thread_id="t-bounce-t2",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        status="sent",
+        is_routed=True,
+    )
+    assert outbound is not None
+    t2 = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="Touch 2 of 3",
+        scheduled_at=_FAR_FUTURE,
+        context={"touch": 2, "trigger": "followup"},
+    )
+
+    bounce = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Delivery Status Notification (Failure)",
+        gmail_thread_id="t-bounce-t2",
+    )
+    assert bounce is not None
+    route_email(
+        database_connection,
+        bounce,
+        "mailer-daemon@gmail.com",
+        make_test_settings(),
+    )
+
+    cancelled = get_task(database_connection, t2.id)
+    assert cancelled is not None
+    assert cancelled.status == "cancelled"
+    assert get_latest_enrollment_outcome(database_connection, enrollment.id) == "failed"
+    outcome_row = database_connection.execute(
+        "SELECT detail->>'disposition' AS disposition FROM activity "
+        "WHERE enrollment_id = %s AND type = 'enrollment_failed' "
+        "ORDER BY created_at DESC LIMIT 1",
+        (enrollment.id,),
+    ).fetchone()
+    assert outcome_row is not None
+    assert outcome_row["disposition"] == "do_not_contact"
+    still_active = get_enrollment(database_connection, workflow.id, contact.id)
+    assert still_active is not None
+    assert still_active.status == "active"
+    disabled = get_contact(database_connection, contact.id)
+    assert disabled is not None
+    assert disabled.disabled_reason is not None
+    assert disabled.disabled_reason.startswith("bounced:")
+
+
+def test_route_email_bounce_skips_already_terminal_enrollment(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.163: bounce does not write a second outcome on an already-terminal enrollment."""
+    account = make_test_account(database_connection, email="bounce-term@example.com")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="outbound"
+    )
+    contact = make_test_contact(database_connection, email="bounce-term@prospect.com")
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    record_enrollment_outcome(
+        database_connection,
+        enrollment.id,
+        outcome="completed",
+        reason="meeting booked",
+        disposition="meeting_booked",
+    )
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="Touch 1",
+        gmail_thread_id="t-bounce-term",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        status="sent",
+        is_routed=True,
+    )
+    bounce = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Bounce",
+        gmail_thread_id="t-bounce-term",
+    )
+    assert bounce is not None
+    route_email(
+        database_connection,
+        bounce,
+        "mailer-daemon@gmail.com",
+        make_test_settings(),
+    )
+
+    assert (
+        get_latest_enrollment_outcome(database_connection, enrollment.id) == "completed"
+    )
+    count_row = database_connection.execute(
+        "SELECT COUNT(*) AS n FROM activity "
+        "WHERE enrollment_id = %s AND type IN "
+        "('enrollment_completed', 'enrollment_failed')",
+        (enrollment.id,),
+    ).fetchone()
+    assert count_row is not None
+    assert count_row["n"] == 1
+
+
+def test_route_email_bounce_concludes_every_outbound_skips_inbound(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.163: fan-out every active outbound enrollment; inbound stays open."""
+    account = make_test_account(database_connection, email="bounce-fan@example.com")
+    outbound_a = make_test_workflow(
+        database_connection,
+        account_id=account.id,
+        name="outbound-a",
+        workflow_type="outbound",
+    )
+    outbound_b = make_test_workflow(
+        database_connection,
+        account_id=account.id,
+        name="outbound-b",
+        workflow_type="outbound",
+    )
+    inbound = make_test_workflow(
+        database_connection,
+        account_id=account.id,
+        name="inbound-a",
+        workflow_type="inbound",
+    )
+    contact = make_test_contact(database_connection, email="bounce-fan@prospect.com")
+    enroll_a = make_test_enrollment(database_connection, outbound_a.id, contact.id)
+    enroll_b = make_test_enrollment(database_connection, outbound_b.id, contact.id)
+    enroll_in = make_test_enrollment(database_connection, inbound.id, contact.id)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="Touch 1",
+        gmail_thread_id="t-bounce-fan",
+        contact_id=contact.id,
+        workflow_id=outbound_a.id,
+        status="sent",
+        is_routed=True,
+    )
+    bounce = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Bounce",
+        gmail_thread_id="t-bounce-fan",
+    )
+    assert bounce is not None
+    route_email(
+        database_connection,
+        bounce,
+        "mailer-daemon@gmail.com",
+        make_test_settings(),
+    )
+
+    assert get_latest_enrollment_outcome(database_connection, enroll_a.id) == "failed"
+    assert get_latest_enrollment_outcome(database_connection, enroll_b.id) == "failed"
+    assert get_latest_enrollment_outcome(database_connection, enroll_in.id) is None
 
 
 # -- enrollment creation -------------------------------------------------------
