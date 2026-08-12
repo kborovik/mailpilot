@@ -15,6 +15,7 @@ import pytest
 REPO = Path(__file__).parent.parent
 SCRIPT = REPO / "scripts" / "changelog"
 MAKEFILE = REPO / "makefile"
+RELEASE_YML = REPO / ".github" / "workflows" / "release.yml"
 
 SAMPLE = """\
 # Changelog
@@ -176,3 +177,15 @@ def test_makefile_release_promotes_changelog() -> None:
     assert text.index("scripts/changelog check") < text.index("uv version --bump")
     assert text.index("uv version --bump") < text.index("scripts/changelog promote")
     assert "gh release create" not in text
+
+
+def test_release_yml_notes_from_changelog() -> None:
+    """§V.62: GH release notes from CHANGELOG section; PyPI OIDC stays."""
+    text = RELEASE_YML.read_text()
+    assert "scripts/changelog notes" in text
+    assert "--notes-file" in text
+    assert "--generate-notes" not in text
+    assert "gh release create" in text
+    assert "dist/*" in text
+    assert "pypa/gh-action-pypi-publish" in text
+    assert "id-token: write" in text

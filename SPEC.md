@@ -277,7 +277,7 @@ T259|x|impl §V.162(+) — SQL touch parse (stats + enrollment --full/--touch) +
 T260|x|impl §V.163(+) — bounce handler conclude do_not_contact + cancel follow-ups on every active outbound enrollment; test bounced T1 → no pending T2 (#215)|V163,V80,V123,V127,B133
 T261|x|impl §V.164(+) — thread-bound inbound binds enrolled contact when From local-part differs; ! auto-enroll alias; left-company/retired auto-reply concludes original + cancels T2; fixture T1 a@domain reply afull@domain (#216)|V164,V161,V27,V123,B134
 T262|x|`scripts/changelog` check/promote/notes + root CHANGELOG.md; `make release` empty-Unreleased hard-fail + promote; commit CHANGELOG w/ pyproject; offline tests|V62,I.pkg
-T263|.|`release.yml` GH notes from CHANGELOG version section via `scripts/changelog notes`; not sole `--generate-notes`; keep PyPI OIDC|V62,I.pkg,T262
+T263|x|`release.yml` GH notes from CHANGELOG version section via `scripts/changelog notes`; not sole `--generate-notes`; keep PyPI OIDC|V62,I.pkg,T262
 T264|.|README release path + CHANGELOG Unreleased duty for user-facing work|V62,T262
 
 ## §B BUGS
