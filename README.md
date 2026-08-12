@@ -96,6 +96,26 @@ Start the event-driven sync loop:
 mailpilot run
 ```
 
+## Release
+
+Human release notes live in root [`CHANGELOG.md`](CHANGELOG.md) (Keep a Changelog).
+During development, append user-facing work under `## Unreleased` in `### Added` / `### Changed` / `### Fixed`.
+Empty Unreleased (no bullets) hard-fails the release - nothing to ship.
+
+```bash
+make release patch   # or minor | major
+```
+
+`make release` is the sole release path (never local `gh release create`):
+
+1. `make check` (ruff, basedpyright, pytest)
+2. Fail if `## Unreleased` has no bullets
+3. Bump `pyproject.toml` version (`major` | `minor` | `patch`)
+4. Promote Unreleased body to `## [vX.Y.Z] - YYYY-MM-DD`, leave an empty `## Unreleased`
+5. Commit `CHANGELOG.md` + `pyproject.toml` + `uv.lock` together, tag `vX.Y.Z`, push
+
+GitHub Actions on tag `v*` re-runs CI, builds sdist+wheel, publishes to PyPI (OIDC), and creates a GitHub Release whose notes are the promoted CHANGELOG section for that tag (plus the artifacts).
+
 ## License
 
 Copyright 2026 Konstantin Borovik.

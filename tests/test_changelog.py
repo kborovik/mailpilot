@@ -189,3 +189,14 @@ def test_release_yml_notes_from_changelog() -> None:
     assert "dist/*" in text
     assert "pypa/gh-action-pypi-publish" in text
     assert "id-token: write" in text
+
+
+def test_readme_release_path_and_unreleased_duty() -> None:
+    """§V.62: README names make release and the Unreleased duty."""
+    text = (REPO / "README.md").read_text()
+    assert "CHANGELOG.md" in text
+    assert "## Unreleased" in text
+    assert "make release" in text
+    assert "Added" in text
+    assert "Changed" in text
+    assert "Fixed" in text
