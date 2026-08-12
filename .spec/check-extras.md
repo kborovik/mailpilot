@@ -915,11 +915,12 @@ Trigger: `src/mailpilot/` account/signature/render paths changed.
 
 ## §V152 — enrollment execution projection
 
-enrollment execution projection — default list lean; `--full` denser {company_domain, company_name, emails_sent, last_touch, next_scheduled_at, next_touch, disposition, created_at}; filters `--has-pending-task` / `--touch N`; sort next_scheduled_at; envelope `enrollments`; entity refs name|UUID (§V.107). `enrollment list --workflow-id` polymorphic name|UUID via `_resolve_workflow_id` (§V.107); help "name or ID"; unknown → `not_found` (#207).
+enrollment execution projection — default list lean; `--full` denser {company_domain, company_name, emails_sent, last_touch, next_scheduled_at, next_touch, disposition, created_at}; filters `--has-pending-task` / `--touch N` / `--disposition` (§V.160); sort next_scheduled_at; envelope `enrollments`; entity refs name|UUID (§V.107). `enrollment list --workflow-id` polymorphic name|UUID via `_resolve_workflow_id` (§V.107); help "name or ID"; unknown → `not_found` (#207).
 
 Trigger: enrollment list/view projection changed.
 - `rg 'next_scheduled_at|emails_sent|last_touch|--full' src/mailpilot/cli.py src/mailpilot/database.py` -> denser projection fields
 - `rg 'def enrollment_list' -A 40 src/mailpilot/cli.py` -> list path calls `_resolve_workflow_id` for workflow filter
+- `rg '--disposition|disposition' src/mailpilot/cli.py src/mailpilot/database.py` -> disposition filter surface
 
 ## §V153 — workflow report composite
 
@@ -955,3 +956,27 @@ workflow status ops-health — `workflow status <ref>`: meta + wording (§V.134)
 
 Trigger: workflow status path changed.
 - `rg 'workflow_status|overdue_tasks|enrollments_never_sent' src/mailpilot/` -> ops-health envelope
+
+## §V158 — contact search multi-token
+
+contact search multi-token — `search_contacts` / `contact search <query>`: single-token query = per-field LIKE on {email, first_name, last_name, title} (status quo); full-name = order-preserving match on `TRIM(COALESCE(first_name,'') || ' ' || COALESCE(last_name,''))` LIKE pattern so `"David Drouin"` hits first=David last=Drouin; multi-token (whitespace-split) = every token AND-matches ≥1 of the same fields (no flood from partial noise); disabled contacts remain searchable (forensics); company domain not required in match set unless already present; CLI help + SKILL document full-name + multi-token behavior (closes §B.129)
+
+Trigger: contact search path changed.
+- `rg 'search_contacts|TRIM|first_name.*last_name' src/mailpilot/database.py` -> multi-token / full-name SQL
+- `rg 'contact search|full.name|multi.token' src/mailpilot/SKILL.md src/mailpilot/cli.py` -> help/docs
+
+## §V159 — contact view timeline dossier
+
+contact view `--timeline` — opt-in bounded dossier on `contact view <ref>`: existing notes + enrollments (status, disposition, last/next touch) + last N emails + last N activities in one JSON envelope; default N=10, hard cap (document in help); bare `contact view` without flag = notes only (agent prompt budget preserved — no timeline keys or empty per chosen shape); works for disabled / do_not_contact contacts (forensics); no auto-enroll; no Gmail body rewrite (reuse email list/view fields)
+
+Trigger: contact view path changed.
+- `rg '--timeline|timeline' src/mailpilot/cli.py src/mailpilot/database.py` -> timeline flag + loader
+- `rg 'enrollments|activities|emails' src/mailpilot/models.py src/mailpilot/cli.py` -> dossier projection keys
+
+## §V160 — enrollment list disposition filter
+
+enrollment list `--disposition` — filter enrollments by latest terminal disposition ∈ {`do_not_contact`, `contact_later`, `meeting_booked`} (product vocabulary = §V.127 conclude set); composes w/ `--workflow-id` / `--status` / `--full` / `--stuck` / `--since`/`--until` / other list filters; unknown value → `validation_error` listing allowed set; help documents flag + allowed values; empty match → ok envelope record_count=0
+
+Trigger: enrollment list disposition filter changed.
+- `rg '--disposition|disposition' src/mailpilot/cli.py src/mailpilot/database.py` -> filter flag + SQL
+- `rg 'validation_error|do_not_contact|contact_later|meeting_booked' src/mailpilot/cli.py` -> allowed-set error path
