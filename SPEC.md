@@ -257,7 +257,7 @@ T247|x|impl §V.157(+) + §I — workflow status ops-health composite; tests + S
 T248|x|impl §V.136 first-touch subject require — compose-only output validator ModelRetry on empty/None/whitespace subject for new-thread touch; follow-up may leave subject empty; unit tests empty/None/whitespace reject + non-empty accept + follow-up None ok|V136,B127
 T249|x|drop `_check_spec_table` + call sites (send_email, reply_email, compose `_lint_touch_output`); drop format-rejection path + tests|V42,B128
 T250|x|drop `_SPEC_TABLE`; ban agent-facing Markdown/pipe-table language; structure as lists; rewrite template/check-extras tests|V42,V45,B128
-T251|.|impl §V.107(∆)+§V.152(∆) — enrollment list --workflow-id name|UUID via _resolve_workflow_id; help "name or ID"; UUID still not_found when missing; tests name+uuid+unknown; SKILL/help; no enroll/disable change (#207)|V107,V152,V90,V4,I.cli
+T251|x|impl §V.107(∆)+§V.152(∆) — enrollment list --workflow-id name|UUID via _resolve_workflow_id; help "name or ID"; UUID still not_found when missing; tests name+uuid+unknown; SKILL/help; no enroll/disable change (#207)|V107,V152,V90,V4,I.cli
 
 ## §B BUGS
 

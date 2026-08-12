@@ -125,7 +125,7 @@ Keys:
 mailpilot status
 mailpilot account list
 mailpilot workflow list --account-email <ACCOUNT_REF>
-mailpilot enrollment list --workflow-id <ID>
+mailpilot enrollment list --workflow-id <NAME_OR_ID>
 mailpilot enrollment list --workflow-id <NAME_OR_ID> --full
 mailpilot workflow stats <NAME_OR_ID>
 mailpilot task list --status pending
