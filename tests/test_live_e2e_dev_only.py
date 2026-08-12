@@ -65,9 +65,7 @@ def test_production_blocks(preflight: types.ModuleType) -> None:
 
 
 @pytest.mark.parametrize("value", [None, "", "staging"])
-def test_non_development_blocks(
-    preflight: types.ModuleType, value: object
-) -> None:
+def test_non_development_blocks(preflight: types.ModuleType, value: object) -> None:
     result: dict[str, object] = {}
     issues: list[str] = []
     preflight._check_logfire_environment(value, result, issues)

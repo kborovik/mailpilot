@@ -95,6 +95,7 @@ def _sql_parse_touch(context_col: SQL) -> Composed:
         "ELSE NULL END"
     ).format(col=context_col)
 
+
 _INLINE_NOTES_CAP = 10
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"

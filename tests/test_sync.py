@@ -2672,9 +2672,7 @@ def test_sync_account_thread_alias_from_binds_enrolled_contact(
         ],
     )
 
-    stored = sync_account(
-        database_connection, account, client, make_test_settings()
-    )
+    stored = sync_account(database_connection, account, client, make_test_settings())
 
     assert stored == 1
     inbound = get_email_by_gmail_message_id(database_connection, "m-alias")
@@ -2733,12 +2731,12 @@ def test_sync_account_rfc_alias_from_binds_across_rethread(
         ],
     )
 
-    stored = sync_account(
-        database_connection, account, client, make_test_settings()
-    )
+    stored = sync_account(database_connection, account, client, make_test_settings())
 
     assert stored == 1
     inbound = get_email_by_gmail_message_id(database_connection, "m-rfc-alias")
     assert inbound is not None
     assert inbound.contact_id == enrolled.id
-    assert get_contact_by_email(database_connection, "afull@rfc-sync.example.com") is None
+    assert (
+        get_contact_by_email(database_connection, "afull@rfc-sync.example.com") is None
+    )

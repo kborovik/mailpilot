@@ -930,9 +930,7 @@ def _resolve_contacts_for_messages(
     best_names = _aggregate_sender_names(messages)
     if not best_names:
         return {}
-    thread_bound_senders = _thread_bound_sender_emails(
-        connection, account_id, messages
-    )
+    thread_bound_senders = _thread_bound_sender_emails(connection, account_id, messages)
     senders = [
         email for email in best_names if email.lower() not in thread_bound_senders
     ]
