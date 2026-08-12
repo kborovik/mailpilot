@@ -1018,3 +1018,13 @@ thread-alias inbound bind — inbound on existing outbound thread binds email.co
 Trigger: inbound routing / thread match / contact bind changed.
 - `rg 'thread_match|contact_id|gmail_thread' src/mailpilot/routing.py src/mailpilot/sync.py` -> thread bind to enrolled contact
 - `rg 'auto.enroll|create_contact' src/mailpilot/routing.py` -> alias From does not mint enroll
+
+## §V165 — live E2E skills DEV-only
+
+Live skill tests (`.claude/skills/mailpilot-campaign-test` + `.claude/skills/mailpilot-reply-test`; `.grok/skills/mailpilot-campaign-test` orchestrator) MUST read `settings.logfire_environment` before any CRM or Gmail mutate (account create/update, send, inject, handle). Value != `development` → blocking preflight issue + skill bail. Gate is `logfire_environment` (same field §V.52 tags spans with), not a host heuristic. Pytest unit tests exempt (constructor kwargs / fixtures). Skill procedure checks env before account-ensure (step 0b).
+
+Trigger: campaign-test or reply-test scripts/skills changed.
+- `rg 'logfire_environment' .claude/skills/mailpilot-campaign-test/scripts/preflight.py` -> gate present
+- `rg 'logfire_environment' .claude/skills/mailpilot-reply-test/scripts/preflight.py` -> gate present
+- `rg 'development' .claude/skills/mailpilot-campaign-test/scripts/preflight.py` -> required value
+- `rg 'development' .claude/skills/mailpilot-reply-test/scripts/preflight.py` -> required value

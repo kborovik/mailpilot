@@ -207,6 +207,7 @@ V161: address-change auto-reply hard-stop — active outbound + address-change/r
 V162: touch-context-parse — context.touch N or T<n> or "n" → int; SQL never raw ::int; unparseable → NULL — → .spec/check-extras.md §V162
 V163: bounce enrollment hard-stop — outbound bounce → every active outbound enrollment do_not_contact + cancel follow-ups — → .spec/check-extras.md §V163
 V164: thread-alias inbound bind — inbound on existing outbound thread binds enrolled contact when From local-part differs; ! auto-enroll alias — → .spec/check-extras.md §V164
+V165: live-e2e-dev-only — campaign-test + reply-test ! read settings.logfire_environment before any CRM/Gmail mutate; != development → preflight fail + skill bail; pytest unit tests exempt — → .spec/check-extras.md §V165
 
 ## §T TASKS
 
@@ -262,6 +263,7 @@ T261|x|impl §V.164(+) — thread-bound inbound binds enrolled contact when From
 T262|x|`scripts/changelog` check/promote/notes + root CHANGELOG.md; `make release` empty-Unreleased hard-fail + promote; commit CHANGELOG w/ pyproject; offline tests|V62,I.pkg
 T263|x|`release.yml` GH notes from CHANGELOG version section via `scripts/changelog notes`; not sole `--generate-notes`; keep PyPI OIDC|V62,I.pkg,T262
 T264|x|README release path + CHANGELOG Unreleased duty for user-facing work|V62,T262
+T265|.|impl §V.165(+) — campaign-test + reply-test preflight block unless logfire_environment=development; skill step before account ensure; unit tests development pass / production fail; no mutate on fail|V165,B135,V52,V122,V104
 
 ## §B BUGS
 
@@ -311,3 +313,4 @@ B131|2026-08-12|address-change auto-reply left outbound enrollment active (no di
 B132|2026-08-12|OOO-resume task stored context.touch="T2"; `(context->>'touch')::int` raised InvalidTextRepresentation; stats/report/status/--full crash|V162
 B133|2026-08-12|bounce disables contact, leaves enrollment active + T2 pending|V163
 B134|2026-08-12|inbound thread reply From local-part alias mints new contact + DNC that row; original enrollment stays active + T2 pending|V164
+B135|2026-08-12|campaign-test preflight never checked logfire_environment; live skill ran against production CRM/DB/pubsub|V165
