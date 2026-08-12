@@ -512,10 +512,13 @@ Trigger: `src/mailpilot/drive.py` changed.
 
 Keyed entities (account=email, company=domain, contact=email, tag=name, workflow=name §V.103) addressed by natural key. Keyless entities (email, note, task, enrollment) addressed by UUID. Polymorphic resolver: value matching UUIDv7 shape (`8-4-4-4-12` hex) → resolve by id; any other value → resolve by natural key (domain has dots, email has at-sign, workflow `name` is kebab with neither nor UUID-shape — never collide), case-insensitive. Unknown key → `not_found`. Every single-entity verb target = positional `<key>` arg, NEVER `--<entity>-id` option. Scope/owner options named for owner natural key (`--company-domain`, `--contact-email`). Account-requiring cmds take a single `--account-email` (polymorphic, resolves email|UUID). `account sync --account-email` is optional (all accounts when omitted). `account sync --since <iso>` bounds full-INBOX backfill on first sync.
 
+`--workflow-id` on list/filter/mutate surfaces resolves name or UUID via `_resolve_workflow_id` (workflow keyed by `name` §V.90/§V.103 — flag retains `-id` historically but accepts natural key). Help text: "name or ID". UUID-only `get_workflow(connection, raw_flag)` without resolve = drift. Unknown name or UUID → `not_found` (same envelope). `enrollment add` + `activity list` already comply; `enrollment list` reported gap (#207); sibling UUID-only list filters (task list|stats, email list) same class when touched.
+
 Trigger: `src/mailpilot/cli.py` changed.
 - `rg '"--\w+-id"' src/mailpilot/cli.py` -> only `--workflow-id` (keyless) present; no `--company-id`, `--contact-id`, `--account-id` options
 - `rg '"--account-email"' src/mailpilot/cli.py | wc -l` -> single polymorphic `--account-email` on account-requiring cmds
 - `rg 'polymorphic\|UUIDv7.*shape\|8-4-4-4-12\|_is_uuid\|uuid.*shape' src/mailpilot/cli.py` -> UUID-shape resolver present
+- `rg '_resolve_workflow_id' src/mailpilot/cli.py` -> resolver present; enrollment list path resolves before list query
 
 ## §V108 — migration registry + schema-hash re-stamp
 
@@ -912,10 +915,11 @@ Trigger: `src/mailpilot/` account/signature/render paths changed.
 
 ## §V152 — enrollment execution projection
 
-enrollment execution projection — default list lean; `--full` denser {company_domain, company_name, emails_sent, last_touch, next_scheduled_at, next_touch, disposition, created_at}; filters `--has-pending-task` / `--touch N`; sort next_scheduled_at; envelope `enrollments`; entity refs name|UUID (§V.107)
+enrollment execution projection — default list lean; `--full` denser {company_domain, company_name, emails_sent, last_touch, next_scheduled_at, next_touch, disposition, created_at}; filters `--has-pending-task` / `--touch N`; sort next_scheduled_at; envelope `enrollments`; entity refs name|UUID (§V.107). `enrollment list --workflow-id` polymorphic name|UUID via `_resolve_workflow_id` (§V.107); help "name or ID"; unknown → `not_found` (#207).
 
 Trigger: enrollment list/view projection changed.
 - `rg 'next_scheduled_at|emails_sent|last_touch|--full' src/mailpilot/cli.py src/mailpilot/database.py` -> denser projection fields
+- `rg 'def enrollment_list' -A 40 src/mailpilot/cli.py` -> list path calls `_resolve_workflow_id` for workflow filter
 
 ## §V153 — workflow report composite
 

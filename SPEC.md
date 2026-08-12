@@ -150,7 +150,7 @@ V103: workflow defs workflows/*.toml; name=kebab stem; import-only def fields; T
 V104: reply-test reply-loop guard — outbound@lab5.ca has no active workflow (test precondition) — → .spec/check-extras.md §V104
 V105: in-scope cases graded deterministically, false-PASS-at-worst; atomicity enforced test-time by allowlist — → .spec/check-extras.md §V105
 V106: Drive search whitespace-tokenized OR-joined fullText predicates; never whole-phrase — → .spec/check-extras.md §V106
-V107: CLI entity = natural key or UUID polymorphic; single-entity target positional `<key>`; `--account-email` sole account option — → .spec/check-extras.md §V107
+V107: CLI entity = natural key or UUID polymorphic; single-entity target positional `<key>`; `--workflow-id` filter name|UUID; `--account-email` sole account option — → .spec/check-extras.md §V107
 V108: migrations/NNN_*.sql forward-only; db migrate own-txn + re-stamp schema_hash; schema.sql canonical; init == migrate-from-zero — → .spec/check-extras.md §V108
 V109: three-state schema verdict in {current, pending, drift} + tiered gate; run+mutations dead-stop on drift/pending — → .spec/check-extras.md §V109
 V110: initialize_database = connect + verify, not provision; empty-DB auto-provision data-loss-free; populated DB never mutates as side-effect — → .spec/check-extras.md §V110
@@ -193,7 +193,7 @@ V148: company list/search order + page — `--sort`/`--desc`/`--offset`; company
 V149: disable reason-file — `company|contact disable` `--reason-file` XOR `--reason`; empty/missing/XOR validation — → .spec/check-extras.md §V149
 V150: enrollment tag-cohort dry-run — `enrollment add --tag --dry-run` company-tag preview; disabled/enrolled/self-loop excluded — → .spec/check-extras.md §V150
 V151: account email signature — AccountSignature cols + nested CLI projection + harness HTML/text render all outbound MIME; agent never drafts; ! persist into email.body — → .spec/check-extras.md §V151
-V152: enrollment execution projection — list lean default; `--full` denser + filters/sort; envelope enrollments — → .spec/check-extras.md §V152
+V152: enrollment execution projection — list lean default; `--full` denser + filters/sort; `--workflow-id` name|UUID; envelope enrollments — → .spec/check-extras.md §V152
 V153: workflow report — pure-SQL composite meta+funnel+tasks+enrollment matrix; filters stuck/touch/status; no LLM — → .spec/check-extras.md §V153
 V154: activity/email list require ≥1 scope filter; `--workflow-id` composes; no unbounded dump — → .spec/check-extras.md §V154
 V155: stuck/overdue filters — task `--overdue`; enrollment/report `--stuck` heuristics; first-send SLA 24h; read-only — → .spec/check-extras.md §V155
@@ -257,6 +257,7 @@ T247|x|impl §V.157(+) + §I — workflow status ops-health composite; tests + S
 T248|x|impl §V.136 first-touch subject require — compose-only output validator ModelRetry on empty/None/whitespace subject for new-thread touch; follow-up may leave subject empty; unit tests empty/None/whitespace reject + non-empty accept + follow-up None ok|V136,B127
 T249|x|drop `_check_spec_table` + call sites (send_email, reply_email, compose `_lint_touch_output`); drop format-rejection path + tests|V42,B128
 T250|x|drop `_SPEC_TABLE`; ban agent-facing Markdown/pipe-table language; structure as lists; rewrite template/check-extras tests|V42,V45,B128
+T251|.|impl §V.107(∆)+§V.152(∆) — enrollment list --workflow-id name|UUID via _resolve_workflow_id; help "name or ID"; UUID still not_found when missing; tests name+uuid+unknown; SKILL/help; no enroll/disable change (#207)|V107,V152,V90,V4,I.cli
 
 ## §B BUGS
 
