@@ -4418,9 +4418,7 @@ def test_skill_documents_contact_verification_meta() -> None:
     assert "§T." not in body
 
 
-def test_contact_view_timeline(
-    runner: CliRunner, mock_connection: MagicMock
-) -> None:
+def test_contact_view_timeline(runner: CliRunner, mock_connection: MagicMock) -> None:
     """§V.159: --timeline returns dossier keys; bare view omits them."""
     contact = _make_contact()
     dossier = {
@@ -4452,9 +4450,7 @@ def test_contact_view_timeline(
             "mailpilot.database.load_contact_timeline", return_value=dossier
         ) as mock_tl,
     ):
-        result = runner.invoke(
-            main, ["contact", "view", contact.id, "--timeline"]
-        )
+        result = runner.invoke(main, ["contact", "view", contact.id, "--timeline"])
 
     assert result.exit_code == 0
     mock_tl.assert_called_once_with(mock_connection, contact.id, limit=10)
@@ -10704,9 +10700,7 @@ def test_enrollment_list_disposition_invalid(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch(
-            "mailpilot.database.list_enrollments_detailed"
-        ) as mock_list,
+        patch("mailpilot.database.list_enrollments_detailed") as mock_list,
     ):
         result = runner.invoke(
             main,

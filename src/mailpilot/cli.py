@@ -3068,7 +3068,10 @@ def contact_list(
     "--limit",
     default=10,
     show_default=True,
-    help="Max rows per --timeline section (enrollments, emails, activities). Hard cap 50.",
+    help=(
+        "Max rows per --timeline section (enrollments, emails, activities). "
+        "Hard cap 50."
+    ),
 )
 def contact_view(
     contact_ref: str, include_meta: bool, timeline: bool, limit: int
@@ -3089,9 +3092,7 @@ def contact_view(
     try:
         contact_id = _resolve_contact_id(connection, contact_ref)
         if timeline:
-            payload = load_contact_timeline(
-                connection, contact_id, limit=limit
-            )
+            payload = load_contact_timeline(connection, contact_id, limit=limit)
             if payload is None:
                 output_error(f"contact not found: {contact_ref}", "not_found")
             if include_meta:

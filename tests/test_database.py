@@ -7021,9 +7021,7 @@ def test_load_contact_timeline_includes_sections(
         database_connection, email="lead@acme.com", company_id=company.id
     )
     workflow = make_test_workflow(database_connection, account.id)
-    enrollment = make_test_enrollment(
-        database_connection, workflow.id, contact.id
-    )
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
     record_enrollment_outcome(
         database_connection,
         enrollment.id,
@@ -7055,7 +7053,8 @@ def test_load_contact_timeline_includes_sections(
         recipients={"to": [account.email]},
         gmail_message_id="gmsg-in-timeline-1",
     )
-    assert outbound is not None and inbound is not None
+    assert outbound is not None
+    assert inbound is not None
     make_test_activity(
         database_connection,
         contact_id=contact.id,

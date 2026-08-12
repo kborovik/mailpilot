@@ -2422,13 +2422,14 @@ def search_contacts(
     for i, token in enumerate(tokens):
         key = f"tok_{i}"
         params[key] = f"%{token}%"
+        ph = Placeholder(key)
         token_clauses.append(
             SQL(
-                "(LOWER(c.email) LIKE LOWER(%({k})s)"
-                " OR LOWER(COALESCE(c.first_name, '')) LIKE LOWER(%({k})s)"
-                " OR LOWER(COALESCE(c.last_name, '')) LIKE LOWER(%({k})s)"
-                " OR LOWER(COALESCE(c.title, '')) LIKE LOWER(%({k})s))"
-            ).format(k=SQL(key))
+                "(LOWER(c.email) LIKE LOWER({})"
+                " OR LOWER(COALESCE(c.first_name, '')) LIKE LOWER({})"
+                " OR LOWER(COALESCE(c.last_name, '')) LIKE LOWER({})"
+                " OR LOWER(COALESCE(c.title, '')) LIKE LOWER({}))"
+            ).format(ph, ph, ph, ph)
         )
     multi_and = SQL(" AND ").join(token_clauses)
     full_name = SQL(
@@ -3956,7 +3957,7 @@ def enable_enrollment(
     return Enrollment.model_validate(row)
 
 
-def list_enrollments_detailed(  # noqa: C901
+def list_enrollments_detailed(  # noqa: C901, PLR0912
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str | None = None,
     contact_id: str | None = None,
@@ -4152,17 +4153,20 @@ def list_enrollments_detailed(  # noqa: C901
             "THEN (nt.context->>'touch')::int ELSE NULL END AS next_touch, "
             "outcome.disposition AS disposition "
         )
-        from_joins = SQL(
-            "FROM enrollment e "
-            "JOIN workflow w ON w.id = e.workflow_id "
-            "JOIN contact c ON c.id = e.contact_id "
-            "LEFT JOIN company co ON co.id = c.company_id "
-            "LEFT JOIN LATERAL ("
-            "SELECT t.scheduled_at, t.context FROM task t "
-            "WHERE t.enrollment_id = e.id AND t.status = 'pending' "
-            "ORDER BY t.scheduled_at ASC NULLS LAST LIMIT 1"
-            ") nt ON TRUE "
-        ) + outcome_lateral
+        from_joins = (
+            SQL(
+                "FROM enrollment e "
+                "JOIN workflow w ON w.id = e.workflow_id "
+                "JOIN contact c ON c.id = e.contact_id "
+                "LEFT JOIN company co ON co.id = c.company_id "
+                "LEFT JOIN LATERAL ("
+                "SELECT t.scheduled_at, t.context FROM task t "
+                "WHERE t.enrollment_id = e.id AND t.status = 'pending' "
+                "ORDER BY t.scheduled_at ASC NULLS LAST LIMIT 1"
+                ") nt ON TRUE "
+            )
+            + outcome_lateral
+        )
     else:
         select_cols = SQL(
             "SELECT e.id, e.workflow_id, w.name AS workflow_name, "
