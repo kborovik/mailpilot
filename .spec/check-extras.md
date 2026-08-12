@@ -986,3 +986,35 @@ enrollment list `--disposition` — filter enrollments by latest terminal dispos
 Trigger: enrollment list disposition filter changed.
 - `rg '--disposition|disposition' src/mailpilot/cli.py src/mailpilot/database.py` -> filter flag + SQL
 - `rg 'validation_error|do_not_contact|contact_later|meeting_booked' src/mailpilot/cli.py` -> allowed-set error path
+
+## §V161 — address-change auto-reply hard-stop
+
+address-change auto-reply hard-stop — active outbound enrollment + inbound address-change / "update your records" / hard email-redirect auto-reply → conclude do_not_contact (cancel follow-ups + disable old contact); note ! carry redirect + new email when present (campaign-review referral); agent never enrolls new address; ! OOO pause-once (noop, no terminal)
+
+Trigger: inbound classify / conclude / campaign-test address-change path changed.
+- `rg 'address.change|update your records|do_not_contact' src/mailpilot/` -> hard-stop path present
+- `rg 'auto_reply|ooo|out.of.office' src/mailpilot/agent/ tests/` -> OOO stays non-terminal
+
+## §V162 — touch-context-parse
+
+touch-context-parse — `task.context.touch` JSON number `N` or string `T<n>` or `"n"` → int N; SQL readers (get_workflow_stats, list_enrollments_detailed --full/--touch) never raw `(context->>'touch')::int`; unparseable → NULL not crash; new writers (cadence + OOO-resume create_task) emit numeric N; `resolve_touch_number` same parse
+
+Trigger: stats / enrollment --full/--touch / cadence task write changed.
+- `rg 'resolve_touch_number' src/mailpilot/` -> shared parse present
+- `rg "context->>'touch'\\)\\s*::int" src/mailpilot/` -> zero raw ::int casts
+
+## §V163 — bounce enrollment hard-stop
+
+bounce enrollment hard-stop — outbound bounce (§V.80) → every active outbound enrollment for that contact: record_enrollment_outcome failed do_not_contact + cancel follow-ups; skip already-terminal; enrollment row untouched (§V.15); contact disable stays §V.80; ! defer to execute-time §V.83
+
+Trigger: bounce handler changed.
+- `rg 'bounced:|record_enrollment_outcome|do_not_contact' src/mailpilot/` -> bounce concludes enrollments
+- `rg 'cancel.*follow|cancel_pending' src/mailpilot/` -> follow-ups cancelled at bounce time
+
+## §V164 — thread-alias inbound bind
+
+thread-alias inbound bind — inbound on existing outbound thread binds email.contact_id to enrolled contact even when From: local-part differs; ! mint or auto-enroll alias From; left-company/retired → conclude original do_not_contact + cancel follow-ups (§V.161/§V.123); referral addrs stay note (agent never enrolls); distinct from case-variant (§V.90) and same-contact address-change (§V.161)
+
+Trigger: inbound routing / thread match / contact bind changed.
+- `rg 'thread_match|contact_id|gmail_thread' src/mailpilot/routing.py src/mailpilot/sync.py` -> thread bind to enrolled contact
+- `rg 'auto.enroll|create_contact' src/mailpilot/routing.py` -> alias From does not mint enroll

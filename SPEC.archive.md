@@ -88,6 +88,23 @@ T194|x|impl §V.130(∆) — `anthropic_max_tokens` setting; always-passed in `_
 T195|x|impl §V.131(+) — `_FALLBACK_ACKNOWLEDGEMENT` + reply-emitted flag; fallback send in `_handle_agent_failure` for inbound failures|V131,B116,V48,V49,V71
 T196|x|impl §V.132 disposition persistence — record_enrollment_outcome disposition param writes detail.disposition; conclude_enrollment forwards disposition + booking-conclusion passes meeting_booked; JSONB key no migration|V132,V127,V128,V15
 T197|x|impl §V.132 + §I — `workflow stats` funnel: single-SQL aggregation fn in database.py + CLI `workflow stats` verb + `{"workflow_stats"}` envelope|V132,V107,V4,V54
+T198|x|impl §V.14(∆) + §I — `delete_notes` fn + CLI `note remove --contact-email|--company-domain` (clear an owner's notes); campaign-test setup clears prospect notes pre-Touch-1 + send_touch1 re-enables prospect between scenarios|V14,B118
+T199|x|redesign §V.14(∆) — `note remove <note_id>` single-note hard-delete; `delete_note(note_id)` fn; campaign-test reset loops `note list` + remove-by-id via `clear_contact_notes`|V14
+T200|x|impl §V.90(∆) — lowercase `email` natural key in create_contact/get_contact_by_email/create_or_get_contact_by_email/create_contacts_bulk/get_contacts_by_emails before match+insert; migration merges existing case-variant duplicate contacts onto canonical lowercase row|V90,B121
+T201|x|impl §V.133(+) + §I — `task stats` single-SQL aggregate fn in database.py + CLI `task stats` verb + `{"task_stats"}` envelope; `--trigger` Enum filter on `context->>'trigger'` for `task list` + `task stats`; `--bucket-tz` day-bucketing for distinct_scheduled_days|V133,V107,V26,V32,V4,V115
+T202|x|impl §V.90(∆) + §V.107(∆) — workflow natural key `name` global UNIQUE + kebab CHECK (migration 009); polymorphic resolver matches name case-insensitively|V90,V107,V108,V103
+T203|x|impl §V.103(∆) — `workflow import` enforces `name` = kebab file-stem + global unique; def fields {name,template,theme,goal,instructions} import-only; `workflow update` restricted to non-def fields (status, account binding)|V103,V107,V90
+T204|x|impl §V.134(+) + §I — `workflow check` verb: 2-way live SHA-256 over wording fields {template,theme,goal,instructions} keyed by workflow `name` (read each `workflows/*.toml` name field, join rows by name); states {in_sync,out_of_sync,not_imported,orphaned}; `{"workflow_check"}` envelope|V134,V103,V107,V4,V54
+T205|x|impl §V.4(∆) + §I — top-level int `record_count` = records displayed on every ok:true envelope (array payload -> len; single-object -> 1); error omits; thread through cli.py output helper|V4,V3
+T206|x|migrate pydantic-ai-slim[anthropic] v1→v2 — pin >=2.2.0,<3.0.0; instr-format v5 span/attr renames; scrub exemption re-keyed to `gen_ai.tool.call.result`|V38,V53,V55,V47
+T207|x|impl §V.103(∆) + §I — workflow import zero-applied loud failure: `applied`/`rejected` envelope aggregates; `applied`=0 -> `import_failed` + exit 1|V103,V4,V3
+T208|x|impl §V.31(∆) — _DEFERRED_TASK_INBOUND fragment + direction-aware build_protocol; inbound rosters exclude conclude_enrollment + create_task|V31,V45,V44
+T209|x|impl §V.135(+) + §V.8(∆) + §V.45(∆) + §I — context pre-feed via shared view loaders; drop read_contact/read_company from all rosters|V135,V8,V45,V40
+T210|x|impl §V.136(+) + §V.103(∆) + §V.134(∆) + §I — cadence def fields (migration 010) + cadence engine; strip cadence prose from workflow TOMLs|V136,V103,V134,V108,V127,V128
+T211|x|impl §V.136 compose-only shape — trigger-keyed dispatch to output_type TouchMessage; harness send + next-touch schedule; retire _DEFERRED_TASK_INITIAL|V136,V31,V45,V81,V120,V42,V44,V25
+T212|x|impl §V.83(∆) — touch pre-flight guards: latest enrollment outcome terminal \| inbound from contact after prior touch -> cancel task, zero LLM calls; then strip reply-self-guard prose from workflow TOMLs (workflows repo, contingent)|V83,V123,V136
+T213|x|reconcile workflow TOMLs w/ T209-T211 landed code — strip retired-agent prose from workflows/*.toml; re-import; `workflow check` in_sync|V135,V136,V103
+T214|x|impl §V.85(∆) — re-enable dotenv source for cwd `.env` (`env_file=".env"` + `dotenv_settings` in customise_sources); process env beats .env; .env beats config.json; TDD|V85
 ## §B BUGS
 
 id|date|cause|fix

@@ -203,32 +203,15 @@ V157: workflow status ops-health composite (meta+wording+run_loop+overdue/failed
 V158: contact search multi-token — full-name TRIM(first||' '||last); multi-token AND across {email,first,last,title}; single-token per-field LIKE retained; disabled searchable — → .spec/check-extras.md §V158
 V159: contact view --timeline — opt-in bounded dossier (notes+enrollments+emails+activities); bare view notes-only; default N=10 + hard cap — → .spec/check-extras.md §V159
 V160: enrollment list --disposition — filter terminal disposition ∈ {do_not_contact, contact_later, meeting_booked}; composes w/ existing filters; unknown → validation_error + allowed set — → .spec/check-extras.md §V160
-V161: address-change auto-reply hard-stop — active outbound enrollment + inbound address-change / "update your records" / hard email-redirect auto-reply → conclude do_not_contact (cancel follow-ups + disable old contact); note ! carry redirect + new email when present (campaign-review referral); agent never enrolls new address; ! OOO pause-once (noop, no terminal)
-V162: touch-context-parse — `task.context.touch` JSON number `N` or string `T<n>` or `"n"` → int N; SQL readers (get_workflow_stats, list_enrollments_detailed --full/--touch) never raw `(context->>'touch')::int`; unparseable → NULL not crash; new writers (cadence + OOO-resume create_task) emit numeric N; `resolve_touch_number` same parse
-V163: bounce enrollment hard-stop — outbound bounce (§V.80) → every active outbound enrollment for that contact: record_enrollment_outcome failed do_not_contact + cancel follow-ups; skip already-terminal; enrollment row untouched (§V.15); contact disable stays §V.80; ! defer to execute-time §V.83
-V164: thread-alias inbound bind — inbound on existing outbound thread binds email.contact_id to enrolled contact even when From: local-part differs; ! mint or auto-enroll alias From; left-company/retired → conclude original do_not_contact + cancel follow-ups (§V.161/§V.123); referral addrs stay note (agent never enrolls); distinct from case-variant (§V.90) and same-contact address-change (§V.161)
+V161: address-change auto-reply hard-stop — active outbound + address-change/redirect auto-reply → conclude do_not_contact; ! OOO pause — → .spec/check-extras.md §V161
+V162: touch-context-parse — context.touch N or T<n> or "n" → int; SQL never raw ::int; unparseable → NULL — → .spec/check-extras.md §V162
+V163: bounce enrollment hard-stop — outbound bounce → every active outbound enrollment do_not_contact + cancel follow-ups — → .spec/check-extras.md §V163
+V164: thread-alias inbound bind — inbound on existing outbound thread binds enrolled contact when From local-part differs; ! auto-enroll alias — → .spec/check-extras.md §V164
 
 ## §T TASKS
 
-## archived: §T.109..§T.197 → SPEC.archive.md (84 rows)
+## archived: §T.109..§T.214 → SPEC.archive.md (101 rows)
 id|status|task|cites
-T198|x|impl §V.14(∆) + §I — `delete_notes` fn + CLI `note remove --contact-email|--company-domain` (clear an owner's notes); campaign-test setup clears prospect notes pre-Touch-1 + send_touch1 re-enables prospect between scenarios|V14,B118
-T199|x|redesign §V.14(∆) — `note remove <note_id>` single-note hard-delete; `delete_note(note_id)` fn; campaign-test reset loops `note list` + remove-by-id via `clear_contact_notes`|V14
-T200|x|impl §V.90(∆) — lowercase `email` natural key in create_contact/get_contact_by_email/create_or_get_contact_by_email/create_contacts_bulk/get_contacts_by_emails before match+insert; migration merges existing case-variant duplicate contacts onto canonical lowercase row|V90,B121
-T201|x|impl §V.133(+) + §I — `task stats` single-SQL aggregate fn in database.py + CLI `task stats` verb + `{"task_stats"}` envelope; `--trigger` Enum filter on `context->>'trigger'` for `task list` + `task stats`; `--bucket-tz` day-bucketing for distinct_scheduled_days|V133,V107,V26,V32,V4,V115
-T202|x|impl §V.90(∆) + §V.107(∆) — workflow natural key `name` global UNIQUE + kebab CHECK (migration 009); polymorphic resolver matches name case-insensitively|V90,V107,V108,V103
-T203|x|impl §V.103(∆) — `workflow import` enforces `name` = kebab file-stem + global unique; def fields {name,template,theme,goal,instructions} import-only; `workflow update` restricted to non-def fields (status, account binding)|V103,V107,V90
-T204|x|impl §V.134(+) + §I — `workflow check` verb: 2-way live SHA-256 over wording fields {template,theme,goal,instructions} keyed by workflow `name` (read each `workflows/*.toml` name field, join rows by name); states {in_sync,out_of_sync,not_imported,orphaned}; `{"workflow_check"}` envelope|V134,V103,V107,V4,V54
-T205|x|impl §V.4(∆) + §I — top-level int `record_count` = records displayed on every ok:true envelope (array payload -> len; single-object -> 1); error omits; thread through cli.py output helper|V4,V3
-T206|x|migrate pydantic-ai-slim[anthropic] v1→v2 — pin >=2.2.0,<3.0.0; instr-format v5 span/attr renames; scrub exemption re-keyed to `gen_ai.tool.call.result`|V38,V53,V55,V47
-T207|x|impl §V.103(∆) + §I — workflow import zero-applied loud failure: `applied`/`rejected` envelope aggregates; `applied`=0 -> `import_failed` + exit 1|V103,V4,V3
-T208|x|impl §V.31(∆) — _DEFERRED_TASK_INBOUND fragment + direction-aware build_protocol; inbound rosters exclude conclude_enrollment + create_task|V31,V45,V44
-T209|x|impl §V.135(+) + §V.8(∆) + §V.45(∆) + §I — context pre-feed via shared view loaders; drop read_contact/read_company from all rosters|V135,V8,V45,V40
-T210|x|impl §V.136(+) + §V.103(∆) + §V.134(∆) + §I — cadence def fields (migration 010) + cadence engine; strip cadence prose from workflow TOMLs|V136,V103,V134,V108,V127,V128
-T211|x|impl §V.136 compose-only shape — trigger-keyed dispatch to output_type TouchMessage; harness send + next-touch schedule; retire _DEFERRED_TASK_INITIAL|V136,V31,V45,V81,V120,V42,V44,V25
-T212|x|impl §V.83(∆) — touch pre-flight guards: latest enrollment outcome terminal \| inbound from contact after prior touch -> cancel task, zero LLM calls; then strip reply-self-guard prose from workflow TOMLs (workflows repo, contingent)|V83,V123,V136
-T213|x|reconcile workflow TOMLs w/ T209-T211 landed code — strip retired-agent prose from workflows/*.toml; re-import; `workflow check` in_sync|V135,V136,V103
-T214|x|impl §V.85(∆) — re-enable dotenv source for cwd `.env` (`env_file=".env"` + `dotenv_settings` in customise_sources); process env beats .env; .env beats config.json; TDD|V85
 T215|x|impl §V.137 ordered connect-hint map + logfire.error (no console Traceback); extend tests/test_database_telemetry.py mocked OperationalError strings; stack #186 role/database split|V137,B125
 T216|x|impl §V.47 provider-aware LLM — `llm_provider` default xai; xai_* settings + `_build_model` dispatch; `pydantic-ai-slim[anthropic,xai]`; Anthropic path opt-in; effort enum reject tests; default model ids|V47,V48,V86
 T217|x|impl §I company projection + §V.8(∆) + §V.116(∆) — CompanySummary/CompanyView tags[]; list --full profile.summary; disabled_reason always on list rows; tests + --skill docs (#188)|V8,V116,V114,V96,I.cli
