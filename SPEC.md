@@ -205,6 +205,7 @@ V160: enrollment list --disposition — filter terminal disposition ∈ {do_not_
 V161: address-change auto-reply hard-stop — active outbound enrollment + inbound address-change / "update your records" / hard email-redirect auto-reply → conclude do_not_contact (cancel follow-ups + disable old contact); note ! carry redirect + new email when present (campaign-review referral); agent never enrolls new address; ! OOO pause-once (noop, no terminal)
 V162: touch-context-parse — `task.context.touch` JSON number `N` or string `T<n>` or `"n"` → int N; SQL readers (get_workflow_stats, list_enrollments_detailed --full/--touch) never raw `(context->>'touch')::int`; unparseable → NULL not crash; new writers (cadence + OOO-resume create_task) emit numeric N; `resolve_touch_number` same parse
 V163: bounce enrollment hard-stop — outbound bounce (§V.80) → every active outbound enrollment for that contact: record_enrollment_outcome failed do_not_contact + cancel follow-ups; skip already-terminal; enrollment row untouched (§V.15); contact disable stays §V.80; ! defer to execute-time §V.83
+V164: thread-alias inbound bind — inbound on existing outbound thread binds email.contact_id to enrolled contact even when From: local-part differs; ! mint or auto-enroll alias From; left-company/retired → conclude original do_not_contact + cancel follow-ups (§V.161/§V.123); referral addrs stay note (agent never enrolls); distinct from case-variant (§V.90) and same-contact address-change (§V.161)
 
 ## §T TASKS
 
@@ -273,6 +274,7 @@ T257|x|impl §V.161(+) — address-change auto-reply hard-stop: protocol/tool gu
 T258|x|swap mailpilot-campaign-test default workflow → `/Users/kb/github/lab5-campaigns/campaigns/var-sales-coclose/workflows/var-sales-coclose.toml` — `_common.DEFAULT_WORKFLOW_FILE` + `.claude`/`.grok` SKILL.md defaults; `--workflow-file` override kept|V122
 T259|x|impl §V.162(+) — SQL touch parse (stats + enrollment --full/--touch) + resolve_touch_number accept 2 and "T2"; new OOO-resume writes numeric; regression pending context.touch="T2"; workflow stats|report|status + enrollment --full JSON (#214)|V162,V132,V152,V136,V157,V153
 T260|x|impl §V.163(+) — bounce handler conclude do_not_contact + cancel follow-ups on every active outbound enrollment; test bounced T1 → no pending T2 (#215)|V163,V80,V123,V127,B133
+T261|.|impl §V.164(+) — thread-bound inbound binds enrolled contact when From local-part differs; ! auto-enroll alias; left-company/retired auto-reply concludes original + cancels T2; fixture T1 a@domain reply afull@domain (#216)|V164,V161,V27,V123,B134
 
 ## §B BUGS
 
@@ -321,3 +323,4 @@ B130|2026-08-12|email list --workflow-id UUID-only get_workflow; name → not_fo
 B131|2026-08-12|address-change auto-reply left outbound enrollment active (no disposition; next touch still scheduled); left-company path correctly do_not_contact|V161
 B132|2026-08-12|OOO-resume task stored context.touch="T2"; `(context->>'touch')::int` raised InvalidTextRepresentation; stats/report/status/--full crash|V162
 B133|2026-08-12|bounce disables contact, leaves enrollment active + T2 pending|V163
+B134|2026-08-12|inbound thread reply From local-part alias mints new contact + DNC that row; original enrollment stays active + T2 pending|V164
