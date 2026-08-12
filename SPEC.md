@@ -267,7 +267,7 @@ T253|x|impl §V.159(+) + §I — contact view --timeline dossier; bounds; tests 
 T254|x|impl §V.160(+) + §V.152(∆) + §I — enrollment list --disposition; validation_error allowed set; SKILL/help; tests match/empty/invalid (#210)|V160,V152,V127,V115,V4,I.cli
 T255|x|impl §V.107(∆) — task list|stats --workflow-id name|UUID via _resolve_workflow_id; help "name or ID"; UUID still works; not_found when missing; tests name+uuid+unknown; SKILL/help (#211)|V107,V133,V90,V4,I.cli
 T256|x|impl §V.107 — email list --workflow-id name|UUID via _resolve_workflow_id; help "name or ID"; UUID still works; not_found when missing; tests name+uuid+unknown; SKILL/help (#213)|V107,V154,V90,V4,I.cli
-T257|.|impl §V.161(+) — address-change auto-reply hard-stop: protocol/tool guidance + campaign-test scenario + fixture/test; note records new email when present; distinct from OOO auto_reply scenario (#212)|V161,V127,V123,B131
+T257|x|impl §V.161(+) — address-change auto-reply hard-stop: protocol/tool guidance + campaign-test scenario + fixture/test; note records new email when present; distinct from OOO auto_reply scenario (#212)|V161,V127,V123,B131
 
 ## §B BUGS
 

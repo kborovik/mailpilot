@@ -64,3 +64,28 @@ def test_question_scenario_reply_is_answerable_without_product_kb() -> None:
     assert "calendar" in body or "times" in body
     assert "sourced reply" not in body
     assert "out of scope" not in body
+
+
+def test_address_change_scenario_hard_stop_distinct_from_ooo() -> None:
+    """§V.161 / §B.131: address_change is hard-stop; auto_reply OOO is noop.
+
+    Catalog fixture drives live campaign-test: address-change must disable the
+    old contact; OOO must leave contact enabled with no agent reply.
+    """
+    common = _load("_common")
+    by_key = {s["key"]: s for s in common.load_scenarios()}
+    assert "address_change" in by_key
+    assert "auto_reply" in by_key
+
+    address = by_key["address_change"]
+    body = address["reply_body"].lower()
+    assert "email address has changed" in body or "address has changed" in body
+    assert "update your records" in body
+    assert "@" in address["reply_body"]  # new email present for note referral
+    assert address["expect"]["contact_disabled"] is True
+    assert address["expect"]["outcome"] == "any"
+
+    ooo = by_key["auto_reply"]
+    assert ooo["expect"]["contact_disabled"] is False
+    assert ooo["expect"]["agent_replied"] is False
+    assert ooo["expect"]["outcome"] == "none"

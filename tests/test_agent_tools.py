@@ -727,6 +727,47 @@ def test_conclude_enrollment_do_not_contact_disables_contact(
     assert blocked.disabled_reason.startswith("do_not_contact:")
 
 
+def test_conclude_enrollment_address_change_note_records_new_email(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.161: address-change do_not_contact note carries redirect + new email.
+
+    Campaign-review referral depends on the note (and disabled_reason) recording
+    the new address when the inbound auto-reply stated one. System side-effects
+    are the same as any do_not_contact (failed + block + cancel follow-ups).
+    """
+    from mailpilot.database import list_activities, list_notes
+
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+
+    new_email = "prospect.redirect@example.com"
+    note = f"address-change: email redirected to {new_email}; update your records"
+    result = conclude_enrollment(
+        connection=database_connection,
+        enrollment_id=enrollment.id,
+        disposition="do_not_contact",
+        note=note,
+    )
+    assert result == {"disposition": "do_not_contact", "outcome": "failed"}
+
+    types = [
+        a.type for a in list_activities(database_connection, contact_id=contact.id)
+    ]
+    assert "enrollment_failed" in types
+
+    blocked = get_contact(database_connection, contact.id)
+    assert blocked is not None
+    assert blocked.disabled_reason is not None
+    assert blocked.disabled_reason.startswith("do_not_contact:")
+    assert new_email in blocked.disabled_reason
+
+    notes = list_notes(database_connection, contact_id=contact.id)
+    assert any(new_email in n.body_preview for n in notes)
+
+
 def test_conclude_enrollment_contact_later_schedules_default_reschedule(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):

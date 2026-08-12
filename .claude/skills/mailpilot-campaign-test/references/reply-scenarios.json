@@ -58,6 +58,17 @@
       }
     },
     {
+      "key": "address_change",
+      "label": "Auto-reply -- email address changed",
+      "expected_branch": "Hard stop (distinct from OOO noop): conclude_enrollment do_not_contact; cancel follow-ups; disable the old contact. Note carries the redirect and new email when present; never enroll the new address.",
+      "reply_body": "Please note my email address has changed to prospect.redirect@example.com. Please update your records and send future mail there.",
+      "expect": {
+        "outcome": "any",
+        "contact_disabled": true,
+        "agent_replied": null
+      }
+    },
+    {
       "key": "wrong_person",
       "label": "Wrong person -- bad contact",
       "expected_branch": "Disable the contact (bad-contact), conclude failed. Stands in for the bounce branch, which routing handles deterministically before the agent and cannot be forged from a normal mailbox.",

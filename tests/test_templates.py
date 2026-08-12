@@ -363,6 +363,25 @@ def test_outbound_deferred_meeting_booked_requires_already_booked() -> None:
     assert _SPEC_CITE.search(fragment) is None
 
 
+def test_outbound_deferred_address_change_hard_stop_distinct_from_ooo() -> None:
+    """§V.161 / §B.131: address-change auto-reply is do_not_contact, not OOO noop.
+
+    Hard email-redirect / "update your records" must stop the old address,
+    carry the new email in the note when present, and never enroll the new
+    address. Out-of-office stays noop (pause once, no terminal).
+    """
+    fragment = templates_module._DEFERRED_TASK_TASK  # pyright: ignore[reportPrivateUsage]
+    assert "do_not_contact" in fragment
+    assert "address has changed" in fragment or "email address has changed" in fragment
+    assert "update your records" in fragment
+    assert "new email" in fragment
+    assert "never enroll" in fragment
+    assert "noop" in fragment
+    assert "Out-of-office" in fragment or "out-of-office" in fragment
+    assert fragment.isascii()
+    assert _SPEC_CITE.search(fragment) is None
+
+
 @pytest.mark.parametrize(
     "trigger",
     ["task", "enrollment_run", "enrollment_schedule", "manual", "email"],

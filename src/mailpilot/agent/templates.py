@@ -131,6 +131,10 @@ _PRODUCT_SPECS = (
 # goal-met -- leave the enrollment open so calendar ingest can conclude. A
 # looser "when the goal is met" line made agents stamp meeting_booked on
 # "I'd like to book" replies and fail campaign-test booked scenarios.
+# Address-change / hard email-redirect auto-replies are a hard stop (§V.161,
+# closes §B.131): continuing touches to the old address is wrong. OOO /
+# temporary-absence auto-replies are different -- noop only, no terminal.
+# Per §V.45 the model-visible string carries no §-cite.
 _DEFERRED_TASK_TASK = (
     "After achieving the workflow goal for a contact, conclude the enrollment "
     "by calling conclude_enrollment with a disposition and a brief note. Use "
@@ -140,7 +144,14 @@ _DEFERRED_TASK_TASK = (
     "can record the booking. When the contact wants to talk or asks for times, "
     "reply_email with the calendar link (or offered times) and leave the "
     "enrollment open -- still end the turn with a tool call; do not stop "
-    "without tools. Use do_not_contact when the contact asks not to be reached. "
+    "without tools. Use do_not_contact when the contact asks not to be reached, "
+    "when a human says wrong person, or when an automated reply says the email "
+    "address has changed, to update your records, or hard-redirects to a new "
+    "address -- stop further touches to the old address; put the redirect and "
+    "the new email (when present) in the note so campaign review can re-target; "
+    "never enroll the new address yourself. Out-of-office and temporary absence "
+    "auto-replies are different: call noop (pause once, leave enrollment open) "
+    "-- do not conclude and do not reply. "
     "Use contact_later to defer (optionally pass reschedule_at). If work cannot "
     "complete now but should resume later, schedule a deferred task via "
     "create_task with a future scheduled_at.\n"

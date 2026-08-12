@@ -265,6 +265,12 @@ def _wrap_conclude_enrollment(  # pyright: ignore[reportUnusedFunction]
     disposition -- disables the contact or schedules a re-enrollment, then
     writes a note. This is a terminal action that satisfies the send
     obligation, like noop.
+
+    Use do_not_contact for opt-out, wrong person, and address-change /
+    "update your records" / hard email-redirect auto-replies: stop touches
+    to the old address; put the redirect and the new email (when present)
+    in `note`; never enroll the new address. Out-of-office auto-replies
+    are not this path -- call noop instead.
     """
     return agent_tools.conclude_enrollment(
         connection=ctx.deps.connection,
@@ -370,7 +376,10 @@ def _wrap_noop(  # pyright: ignore[reportUnusedFunction]
 
     Call this tool when, after reviewing context, no action is appropriate.
     You must still call a tool every turn -- noop is the explicit "do nothing"
-    signal.
+    signal. Typical case: out-of-office or temporary absence auto-reply
+    (pause once; leave enrollment open; do not conclude). Address-change
+    and hard email-redirect auto-replies are not noop -- use
+    conclude_enrollment with do_not_contact instead.
     """
     return agent_tools.noop(reason=reason)
 

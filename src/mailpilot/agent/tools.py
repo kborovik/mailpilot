@@ -322,7 +322,11 @@ def conclude_enrollment(
         - ``meeting_booked`` -- records a completed outcome and writes a note
           (the "I booked" reply path, distinct from calendar detection).
         - ``do_not_contact`` -- records a failed outcome, sets a global block on
-          the contact, and writes a note.
+          the contact, and writes a note. Use for opt-out, wrong person, and
+          address-change / "update your records" / hard email-redirect
+          auto-replies: stop touches to the old address; put the redirect and
+          the new email (when present) in the note; never enroll the new
+          address. Out-of-office auto-replies are NOT this path -- use noop.
         - ``contact_later`` -- records a failed outcome and schedules a
           re-enrollment first-touch task at ``reschedule_at`` (about three
           months out when omitted), then writes a note.
@@ -332,7 +336,8 @@ def conclude_enrollment(
         enrollment_id: Current enrollment ID (from deps, not the LLM).
         disposition: One of meeting_booked, do_not_contact, contact_later.
         note: The agent's explanation, written to the outcome activity and a
-            contact note.
+            contact note. For address-change, include the redirect and new
+            email when the inbound message states one.
         reschedule_at: ISO 8601 timestamp for the contact_later re-enrollment
             touch; defaults to about three months out when omitted.
 
@@ -628,7 +633,10 @@ def noop(reason: str) -> dict[str, Any]:
 
     Call this tool when, after reviewing context, no action is appropriate.
     You must still call a tool every turn -- noop is the explicit "do nothing"
-    signal.
+    signal. Typical case: out-of-office or temporary absence auto-reply
+    (pause once; leave the enrollment open; do not conclude). Address-change
+    and hard email-redirect auto-replies are not noop -- use
+    conclude_enrollment with do_not_contact instead.
 
     Args:
         reason: Why no action is needed.
