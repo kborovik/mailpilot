@@ -76,6 +76,8 @@ _WORKFLOW_STATUSES = ["draft", "active", "paused"]
 _WORKFLOW_TEMPLATES = ["outbound-general", "inbound-general", "inbound-google-drive"]
 _EMAIL_STATUSES = ["sent", "received", "bounced"]
 _ENROLLMENT_STATUSES = ["active", "disabled"]
+# Terminal dispositions on enrollment outcome activity (§V.127 / §V.160).
+_ENROLLMENT_DISPOSITIONS = ["meeting_booked", "do_not_contact", "contact_later"]
 _TASK_STATUSES = ["pending", "completed", "failed", "cancelled"]
 # Caller-path taxonomy stored in task.context->>'trigger' (§V.26); shared by
 # `task list --trigger` and `task stats --trigger`.
@@ -5798,6 +5800,14 @@ def enrollment_view(enrollment_id: str) -> None:
 @scope_option("--contact-email", "contact_email", "Filter by contact (email or ID).")
 @enum_option("--status", "status", _ENROLLMENT_STATUSES, "Filter by enrollment status.")
 @click.option(
+    "--disposition",
+    default=None,
+    help=(
+        "Filter by latest terminal disposition: meeting_booked, do_not_contact, "
+        "or contact_later. Unknown values return validation_error with allowed set."
+    ),
+)
+@click.option(
     "--full",
     "full",
     is_flag=True,
@@ -5840,6 +5850,7 @@ def enrollment_list(
     workflow_id: str | None,
     contact_email: str | None,
     status: str | None,
+    disposition: str | None,
     full: bool,
     stuck: bool,
     has_pending_task: bool | None,
@@ -5855,7 +5866,8 @@ def enrollment_list(
     """List enrollments as summaries. Filter by workflow, contact, or both.
 
     Default rows stay lean. Pass --full for company, touch progress, next send,
-    and disposition fields used in campaign triage.
+    and disposition fields used in campaign triage. --disposition filters by
+    latest terminal disposition (meeting_booked, do_not_contact, contact_later).
     """
     from mailpilot.database import (
         get_workflow,
@@ -5863,6 +5875,13 @@ def enrollment_list(
         list_enrollments_detailed,
     )
     from mailpilot.models import ENROLLMENT_FULL_FIELDS
+
+    if disposition is not None and disposition not in _ENROLLMENT_DISPOSITIONS:
+        allowed = ", ".join(_ENROLLMENT_DISPOSITIONS)
+        output_error(
+            f"invalid disposition {disposition!r}; allowed: {allowed}",
+            "validation_error",
+        )
 
     connection = initialize_database(_database_url())
     try:
@@ -5893,6 +5912,7 @@ def enrollment_list(
             sort=sort,
             desc=desc,
             stuck=stuck,
+            disposition=disposition,
         )
         exclude = None if use_full else set(ENROLLMENT_FULL_FIELDS)
         dumped = [r.model_dump(mode="json", exclude=exclude) for r in rows]

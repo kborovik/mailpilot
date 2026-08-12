@@ -10414,6 +10414,7 @@ def test_enrollment_list(runner: CliRunner, mock_connection: MagicMock) -> None:
         sort="updated_at",
         desc=False,
         stuck=False,
+        disposition=None,
     )
     data = json.loads(result.output)
     assert data["ok"] is True
@@ -10461,6 +10462,7 @@ def test_enrollment_list_with_status(
         sort="updated_at",
         desc=False,
         stuck=False,
+        disposition=None,
     )
 
 
@@ -10502,6 +10504,7 @@ def test_enrollment_list_with_limit(
         sort="updated_at",
         desc=False,
         stuck=False,
+        disposition=None,
     )
 
 
@@ -10539,6 +10542,7 @@ def test_enrollment_list_filters_by_contact(
         sort="updated_at",
         desc=False,
         stuck=False,
+        disposition=None,
     )
 
 
@@ -10658,6 +10662,105 @@ def test_enrollment_list_full_projects_execution_fields(
     assert row["last_touch"] == 1
     assert row["next_touch"] == 2
     assert "created_at" in row
+
+
+def test_enrollment_list_disposition_filter(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.160: --disposition passes through to list_enrollments_detailed."""
+    summary = _make_enrollment_summary(disposition="do_not_contact")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=_make_workflow()),
+        patch(
+            "mailpilot.database.list_enrollments_detailed", return_value=[summary]
+        ) as mock_list,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "list",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--disposition",
+                "do_not_contact",
+                "--full",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert mock_list.call_args.kwargs["disposition"] == "do_not_contact"
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 1
+
+
+def test_enrollment_list_disposition_invalid(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.160: unknown disposition → validation_error + allowed set."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.list_enrollments_detailed"
+        ) as mock_list,
+    ):
+        result = runner.invoke(
+            main,
+            ["enrollment", "list", "--disposition", "nope"],
+        )
+
+    assert result.exit_code == 1
+    mock_list.assert_not_called()
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "do_not_contact" in data["message"]
+    assert "contact_later" in data["message"]
+    assert "meeting_booked" in data["message"]
+
+
+def test_enrollment_list_disposition_empty_ok(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.160: no matches → ok envelope record_count 0."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=_make_workflow()),
+        patch("mailpilot.database.list_enrollments_detailed", return_value=[]),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "list",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--disposition",
+                "meeting_booked",
+            ],
+        )
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["enrollments"] == []
+    assert data["record_count"] == 0
+
+
+def test_skill_documents_enrollment_disposition() -> None:
+    """§V.160: SKILL.md documents --disposition allowed values."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "--disposition" in body
+    assert "do_not_contact" in body
+    assert "contact_later" in body
+    assert "meeting_booked" in body
+    assert "§V." not in body
 
 
 # -- enrollment update removed (§V.15) -----------------------------------------

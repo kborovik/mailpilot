@@ -141,13 +141,18 @@ Pass `--full` for company, touch progress, next send, and disposition:
 mailpilot enrollment list --workflow-id acumatica-var-outbound --full
 mailpilot enrollment list --workflow-id acumatica-var-outbound --full \
   --has-pending-task --touch 2 --sort next_scheduled_at
+mailpilot enrollment list --workflow-id acumatica-var-outbound \
+  --disposition do_not_contact
+mailpilot enrollment list --workflow-id acumatica-var-outbound \
+  --disposition contact_later --full
 ```
 
 `--full` fields: `company_domain`, `company_name`, `emails_sent`, `last_touch`,
 `next_scheduled_at`, `next_touch`, `disposition`, `created_at`. Filters
-`--has-pending-task` / `--no-pending-task` and `--touch N` compose with
-workflow/contact/status scopes. Sort keys: `updated_at` (default),
-`next_scheduled_at`.
+`--has-pending-task` / `--no-pending-task`, `--touch N`, and `--disposition`
+(`meeting_booked` | `do_not_contact` | `contact_later`) compose with
+workflow/contact/status scopes. Unknown disposition → `validation_error` with
+allowed set. Sort keys: `updated_at` (default), `next_scheduled_at`.
 
 ### Workflow stats (funnel + touch slices)
 

@@ -4446,6 +4446,57 @@ def test_list_enrollments_detailed_status_filter(
     assert results[0].contact_id == c1.id
 
 
+def test_list_enrollments_detailed_disposition_filter(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.160: --disposition returns only matching terminal outcomes."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    dnc = make_test_contact(database_connection, email="dnc@example.com")
+    later = make_test_contact(database_connection, email="later@example.com")
+    open_c = make_test_contact(database_connection, email="open@example.com")
+    e_dnc = make_test_enrollment(database_connection, workflow.id, dnc.id)
+    e_later = make_test_enrollment(database_connection, workflow.id, later.id)
+    make_test_enrollment(database_connection, workflow.id, open_c.id)
+    record_enrollment_outcome(
+        database_connection,
+        e_dnc.id,
+        "failed",
+        "left company",
+        disposition="do_not_contact",
+    )
+    record_enrollment_outcome(
+        database_connection,
+        e_later.id,
+        "failed",
+        "not now",
+        disposition="contact_later",
+    )
+
+    only_dnc = list_enrollments_detailed(
+        database_connection,
+        workflow_id=workflow.id,
+        disposition="do_not_contact",
+        full=True,
+    )
+    assert {r.contact_id for r in only_dnc} == {dnc.id}
+    assert only_dnc[0].disposition == "do_not_contact"
+
+    only_later = list_enrollments_detailed(
+        database_connection,
+        workflow_id=workflow.id,
+        disposition="contact_later",
+    )
+    assert {r.contact_id for r in only_later} == {later.id}
+
+    empty = list_enrollments_detailed(
+        database_connection,
+        workflow_id=workflow.id,
+        disposition="meeting_booked",
+    )
+    assert empty == []
+
+
 def test_create_enrollment_defaults_to_active(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:

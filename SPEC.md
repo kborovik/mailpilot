@@ -263,7 +263,7 @@ T250|x|drop `_SPEC_TABLE`; ban agent-facing Markdown/pipe-table language; struct
 T251|x|impl §V.107(∆)+§V.152(∆) — enrollment list --workflow-id name|UUID via _resolve_workflow_id; help "name or ID"; UUID still not_found when missing; tests name+uuid+unknown; SKILL/help; no enroll/disable change (#207)|V107,V152,V90,V4,I.cli
 T252|x|impl §V.158(+) + §I — contact search full-name + multi-token AND; SKILL/help; tests full-name, multi-token, single-token regression, disabled hit (#208)|V158,V90,V4,I.cli
 T253|x|impl §V.159(+) + §I — contact view --timeline dossier; bounds; tests fixture send+inbound+enrollment fail; bare view omits timeline keys (#209)|V159,V8,V4,I.cli
-T254|.|impl §V.160(+) + §V.152(∆) + §I — enrollment list --disposition; validation_error allowed set; SKILL/help; tests match/empty/invalid (#210)|V160,V152,V127,V115,V4,I.cli
+T254|x|impl §V.160(+) + §V.152(∆) + §I — enrollment list --disposition; validation_error allowed set; SKILL/help; tests match/empty/invalid (#210)|V160,V152,V127,V115,V4,I.cli
 
 ## §B BUGS
 

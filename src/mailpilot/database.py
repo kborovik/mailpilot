@@ -3972,6 +3972,7 @@ def list_enrollments_detailed(  # noqa: C901
     desc: bool = False,
     stuck: bool = False,
     first_send_sla_hours: int = 24,
+    disposition: str | None = None,
 ) -> list[EnrollmentSummary]:
     """List enrollments with denormalised contact info as summaries.
 
@@ -3999,6 +4000,8 @@ def list_enrollments_detailed(  # noqa: C901
         desc: Sort descending when True.
         stuck: When True (§V.155), only stuck enrollments (heuristics below).
         first_send_sla_hours: SLA for never-sent active enrollments (default 24).
+        disposition: When set (§V.160), filter by latest terminal disposition
+            in {meeting_booked, do_not_contact, contact_later}.
 
     Returns:
         List of enrollment summaries.
@@ -4023,6 +4026,9 @@ def list_enrollments_detailed(  # noqa: C901
     if until is not None:
         where_parts.append(SQL("e.updated_at <= %(until)s"))
         params["until"] = until
+    if disposition is not None:
+        params["disposition"] = disposition
+        where_parts.append(SQL("outcome.disposition = %(disposition)s"))
     if stuck:
         # Force full joins for stuck heuristics that need next task / bounce.
         full = True
@@ -4110,6 +4116,16 @@ def list_enrollments_detailed(  # noqa: C901
     where_clause = (
         SQL("WHERE ") + SQL(" AND ").join(where_parts) if where_parts else SQL("")
     )
+    outcome_lateral = SQL(
+        "LEFT JOIN LATERAL ("
+        "SELECT a.detail->>'disposition' AS disposition "
+        "FROM activity a "
+        "WHERE a.contact_id = e.contact_id "
+        "AND a.workflow_id = e.workflow_id "
+        "AND a.type IN ('enrollment_completed', 'enrollment_failed') "
+        "ORDER BY a.created_at DESC LIMIT 1"
+        ") outcome ON TRUE "
+    )
     if full:
         select_cols = SQL(
             "SELECT e.id, e.workflow_id, w.name AS workflow_name, "
@@ -4146,15 +4162,7 @@ def list_enrollments_detailed(  # noqa: C901
             "WHERE t.enrollment_id = e.id AND t.status = 'pending' "
             "ORDER BY t.scheduled_at ASC NULLS LAST LIMIT 1"
             ") nt ON TRUE "
-            "LEFT JOIN LATERAL ("
-            "SELECT a.detail->>'disposition' AS disposition "
-            "FROM activity a "
-            "WHERE a.contact_id = e.contact_id "
-            "AND a.workflow_id = e.workflow_id "
-            "AND a.type IN ('enrollment_completed', 'enrollment_failed') "
-            "ORDER BY a.created_at DESC LIMIT 1"
-            ") outcome ON TRUE "
-        )
+        ) + outcome_lateral
     else:
         select_cols = SQL(
             "SELECT e.id, e.workflow_id, w.name AS workflow_name, "
@@ -4168,6 +4176,9 @@ def list_enrollments_detailed(  # noqa: C901
             "JOIN workflow w ON w.id = e.workflow_id "
             "JOIN contact c ON c.id = e.contact_id "
         )
+        # §V.160 disposition filter needs outcome lateral even on lean rows.
+        if disposition is not None:
+            from_joins = from_joins + outcome_lateral
     order_col = (
         SQL("nt.scheduled_at")
         if full and sort == "next_scheduled_at"
