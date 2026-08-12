@@ -203,6 +203,7 @@ V158: contact search multi-token — full-name TRIM(first||' '||last); multi-tok
 V159: contact view --timeline — opt-in bounded dossier (notes+enrollments+emails+activities); bare view notes-only; default N=10 + hard cap — → .spec/check-extras.md §V159
 V160: enrollment list --disposition — filter terminal disposition ∈ {do_not_contact, contact_later, meeting_booked}; composes w/ existing filters; unknown → validation_error + allowed set — → .spec/check-extras.md §V160
 V161: address-change auto-reply hard-stop — active outbound enrollment + inbound address-change / "update your records" / hard email-redirect auto-reply → conclude do_not_contact (cancel follow-ups + disable old contact); note ! carry redirect + new email when present (campaign-review referral); agent never enrolls new address; ! OOO pause-once (noop, no terminal)
+V162: touch-context-parse — `task.context.touch` JSON number `N` or string `T<n>` or `"n"` → int N; SQL readers (get_workflow_stats, list_enrollments_detailed --full/--touch) never raw `(context->>'touch')::int`; unparseable → NULL not crash; new writers (cadence + OOO-resume create_task) emit numeric N; `resolve_touch_number` same parse
 
 ## §T TASKS
 
@@ -269,6 +270,7 @@ T255|x|impl §V.107(∆) — task list|stats --workflow-id name|UUID via _resolv
 T256|x|impl §V.107 — email list --workflow-id name|UUID via _resolve_workflow_id; help "name or ID"; UUID still works; not_found when missing; tests name+uuid+unknown; SKILL/help (#213)|V107,V154,V90,V4,I.cli
 T257|x|impl §V.161(+) — address-change auto-reply hard-stop: protocol/tool guidance + campaign-test scenario + fixture/test; note records new email when present; distinct from OOO auto_reply scenario (#212)|V161,V127,V123,B131
 T258|x|swap mailpilot-campaign-test default workflow → `/Users/kb/github/lab5-campaigns/campaigns/var-sales-coclose/workflows/var-sales-coclose.toml` — `_common.DEFAULT_WORKFLOW_FILE` + `.claude`/`.grok` SKILL.md defaults; `--workflow-file` override kept|V122
+T259|.|impl §V.162(+) — SQL touch parse (stats + enrollment --full/--touch) + resolve_touch_number accept 2 and "T2"; new OOO-resume writes numeric; regression pending context.touch="T2"; workflow stats|report|status + enrollment --full JSON (#214)|V162,V132,V152,V136,V157,V153
 
 ## §B BUGS
 
@@ -315,3 +317,4 @@ B128|2026-08-11|`_check_spec_table` false-positive on multi-line ready-copy pros
 B129|2026-08-12|contact search per-field LIKE only; multi-word full name never hits first+last|V158
 B130|2026-08-12|email list --workflow-id UUID-only get_workflow; name → not_found while enrollment/task resolve name|V107
 B131|2026-08-12|address-change auto-reply left outbound enrollment active (no disposition; next touch still scheduled); left-company path correctly do_not_contact|V161
+B132|2026-08-12|OOO-resume task stored context.touch="T2"; `(context->>'touch')::int` raised InvalidTextRepresentation; stats/report/status/--full crash|V162
