@@ -2,7 +2,7 @@
 name: mailpilot-campaign-test
 description: >-
   Test the full multi-step flow of the real outbound cold-email workflow agent
-  (default workflows/ai-engineering.toml) before any real send. The live agent
+  (default lab5-campaigns var-sales-coclose.toml) before any real send. The live agent
   sends a personalized cold Touch 1 to a controlled prospect mailbox
   (inbound@lab5.ca), then the test replies to that email with content crafted to
   drive each branch of the workflow's reply handling -- positive/booked,
@@ -123,17 +123,16 @@ from the repo root with `uv run python`.
 ## Arguments
 
 - `--workflow-file <path>` -- the outbound workflow TOML whose agent to test.
-  Defaults to `workflows/ai-engineering.toml`.
+  Defaults to
+  `/Users/kb/github/lab5-campaigns/campaigns/var-sales-coclose/workflows/var-sales-coclose.toml`.
 - `--company-domain <domain>` -- restrict the grounding contact to one company.
 - `--min-confidence N` -- restrict the grounding contact to `email_confidence`
   at least N.
 
 The workflow file must exist and be valid TOML with `name`, `template`,
-`goal`, and `instructions`. The default lives under `workflows/`, a
-gitignored symlink to the independent repo at `/Users/kb/github/workflows`. If
-that path is absent, restore the symlink (`ln -s ../workflows workflows`) or pass
-`--workflow-file` with an explicit path. The reply branches are fixed by
-`references/reply-scenarios.json`.
+`goal`, and `instructions`. The default is the lab5-campaigns VAR sales
+co-close definition; pass `--workflow-file` for any other catalog TOML. The
+reply branches are fixed by `references/reply-scenarios.json`.
 
 ## Procedure
 
@@ -394,4 +393,4 @@ recipient on the controlled `inbound@lab5.ca` mailbox, so a broken branch is
 caught before it reaches a prospect. The critique then reads the branches as a set
 and points back at the workflow's reply-handling wording -- the text the operator
 actually edits. The default workflow definition lives at
-`workflows/ai-engineering.toml`.
+`/Users/kb/github/lab5-campaigns/campaigns/var-sales-coclose/workflows/var-sales-coclose.toml`.

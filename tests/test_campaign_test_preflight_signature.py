@@ -57,6 +57,15 @@ def test_required_outbound_signature_fields(common: types.ModuleType) -> None:
     assert required["full_name"].endswith("Borovik")
 
 
+def test_default_workflow_file_is_var_sales_coclose(common: types.ModuleType) -> None:
+    """§T.258 — campaign-test default is lab5-campaigns var-sales-coclose."""
+    assert common.DEFAULT_WORKFLOW_FILE.endswith(
+        "var-sales-coclose/workflows/var-sales-coclose.toml"
+    )
+    assert "ai-engineering" not in common.DEFAULT_WORKFLOW_FILE
+    assert "acumatica-var-outbound" not in common.DEFAULT_WORKFLOW_FILE
+
+
 def test_check_outbound_signature_missing_blocks(preflight: types.ModuleType) -> None:
     result: dict[str, object] = {}
     issues: list[str] = []

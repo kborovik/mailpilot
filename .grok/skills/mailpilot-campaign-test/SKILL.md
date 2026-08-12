@@ -4,7 +4,7 @@ description: >-
   Grok-native multi-step smoke test for an outbound cold-email workflow agent.
   Sends live Touch 1 from outbound@lab5.ca to inbound@lab5.ca only, injects
   crafted prospect replies per branch, verifies agent branch outcomes, then
-  cleans up. Default workflow is acumatica-var-outbound. Use when the user
+  cleans up. Default workflow is var-sales-coclose. Use when the user
   wants to test, smoke-test, dry-run, or validate a campaign / outreach
   workflow before real sends, or runs /mailpilot-campaign-test.
 argument-hint: "[--workflow-file <path>] [--company-domain <domain>] [--min-confidence N]"
@@ -22,7 +22,7 @@ skill is the Grok orchestrator.
 `.claude/skills/mailpilot-campaign-test/references/`.
 
 **Default workflow file:**
-`/Users/kb/github/lab5-leads/workflows/acumatica-var-outbound.toml`
+`/Users/kb/github/lab5-campaigns/campaigns/var-sales-coclose/workflows/var-sales-coclose.toml`
 
 Every command runs from the **repo root** via `uv run python` / `uv run mailpilot`.
 
@@ -116,7 +116,7 @@ is unavailable, say so once and continue — same as step 11.
 
 ## Arguments
 
-- `--workflow-file <path>` -- defaults to the acumatica-var-outbound path above
+- `--workflow-file <path>` -- defaults to the var-sales-coclose path above
 - `--company-domain <domain>` -- optional grounding filter
 - `--min-confidence N` -- optional `email_confidence` floor
 
@@ -173,7 +173,7 @@ field mismatches.
 ```bash
 uv run python .claude/skills/mailpilot-campaign-test/scripts/preflight.py \
   --run-id $RUN_ID \
-  --workflow-file /Users/kb/github/lab5-leads/workflows/acumatica-var-outbound.toml
+  --workflow-file /Users/kb/github/lab5-campaigns/campaigns/var-sales-coclose/workflows/var-sales-coclose.toml
 ```
 
 Stop if `verdict != "ok"`. WARNING lines are non-blocking.

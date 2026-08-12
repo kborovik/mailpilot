@@ -268,7 +268,7 @@ T254|x|impl §V.160(+) + §V.152(∆) + §I — enrollment list --disposition; v
 T255|x|impl §V.107(∆) — task list|stats --workflow-id name|UUID via _resolve_workflow_id; help "name or ID"; UUID still works; not_found when missing; tests name+uuid+unknown; SKILL/help (#211)|V107,V133,V90,V4,I.cli
 T256|x|impl §V.107 — email list --workflow-id name|UUID via _resolve_workflow_id; help "name or ID"; UUID still works; not_found when missing; tests name+uuid+unknown; SKILL/help (#213)|V107,V154,V90,V4,I.cli
 T257|x|impl §V.161(+) — address-change auto-reply hard-stop: protocol/tool guidance + campaign-test scenario + fixture/test; note records new email when present; distinct from OOO auto_reply scenario (#212)|V161,V127,V123,B131
-T258|.|swap mailpilot-campaign-test default workflow → `/Users/kb/github/lab5-campaigns/campaigns/var-sales-coclose/workflows/var-sales-coclose.toml` — `_common.DEFAULT_WORKFLOW_FILE` + `.claude`/`.grok` SKILL.md defaults; `--workflow-file` override kept|V122
+T258|x|swap mailpilot-campaign-test default workflow → `/Users/kb/github/lab5-campaigns/campaigns/var-sales-coclose/workflows/var-sales-coclose.toml` — `_common.DEFAULT_WORKFLOW_FILE` + `.claude`/`.grok` SKILL.md defaults; `--workflow-file` override kept|V122
 
 ## §B BUGS
 
