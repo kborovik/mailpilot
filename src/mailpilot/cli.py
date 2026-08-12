@@ -3052,13 +3052,53 @@ def contact_list(
         "Default view and the agent prompt path omit meta."
     ),
 )
-def contact_view(contact_ref: str, include_meta: bool) -> None:
-    """Show a contact by email or ID with inlined notes (own + parent company)."""
-    from mailpilot.database import get_contact, initialize_database, load_contact_view
+@click.option(
+    "--timeline",
+    is_flag=True,
+    default=False,
+    help=(
+        "Include bounded dossier: enrollments (status, disposition, last/next "
+        "touch), recent emails, and recent activities. Default view is notes "
+        "only. Default 10 rows per section; use --limit (hard cap 50)."
+    ),
+)
+@click.option(
+    "--limit",
+    default=10,
+    show_default=True,
+    help="Max rows per --timeline section (enrollments, emails, activities). Hard cap 50.",
+)
+def contact_view(
+    contact_ref: str, include_meta: bool, timeline: bool, limit: int
+) -> None:
+    """Show a contact by email or ID with inlined notes (own + parent company).
+
+    Pass --timeline for a bounded dossier (enrollments + emails + activities).
+    Default path stays notes-only for agent prompt budget.
+    """
+    from mailpilot.database import (
+        get_contact,
+        initialize_database,
+        load_contact_timeline,
+        load_contact_view,
+    )
 
     connection = initialize_database(_database_url())
     try:
         contact_id = _resolve_contact_id(connection, contact_ref)
+        if timeline:
+            payload = load_contact_timeline(
+                connection, contact_id, limit=limit
+            )
+            if payload is None:
+                output_error(f"contact not found: {contact_ref}", "not_found")
+            if include_meta:
+                row = get_contact(connection, contact_id)
+                payload["verification_meta"] = (
+                    row.verification_meta if row is not None else None
+                )
+            output({"contact": payload})
+            return
         found = load_contact_view(connection, contact_id)
         if found is None:
             output_error(f"contact not found: {contact_ref}", "not_found")

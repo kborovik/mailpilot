@@ -6761,6 +6761,11 @@ def _load_notes_for_owner(
     return notes, total
 
 
+# §V.159: default / hard cap for contact view --timeline section sizes.
+_TIMELINE_DEFAULT_LIMIT = 10
+_TIMELINE_HARD_CAP = 50
+
+
 def load_contact_view(
     connection: psycopg.Connection[dict[str, Any]],
     contact_id: str,
@@ -6804,6 +6809,41 @@ def load_contact_view(
         company_notes=company_notes,
         company_notes_total=company_notes_total,
     )
+
+
+def load_contact_timeline(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact_id: str,
+    *,
+    limit: int = _TIMELINE_DEFAULT_LIMIT,
+) -> dict[str, Any] | None:
+    """Load contact view plus bounded enrollments/emails/activities (§V.159).
+
+    Returns ``None`` when the contact does not exist. Composes
+    ``load_contact_view`` with denser enrollment rows (status, disposition,
+    last/next touch), recent emails, and recent activities. Each list is
+    capped at ``limit`` (clamped to ``[_TIMELINE_DEFAULT_LIMIT range,
+    _TIMELINE_HARD_CAP]``). Disabled / do_not_contact contacts are loaded
+    normally (forensics). Does not rewrite Gmail bodies.
+
+    The bare ``load_contact_view`` path is unchanged — timeline keys only
+    appear on this opt-in loader.
+    """
+    view = load_contact_view(connection, contact_id)
+    if view is None:
+        return None
+    n = max(1, min(int(limit), _TIMELINE_HARD_CAP))
+    enrollments = list_enrollments_detailed(
+        connection, contact_id=contact_id, full=True, limit=n
+    )
+    emails = list_emails(connection, contact_id=contact_id, limit=n)
+    activities = list_activities(connection, contact_id=contact_id, limit=n)
+    payload = view.model_dump(mode="json")
+    payload["enrollments"] = [e.model_dump(mode="json") for e in enrollments]
+    payload["emails"] = [e.model_dump(mode="json") for e in emails]
+    payload["activities"] = [a.model_dump(mode="json") for a in activities]
+    payload["timeline_limit"] = n
+    return payload
 
 
 def load_company_view(

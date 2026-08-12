@@ -272,6 +272,21 @@ last=Drouin). Multi-word queries require every token to match at least one
 of those fields (AND), so partial noise does not flood results. Disabled
 contacts stay searchable for forensics.
 
+### Contact view timeline (dossier)
+
+```
+mailpilot contact view lead@example.com
+mailpilot contact view lead@example.com --timeline
+mailpilot contact view lead@example.com --timeline --limit 20
+```
+
+Default `contact view` returns notes only (agent prompt budget). `--timeline`
+adds a bounded dossier in one envelope: enrollments (status, disposition,
+last/next touch), recent emails, and recent activities. Default 10 rows per
+section; `--limit` raises the cap (hard max 50). Works for disabled /
+do_not_contact contacts (forensics). Timeline keys are absent without the
+flag.
+
 ### Contact verification meta (operator-only)
 
 Store Bouncer status, source, and other verification trails as structured

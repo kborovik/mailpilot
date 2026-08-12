@@ -4418,6 +4418,64 @@ def test_skill_documents_contact_verification_meta() -> None:
     assert "§T." not in body
 
 
+def test_contact_view_timeline(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.159: --timeline returns dossier keys; bare view omits them."""
+    contact = _make_contact()
+    dossier = {
+        "id": contact.id,
+        "email": contact.email,
+        "notes": [],
+        "notes_total": 0,
+        "company_notes": [],
+        "company_notes_total": 0,
+        "enrollments": [
+            {
+                "id": "enr-1",
+                "status": "active",
+                "disposition": "do_not_contact",
+                "last_touch": 1,
+                "next_touch": None,
+            }
+        ],
+        "emails": [{"id": "em-1", "subject": "Touch 1"}],
+        "activities": [{"id": "act-1", "type": "email_sent"}],
+        "timeline_limit": 10,
+        "created_at": contact.created_at.isoformat(),
+        "updated_at": contact.updated_at.isoformat(),
+    }
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.load_contact_timeline", return_value=dossier
+        ) as mock_tl,
+    ):
+        result = runner.invoke(
+            main, ["contact", "view", contact.id, "--timeline"]
+        )
+
+    assert result.exit_code == 0
+    mock_tl.assert_called_once_with(mock_connection, contact.id, limit=10)
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["contact"]["enrollments"]
+    assert data["contact"]["emails"]
+    assert data["contact"]["activities"]
+    assert data["contact"]["timeline_limit"] == 10
+
+
+def test_skill_documents_contact_timeline() -> None:
+    """§V.159: SKILL.md documents --timeline + bounds."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "--timeline" in body
+    assert "hard max 50" in body or "Hard max 50" in body or "hard cap 50" in body
+    assert "§V." not in body
+
+
 def test_contact_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),

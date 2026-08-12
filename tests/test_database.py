@@ -6953,6 +6953,126 @@ def test_contact_view_field_set_superset_of_base_and_summary() -> None:
     assert "verification_meta" not in view
 
 
+def test_load_contact_timeline_includes_sections(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.159: timeline dossier carries notes + enrollments + emails + activities."""
+    from mailpilot.database import (
+        create_email,
+        load_contact_timeline,
+        load_contact_view,
+        record_enrollment_outcome,
+    )
+
+    account = make_test_account(database_connection)
+    company = make_test_company(database_connection)
+    contact = make_test_contact(
+        database_connection, email="lead@acme.com", company_id=company.id
+    )
+    workflow = make_test_workflow(database_connection, account.id)
+    enrollment = make_test_enrollment(
+        database_connection, workflow.id, contact.id
+    )
+    record_enrollment_outcome(
+        database_connection,
+        enrollment.id,
+        "failed",
+        "left company",
+        disposition="do_not_contact",
+    )
+    outbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="Touch 1",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        status="sent",
+        sender=account.email,
+        recipients={"to": [contact.email]},
+        gmail_message_id="gmsg-out-timeline-1",
+    )
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Re: Touch 1",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        status="received",
+        sender=contact.email,
+        recipients={"to": [account.email]},
+        gmail_message_id="gmsg-in-timeline-1",
+    )
+    assert outbound is not None and inbound is not None
+    make_test_activity(
+        database_connection,
+        contact_id=contact.id,
+        activity_type="email_sent",
+        summary="sent touch 1",
+    )
+
+    bare = load_contact_view(database_connection, contact.id)
+    assert bare is not None
+    bare_dump = bare.model_dump()
+    assert "enrollments" not in bare_dump
+    assert "emails" not in bare_dump
+    assert "activities" not in bare_dump
+
+    dossier = load_contact_timeline(database_connection, contact.id)
+    assert dossier is not None
+    assert dossier["email"] == contact.email
+    assert "notes" in dossier
+    assert len(dossier["enrollments"]) == 1
+    assert dossier["enrollments"][0]["disposition"] == "do_not_contact"
+    assert {e["id"] for e in dossier["emails"]} >= {outbound.id, inbound.id}
+    assert len(dossier["activities"]) >= 1
+    assert dossier["timeline_limit"] == 10
+
+
+def test_load_contact_timeline_works_for_disabled(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.159: disabled / DNC contacts remain loadable for forensics."""
+    from mailpilot.database import load_contact_timeline
+
+    contact = make_test_contact(database_connection, email="gone@example.com")
+    disable_contact(database_connection, contact.id, "do not contact")
+    dossier = load_contact_timeline(database_connection, contact.id)
+    assert dossier is not None
+    assert dossier["disabled_reason"] is not None
+    assert dossier["enrollments"] == []
+    assert dossier["emails"] == []
+    assert dossier["activities"] == []
+
+
+def test_load_contact_timeline_respects_limit_cap(
+    database_connection: psycopg.Connection[dict[str, Any]],
+):
+    """§V.159: --limit clamps section size; hard cap 50."""
+    from mailpilot.database import create_email, load_contact_timeline
+
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection, email="cap@example.com")
+    for i in range(3):
+        create_email(
+            database_connection,
+            account_id=account.id,
+            direction="outbound",
+            subject=f"m{i}",
+            contact_id=contact.id,
+            status="sent",
+            gmail_message_id=f"gmsg-cap-{i}",
+        )
+    dossier = load_contact_timeline(database_connection, contact.id, limit=2)
+    assert dossier is not None
+    assert dossier["timeline_limit"] == 2
+    assert len(dossier["emails"]) == 2
+    over = load_contact_timeline(database_connection, contact.id, limit=999)
+    assert over is not None
+    assert over["timeline_limit"] == 50
+
+
 # -- _BASE template fragment carries §V.8 directive --------------------------
 
 
