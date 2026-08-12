@@ -5817,6 +5817,94 @@ def test_list_enrollments_detailed_full_execution_fields(
     assert row.disposition is None
 
 
+def test_workflow_readers_accept_t_label_touch_context(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.162 / §B.132: pending context.touch='T2' does not crash SQL readers.
+
+    ``2`` and ``\"T2\"`` both resolve to touch 2. Regression for the
+    InvalidTextRepresentation crash on workflow stats/report/status and
+    enrollment --full.
+    """
+    from mailpilot.database import get_workflow_report, get_workflow_status_health
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="outbound"
+    )
+    database_connection.execute(
+        "UPDATE workflow SET touches = 3, touch_interval_days = 3 WHERE id = %(id)s",
+        {"id": workflow.id},
+    )
+    database_connection.commit()
+
+    labeled = make_test_contact(database_connection, email="t2label@testcorp.com")
+    e_labeled = make_test_enrollment(database_connection, workflow.id, labeled.id)
+    create_task(
+        database_connection,
+        enrollment_id=e_labeled.id,
+        workflow_id=workflow.id,
+        contact_id=labeled.id,
+        description="OOO resume Touch 2",
+        scheduled_at="2099-01-01T00:00:00+00:00",
+        context={"touch": "T2", "reason": "ooo_pause"},
+    )
+
+    numeric = make_test_contact(database_connection, email="t2int@testcorp.com")
+    e_numeric = make_test_enrollment(database_connection, workflow.id, numeric.id)
+    create_task(
+        database_connection,
+        enrollment_id=e_numeric.id,
+        workflow_id=workflow.id,
+        contact_id=numeric.id,
+        description="Touch 2",
+        scheduled_at="2099-01-01T00:00:00+00:00",
+        context={"touch": 2},
+    )
+
+    garbage = make_test_contact(database_connection, email="tbad@testcorp.com")
+    e_garbage = make_test_enrollment(database_connection, workflow.id, garbage.id)
+    create_task(
+        database_connection,
+        enrollment_id=e_garbage.id,
+        workflow_id=workflow.id,
+        contact_id=garbage.id,
+        description="malformed touch",
+        scheduled_at="2099-01-01T00:00:00+00:00",
+        context={"touch": "oops"},
+    )
+
+    stats = get_workflow_stats(database_connection, workflow.id)
+    assert stats is not None
+    assert stats.touches["2"].pending == 2
+
+    rows = list_enrollments_detailed(
+        database_connection, workflow_id=workflow.id, full=True
+    )
+    by_email = {row.contact_email: row for row in rows}
+    assert by_email["t2label@testcorp.com"].next_touch == 2
+    assert by_email["t2int@testcorp.com"].next_touch == 2
+    assert by_email["tbad@testcorp.com"].next_touch is None
+
+    matched = list_enrollments_detailed(
+        database_connection, workflow_id=workflow.id, full=True, touch=2
+    )
+    assert {row.contact_email for row in matched} == {
+        "t2label@testcorp.com",
+        "t2int@testcorp.com",
+    }
+
+    report = get_workflow_report(database_connection, workflow.id)
+    assert report is not None
+    assert report.funnel.touches["2"].pending == 2
+    report_by_email = {row.contact_email: row for row in report.enrollments}
+    assert report_by_email["t2label@testcorp.com"].next_touch == 2
+
+    health = get_workflow_status_health(database_connection, workflow.id)
+    assert health is not None
+    assert health.workflow.name == workflow.name
+
+
 # -- list_active_outbound_enrollments_for_contact (§V.128) ---------------------
 
 

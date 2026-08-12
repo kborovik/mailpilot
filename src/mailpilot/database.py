@@ -79,6 +79,22 @@ from mailpilot.settings import SECRET_KEYS, Settings
 # Distribution name is mailpilot-crm; the import package stays mailpilot.
 _MAILPILOT_VERSION = _pkg_version("mailpilot-crm")
 
+
+def _sql_parse_touch(context_col: SQL) -> Composed:
+    """SQL that parses ``context.touch`` (2 / digit string / T<n>) to int; else NULL.
+
+    ``context_col`` is a caller-owned fragment such as ``t.context`` or
+    ``nt.context`` -- never user input. Replaces raw ``::int`` casts that
+    raise ``InvalidTextRepresentation`` on ``T2`` (§V.162 / §B.132).
+    """
+    return SQL(
+        "CASE "
+        "WHEN ({col}->>'touch') ~ '^[0-9]+$' THEN ({col}->>'touch')::int "
+        "WHEN ({col}->>'touch') ~ '^T[0-9]+$' "
+        "THEN substring({col}->>'touch' from 2)::int "
+        "ELSE NULL END"
+    ).format(col=context_col)
+
 _INLINE_NOTES_CAP = 10
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
@@ -2885,32 +2901,34 @@ def get_workflow_stats(
     configured_touches = workflow.touches
     if configured_touches is not None and configured_touches >= 1:
         touch_rows = connection.execute(
-            """\
-            WITH touch_nums AS (
-                SELECT generate_series(1, %(touches)s) AS touch
-            )
-            SELECT
-                tn.touch::text AS touch_key,
-                (
-                    SELECT COUNT(*)::int FROM enrollment e
-                    WHERE e.workflow_id = %(workflow_id)s
-                      AND (
-                          SELECT COUNT(*)::int FROM email
-                          WHERE email.workflow_id = e.workflow_id
-                            AND email.contact_id = e.contact_id
-                            AND email.direction = 'outbound'
-                            AND email.status = 'sent'
-                      ) >= tn.touch
-                ) AS sent,
-                (
-                    SELECT COUNT(*)::int FROM task t
-                    WHERE t.workflow_id = %(workflow_id)s
-                      AND t.status = 'pending'
-                      AND (t.context->>'touch')::int = tn.touch
-                ) AS pending
-            FROM touch_nums tn
-            ORDER BY tn.touch
-            """,
+            SQL(
+                """\
+                WITH touch_nums AS (
+                    SELECT generate_series(1, %(touches)s) AS touch
+                )
+                SELECT
+                    tn.touch::text AS touch_key,
+                    (
+                        SELECT COUNT(*)::int FROM enrollment e
+                        WHERE e.workflow_id = %(workflow_id)s
+                          AND (
+                              SELECT COUNT(*)::int FROM email
+                              WHERE email.workflow_id = e.workflow_id
+                                AND email.contact_id = e.contact_id
+                                AND email.direction = 'outbound'
+                                AND email.status = 'sent'
+                          ) >= tn.touch
+                    ) AS sent,
+                    (
+                        SELECT COUNT(*)::int FROM task t
+                        WHERE t.workflow_id = %(workflow_id)s
+                          AND t.status = 'pending'
+                          AND {touch} = tn.touch
+                    ) AS pending
+                FROM touch_nums tn
+                ORDER BY tn.touch
+                """
+            ).format(touch=_sql_parse_touch(SQL("t.context"))),
             {"workflow_id": workflow_id, "touches": configured_touches},
         ).fetchall()
         for tr in touch_rows:
@@ -4097,7 +4115,7 @@ def list_enrollments_detailed(  # noqa: C901, PLR0912
                 "EXISTS ("
                 "SELECT 1 FROM task t "
                 "WHERE t.enrollment_id = e.id AND t.status = 'pending' "
-                "AND (t.context->>'touch')::int = %(touch)s"
+                "AND {touch} = %(touch)s"
                 ") "
                 "OR ("
                 "NOT EXISTS ("
@@ -4112,7 +4130,7 @@ def list_enrollments_detailed(  # noqa: C901, PLR0912
                 ") = %(touch)s"
                 ")"
                 ")"
-            )
+            ).format(touch=_sql_parse_touch(SQL("t.context")))
         )
     where_clause = (
         SQL("WHERE ") + SQL(" AND ").join(where_parts) if where_parts else SQL("")
@@ -4149,10 +4167,9 @@ def list_enrollments_detailed(  # noqa: C901, PLR0912
             "AND em.direction = 'outbound' AND em.status = 'sent'"
             ") AS last_touch, "
             "nt.scheduled_at AS next_scheduled_at, "
-            "CASE WHEN nt.context ? 'touch' "
-            "THEN (nt.context->>'touch')::int ELSE NULL END AS next_touch, "
+            "{next_touch} AS next_touch, "
             "outcome.disposition AS disposition "
-        )
+        ).format(next_touch=_sql_parse_touch(SQL("nt.context")))
         from_joins = (
             SQL(
                 "FROM enrollment e "

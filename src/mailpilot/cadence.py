@@ -16,6 +16,7 @@ the call into ``advance_touch_cadence`` are wired by the compose-only touch path
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -28,6 +29,27 @@ _SATURDAY = 5
 _SUNDAY = 6
 
 _FIRST_TOUCH_TRIGGERS = ("enrollment_run", "enrollment_schedule")
+_TOUCH_NUMERIC = re.compile(r"^[0-9]+$")
+_TOUCH_LABEL = re.compile(r"^T[0-9]+$")
+
+
+def parse_touch_number(value: object) -> int | None:
+    """Parse ``context.touch`` to a 1-based int (§V.162).
+
+    Accepts a JSON number N, digit string ``n``, or label ``T<n>``.
+    Unparseable values (bool, empty, other labels) return ``None``.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if _TOUCH_NUMERIC.fullmatch(text):
+            return int(text)
+        if _TOUCH_LABEL.fullmatch(text):
+            return int(text[1:])
+    return None
 
 
 def resolve_touch_number(
@@ -44,7 +66,8 @@ def resolve_touch_number(
     stays on the tool loop.
 
     ``task_context['touch']`` wins over the trigger so a touch-N task drained as
-    the generic ``task`` trigger still resolves to N.
+    the generic ``task`` trigger still resolves to N. Values 2, ``2``, and
+    ``T2`` all resolve to 2 (§V.162).
 
     Args:
         task_context: The task row's JSON context, if any.
@@ -54,9 +77,9 @@ def resolve_touch_number(
         The 1-based touch number, or ``None`` for a tool-loop run.
     """
     if task_context is not None:
-        touch = task_context.get("touch")
-        if isinstance(touch, int):
-            return touch
+        parsed = parse_touch_number(task_context.get("touch"))
+        if parsed is not None:
+            return parsed
     if trigger in _FIRST_TOUCH_TRIGGERS:
         return 1
     return None

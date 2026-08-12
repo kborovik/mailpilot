@@ -19,6 +19,7 @@ from mailpilot import database
 from mailpilot.cadence import (
     advance_touch_cadence,
     next_touch_scheduled_at,
+    parse_touch_number,
     resolve_touch_number,
 )
 from mailpilot.database import create_workflow, update_workflow
@@ -52,8 +53,25 @@ def test_resolve_touch_number_tool_loop_triggers_return_none() -> None:
     assert resolve_touch_number(None, "task") is None
     assert resolve_touch_number({}, "email") is None
     assert resolve_touch_number(None, "manual") is None
-    # A non-int touch value is ignored (malformed context, not a touch run).
-    assert resolve_touch_number({"touch": "2"}, "task") is None
+    # Unparseable touch is ignored (malformed context, not a touch run).
+    assert resolve_touch_number({"touch": "oops"}, "task") is None
+
+
+def test_resolve_touch_number_parses_int_and_t_label() -> None:
+    """§V.162: JSON number 2, digit string, and T<n> all resolve to 2."""
+    assert resolve_touch_number({"touch": 2}, "task") == 2
+    assert resolve_touch_number({"touch": "2"}, "task") == 2
+    assert resolve_touch_number({"touch": "T2"}, "task") == 2
+
+
+def test_parse_touch_number_rejects_unparseable() -> None:
+    """§V.162: unparseable touch values return None, never raise."""
+    assert parse_touch_number(None) is None
+    assert parse_touch_number(True) is None
+    assert parse_touch_number("oops") is None
+    assert parse_touch_number("T") is None
+    assert parse_touch_number("") is None
+    assert parse_touch_number("T2a") is None
 
 
 # -- next_touch_scheduled_at: interval + weekend roll (§V.136) -----------------

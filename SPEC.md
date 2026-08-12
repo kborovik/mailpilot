@@ -270,7 +270,7 @@ T255|x|impl §V.107(∆) — task list|stats --workflow-id name|UUID via _resolv
 T256|x|impl §V.107 — email list --workflow-id name|UUID via _resolve_workflow_id; help "name or ID"; UUID still works; not_found when missing; tests name+uuid+unknown; SKILL/help (#213)|V107,V154,V90,V4,I.cli
 T257|x|impl §V.161(+) — address-change auto-reply hard-stop: protocol/tool guidance + campaign-test scenario + fixture/test; note records new email when present; distinct from OOO auto_reply scenario (#212)|V161,V127,V123,B131
 T258|x|swap mailpilot-campaign-test default workflow → `/Users/kb/github/lab5-campaigns/campaigns/var-sales-coclose/workflows/var-sales-coclose.toml` — `_common.DEFAULT_WORKFLOW_FILE` + `.claude`/`.grok` SKILL.md defaults; `--workflow-file` override kept|V122
-T259|.|impl §V.162(+) — SQL touch parse (stats + enrollment --full/--touch) + resolve_touch_number accept 2 and "T2"; new OOO-resume writes numeric; regression pending context.touch="T2"; workflow stats|report|status + enrollment --full JSON (#214)|V162,V132,V152,V136,V157,V153
+T259|x|impl §V.162(+) — SQL touch parse (stats + enrollment --full/--touch) + resolve_touch_number accept 2 and "T2"; new OOO-resume writes numeric; regression pending context.touch="T2"; workflow stats|report|status + enrollment --full JSON (#214)|V162,V132,V152,V136,V157,V153
 
 ## §B BUGS
 

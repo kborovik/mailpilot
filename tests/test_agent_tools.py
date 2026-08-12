@@ -574,6 +574,32 @@ def test_create_task_with_context_and_email(
     assert task.email_id == email.id
 
 
+def test_create_task_normalizes_t_label_touch_to_int(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.162: new OOO-resume writes numeric touch, not a T<n> label."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+
+    result = create_task(
+        connection=database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="Resume after OOO",
+        scheduled_at=(datetime.now(UTC) + timedelta(days=5)).isoformat(),
+        context={"touch": "T2", "reason": "ooo_pause", "return_date": "2026-08-17"},
+    )
+
+    task = get_task(database_connection, result["id"])
+    assert task is not None
+    assert task.context["touch"] == 2
+    assert task.context["reason"] == "ooo_pause"
+    assert task.context["return_date"] == "2026-08-17"
+
+
 def test_create_task_rejects_past_scheduled_at(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):

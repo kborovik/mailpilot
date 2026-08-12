@@ -33,6 +33,7 @@ from typing import Any
 import psycopg
 
 from mailpilot import database, email_ops
+from mailpilot.cadence import parse_touch_number
 from mailpilot.drive import DriveClient
 from mailpilot.models import Account
 from mailpilot.settings import Settings
@@ -218,6 +219,22 @@ def _reject_past_timestamp(value: str, *, field: str) -> dict[str, str] | None:
     return None
 
 
+def _normalize_touch_context(
+    context: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Coerce ``context.touch`` ``T<n>`` / digit-string to int (§V.162).
+
+    Existing malformed rows stay readable via SQL parse. New agent writes
+    (OOO-resume ``create_task``) persist a numeric touch.
+    """
+    if context is None or "touch" not in context:
+        return context
+    parsed = parse_touch_number(context["touch"])
+    if parsed is None or parsed == context["touch"]:
+        return context
+    return {**context, "touch": parsed}
+
+
 def create_task(  # noqa: PLR0913
     connection: psycopg.Connection[dict[str, Any]],
     enrollment_id: str,
@@ -257,7 +274,7 @@ def create_task(  # noqa: PLR0913
         contact_id=contact_id,
         description=description,
         scheduled_at=scheduled_at,
-        context=context,
+        context=_normalize_touch_context(context),
         email_id=email_id,
     )
     return {"id": task.id}
