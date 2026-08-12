@@ -263,7 +263,7 @@ T261|x|impl §V.164(+) — thread-bound inbound binds enrolled contact when From
 T262|x|`scripts/changelog` check/promote/notes + root CHANGELOG.md; `make release` empty-Unreleased hard-fail + promote; commit CHANGELOG w/ pyproject; offline tests|V62,I.pkg
 T263|x|`release.yml` GH notes from CHANGELOG version section via `scripts/changelog notes`; not sole `--generate-notes`; keep PyPI OIDC|V62,I.pkg,T262
 T264|x|README release path + CHANGELOG Unreleased duty for user-facing work|V62,T262
-T265|.|impl §V.165(+) — campaign-test + reply-test preflight block unless logfire_environment=development; skill step before account ensure; unit tests development pass / production fail; no mutate on fail|V165,B135,V52,V122,V104
+T265|x|impl §V.165(+) — campaign-test + reply-test preflight block unless logfire_environment=development; skill step before account ensure; unit tests development pass / production fail; no mutate on fail|V165,B135,V52,V122,V104
 
 ## §B BUGS
 

@@ -4,9 +4,10 @@ Validates the outbound workflow TOML (the agent definition under test),
 resolves the sender (outbound@lab5.ca) and the prospect mailbox
 (inbound@lab5.ca, which is also the prospect contact's address), confirms
 neither account is disabled, confirms Google credentials are configured (the
-live send needs them), and counts the real contacts available as Touch 1
-personalization grounding. Writes ``preflight.json`` (the single source of
-resolved state for later scripts) and exits non-zero on a blocking issue.
+live send needs them), requires ``logfire_environment == development`` (§V.165),
+and counts the real contacts available as Touch 1 personalization grounding.
+Writes ``preflight.json`` (the single source of resolved state for later
+scripts) and exits non-zero on a blocking issue.
 
 Usage:
     uv run python scripts/preflight.py --run-id <id> [--workflow-file <path>]
@@ -35,6 +36,23 @@ from _common import (
 )
 
 _REQUIRED_WORKFLOW_FIELDS = ("name", "template", "goal", "instructions")
+REQUIRED_LOGFIRE_ENVIRONMENT = "development"
+
+
+def _check_logfire_environment(
+    environment: object, result: dict[str, object], issues: list[str]
+) -> None:
+    """Block unless logfire_environment is development (§V.165)."""
+    result["logfire_environment"] = environment
+    ok = environment == REQUIRED_LOGFIRE_ENVIRONMENT
+    result["logfire_environment_ok"] = ok
+    if not ok:
+        issues.append(
+            f"logfire_environment={environment!r} "
+            f"(want {REQUIRED_LOGFIRE_ENVIRONMENT!r}); "
+            "live campaign-test runs only in development — restore DEV config "
+            "before any account create/update or send"
+        )
 
 
 def _resolve_workflow(
@@ -189,16 +207,19 @@ def _count_contacts(result: dict[str, object], issues: list[str]) -> None:
 
 
 def _check_settings(result: dict[str, object], issues: list[str]) -> None:
+    environment: object = None
     try:
         sys.path.insert(0, str(repo_root() / "src"))
         from mailpilot.settings import get_settings
 
         settings = get_settings()
         google_creds = bool(settings.google_application_credentials)
+        environment = settings.logfire_environment
     except Exception as exc:
         google_creds = False
         issues.append(f"could not load settings: {exc}")
     result["google_credentials_configured"] = google_creds
+    _check_logfire_environment(environment, result, issues)
     if not google_creds:
         issues.append(
             "google_application_credentials not set (live Gmail send cannot run)"
@@ -218,10 +239,11 @@ def main() -> int:
         "prospect_email": PROSPECT_EMAIL,
     }
 
-    _resolve_workflow(args.workflow_file, result, issues)
-    _resolve_accounts(result, issues)
-    _count_contacts(result, issues)
     _check_settings(result, issues)
+    if result.get("logfire_environment_ok") is True:
+        _resolve_workflow(args.workflow_file, result, issues)
+        _resolve_accounts(result, issues)
+        _count_contacts(result, issues)
 
     blocking = [i for i in issues if "WARNING" not in i]
     result["issues"] = issues

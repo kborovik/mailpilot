@@ -33,6 +33,8 @@ Every command runs from the **repo root** via `uv run python` / `uv run mailpilo
 - Never send to any other address. Never start `mailpilot run`.
 - Real contacts are grounding data only; their address is never a recipient.
 - Always run cleanup (step 10) before finishing, even on failure.
+- **DEV only:** `logfire_environment` must be `development`. Check before any
+  account create/update (step 0a). Any other value is a hard stop.
 
 ## Logfire real-time error watch (required when MCP available)
 
@@ -130,6 +132,15 @@ share shell state). Artifacts: `reports/campaign-test/<run_id>/` (git-ignored).
 ```bash
 uv run python .claude/skills/mailpilot-campaign-test/scripts/new_run_id.py
 ```
+
+### 0a. Confirm DEV environment
+
+```bash
+uv run mailpilot config get logfire_environment
+```
+
+Stop if `value` is not `development`. Do not create accounts, update identity,
+or send. Restore DEV `~/.mailpilot/config.json` and retry.
 
 ### 0b. Ensure test accounts exist
 
@@ -308,6 +319,7 @@ After FAIL:
 ## Prerequisites
 
 - Working DB (`mailpilot config get database_url`)
+- `logfire_environment` is `development` (step 0a; preflight also blocks)
 - `outbound@lab5.ca` + `inbound@lab5.ca` (step 0b creates if missing)
 - Outbound identity set (step 0c: display_name + signature; preflight enforces)
 - `google_application_credentials` configured

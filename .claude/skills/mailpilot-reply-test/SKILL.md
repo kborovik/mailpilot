@@ -59,6 +59,9 @@ the `mailpilot` console script, and the package are importable. Scripts live in
   `outbound@lab5.ca`, which has no active workflow, so routing marks it
   `skipped_no_workflows` (§V.76) and sends no second reply — that is what
   prevents a reply-loop.
+- **DEV only:** `logfire_environment` must be `development`. Check before
+  setup (step 0a). Preflight imports the demo workflow only after that gate
+  passes. Any other value is a hard stop.
 
 ## Model orchestration
 
@@ -85,6 +88,13 @@ Reuse the printed value (e.g. `2026-06-26-142305_746e35cd`) as a **literal**
 wherever `$RUN_ID` appears below — substitute the actual string into each command. Do not rely on a
 shell variable: separate tool calls do not share shell state. Artifacts go to
 `reports/reply-test/<run_id>/`.
+
+### 0a. Confirm DEV environment (orchestrator)
+```bash
+uv run mailpilot config get logfire_environment
+```
+Stop if `value` is not `development`. Do not run setup checks (preflight may
+import the demo workflow). Restore DEV `~/.mailpilot/config.json` and retry.
 
 ### 1. Setup checks — Sonnet sub-agent
 Have it run, in order, and report the result of each:
