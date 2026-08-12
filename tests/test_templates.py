@@ -382,6 +382,22 @@ def test_outbound_deferred_address_change_hard_stop_distinct_from_ooo() -> None:
     assert _SPEC_CITE.search(fragment) is None
 
 
+def test_outbound_deferred_retired_left_company_binds_enrolled() -> None:
+    """§V.164 / §B.134: retired / left-company auto-reply is do_not_contact.
+
+    Distinct from OOO noop. The From local-part alias must not be enrolled;
+    referral addresses stay in the note for campaign review.
+    """
+    fragment = templates_module._DEFERRED_TASK_TASK  # pyright: ignore[reportPrivateUsage]
+    assert "retired" in fragment
+    assert "left the company" in fragment
+    assert "local-part" in fragment
+    assert "never enroll" in fragment
+    assert "do_not_contact" in fragment
+    assert fragment.isascii()
+    assert _SPEC_CITE.search(fragment) is None
+
+
 @pytest.mark.parametrize(
     "trigger",
     ["task", "enrollment_run", "enrollment_schedule", "manual", "email"],

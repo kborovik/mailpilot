@@ -49,7 +49,7 @@ from mailpilot.database import (
     record_enrollment_outcome,
     update_email,
 )
-from mailpilot.models import Email
+from mailpilot.models import Contact, Email
 from mailpilot.operator_log import operator_event
 from mailpilot.settings import Settings
 
@@ -126,12 +126,27 @@ def route_email(
             persisted_route_method = (
                 route_method if route_method != "unrouted" else None
             )
+            # §V.164: inbound on an existing outbound thread binds the
+            # enrolled contact even when From: local-part differs. Rebind
+            # in the same UPDATE as the routing decision so _ensure_enrollment
+            # never sees the alias From.
+            bound = find_thread_enrolled_contact(
+                connection,
+                email.account_id,
+                gmail_thread_id=email.gmail_thread_id,
+                in_reply_to=email.in_reply_to,
+                references_header=email.references_header,
+            )
+            contact_update: dict[str, object] = {}
+            if bound is not None and email.contact_id != bound.id:
+                contact_update["contact_id"] = bound.id
             updated = update_email(
                 connection,
                 email.id,
                 workflow_id=workflow_id,
                 is_routed=True,
                 route_method=persisted_route_method,
+                **contact_update,
             )
             result = updated if updated is not None else email
 
@@ -287,6 +302,58 @@ def _try_thread_match(
     return matches[0].workflow_id
 
 
+def find_thread_enrolled_contact(
+    connection: psycopg.Connection[dict[str, Any]],
+    account_id: str,
+    *,
+    gmail_thread_id: str | None = None,
+    in_reply_to: str | None = None,
+    references_header: str | None = None,
+) -> Contact | None:
+    """Return the enrolled contact on an existing outbound thread (§V.164).
+
+    RFC Message-ID first (same order as §V.27), then Gmail thread. Only an
+    outbound parent with ``contact_id`` counts -- inbound-only threads keep
+    From-based resolution. Account-scoped so a shared thread id on another
+    mailbox cannot leak a contact bind.
+    """
+    referenced_ids = _unique_message_ids(in_reply_to, references_header)
+    rfc_parent: Email | None = None
+    if referenced_ids:
+        rfc_parent = find_email_by_rfc2822_message_id(
+            connection, account_id, referenced_ids
+        )
+
+    outbound: Email | None = None
+    if (
+        rfc_parent is not None
+        and rfc_parent.direction == "outbound"
+        and rfc_parent.contact_id is not None
+    ):
+        outbound = rfc_parent
+    if outbound is None:
+        thread_ids: list[str] = []
+        parent_thread = rfc_parent.gmail_thread_id if rfc_parent else None
+        for tid in (gmail_thread_id, parent_thread):
+            if tid and tid not in thread_ids:
+                thread_ids.append(tid)
+        candidates: list[Email] = []
+        for tid in thread_ids:
+            candidates.extend(
+                prior
+                for prior in get_emails_by_gmail_thread_id(connection, tid)
+                if prior.account_id == account_id
+                and prior.direction == "outbound"
+                and prior.contact_id is not None
+            )
+        if candidates:
+            candidates.sort(key=lambda e: e.created_at, reverse=True)
+            outbound = candidates[0]
+    if outbound is None or outbound.contact_id is None:
+        return None
+    return get_contact(connection, outbound.contact_id)
+
+
 def _try_rfc_message_id_match(
     connection: psycopg.Connection[dict[str, Any]],
     email: Email,
@@ -315,20 +382,12 @@ def _try_rfc_message_id_match(
     return parent.workflow_id
 
 
-def _collect_referenced_message_ids(email: Email) -> list[str]:
-    """Return message-ids cited by an inbound email's threading headers.
-
-    Combines the parent ``In-Reply-To`` value with every entry in the
-    whitespace-separated ``References`` chain. Duplicates are dropped
-    while preserving the order that the original headers used (parent
-    first, then ancestors). Returns an empty list when neither header
-    is populated.
-    """
+def _unique_message_ids(*raw_headers: str | None) -> list[str]:
+    """Dedupe whitespace-separated Message-ID tokens, parent first."""
     candidates: list[str] = []
-    if email.in_reply_to:
-        candidates.extend(email.in_reply_to.split())
-    if email.references_header:
-        candidates.extend(email.references_header.split())
+    for raw in raw_headers:
+        if raw:
+            candidates.extend(raw.split())
     seen: set[str] = set()
     unique: list[str] = []
     for raw in candidates:
@@ -338,6 +397,18 @@ def _collect_referenced_message_ids(email: Email) -> list[str]:
         seen.add(token)
         unique.append(token)
     return unique
+
+
+def _collect_referenced_message_ids(email: Email) -> list[str]:
+    """Return message-ids cited by an inbound email's threading headers.
+
+    Combines the parent ``In-Reply-To`` value with every entry in the
+    whitespace-separated ``References`` chain. Duplicates are dropped
+    while preserving the order that the original headers used (parent
+    first, then ancestors). Returns an empty list when neither header
+    is populated.
+    """
+    return _unique_message_ids(email.in_reply_to, email.references_header)
 
 
 def _try_classify(

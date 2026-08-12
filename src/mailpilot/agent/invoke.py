@@ -266,11 +266,13 @@ def _wrap_conclude_enrollment(  # pyright: ignore[reportUnusedFunction]
     writes a note. This is a terminal action that satisfies the send
     obligation, like noop.
 
-    Use do_not_contact for opt-out, wrong person, and address-change /
-    "update your records" / hard email-redirect auto-replies: stop touches
-    to the old address; put the redirect and the new email (when present)
-    in `note`; never enroll the new address. Out-of-office auto-replies
-    are not this path -- call noop instead.
+    Use do_not_contact for opt-out, wrong person, retired / left-the-company
+    auto-replies, and address-change / "update your records" / hard
+    email-redirect auto-replies: stop touches to the enrolled address even
+    if From uses a different local-part; put the redirect, referral
+    addresses, and the new email (when present) in `note`; never enroll
+    the From alias or any new address. Out-of-office auto-replies are not
+    this path -- call noop instead.
     """
     return agent_tools.conclude_enrollment(
         connection=ctx.deps.connection,

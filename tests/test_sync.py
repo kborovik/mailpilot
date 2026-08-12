@@ -16,19 +16,25 @@ from logfire.testing import CaptureLogfire
 from conftest import (
     make_test_account,
     make_test_contact,
+    make_test_enrollment,
     make_test_settings,
     make_test_workflow,
 )
 from mailpilot.database import (
+    activate_workflow,
     create_email,
+    create_task,
     delete_sync_status,
     get_contact_by_email,
     get_email,
     get_email_by_gmail_message_id,
+    get_enrollment,
     get_sync_status,
+    get_task,
     list_emails,
     update_account,
     update_sync_heartbeat,
+    update_workflow,
     upsert_sync_status,
 )
 from mailpilot.gmail import GmailClient
@@ -2585,3 +2591,154 @@ def test_sync_one_message_persists_route_method_predates_workflows(
     persisted = get_email(database_connection, email.id)
     assert persisted is not None
     assert persisted.route_method == "skipped_predates_workflows"
+
+
+# -- Thread-alias inbound bind (§V.164 / §B.134) --------------------------------
+
+_RETIRED_BODY = (
+    "Automatic reply: I have retired from the company. Please update your "
+    "records and contact Janice@example.com or Alec@example.com going forward."
+)
+_FAR_FUTURE = "2099-12-31T00:00:00Z"
+
+
+def _activate_outbound(
+    connection: psycopg.Connection[dict[str, Any]], workflow_id: str
+) -> None:
+    update_workflow(
+        connection,
+        workflow_id,
+        goal="Book a meeting",
+        instructions="Send the sequence",
+    )
+    activate_workflow(connection, workflow_id)
+
+
+def test_sync_account_thread_alias_from_binds_enrolled_contact(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.164: T1 to a@domain, auto-reply from afull@domain on the same thread.
+
+    Must bind email.contact_id to the enrolled contact, skip minting the
+    From alias, leave referral addresses as notes-only (not minted), and
+    cancel pending T2 on the original enrollment.
+    """
+    account = make_test_account(database_connection, email="sync-alias@example.com")
+    workflow = make_test_workflow(
+        database_connection,
+        account_id=account.id,
+        name="sync-thread-alias",
+        workflow_type="outbound",
+    )
+    _activate_outbound(database_connection, workflow.id)
+    enrolled = make_test_contact(database_connection, email="a@domain.example.com")
+    enrollment = make_test_enrollment(database_connection, workflow.id, enrolled.id)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="Touch 1",
+        gmail_thread_id="t-sync-alias",
+        contact_id=enrolled.id,
+        workflow_id=workflow.id,
+        status="sent",
+        is_routed=True,
+        rfc2822_message_id="<t1-sync-alias@mail>",
+    )
+    t2 = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=enrolled.id,
+        description="Touch 2 of 3",
+        scheduled_at=_FAR_FUTURE,
+        context={"touch": 2, "trigger": "followup"},
+    )
+    client, service = _make_mock_client(account.email)
+    _set_list_messages(service, [{"id": "m-alias", "threadId": "t-sync-alias"}])
+    _set_get_messages(
+        service,
+        [
+            _make_gmail_message(
+                "m-alias",
+                "t-sync-alias",
+                from_header="A Full <afull@domain.example.com>",
+                subject="Automatic reply: retired",
+                body=_RETIRED_BODY,
+                extra_headers=[
+                    {"name": "In-Reply-To", "value": "<t1-sync-alias@mail>"},
+                ],
+            )
+        ],
+    )
+
+    stored = sync_account(
+        database_connection, account, client, make_test_settings()
+    )
+
+    assert stored == 1
+    inbound = get_email_by_gmail_message_id(database_connection, "m-alias")
+    assert inbound is not None
+    assert inbound.contact_id == enrolled.id
+    assert get_contact_by_email(database_connection, "afull@domain.example.com") is None
+    assert get_contact_by_email(database_connection, "janice@example.com") is None
+    assert get_contact_by_email(database_connection, "alec@example.com") is None
+    assert get_enrollment(database_connection, workflow.id, enrolled.id) is not None
+    cancelled = get_task(database_connection, t2.id)
+    assert cancelled is not None
+    assert cancelled.status == "cancelled"
+
+
+def test_sync_account_rfc_alias_from_binds_across_rethread(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.164 / §V.27: In-Reply-To binds the enrolled contact when Gmail rethreads."""
+    account = make_test_account(database_connection, email="sync-rfc-alias@example.com")
+    workflow = make_test_workflow(
+        database_connection,
+        account_id=account.id,
+        name="sync-rfc-alias",
+        workflow_type="outbound",
+    )
+    _activate_outbound(database_connection, workflow.id)
+    enrolled = make_test_contact(database_connection, email="a@rfc-sync.example.com")
+    make_test_enrollment(database_connection, workflow.id, enrolled.id)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="Touch 1",
+        gmail_thread_id="t-sync-rfc-out",
+        contact_id=enrolled.id,
+        workflow_id=workflow.id,
+        status="sent",
+        is_routed=True,
+        rfc2822_message_id="<t1-sync-rfc@mail>",
+    )
+    client, service = _make_mock_client(account.email)
+    _set_list_messages(service, [{"id": "m-rfc-alias", "threadId": "t-sync-rfc-in"}])
+    _set_get_messages(
+        service,
+        [
+            _make_gmail_message(
+                "m-rfc-alias",
+                "t-sync-rfc-in",
+                from_header="A Full <afull@rfc-sync.example.com>",
+                subject="Re: Touch 1",
+                body=_RETIRED_BODY,
+                extra_headers=[
+                    {"name": "In-Reply-To", "value": "<t1-sync-rfc@mail>"},
+                ],
+            )
+        ],
+    )
+
+    stored = sync_account(
+        database_connection, account, client, make_test_settings()
+    )
+
+    assert stored == 1
+    inbound = get_email_by_gmail_message_id(database_connection, "m-rfc-alias")
+    assert inbound is not None
+    assert inbound.contact_id == enrolled.id
+    assert get_contact_by_email(database_connection, "afull@rfc-sync.example.com") is None

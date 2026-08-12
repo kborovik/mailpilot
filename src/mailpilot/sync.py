@@ -78,7 +78,7 @@ from mailpilot.gmail import (
 )
 from mailpilot.models import Account, Contact, Email, Meeting
 from mailpilot.operator_log import operator_event
-from mailpilot.routing import route_email
+from mailpilot.routing import find_thread_enrolled_contact, route_email
 from mailpilot.settings import Settings
 
 _HEARTBEAT_INTERVAL = 30  # seconds
@@ -849,7 +849,7 @@ def sync_account(
             # regardless of message count. Scales with unique senders, not
             # with mailbox size.
             contacts_by_email = _resolve_contacts_for_messages(
-                connection, fresh_messages
+                connection, account.id, fresh_messages
             )
             active_workflows = list_workflows(
                 connection, account_id=account.id, status="active"
@@ -911,6 +911,7 @@ def sync_account(
 
 def _resolve_contacts_for_messages(
     connection: psycopg.Connection[dict[str, Any]],
+    account_id: str,
     messages: list[dict[str, Any]],
 ) -> dict[str, Contact]:
     """Resolve every distinct sender in ``messages`` to a contact row.
@@ -921,11 +922,20 @@ def _resolve_contacts_for_messages(
     backfill pass to populate first/last names where the From header has
     them and the contact row does not. Round-trips scale with distinct
     senders, not with message count.
+
+    Senders whose inbound sits on an existing outbound thread (§V.164)
+    are not minted: the store path binds ``email.contact_id`` to the
+    enrolled contact instead of the From alias.
     """
     best_names = _aggregate_sender_names(messages)
     if not best_names:
         return {}
-    senders = list(best_names)
+    thread_bound_senders = _thread_bound_sender_emails(
+        connection, account_id, messages
+    )
+    senders = [
+        email for email in best_names if email.lower() not in thread_bound_senders
+    ]
     with logfire.span(
         "sync.account.resolve_contacts",
         distinct_sender_count=len(senders),
@@ -938,6 +948,30 @@ def _resolve_contacts_for_messages(
             contacts_by_email.update(create_contacts_bulk(connection, missing))
         _backfill_contact_names(connection, contacts_by_email, best_names)
         return contacts_by_email
+
+
+def _thread_bound_sender_emails(
+    connection: psycopg.Connection[dict[str, Any]],
+    account_id: str,
+    messages: list[dict[str, Any]],
+) -> set[str]:
+    """Lowercased From addresses that belong on an existing outbound thread."""
+    bound: set[str] = set()
+    for message in messages:
+        headers = get_message_headers(message)
+        sender_email, _, _ = parse_sender(headers.get("from", ""))
+        if not sender_email:
+            continue
+        contact = find_thread_enrolled_contact(
+            connection,
+            account_id,
+            gmail_thread_id=message.get("threadId"),
+            in_reply_to=headers.get("in-reply-to"),
+            references_header=headers.get("references"),
+        )
+        if contact is not None:
+            bound.add(sender_email.lower())
+    return bound
 
 
 def _aggregate_sender_names(
@@ -1092,11 +1126,19 @@ def _store_inbound_message(  # noqa: PLR0913
     """
     headers = get_message_headers(message)
     sender_email, first_name, last_name = parse_sender(headers.get("from", ""))
-    contact = contacts_by_email.get(sender_email)
+    thread_contact = find_thread_enrolled_contact(
+        connection,
+        account.id,
+        gmail_thread_id=message.get("threadId"),
+        in_reply_to=headers.get("in-reply-to"),
+        references_header=headers.get("references"),
+    )
+    sender_key = sender_email.lower() if sender_email else ""
+    contact = thread_contact or contacts_by_email.get(sender_key)
     if contact is None:
         # Fallback for senders not in the pre-fetched dict (e.g. empty From
         # header): resolve one-off so a single malformed message does not
-        # abort the whole sync.
+        # abort the whole sync. Thread-bound alias From never reaches here.
         contact = create_or_get_contact_by_email(
             connection,
             email=sender_email,

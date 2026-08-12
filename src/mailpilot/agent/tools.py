@@ -339,11 +339,13 @@ def conclude_enrollment(
         - ``meeting_booked`` -- records a completed outcome and writes a note
           (the "I booked" reply path, distinct from calendar detection).
         - ``do_not_contact`` -- records a failed outcome, sets a global block on
-          the contact, and writes a note. Use for opt-out, wrong person, and
-          address-change / "update your records" / hard email-redirect
-          auto-replies: stop touches to the old address; put the redirect and
-          the new email (when present) in the note; never enroll the new
-          address. Out-of-office auto-replies are NOT this path -- use noop.
+          the contact, and writes a note. Use for opt-out, wrong person, retired
+          / left-the-company auto-replies, and address-change / "update your
+          records" / hard email-redirect auto-replies: stop touches to the
+          enrolled address even if From uses a different local-part; put the
+          redirect, referral addresses, and the new email (when present) in the
+          note; never enroll the From alias or any new address. Out-of-office
+          auto-replies are NOT this path -- use noop.
         - ``contact_later`` -- records a failed outcome and schedules a
           re-enrollment first-touch task at ``reschedule_at`` (about three
           months out when omitted), then writes a note.

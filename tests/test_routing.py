@@ -22,6 +22,7 @@ from mailpilot.database import (
     create_email,
     create_task,
     get_contact,
+    get_contact_by_email,
     get_email,
     get_enrollment,
     get_latest_enrollment_outcome,
@@ -1556,3 +1557,170 @@ def test_route_email_persists_route_method_skipped_no_inbound_workflows(
     persisted = get_email(database_connection, new_email.id)
     assert persisted is not None
     assert persisted.route_method == "skipped_no_inbound_workflows"
+
+
+# -- Thread-alias inbound bind (§V.164 / §B.134) --------------------------------
+
+
+def test_route_email_thread_alias_from_binds_enrolled_contact(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.164: inbound on an outbound thread binds the enrolled contact.
+
+    Fixture: T1 to a@domain, reply from afull@domain on the same thread.
+    The From local-part alias must not stay bound or enrolled.
+    """
+    account = make_test_account(database_connection, email="alias-bind@example.com")
+    workflow = make_test_workflow(
+        database_connection,
+        account_id=account.id,
+        name="thread-alias-bind",
+        workflow_type="outbound",
+    )
+    enrolled = make_test_contact(database_connection, email="a@example.com")
+    alias = make_test_contact(database_connection, email="afull@example.com")
+    enrollment = make_test_enrollment(database_connection, workflow.id, enrolled.id)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="Touch 1",
+        gmail_thread_id="t-alias-bind",
+        contact_id=enrolled.id,
+        workflow_id=workflow.id,
+        status="sent",
+        is_routed=True,
+    )
+    t2 = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=enrolled.id,
+        description="Touch 2 of 3",
+        scheduled_at=_FAR_FUTURE,
+        context={"touch": 2, "trigger": "followup"},
+    )
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Automatic reply: retired",
+        body_text=(
+            "I have retired from the company. Please update your records "
+            "and reach Janice@example.com or Alec@example.com instead."
+        ),
+        gmail_thread_id="t-alias-bind",
+        contact_id=alias.id,
+        sender="afull@example.com",
+    )
+    assert inbound is not None
+
+    routed = route_email(
+        database_connection, inbound, "afull@example.com", make_test_settings()
+    )
+
+    assert routed.contact_id == enrolled.id
+    persisted = get_email(database_connection, inbound.id)
+    assert persisted is not None
+    assert persisted.contact_id == enrolled.id
+    assert get_enrollment(database_connection, workflow.id, alias.id) is None
+    still = get_enrollment(database_connection, workflow.id, enrolled.id)
+    assert still is not None
+    cancelled = get_task(database_connection, t2.id)
+    assert cancelled is not None
+    assert cancelled.status == "cancelled"
+    assert get_contact_by_email(database_connection, "janice@example.com") is None
+    assert get_contact_by_email(database_connection, "alec@example.com") is None
+
+
+def test_route_email_rfc_alias_from_binds_enrolled_contact(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.164 / §V.27: RFC In-Reply-To binds the enrolled contact across rethread."""
+    account = make_test_account(database_connection, email="alias-rfc@example.com")
+    workflow = make_test_workflow(
+        database_connection,
+        account_id=account.id,
+        name="thread-alias-rfc",
+        workflow_type="outbound",
+    )
+    enrolled = make_test_contact(database_connection, email="a@rfc.example.com")
+    alias = make_test_contact(database_connection, email="afull@rfc.example.com")
+    make_test_enrollment(database_connection, workflow.id, enrolled.id)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="Touch 1",
+        gmail_thread_id="t-alias-rfc-out",
+        contact_id=enrolled.id,
+        workflow_id=workflow.id,
+        status="sent",
+        is_routed=True,
+        rfc2822_message_id="<t1-alias-rfc@mail>",
+    )
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Re: Touch 1",
+        gmail_thread_id="t-alias-rfc-in",
+        contact_id=alias.id,
+        in_reply_to="<t1-alias-rfc@mail>",
+        sender="afull@rfc.example.com",
+    )
+    assert inbound is not None
+
+    routed = route_email(
+        database_connection,
+        inbound,
+        "afull@rfc.example.com",
+        make_test_settings(),
+    )
+
+    assert routed.contact_id == enrolled.id
+    assert routed.route_method == "rfc_message_id_match"
+    assert get_enrollment(database_connection, workflow.id, alias.id) is None
+
+
+def test_route_email_thread_alias_same_from_unchanged(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.164 vs §V.161: same-contact reply keeps the enrolled contact_id."""
+    account = make_test_account(database_connection, email="alias-same@example.com")
+    workflow = make_test_workflow(
+        database_connection,
+        account_id=account.id,
+        name="thread-alias-same",
+        workflow_type="outbound",
+    )
+    enrolled = make_test_contact(database_connection, email="a@same.example.com")
+    make_test_enrollment(database_connection, workflow.id, enrolled.id)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="Touch 1",
+        gmail_thread_id="t-alias-same",
+        contact_id=enrolled.id,
+        workflow_id=workflow.id,
+        status="sent",
+        is_routed=True,
+    )
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Re: Touch 1",
+        gmail_thread_id="t-alias-same",
+        contact_id=enrolled.id,
+        sender="a@same.example.com",
+    )
+    assert inbound is not None
+
+    routed = route_email(
+        database_connection, inbound, "a@same.example.com", make_test_settings()
+    )
+
+    assert routed.contact_id == enrolled.id
+    assert get_enrollment(database_connection, workflow.id, enrolled.id) is not None
