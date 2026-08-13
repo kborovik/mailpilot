@@ -78,26 +78,26 @@ V12: IDs minted client-side via _new_id() -> UUIDv7; enrollment addressed by sca
 V13: tag + note target = XOR — exactly one of {contact_id, company_id} set (schema CHECK)
 V14: activity append-only; sole hard-delete = `note remove` operator-only dual-mode (id | owner+`--yes`); no activity on delete — → .spec/check-extras.md §V14
 V15: enrollment.status in {active, disabled}; outcomes on activity timeline via record_enrollment_outcome — → .spec/check-extras.md §V15
-V16: race-safe create — UNIQUE-bearing create_X uses ON CONFLICT DO NOTHING -> None to race loser, exactly 1 row persists; bulk variants converge to shared ids; CLI surfaces duplicate_key envelope
+V16: race-safe create — ON CONFLICT DO NOTHING; race loser None; duplicate_key envelope — → .spec/check-extras.md §V16
 V17: activity targets >= 1 of {contact_id, company_id}, both allowed (multi-target); list_activities enforces same
 V18: schema drift = live structure diverged from `schema.sql` w/ no migration path (hash-mismatch primitive §V.19), distinct from `pending` (§V.108); tiered response per §V.109 — → .spec/check-extras.md §V18
 V19: schema hash = sha256 over normalized schema.sql (strip -- comments, collapse whitespace)
-V20: email.route_method NULL or in 7-value enum (schema CHECK, set per §I.cli); non-NULL -> is_routed=TRUE; NULL + is_routed=TRUE = pipeline ran, no match ("unrouted" = span-only label)
-V21: background loops wake on events not timers — wakeup_event set by Pub/Sub notify + pg NOTIFY task_pending (INSERT + retry-UPDATE triggers); run_interval tick = fallback only
+V20: email.route_method NULL or 7-value enum; non-NULL → is_routed; unrouted = span-only — → .spec/check-extras.md §V20
+V21: background loops wake on events not timers; run_interval tick = fallback only — → .spec/check-extras.md §V21
 V22: <= 1 routing.route_email span lifecycle per email_id — is_routed gate; History-API re-delivery + repeat sync never trigger second route pass; → .spec/check-extras.md §V22
 V23: task drain = bounded pool <= max_concurrent_tasks; atomic claim; each worker owns its connection + roots its own trace (trace_id 1:1 w/ agent.invoke) — → .spec/check-extras.md §V23
 V24: main loop never blocks on task futures — reaper collects on later ticks + emits task.drain
 V25: advisory locks 2-tier — coarse (workflow_id, contact_id) + task-scoped; acquired before agent.invoke span opens; contention -> reschedule w/o attempt_count bump — → .spec/check-extras.md §V25
 V26: agent.invoke span trigger attr in {enrollment_run, enrollment_schedule, task, email, manual} = caller path
 V27: routing order RFC message-id → thread → LLM classify; account-scoped; is_routed + distinct route_method — → .spec/check-extras.md §V27
-V28: task.enrollment_id NOT NULL; workflow_id + contact_id denorm retained for filters; enrollment guaranteed @ route time via _ensure_enrollment — ON CONFLICT once, enrollment_added activity on first insert only
+V28: task.enrollment_id NOT NULL; _ensure_enrollment ON CONFLICT once — → .spec/check-extras.md §V28
 V29: trigger email body inlined once under "New inbound email:"; excluded from email_history — no prompt duplicate
-V30: prompt framing follows trigger — first-reach-out (enrollment_run + enrollment_schedule byte-identical) vs deferred-task vs inbound; inbound email present -> email framing wins; no synthesized task_description
+V30: prompt framing follows trigger; inbound email present → email framing wins — → .spec/check-extras.md §V30
 V31: deferred branch direction-aware — outbound → terminal-outcome; inbound → reply-once; templates bind neither conclude nor create_task — → .spec/check-extras.md §V31
-V32: enrollment_schedule = distinct trigger label (observability split from enrollment_run); --scheduled-at -> pending first-touch task (email_id NULL), idempotent, rejected for inbound workflows
+V32: enrollment_schedule distinct trigger; --scheduled-at pending first-touch; inbound reject — → .spec/check-extras.md §V32
 V33: enrollment self-loop rejected — contact.email == workflow account email, case-insensitive
 V34: every Drive call carries Shared-Drive flags — corpora="allDrives", supportsAllDrives=True, includeItemsFromAllDrives=True
-V35: Drive KB isolation = per-account impersonation (DWD with_subject); account reads only files its identity can read; list/search filter mimeType text/markdown + trashed=false; content decoded UTF-8 errors=replace
+V35: Drive KB isolation = per-account DWD; markdown + trashed=false; UTF-8 replace — → .spec/check-extras.md §V35
 V37: auth = service account + domain-wide delegation; file creds -> with_subject(email); ADC -> iam.Signer credentials w/ subject=email; no OAuth user login
 V38: Drive tools sequential=True; transport faults → structured drive_unavailable dict, never bare raise — → .spec/check-extras.md §V38
 V39: agent tool failure -> error dict {error, message}, never exception to agent; agent re-drafts via tool-error path
@@ -112,33 +112,33 @@ V48: provider transport timeout = 240s terminal (Anthropic HTTP + xAI `XaiProvid
 V49: bounded auto-retry — 4 attempts, execute_task per-task classification, manual retry = failed/cancelled only — retry matrix → .spec/check-extras.md §V49
 V51: every logfire.exception site reachable from `mailpilot run` ! paired operator_event("error", source=..., message=...); contract test sweeps run-reachable modules; → .spec/check-extras.md §V51
 V52: logfire.configure(environment=settings.logfire_environment) -> spans carry deployment_environment; cloud queries filter by env
-V53: agent tool spans come from logfire.instrument_pydantic_ai() (gen_ai.tool.name attr); no logfire.span inside agent tools; agents carry explicit names mailpilot.classifier + mailpilot.workflow
+V53: agent tool spans from instrument_pydantic_ai; no logfire.span in tools — → .spec/check-extras.md §V53
 V54: CLI mutation = logfire.span + operator_event; constraint code vocabulary; SystemExit absorbed at boundary — → .spec/check-extras.md §V54
-V55: `gen_ai.tool.call.result` span attr exempt from Logfire scrubbing; all other attrs scrubbed; scrubbing contract test drives a real instrumented tool call, never a fabricated span
+V55: `gen_ai.tool.call.result` scrub-exempt; contract test real tool call — → .spec/check-extras.md §V55
 V62: release pipeline — `make release <part>` sole path; Keep-a-Changelog Unreleased (empty hard-fail; promote → `## [vX.Y.Z] - date`); tag `v*` → release.yml notes from CHANGELOG + PyPI (OIDC); dist mailpilot-crm; module/CLI mailpilot — → .spec/check-extras.md §V62
 V67: persisted outbound in_reply_to + references_header mirror wire MIME headers exactly
 V69: tick classifying >= 1 inbound -> next tick forces full sweep + wakeup_event set
 V71: no format-rejection path — send_email|reply_email|compose body never format-reject; no reply_rejection_scope / cap / bypass
-V72: company.profile JSONB validated vs CompanyProfile — required {summary, products, target_customers, sources} non-empty; timezone optional, null on multi-zone; malformed -> validation_error
+V72: company.profile JSONB vs CompanyProfile; required non-empty; malformed → validation_error — → .spec/check-extras.md §V72
 V73: skill-body-embedded Workflow snippet runnable as authored — (a) zero free vars; (b) args-as-collection guard; (c) prose-matches-dispatch; (d) saved-workflow byte-identical — recipe → .spec/check-extras.md §V73
 V74: CSV ingestion uses RFC-4180 parser (csv module / csv.DictReader); redirect resolution = hop-agnostic curl -sL; scope .claude/skills/**; .claude/workflows/*.js excluded — recipe → .spec/check-extras.md §V74
 V75: sync incremental History API; 404 → full INBOX; first sync full; mid-batch 429|5xx backoff never drop; checkpoint past persisted only — → .spec/check-extras.md §V75
-V76: routing eligibility window — received_at older than 7 days, zero active workflows, or predates earliest active workflow -> is_routed=TRUE w/ matching skipped_* route_method, no LLM call
+V76: routing eligibility window — stale/no-workflow/predates → skipped_* no LLM — → .spec/check-extras.md §V76
 V77: outbound email row persists only after Gmail accepts send; orphan recovery via get_email_by_gmail_message_id on conflict — → .spec/check-extras.md §V77
 V78: outbound MIME headers (X-MailPilot-*) + thread_id threading via send path — → .spec/check-extras.md §V78
 V79: send/reply guards + account soft-disable lifecycle — → .spec/check-extras.md §V79
 V80: bounce/unsubscribe handling + contact disable; reason prefix in {bounced:, unsubscribed:} — → .spec/check-extras.md §V80
-V81: tool-loop agent run ! call >= 1 tool; noop(reason) = explicit no-op escape; zero tool calls -> AgentDidNotUseToolsError; compose-only structured-output runs exempt (§V.136) — validated output IS the action
+V81: tool-loop ! ≥1 tool; noop escape; compose-only exempt §V.136 — → .spec/check-extras.md §V81
 V82: agent email history scoped to (account_id, contact_id, workflow_id) — other workflows' mail excluded
 V83: execute_task pre-flight cancels stale tasks (inactive workflow/contact/enrollment; terminal or replied-after touch) w/ zero LLM calls (complements §V.123) — → .spec/check-extras.md §V83
 V84: pubsub notification callback acks unconditionally (decode error + missing emailAddress included); sets wakeup_event when supplied
-V85: settings precedence kwargs > process MAILPILOT_* env > cwd `.env` (MAILPILOT_* keys only, pydantic-settings dotenv) > ~/.mailpilot/config.json > defaults; missing `.env` = no-op; config file auto-created on first load
+V85: settings precedence kwargs > env > `.env` > config.json > defaults — → .spec/check-extras.md §V85
 V86: secret settings (`anthropic_api_key`, `xai_api_key`, `logfire_token`, `database_url`) redacted as '***' in telemetry; config.set event logs key + changed flag
 V87: cross-account isolation — thread + RFC message-id lookups scoped to account_id; agent read_email cross-account -> None (prompt-injection guard)
-V88: entity enums enforced by schema CHECK — workflow.template/type/status, enrollment.status, email.direction/status/route_method, task.status, activity.type; value sets authoritative in schema.sql
+V88: entity enums schema CHECK; value sets authoritative in schema.sql — → .spec/check-extras.md §V88
 V89: singleton rows — schema_metadata id=1, sync_status id='singleton'
 V90: natural-key UNIQUE constraints = canonical CLI identifiers; unknown key -> not_found — → .spec/check-extras.md §V90
-V92: email render = Markdown -> HTML inline styles only, no stylesheet; hard_wrap=True (soft newlines -> <br>); body container ! max-width (fluid); THEMES = {blue, green, orange, purple, red, slate}; None/unknown theme -> blue fallback
+V92: email render Markdown→HTML inline; hard_wrap; fluid; THEMES; unknown→blue — → .spec/check-extras.md §V92
 V93: operator_event -> stderr single line "HH:MM:SS event=NAME k=v ..."; newlines collapsed to space; whitespace values double-quoted, inner quotes escaped
 V94: CLI FK validation precedes mutation — referenced entity missing -> error envelope, no partial write
 V95: contact lead-metadata flat cols: title TEXT, email_confidence INT; NULL = high risk; --max-email-confidence includes NULL — → .spec/check-extras.md §V95
@@ -215,15 +215,8 @@ V167: company-create-oneshot — `company create` accepts §V.140 profile flags 
 
 ## §T TASKS
 
-## archived: §T.109..§T.214 → SPEC.archive.md (101 rows)
+## archived: §T.109..§T.221 → SPEC.archive.md (108 rows)
 id|status|task|cites
-T215|x|impl §V.137 ordered connect-hint map + logfire.error (no console Traceback); extend tests/test_database_telemetry.py mocked OperationalError strings; stack #186 role/database split|V137,B125
-T216|x|impl §V.47 provider-aware LLM — `llm_provider` default xai; xai_* settings + `_build_model` dispatch; `pydantic-ai-slim[anthropic,xai]`; Anthropic path opt-in; effort enum reject tests; default model ids|V47,V48,V86
-T217|x|impl §I company projection + §V.8(∆) + §V.116(∆) — CompanySummary/CompanyView tags[]; list --full profile.summary; disabled_reason always on list rows; tests + --skill docs (#188)|V8,V116,V114,V96,I.cli
-T218|x|impl §V.138(+) + §I — company list --status pipeline Enum; SQL/filter rules; compose --tag/--min-max-contacts/--include-disabled; tests per bucket; --skill/help docs (#189)|V138,V115,V114,V96,V116,I.cli
-T219|x|impl §V.139(+) + §I — company disable --stdin + contact create --stdin NDJSON batch; partial-success results envelope; exit policy; mixed ok/error tests; --skill recipes (#190)|V139,V4,V3,V16,V94,V107,I.cli
-T220|x|impl §V.140(+) + §I — company update --profile-file/--profile - full-replace + field-patch flags (summary/product/source/timezone/target-customers); merge vs replace; validation_error no partial; tests + --skill (#191)|V140,V72,V4,V54,I.cli
-T221|x|impl §V.141(+) + §V.116(∆) + §I — multi-owner tag add (repeatable --company-domain|--contact-email) + tag set replace; multi results envelope; tests multi-add + company view tags always; --skill docs (#192)|V141,V116,V8,V14,V4,V94,I.cli
 T222|x|impl §V.142(+) + §V.143(+) + §I — company domain aliases + merge into survivor; migration 011 company_alias; resolve on view/contact; create --alias; merge --move-contacts; export aliases[]; tests + --skill (#193)|V142,V143,V8,V90,V107,V114,V121,V16,V4,V94,I.cli
 T223|x|impl §V.144(+) + §V.8(∆) + §I — contact verification_meta JSONB; create|update --meta-json; view --include-meta; agent allowlist + context-builder tests; migration; --skill docs (#194)|V144,V8,V95,V135,V4,I.cli
 T224|x|impl §V.145(+) + §I — company export jsonl; list-family filters; --full profile; --out status envelope or stdout stream; shape tests; --skill (#195)|V145,V138,V116,V114,V96,V3,V4,I.cli

@@ -1072,3 +1072,124 @@ Trigger: `show queue` path changed.
 Trigger: `company create` path changed.
 - `rg '--tag|profile.file|profile_file' src/mailpilot/cli.py` -> create accepts profile + tag flags
 - `rg 'def create_company|company create' src/mailpilot/cli.py` -> create handler present
+
+## §V16 — race-safe create
+
+UNIQUE-bearing `create_X` uses `ON CONFLICT DO NOTHING` -> None to race loser, exactly 1 row persists; bulk variants converge to shared ids; CLI surfaces `duplicate_key` envelope
+
+Trigger: `src/mailpilot/database.py` create paths changed.
+- `rg 'ON CONFLICT DO NOTHING' src/mailpilot/database.py` -> race-safe create present
+- `rg 'duplicate_key' src/mailpilot/` -> CLI envelope code present
+
+## §V20 — email.route_method enum
+
+email.route_method NULL or in 7-value enum (schema CHECK, set per §I.cli); non-NULL -> is_routed=TRUE; NULL + is_routed=TRUE = pipeline ran, no match ("unrouted" = span-only label)
+
+Trigger: schema or routing persist changed.
+- `rg 'route_method' src/mailpilot/schema.sql src/mailpilot/cli.py` -> enum + projection present
+- `rg 'skipped_outside_window|rfc_message_id_match|thread_match' src/mailpilot/` -> 7-value set present
+
+## §V21 — event-wake loops
+
+background loops wake on events not timers — wakeup_event set by Pub/Sub notify + pg NOTIFY task_pending (INSERT + retry-UPDATE triggers); run_interval tick = fallback only
+
+Trigger: `src/mailpilot/sync.py` or `src/mailpilot/pubsub.py` changed.
+- `rg 'wakeup_event' src/mailpilot/` -> event wake present
+- `rg 'task_pending' src/mailpilot/` -> pg NOTIFY wake present
+
+## §V28 — task.enrollment_id + _ensure_enrollment
+
+task.enrollment_id NOT NULL; workflow_id + contact_id denorm retained for filters; enrollment guaranteed @ route time via `_ensure_enrollment` — ON CONFLICT once, enrollment_added activity on first insert only
+
+Trigger: `src/mailpilot/routing.py` or task schema changed.
+- `rg '_ensure_enrollment' src/mailpilot/routing.py` -> route-time ensure present
+- `rg 'enrollment_id' src/mailpilot/schema.sql` -> NOT NULL on task
+
+## §V30 — prompt framing follows trigger
+
+prompt framing follows trigger — first-reach-out (`enrollment_run` + `enrollment_schedule` byte-identical) vs deferred-task vs inbound; inbound email present -> email framing wins; no synthesized task_description
+
+Trigger: `src/mailpilot/agent/` prompt compose changed.
+- `rg 'enrollment_run|enrollment_schedule|task_description' src/mailpilot/agent/` -> trigger-keyed framing present
+- `rg 'New inbound email' src/mailpilot/agent/` -> inbound email frame present
+
+## §V32 — enrollment_schedule trigger
+
+enrollment_schedule = distinct trigger label (observability split from enrollment_run); `--scheduled-at` -> pending first-touch task (email_id NULL), idempotent, rejected for inbound workflows
+
+Trigger: enrollment schedule / first-touch path changed.
+- `rg 'enrollment_schedule' src/mailpilot/` -> distinct trigger label present
+- `rg 'scheduled.at|scheduled_at' src/mailpilot/cli.py` -> --scheduled-at first-touch present
+
+## §V35 — Drive KB isolation
+
+Drive KB isolation = per-account impersonation (DWD with_subject); account reads only files its identity can read; list/search filter mimeType text/markdown + trashed=false; content decoded UTF-8 errors=replace
+
+Trigger: `src/mailpilot/drive.py` changed.
+- `rg 'text/markdown|trashed' src/mailpilot/drive.py` -> list/search filters present
+- `rg 'errors=.?replace|utf-8' src/mailpilot/drive.py` -> UTF-8 replace decode
+
+## §V53 — agent tool span source
+
+agent tool spans come from `logfire.instrument_pydantic_ai()` (`gen_ai.tool.name` attr); no `logfire.span` inside agent tools; agents carry explicit names `mailpilot.classifier` + `mailpilot.workflow`
+
+Trigger: `src/mailpilot/cli.py` or `src/mailpilot/agent/` changed.
+- `rg 'instrument_pydantic_ai' src/mailpilot/` -> instrumentation site present
+- `rg 'mailpilot.classifier|mailpilot.workflow' src/mailpilot/` -> named agents present
+
+## §V55 — tool-result scrub exemption
+
+`gen_ai.tool.call.result` span attr exempt from Logfire scrubbing; all other attrs scrubbed; scrubbing contract test drives a real instrumented tool call, never a fabricated span
+
+Trigger: logfire scrubbing / agent tool instrumentation changed.
+- `rg 'gen_ai.tool.call.result' src/mailpilot/ tests/` -> exemption key present
+- `rg 'instrument_pydantic_ai|scrub' tests/test_logfire_scrubbing.py` -> real-call contract test
+
+## §V72 — CompanyProfile JSONB validation
+
+company.profile JSONB validated vs CompanyProfile — required {summary, products, target_customers, sources} non-empty; timezone optional, null on multi-zone; malformed -> validation_error
+
+Trigger: `src/mailpilot/models.py` or company profile write changed.
+- `rg 'class CompanyProfile' src/mailpilot/models.py` -> schema present
+- `rg 'CompanyProfile.model_validate' src/mailpilot/` -> validate-on-write present
+
+## §V76 — routing eligibility window
+
+routing eligibility window — received_at older than 7 days, zero active workflows, or predates earliest active workflow -> is_routed=TRUE w/ matching skipped_* route_method, no LLM call
+
+Trigger: `src/mailpilot/sync.py` or `src/mailpilot/routing.py` changed.
+- `rg 'skipped_outside_window|skipped_no_workflows|skipped_predates' src/mailpilot/` -> skipped_* methods present
+- `rg '7 days|timedelta.days.?=.?7' src/mailpilot/` -> 7-day window present
+
+## §V81 — tool-loop send-or-noop
+
+tool-loop agent run ! call >= 1 tool; `noop(reason)` = explicit no-op escape; zero tool calls -> AgentDidNotUseToolsError; compose-only structured-output runs exempt (§V.136) — validated output IS the action
+
+Trigger: `src/mailpilot/agent/invoke.py` changed.
+- `rg 'AgentDidNotUseToolsError' src/mailpilot/` -> zero-tool guard present
+- `rg 'def noop' src/mailpilot/agent/` -> noop escape present
+
+## §V85 — settings precedence
+
+settings precedence kwargs > process MAILPILOT_* env > cwd `.env` (MAILPILOT_* keys only, pydantic-settings dotenv) > ~/.mailpilot/config.json > defaults; missing `.env` = no-op; config file auto-created on first load
+
+Trigger: `src/mailpilot/settings.py` changed.
+- `rg 'env_file=.env|settings_customise_sources' src/mailpilot/settings.py` -> dotenv + source order present
+- `rg 'config.json' src/mailpilot/settings.py` -> config-file source present
+
+## §V88 — entity enum schema CHECK
+
+entity enums enforced by schema CHECK — workflow.template/type/status, enrollment.status, email.direction/status/route_method, task.status, activity.type; value sets authoritative in schema.sql
+
+Trigger: `src/mailpilot/schema.sql` changed.
+- `rg 'CHECK' src/mailpilot/schema.sql` -> enum CHECKs present
+- `rg 'route_method|enrollment.status|workflow.status' src/mailpilot/schema.sql` -> entity enum cols present
+
+## §V92 — email HTML render
+
+email render = Markdown -> HTML inline styles only, no stylesheet; hard_wrap=True (soft newlines -> <br>); body container ! max-width (fluid); THEMES = {blue, green, orange, purple, red, slate}; None/unknown theme -> blue fallback
+
+Trigger: `src/mailpilot/email_renderer.py` changed.
+- `rg 'hard_wrap' src/mailpilot/email_renderer.py` -> hard_wrap=True present
+- `rg 'THEMES' src/mailpilot/email_renderer.py` -> theme enum present
+- `rg 'max-width' src/mailpilot/email_renderer.py` -> zero body max-width

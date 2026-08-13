@@ -105,6 +105,13 @@ T211|x|impl §V.136 compose-only shape — trigger-keyed dispatch to output_type
 T212|x|impl §V.83(∆) — touch pre-flight guards: latest enrollment outcome terminal \| inbound from contact after prior touch -> cancel task, zero LLM calls; then strip reply-self-guard prose from workflow TOMLs (workflows repo, contingent)|V83,V123,V136
 T213|x|reconcile workflow TOMLs w/ T209-T211 landed code — strip retired-agent prose from workflows/*.toml; re-import; `workflow check` in_sync|V135,V136,V103
 T214|x|impl §V.85(∆) — re-enable dotenv source for cwd `.env` (`env_file=".env"` + `dotenv_settings` in customise_sources); process env beats .env; .env beats config.json; TDD|V85
+T215|x|impl §V.137 ordered connect-hint map + logfire.error (no console Traceback); extend tests/test_database_telemetry.py mocked OperationalError strings; stack #186 role/database split|V137,B125
+T216|x|impl §V.47 provider-aware LLM — `llm_provider` default xai; xai_* settings + `_build_model` dispatch; `pydantic-ai-slim[anthropic,xai]`; Anthropic path opt-in; effort enum reject tests; default model ids|V47,V48,V86
+T217|x|impl §I company projection + §V.8(∆) + §V.116(∆) — CompanySummary/CompanyView tags[]; list --full profile.summary; disabled_reason always on list rows; tests + --skill docs (#188)|V8,V116,V114,V96,I.cli
+T218|x|impl §V.138(+) + §I — company list --status pipeline Enum; SQL/filter rules; compose --tag/--min-max-contacts/--include-disabled; tests per bucket; --skill/help docs (#189)|V138,V115,V114,V96,V116,I.cli
+T219|x|impl §V.139(+) + §I — company disable --stdin + contact create --stdin NDJSON batch; partial-success results envelope; exit policy; mixed ok/error tests; --skill recipes (#190)|V139,V4,V3,V16,V94,V107,I.cli
+T220|x|impl §V.140(+) + §I — company update --profile-file/--profile - full-replace + field-patch flags (summary/product/source/timezone/target-customers); merge vs replace; validation_error no partial; tests + --skill (#191)|V140,V72,V4,V54,I.cli
+T221|x|impl §V.141(+) + §V.116(∆) + §I — multi-owner tag add (repeatable --company-domain|--contact-email) + tag set replace; multi results envelope; tests multi-add + company view tags always; --skill docs (#192)|V141,V116,V8,V14,V4,V94,I.cli
 ## §B BUGS
 
 id|date|cause|fix
