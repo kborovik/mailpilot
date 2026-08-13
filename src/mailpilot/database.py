@@ -53,6 +53,9 @@ from mailpilot.models import (
     MeetingView,
     Note,
     NoteSummary,
+    QueueReport,
+    QueueTaskRow,
+    QueueWorkflowRow,
     SchemaMetadata,
     SchemaStatus,
     SchemaVerdict,
@@ -3056,6 +3059,208 @@ def get_workflow_status_health(
         enrollments_never_sent=funnel.awaiting_first_touch,
         funnel_active=funnel.active,
     )
+
+
+def get_queue_report(
+    connection: psycopg.Connection[dict[str, Any]],
+    *,
+    detail: bool = False,
+    workflow_id: str | None = None,
+    tz: str = "UTC",
+    limit: int = 100,
+    overdue: bool = False,
+    now: datetime | None = None,
+) -> QueueReport:
+    """Build the ``show queue`` report (§V.166).
+
+    Workflow grain: one row per in-scope workflow (draft/active/paused),
+    sorted by next pending ``scheduled_at`` ascending (empty last) then name.
+    Task grain: pending tasks only, sorted by ``scheduled_at`` ascending
+    (does not change ``list_tasks`` DESC). ``--limit`` and ``--overdue``
+    apply to task grain only. No LLM, no write.
+    """
+    from zoneinfo import ZoneInfo
+
+    ZoneInfo(tz)  # raise ZoneInfoNotFoundError for the CLI to map
+    clock = now if now is not None else datetime.now(UTC)
+    if detail:
+        rows = _queue_task_rows(
+            connection,
+            workflow_id=workflow_id,
+            tz=tz,
+            limit=limit,
+            overdue=overdue,
+            now=clock,
+        )
+        return QueueReport(grain="task", tz=tz, rows=rows)
+    workflow_rows = _queue_workflow_rows(connection, workflow_id=workflow_id, tz=tz)
+    return QueueReport(grain="workflow", tz=tz, rows=workflow_rows)
+
+
+def _queue_workflow_rows(
+    connection: psycopg.Connection[dict[str, Any]],
+    *,
+    workflow_id: str | None,
+    tz: str,
+) -> list[QueueWorkflowRow]:
+    """Aggregate one row per workflow for the default queue grain."""
+    conditions: list[SQL] = []
+    params: dict[str, object] = {"tz": tz}
+    if workflow_id is not None:
+        conditions.append(SQL("w.id = %(workflow_id)s"))
+        params["workflow_id"] = workflow_id
+    where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
+    query = SQL(
+        """\
+        WITH enroll AS (
+            SELECT
+                e.workflow_id,
+                COUNT(*) FILTER (
+                    WHERE e.status = 'active' AND outcome.latest_outcome IS NULL
+                )::int AS active,
+                COUNT(*) FILTER (
+                    WHERE e.status = 'active'
+                      AND outcome.latest_outcome IS NULL
+                      AND NOT EXISTS (
+                          SELECT 1 FROM email
+                          WHERE email.workflow_id = e.workflow_id
+                            AND email.contact_id = e.contact_id
+                            AND email.direction = 'outbound'
+                            AND email.status = 'sent'
+                      )
+                )::int AS never_sent
+            FROM enrollment e
+            LEFT JOIN LATERAL (
+                SELECT
+                    CASE a.type
+                        WHEN 'enrollment_completed' THEN 'completed'
+                        WHEN 'enrollment_failed' THEN 'failed'
+                    END AS latest_outcome
+                FROM activity a
+                WHERE a.contact_id = e.contact_id
+                  AND a.workflow_id = e.workflow_id
+                  AND a.type IN ('enrollment_completed', 'enrollment_failed')
+                ORDER BY a.created_at DESC
+                LIMIT 1
+            ) outcome ON TRUE
+            GROUP BY e.workflow_id
+        ),
+        tasks AS (
+            SELECT
+                t.workflow_id,
+                COUNT(*) FILTER (WHERE t.status = 'pending')::int AS pending,
+                COUNT(*) FILTER (
+                    WHERE t.status = 'pending' AND t.scheduled_at < NOW()
+                )::int AS overdue,
+                COUNT(*) FILTER (
+                    WHERE t.status = 'pending'
+                      AND (t.scheduled_at AT TIME ZONE %(tz)s)::date
+                        = (NOW() AT TIME ZONE %(tz)s)::date
+                )::int AS due_today,
+                MIN(t.scheduled_at) FILTER (WHERE t.status = 'pending')
+                    AS next_at,
+                COUNT(*) FILTER (
+                    WHERE t.status = 'failed'
+                      AND t.completed_at >= NOW() - INTERVAL '24 hours'
+                )::int AS failed_24h
+            FROM task t
+            GROUP BY t.workflow_id
+        )
+        SELECT
+            w.name AS workflow,
+            w.status,
+            COALESCE(enroll.active, 0) AS active,
+            COALESCE(tasks.pending, 0) AS pending,
+            COALESCE(tasks.overdue, 0) AS overdue,
+            COALESCE(tasks.due_today, 0) AS due_today,
+            tasks.next_at,
+            COALESCE(tasks.failed_24h, 0) AS failed_24h,
+            COALESCE(enroll.never_sent, 0) AS never_sent
+        FROM workflow w
+        LEFT JOIN enroll ON enroll.workflow_id = w.id
+        LEFT JOIN tasks ON tasks.workflow_id = w.id
+        {}
+        ORDER BY tasks.next_at ASC NULLS LAST, w.name ASC
+        """
+    ).format(where)
+    rows = connection.execute(query, params).fetchall()
+    return [QueueWorkflowRow.model_validate(row) for row in rows]
+
+
+def _queue_task_rows(
+    connection: psycopg.Connection[dict[str, Any]],
+    *,
+    workflow_id: str | None,
+    tz: str,
+    limit: int,
+    overdue: bool,
+    now: datetime,
+) -> list[QueueTaskRow]:
+    """Pending-task grain, queue order (scheduled_at ASC)."""
+    from zoneinfo import ZoneInfo
+
+    from mailpilot.queue import format_queue_touch, format_queue_when
+
+    zone = ZoneInfo(tz)
+    conditions: list[SQL] = [SQL("t.status = 'pending'")]
+    params: dict[str, object] = {"limit": limit}
+    if workflow_id is not None:
+        conditions.append(SQL("t.workflow_id = %(workflow_id)s"))
+        params["workflow_id"] = workflow_id
+    if overdue:
+        conditions.append(SQL("t.scheduled_at < NOW()"))
+    where = SQL("WHERE ") + SQL(" AND ").join(conditions)
+    query = SQL(
+        """\
+        SELECT
+            t.id AS task_id,
+            t.enrollment_id,
+            t.scheduled_at,
+            COALESCE(
+                NULLIF(
+                    TRIM(BOTH FROM CONCAT_WS(' ', c.first_name, c.last_name)),
+                    ''
+                ),
+                c.email
+            ) AS contact,
+            c.email AS email,
+            COALESCE(co.domain, '') AS company,
+            w.name AS workflow,
+            t.context,
+            COALESCE(t.context->>'trigger', '') AS trigger,
+            t.status AS state,
+            t.attempt_count AS attempts
+        FROM task t
+        JOIN workflow w ON w.id = t.workflow_id
+        JOIN contact c ON c.id = t.contact_id
+        LEFT JOIN company co ON co.id = c.company_id
+        {}
+        ORDER BY t.scheduled_at ASC
+        LIMIT %(limit)s
+        """
+    ).format(where)
+    rows = connection.execute(query, params).fetchall()
+    result: list[QueueTaskRow] = []
+    for row in rows:
+        context = row["context"]
+        context_dict = context if isinstance(context, dict) else None
+        result.append(
+            QueueTaskRow(
+                when=format_queue_when(row["scheduled_at"], now=now, tz=zone),
+                scheduled_at=row["scheduled_at"],
+                contact=row["contact"],
+                email=row["email"],
+                company=row["company"],
+                workflow=row["workflow"],
+                touch=format_queue_touch(context_dict),
+                trigger=row["trigger"],
+                state=row["state"],
+                attempts=row["attempts"],
+                task_id=row["task_id"],
+                enrollment_id=row["enrollment_id"],
+            )
+        )
+    return result
 
 
 def _compute_workflow_wording_hash(

@@ -990,7 +990,97 @@ def status() -> None:
         connection.close()
 
 
-# -- Run command ---------------------------------------------------------------
+# -- Show report hub -----------------------------------------------------------
+
+
+@main.group()
+def show() -> None:
+    """Human report hub."""
+
+
+@show.command("queue")
+@click.option(
+    "--detail",
+    is_flag=True,
+    default=False,
+    help="Task-grain queue: one row per pending task.",
+)
+@scope_option("--workflow-id", "workflow_id", "Filter by workflow (name or ID).")
+@click.option(
+    "--tz",
+    "tz_name",
+    default="UTC",
+    show_default=True,
+    help="IANA timezone for due-today and relative when.",
+)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["json", "table"], case_sensitive=False),
+    default="table",
+    show_default=True,
+    help="Output format (default table).",
+)
+@limit_option
+@click.option(
+    "--overdue",
+    is_flag=True,
+    default=False,
+    help="Only pending tasks with scheduled_at in the past.",
+)
+def show_queue(
+    detail: bool,
+    workflow_id: str | None,
+    tz_name: str,
+    output_format: str,
+    limit: int,
+    overdue: bool,
+) -> None:
+    """Show the outbound queue as a human table (JSON opt-in).
+
+    Default grain is one row per workflow (draft, active, paused). --detail
+    switches to pending tasks in queue order. Empty prints (no rows).
+    """
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    from tabulate import tabulate
+
+    from mailpilot.database import get_queue_report, get_workflow, initialize_database
+    from mailpilot.queue import queue_table_cells, queue_table_headers
+
+    try:
+        ZoneInfo(tz_name)
+    except ZoneInfoNotFoundError, ValueError:
+        output_error(f"unknown timezone: {tz_name}", "validation_error")
+
+    connection = initialize_database(_database_url())
+    try:
+        resolved_workflow_id: str | None = None
+        if workflow_id is not None:
+            resolved_workflow_id = _resolve_workflow_id(connection, workflow_id)
+            if get_workflow(connection, resolved_workflow_id) is None:
+                output_error(f"workflow not found: {workflow_id}", "not_found")
+        report = get_queue_report(
+            connection,
+            detail=detail,
+            workflow_id=resolved_workflow_id,
+            tz=tz_name,
+            limit=limit if detail else 100,
+            overdue=overdue if detail else False,
+        )
+    finally:
+        connection.close()
+
+    dumped = report.model_dump(mode="json")
+    if output_format.lower() == "json":
+        output({"queue": dumped}, record_count=len(report.rows))
+        return
+    if not report.rows:
+        click.echo("(no rows)")
+        return
+    headers = queue_table_headers(detail=detail)
+    table_rows = [queue_table_cells(row, detail=detail) for row in dumped["rows"]]
+    click.echo(tabulate(table_rows, headers=headers, tablefmt="simple"))
 
 
 @main.command()

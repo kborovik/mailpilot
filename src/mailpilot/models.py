@@ -674,6 +674,55 @@ class WorkflowStatusHealth(BaseModel):
     funnel_active: int | None = None
 
 
+QueueGrain = Literal["workflow", "task"]
+
+
+class QueueWorkflowRow(BaseModel):
+    """One workflow-grain row for ``show queue`` (§V.166)."""
+
+    workflow: str
+    status: WorkflowStatus
+    active: int
+    pending: int
+    overdue: int
+    due_today: int
+    next_at: datetime | None
+    failed_24h: int
+    never_sent: int
+
+
+class QueueTaskRow(BaseModel):
+    """One pending-task row for ``show queue --detail`` (§V.166).
+
+    Table render hides ``task_id``, ``enrollment_id``, and ``scheduled_at``.
+    JSON keeps those plus relative ``when``.
+    """
+
+    when: str
+    scheduled_at: datetime
+    contact: str
+    email: str
+    company: str = ""
+    workflow: str
+    touch: str = ""
+    trigger: str = ""
+    state: str
+    attempts: int
+    task_id: str
+    enrollment_id: str
+
+
+class QueueReport(BaseModel):
+    """Operator queue report for ``show queue`` (§V.166).
+
+    Envelope key ``queue``. ``record_count`` is ``len(rows)``, not 1.
+    """
+
+    grain: QueueGrain
+    tz: str
+    rows: list[QueueWorkflowRow] | list[QueueTaskRow]
+
+
 ActivityType = Literal[
     "email_sent",
     "email_received",

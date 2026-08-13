@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `mailpilot show queue` operator report hub. Default ASCII table; pass
+  `--format json` for the `queue` envelope (`record_count` is the row
+  count). `--detail` lists pending tasks in queue order. `--workflow-id`
+  accepts a workflow name or UUID.
+
 ## [v0.23.0] - 2026-08-12
 
 ### Added

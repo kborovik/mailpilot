@@ -9,7 +9,7 @@ settings. Out of scope: database schema, internal agent / template wiring.
 
 ```
 mailpilot <noun> <verb> [args]
-mailpilot run | status | config get|set
+mailpilot run | status | config get|set | show queue
 mailpilot --version | --help | --completion <shell> | --debug
 ```
 
@@ -30,7 +30,8 @@ subverbs for reading and writing persistent configuration.
 ## JSON envelope
 
 Every noun-verb command writes a single JSON document to stdout. Operator
-diagnostics go to stderr and never to stdout.
+diagnostics go to stderr and never to stdout. `show queue` is the exception:
+it defaults to an ASCII table; pass `--format json` for the `queue` envelope.
 
 - `list`, `search`, `sync`, `export`, `import`:
   `{"<plural>": [...], "record_count": <int>, "ok": true}`
@@ -131,6 +132,23 @@ mailpilot workflow stats <NAME_OR_ID>
 mailpilot task list --workflow-id <NAME_OR_ID> --status pending
 mailpilot task stats --workflow-id <NAME_OR_ID>
 mailpilot email list --account-email <ACCOUNT_REF> --limit 50
+```
+
+### Queue report
+
+Human hub for "what is due?". Default is an ASCII table (not JSON). One row
+per workflow (draft, active, paused) with active enrollments, pending /
+overdue / due-today tasks, next send, failed in the last 24 hours, and
+never-sent enrollments. `--detail` switches to pending-task grain in queue
+order (oldest first). `--workflow-id` accepts name or UUID. Empty prints
+`(no rows)` and exits 0. Read-only; no LLM.
+
+```
+mailpilot show queue
+mailpilot show queue --workflow-id <NAME_OR_ID>
+mailpilot show queue --detail
+mailpilot show queue --detail --overdue --limit 50
+mailpilot show queue --format json --tz America/Toronto
 ```
 
 ### Campaign enrollment triage

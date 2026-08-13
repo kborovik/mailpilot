@@ -267,7 +267,7 @@ T262|x|`scripts/changelog` check/promote/notes + root CHANGELOG.md; `make releas
 T263|x|`release.yml` GH notes from CHANGELOG version section via `scripts/changelog notes`; not sole `--generate-notes`; keep PyPI OIDC|V62,I.pkg,T262
 T264|x|README release path + CHANGELOG Unreleased duty for user-facing work|V62,T262
 T265|x|impl §V.165(+) — campaign-test + reply-test preflight block unless logfire_environment=development; skill step before account ensure; unit tests development pass / production fail; no mutate on fail|V165,B135,V52,V122,V104
-T266|.|impl §V.166(+) + §I — `show queue` + `--detail`; tabulate simple; tests + SKILL|V166,V3,V4,V107,V111,V155,V156,V162,I.cli
+T266|x|impl §V.166(+) + §I — `show queue` + `--detail`; tabulate simple; tests + SKILL|V166,V3,V4,V107,V111,V155,V156,V162,I.cli
 
 ## §B BUGS
 

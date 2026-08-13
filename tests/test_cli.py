@@ -12705,3 +12705,176 @@ def test_email_list_requires_scope(
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["error"] == "missing_filter"
+
+
+# -- show queue (§V.166) -------------------------------------------------------
+
+
+def _make_queue_workflow_report() -> Any:
+    from mailpilot.models import QueueReport, QueueWorkflowRow
+
+    return QueueReport(
+        grain="workflow",
+        tz="UTC",
+        rows=[
+            QueueWorkflowRow(
+                workflow="alpha-outreach",
+                status="active",
+                active=2,
+                pending=1,
+                overdue=0,
+                due_today=1,
+                next_at=_NOW,
+                failed_24h=0,
+                never_sent=1,
+            )
+        ],
+    )
+
+
+def test_show_queue_default_is_table(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.166 / §V.3: default stdout is tabulate simple, not JSON."""
+    report = _make_queue_workflow_report()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_queue_report", return_value=report),
+    ):
+        result = runner.invoke(main, ["show", "queue"])
+    assert result.exit_code == 0
+    assert not result.output.lstrip().startswith("{")
+    assert "workflow" in result.output
+    assert "alpha-outreach" in result.output
+    assert "------" in result.output or "--------" in result.output
+
+
+def test_show_queue_json_envelope_record_count(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.4 / §V.166: json envelope key queue; record_count is len(rows)."""
+    report = _make_queue_workflow_report()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_queue_report", return_value=report),
+    ):
+        result = runner.invoke(main, ["show", "queue", "--format", "json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 1
+    assert data["queue"]["grain"] == "workflow"
+    assert data["queue"]["tz"] == "UTC"
+    assert data["queue"]["rows"][0]["workflow"] == "alpha-outreach"
+
+
+def test_show_queue_empty_prints_no_rows(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.166: empty table prints (no rows) and exits 0."""
+    from mailpilot.models import QueueReport
+
+    report = QueueReport(grain="workflow", tz="UTC", rows=[])
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_queue_report", return_value=report),
+    ):
+        result = runner.invoke(main, ["show", "queue"])
+    assert result.exit_code == 0
+    assert result.output.strip() == "(no rows)"
+
+
+def test_show_queue_detail_json_hides_no_ids(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.166: task-grain JSON includes task_id; table does not."""
+    from mailpilot.models import QueueReport, QueueTaskRow
+
+    report = QueueReport(
+        grain="task",
+        tz="UTC",
+        rows=[
+            QueueTaskRow(
+                when="in 3d",
+                scheduled_at=_NOW,
+                contact="Ada Lovelace",
+                email="ada@example.com",
+                company="example.com",
+                workflow="alpha-outreach",
+                touch="T2",
+                trigger="task",
+                state="pending",
+                attempts=0,
+                task_id="01234567-0000-7000-0000-000000000099",
+                enrollment_id="01234567-0000-7000-0000-000000000088",
+            )
+        ],
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_queue_report", return_value=report),
+    ):
+        table = runner.invoke(main, ["show", "queue", "--detail"])
+        js = runner.invoke(main, ["show", "queue", "--detail", "--format", "json"])
+    assert table.exit_code == 0
+    assert "01234567-0000-7000-0000-000000000099" not in table.output
+    assert "Ada Lovelace" in table.output
+    assert "T2" in table.output
+    data = json.loads(js.output)
+    assert data["queue"]["grain"] == "task"
+    assert data["queue"]["rows"][0]["task_id"].endswith("099")
+    assert data["record_count"] == 1
+
+
+def test_show_queue_unknown_workflow(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.107: unknown --workflow-id is not_found."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow_by_name", return_value=None),
+    ):
+        result = runner.invoke(
+            main, ["show", "queue", "--workflow-id", "missing-workflow"]
+        )
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+
+
+def test_show_queue_unknown_timezone(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.166: unknown --tz is validation_error JSON on stderr."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(main, ["show", "queue", "--tz", "Not/AZone"])
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert data["ok"] is False
+    assert "record_count" not in data
+
+
+def test_show_queue_rejects_csv(runner: CliRunner) -> None:
+    """§V.156: show group is json|table only."""
+    result = runner.invoke(main, ["show", "queue", "--format", "csv"])
+    assert result.exit_code != 0
+    assert "json" in result.output.lower() or "csv" in result.output.lower()
+
+
+def test_skill_documents_show_queue() -> None:
+    """§V.166: packaged SKILL.md documents show queue + --detail."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "show queue" in body
+    assert "--detail" in body
+    assert "ASCII table" in body

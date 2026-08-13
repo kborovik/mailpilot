@@ -8427,3 +8427,214 @@ def test_get_workflow_status_health(
     assert health.run_loop in {"ok", "stale", "stopped"}
     assert health.enrollments_never_sent == 1
     assert health.funnel_active == 1
+
+
+def test_get_queue_report_workflow_grain_includes_draft_and_sorts(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.166: every workflow status; next_at ASC empty last then name."""
+    from mailpilot.database import get_queue_report, update_contact
+
+    account = make_test_account(database_connection)
+    later = make_test_workflow(
+        database_connection, account_id=account.id, name="zeta-later"
+    )
+    empty = make_test_workflow(
+        database_connection, account_id=account.id, name="draft-empty"
+    )
+    sooner = make_test_workflow(
+        database_connection, account_id=account.id, name="alpha-sooner"
+    )
+    database_connection.execute(
+        "UPDATE workflow SET status = 'active' WHERE id = ANY(%(ids)s)",
+        {"ids": [later.id, sooner.id]},
+    )
+    database_connection.commit()
+    del empty  # present as draft with zeros; selected by the report
+
+    contact = make_test_contact(database_connection, email="q@testcorp.com")
+    update_contact(
+        database_connection, contact.id, first_name="Queue", last_name="Lead"
+    )
+    e_soon = make_test_enrollment(database_connection, sooner.id, contact.id)
+    e_late = make_test_enrollment(database_connection, later.id, contact.id)
+    create_task(
+        database_connection,
+        enrollment_id=e_late.id,
+        workflow_id=later.id,
+        contact_id=contact.id,
+        description="later",
+        scheduled_at="2099-06-01T00:00:00+00:00",
+        context={"touch": 1},
+    )
+    create_task(
+        database_connection,
+        enrollment_id=e_soon.id,
+        workflow_id=sooner.id,
+        contact_id=contact.id,
+        description="sooner",
+        scheduled_at="2099-01-01T00:00:00+00:00",
+        context={"touch": 1},
+    )
+
+    report = get_queue_report(database_connection)
+    names = [row.workflow for row in report.rows]
+    assert names == ["alpha-sooner", "zeta-later", "draft-empty"]
+    assert report.grain == "workflow"
+    draft = next(r for r in report.rows if r.workflow == "draft-empty")
+    assert draft.status == "draft"
+    assert draft.active == 0
+    assert draft.pending == 0
+    assert draft.next_at is None
+
+
+def test_get_queue_report_never_sent_and_failed_24h(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.166 / §V.155: never_sent + failed_24h reuse 24h SLA counters."""
+    from mailpilot.database import get_queue_report
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="queue-health"
+    )
+    awaiting = make_test_contact(database_connection, email="await@testcorp.com")
+    make_test_enrollment(database_connection, workflow.id, awaiting.id)
+    failed_c = make_test_contact(database_connection, email="fail@testcorp.com")
+    e_fail = make_test_enrollment(database_connection, workflow.id, failed_c.id)
+    failed = create_task(
+        database_connection,
+        enrollment_id=e_fail.id,
+        workflow_id=workflow.id,
+        contact_id=failed_c.id,
+        description="failed send",
+        scheduled_at="2020-01-01T00:00:00+00:00",
+        context={"touch": 1},
+    )
+    database_connection.execute(
+        """\
+        UPDATE task
+        SET status = 'failed', completed_at = NOW()
+        WHERE id = %(id)s
+        """,
+        {"id": failed.id},
+    )
+    database_connection.commit()
+
+    report = get_queue_report(database_connection, workflow_id=workflow.id)
+    assert len(report.rows) == 1
+    row = report.rows[0]
+    assert row.never_sent == 2
+    assert row.failed_24h == 1
+    assert row.active == 2
+
+
+def test_get_queue_report_task_grain_pending_asc_touch(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.166 / §V.162: pending only, ASC queue order, T2 parse; list_tasks DESC."""
+    from mailpilot.database import get_queue_report, update_contact
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="queue-tasks"
+    )
+    company = make_test_company(database_connection, domain="acme.com", name="Acme")
+    contact = make_test_contact(
+        database_connection, email="lead@acme.com", company_id=company.id
+    )
+    update_contact(
+        database_connection, contact.id, first_name="Lead", last_name="Person"
+    )
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="later T2",
+        scheduled_at="2099-06-01T00:00:00+00:00",
+        context={"touch": "T2", "trigger": "task"},
+    )
+    create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="sooner T1",
+        scheduled_at="2099-01-01T00:00:00+00:00",
+        context={"touch": 1, "trigger": "enrollment_schedule"},
+    )
+    done = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="completed",
+        scheduled_at="2020-01-01T00:00:00+00:00",
+        context={"touch": 1},
+    )
+    database_connection.execute(
+        "UPDATE task SET status = 'completed', completed_at = NOW() WHERE id = %(id)s",
+        {"id": done.id},
+    )
+    database_connection.commit()
+
+    report = get_queue_report(
+        database_connection,
+        detail=True,
+        now=datetime(2026, 8, 13, 12, 0, tzinfo=UTC),
+    )
+    assert report.grain == "task"
+    assert [row.touch for row in report.rows] == ["T1", "T2"]
+    assert report.rows[0].when == "in 137d" or report.rows[0].when.startswith("in ")
+    assert report.rows[0].contact == "Lead Person"
+    assert report.rows[0].email == "lead@acme.com"
+    assert report.rows[0].company == "acme.com"
+    assert report.rows[0].task_id
+    listed = list_tasks(database_connection, workflow_id=workflow.id)
+    assert [t.description for t in listed if t.status == "pending"] == [
+        "later T2",
+        "sooner T1",
+    ]
+
+
+def test_get_queue_report_overdue_and_limit(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.155 / §V.166: --overdue + --limit on task grain only."""
+    from mailpilot.database import get_queue_report
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="queue-overdue"
+    )
+    contact = make_test_contact(database_connection, email="odq@testcorp.com")
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="overdue",
+        scheduled_at="2020-01-01T00:00:00+00:00",
+        context={"touch": 1},
+    )
+    create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="future",
+        scheduled_at="2099-01-01T00:00:00+00:00",
+        context={"touch": 2},
+    )
+    overdue = get_queue_report(database_connection, detail=True, overdue=True)
+    assert len(overdue.rows) == 1
+    assert overdue.rows[0].when.startswith("overdue")
+    limited = get_queue_report(database_connection, detail=True, limit=1)
+    assert len(limited.rows) == 1
+    assert limited.rows[0].when.startswith("overdue")
+    all_pending = get_queue_report(database_connection, detail=True)
+    assert len(all_pending.rows) == 2
+    assert all_pending.rows[0].scheduled_at < all_pending.rows[1].scheduled_at
