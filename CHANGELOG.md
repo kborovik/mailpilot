@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `workflow check --account-email` plus `--file` restores that account's
+  full wording envelope, including orphaned rows.
+
 - `enrollment add --tag --dry-run` matches company tags or contact tags
   (union, unique by contact). Preview rows include title, company tags,
   contact tags, email confidence, and peer-workflow names, grouped by
@@ -22,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call. Combined with `--upsert`, a second identical call exits 0,
   updates the profile when flags are present, and does not duplicate
   tags. Invalid profile or undefined tag writes nothing.
+
+### Changed
+
+- `workflow check --file` always path-scopes to discovered TOML files
+  (file or directory; directories recurse `**/*.toml`). A directory is
+  no longer a full-catalog check. Other account workflows no longer
+  appear as orphaned.
 
 ## [v0.23.1] - 2026-08-13
 

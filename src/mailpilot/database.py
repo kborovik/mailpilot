@@ -3348,6 +3348,7 @@ def check_workflow_wording(
     connection: psycopg.Connection[dict[str, Any]],
     catalog: dict[str, dict[str, Any]],
     scope_to_catalog: bool = False,
+    account_id: str | None = None,
 ) -> WorkflowCheck:
     """Compare catalog defs against live rows by name and classify each (§V.134).
 
@@ -3356,8 +3357,8 @@ def check_workflow_wording(
     mirroring ``db check``: no stored column, both sides hashed on the fly. The
     cadence pair joined the hashed set per §V.136. The globally unique ``name``
     (§V.90)
-    is the join key, so the comparison spans every account's rows. Each name
-    lands in one of four states:
+    is the join key, so the comparison spans every account's rows unless
+    ``account_id`` scopes the live side. Each name lands in one of four states:
 
     - ``in_sync``: name on both sides, hashes equal.
     - ``out_of_sync``: name on both sides, hashes differ (re-import due).
@@ -3374,9 +3375,11 @@ def check_workflow_wording(
             reader applies last-def-wins on duplicate names per §V.134).
         scope_to_catalog: When ``True``, report only the catalog names -- a DB
             row with no def is dropped, never ``orphaned`` (§V.134). The CLI
-            sets this for a specific-file check so the report presents only the
-            inquired workflows; a directory check leaves it ``False`` so an
-            unaccounted DB row still surfaces as ``orphaned`` drift.
+            sets this for every ``--file``-only check (file or directory).
+        account_id: When set, hash only that account's live rows. The CLI
+            pairs this with ``scope_to_catalog=False`` so ``--account-email``
+            plus ``--file`` restores the account's full envelope (orphans
+            included).
 
     Returns:
         ``WorkflowCheck`` carrying one entry per name plus rollup counts.
@@ -3390,7 +3393,7 @@ def check_workflow_wording(
             touches=row.touches,
             touch_interval_days=row.touch_interval_days,
         )
-        for row in list_workflows_full(connection)
+        for row in list_workflows_full(connection, account_id)
     }
     catalog_hashes = {
         name: _catalog_wording_hash(entry) for name, entry in catalog.items()

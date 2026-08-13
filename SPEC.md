@@ -272,7 +272,7 @@ T266|x|impl §V.166(+) + §I — `show queue` + `--detail`; tabulate simple; tes
 T267|x|impl §V.167(+) + §V.140(∆) + §V.141(∆) + §V.147(∆) + §I — company create --upsert --profile-file --tag oneshot; one txn; has_profile+tags[]; second call exit 0 no tag dup; tests + SKILL (#217)|V167,V140,V141,V147,V72,V116,V94,V4,I.cli
 T268|x|impl §V.150(∆) + §I — enrollment add --tag dry-run company-or-contact tag union; enrich preview title/tags/peer_workflows/email_confidence; group-stable sort; tests sales-seat not 0; SKILL one-call recipe (#218)|V150,V33,V114,V116,V107,V4,I.cli
 T269|x|impl §V.152(∆)+§V.162(∆) — enrollment list --touch 1 matches emails_sent=0 + next_scheduled_at; project next_touch=1; enrollment_schedule writer emits touch:1; tests + SKILL (#218)|V152,V162,V32,V136,V4,I.cli
-T270|.|impl §V.134 + §I — workflow check --file always path-scope (file|dir); --account-email+--file = account full envelope (orphans); tests slug-dir-only vs other account workflows; SKILL one-call check recipe (#219)|V134,V103,I.cli
+T270|x|impl §V.134 + §I — workflow check --file always path-scope (file|dir); --account-email+--file = account full envelope (orphans); tests slug-dir-only vs other account workflows; SKILL one-call check recipe (#219)|V134,V103,I.cli
 T271|.|impl §V.103 + §I — workflow import --file recurse **/*.toml; per-row {action,in_sync,changed} preview; tests campaigns/<slug>/workflows/<slug>.toml + preview skips view; SKILL one-call import recipe (#220)|V103,V134,I.cli
 
 ## §B BUGS

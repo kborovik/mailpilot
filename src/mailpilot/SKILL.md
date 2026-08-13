@@ -599,9 +599,9 @@ mailpilot workflow import --account-email <ACCOUNT_REF> --file workflows/
 
 `workflow export` writes one `*.toml` per workflow into `--out-dir` and prints a
 JSON status envelope of the paths written (TOML never goes to stdout). `workflow
-import` takes a single `.toml` file or a directory of them (`*.toml` glob). Each
-file carries `name`, `template`, `goal`, `instructions`, `theme`, with
-`instructions` as a TOML multi-line literal string. Available templates:
+import` takes a single `.toml` file or a directory of them (`**/*.toml`
+recurse). Each file carries `name`, `template`, `goal`, `instructions`, `theme`,
+with `instructions` as a TOML multi-line literal string. Available templates:
 
 ```
 mailpilot template list
@@ -618,6 +618,25 @@ row rejected, or no `*.toml` found) fails loudly: `import_failed` error
 envelope on stderr with the per-row rows inlined, exit 1. A partial import
 stays `ok: true` (exit 0) with per-row errors inline, so check `rejected`
 before trusting a batch.
+
+### Check workflow wording (one call)
+
+`--file` lists only workflows whose TOML files sit under that path (file
+or directory; directories recurse). Other live workflows do not appear as
+orphaned. One call covers a campaigns tree -- do not run one `--file` per
+slug directory.
+
+```
+mailpilot workflow check --file campaigns/
+mailpilot workflow check --file campaigns/<slug>/workflows/
+```
+
+Add `--account-email` when you want that account's full envelope (orphaned
+rows included):
+
+```
+mailpilot workflow check --account-email <ACCOUNT_REF> --file campaigns/
+```
 
 ### Enroll a contact
 

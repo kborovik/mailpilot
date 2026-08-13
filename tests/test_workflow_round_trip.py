@@ -203,6 +203,89 @@ def test_workflow_export_import_round_trip_and_idempotence(
     mock_update.assert_not_called()
 
 
+def _write_minimal_workflow_toml(path: pathlib.Path, name: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f'name = "{name}"\ntemplate = "outbound-general"\n')
+
+
+def test_workflow_check_slug_dir_excludes_other_account_workflows(
+    runner: CliRunner,
+    database_connection: psycopg.Connection[dict[str, Any]],
+    tmp_path: pathlib.Path,
+) -> None:
+    """§V.134: --file campaigns/<slug>/workflows/ reports that slug only.
+
+    A second account's workflow and an unpassed same-account workflow stay
+    out of the path-scoped envelope. --account-email + --file restores
+    that account's orphans.
+    """
+    account_a = make_test_account(database_connection, email="slug-a@example.com")
+    account_b = make_test_account(database_connection, email="slug-b@example.com")
+    create_workflow(
+        database_connection,
+        name="slug-a",
+        template="outbound-general",
+        account_id=account_a.id,
+    )
+    create_workflow(
+        database_connection,
+        name="other-a",
+        template="outbound-general",
+        account_id=account_a.id,
+    )
+    create_workflow(
+        database_connection,
+        name="slug-b",
+        template="outbound-general",
+        account_id=account_b.id,
+    )
+
+    campaigns = tmp_path / "campaigns"
+    slug_a_dir = campaigns / "slug-a" / "workflows"
+    slug_b_dir = campaigns / "slug-b" / "workflows"
+    _write_minimal_workflow_toml(slug_a_dir / "slug-a.toml", "slug-a")
+    _write_minimal_workflow_toml(slug_b_dir / "slug-b.toml", "slug-b")
+
+    slug_only = _invoke(
+        runner,
+        database_connection,
+        ["workflow", "check", "--file", str(slug_a_dir)],
+    )
+    slug_names = {row["name"] for row in slug_only["workflow_check"]["workflows"]}
+    assert slug_names == {"slug-a"}
+    assert slug_only["workflow_check"]["orphaned"] == 0
+
+    tree = _invoke(
+        runner,
+        database_connection,
+        ["workflow", "check", "--file", str(campaigns)],
+    )
+    tree_names = {row["name"] for row in tree["workflow_check"]["workflows"]}
+    assert tree_names == {"slug-a", "slug-b"}
+    assert tree["workflow_check"]["orphaned"] == 0
+    assert "other-a" not in tree_names
+
+    full = _invoke(
+        runner,
+        database_connection,
+        [
+            "workflow",
+            "check",
+            "--file",
+            str(campaigns),
+            "--account-email",
+            account_a.email,
+        ],
+    )
+    full_by_name = {
+        row["name"]: row["state"] for row in full["workflow_check"]["workflows"]
+    }
+    assert full_by_name["slug-a"] == "in_sync"
+    assert full_by_name["other-a"] == "orphaned"
+    assert full_by_name["slug-b"] == "not_imported"
+    assert full["workflow_check"]["orphaned"] == 1
+
+
 def test_workflow_export_toml_excludes_denormalized_fields(
     runner: CliRunner,
     database_connection: psycopg.Connection[dict[str, Any]],

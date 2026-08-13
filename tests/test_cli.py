@@ -6641,10 +6641,10 @@ def test_workflow_check_multiple_files_scope_to_catalog(
     assert mock_check.call_args.kwargs["scope_to_catalog"] is True
 
 
-def test_workflow_check_directory_reports_orphaned(
+def test_workflow_check_directory_path_scopes(
     runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
 ) -> None:
-    """§V.134: a directory is the full catalog, so orphaned rows still surface."""
+    """§V.134: a directory --file path-scopes; orphaned rows are suppressed."""
     (tmp_path / "x.toml").write_text('name = "x"\ntemplate = "outbound-general"\n')
     report = WorkflowCheck(
         workflows=[], in_sync=0, out_of_sync=0, not_imported=0, orphaned=0
@@ -6658,7 +6658,92 @@ def test_workflow_check_directory_reports_orphaned(
     ):
         result = runner.invoke(main, ["workflow", "check", "--file", str(tmp_path)])
     assert result.exit_code == 0, result.output
+    assert mock_check.call_args.kwargs["scope_to_catalog"] is True
+    assert mock_check.call_args.kwargs["account_id"] is None
+
+
+def test_workflow_check_recurses_campaigns_tree(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    """§V.134/§V.103: --file campaigns/ discovers campaigns/<slug>/workflows/*.toml."""
+    for slug in ("slug-a", "slug-b"):
+        nested = tmp_path / "campaigns" / slug / "workflows"
+        nested.mkdir(parents=True)
+        (nested / f"{slug}.toml").write_text(
+            f'name = "{slug}"\ntemplate = "outbound-general"\n'
+        )
+    report = WorkflowCheck(
+        workflows=[], in_sync=0, out_of_sync=0, not_imported=0, orphaned=0
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.check_workflow_wording", return_value=report
+        ) as mock_check,
+    ):
+        result = runner.invoke(
+            main, ["workflow", "check", "--file", str(tmp_path / "campaigns")]
+        )
+    assert result.exit_code == 0, result.output
+    catalog_arg = mock_check.call_args.args[1]
+    assert set(catalog_arg) == {"slug-a", "slug-b"}
+    assert mock_check.call_args.kwargs["scope_to_catalog"] is True
+
+
+def test_workflow_check_account_email_restores_full_envelope(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    """§V.134: --account-email + --file keeps orphans for that account."""
+    (tmp_path / "x.toml").write_text('name = "x"\ntemplate = "outbound-general"\n')
+    account = _make_account()
+    report = WorkflowCheck(
+        workflows=[], in_sync=0, out_of_sync=0, not_imported=0, orphaned=0
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account_by_email", return_value=account),
+        patch(
+            "mailpilot.database.check_workflow_wording", return_value=report
+        ) as mock_check,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "check",
+                "--file",
+                str(tmp_path),
+                "--account-email",
+                account.email,
+            ],
+        )
+    assert result.exit_code == 0, result.output
     assert mock_check.call_args.kwargs["scope_to_catalog"] is False
+    assert mock_check.call_args.kwargs["account_id"] == account.id
+
+
+def test_workflow_check_help_account_email_no_spec_cite(runner: CliRunner) -> None:
+    """§V.134/§V.111: check --help names --account-email; no SPEC cites."""
+    result = runner.invoke(main, ["workflow", "check", "--help"])
+    assert result.exit_code == 0
+    assert "--account-email" in result.output
+    assert "orphaned" in result.output.lower()
+    assert "§V." not in result.output
+    assert "§T." not in result.output
+
+
+def test_skill_documents_workflow_check_one_call() -> None:
+    """§V.134: packaged SKILL.md documents one-call check of a campaigns tree."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "Check workflow wording (one call)" in body
+    assert "workflow check --file campaigns/" in body
+    assert "--account-email <ACCOUNT_REF> --file campaigns/" in body
+    assert "§V." not in body
+    assert "§T." not in body
 
 
 def test_workflow_search(runner: CliRunner, mock_connection: MagicMock) -> None:

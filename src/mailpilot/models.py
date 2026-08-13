@@ -368,10 +368,11 @@ class WorkflowCheck(BaseModel):
     """Aggregate wording-integrity report over the checked workflow names (§V.134).
 
     A read-only 2-way live SHA-256 comparison mirroring ``db check``: each
-    ``workflows/*.toml`` def is joined to the live rows by ``name`` and
-    classified into one of four states. A directory check spans every name on
-    either side; a specific-file check reports only the passed names, so
-    ``orphaned`` (a row with no def) appears in directory mode only (§V.134).
+    discovered ``*.toml`` def is joined to the live rows by ``name`` and
+    classified into one of four states. ``--file`` (file or directory) reports
+    only the discovered catalog names, so ``orphaned`` is suppressed; pass
+    ``--account-email`` with ``--file`` to restore that account's full
+    envelope, where a row with no def surfaces as ``orphaned`` (§V.134).
     ``ok:true`` is reported regardless of state -- the check informs, it is
     never a deploy gate. The envelope key is ``workflow_check`` (an aggregate,
     not a ``workflow`` entity row, cf §V.132).

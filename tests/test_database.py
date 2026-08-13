@@ -8597,11 +8597,46 @@ def test_check_workflow_wording_scope_to_catalog_suppresses_orphaned(
     assert by_name["in-catalog-flow"].state == "in_sync"
     assert by_name["new-flow"].state == "not_imported"
 
-    # Directory mode (the default) still surfaces the unpassed row as orphaned.
+    # Unscoped (CLI --account-email + --file) still surfaces the unpassed
+    # row as orphaned.
     unscoped = check_workflow_wording(database_connection, catalog)
     unscoped_by_name = {entry.name: entry for entry in unscoped.workflows}
     assert unscoped_by_name["other-db-flow"].state == "orphaned"
     assert unscoped.orphaned == 1
+
+
+def test_check_workflow_wording_account_id_filters_rows(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.134: account_id hashes only that account's rows; other accounts drop."""
+    account_a = make_test_account(database_connection, email="check-a@example.com")
+    account_b = make_test_account(database_connection, email="check-b@example.com")
+    create_workflow(
+        database_connection,
+        name="account-a-flow",
+        template="outbound-general",
+        account_id=account_a.id,
+    )
+    create_workflow(
+        database_connection,
+        name="account-b-flow",
+        template="outbound-general",
+        account_id=account_b.id,
+    )
+
+    catalog = {
+        "account-a-flow": _catalog_entry("account-a-flow", template="outbound-general"),
+    }
+    report = check_workflow_wording(
+        database_connection,
+        catalog,
+        scope_to_catalog=False,
+        account_id=account_a.id,
+    )
+    names = {entry.name: entry.state for entry in report.workflows}
+    assert names["account-a-flow"] == "in_sync"
+    assert "account-b-flow" not in names
+    assert report.orphaned == 0
 
 
 def test_get_workflow_report_matrix(

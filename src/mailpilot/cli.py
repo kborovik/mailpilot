@@ -4985,35 +4985,27 @@ def workflow_status_cmd(workflow_ref: str) -> None:
 
 def _read_workflow_check_catalog(
     files: tuple[str, ...],
-) -> tuple[dict[str, dict[str, Any]], bool]:
+) -> dict[str, dict[str, Any]]:
     """Read catalog ``*.toml`` defs into a ``{name -> entry}`` map (§V.134).
 
-    Reuses the import loader's TOML-only file-vs-dir dispatch (§V.103) but keys
-    each entry on its ``name`` field -- ``workflow check`` reads the field, not
-    the file stem (§V.134). ``--file`` is repeatable, so every passed source is
-    read and merged; on a duplicate ``name`` across files the last def wins
-    (§V.134). A malformed file or an entry missing ``name`` exits
-    ``validation_error`` per the closed error vocabulary (§V.54); an empty
-    ``files`` exits ``validation_error`` too.
+    Reuses the import loader's TOML-only file-vs-dir dispatch and ``**/*.toml``
+    recurse (§V.103) but keys each entry on its ``name`` field -- ``workflow
+    check`` reads the field, not the file stem (§V.134). ``--file`` is
+    repeatable, so every passed source is read and merged; on a duplicate
+    ``name`` across files the last def wins (§V.134). A malformed file or an
+    entry missing ``name`` exits ``validation_error`` per the closed error
+    vocabulary (§V.54); an empty ``files`` exits ``validation_error`` too.
 
     Returns:
-        The merged catalog and ``scope_to_catalog``: ``True`` when every source
-        is a specific ``.toml`` file (the report presents only the inquired
-        names), ``False`` when any source is a directory (a full-catalog check
-        that still surfaces unaccounted rows as ``orphaned``, §V.134).
+        The merged catalog keyed by each def's ``name`` field.
     """
-    import pathlib
-
     if not files:
         output_error(
             "no input: provide --file PATH (a '.toml' file or a directory)",
             "validation_error",
         )
     catalog: dict[str, dict[str, Any]] = {}
-    scope_to_catalog = True
     for file in files:
-        if pathlib.Path(file).is_dir():
-            scope_to_catalog = False
         entries, pre_errors = _load_workflow_import_entries(file)
         if pre_errors:
             output_error(str(pre_errors[0]["message"]), "validation_error")
@@ -5025,7 +5017,7 @@ def _read_workflow_check_catalog(
                     "validation_error",
                 )
             catalog[name] = entry
-    return catalog, scope_to_catalog
+    return catalog
 
 
 @workflow.command("check")
@@ -5036,12 +5028,19 @@ def _read_workflow_check_catalog(
     type=click.Path(exists=True),
     help=(
         "Catalog source (TOML only): a '.toml' file or a directory of '*.toml' "
-        "defs to check against the live workflow rows. Repeatable: pass --file "
-        "once per source. A specific-file check reports only the passed "
-        "workflows; a directory check also flags unaccounted rows as orphaned."
+        "defs (directories recurse). Repeatable. The report lists only "
+        "workflows found under --file."
     ),
 )
-def workflow_check(files: tuple[str, ...]) -> None:
+@click.option(
+    "--account-email",
+    default=None,
+    help=(
+        "Owning Gmail account (email or ID). With --file, report that "
+        "account's full envelope including orphaned rows."
+    ),
+)
+def workflow_check(files: tuple[str, ...], account_email: str | None) -> None:
     """Report wording drift between catalog defs and live workflow rows.
 
     A read-only 2-way live SHA-256 over the wording fields
@@ -5050,18 +5049,27 @@ def workflow_check(files: tuple[str, ...]) -> None:
     not_imported, orphaned) exits 0 with ``ok:true`` -- the check informs, it is
     never a deploy gate.
 
-    ``--file`` is repeatable. Passing specific ``.toml`` files scopes the report
-    to those workflows only; a live row you did not pass never appears as
-    orphaned. Pass a directory to check the full catalog, where a row with no
-    def surfaces as orphaned drift.
+    ``--file`` is repeatable and always path-scopes the report to discovered
+    catalog names (file or directory). A live row you did not pass never
+    appears as orphaned. Pass ``--account-email`` with ``--file`` to restore
+    that account's full envelope, where a row with no def surfaces as
+    orphaned drift.
     """
     from mailpilot.database import check_workflow_wording, initialize_database
 
-    catalog, scope_to_catalog = _read_workflow_check_catalog(files)
+    catalog = _read_workflow_check_catalog(files)
     connection = initialize_database(_database_url())
     try:
+        account_id = None
+        scope_to_catalog = True
+        if account_email is not None:
+            account_id = _resolve_account(connection, account_email).id
+            scope_to_catalog = False
         report = check_workflow_wording(
-            connection, catalog, scope_to_catalog=scope_to_catalog
+            connection,
+            catalog,
+            scope_to_catalog=scope_to_catalog,
+            account_id=account_id,
         )
     finally:
         connection.close()
@@ -5420,14 +5428,16 @@ def _parse_toml_catalog_dir(
     """Glob ``*.toml`` in a catalog dir; collect each as a (stem, entry) pair (§V.103).
 
     Each entry is paired with its file stem so import can enforce the
-    ``name == stem`` bijection (§V.103). A file that fails to parse becomes a
-    per-row error so the rest of the catalog still imports (§V.63).
+    ``name == stem`` bijection (§V.103). Recurses ``**/*.toml`` so a campaigns
+    tree (``campaigns/<slug>/workflows/<slug>.toml``) is one ``--file`` source.
+    A file that fails to parse becomes a per-row error so the rest of the
+    catalog still imports (§V.63).
     """
     import tomllib
 
     entries: list[tuple[str, dict[str, Any]]] = []
     pre_errors: list[dict[str, object]] = []
-    for toml_path in sorted(path.glob("*.toml")):
+    for toml_path in sorted(path.rglob("*.toml")):
         try:
             with toml_path.open("rb") as handle:
                 entries.append((toml_path.stem, tomllib.load(handle)))
@@ -5448,11 +5458,11 @@ def _load_workflow_import_entries(
     """Parse a ``workflow import`` source into (stem, entry) pairs + errors (§V.103).
 
     TOML-only per §V.103, §V.63 (no JSON, no stdin). Dispatch by shape: a
-    directory globs ``*.toml`` (catalog batch, per-file parse errors become
-    per-row pre-errors) and a single ``.toml`` file parses to one entry. Each
-    entry carries its file stem so import can enforce the ``name == stem``
-    bijection (§V.103). A missing ``--file`` or a non-TOML path exits via
-    ``output_error`` with ``validation_error``.
+    directory recurses ``**/*.toml`` (catalog batch, per-file parse errors
+    become per-row pre-errors) and a single ``.toml`` file parses to one
+    entry. Each entry carries its file stem so import can enforce the
+    ``name == stem`` bijection (§V.103). A missing ``--file`` or a non-TOML
+    path exits via ``output_error`` with ``validation_error``.
     """
     import pathlib
     import tomllib
