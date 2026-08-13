@@ -838,11 +838,11 @@ stdin NDJSON batch mutation — selected Mutate verbs accept `--stdin` (NDJSON, 
 
 ## §V140
 
-company profile write paths — `company update` full-replace via exclusive XOR of {`--profile-json`, `--profile-file <path>`, `--profile -` (stdin)}; all three validate vs CompanyProfile (§V.72) before write; field-patch flags {`--summary`, `--product` (multi), `--source` (multi), `--timezone`, `--target-customers`} merge into existing profile (null existing → patch builds base then validates full object); full-replace exclusive w/ any patch flag; invalid → `validation_error` no partial write; success envelope = full company w/ profile (ok:true, record_count=1); --skill recipes prefer file/stdin over inline JSON; help zero SPEC cites §V.111
+company profile write paths — `company create` + `company update` full-replace via exclusive XOR of {`--profile-json`, `--profile-file <path>`, `--profile -` (stdin)}; all three validate vs CompanyProfile (§V.72) before write; field-patch flags {`--summary`, `--product` (multi), `--source` (multi), `--timezone`, `--target-customers`} merge into existing profile (null existing → patch builds base then validates full object); full-replace exclusive w/ any patch flag; invalid → `validation_error` no partial write; create + `--tag` oneshot → §V.167; success envelope = full company w/ profile (ok:true, record_count=1); --skill recipes prefer file/stdin over inline JSON; help zero SPEC cites §V.111
 
 ## §V141
 
-multi-owner tag link + set-replace — `tag add --tag <name>` accepts repeatable `--company-domain` or repeatable `--contact-email`; owner-kind XOR per call (companies or contacts, not mixed; ≥1 owner); undefined tag → `not_found` never auto-create (§V.116); N>1 → results envelope §V.139 shape + exit 0 iff zero errors; N=1 → `tag_assignment` entity envelope; already-linked multi row → status ok skip; `tag set` owner XOR + `--tags` comma-list replaces owner's full assignment set one txn (add missing, remove extras, activity per change §V.14); empty `--tags` clears all; undefined name in set → `not_found` zero writes; company list|view `tags[]` always (§V.8/§V.116); help/--skill zero SPEC cites §V.111
+multi-owner tag link + set-replace — `tag add --tag <name>` accepts repeatable `--company-domain` or repeatable `--contact-email`; owner-kind XOR per call (companies or contacts, not mixed; ≥1 owner); undefined tag → `not_found` never auto-create (§V.116); N>1 → results envelope §V.139 shape + exit 0 iff zero errors; N=1 → `tag_assignment` entity envelope; already-linked multi row → status ok skip; `tag set` owner XOR + `--tags` comma-list replaces owner's full assignment set one txn (add missing, remove extras, activity per change §V.14); empty `--tags` clears all; undefined name in set → `not_found` zero writes; `company create --tag` (repeatable) additive same as tag add (§V.167); company list|view `tags[]` always (§V.8/§V.116); help/--skill zero SPEC cites §V.111
 
 ## §V142
 
@@ -866,7 +866,7 @@ company tracker dry-run import — `company import --from <path.jsonl> --dry-run
 
 ## §V147
 
-company/contact create upsert — `company create` / `contact create` accept `--upsert`; natural-key conflict w/o flag → existing error codes preserved (`duplicate_key` contact §V.16; `already_exists` company domain/alias §V.142); w/ `--upsert` → field-selective update only supplied flags (contact: title, email_confidence, company_domain if present; ? verification_meta if `--meta-json` present — never clobber omitted; company: name if provided; profile only when `--profile-*` or field-patch flags also passed per §V.140 — bare upsert never wipes profile; new `--alias` ? register missing only, never move ownership); success = final entity envelope + top-level bool `created` (true=insert, false=update) + record_count=1 exit 0; `contact create --stdin` line schema ? optional `upsert:true` same per-row semantics; --skill preferred agent path uses upsert; help zero SPEC cites §V.111
+company/contact create upsert — `company create` / `contact create` accept `--upsert`; natural-key conflict w/o flag → existing error codes preserved (`duplicate_key` contact §V.16; `already_exists` company domain/alias §V.142); w/ `--upsert` → field-selective update only supplied flags (contact: title, email_confidence, company_domain if present; ? verification_meta if `--meta-json` present — never clobber omitted; company: name if provided; profile only when `--profile-*` or field-patch flags also passed per §V.140 — bare upsert never wipes profile; new `--alias` ? register missing only, never move ownership); company create oneshot profile+tags → §V.167; success = final entity envelope + top-level bool `created` (true=insert, false=update) + record_count=1 exit 0; `contact create --stdin` line schema ? optional `upsert:true` same per-row semantics; --skill preferred agent path uses upsert; help zero SPEC cites §V.111
 
 ## §V148
 
@@ -1044,3 +1044,11 @@ Trigger: `show queue` path changed.
 - `rg 'show.*queue|def show_queue' src/mailpilot/cli.py` -> command present
 - `rg 'tabulate|tablefmt' src/mailpilot/` -> tabulate simple renderer
 - `rg 'QueueWorkflowRow|QueueTaskRow|QueueReport' src/mailpilot/models.py` -> read models
+
+## §V167 — company create oneshot profile+tags
+
+`company create` accepts §V.140 profile flags (`--profile-json` | `--profile-file` | `--profile -` XOR field-patch) + repeatable `--tag <name>` same invocation. One txn: company row + optional profile write + additive tag links. Invalid profile → `validation_error` zero writes. Undefined tag → `not_found` never auto-create (§V.116) zero writes. `--tag` additive (same as `tag add` §V.141); already-linked → skip no dup; not `tag set` replace. `--upsert` field-selective per §V.147: profile written only when profile flags passed; bare upsert never wipes profile; second identical call exit 0 + update profile if flags + no tag dups. Success envelope = company entity w/ `has_profile` true when profile flags passed + `tags[]` incl requested names + `created` flag + record_count=1. `--stdin` NDJSON batch of oneshot rows = follow-on (not this row). --skill preferred agent path uses oneshot; help zero SPEC cites §V.111
+
+Trigger: `company create` path changed.
+- `rg '--tag|profile.file|profile_file' src/mailpilot/cli.py` -> create accepts profile + tag flags
+- `rg 'def create_company|company create' src/mailpilot/cli.py` -> create handler present
