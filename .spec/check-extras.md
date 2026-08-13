@@ -1034,7 +1034,7 @@ Trigger: campaign-test or reply-test scripts/skills changed.
 
 `mailpilot show queue` = read-only operator report hub (not CRM noun). Default stdout ASCII table via `tabulate` `tablefmt=simple` (no Unicode box, no ANSI color, no TTY-variant bytes). `--format json|table` (default table). No csv/ndjson. Errors stay JSON stderr + exit 1. `--format json` envelope `{"queue":{grain,tz,rows},"ok":true,"record_count":N}` N=len(rows). `grain` in {`workflow`,`task`}. `--detail` -> task grain else workflow grain.
 
-Workflow grain: 1 row / workflow in scope incl draft|active|paused; omit `--workflow-id` = every workflow; columns {workflow, status, active, pending, overdue, due_today, next_at, failed_24h, never_sent}; sort next_at ASC (empty last) then name; no `--limit`.
+Workflow grain: 1 row / workflow in scope incl draft|active|paused; omit `--workflow-id` = every workflow; columns {workflow, status, active, pending, overdue, due_today, next_at, failed_24h, never_sent}; table `next_at` = YYYY-MM-DD in `--tz` (empty if none); JSON keeps ISO datetime; sort next_at ASC (empty last) then name; no `--limit`.
 
 Task grain: 1 row / pending task; sort scheduled_at ASC (queue order; ! change `list_tasks` DESC); table columns {when, contact, email, company, workflow, touch, trigger, state, attempts}; hide UUIDs on table; JSON ? include task_id + enrollment_id; `--limit` default 100; `--overdue` = pending + scheduled_at < now; stuck-without-task ! rows (stays §V.155 enrollment/report `--stuck`).
 

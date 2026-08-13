@@ -138,7 +138,8 @@ mailpilot email list --account-email <ACCOUNT_REF> --limit 50
 
 Human hub for "what is due?". Default is an ASCII table (not JSON). One row
 per workflow (draft, active, paused) with active enrollments, pending /
-overdue / due-today tasks, next send, failed in the last 24 hours, and
+overdue / due-today tasks, next send as a date (`YYYY-MM-DD` in `--tz`;
+JSON keeps the ISO datetime), failed in the last 24 hours, and
 never-sent enrollments. `--detail` switches to pending-task grain in queue
 order (oldest first). `--workflow-id` accepts name or UUID. Empty prints
 `(no rows)` and exits 0. Read-only; no LLM.

@@ -12748,6 +12748,8 @@ def test_show_queue_default_is_table(
     assert "workflow" in result.output
     assert "alpha-outreach" in result.output
     assert "------" in result.output or "--------" in result.output
+    assert "2024-01-01" in result.output
+    assert "T00:00:00" not in result.output
 
 
 def test_show_queue_json_envelope_record_count(
@@ -12768,6 +12770,7 @@ def test_show_queue_json_envelope_record_count(
     assert data["queue"]["grain"] == "workflow"
     assert data["queue"]["tz"] == "UTC"
     assert data["queue"]["rows"][0]["workflow"] == "alpha-outreach"
+    assert data["queue"]["rows"][0]["next_at"].startswith("2024-01-01T")
 
 
 def test_show_queue_empty_prints_no_rows(

@@ -6,7 +6,7 @@ Formatting only -- SQL lives in ``database.get_queue_report``. Kept out of
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from mailpilot.cadence import parse_touch_number
@@ -50,6 +50,19 @@ def format_queue_when(scheduled_at: datetime, *, now: datetime, tz: ZoneInfo) ->
     return f"in {_format_queue_delta(local_sched - local_now)}"
 
 
+def format_queue_next_at(next_at: datetime | str | None, *, tz: ZoneInfo) -> str:
+    """Render workflow-grain ``next_at`` as ``YYYY-MM-DD`` in ``tz``.
+
+    Empty when unset. JSON keeps the ISO datetime; table is date-only.
+    """
+    if next_at is None or next_at == "":
+        return ""
+    parsed = datetime.fromisoformat(next_at) if isinstance(next_at, str) else next_at
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(tz).date().isoformat()
+
+
 def format_queue_touch(context: dict[str, object] | None) -> str:
     """Render ``context.touch`` as ``T<n>`` or empty (§V.162)."""
     if context is None:
@@ -78,13 +91,20 @@ def queue_table_headers(*, detail: bool) -> tuple[str, ...]:
     return _QUEUE_WORKFLOW_HEADERS
 
 
-def queue_table_cells(row: dict[str, object], *, detail: bool) -> list[str]:
+def queue_table_cells(
+    row: dict[str, object], *, detail: bool, tz: ZoneInfo
+) -> list[str]:
     """Project one report row onto table cells (empty for nulls)."""
     headers = queue_table_headers(detail=detail)
     cells: list[str] = []
     for header in headers:
         value = row.get(header)
-        if value is None:
+        if header == "next_at":
+            if value is None or isinstance(value, (datetime, str)):
+                cells.append(format_queue_next_at(value, tz=tz))
+            else:
+                cells.append(str(value))
+        elif value is None:
             cells.append("")
         elif isinstance(value, datetime):
             cells.append(value.isoformat())

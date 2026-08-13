@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- `mailpilot show queue` table `next_at` is a date (`YYYY-MM-DD` in
+  `--tz`), not a full ISO timestamp. JSON still emits the ISO datetime.
+
 ### Added
 
 - `mailpilot show queue` operator report hub. Default ASCII table; pass

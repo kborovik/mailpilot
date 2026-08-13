@@ -1049,7 +1049,7 @@ def show_queue(
     from mailpilot.queue import queue_table_cells, queue_table_headers
 
     try:
-        ZoneInfo(tz_name)
+        zone = ZoneInfo(tz_name)
     except ZoneInfoNotFoundError, ValueError:
         output_error(f"unknown timezone: {tz_name}", "validation_error")
 
@@ -1079,7 +1079,9 @@ def show_queue(
         click.echo("(no rows)")
         return
     headers = queue_table_headers(detail=detail)
-    table_rows = [queue_table_cells(row, detail=detail) for row in dumped["rows"]]
+    table_rows = [
+        queue_table_cells(row, detail=detail, tz=zone) for row in dumped["rows"]
+    ]
     click.echo(tabulate(table_rows, headers=headers, tablefmt="simple"))
 
 

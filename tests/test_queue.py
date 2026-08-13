@@ -3,7 +3,12 @@
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
-from mailpilot.queue import format_queue_touch, format_queue_when
+from mailpilot.queue import (
+    format_queue_next_at,
+    format_queue_touch,
+    format_queue_when,
+    queue_table_cells,
+)
 
 
 def test_format_queue_when_overdue_days() -> None:
@@ -28,6 +33,38 @@ def test_format_queue_when_past_same_day_is_overdue() -> None:
     now = datetime(2026, 8, 13, 15, 0, tzinfo=UTC)
     scheduled = datetime(2026, 8, 13, 10, 0, tzinfo=UTC)
     assert format_queue_when(scheduled, now=now, tz=ZoneInfo("UTC")) == "overdue 5h"
+
+
+def test_format_queue_next_at_is_date_in_tz() -> None:
+    utc = ZoneInfo("UTC")
+    toronto = ZoneInfo("America/Toronto")
+    assert format_queue_next_at(None, tz=utc) == ""
+    assert (
+        format_queue_next_at(datetime(2026, 8, 13, 14, 30, tzinfo=UTC), tz=utc)
+        == "2026-08-13"
+    )
+    # 02:00 UTC is still the previous calendar day in Toronto (UTC-4 in August).
+    assert (
+        format_queue_next_at(datetime(2026, 8, 14, 2, 0, tzinfo=UTC), tz=toronto)
+        == "2026-08-13"
+    )
+    assert format_queue_next_at("2026-08-14T02:00:00+00:00", tz=toronto) == "2026-08-13"
+
+
+def test_queue_table_cells_next_at_is_date_only() -> None:
+    row = {
+        "workflow": "alpha-outreach",
+        "status": "active",
+        "active": 1,
+        "pending": 1,
+        "overdue": 0,
+        "due_today": 0,
+        "next_at": "2026-08-13T14:30:00+00:00",
+        "failed_24h": 0,
+        "never_sent": 0,
+    }
+    cells = queue_table_cells(row, detail=False, tz=ZoneInfo("UTC"))
+    assert cells[6] == "2026-08-13"
 
 
 def test_format_queue_touch_t_label_and_empty() -> None:
