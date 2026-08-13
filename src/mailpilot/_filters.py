@@ -225,27 +225,26 @@ def tag_filter_options(fn: Callable[..., Any]) -> Callable[..., Any]:
     """Add ``--tag`` / ``--no-tag`` membership filters (§V.116).
 
     ``--tag <name>`` keeps only owners carrying the named vocabulary tag;
-    ``--no-tag <name>`` keeps only owners NOT carrying it. ``--no-tag`` is
-    repeatable -- each occurrence is one negated-membership predicate and all
-    are intersected (carry NONE of the named tags), the one bounded exception
-    to intersection-only composition. It exists for memoization: the
-    lead-contacts discover set drops both ``no-contacts-found`` and
-    ``contacts-exhausted`` via ``--no-tag no-contacts-found --no-tag
-    contacts-exhausted`` (§V.96). Both flags resolve each name through the
-    vocabulary in the command body (an undefined name -> ``not_found``) and
-    compose as an intersection.
+    ``--no-tag <name>`` keeps only owners NOT carrying it. Both flags are
+    repeatable and AND-compose: every ``--tag`` must be present, and none of
+    the ``--no-tag`` names may be present. Repeatable ``--no-tag`` exists
+    for memoization: the lead-contacts discover set drops both
+    ``no-contacts-found`` and ``contacts-exhausted`` via ``--no-tag
+    no-contacts-found --no-tag contacts-exhausted`` (§V.96). Both flags
+    resolve each name through the vocabulary in the command body (an
+    undefined name -> ``not_found``).
     """
     fn = click.option(
         "--no-tag",
         "no_tag",
         multiple=True,
-        help="Keep only rows NOT carrying this tag (repeatable; name or ID).",
+        help="Keep only rows NOT carrying this tag (repeatable AND; name or ID).",
     )(fn)
     fn = click.option(
         "--tag",
         "tag",
-        default=None,
-        help="Keep only rows carrying this tag (name or ID).",
+        multiple=True,
+        help="Keep only rows carrying this tag (repeatable AND; name or ID).",
     )(fn)
     return fn
 

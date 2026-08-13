@@ -3912,6 +3912,51 @@ def test_list_companies_exclude_by_multiple_no_tags(
     assert c.domain == "c.test"
 
 
+def test_list_companies_filter_by_two_tags_and(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.116: repeatable --tag AND-composes (row must carry every tag)."""
+    both = make_test_company(database_connection, name="Both", domain="both.test")
+    sage_only = make_test_company(database_connection, name="Sage", domain="sage.test")
+    linkedin_only = make_test_company(
+        database_connection, name="Li", domain="linkedin.test"
+    )
+    sage = create_tag(database_connection, name="sage-var")
+    linkedin = create_tag(database_connection, name="linkedin-pass-done")
+    assert sage is not None
+    assert linkedin is not None
+    make_test_tag_assignment(database_connection, company_id=both.id, name="sage-var")
+    make_test_tag_assignment(
+        database_connection, company_id=both.id, name="linkedin-pass-done"
+    )
+    make_test_tag_assignment(
+        database_connection, company_id=sage_only.id, name="sage-var"
+    )
+    make_test_tag_assignment(
+        database_connection, company_id=linkedin_only.id, name="linkedin-pass-done"
+    )
+    rows = list_companies(database_connection, tag=[sage.id, linkedin.id])
+    assert [row.domain for row in rows] == ["both.test"]
+
+
+def test_list_contacts_filter_by_two_tags_and(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.116: contact list --tag AND-composes across two tags."""
+    both = make_test_contact(database_connection, email="both@acme.test")
+    vip_only = make_test_contact(database_connection, email="vip@acme.test")
+    make_test_contact(database_connection, email="none@acme.test")
+    vip = create_tag(database_connection, name="vip")
+    warm = create_tag(database_connection, name="warm")
+    assert vip is not None
+    assert warm is not None
+    make_test_tag_assignment(database_connection, contact_id=both.id, name="vip")
+    make_test_tag_assignment(database_connection, contact_id=both.id, name="warm")
+    make_test_tag_assignment(database_connection, contact_id=vip_only.id, name="vip")
+    rows = list_contacts(database_connection, tag=[vip.id, warm.id])
+    assert [row.email for row in rows] == ["both@acme.test"]
+
+
 def test_list_companies_tag_and_no_tag_intersection(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):

@@ -1316,6 +1316,46 @@ def get_company(
     return Company.model_validate(row)
 
 
+def _normalize_tag_ids(tag: str | Sequence[str] | None) -> list[str]:
+    """Coerce a single tag id or a sequence into a list (§V.116).
+
+    A bare ``str`` is one id (enrollment preview still passes ``tag.id``).
+    ``str`` is checked first so a string is not treated as a sequence of
+    characters.
+    """
+    if tag is None:
+        return []
+    if isinstance(tag, str):
+        return [tag]
+    return [item for item in tag if item]
+
+
+def _include_tags_conditions(
+    tags: Sequence[str] | None,
+    owner_column: str,
+    params: dict[str, object],
+) -> list[Composed]:
+    """Build one ``EXISTS`` predicate per required tag (§V.116).
+
+    ``--tag`` is repeatable and AND-composes: the row must carry every
+    named tag. Each tag becomes its own intersected ``EXISTS`` over
+    ``tag_assignment`` on ``owner_column``.
+    """
+    conditions: list[Composed] = []
+    if not tags:
+        return conditions
+    for index, tag_id in enumerate(tags):
+        param_name = f"include_tag_id_{index}"
+        conditions.append(
+            SQL(
+                "EXISTS (SELECT 1 FROM tag_assignment ta "
+                "WHERE ta.{} = c.id AND ta.tag_id = {})"
+            ).format(Identifier(owner_column), Placeholder(param_name))
+        )
+        params[param_name] = tag_id
+    return conditions
+
+
 def _exclude_tags_conditions(
     exclude_tags: Sequence[str] | None,
     owner_column: str,
@@ -1427,7 +1467,7 @@ def list_companies(
     max_contacts: int | None = None,
     min_contacts: int | None = None,
     include_disabled: bool = False,
-    tag: str | None = None,
+    tag: str | Sequence[str] | None = None,
     exclude_tags: Sequence[str] | None = None,
     full: bool = False,
     status: str | None = None,
@@ -1469,9 +1509,10 @@ def list_companies(
             into a closed range.
         include_disabled: When ``True``, includes disabled companies; the
             default (``False``) hides them (§V.114).
-        tag: When set (a resolved tag id), returns only companies carrying that
-            tag -- an Enum-family membership filter over ``tag_assignment``
-            (§V.116). Composes with ``exclude_tags`` as an intersection.
+        tag: When set (one resolved tag id or a sequence of ids), returns
+            only companies carrying every named tag -- AND-compose over
+            ``tag_assignment`` (§V.116). Composes with ``exclude_tags`` as
+            an intersection.
         exclude_tags: When set (resolved tag ids), returns only companies
             carrying NONE of the given tags -- one ``NOT EXISTS`` predicate per
             tag, all intersected (§V.116). The repeatable negated membership
@@ -1516,14 +1557,9 @@ def list_companies(
     if min_contacts is not None:
         having.append(SQL("COUNT(ct.id) >= %(min_contacts)s"))
         params["min_contacts"] = min_contacts
-    if tag is not None:
-        conditions.append(
-            SQL(
-                "EXISTS (SELECT 1 FROM tag_assignment ta "
-                "WHERE ta.company_id = c.id AND ta.tag_id = %(tag_id)s)"
-            )
-        )
-        params["tag_id"] = tag
+    conditions.extend(
+        _include_tags_conditions(_normalize_tag_ids(tag), "company_id", params)
+    )
     conditions.extend(_exclude_tags_conditions(exclude_tags, "company_id", params))
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     having_clause = SQL("HAVING ") + SQL(" AND ").join(having) if having else SQL("")
@@ -1610,7 +1646,7 @@ def export_companies(
     max_contacts: int | None = None,
     min_contacts: int | None = None,
     include_disabled: bool = False,
-    tag: str | None = None,
+    tag: str | Sequence[str] | None = None,
     exclude_tags: Sequence[str] | None = None,
     status: str | None = None,
     full: bool = False,
@@ -1629,7 +1665,7 @@ def export_companies(
         max_contacts: Inclusive upper bound on contact_count.
         min_contacts: Inclusive lower bound on contact_count.
         include_disabled: When ``True``, includes disabled companies.
-        tag: Resolved tag id membership filter.
+        tag: One resolved tag id or a sequence; AND-compose membership.
         exclude_tags: Resolved tag ids excluded via NOT EXISTS.
         status: Pipeline cohort filter (§V.138).
         full: When ``True``, embed full profile JSON (or null).
@@ -1655,14 +1691,9 @@ def export_companies(
     if min_contacts is not None:
         having.append(SQL("COUNT(ct.id) >= %(min_contacts)s"))
         params["min_contacts"] = min_contacts
-    if tag is not None:
-        conditions.append(
-            SQL(
-                "EXISTS (SELECT 1 FROM tag_assignment ta "
-                "WHERE ta.company_id = c.id AND ta.tag_id = %(tag_id)s)"
-            )
-        )
-        params["tag_id"] = tag
+    conditions.extend(
+        _include_tags_conditions(_normalize_tag_ids(tag), "company_id", params)
+    )
     conditions.extend(_exclude_tags_conditions(exclude_tags, "company_id", params))
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     having_clause = SQL("HAVING ") + SQL(" AND ").join(having) if having else SQL("")
@@ -1704,7 +1735,7 @@ def company_import_diff(
     max_contacts: int | None = None,
     min_contacts: int | None = None,
     include_disabled: bool = False,
-    tag: str | None = None,
+    tag: str | Sequence[str] | None = None,
     exclude_tags: Sequence[str] | None = None,
     status: str | None = None,
 ) -> dict[str, Any]:
@@ -1721,7 +1752,7 @@ def company_import_diff(
         max_contacts: Inclusive upper bound on contact_count.
         min_contacts: Inclusive lower bound on contact_count.
         include_disabled: When ``True``, includes disabled CRM companies.
-        tag: Resolved tag id membership filter.
+        tag: One resolved tag id or a sequence; AND-compose membership.
         exclude_tags: Resolved tag ids excluded via NOT EXISTS.
         status: Pipeline cohort filter (§V.138).
 
@@ -2326,7 +2357,7 @@ def list_contacts(
     max_email_confidence: int | None = None,
     min_email_confidence: int | None = None,
     title: str | None = None,
-    tag: str | None = None,
+    tag: str | Sequence[str] | None = None,
     exclude_tags: Sequence[str] | None = None,
 ) -> list[ContactSummary]:
     """List contacts as summaries with optional filters.
@@ -2356,9 +2387,10 @@ def list_contacts(
         title: When set, a case-insensitive exact match on ``contact.title``.
             Substring/fuzzy title matching is the ``contact search`` verb's
             job, never the ``list`` filter (§V.115 family 5).
-        tag: When set (a resolved tag id), returns only contacts carrying that
-            tag -- an Enum-family membership filter over ``tag_assignment``
-            (§V.116). Composes with ``exclude_tags`` as an intersection.
+        tag: When set (one resolved tag id or a sequence of ids), returns
+            only contacts carrying every named tag -- AND-compose over
+            ``tag_assignment`` (§V.116). Composes with ``exclude_tags`` as
+            an intersection.
         exclude_tags: When set (resolved tag ids), returns only contacts
             carrying NONE of the given tags -- one ``NOT EXISTS`` predicate per
             tag, all intersected (§V.116).
@@ -2393,14 +2425,9 @@ def list_contacts(
     if title is not None:
         conditions.append(SQL("LOWER(c.title) = LOWER(%(title)s)"))
         params["title"] = title
-    if tag is not None:
-        conditions.append(
-            SQL(
-                "EXISTS (SELECT 1 FROM tag_assignment ta "
-                "WHERE ta.contact_id = c.id AND ta.tag_id = %(tag_id)s)"
-            )
-        )
-        params["tag_id"] = tag
+    conditions.extend(
+        _include_tags_conditions(_normalize_tag_ids(tag), "contact_id", params)
+    )
     conditions.extend(_exclude_tags_conditions(exclude_tags, "contact_id", params))
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(

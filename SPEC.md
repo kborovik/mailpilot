@@ -270,7 +270,7 @@ T270|x|impl §V.134 + §I — workflow check --file always path-scope (file|dir)
 T271|x|impl §V.103 + §I — workflow import --file recurse **/*.toml; per-row {action,in_sync,changed} preview; tests campaigns/<slug>/workflows/<slug>.toml + preview skips view; SKILL one-call import recipe (#220)|V103,V134,I.cli
 T272|x|impl §V.143(∆) + §I — merge allow disabled source + disabled survivor; keep survivor reason; tests + help (#221)|V143,V114,V142,V4,I.cli
 T273|x|impl §V.168(+) + §I — company view --full embeds contacts/tags/notes; lean unchanged; tests + help (#222)|V168,V8,V4,I.cli
-T274|.|impl §V.116(∆) + §I — company|contact list --tag repeatable AND; help documents AND; tests two-tag intersection (#223)|V116,V4,I.cli
+T274|x|impl §V.116(∆) + §I — company|contact list --tag repeatable AND; help documents AND; tests two-tag intersection (#223)|V116,V4,I.cli
 
 ## §B BUGS
 

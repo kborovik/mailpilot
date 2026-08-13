@@ -2293,7 +2293,7 @@ def test_company_export_full_and_filters_flow(
     assert kwargs["has_profile"] is True
     assert kwargs["min_contacts"] == 1
     assert kwargs["include_disabled"] is True
-    assert kwargs["tag"] == "tag-1"
+    assert kwargs["tag"] == ["tag-1"]
 
 
 def test_company_export_help_no_spec_cites(runner: CliRunner) -> None:
@@ -9621,8 +9621,62 @@ def test_company_list_filter_by_tag(
 
     assert result.exit_code == 0
     _, kwargs = mock_list.call_args
-    assert kwargs["tag"] == _TAG_ID
+    assert kwargs["tag"] == [_TAG_ID]
     assert kwargs["exclude_tags"] == []
+
+
+def test_company_list_repeatable_tag_and(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.116: repeatable --tag resolves every name and AND-forwards ids."""
+    sage = _make_tag(name="sage-var", id=_TAG_ID)
+    linkedin = _make_tag(
+        name="linkedin-pass-done", id="01234567-0000-7000-0000-0000000000ee"
+    )
+    by_name = {"sage-var": sage, "linkedin-pass-done": linkedin}
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.get_tag_by_name",
+            side_effect=lambda _conn, name: by_name[name],
+        ),
+        patch("mailpilot.database.list_companies", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "list",
+                "--tag",
+                "sage-var",
+                "--tag",
+                "linkedin-pass-done",
+            ],
+        )
+
+    assert result.exit_code == 0
+    _, kwargs = mock_list.call_args
+    assert kwargs["tag"] == [sage.id, linkedin.id]
+
+
+def test_company_list_help_documents_tag_and(runner: CliRunner) -> None:
+    """§V.116/§V.111: company list --help documents repeatable --tag as AND."""
+    result = runner.invoke(main, ["company", "list", "--help"])
+    assert result.exit_code == 0
+    assert "--tag" in result.output
+    assert "AND" in result.output
+    assert "§V." not in result.output
+    assert "§T." not in result.output
+
+
+def test_skill_documents_repeatable_tag_and() -> None:
+    """§V.116: packaged SKILL.md documents repeatable --tag as AND."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "--tag sage-var --tag linkedin-pass-done" in body
+    assert "AND" in body
 
 
 def test_company_list_no_tag_filter(
@@ -9709,8 +9763,33 @@ def test_contact_list_filter_by_tag(
 
     assert result.exit_code == 0
     _, kwargs = mock_list.call_args
-    assert kwargs["tag"] == _TAG_ID
+    assert kwargs["tag"] == [_TAG_ID]
     assert kwargs["exclude_tags"] == []
+
+
+def test_contact_list_repeatable_tag_and(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.116: contact list repeatable --tag AND-forwards resolved ids."""
+    vip = _make_tag(name="vip", id=_TAG_ID)
+    warm = _make_tag(name="warm", id="01234567-0000-7000-0000-0000000000ee")
+    by_name = {"vip": vip, "warm": warm}
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.get_tag_by_name",
+            side_effect=lambda _conn, name: by_name[name],
+        ),
+        patch("mailpilot.database.list_contacts", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(
+            main, ["contact", "list", "--tag", "vip", "--tag", "warm"]
+        )
+
+    assert result.exit_code == 0
+    _, kwargs = mock_list.call_args
+    assert kwargs["tag"] == [vip.id, warm.id]
 
 
 # -- note helpers --------------------------------------------------------------

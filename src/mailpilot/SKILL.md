@@ -511,6 +511,7 @@ Pipeline cohort filter `--status` (AND-composes with `--tag`, `--no-tag`,
 
 ```
 mailpilot company list --tag acumatica-var
+mailpilot company list --tag sage-var --tag linkedin-pass-done
 mailpilot company list --tag acumatica-var --status ready
 mailpilot company list --tag acumatica-var --status needs_contacts
 mailpilot company list --tag acumatica-var --status needs_profile
@@ -521,6 +522,10 @@ mailpilot company list --include-disabled
 mailpilot company list --full
 mailpilot company view <DOMAIN_OR_ID>
 ```
+
+Repeatable `--tag` is AND: the row must carry every named tag. Repeatable
+`--no-tag` is AND: the row must carry none of the named tags. Same AND
+rule on `contact list`.
 
 `--full` embeds `profile.summary` only (`null` when the company has no
 profile); default list never ships products, target_customers, or sources.

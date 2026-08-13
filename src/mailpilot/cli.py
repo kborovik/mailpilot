@@ -885,6 +885,11 @@ def _resolve_tag(connection: Any, tag_ref: str) -> Any:
     return tag
 
 
+def _resolve_tag_ids(connection: Any, tag_refs: tuple[str, ...]) -> list[str]:
+    """Resolve repeatable ``--tag`` refs to vocabulary ids (§V.116)."""
+    return [_resolve_tag(connection, name).id for name in tag_refs]
+
+
 # -- Main CLI ------------------------------------------------------------------
 
 
@@ -2601,7 +2606,7 @@ def company_list(
     max_contacts: int | None,
     min_contacts: int | None,
     include_disabled: bool,
-    tag: str | None,
+    tag: tuple[str, ...],
     no_tag: tuple[str, ...],
     full: bool,
     status: str | None,
@@ -2621,12 +2626,15 @@ def company_list(
     needs_profile (no profile, not disabled), disabled (disabled_reason set;
     overrides the default hide). Status AND-composes with --tag, --no-tag,
     --min/max-contacts, --has-profile, and --include-disabled.
+
+    Repeatable --tag is AND (row must carry every named tag). Repeatable
+    --no-tag is AND (row must carry none of the named tags).
     """
     from mailpilot.database import initialize_database, list_companies
 
     connection = initialize_database(_database_url())
     try:
-        tag_id = _resolve_tag(connection, tag).id if tag is not None else None
+        tag_ids = _resolve_tag_ids(connection, tag)
         exclude_tag_ids = [_resolve_tag(connection, name).id for name in no_tag]
         # --status disabled overrides the default hide of disabled rows.
         effective_include_disabled = include_disabled or status == "disabled"
@@ -2642,7 +2650,7 @@ def company_list(
             max_contacts=max_contacts,
             min_contacts=min_contacts,
             include_disabled=effective_include_disabled,
-            tag=tag_id,
+            tag=tag_ids or None,
             exclude_tags=exclude_tag_ids,
             full=full,
             status=status,
@@ -2749,7 +2757,7 @@ def company_export(
     max_contacts: int | None,
     min_contacts: int | None,
     include_disabled: bool,
-    tag: str | None,
+    tag: tuple[str, ...],
     no_tag: tuple[str, ...],
     full: bool,
     status: str | None,
@@ -2773,7 +2781,7 @@ def company_export(
     del export_format  # only jsonl is accepted; Choice already enforced
     connection = initialize_database(_database_url())
     try:
-        tag_id = _resolve_tag(connection, tag).id if tag is not None else None
+        tag_ids = _resolve_tag_ids(connection, tag)
         exclude_tag_ids = [_resolve_tag(connection, name).id for name in no_tag]
         effective_include_disabled = include_disabled or status == "disabled"
         rows = export_companies(
@@ -2782,7 +2790,7 @@ def company_export(
             max_contacts=max_contacts,
             min_contacts=min_contacts,
             include_disabled=effective_include_disabled,
-            tag=tag_id,
+            tag=tag_ids or None,
             exclude_tags=exclude_tag_ids,
             full=full,
             status=status,
@@ -2847,7 +2855,7 @@ def company_import(
     max_contacts: int | None,
     min_contacts: int | None,
     include_disabled: bool,
-    tag: str | None,
+    tag: tuple[str, ...],
     no_tag: tuple[str, ...],
     status: str | None,
 ) -> None:
@@ -2903,7 +2911,7 @@ def company_import(
 
     connection = initialize_database(_database_url())
     try:
-        tag_id = _resolve_tag(connection, tag).id if tag is not None else None
+        tag_ids = _resolve_tag_ids(connection, tag)
         exclude_tag_ids = [_resolve_tag(connection, name).id for name in no_tag]
         effective_include_disabled = include_disabled or status == "disabled"
         diff = company_import_diff(
@@ -2913,7 +2921,7 @@ def company_import(
             max_contacts=max_contacts,
             min_contacts=min_contacts,
             include_disabled=effective_include_disabled,
-            tag=tag_id,
+            tag=tag_ids or None,
             exclude_tags=exclude_tag_ids,
             status=status,
         )
@@ -3333,10 +3341,14 @@ def contact_list(
     max_email_confidence: int | None,
     min_email_confidence: int | None,
     title: str | None,
-    tag: str | None,
+    tag: tuple[str, ...],
     no_tag: tuple[str, ...],
 ) -> None:
-    """List contacts as summaries."""
+    """List contacts as summaries.
+
+    Repeatable --tag is AND (row must carry every named tag). Repeatable
+    --no-tag is AND (row must carry none of the named tags).
+    """
     from mailpilot.database import initialize_database, list_contacts
 
     connection = initialize_database(_database_url())
@@ -3346,7 +3358,7 @@ def contact_list(
             if company_domain is not None
             else None
         )
-        tag_id = _resolve_tag(connection, tag).id if tag is not None else None
+        tag_ids = _resolve_tag_ids(connection, tag)
         exclude_tag_ids = [_resolve_tag(connection, name).id for name in no_tag]
         contacts = list_contacts(
             connection,
@@ -3358,7 +3370,7 @@ def contact_list(
             max_email_confidence=max_email_confidence,
             min_email_confidence=min_email_confidence,
             title=title,
-            tag=tag_id,
+            tag=tag_ids or None,
             exclude_tags=exclude_tag_ids,
         )
         output({"contacts": [c.model_dump(mode="json") for c in contacts]})

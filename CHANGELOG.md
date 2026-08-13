@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `company list` and `contact list` `--tag` is repeatable and AND-composes
+  (the row must carry every named tag). `--help` documents AND, matching
+  `--no-tag`.
+
 - `company merge` accepts a disabled source and a disabled survivor. The
   survivor keeps its `disabled_reason`; the source is recorded as an
   alias with `merged:into <survivor.domain>`.
