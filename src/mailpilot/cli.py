@@ -1005,7 +1005,7 @@ def show() -> None:
     default=False,
     help="Task-grain queue: one row per pending task.",
 )
-@scope_option("--workflow-id", "workflow_id", "Filter by workflow (name or ID).")
+@scope_option("--workflow-name", "workflow_name", "Filter by workflow (name or ID).")
 @click.option(
     "--tz",
     "tz_name",
@@ -1030,7 +1030,7 @@ def show() -> None:
 )
 def show_queue(
     detail: bool,
-    workflow_id: str | None,
+    workflow_name: str | None,
     tz_name: str,
     output_format: str,
     limit: int,
@@ -1056,10 +1056,10 @@ def show_queue(
     connection = initialize_database(_database_url())
     try:
         resolved_workflow_id: str | None = None
-        if workflow_id is not None:
-            resolved_workflow_id = _resolve_workflow_id(connection, workflow_id)
+        if workflow_name is not None:
+            resolved_workflow_id = _resolve_workflow_id(connection, workflow_name)
             if get_workflow(connection, resolved_workflow_id) is None:
-                output_error(f"workflow not found: {workflow_id}", "not_found")
+                output_error(f"workflow not found: {workflow_name}", "not_found")
         report = get_queue_report(
             connection,
             detail=detail,

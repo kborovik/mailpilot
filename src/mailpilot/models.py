@@ -680,7 +680,7 @@ QueueGrain = Literal["workflow", "task"]
 class QueueWorkflowRow(BaseModel):
     """One workflow-grain row for ``show queue`` (§V.166)."""
 
-    workflow: str
+    workflow_name: str
     status: WorkflowStatus
     active: int
     pending: int
@@ -703,7 +703,7 @@ class QueueTaskRow(BaseModel):
     contact: str
     email: str
     company: str = ""
-    workflow: str
+    workflow_name: str
     touch: str = ""
     trigger: str = ""
     state: str

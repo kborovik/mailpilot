@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from mailpilot.cadence import parse_touch_number
 
 _QUEUE_WORKFLOW_HEADERS = (
-    "workflow",
+    "workflow_name",
     "status",
     "active",
     "pending",
@@ -27,7 +27,7 @@ _QUEUE_TASK_TABLE_HEADERS = (
     "contact",
     "email",
     "company",
-    "workflow",
+    "workflow_name",
     "touch",
     "trigger",
     "state",

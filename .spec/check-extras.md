@@ -1034,11 +1034,11 @@ Trigger: campaign-test or reply-test scripts/skills changed.
 
 `mailpilot show queue` = read-only operator report hub (not CRM noun). Default stdout ASCII table via `tabulate` `tablefmt=simple` (no Unicode box, no ANSI color, no TTY-variant bytes). `--format json|table` (default table). No csv/ndjson. Errors stay JSON stderr + exit 1. `--format json` envelope `{"queue":{grain,tz,rows},"ok":true,"record_count":N}` N=len(rows). `grain` in {`workflow`,`task`}. `--detail` -> task grain else workflow grain.
 
-Workflow grain: 1 row / workflow in scope incl draft|active|paused; omit `--workflow-id` = every workflow; columns {workflow, status, active, pending, overdue, due_today, next_at, failed_24h, never_sent}; table `next_at` = YYYY-MM-DD in `--tz` (empty if none); JSON keeps ISO datetime; sort next_at ASC (empty last) then name; no `--limit`.
+Workflow grain: 1 row / workflow in scope incl draft|active|paused; omit `--workflow-name` = every workflow; columns {workflow_name, status, active, pending, overdue, due_today, next_at, failed_24h, never_sent}; table `next_at` = YYYY-MM-DD in `--tz` (empty if none); JSON keeps ISO datetime; sort next_at ASC (empty last) then name; no `--limit`.
 
-Task grain: 1 row / pending task; sort scheduled_at ASC (queue order; ! change `list_tasks` DESC); table columns {when, contact, email, company, workflow, touch, trigger, state, attempts}; hide UUIDs on table; JSON ? include task_id + enrollment_id; `--limit` default 100; `--overdue` = pending + scheduled_at < now; stuck-without-task ! rows (stays §V.155 enrollment/report `--stuck`).
+Task grain: 1 row / pending task; sort scheduled_at ASC (queue order; ! change `list_tasks` DESC); table columns {when, contact, email, company, workflow_name, touch, trigger, state, attempts}; hide UUIDs on table; JSON ? include task_id + enrollment_id; `--limit` default 100; `--overdue` = pending + scheduled_at < now; stuck-without-task ! rows (stays §V.155 enrollment/report `--stuck`).
 
-`--workflow-id` name|UUID §V.107 unknown -> not_found. `--tz` IANA default UTC (due_today + relative when). `when` relative (`overdue 2d`, `today 14:00`, `in 3d`) + ISO in JSON. `touch` parse §V.162 (`T2` or empty). `never_sent` / `failed_24h` reuse §V.157 / §V.155 24h SLA. No LLM. No CRM write. Entity JSON verbs byte-stable. Empty -> `(no rows)` exit 0.
+`--workflow-name` name|UUID §V.107 unknown -> not_found; flag matches table+JSON col `workflow_name` (name, not UUID). `--tz` IANA default UTC (due_today + relative when). `when` relative (`overdue 2d`, `today 14:00`, `in 3d`) + ISO in JSON. `touch` parse §V.162 (`T2` or empty). `never_sent` / `failed_24h` reuse §V.157 / §V.155 24h SLA. No LLM. No CRM write. Entity JSON verbs byte-stable. Empty -> `(no rows)` exit 0.
 
 Trigger: `show queue` path changed.
 - `rg 'show.*queue|def show_queue' src/mailpilot/cli.py` -> command present

@@ -141,12 +141,13 @@ per workflow (draft, active, paused) with active enrollments, pending /
 overdue / due-today tasks, next send as a date (`YYYY-MM-DD` in `--tz`;
 JSON keeps the ISO datetime), failed in the last 24 hours, and
 never-sent enrollments. `--detail` switches to pending-task grain in queue
-order (oldest first). `--workflow-id` accepts name or UUID. Empty prints
-`(no rows)` and exits 0. Read-only; no LLM.
+order (oldest first). `--workflow-name` accepts name or UUID and matches
+the `workflow_name` table/JSON column. Empty prints `(no rows)` and
+exits 0. Read-only; no LLM.
 
 ```
 mailpilot show queue
-mailpilot show queue --workflow-id <NAME_OR_ID>
+mailpilot show queue --workflow-name <NAME_OR_ID>
 mailpilot show queue --detail
 mailpilot show queue --detail --overdue --limit 50
 mailpilot show queue --format json --tz America/Toronto

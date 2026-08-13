@@ -8478,10 +8478,10 @@ def test_get_queue_report_workflow_grain_includes_draft_and_sorts(
     )
 
     report = get_queue_report(database_connection)
-    names = [row.workflow for row in report.rows]
+    names = [row.workflow_name for row in report.rows]
     assert names == ["alpha-sooner", "zeta-later", "draft-empty"]
     assert report.grain == "workflow"
-    draft = next(r for r in report.rows if r.workflow == "draft-empty")
+    draft = next(r for r in report.rows if r.workflow_name == "draft-empty")
     assert draft.status == "draft"
     assert draft.active == 0
     assert draft.pending == 0
@@ -8591,6 +8591,7 @@ def test_get_queue_report_task_grain_pending_asc_touch(
     assert report.rows[0].contact == "Lead Person"
     assert report.rows[0].email == "lead@acme.com"
     assert report.rows[0].company == "acme.com"
+    assert report.rows[0].workflow_name == "queue-tasks"
     assert report.rows[0].task_id
     listed = list_tasks(database_connection, workflow_id=workflow.id)
     assert [t.description for t in listed if t.status == "pending"] == [

@@ -12718,7 +12718,7 @@ def _make_queue_workflow_report() -> Any:
         tz="UTC",
         rows=[
             QueueWorkflowRow(
-                workflow="alpha-outreach",
+                workflow_name="alpha-outreach",
                 status="active",
                 active=2,
                 pending=1,
@@ -12745,7 +12745,7 @@ def test_show_queue_default_is_table(
         result = runner.invoke(main, ["show", "queue"])
     assert result.exit_code == 0
     assert not result.output.lstrip().startswith("{")
-    assert "workflow" in result.output
+    assert "workflow_name" in result.output
     assert "alpha-outreach" in result.output
     assert "------" in result.output or "--------" in result.output
     assert "2024-01-01" in result.output
@@ -12769,7 +12769,8 @@ def test_show_queue_json_envelope_record_count(
     assert data["record_count"] == 1
     assert data["queue"]["grain"] == "workflow"
     assert data["queue"]["tz"] == "UTC"
-    assert data["queue"]["rows"][0]["workflow"] == "alpha-outreach"
+    assert data["queue"]["rows"][0]["workflow_name"] == "alpha-outreach"
+    assert "workflow" not in data["queue"]["rows"][0]
     assert data["queue"]["rows"][0]["next_at"].startswith("2024-01-01T")
 
 
@@ -12806,7 +12807,7 @@ def test_show_queue_detail_json_hides_no_ids(
                 contact="Ada Lovelace",
                 email="ada@example.com",
                 company="example.com",
-                workflow="alpha-outreach",
+                workflow_name="alpha-outreach",
                 touch="T2",
                 trigger="task",
                 state="pending",
@@ -12836,14 +12837,14 @@ def test_show_queue_detail_json_hides_no_ids(
 def test_show_queue_unknown_workflow(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    """§V.107: unknown --workflow-id is not_found."""
+    """§V.107: unknown --workflow-name is not_found."""
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_workflow_by_name", return_value=None),
     ):
         result = runner.invoke(
-            main, ["show", "queue", "--workflow-id", "missing-workflow"]
+            main, ["show", "queue", "--workflow-name", "missing-workflow"]
         )
     assert result.exit_code == 1
     data = json.loads(result.output)
@@ -12881,3 +12882,12 @@ def test_skill_documents_show_queue() -> None:
     assert "show queue" in body
     assert "--detail" in body
     assert "ASCII table" in body
+    assert "--workflow-name" in body
+
+
+def test_show_queue_help_uses_workflow_name(runner: CliRunner) -> None:
+    """§V.166: flag matches table/JSON column workflow_name."""
+    result = runner.invoke(main, ["show", "queue", "--help"])
+    assert result.exit_code == 0
+    assert "--workflow-name" in result.output
+    assert "--workflow-id" not in result.output

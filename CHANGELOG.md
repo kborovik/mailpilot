@@ -11,12 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `mailpilot show queue` table `next_at` is a date (`YYYY-MM-DD` in
   `--tz`), not a full ISO timestamp. JSON still emits the ISO datetime.
+- `mailpilot show queue` column and filter are `workflow_name` /
+  `--workflow-name` (name or UUID). The old `--workflow-id` flag and
+  `workflow` column are gone.
 
 ### Added
 
 - `mailpilot show queue` operator report hub. Default ASCII table; pass
   `--format json` for the `queue` envelope (`record_count` is the row
-  count). `--detail` lists pending tasks in queue order. `--workflow-id`
+  count). `--detail` lists pending tasks in queue order. `--workflow-name`
   accepts a workflow name or UUID.
 
 ## [v0.23.0] - 2026-08-12

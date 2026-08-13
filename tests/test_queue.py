@@ -53,7 +53,7 @@ def test_format_queue_next_at_is_date_in_tz() -> None:
 
 def test_queue_table_cells_next_at_is_date_only() -> None:
     row = {
-        "workflow": "alpha-outreach",
+        "workflow_name": "alpha-outreach",
         "status": "active",
         "active": 1,
         "pending": 1,

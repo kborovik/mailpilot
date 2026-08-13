@@ -3167,7 +3167,7 @@ def _queue_workflow_rows(
             GROUP BY t.workflow_id
         )
         SELECT
-            w.name AS workflow,
+            w.name AS workflow_name,
             w.status,
             COALESCE(enroll.active, 0) AS active,
             COALESCE(tasks.pending, 0) AS pending,
@@ -3225,7 +3225,7 @@ def _queue_task_rows(
             ) AS contact,
             c.email AS email,
             COALESCE(co.domain, '') AS company,
-            w.name AS workflow,
+            w.name AS workflow_name,
             t.context,
             COALESCE(t.context->>'trigger', '') AS trigger,
             t.status AS state,
@@ -3251,7 +3251,7 @@ def _queue_task_rows(
                 contact=row["contact"],
                 email=row["email"],
                 company=row["company"],
-                workflow=row["workflow"],
+                workflow_name=row["workflow_name"],
                 touch=format_queue_touch(context_dict),
                 trigger=row["trigger"],
                 state=row["state"],
