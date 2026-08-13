@@ -8434,6 +8434,7 @@ def test_get_queue_report_workflow_grain_includes_draft_and_sorts(
 ) -> None:
     """§V.166: every workflow status; next_at ASC empty last then name."""
     from mailpilot.database import get_queue_report, update_contact
+    from mailpilot.models import QueueWorkflowRow
 
     account = make_test_account(database_connection)
     later = make_test_workflow(
@@ -8482,6 +8483,7 @@ def test_get_queue_report_workflow_grain_includes_draft_and_sorts(
     assert names == ["alpha-sooner", "zeta-later", "draft-empty"]
     assert report.grain == "workflow"
     draft = next(r for r in report.rows if r.workflow_name == "draft-empty")
+    assert isinstance(draft, QueueWorkflowRow)
     assert draft.status == "draft"
     assert draft.active == 0
     assert draft.pending == 0
@@ -8493,6 +8495,7 @@ def test_get_queue_report_never_sent_and_failed_24h(
 ) -> None:
     """§V.166 / §V.155: never_sent + failed_24h reuse 24h SLA counters."""
     from mailpilot.database import get_queue_report
+    from mailpilot.models import QueueWorkflowRow
 
     account = make_test_account(database_connection)
     workflow = make_test_workflow(
@@ -8524,6 +8527,7 @@ def test_get_queue_report_never_sent_and_failed_24h(
     report = get_queue_report(database_connection, workflow_id=workflow.id)
     assert len(report.rows) == 1
     row = report.rows[0]
+    assert isinstance(row, QueueWorkflowRow)
     assert row.never_sent == 2
     assert row.failed_24h == 1
     assert row.active == 2
@@ -8534,6 +8538,7 @@ def test_get_queue_report_task_grain_pending_asc_touch(
 ) -> None:
     """§V.166 / §V.162: pending only, ASC queue order, T2 parse; list_tasks DESC."""
     from mailpilot.database import get_queue_report, update_contact
+    from mailpilot.models import QueueTaskRow
 
     account = make_test_account(database_connection)
     workflow = make_test_workflow(
@@ -8586,13 +8591,14 @@ def test_get_queue_report_task_grain_pending_asc_touch(
         now=datetime(2026, 8, 13, 12, 0, tzinfo=UTC),
     )
     assert report.grain == "task"
-    assert [row.touch for row in report.rows] == ["T1", "T2"]
-    assert report.rows[0].when == "in 137d" or report.rows[0].when.startswith("in ")
-    assert report.rows[0].contact == "Lead Person"
-    assert report.rows[0].email == "lead@acme.com"
-    assert report.rows[0].company == "acme.com"
-    assert report.rows[0].workflow_name == "queue-tasks"
-    assert report.rows[0].task_id
+    rows = [row for row in report.rows if isinstance(row, QueueTaskRow)]
+    assert [row.touch for row in rows] == ["T1", "T2"]
+    assert rows[0].when == "in 137d" or rows[0].when.startswith("in ")
+    assert rows[0].contact == "Lead Person"
+    assert rows[0].email == "lead@acme.com"
+    assert rows[0].company == "acme.com"
+    assert rows[0].workflow_name == "queue-tasks"
+    assert rows[0].task_id
     listed = list_tasks(database_connection, workflow_id=workflow.id)
     assert [t.description for t in listed if t.status == "pending"] == [
         "later T2",
@@ -8605,6 +8611,7 @@ def test_get_queue_report_overdue_and_limit(
 ) -> None:
     """§V.155 / §V.166: --overdue + --limit on task grain only."""
     from mailpilot.database import get_queue_report
+    from mailpilot.models import QueueTaskRow
 
     account = make_test_account(database_connection)
     workflow = make_test_workflow(
@@ -8632,10 +8639,15 @@ def test_get_queue_report_overdue_and_limit(
     )
     overdue = get_queue_report(database_connection, detail=True, overdue=True)
     assert len(overdue.rows) == 1
-    assert overdue.rows[0].when.startswith("overdue")
+    first_overdue = overdue.rows[0]
+    assert isinstance(first_overdue, QueueTaskRow)
+    assert first_overdue.when.startswith("overdue")
     limited = get_queue_report(database_connection, detail=True, limit=1)
     assert len(limited.rows) == 1
-    assert limited.rows[0].when.startswith("overdue")
+    first_limited = limited.rows[0]
+    assert isinstance(first_limited, QueueTaskRow)
+    assert first_limited.when.startswith("overdue")
     all_pending = get_queue_report(database_connection, detail=True)
-    assert len(all_pending.rows) == 2
-    assert all_pending.rows[0].scheduled_at < all_pending.rows[1].scheduled_at
+    pending_rows = [row for row in all_pending.rows if isinstance(row, QueueTaskRow)]
+    assert len(pending_rows) == 2
+    assert pending_rows[0].scheduled_at < pending_rows[1].scheduled_at

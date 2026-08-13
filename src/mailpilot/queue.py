@@ -6,6 +6,7 @@ Formatting only -- SQL lives in ``database.get_queue_report``. Kept out of
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -92,7 +93,7 @@ def queue_table_headers(*, detail: bool) -> tuple[str, ...]:
 
 
 def queue_table_cells(
-    row: dict[str, object], *, detail: bool, tz: ZoneInfo
+    row: Mapping[str, object], *, detail: bool, tz: ZoneInfo
 ) -> list[str]:
     """Project one report row onto table cells (empty for nulls)."""
     headers = queue_table_headers(detail=detail)
