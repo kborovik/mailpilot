@@ -50,6 +50,7 @@ ALLOWED_VERBS = {
     "get",
     "set",
     "status",
+    "queue",  # leaf of `show queue` (§V.166 / §I Read)
 }
 
 # Owner selectors attach a sub-entity to a contact/company/workflow. Alone they
