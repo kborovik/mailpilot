@@ -99,6 +99,21 @@ def _sql_parse_touch(context_col: SQL) -> Composed:
     ).format(col=context_col)
 
 
+def _sql_resolve_touch(context_col: SQL) -> Composed:
+    """SQL that matches ``resolve_touch_number``: parse, else first-touch = 1.
+
+    ``enrollment_run`` / ``enrollment_schedule`` with absent or unparseable
+    ``context.touch`` resolve to 1 so stats pending and queue buckets count
+    scheduled first-reach as T1 (§V.162 / §B.138).
+    """
+    return SQL(
+        "COALESCE("
+        "{parsed}, "
+        "CASE WHEN {col}->>'trigger' IN ('enrollment_run', 'enrollment_schedule') "
+        "THEN 1 END)"
+    ).format(parsed=_sql_parse_touch(context_col), col=context_col)
+
+
 _INLINE_NOTES_CAP = 10
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
@@ -2970,7 +2985,7 @@ def get_workflow_stats(
                 FROM touch_nums tn
                 ORDER BY tn.touch
                 """
-            ).format(touch=_sql_parse_touch(SQL("t.context"))),
+            ).format(touch=_sql_resolve_touch(SQL("t.context"))),
             {"workflow_id": workflow_id, "touches": configured_touches},
         ).fetchall()
         for tr in touch_rows:
@@ -3131,7 +3146,7 @@ def get_queue_report(
             now=clock,
         )
         return QueueReport(grain="task", tz=tz, rows=rows)
-    workflow_rows = _queue_workflow_rows(connection, workflow_id=workflow_id, tz=tz)
+    workflow_rows = _queue_workflow_rows(connection, workflow_id=workflow_id)
     return QueueReport(grain="workflow", tz=tz, rows=workflow_rows)
 
 
@@ -3139,88 +3154,51 @@ def _queue_workflow_rows(
     connection: psycopg.Connection[dict[str, Any]],
     *,
     workflow_id: str | None,
-    tz: str,
 ) -> list[QueueWorkflowRow]:
     """Aggregate one row per workflow for the default queue grain."""
     conditions: list[SQL] = []
-    params: dict[str, object] = {"tz": tz}
+    params: dict[str, object] = {}
     if workflow_id is not None:
         conditions.append(SQL("w.id = %(workflow_id)s"))
         params["workflow_id"] = workflow_id
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
+    resolved = _sql_resolve_touch(SQL("t.context"))
     query = SQL(
         """\
-        WITH enroll AS (
-            SELECT
-                e.workflow_id,
-                COUNT(*) FILTER (
-                    WHERE e.status = 'active' AND outcome.latest_outcome IS NULL
-                )::int AS active,
-                COUNT(*) FILTER (
-                    WHERE e.status = 'active'
-                      AND outcome.latest_outcome IS NULL
-                      AND NOT EXISTS (
-                          SELECT 1 FROM email
-                          WHERE email.workflow_id = e.workflow_id
-                            AND email.contact_id = e.contact_id
-                            AND email.direction = 'outbound'
-                            AND email.status = 'sent'
-                      )
-                )::int AS never_sent
-            FROM enrollment e
-            LEFT JOIN LATERAL (
-                SELECT
-                    CASE a.type
-                        WHEN 'enrollment_completed' THEN 'completed'
-                        WHEN 'enrollment_failed' THEN 'failed'
-                    END AS latest_outcome
-                FROM activity a
-                WHERE a.contact_id = e.contact_id
-                  AND a.workflow_id = e.workflow_id
-                  AND a.type IN ('enrollment_completed', 'enrollment_failed')
-                ORDER BY a.created_at DESC
-                LIMIT 1
-            ) outcome ON TRUE
-            GROUP BY e.workflow_id
-        ),
-        tasks AS (
+        WITH tasks AS (
             SELECT
                 t.workflow_id,
-                COUNT(*) FILTER (WHERE t.status = 'pending')::int AS pending,
                 COUNT(*) FILTER (
-                    WHERE t.status = 'pending' AND t.scheduled_at < NOW()
-                )::int AS overdue,
+                    WHERE t.status = 'pending' AND {touch} = 1
+                )::int AS t1,
                 COUNT(*) FILTER (
-                    WHERE t.status = 'pending'
-                      AND (t.scheduled_at AT TIME ZONE %(tz)s)::date
-                        = (NOW() AT TIME ZONE %(tz)s)::date
-                )::int AS due_today,
+                    WHERE t.status = 'pending' AND {touch} = 2
+                )::int AS t2,
+                COUNT(*) FILTER (
+                    WHERE t.status = 'pending' AND {touch} = 3
+                )::int AS t3,
+                COUNT(*) FILTER (
+                    WHERE t.status = 'pending' AND {touch} >= 4
+                )::int AS t4p,
                 MIN(t.scheduled_at) FILTER (WHERE t.status = 'pending')
-                    AS next_at,
-                COUNT(*) FILTER (
-                    WHERE t.status = 'failed'
-                      AND t.completed_at >= NOW() - INTERVAL '24 hours'
-                )::int AS failed_24h
+                    AS next_at
             FROM task t
             GROUP BY t.workflow_id
         )
         SELECT
             w.name AS workflow_name,
             w.status,
-            COALESCE(enroll.active, 0) AS active,
-            COALESCE(tasks.pending, 0) AS pending,
-            COALESCE(tasks.overdue, 0) AS overdue,
-            COALESCE(tasks.due_today, 0) AS due_today,
-            tasks.next_at,
-            COALESCE(tasks.failed_24h, 0) AS failed_24h,
-            COALESCE(enroll.never_sent, 0) AS never_sent
+            COALESCE(tasks.t1, 0) AS t1,
+            COALESCE(tasks.t2, 0) AS t2,
+            COALESCE(tasks.t3, 0) AS t3,
+            COALESCE(tasks.t4p, 0) AS t4p,
+            tasks.next_at
         FROM workflow w
-        LEFT JOIN enroll ON enroll.workflow_id = w.id
         LEFT JOIN tasks ON tasks.workflow_id = w.id
-        {}
+        {where}
         ORDER BY tasks.next_at ASC NULLS LAST, w.name ASC
         """
-    ).format(where)
+    ).format(touch=resolved, where=where)
     rows = connection.execute(query, params).fetchall()
     return [QueueWorkflowRow.model_validate(row) for row in rows]
 
@@ -3290,7 +3268,7 @@ def _queue_task_rows(
                 email=row["email"],
                 company=row["company"],
                 workflow_name=row["workflow_name"],
-                touch=format_queue_touch(context_dict),
+                touch=format_queue_touch(context_dict, row["trigger"]),
                 trigger=row["trigger"],
                 state=row["state"],
                 attempts=row["attempts"],

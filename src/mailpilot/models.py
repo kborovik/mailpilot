@@ -689,13 +689,11 @@ class QueueWorkflowRow(BaseModel):
 
     workflow_name: str
     status: WorkflowStatus
-    active: int
-    pending: int
-    overdue: int
-    due_today: int
+    t1: int
+    t2: int
+    t3: int
+    t4p: int
     next_at: datetime | None
-    failed_24h: int
-    never_sent: int
 
 
 class QueueTaskRow(BaseModel):

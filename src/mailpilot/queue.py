@@ -10,18 +10,16 @@ from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from mailpilot.cadence import parse_touch_number
+from mailpilot.cadence import resolve_touch_number
 
 _QUEUE_WORKFLOW_HEADERS = (
     "workflow_name",
     "status",
-    "active",
-    "pending",
-    "overdue",
-    "due_today",
+    "t1",
+    "t2",
+    "t3",
+    "t4p",
     "next_at",
-    "failed_24h",
-    "never_sent",
 )
 _QUEUE_TASK_TABLE_HEADERS = (
     "when",
@@ -52,23 +50,30 @@ def format_queue_when(scheduled_at: datetime, *, now: datetime, tz: ZoneInfo) ->
 
 
 def format_queue_next_at(next_at: datetime | str | None, *, tz: ZoneInfo) -> str:
-    """Render workflow-grain ``next_at`` as ``YYYY-MM-DD`` in ``tz``.
+    """Render workflow-grain ``next_at`` as full ISO datetime in ``tz``.
 
-    Empty when unset. JSON keeps the ISO datetime; table is date-only.
+    Empty when unset. JSON keeps the stored ISO; table converts to ``tz``.
     """
     if next_at is None or next_at == "":
         return ""
     parsed = datetime.fromisoformat(next_at) if isinstance(next_at, str) else next_at
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(tz).date().isoformat()
+    return parsed.astimezone(tz).isoformat()
 
 
-def format_queue_touch(context: dict[str, object] | None) -> str:
-    """Render ``context.touch`` as ``T<n>`` or empty (§V.162)."""
-    if context is None:
-        return ""
-    parsed = parse_touch_number(context.get("touch"))
+def format_queue_touch(context: dict[str, object] | None, trigger: str = "") -> str:
+    """Render resolved touch as ``T<n>`` or empty (§V.162).
+
+    Shares ``resolve_touch_number``: parse ``context.touch``, else first-reach
+    triggers (``enrollment_run`` / ``enrollment_schedule``) become T1.
+    """
+    resolved_trigger = trigger
+    if not resolved_trigger and context is not None:
+        raw = context.get("trigger")
+        if isinstance(raw, str):
+            resolved_trigger = raw
+    parsed = resolve_touch_number(context, resolved_trigger)
     if parsed is None:
         return ""
     return f"T{parsed}"

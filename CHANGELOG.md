@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   enrollment updates the pending task time in place. A re-run at the same
   instant stays a no-op. Later touches and already-sent enrollments are
   not moved.
+- `workflow stats` `touches.1.pending` and `show queue --detail` treat
+  `enrollment_schedule` tasks with no `context.touch` as T1.
+
+### Changed
+
+- `show queue` workflow-grain columns are `workflow_name`, `status`,
+  `t1`, `t2`, `t3`, `t4p`, `next_at`. Table `next_at` is a full ISO
+  datetime in `--tz`; JSON keeps the stored ISO.
 
 ## [v0.24.0] - 2026-08-13
 

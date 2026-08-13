@@ -13800,13 +13800,11 @@ def _make_queue_workflow_report() -> Any:
             QueueWorkflowRow(
                 workflow_name="alpha-outreach",
                 status="active",
-                active=2,
-                pending=1,
-                overdue=0,
-                due_today=1,
+                t1=1,
+                t2=0,
+                t3=0,
+                t4p=0,
                 next_at=_NOW,
-                failed_24h=0,
-                never_sent=1,
             )
         ],
     )
@@ -13827,9 +13825,10 @@ def test_show_queue_default_is_table(
     assert not result.output.lstrip().startswith("{")
     assert "workflow_name" in result.output
     assert "alpha-outreach" in result.output
+    assert "t1" in result.output
+    assert "t4p" in result.output
     assert "------" in result.output or "--------" in result.output
-    assert "2024-01-01" in result.output
-    assert "T00:00:00" not in result.output
+    assert "2024-01-01T00:00:00+00:00" in result.output
 
 
 def test_show_queue_json_envelope_record_count(
@@ -13963,6 +13962,8 @@ def test_skill_documents_show_queue() -> None:
     assert "--detail" in body
     assert "ASCII table" in body
     assert "--workflow-name" in body
+    assert "t1" in body
+    assert "t4p" in body
 
 
 def test_show_queue_help_uses_workflow_name(runner: CliRunner) -> None:

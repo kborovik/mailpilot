@@ -6072,6 +6072,59 @@ def test_get_workflow_stats_touch_slices_and_awaiting(
     assert stats.touches["2"].pending == 1
 
 
+def test_get_workflow_stats_pending_first_touch_fallback(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.132 / §V.162 / §B.138: empty-touch enrollment_schedule is T1 pending."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="outbound"
+    )
+    database_connection.execute(
+        "UPDATE workflow SET touches = 3, touch_interval_days = 3 WHERE id = %(id)s",
+        {"id": workflow.id},
+    )
+    database_connection.commit()
+
+    first = make_test_contact(database_connection, email="t1pend@testcorp.com")
+    e_first = make_test_enrollment(database_connection, workflow.id, first.id)
+    create_task(
+        database_connection,
+        enrollment_id=e_first.id,
+        workflow_id=workflow.id,
+        contact_id=first.id,
+        description="scheduled first reach-out",
+        scheduled_at="2099-01-01T09:00:00+00:00",
+        context={"trigger": "enrollment_schedule"},
+    )
+
+    later = make_test_contact(database_connection, email="t2pend@testcorp.com")
+    e_later = make_test_enrollment(database_connection, workflow.id, later.id)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        status="sent",
+        contact_id=later.id,
+        workflow_id=workflow.id,
+    )
+    create_task(
+        database_connection,
+        enrollment_id=e_later.id,
+        workflow_id=workflow.id,
+        contact_id=later.id,
+        description="Touch 2",
+        scheduled_at="2099-01-04T09:00:00+00:00",
+        context={"touch": 2},
+    )
+
+    stats = get_workflow_stats(database_connection, workflow.id)
+    assert stats is not None
+    assert stats.touches["1"].pending == 1
+    assert stats.touches["2"].pending == 1
+    assert stats.awaiting_first_touch == 1
+
+
 def test_list_enrollments_detailed_full_execution_fields(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
@@ -9057,52 +9110,83 @@ def test_get_queue_report_workflow_grain_includes_draft_and_sorts(
     draft = next(r for r in report.rows if r.workflow_name == "draft-empty")
     assert isinstance(draft, QueueWorkflowRow)
     assert draft.status == "draft"
-    assert draft.active == 0
-    assert draft.pending == 0
+    assert draft.t1 == 0
+    assert draft.t2 == 0
+    assert draft.t3 == 0
+    assert draft.t4p == 0
     assert draft.next_at is None
 
 
-def test_get_queue_report_never_sent_and_failed_24h(
+def test_get_queue_report_workflow_grain_touch_buckets(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.166 / §V.155: never_sent + failed_24h reuse 24h SLA counters."""
+    """§V.166 / §V.162: t1/t2/t3/t4p count resolved pending touches.
+
+    enrollment_schedule with empty context.touch counts as t1, not blank.
+    """
     from mailpilot.database import get_queue_report
     from mailpilot.models import QueueWorkflowRow
 
     account = make_test_account(database_connection)
     workflow = make_test_workflow(
-        database_connection, account_id=account.id, name="queue-health"
+        database_connection, account_id=account.id, name="queue-touches"
     )
-    awaiting = make_test_contact(database_connection, email="await@testcorp.com")
-    make_test_enrollment(database_connection, workflow.id, awaiting.id)
-    failed_c = make_test_contact(database_connection, email="fail@testcorp.com")
-    e_fail = make_test_enrollment(database_connection, workflow.id, failed_c.id)
-    failed = create_task(
+    t1_c = make_test_contact(database_connection, email="t1@testcorp.com")
+    t2_c = make_test_contact(database_connection, email="t2@testcorp.com")
+    t3_c = make_test_contact(database_connection, email="t3@testcorp.com")
+    t5_c = make_test_contact(database_connection, email="t5@testcorp.com")
+    e1 = make_test_enrollment(database_connection, workflow.id, t1_c.id)
+    e2 = make_test_enrollment(database_connection, workflow.id, t2_c.id)
+    e3 = make_test_enrollment(database_connection, workflow.id, t3_c.id)
+    e5 = make_test_enrollment(database_connection, workflow.id, t5_c.id)
+    create_task(
         database_connection,
-        enrollment_id=e_fail.id,
+        enrollment_id=e1.id,
         workflow_id=workflow.id,
-        contact_id=failed_c.id,
-        description="failed send",
-        scheduled_at="2020-01-01T00:00:00+00:00",
-        context={"touch": 1},
+        contact_id=t1_c.id,
+        description="scheduled first reach-out",
+        scheduled_at="2099-01-01T09:00:00+00:00",
+        context={"trigger": "enrollment_schedule"},
     )
-    database_connection.execute(
-        """\
-        UPDATE task
-        SET status = 'failed', completed_at = NOW()
-        WHERE id = %(id)s
-        """,
-        {"id": failed.id},
+    create_task(
+        database_connection,
+        enrollment_id=e2.id,
+        workflow_id=workflow.id,
+        contact_id=t2_c.id,
+        description="Touch 2",
+        scheduled_at="2099-01-04T09:00:00+00:00",
+        context={"touch": 2},
     )
-    database_connection.commit()
+    create_task(
+        database_connection,
+        enrollment_id=e3.id,
+        workflow_id=workflow.id,
+        contact_id=t3_c.id,
+        description="Touch 3",
+        scheduled_at="2099-01-07T09:00:00+00:00",
+        context={"touch": "T3"},
+    )
+    create_task(
+        database_connection,
+        enrollment_id=e5.id,
+        workflow_id=workflow.id,
+        contact_id=t5_c.id,
+        description="Touch 5",
+        scheduled_at="2099-01-13T09:00:00+00:00",
+        context={"touch": 5},
+    )
 
     report = get_queue_report(database_connection, workflow_id=workflow.id)
     assert len(report.rows) == 1
     row = report.rows[0]
     assert isinstance(row, QueueWorkflowRow)
-    assert row.never_sent == 2
-    assert row.failed_24h == 1
-    assert row.active == 2
+    assert row.t1 == 1
+    assert row.t2 == 1
+    assert row.t3 == 1
+    assert row.t4p == 1
+    assert row.next_at == datetime(2099, 1, 1, 9, 0, tzinfo=UTC)
+    assert not hasattr(row, "never_sent")
+    assert not hasattr(row, "pending")
 
 
 def test_get_queue_report_task_grain_pending_asc_touch(
@@ -9176,6 +9260,38 @@ def test_get_queue_report_task_grain_pending_asc_touch(
         "later T2",
         "sooner T1",
     ]
+
+
+def test_get_queue_report_detail_t1_for_empty_touch_schedule(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.166 / §V.162: --detail prints T1 for enrollment_schedule with no touch."""
+    from mailpilot.database import get_queue_report
+    from mailpilot.models import QueueTaskRow
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="queue-t1-fallback"
+    )
+    contact = make_test_contact(database_connection, email="jmayer@mayererp.com")
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="scheduled first reach-out",
+        scheduled_at="2099-01-01T09:00:00+00:00",
+        context={"trigger": "enrollment_schedule"},
+    )
+
+    report = get_queue_report(database_connection, detail=True)
+    assert len(report.rows) == 1
+    row = report.rows[0]
+    assert isinstance(row, QueueTaskRow)
+    assert row.touch == "T1"
+    assert row.trigger == "enrollment_schedule"
+    assert row.email == "jmayer@mayererp.com"
 
 
 def test_get_queue_report_overdue_and_limit(

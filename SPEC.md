@@ -274,7 +274,7 @@ T273|x|impl §V.168(+) + §I — company view --full embeds contacts/tags/notes;
 T274|x|impl §V.116(∆) + §I — company|contact list --tag repeatable AND; help documents AND; tests two-tag intersection (#223)|V116,V4,I.cli
 T275|x|impl §V.169(+) + §V.131(∆) + §V.161(∆) — OOO/auto-reply inbound never fallback ACK; failed inbound ! bump last_touch/emails_sent; harness pause + resume @ parseable return date; distinct §V.161 DNC; fixtures fail-path (no ACK, no burned touch) + success-path (resume scheduled) (#225)|V169,V131,V161,V123,V162,V136,B136
 T276|x|impl §V.32 last-write-wins --scheduled-at on existing first-reach; changed; no second enrollment; tests + SKILL (#229)|V32,V54,V4,I.cli
-T277|.|impl §V.162+§V.132+§V.166+§I — resolve-touch fallback on stats pending + queue t1/t2/t3/t4p + --detail T1; workflow-grain cols {workflow_name,status,t1,t2,t3,t4p,next_at}; next_at ISO; tests + SKILL (#228)|V162,V132,V166,V32,V4,I.cli
+T277|x|impl §V.162+§V.132+§V.166+§I — resolve-touch fallback on stats pending + queue t1/t2/t3/t4p + --detail T1; workflow-grain cols {workflow_name,status,t1,t2,t3,t4p,next_at}; next_at ISO; tests + SKILL (#228)|V162,V132,V166,V32,V4,I.cli
 T278|.|impl §V.166 + §I — show queue --detail cols {workflow_name,company_domain,contact,email,touch,attempts,next_at}; drop when/trigger/state; next_at ISO in --tz; tests + SKILL|V166,V162,V4,I.cli
 
 ## §B BUGS

@@ -137,13 +137,13 @@ mailpilot email list --account-email <ACCOUNT_REF> --limit 50
 ### Queue report
 
 Human hub for "what is due?". Default is an ASCII table (not JSON). One row
-per workflow (draft, active, paused) with active enrollments, pending /
-overdue / due-today tasks, next send as a date (`YYYY-MM-DD` in `--tz`;
-JSON keeps the ISO datetime), failed in the last 24 hours, and
-never-sent enrollments. `--detail` switches to pending-task grain in queue
-order (oldest first). `--workflow-name` accepts name or UUID and matches
-the `workflow_name` table/JSON column. Empty prints `(no rows)` and
-exits 0. Read-only; no LLM.
+per workflow (draft, active, paused) with pending-task counts by resolved
+touch (`t1`, `t2`, `t3`, `t4p` for touch 4+) and next send as a full ISO
+datetime (table in `--tz`; JSON keeps the stored ISO). `--detail` switches
+to pending-task grain in queue order (oldest first); first-reach rows
+(`enrollment_schedule` with no `touch`) print `T1`. `--workflow-name`
+accepts name or UUID and matches the `workflow_name` table/JSON column.
+Empty prints `(no rows)` and exits 0. Read-only; no LLM.
 
 ```
 mailpilot show queue
