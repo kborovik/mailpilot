@@ -6010,6 +6010,75 @@ def test_list_enrollments_detailed_full_execution_fields(
     assert row.disposition is None
 
 
+def test_list_enrollments_touch_1_matches_never_sent_scheduled(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.152/§V.162: --touch 1 matches emails_sent=0 + next_scheduled_at.
+
+    enrollment_schedule tasks that omit context.touch still list as touch 1.
+    --full projects next_touch=1. --touch 2 does not match that row.
+    """
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="outbound"
+    )
+    company = make_test_company(
+        database_connection, domain="first-touch.test", name="FT"
+    )
+    never = make_test_contact(
+        database_connection, email="new@first-touch.test", company_id=company.id
+    )
+    later = make_test_contact(
+        database_connection, email="t2@first-touch.test", company_id=company.id
+    )
+    e_never = make_test_enrollment(database_connection, workflow.id, never.id)
+    e_later = make_test_enrollment(database_connection, workflow.id, later.id)
+    create_task(
+        database_connection,
+        enrollment_id=e_never.id,
+        workflow_id=workflow.id,
+        contact_id=never.id,
+        description="scheduled first reach-out",
+        scheduled_at="2099-06-01T12:00:00+00:00",
+        context={"trigger": "enrollment_schedule"},
+    )
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        status="sent",
+        contact_id=later.id,
+        workflow_id=workflow.id,
+    )
+    create_task(
+        database_connection,
+        enrollment_id=e_later.id,
+        workflow_id=workflow.id,
+        contact_id=later.id,
+        description="Touch 2",
+        scheduled_at="2099-06-08T12:00:00+00:00",
+        context={"touch": 2},
+    )
+
+    touch1 = list_enrollments_detailed(
+        database_connection,
+        workflow_id=workflow.id,
+        full=True,
+        has_pending_task=True,
+        touch=1,
+    )
+    assert [row.contact_email for row in touch1] == [never.email]
+    assert touch1[0].emails_sent == 0
+    assert touch1[0].next_scheduled_at is not None
+    assert touch1[0].next_touch == 1
+
+    touch2 = list_enrollments_detailed(
+        database_connection, workflow_id=workflow.id, full=True, touch=2
+    )
+    assert [row.contact_email for row in touch2] == [later.email]
+    assert touch2[0].next_touch == 2
+
+
 def test_workflow_readers_accept_t_label_touch_context(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:

@@ -423,7 +423,7 @@ def conclude_enrollment(
             contact_id=contact_id,
             description="scheduled re-enrollment first reach-out",
             scheduled_at=scheduled_at,
-            context={"trigger": "enrollment_schedule"},
+            context={"trigger": "enrollment_schedule", "touch": 1},
             email_id=None,
         )
         result["reschedule_at"] = scheduled_at

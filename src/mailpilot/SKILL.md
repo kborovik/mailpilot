@@ -172,8 +172,18 @@ mailpilot enrollment list --workflow-id acumatica-var-outbound \
 `next_scheduled_at`, `next_touch`, `disposition`, `created_at`. Filters
 `--has-pending-task` / `--no-pending-task`, `--touch N`, and `--disposition`
 (`meeting_booked` | `do_not_contact` | `contact_later`) compose with
-workflow/contact/status scopes. Unknown disposition → `validation_error` with
-allowed set. Sort keys: `updated_at` (default), `next_scheduled_at`.
+workflow/contact/status scopes. `--touch 1` matches never-sent rows that
+have `next_scheduled_at` set (`emails_sent=0`), even when `next_touch` was
+null; `--full` projects `next_touch=1` on those rows. Unknown disposition →
+`validation_error` with allowed set. Sort keys: `updated_at` (default),
+`next_scheduled_at`.
+
+Verify a just-scheduled first-touch batch:
+
+```
+mailpilot enrollment list --workflow-id acumatica-outreach --full \
+  --has-pending-task --touch 1
+```
 
 ### Workflow stats (funnel + touch slices)
 

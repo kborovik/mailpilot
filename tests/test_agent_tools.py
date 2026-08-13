@@ -827,6 +827,7 @@ def test_conclude_enrollment_contact_later_schedules_default_reschedule(
     task = get_task(database_connection, tasks[0].id)
     assert task is not None
     assert task.context.get("trigger") == "enrollment_schedule"
+    assert task.context.get("touch") == 1
     assert task.email_id is None
 
 

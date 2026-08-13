@@ -4372,7 +4372,10 @@ def list_enrollments_detailed(  # noqa: C901, PLR0912
         full: When True, denser execution projection (§V.152).
         has_pending_task: When True/False, filter by presence of pending task.
         touch: Filter to enrollments whose next pending touch equals N, or
-            (when no pending) whose last sent touch equals N.
+            (when no pending) whose last sent touch equals N. ``touch=1``
+            also matches never-sent rows with a pending first-touch
+            (``emails_sent=0`` and ``next_scheduled_at`` set) even when
+            ``context.touch`` is absent (§V.152).
         sort: ``updated_at`` (default) or ``next_scheduled_at`` (full path).
         desc: Sort descending when True.
         stuck: When True (§V.155), only stuck enrollments (heuristics below).
@@ -4467,6 +4470,7 @@ def list_enrollments_detailed(  # noqa: C901, PLR0912
         )
     if touch is not None:
         params["touch"] = touch
+        parsed_pending = _sql_parse_touch(SQL("t.context"))
         where_parts.append(
             SQL(
                 "("
@@ -4474,6 +4478,20 @@ def list_enrollments_detailed(  # noqa: C901, PLR0912
                 "SELECT 1 FROM task t "
                 "WHERE t.enrollment_id = e.id AND t.status = 'pending' "
                 "AND {touch} = %(touch)s"
+                ") "
+                "OR ("
+                "%(touch)s = 1 "
+                "AND EXISTS ("
+                "SELECT 1 FROM task t "
+                "WHERE t.enrollment_id = e.id AND t.status = 'pending' "
+                "AND t.context->>'touch' IS NULL"
+                ") "
+                "AND ("
+                "SELECT COUNT(*)::int FROM email em "
+                "WHERE em.workflow_id = e.workflow_id "
+                "AND em.contact_id = e.contact_id "
+                "AND em.direction = 'outbound' AND em.status = 'sent'"
+                ") = 0"
                 ") "
                 "OR ("
                 "NOT EXISTS ("
@@ -4488,7 +4506,7 @@ def list_enrollments_detailed(  # noqa: C901, PLR0912
                 ") = %(touch)s"
                 ")"
                 ")"
-            ).format(touch=_sql_parse_touch(SQL("t.context")))
+            ).format(touch=parsed_pending)
         )
     where_clause = (
         SQL("WHERE ") + SQL(" AND ").join(where_parts) if where_parts else SQL("")
@@ -4525,7 +4543,16 @@ def list_enrollments_detailed(  # noqa: C901, PLR0912
             "AND em.direction = 'outbound' AND em.status = 'sent'"
             ") AS last_touch, "
             "nt.scheduled_at AS next_scheduled_at, "
-            "{next_touch} AS next_touch, "
+            "COALESCE("
+            "{next_touch}, "
+            "CASE WHEN nt.scheduled_at IS NOT NULL "
+            "AND nt.context->>'touch' IS NULL AND ("
+            "SELECT COUNT(*)::int FROM email em "
+            "WHERE em.workflow_id = e.workflow_id "
+            "AND em.contact_id = e.contact_id "
+            "AND em.direction = 'outbound' AND em.status = 'sent'"
+            ") = 0 THEN 1 END"
+            ") AS next_touch, "
             "outcome.disposition AS disposition "
         ).format(next_touch=_sql_parse_touch(SQL("nt.context")))
         from_joins = (

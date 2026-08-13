@@ -10266,7 +10266,10 @@ def test_enrollment_add_with_scheduled_at_outbound_creates_task(
     assert create_kwargs["contact_id"] == _CONTACT_ID
     assert create_kwargs["description"] == "scheduled first reach-out"
     assert create_kwargs["scheduled_at"] == "2026-06-01T10:00:00+00:00"
-    assert create_kwargs["context"] == {"trigger": "enrollment_schedule"}
+    assert create_kwargs["context"] == {
+        "trigger": "enrollment_schedule",
+        "touch": 1,
+    }
     assert create_kwargs["email_id"] is None
     data = json.loads(result.output)
     assert data["enrollment"]["workflow_id"] == _WORKFLOW_ID
@@ -11049,6 +11052,20 @@ def test_enrollment_list_help_workflow_id_name_or_id(runner: CliRunner) -> None:
     result = runner.invoke(main, ["enrollment", "list", "--help"])
     assert result.exit_code == 0
     assert "name or ID" in result.output
+    assert "never-sent" in result.output
+    assert "§V." not in result.output
+
+
+def test_skill_documents_enrollment_touch_1() -> None:
+    """§V.152: packaged SKILL.md documents --touch 1 first-touch verify."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "--touch 1" in body
+    assert "emails_sent=0" in body
+    assert "next_touch=1" in body
+    assert "§V." not in body
+    assert "§T." not in body
 
 
 def test_enrollment_list_full_projects_execution_fields(

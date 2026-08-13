@@ -5670,7 +5670,7 @@ def _maybe_schedule_first_touch(
         contact_id=contact_id,
         description="scheduled first reach-out",
         scheduled_at=scheduled_iso,
-        context={"trigger": "enrollment_schedule"},
+        context={"trigger": "enrollment_schedule", "touch": 1},
         email_id=None,
     )
     changed.append("scheduled_first_send")
@@ -6122,7 +6122,10 @@ def enrollment_view(enrollment_id: str) -> None:
     "--touch",
     type=int,
     default=None,
-    help="Filter by next pending touch number (or last sent when none pending).",
+    help=(
+        "Filter by next pending touch number (or last sent when none pending). "
+        "Touch 1 also matches never-sent rows that have a scheduled first send."
+    ),
 )
 @sort_option(["updated_at", "next_scheduled_at"], default="updated_at")
 @desc_option
