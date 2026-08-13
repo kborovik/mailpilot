@@ -527,6 +527,17 @@ profile); default list never ships products, target_customers, or sources.
 `company view` projects the same `tags` shape as list, plus `aliases`
 (sorted alternate domains), full profile, and inlined notes.
 
+Pass `company view --full` to inspect one firm in a single call: the
+company envelope embeds `contacts[]` (lean contact fields, including
+disabled), plus the existing `tags[]` and `notes[]`. Distinct from
+`company list --full`. Omit `verification_meta` unless `--include-meta`.
+Lean `company view` (no `--full`) is unchanged.
+
+```
+mailpilot company view example.com --full
+mailpilot company view example.com --full --include-meta
+```
+
 ### Company tracker export and dry-run import
 
 Export a filterable company cohort as NDJSON for external trackers (not the

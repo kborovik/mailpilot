@@ -2654,9 +2654,38 @@ def company_list(
 
 @company.command("view")
 @click.argument("company_ref")
-def company_view(company_ref: str) -> None:
-    """Show a company by domain or ID with inlined notes."""
-    from mailpilot.database import initialize_database, load_company_view
+@click.option(
+    "--full",
+    is_flag=True,
+    default=False,
+    help=(
+        "Embed contacts (lean fields) with existing tags and notes. "
+        "Distinct from company list --full (profile.summary only)."
+    ),
+)
+@click.option(
+    "--include-meta",
+    is_flag=True,
+    default=False,
+    help=(
+        "With --full, project verification_meta on each contact "
+        "(null when unset). Lean view omits meta."
+    ),
+)
+def company_view(company_ref: str, full: bool, include_meta: bool) -> None:
+    """Show a company by domain or ID with inlined notes.
+
+    Lean view is unchanged (profile, tags, aliases, notes). Pass --full to
+    embed contacts[] (lean contact fields) in the same envelope. Pass
+    --include-meta with --full to project verification_meta on those
+    contacts. Distinct from company list --full, which only embeds
+    profile.summary.
+    """
+    from mailpilot.database import (
+        initialize_database,
+        list_company_inspect_contacts,
+        load_company_view,
+    )
 
     connection = initialize_database(_database_url())
     try:
@@ -2664,7 +2693,14 @@ def company_view(company_ref: str) -> None:
         found = load_company_view(connection, company_id)
         if found is None:
             output_error(f"company not found: {company_ref}", "not_found")
-        output_entity("company", found)
+        if not full:
+            output_entity("company", found)
+            return
+        payload = found.model_dump(mode="json")
+        payload["contacts"] = list_company_inspect_contacts(
+            connection, found.id, include_meta=include_meta
+        )
+        output({"company": payload})
     finally:
         connection.close()
 

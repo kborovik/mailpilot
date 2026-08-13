@@ -7315,6 +7315,41 @@ def load_company_view(
     )
 
 
+def list_company_inspect_contacts(
+    connection: psycopg.Connection[dict[str, Any]],
+    company_id: str,
+    *,
+    include_meta: bool = False,
+) -> list[dict[str, Any]]:
+    """Lean child contacts for ``company view --full`` (§V.168).
+
+    Returns ContactSummary dicts (same fields as ``contact list``). Disabled
+    contacts are included so the inspect set matches ``contact_count``.
+    ``verification_meta`` is omitted unless ``include_meta`` is True (§V.144).
+    """
+    summaries = list_contacts(
+        connection,
+        company_id=company_id,
+        include_disabled=True,
+        limit=1_000_000,
+    )
+    payloads = [summary.model_dump(mode="json") for summary in summaries]
+    if not include_meta:
+        return payloads
+    rows = connection.execute(
+        """\
+        SELECT id, verification_meta
+        FROM contact
+        WHERE company_id = %(company_id)s
+        """,
+        {"company_id": company_id},
+    ).fetchall()
+    meta_by_id = {str(row["id"]): row["verification_meta"] for row in rows}
+    for payload in payloads:
+        payload["verification_meta"] = meta_by_id.get(str(payload["id"]))
+    return payloads
+
+
 def load_meeting_view(
     connection: psycopg.Connection[dict[str, Any]],
     meeting_id: str,

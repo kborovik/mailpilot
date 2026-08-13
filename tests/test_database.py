@@ -85,6 +85,7 @@ from mailpilot.database import (
     list_activities,
     list_companies,
     list_company_aliases,
+    list_company_inspect_contacts,
     list_contacts,
     list_emails,
     list_enrollments_detailed,
@@ -7236,6 +7237,75 @@ def test_load_company_view_projects_tags_same_shape_as_list(
     assert bare_view.tags == []
     assert view.tags == listed[company.id].tags
     assert bare_view.tags == listed[bare.id].tags
+
+
+def test_list_company_inspect_contacts_lean_omits_meta(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.168: --full contacts are lean ContactSummary fields, no meta."""
+    company = make_test_company(database_connection, name="Acme", domain="acme.com")
+    contact = create_contact(
+        database_connection,
+        email="ada@acme.com",
+        company_id=company.id,
+        title="VP Sales",
+        verification_meta={"bouncer_status": "deliverable"},
+    )
+    assert contact is not None
+    disabled = create_contact(
+        database_connection,
+        email="gone@acme.com",
+        company_id=company.id,
+    )
+    assert disabled is not None
+    disable_contact(database_connection, disabled.id, "left")
+
+    payloads = list_company_inspect_contacts(database_connection, company.id)
+    emails = [row["email"] for row in payloads]
+    assert "ada@acme.com" in emails
+    assert "gone@acme.com" in emails
+    for row in payloads:
+        assert "verification_meta" not in row
+        assert "title" in row
+        assert "email" in row
+
+
+def test_list_company_inspect_contacts_include_meta(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.168/§V.144: --include-meta projects verification_meta (null ok)."""
+    company = make_test_company(database_connection, name="Acme", domain="acme.com")
+    meta = {"bouncer_status": "deliverable", "source": "hunter"}
+    with_meta = create_contact(
+        database_connection,
+        email="ada@acme.com",
+        company_id=company.id,
+        verification_meta=meta,
+    )
+    bare = create_contact(
+        database_connection,
+        email="grace@acme.com",
+        company_id=company.id,
+    )
+    assert with_meta is not None
+    assert bare is not None
+
+    payloads = {
+        row["email"]: row
+        for row in list_company_inspect_contacts(
+            database_connection, company.id, include_meta=True
+        )
+    }
+    assert payloads["ada@acme.com"]["verification_meta"] == meta
+    assert payloads["grace@acme.com"]["verification_meta"] is None
+
+
+def test_list_company_inspect_contacts_empty(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.168: company with zero contacts returns an empty list."""
+    company = make_test_company(database_connection, name="Empty", domain="empty.com")
+    assert list_company_inspect_contacts(database_connection, company.id) == []
 
 
 def test_load_contact_view_carries_title_and_email_confidence(

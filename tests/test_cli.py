@@ -2915,6 +2915,112 @@ def test_company_view(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert data["company"]["notes"] == []
     assert data["company"]["notes_total"] == 0
     assert data["company"]["tags"] == ["vip"]
+    assert "contacts" not in data["company"]
+
+
+def test_company_view_full_embeds_contacts(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.168: --full embeds contacts[] on the company envelope."""
+    company = _make_company()
+    view = CompanyView(
+        id=company.id,
+        name=company.name,
+        domain=company.domain,
+        tags=["vip"],
+        created_at=company.created_at,
+        updated_at=company.updated_at,
+        notes=[],
+        notes_total=0,
+    )
+    contacts = [
+        {
+            "id": "c1",
+            "email": "ada@acme.com",
+            "first_name": "Ada",
+            "last_name": None,
+            "title": "VP Sales",
+            "company_id": company.id,
+            "company_domain": company.domain,
+            "email_confidence": 98,
+            "disabled_reason": None,
+            "created_at": _NOW.isoformat(),
+        }
+    ]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.load_company_view", return_value=view),
+        patch(
+            "mailpilot.database.list_company_inspect_contacts",
+            return_value=contacts,
+        ) as mock_contacts,
+    ):
+        result = runner.invoke(main, ["company", "view", company.id, "--full"])
+
+    assert result.exit_code == 0, result.output
+    mock_contacts.assert_called_once_with(
+        mock_connection, company.id, include_meta=False
+    )
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 1
+    assert data["company"]["tags"] == ["vip"]
+    assert data["company"]["notes"] == []
+    assert data["company"]["contacts"] == contacts
+    assert "verification_meta" not in data["company"]["contacts"][0]
+
+
+def test_company_view_full_include_meta_forwards_flag(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.168: --full --include-meta forwards include_meta=True."""
+    company = _make_company()
+    view = CompanyView(
+        id=company.id,
+        name=company.name,
+        domain=company.domain,
+        created_at=company.created_at,
+        updated_at=company.updated_at,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.load_company_view", return_value=view),
+        patch(
+            "mailpilot.database.list_company_inspect_contacts",
+            return_value=[],
+        ) as mock_contacts,
+    ):
+        result = runner.invoke(
+            main, ["company", "view", company.id, "--full", "--include-meta"]
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_contacts.assert_called_once_with(
+        mock_connection, company.id, include_meta=True
+    )
+
+
+def test_company_view_help_documents_full(runner: CliRunner) -> None:
+    """§V.168/§V.111: company view --help documents --full."""
+    result = runner.invoke(main, ["company", "view", "--help"])
+    assert result.exit_code == 0
+    assert "--full" in result.output
+    assert "contacts" in result.output
+    assert "§V." not in result.output
+    assert "§T." not in result.output
+
+
+def test_skill_documents_company_view_full() -> None:
+    """§V.168: packaged SKILL.md documents company view --full inspect."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "company view" in body
+    assert "--full" in body
+    assert "contacts" in body
+    assert "--include-meta" in body
 
 
 def test_company_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:

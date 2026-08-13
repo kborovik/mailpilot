@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `company view --full` embeds `contacts[]` with existing `tags[]` and
+  `notes[]` on one company envelope. Lean `company view` is unchanged.
+  Pass `--include-meta` to project `verification_meta` on those contacts.
+
 - `workflow check --account-email` plus `--file` restores that account's
   full wording envelope, including orphaned rows.
 
