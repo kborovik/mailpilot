@@ -784,8 +784,8 @@ Trigger: `src/mailpilot/run.py` or `src/mailpilot/agent/templates.py` changed.
 - `active` = `status='active'` enrollment with no terminal outcome
 
 Touch-level + execution slices (additive; still enrollment grain where applicable):
-- `touches` = map touch-number string → `{sent, pending}` for each configured def `touches` N (outbound sent count vs pending task.context.touch)
-- `awaiting_first_touch` = active enrollments with no outbound email for this workflow
+- `touches` = map touch-number string → `{sent, pending}` for each configured def `touches` N (outbound sent count vs pending tasks whose resolved touch = N per §V.162: parse context.touch; absent/unparseable + trigger in {enrollment_run, enrollment_schedule} → 1)
+- `awaiting_first_touch` = active enrollments with no outbound email for this workflow (enrollment grain; ! required equal `touches.1.pending`)
 - `disabled` = enrollments with `status='disabled'`
 
 Disposition persistence: `record_enrollment_outcome` writes `detail.disposition` in {meeting_booked, do_not_contact, contact_later} from `conclude_enrollment.disposition` (§V.127) + booking-conclusion `meeting_booked` (§V.128). JSONB key, no migration. Pre-change failed rows lack disposition (legacy gap; forward campaigns are exact).
@@ -1017,12 +1017,13 @@ Trigger: inbound classify / conclude / campaign-test address-change path changed
 
 ## §V162 — touch-context-parse
 
-touch-context-parse — `task.context.touch` JSON number `N` or string `T<n>` or `"n"` → int N; SQL readers (get_workflow_stats, list_enrollments_detailed --full/--touch) never raw `(context->>'touch')::int`; unparseable → NULL not crash; new writers (cadence + OOO-resume create_task + enrollment_schedule first-touch) emit numeric N; enrollment_schedule writer (`enrollment add --scheduled-at`) persists `context.touch` numeric 1; `resolve_touch_number` same parse + trigger in {enrollment_run, enrollment_schedule} → 1 when touch absent
+touch-context-parse — `task.context.touch` JSON number `N` or string `T<n>` or `"n"` → int N; SQL readers (get_workflow_stats, list_enrollments_detailed --full/--touch) never raw `(context->>'touch')::int`; unparseable → NULL not crash; new writers (cadence + OOO-resume create_task + enrollment_schedule first-touch) emit numeric N; enrollment_schedule writer (`enrollment add --scheduled-at`) persists `context.touch` numeric 1; `resolve_touch_number` same parse + trigger in {enrollment_run, enrollment_schedule} → 1 when touch absent. SQL pending count (`get_workflow_stats`) + queue readers (`format_queue_touch`, workflow-grain t1/t2/t3) share that fallback — enrollment_schedule w/ empty touch → 1 not NULL/blank.
 
-Trigger: stats / enrollment --full/--touch / cadence task write / enrollment_schedule writer changed.
+Trigger: stats / enrollment --full/--touch / cadence task write / enrollment_schedule writer / show queue changed.
 - `rg 'resolve_touch_number' src/mailpilot/` -> shared parse present
 - `rg "context->>'touch'\\)\\s*::int" src/mailpilot/` -> zero raw ::int casts
 - `rg 'enrollment_schedule' src/mailpilot/cli.py src/mailpilot/agent/tools.py` -> first-touch writer sites emit touch:1
+- `rg 'format_queue_touch' src/mailpilot/queue.py` -> queue touch cell present
 
 ## §V163 — bounce enrollment hard-stop
 
@@ -1054,11 +1055,11 @@ Trigger: campaign-test or reply-test scripts/skills changed.
 
 `mailpilot show queue` = read-only operator report hub (not CRM noun). Default stdout ASCII table via `tabulate` `tablefmt=simple` (no Unicode box, no ANSI color, no TTY-variant bytes). `--format json|table` (default table). No csv/ndjson. Errors stay JSON stderr + exit 1. `--format json` envelope `{"queue":{grain,tz,rows},"ok":true,"record_count":N}` N=len(rows). `grain` in {`workflow`,`task`}. `--detail` -> task grain else workflow grain.
 
-Workflow grain: 1 row / workflow in scope incl draft|active|paused; omit `--workflow-name` = every workflow; columns {workflow_name, status, active, pending, overdue, due_today, next_at, failed_24h, never_sent}; table `next_at` = YYYY-MM-DD in `--tz` (empty if none); JSON keeps ISO datetime; sort next_at ASC (empty last) then name; no `--limit`.
+Workflow grain: 1 row / workflow in scope incl draft|active|paused; omit `--workflow-name` = every workflow; columns {workflow_name, t1, t2, t3, next_at} only (drop status, active, pending, overdue, due_today, failed_24h, never_sent). tN = pending-task count whose resolved touch = N (§V.162 parse + first-touch trigger fallback). resolved touch ≥4 omitted from t1/t2/t3. table `next_at` = YYYY-MM-DD in `--tz` (empty if none); JSON keeps ISO datetime; next_at = MIN pending scheduled_at (all pending, not t1-only); sort next_at ASC (empty last) then name; no `--limit`.
 
 Task grain: 1 row / pending task; sort scheduled_at ASC (queue order; ! change `list_tasks` DESC); table columns {when, contact, email, company, workflow_name, touch, trigger, state, attempts}; hide UUIDs on table; JSON ? include task_id + enrollment_id; `--limit` default 100; `--overdue` = pending + scheduled_at < now; stuck-without-task ! rows (stays §V.155 enrollment/report `--stuck`).
 
-`--workflow-name` name|UUID §V.107 unknown -> not_found; flag matches table+JSON col `workflow_name` (name, not UUID). `--tz` IANA default UTC (due_today + relative when). `when` relative (`overdue 2d`, `today 14:00`, `in 3d`) + ISO in JSON. `touch` parse §V.162 (`T2` or empty). `never_sent` / `failed_24h` reuse §V.157 / §V.155 24h SLA. No LLM. No CRM write. Entity JSON verbs byte-stable. Empty -> `(no rows)` exit 0.
+`--workflow-name` name|UUID §V.107 unknown -> not_found; flag matches table+JSON col `workflow_name` (name, not UUID). `--tz` IANA default UTC (next_at date + relative when). `when` relative (`overdue 2d`, `today 14:00`, `in 3d`) + ISO in JSON. `touch` parse §V.162 + first-touch trigger fallback (`enrollment_schedule` / `enrollment_run` → T1 when touch absent). No LLM. No CRM write. Entity JSON verbs byte-stable. Empty -> `(no rows)` exit 0.
 
 Trigger: `show queue` path changed.
 - `rg 'show.*queue|def show_queue' src/mailpilot/cli.py` -> command present
@@ -1115,11 +1116,12 @@ Trigger: `src/mailpilot/agent/` prompt compose changed.
 
 ## §V32 — enrollment_schedule trigger
 
-enrollment_schedule = distinct trigger label (observability split from enrollment_run); `--scheduled-at` -> pending first-touch task (email_id NULL), idempotent, rejected for inbound workflows
+enrollment_schedule = distinct trigger label (observability split from enrollment_run). `--scheduled-at` on outbound → pending first-touch (email_id NULL, context.trigger=enrollment_schedule, context.touch numeric 1). Insert-once: no second first-reach task, no second enrollment. Re-run `enrollment add --contact-email --scheduled-at` on active emails_sent=0 enrollment w/ pending first-reach: parsed instant differs → UPDATE that task scheduled_at in place + persist touch 1 if absent + `changed` includes `scheduled_first_send`; same instant → no-op `changed=[]`. emails_sent>0 or pending row not first-reach (trigger not in {enrollment_schedule, enrollment_run} or resolved touch ≥2) → no-op (never move T2/T3). inbound workflow → invalid_state. Compare instants not strings.
 
 Trigger: enrollment schedule / first-touch path changed.
 - `rg 'enrollment_schedule' src/mailpilot/` -> distinct trigger label present
 - `rg 'scheduled.at|scheduled_at' src/mailpilot/cli.py` -> --scheduled-at first-touch present
+- `rg 'scheduled_first_send' src/mailpilot/cli.py` -> changed token on first-touch write
 
 ## §V35 — Drive KB isolation
 
