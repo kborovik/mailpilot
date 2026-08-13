@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `workflow check --account-email` plus `--file` restores that account's
   full wording envelope, including orphaned rows.
 
+- `workflow import --file` recurses `**/*.toml`. Each applied row includes
+  `in_sync` and a short `changed` excerpt so `workflow view` is not
+  required to confirm ready-copy.
+
 - `enrollment add --tag --dry-run` matches company tags or contact tags
   (union, unique by contact). Preview rows include title, company tags,
   contact tags, email confidence, and peer-workflow names, grouped by

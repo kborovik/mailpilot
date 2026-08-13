@@ -5235,6 +5235,68 @@ _WORKFLOW_IMPORT_UPDATABLE = (
     "touches",
     "touch_interval_days",
 )
+_IMPORT_EXCERPT_HEAD = 160
+_IMPORT_EXCERPT_TAIL = 160
+
+
+def _import_field_excerpt(value: object) -> str:
+    """Short preview of a mutated def field (§V.103).
+
+    Instructions keep a tail so ready-copy at the end of a long body is
+    visible without a follow-up ``workflow view``.
+    """
+    if value is None:
+        return ""
+    text = str(value)
+    limit = _IMPORT_EXCERPT_HEAD + _IMPORT_EXCERPT_TAIL + 5
+    if len(text) <= limit:
+        return text
+    return f"{text[:_IMPORT_EXCERPT_HEAD]}...{text[-_IMPORT_EXCERPT_TAIL:]}"
+
+
+def _projected_import_def(entry: dict[str, Any], current: Any | None) -> dict[str, Any]:
+    """Def fields as import would persist them, for the post-apply hash."""
+
+    def merged(field: str, default: object) -> object:
+        if field in entry:
+            return entry[field]
+        if current is not None:
+            return getattr(current, field)
+        return default
+
+    theme = merged("theme", "blue")
+    goal = merged("goal", "")
+    instructions = merged("instructions", "")
+    return {
+        "template": str(entry.get("template") or (current.template if current else "")),
+        "theme": str(theme or "blue"),
+        "goal": str(goal or ""),
+        "instructions": str(instructions or ""),
+        "touches": merged("touches", None),
+        "touch_interval_days": merged("touch_interval_days", None),
+    }
+
+
+def _import_applied_preview(
+    name: str,
+    action: str,
+    entry: dict[str, Any],
+    current: Any | None,
+    changed: dict[str, object],
+) -> dict[str, object]:
+    """Per-row import preview: action + post-apply sync + changed excerpts."""
+    from mailpilot.database import import_row_in_sync
+
+    projected = _projected_import_def(entry, current)
+    in_sync = import_row_in_sync(entry, projected)
+    return {
+        "name": name,
+        "action": action,
+        "in_sync": in_sync,
+        "changed": {
+            key: _import_field_excerpt(value) for key, value in changed.items()
+        },
+    }
 
 
 def _workflow_import_extras(entry: dict[str, Any]) -> dict[str, object]:
@@ -5293,17 +5355,19 @@ def _import_workflow_create(
     activated = bool(entry.get("goal") and entry.get("instructions"))
     if activated:
         activate_workflow(connection, created.id)
-    changed = ["name", "template", "account_id", "theme", *extras.keys()]
+    preview_changed: dict[str, object] = {"theme": entry.get("theme") or "blue"}
+    preview_changed.update(extras)
+    event_changed = ["name", "template", "account_id", "theme", *extras.keys()]
     if activated:
-        changed.append("status")
+        event_changed.append("status")
     operator_event(
         "workflow.import",
         entity_id=created.id,
         account_id=account_id,
         name=name,
-        changed=changed,
+        changed=event_changed,
     )
-    return {"name": name, "action": "created"}
+    return _import_applied_preview(name, "created", entry, None, preview_changed)
 
 
 def _import_workflow_update(
@@ -5327,7 +5391,7 @@ def _import_workflow_update(
             name=current.name,
             changed=[],
         )
-        return {"name": current.name, "action": "unchanged"}
+        return _import_applied_preview(current.name, "unchanged", entry, current, {})
     update_workflow(connection, current.id, **diff)
     operator_event(
         "workflow.import",
@@ -5336,7 +5400,7 @@ def _import_workflow_update(
         name=current.name,
         changed=list(diff.keys()),
     )
-    return {"name": current.name, "action": "updated"}
+    return _import_applied_preview(current.name, "updated", entry, current, diff)
 
 
 def _validate_workflow_import_name(name: str, stem: str) -> str | None:
@@ -5500,7 +5564,8 @@ def _load_workflow_import_entries(
     type=click.Path(exists=True),
     help=(
         "Workflow source (TOML only): a '.toml' file imports one workflow "
-        "(catalog entry); a directory imports every '*.toml' in it."
+        "(catalog entry); a directory recurses and imports every '*.toml' "
+        "under it."
     ),
 )
 def workflow_import(account_email: str | None, file: str | None) -> None:
@@ -5510,8 +5575,9 @@ def workflow_import(account_email: str | None, file: str | None) -> None:
 
     * ``--file X.toml`` -- one workflow as pure TOML; ``instructions`` may use a
       multi-line literal string.
-    * ``--file <dir>`` -- every ``*.toml`` in the directory (catalog batch); a
-      file that fails to parse becomes a per-row error and the batch continues.
+    * ``--file <dir>`` -- every ``*.toml`` under the directory, recursively
+      (catalog batch); a file that fails to parse becomes a per-row error and
+      the batch continues.
 
     Each parsed entry feeds the same upsert (keyed on ``(account_id, name)``):
     workflows absent from the DB are created (and activated when both
@@ -5519,10 +5585,13 @@ def workflow_import(account_email: str | None, file: str | None) -> None:
     updated for changed fields only, ``template`` differences emit a per-row
     ``template_immutable`` error, and ``status`` is never written by import.
 
-    The terminal envelope aggregates: top-level ``applied`` and ``rejected``
-    counts on every import envelope; zero applied rows -> an ``import_failed``
-    error envelope on stderr (per-row rows inlined) and exit 1, so scripts
-    gating on the exit code never mistake a no-op import for success.
+    Applied rows carry ``action`` (created / updated / unchanged), ``in_sync``
+    (post-apply wording-hash match), and ``changed`` (mutated def fields with
+    a short excerpt). The terminal envelope aggregates: top-level ``applied``
+    and ``rejected`` counts on every import envelope; zero applied rows -> an
+    ``import_failed`` error envelope on stderr (per-row rows inlined) and exit
+    1, so scripts gating on the exit code never mistake a no-op import for
+    success.
     """
     from mailpilot.database import (
         initialize_database,

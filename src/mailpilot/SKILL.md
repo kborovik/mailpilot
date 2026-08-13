@@ -619,6 +619,26 @@ envelope on stderr with the per-row rows inlined, exit 1. A partial import
 stays `ok: true` (exit 0) with per-row errors inline, so check `rejected`
 before trusting a batch.
 
+### Import campaign workflows (one call)
+
+`--file` recurses `**/*.toml`, so a campaigns monorepo is one import. Do
+not run one import per slug directory, and do not follow with
+`workflow view` to confirm wording.
+
+```
+mailpilot workflow import --account-email <ACCOUNT_REF> --file campaigns/
+```
+
+Each applied row carries `action` (`created` / `updated` / `unchanged`),
+`in_sync` (post-apply wording hash match), and `changed` (mutated def
+fields with a short excerpt). Instruction excerpts keep the tail so
+ready-copy at the end of a long body is visible. Then check the same
+tree:
+
+```
+mailpilot workflow check --file campaigns/
+```
+
 ### Check workflow wording (one call)
 
 `--file` lists only workflows whose TOML files sit under that path (file

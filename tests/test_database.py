@@ -77,6 +77,7 @@ from mailpilot.database import (
     get_workflow_by_name,
     get_workflow_stats,
     has_inbound_email_from_contact_after,
+    import_row_in_sync,
     import_snapshot,
     link_meeting_attendee,
     list_accounts,
@@ -8637,6 +8638,22 @@ def test_check_workflow_wording_account_id_filters_rows(
     assert names["account-a-flow"] == "in_sync"
     assert "account-b-flow" not in names
     assert report.orphaned == 0
+
+
+def test_import_row_in_sync_detects_wording_mismatch() -> None:
+    """§V.103: in_sync is a post-apply wording-hash match, not a bare True."""
+    entry = _catalog_entry("demo", goal="New goal", instructions="Body")
+    matching = {
+        "template": "outbound-general",
+        "theme": "blue",
+        "goal": "New goal",
+        "instructions": "Body",
+        "touches": None,
+        "touch_interval_days": None,
+    }
+    drifted = {**matching, "goal": "Old goal"}
+    assert import_row_in_sync(entry, matching) is True
+    assert import_row_in_sync(entry, drifted) is False
 
 
 def test_get_workflow_report_matrix(

@@ -7064,7 +7064,12 @@ def test_workflow_import_create_path_activates(
     mock_activate.assert_called_once_with(mock_connection, created.id)
     data = json.loads(result.output)
     assert data["ok"] is True
-    assert data["workflows"] == [{"name": "demo-outreach", "action": "created"}]
+    created_row = data["workflows"][0]
+    assert created_row["name"] == "demo-outreach"
+    assert created_row["action"] == "created"
+    assert created_row["in_sync"] is True
+    assert created_row["changed"]["goal"] == "Book demos"
+    assert "sales rep" in created_row["changed"]["instructions"]
     assert data["applied"] == 1
     assert data["rejected"] == 0
     assert data["record_count"] == 1
@@ -7150,7 +7155,11 @@ def test_workflow_import_update_path_diff_only(
     mock_activate.assert_not_called()
     mock_update.assert_called_once_with(mock_connection, existing.id, goal="New goal")
     data = json.loads(result.output)
-    assert data["workflows"] == [{"name": "demo-outreach", "action": "updated"}]
+    updated_row = data["workflows"][0]
+    assert updated_row["name"] == "demo-outreach"
+    assert updated_row["action"] == "updated"
+    assert updated_row["in_sync"] is True
+    assert updated_row["changed"] == {"goal": "New goal"}
 
 
 def test_workflow_import_unchanged_no_mutation(
@@ -7192,7 +7201,11 @@ def test_workflow_import_unchanged_no_mutation(
     mock_update.assert_not_called()
     mock_activate.assert_not_called()
     data = json.loads(result.output)
-    assert data["workflows"] == [{"name": "demo-outreach", "action": "unchanged"}]
+    unchanged_row = data["workflows"][0]
+    assert unchanged_row["name"] == "demo-outreach"
+    assert unchanged_row["action"] == "unchanged"
+    assert unchanged_row["in_sync"] is True
+    assert unchanged_row["changed"] == {}
 
 
 def test_workflow_import_template_immutable_row_error(
@@ -7248,7 +7261,9 @@ def test_workflow_import_template_immutable_row_error(
     by_name = {row["name"]: row for row in rows}
     assert by_name["demo-outreach"]["error"] == "template_immutable"
     assert "inbound-general" in by_name["demo-outreach"]["message"]
-    assert by_name["other-workflow"] == {"name": "other-workflow", "action": "created"}
+    assert by_name["other-workflow"]["name"] == "other-workflow"
+    assert by_name["other-workflow"]["action"] == "created"
+    assert by_name["other-workflow"]["in_sync"] is True
     assert data["applied"] == 1
     assert data["rejected"] == 1
     assert data["record_count"] == 2
@@ -7399,6 +7414,124 @@ def test_workflow_import_directory_globs_toml(
     assert [row["name"] for row in data["workflows"]] == ["alpha", "bravo"]
 
 
+def test_workflow_import_recurses_campaigns_tree(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    """§V.103: --file campaigns/ imports campaigns/<slug>/workflows/<slug>.toml."""
+    account = _make_account()
+    created = _make_workflow()
+    for slug in ("slug-a", "slug-b"):
+        nested = tmp_path / "campaigns" / slug / "workflows"
+        nested.mkdir(parents=True)
+        _write_workflow_toml(
+            nested / f"{slug}.toml",
+            _import_payload(name=slug, goal=f"Goal {slug}"),
+        )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.database.list_workflows_full", return_value=[]),
+        patch("mailpilot.database.create_workflow", return_value=created),
+        patch("mailpilot.database.update_workflow", return_value=created),
+        patch("mailpilot.database.activate_workflow", return_value=created),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "import",
+                "--account-email",
+                _ACCOUNT_ID,
+                "--file",
+                str(tmp_path / "campaigns"),
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    names = [row["name"] for row in data["workflows"]]
+    assert names == ["slug-a", "slug-b"]
+    assert data["applied"] == 2
+    assert all(row["action"] == "created" for row in data["workflows"])
+    assert all(row["in_sync"] is True for row in data["workflows"])
+
+
+def test_workflow_import_preview_skips_view(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    """§V.103: changed.instructions excerpt includes ready-copy tail; no view needed."""
+    account = _make_account()
+    existing = _make_workflow(
+        name="demo-outreach",
+        goal="Book demos",
+        instructions="Old opening that will be pushed out of the excerpt.\n",
+        theme="green",
+        status="active",
+    )
+    ready_copy = "**T1 ready copy: book the 20-minute demo this week.**"
+    # Long prefix so the excerpt must keep a tail to stay useful.
+    prefix = "Keep the shared preamble. " * 20
+    file = tmp_path / "demo-outreach.toml"
+    _write_workflow_toml(
+        file,
+        _import_payload(instructions=prefix + ready_copy),
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.database.list_workflows_full", return_value=[existing]),
+        patch("mailpilot.database.create_workflow") as mock_create,
+        patch("mailpilot.database.update_workflow", return_value=existing),
+        patch("mailpilot.database.activate_workflow"),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "import",
+                "--account-email",
+                _ACCOUNT_ID,
+                "--file",
+                str(file),
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_create.assert_not_called()
+    data = json.loads(result.output)
+    row = data["workflows"][0]
+    assert row["action"] == "updated"
+    assert row["in_sync"] is True
+    excerpt = row["changed"]["instructions"]
+    assert ready_copy in excerpt
+    assert "..." in excerpt
+
+
+def test_workflow_import_help_recurse_no_spec_cite(runner: CliRunner) -> None:
+    """§V.103/§V.111: import --help names recurse; no SPEC cites."""
+    result = runner.invoke(main, ["workflow", "import", "--help"])
+    assert result.exit_code == 0
+    assert "recurs" in result.output.lower()
+    assert "in_sync" in result.output or "excerpt" in result.output.lower()
+    assert "§V." not in result.output
+    assert "§T." not in result.output
+
+
+def test_skill_documents_workflow_import_one_call() -> None:
+    """§V.103: packaged SKILL.md documents one-call campaigns import + preview."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "Import campaign workflows (one call)" in body
+    assert "workflow import --account-email <ACCOUNT_REF> --file campaigns/" in body
+    assert "in_sync" in body
+    assert "workflow view" in body
+    assert "§V." not in body
+    assert "§T." not in body
+
+
 def test_workflow_import_toml_malformed_top_error(
     runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
 ) -> None:
@@ -7469,7 +7602,9 @@ def test_workflow_import_directory_parse_error_continues_batch(
     assert len(rows) == 2
     assert rows[0]["error"] == "validation_error"
     assert "bad.toml" in rows[0]["message"]
-    assert rows[1] == {"name": "good", "action": "created"}
+    assert rows[1]["name"] == "good"
+    assert rows[1]["action"] == "created"
+    assert rows[1]["in_sync"] is True
     assert data["applied"] == 1
     assert data["rejected"] == 1
     assert data["record_count"] == 2

@@ -3344,6 +3344,23 @@ def _catalog_wording_hash(entry: dict[str, Any]) -> str:
     )
 
 
+def import_row_in_sync(entry: dict[str, Any], persisted: dict[str, Any]) -> bool:
+    """True when catalog wording hash matches the persisted def fields (§V.103).
+
+    Import uses this for the per-row ``in_sync`` flag after create/update.
+    ``persisted`` is the projected post-apply def
+    ``{template, theme, goal, instructions, touches, touch_interval_days}``.
+    """
+    return _catalog_wording_hash(entry) == _compute_workflow_wording_hash(
+        template=str(persisted.get("template") or ""),
+        theme=str(persisted.get("theme") or "blue"),
+        goal=str(persisted.get("goal") or ""),
+        instructions=str(persisted.get("instructions") or ""),
+        touches=persisted.get("touches"),
+        touch_interval_days=persisted.get("touch_interval_days"),
+    )
+
+
 def check_workflow_wording(
     connection: psycopg.Connection[dict[str, Any]],
     catalog: dict[str, dict[str, Any]],
