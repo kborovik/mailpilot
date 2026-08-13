@@ -77,6 +77,7 @@ from mailpilot.gmail import (
     strip_control_chars,
 )
 from mailpilot.models import Account, Contact, Email, Meeting
+from mailpilot.ooo import auto_submitted_label
 from mailpilot.operator_log import operator_event
 from mailpilot.routing import find_thread_enrolled_contact, route_email
 from mailpilot.settings import Settings
@@ -1148,6 +1149,10 @@ def _store_inbound_message(  # noqa: PLR0913
         received_at is not None and datetime.now(UTC) - received_at <= _RECENCY_WINDOW
     )
     inbound_recipients = _extract_recipients(headers)
+    labels = list(message.get("labelIds", []))
+    marker = auto_submitted_label(headers.get("auto-submitted"))
+    if marker is not None:
+        labels.append(marker)
     email = create_email(
         connection,
         account_id=account.id,
@@ -1159,7 +1164,7 @@ def _store_inbound_message(  # noqa: PLR0913
         contact_id=contact.id,
         is_routed=not within_window,
         received_at=received_at,
-        labels=list(message.get("labelIds", [])),
+        labels=labels,
         rfc2822_message_id=headers.get("message-id"),
         in_reply_to=headers.get("in-reply-to"),
         references_header=headers.get("references"),

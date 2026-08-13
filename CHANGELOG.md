@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Out-of-office automatic replies on an outbound enrollment no longer
+  send the fallback acknowledgement or burn a touch. The next touch
+  resumes on the stated return date when that date is parseable, or
+  after the cadence interval (three days when cadence is unset).
+  Address-change and left-company auto-replies stay a hard stop.
+
 - `company list` and `contact list` `--tag` is repeatable and AND-composes
   (the row must carry every named tag). `--help` documents AND, matching
   `--no-tag`.

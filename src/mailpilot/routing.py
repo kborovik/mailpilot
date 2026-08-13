@@ -50,6 +50,7 @@ from mailpilot.database import (
     update_email,
 )
 from mailpilot.models import Contact, Email
+from mailpilot.ooo import is_mechanical_ooo, schedule_ooo_resume
 from mailpilot.operator_log import operator_event
 from mailpilot.settings import Settings
 
@@ -162,6 +163,7 @@ def route_email(
                     _cancel_pending_followups(
                         connection, workflow_id, result.contact_id, result.id
                     )
+                    _maybe_ooo_pause(connection, result, workflow_id)
             else:
                 operator_event("route.no_match", email_id=result.id)
 
@@ -504,3 +506,26 @@ def _cancel_pending_followups(
             enrollment_id=enrollment.id,
             cancelled_count=len(cancelled),
         )
+
+
+def _maybe_ooo_pause(
+    connection: psycopg.Connection[dict[str, Any]],
+    email: Email,
+    workflow_id: str,
+) -> None:
+    """Schedule an OOO resume after V123 cancel on mechanical auto-reply.
+
+    Only outbound enrollments. Address-change / left-company auto-replies
+    are not OOO (§V.161, §V.164) and stay on the agent path.
+    """
+    if email.contact_id is None:
+        return
+    if not is_mechanical_ooo(email):
+        return
+    workflow = get_workflow(connection, workflow_id)
+    if workflow is None or workflow.type != "outbound":
+        return
+    enrollment = get_enrollment(connection, workflow_id, email.contact_id)
+    if enrollment is None:
+        return
+    schedule_ooo_resume(connection, workflow, enrollment, email)

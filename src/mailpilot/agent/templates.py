@@ -152,8 +152,8 @@ _DEFERRED_TASK_TASK = (
     "a different local-part; put the redirect, referral addresses, and the new "
     "email (when present) in the note so campaign review can re-target; never "
     "enroll the From alias or any new address yourself. Out-of-office and "
-    "temporary absence auto-replies are different: call noop (pause once, "
-    "leave enrollment open) "
+    "temporary absence auto-replies are different: call noop (the system "
+    "pauses and resumes the sequence; leave enrollment open) "
     "-- do not conclude and do not reply. "
     "Use contact_later to defer (optionally pass reschedule_at). If work cannot "
     "complete now but should resume later, schedule a deferred task via "
@@ -228,7 +228,8 @@ _DECLINE = (
 # answer, §V.45 / §V.130) cannot reach the sender; the inbound sender gets a brief
 # receipt instead of silent NO_REPLY. ``run._handle_agent_failure`` sends this
 # string verbatim via ``email_ops.reply_email``; an outbound first reach-out
-# failure (no inbound email_id) stays silent. The model never sees this string,
+# failure (no inbound email_id) stays silent, and an OOO / auto-reply inbound
+# is also silent. The model never sees this string,
 # yet it stays ASCII-only per §C (code-defined content, not agent-generated).
 _FALLBACK_ACKNOWLEDGEMENT = (
     "Thank you for your message. We have received it and a member of our team "

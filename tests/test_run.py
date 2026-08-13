@@ -985,6 +985,83 @@ def test_execute_task_no_double_reply_when_reply_emitted(
     assert mock_complete.call_args.kwargs["status"] == "failed"
 
 
+def test_execute_task_ooo_inbound_failure_sends_no_fallback(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.131 / §V.169: terminal failure on an OOO inbound sends no ACK."""
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings()
+    email = _make_email(
+        subject="Re: Touch 1",
+        body_text="I am out of the office returning Thursday.",
+    )
+    task = _make_task(email_id=_EMAIL_ID)
+    workflow = _make_workflow()
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch("mailpilot.run.get_email", return_value=email),
+        patch(
+            "mailpilot.run.invoke_workflow_agent",
+            side_effect=RuntimeError("LLM error"),
+        ),
+        patch("mailpilot.run.schedule_ooo_resume") as mock_resume,
+        patch("mailpilot.run.email_ops") as mock_email_ops,
+        patch("mailpilot.run.complete_task") as mock_complete,
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_email_ops.reply_email.assert_not_called()
+    mock_resume.assert_called_once()
+    assert mock_complete.call_args.kwargs["status"] == "failed"
+
+
+def test_execute_task_mechanical_ooo_skips_agent(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.169: Automatic-reply OOO on outbound completes without an agent turn."""
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings()
+    email = _make_email(
+        subject="Automatic reply: out of the office until Monday",
+        body_text="I am out of the office until Monday.",
+    )
+    task = _make_task(email_id=_EMAIL_ID)
+    workflow = _make_workflow()
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch("mailpilot.run.get_email", return_value=email),
+        patch("mailpilot.run.invoke_workflow_agent") as mock_invoke,
+        patch("mailpilot.run.schedule_ooo_resume") as mock_resume,
+        patch("mailpilot.run.email_ops") as mock_email_ops,
+        patch("mailpilot.run.complete_task") as mock_complete,
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_invoke.assert_not_called()
+    mock_email_ops.reply_email.assert_not_called()
+    mock_resume.assert_called_once()
+    mock_complete.assert_called_once_with(
+        database_connection,
+        _TASK_ID,
+        status="completed",
+        result={"reason": "ooo_pause"},
+    )
+
+
 def test_execute_task_fallback_send_failure_still_marks_failed(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
