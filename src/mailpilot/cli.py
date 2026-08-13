@@ -5763,6 +5763,31 @@ def _reject_enrollment_self_loop(
         )
 
 
+def _same_scheduled_instant(existing: Any, scheduled_iso: str) -> bool:
+    """True when ``existing`` and the parsed ISO string are the same instant."""
+    from datetime import UTC, datetime
+
+    wanted = datetime.fromisoformat(scheduled_iso)
+    if wanted.tzinfo is None:
+        wanted = wanted.replace(tzinfo=UTC)
+    have = existing
+    if have.tzinfo is None:
+        have = have.replace(tzinfo=UTC)
+    return have == wanted
+
+
+def _is_first_reach_task(task: Any) -> bool:
+    """True when the pending row is a first-reach (T1), not T2+ (§V.32)."""
+    from mailpilot.cadence import resolve_touch_number
+
+    context = task.context or {}
+    trigger = str(context.get("trigger") or "")
+    touch = resolve_touch_number(context, trigger)
+    if touch is not None and touch >= 2:
+        return False
+    return trigger in ("enrollment_schedule", "enrollment_run")
+
+
 def _maybe_schedule_first_touch(
     connection: Any,
     enrollment_id: str,
@@ -5770,22 +5795,41 @@ def _maybe_schedule_first_touch(
     contact_id: str,
     scheduled_iso: str | None,
     changed: list[str],
+    *,
+    enrollment_status: str,
+    emails_sent: int,
 ) -> None:
-    """Insert a pending first-touch task per §V.32 unless one already exists.
+    """Insert or last-write-wins a pending first-touch task per §V.32.
 
-    Idempotent: if ``find_pending_first_touch_task`` returns a row for the
-    enrollment, no task is created and ``changed`` is left alone. On insert,
-    ``changed`` gains ``"scheduled_first_send"`` so §V.54 operator events
-    carry an accurate diff list.
+    New enrollment (no pending first-reach): insert once. Re-run on an
+    active ``emails_sent=0`` enrollment with a pending first-reach: UPDATE
+    ``scheduled_at`` in place when the parsed instant differs, persist
+    ``touch`` 1 if absent, and append ``scheduled_first_send`` to
+    ``changed``. Same instant, later touch, already-sent, or non-active
+    enrollment: no-op. Never inserts a second first-reach.
     """
     if scheduled_iso is None:
         return
     from mailpilot.database import (
         create_task,
         find_pending_first_touch_task,
+        update_pending_first_touch_schedule,
     )
 
-    if find_pending_first_touch_task(connection, enrollment_id) is not None:
+    existing = find_pending_first_touch_task(connection, enrollment_id)
+    if existing is not None:
+        if not _is_first_reach_task(existing):
+            return
+        if emails_sent > 0 or enrollment_status != "active":
+            return
+        if _same_scheduled_instant(existing.scheduled_at, scheduled_iso):
+            return
+        update_pending_first_touch_schedule(
+            connection, task=existing, scheduled_at=scheduled_iso
+        )
+        changed.append("scheduled_first_send")
+        return
+    if emails_sent > 0:
         return
     create_task(
         connection,
@@ -5883,6 +5927,7 @@ def _enrollment_add_contact(
 ) -> None:
     """Enroll a single contact, optionally scheduling first touch."""
     from mailpilot.database import (
+        count_outbound_sent,
         create_activity,
         create_enrollment,
         get_account,
@@ -5921,12 +5966,18 @@ def _enrollment_add_contact(
             )
             target = created
             changed = ["status"]
+            emails_sent = 0
         else:
             existing = get_enrollment(connection, workflow_id, contact_id)
             if existing is None:
                 return
             target = existing
             changed = []
+            emails_sent = (
+                count_outbound_sent(connection, workflow_id, contact_id)
+                if scheduled_iso is not None
+                else 0
+            )
         _maybe_schedule_first_touch(
             connection,
             target.id,
@@ -5934,6 +5985,8 @@ def _enrollment_add_contact(
             contact_id,
             scheduled_iso,
             changed,
+            enrollment_status=target.status,
+            emails_sent=emails_sent,
         )
         event_fields: dict[str, Any] = {
             "enrollment_id": target.id,
@@ -5983,7 +6036,7 @@ def _enrollment_add_contact(
     default=None,
     help=(
         "ISO 8601 timestamp for scheduled first reach-out (outbound workflows "
-        "only). Inserts a pending task drained by the run loop."
+        "only). Re-run updates an existing pending first-reach in place."
     ),
 )
 def enrollment_add(
@@ -5997,8 +6050,9 @@ def enrollment_add(
     """Enroll a contact, or dry-run a tag-cohort preview.
 
     Single-contact path: ``--workflow-id`` + ``--contact-email``. When
-    ``--scheduled-at`` is given on an outbound workflow, a pending task is
-    inserted for the run loop. Tag cohort path (dry-run only):
+    ``--scheduled-at`` is given on an outbound workflow, a pending first
+    reach-out is inserted, or an existing never-sent first-reach is
+    updated in place. Tag cohort path (dry-run only):
     ``--workflow-id`` + ``--tag`` + ``--dry-run`` [optional ``--min-contacts``]
     returns an ``enrollment_preview`` with no writes. ``--tag`` matches
     company tags or contact tags (union, unique by contact).

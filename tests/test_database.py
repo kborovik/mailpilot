@@ -27,6 +27,7 @@ from mailpilot.database import (
     check_workflow_wording,
     company_import_diff,
     complete_task,
+    count_outbound_sent,
     create_account,
     create_activity,
     create_company,
@@ -112,6 +113,7 @@ from mailpilot.database import (
     update_contact,
     update_email,
     update_meeting,
+    update_pending_first_touch_schedule,
     update_workflow,
     upsert_meeting,
 )
@@ -5453,6 +5455,66 @@ def test_find_pending_first_touch_task_scoped_to_enrollment(
     )
     assert find_pending_first_touch_task(database_connection, enroll_b.id) is None
     assert find_pending_first_touch_task(database_connection, enroll_a.id) is not None
+
+
+def test_update_pending_first_touch_schedule_moves_time_and_persists_touch(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.32: UPDATE scheduled_at in place and persist numeric touch 1."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    created = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="scheduled first reach-out",
+        scheduled_at="2026-08-14T13:00:00+00:00",
+        context={"trigger": "enrollment_schedule"},
+    )
+
+    updated = update_pending_first_touch_schedule(
+        database_connection,
+        task=created,
+        scheduled_at="2026-08-14T08:00:00-04:00",
+    )
+    assert updated is not None
+    assert updated.id == created.id
+    assert updated.scheduled_at == datetime(2026, 8, 14, 12, 0, tzinfo=UTC)
+    assert updated.context.get("trigger") == "enrollment_schedule"
+    assert updated.context.get("touch") == 1
+
+    found = find_pending_first_touch_task(database_connection, enrollment.id)
+    assert found is not None
+    assert found.id == created.id
+    assert found.scheduled_at == datetime(2026, 8, 14, 12, 0, tzinfo=UTC)
+
+
+def test_count_outbound_sent_zero_then_one(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.32: emails_sent gate counts outbound sent rows only."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    assert count_outbound_sent(database_connection, workflow.id, contact.id) == 0
+    created = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="Touch 1",
+        body_text="hello",
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        status="sent",
+        sent_at=datetime(2026, 8, 13, 12, 0, tzinfo=UTC),
+        sender=account.email,
+        recipients={"to": [contact.email]},
+    )
+    assert created is not None
+    assert count_outbound_sent(database_connection, workflow.id, contact.id) == 1
 
 
 # -- cancel_enrollment_followup_tasks (§V.123) ---------------------------------

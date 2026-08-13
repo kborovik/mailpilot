@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- `enrollment add --scheduled-at` on an existing never-sent first-reach
+  enrollment updates the pending task time in place. A re-run at the same
+  instant stays a no-op. Later touches and already-sent enrollments are
+  not moved.
+
 ## [v0.24.0] - 2026-08-13
 
 ### Added

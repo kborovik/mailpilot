@@ -792,6 +792,71 @@ def test_enrollment_add_scheduled_at_event_carries_field(
     assert "'scheduled_first_send'" in err
 
 
+def test_enrollment_add_scheduled_at_rerun_event_carries_changed(
+    runner: CliRunner,
+    mock_connection: MagicMock,
+    capfire: CaptureLogfire,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """§V.32 + §V.54: last-write-wins re-run emits scheduled_first_send."""
+    from mailpilot.models import Task
+
+    enrollment = _make_enrollment()
+    workflow = _make_workflow(type="outbound")
+    contact = _make_contact()
+    existing_task = Task(
+        id="01234567-0000-7000-0000-aaaaaaaaaaaa",
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        email_id=None,
+        description="scheduled first reach-out",
+        context={"trigger": "enrollment_schedule"},
+        scheduled_at=datetime(2026, 8, 14, 13, 0, tzinfo=UTC),
+        status="pending",
+        result={},
+        completed_at=None,
+        created_at=_NOW,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=workflow),
+        patch("mailpilot.database.get_contact", return_value=contact),
+        patch("mailpilot.database.get_account", return_value=_make_account()),
+        patch("mailpilot.database.create_enrollment", return_value=None),
+        patch("mailpilot.database.get_enrollment", return_value=enrollment),
+        patch("mailpilot.database.count_outbound_sent", return_value=0),
+        patch(
+            "mailpilot.database.find_pending_first_touch_task",
+            return_value=existing_task,
+        ),
+        patch("mailpilot.database.update_pending_first_touch_schedule"),
+        patch("mailpilot.database.create_task") as mock_create_task,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.id,
+                "--contact-email",
+                contact.id,
+                "--scheduled-at",
+                "2026-08-14T08:00:00-04:00",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_create_task.assert_not_called()
+    assert _spans_named(capfire, "enrollment.add")
+    err = result.stderr
+    assert "event=enrollment.add" in err
+    assert "scheduled_at=2026-08-14T08:00:00-04:00" in err
+    assert "'scheduled_first_send'" in err
+
+
 def test_enrollment_disable_emits_span_and_event(
     runner: CliRunner,
     mock_connection: MagicMock,

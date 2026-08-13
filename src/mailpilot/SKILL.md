@@ -692,7 +692,10 @@ mailpilot enrollment enable <ENROLLMENT_ID>
 
 Pass `--scheduled-at <ISO>` on `enrollment add` against an outbound workflow
 to queue a first-touch send for that time; the run loop dispatches it when
-due.
+due. Re-run the same command on an active never-sent enrollment to move
+the pending first-reach time. The task is updated in place; no second
+enrollment is created. A re-run at the same instant is a no-op. Later
+touches and already-sent enrollments are not moved.
 
 Enrollment status is `active` or `disabled`. `disabled` is the operator halt
 (set via `enrollment disable`, reversed via `enrollment enable`); the agent

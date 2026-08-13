@@ -5272,9 +5272,9 @@ def find_pending_first_touch_task(
     A first-touch task is the CLI-scheduled initial outbound send per §V.32:
     ``email_id IS NULL`` (not tied to a triggering inbound email) and
     ``status='pending'`` (not yet drained, not cancelled, not failed). Used
-    by ``mailpilot enrollment add --scheduled-at ...`` to skip a duplicate
-    insert when the operator re-runs against an enrollment that already has
-    one queued. Keyed on scalar ``enrollment_id`` per §V.32 post-migration.
+    by ``mailpilot enrollment add --scheduled-at ...`` to locate the queued
+    first-reach (insert or last-write-wins UPDATE). Keyed on scalar
+    ``enrollment_id`` per §V.32 post-migration.
     """
     row = connection.execute(
         """\
@@ -5287,6 +5287,67 @@ def find_pending_first_touch_task(
         """,
         {"enrollment_id": enrollment_id},
     ).fetchone()
+    if row is None:
+        return None
+    return Task.model_validate(row)
+
+
+def count_outbound_sent(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+    contact_id: str,
+) -> int:
+    """Count sent outbound emails for a workflow/contact pair.
+
+    Same grain as the ``emails_sent`` projection on enrollment ``--full``
+    (§V.152). Used by ``enrollment add --scheduled-at`` to refuse moving a
+    first-reach after a send (§V.32).
+    """
+    row = connection.execute(
+        """\
+        SELECT COUNT(*)::int AS n FROM email
+        WHERE workflow_id = %(workflow_id)s
+          AND contact_id = %(contact_id)s
+          AND direction = 'outbound' AND status = 'sent'
+        """,
+        {"workflow_id": workflow_id, "contact_id": contact_id},
+    ).fetchone()
+    if row is None:
+        return 0
+    return int(row["n"])
+
+
+def update_pending_first_touch_schedule(
+    connection: psycopg.Connection[dict[str, Any]],
+    *,
+    task: Task,
+    scheduled_at: str,
+) -> Task | None:
+    """Move a pending first-reach ``scheduled_at`` in place (§V.32).
+
+    Persists numeric ``context.touch = 1`` when absent so later SQL parsers
+    do not need the enrollment_schedule fallback (§V.162). Same task id.
+    """
+    from mailpilot.cadence import parse_touch_number
+
+    context = dict(task.context)
+    if parse_touch_number(context.get("touch")) is None:
+        context["touch"] = 1
+    row = connection.execute(
+        """\
+        UPDATE task
+        SET scheduled_at = %(scheduled_at)s,
+            context = %(context)s
+        WHERE id = %(id)s AND status = 'pending'
+        RETURNING *
+        """,
+        {
+            "id": task.id,
+            "scheduled_at": scheduled_at,
+            "context": Json(context),
+        },
+    ).fetchone()
+    connection.commit()
     if row is None:
         return None
     return Task.model_validate(row)
