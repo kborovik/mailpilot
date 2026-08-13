@@ -878,7 +878,7 @@ disable reason-file — `company disable` + `contact disable` accept `--reason-f
 
 ## §V150
 
-enrollment tag-cohort dry-run — `enrollment add --workflow-id <ref> --tag <name> --dry-run` [optional `--min-contacts N`]; company-tag path only MVP; dry-run required for tag path (tag w/o dry-run → `validation_error`; dry-run w/o tag → `validation_error`); single-contact `--contact-email` path unchanged (no dry-run needed); expand: companies w/ tag (disabled excluded by default §V.114) → enabled contacts; drop already-enrolled for workflow + self-loop contacts (§V.33) + disabled contacts; optional `--min-contacts N` filters companies before expand; envelope `{"enrollment_preview":{workflow, tag, count, contacts:[{email, company_domain}], excluded:{disabled_companies, already_enrolled, self_loop, disabled_contacts}},"ok":true,"record_count":count}` (aggregate not enrollment row); undefined tag → `not_found`; zero candidates → ok empty record_count=0; no writes; --skill cohort recipe; help zero SPEC cites §V.111
+enrollment tag-cohort dry-run — `enrollment add --workflow-id <ref> --tag <name> --dry-run` [optional `--min-contacts N`]; `--tag` matches company-tag or contact-tag (union, dedup contact id); company-tag expand = enabled contacts @ tagged companies; contact-tag expand = enabled contacts carrying tag (disabled company excluded §V.114); dry-run required for tag path (tag w/o dry-run → `validation_error`; dry-run w/o tag → `validation_error`); single-contact `--contact-email` path unchanged (no dry-run needed); drop already-enrolled this workflow + self-loop contacts (§V.33) + disabled contacts; optional `--min-contacts N` filters companies before expand (company-tag) / contact's company contact_count (contact-tag); envelope `{"enrollment_preview":{workflow, tag, count, contacts:[{email, title, company_domain, company_tags[], contact_tags[], email_confidence, peer_workflows[]}], excluded:{disabled_companies, already_enrolled, self_loop, disabled_contacts}},"ok":true,"record_count":count}` (aggregate not enrollment row); contacts sorted company_domain then email (group-stable); `peer_workflows` = other-workflow names w/ active enrollment (empty ok); undefined tag → `not_found`; zero candidates → ok empty record_count=0; no writes; --skill one-call cohort recipe; help zero SPEC cites §V.111
 
 ## §V3 — stdout strict JSON + stderr lifecycle
 
@@ -922,12 +922,13 @@ Trigger: `src/mailpilot/` account/signature/render paths changed.
 
 ## §V152 — enrollment execution projection
 
-enrollment execution projection — default list lean; `--full` denser {company_domain, company_name, emails_sent, last_touch, next_scheduled_at, next_touch, disposition, created_at}; filters `--has-pending-task` / `--touch N` / `--disposition` (§V.160); sort next_scheduled_at; envelope `enrollments`; entity refs name|UUID (§V.107). `enrollment list --workflow-id` polymorphic name|UUID via `_resolve_workflow_id` (§V.107); help "name or ID"; unknown → `not_found` (#207).
+enrollment execution projection — default list lean; `--full` denser {company_domain, company_name, emails_sent, last_touch, next_scheduled_at, next_touch, disposition, created_at}; filters `--has-pending-task` / `--touch N` / `--disposition` (§V.160); `--touch 1` matches pending first-touch when `emails_sent=0` AND `next_scheduled_at` IS NOT NULL even when `context.touch` absent / `next_touch` null (`enrollment_schedule` §V.32); `--full` projects `next_touch=1` on that row; `--touch N` N>=2 unchanged (pending context.touch=N or no-pending last-sent=N); sort next_scheduled_at; envelope `enrollments`; entity refs name|UUID (§V.107). `enrollment list --workflow-id` polymorphic name|UUID via `_resolve_workflow_id` (§V.107); help "name or ID"; unknown → `not_found` (#207).
 
 Trigger: enrollment list/view projection changed.
 - `rg 'next_scheduled_at|emails_sent|last_touch|--full' src/mailpilot/cli.py src/mailpilot/database.py` -> denser projection fields
 - `rg 'def enrollment_list' -A 40 src/mailpilot/cli.py` -> list path calls `_resolve_workflow_id` for workflow filter
 - `rg '--disposition|disposition' src/mailpilot/cli.py src/mailpilot/database.py` -> disposition filter surface
+- `rg 'emails_sent=0|next_scheduled_at|next_touch' src/mailpilot/database.py` -> first-touch --touch 1 fallback present
 
 ## §V153 — workflow report composite
 
@@ -998,11 +999,12 @@ Trigger: inbound classify / conclude / campaign-test address-change path changed
 
 ## §V162 — touch-context-parse
 
-touch-context-parse — `task.context.touch` JSON number `N` or string `T<n>` or `"n"` → int N; SQL readers (get_workflow_stats, list_enrollments_detailed --full/--touch) never raw `(context->>'touch')::int`; unparseable → NULL not crash; new writers (cadence + OOO-resume create_task) emit numeric N; `resolve_touch_number` same parse
+touch-context-parse — `task.context.touch` JSON number `N` or string `T<n>` or `"n"` → int N; SQL readers (get_workflow_stats, list_enrollments_detailed --full/--touch) never raw `(context->>'touch')::int`; unparseable → NULL not crash; new writers (cadence + OOO-resume create_task + enrollment_schedule first-touch) emit numeric N; enrollment_schedule writer (`enrollment add --scheduled-at`) persists `context.touch` numeric 1; `resolve_touch_number` same parse + trigger in {enrollment_run, enrollment_schedule} → 1 when touch absent
 
-Trigger: stats / enrollment --full/--touch / cadence task write changed.
+Trigger: stats / enrollment --full/--touch / cadence task write / enrollment_schedule writer changed.
 - `rg 'resolve_touch_number' src/mailpilot/` -> shared parse present
 - `rg "context->>'touch'\\)\\s*::int" src/mailpilot/` -> zero raw ::int casts
+- `rg 'enrollment_schedule' src/mailpilot/cli.py src/mailpilot/agent/tools.py` -> first-touch writer sites emit touch:1
 
 ## §V163 — bounce enrollment hard-stop
 
