@@ -175,7 +175,7 @@ V126: CalendarClient mirrors Gmail/Drive; poll from run-interval + account sync;
 V127: conclude_enrollment = sole agent terminal; disposition enum; system side-effects; record_enrollment_outcome not agent tool — → .spec/check-extras.md §V127
 V128: calendar booking concludes active outbound enrollments + cancels follow-ups, no agent turn — → .spec/check-extras.md §V128
 V129: agent timestamps grounded (current-date inject) + future-checked at create_task + conclude_enrollment.reschedule_at — → .spec/check-extras.md §V129
-V131: terminal inbound agent failure → one `_FALLBACK_ACKNOWLEDGEMENT`; outbound first-touch silent; fallback-send fail → task failed — → .spec/check-extras.md §V131
+V131: terminal inbound agent failure → one `_FALLBACK_ACKNOWLEDGEMENT`; outbound first-touch silent; auto-reply/OOO inbound silent; fallback-send fail → task failed — → .spec/check-extras.md §V131
 V132: workflow stats funnel single-SQL enrollment grain; 8 stages + touch slices + awaiting_first_touch + disabled; no LLM — → .spec/check-extras.md §V132
 V133: task stats aggregate single-SQL; filters --workflow-id + --trigger; per-status counts + scheduled day buckets — → .spec/check-extras.md §V133
 V134: workflow check SHA-256; --file always path-scope (file|dir recurse); --account-email+--file ? full envelope; states {in_sync,out_of_sync,not_imported,orphaned}; report-only — → .spec/check-extras.md §V134
@@ -205,7 +205,7 @@ V157: workflow status ops-health composite (meta+wording+run_loop+overdue/failed
 V158: contact search multi-token — full-name TRIM(first||' '||last); multi-token AND across {email,first,last,title}; single-token per-field LIKE retained; disabled searchable — → .spec/check-extras.md §V158
 V159: contact view --timeline — opt-in bounded dossier (notes+enrollments+emails+activities); bare view notes-only; default N=10 + hard cap — → .spec/check-extras.md §V159
 V160: enrollment list --disposition — filter terminal disposition ∈ {do_not_contact, contact_later, meeting_booked}; composes w/ existing filters; unknown → validation_error + allowed set — → .spec/check-extras.md §V160
-V161: address-change auto-reply hard-stop — active outbound + address-change/redirect auto-reply → conclude do_not_contact; ! OOO pause — → .spec/check-extras.md §V161
+V161: address-change auto-reply hard-stop — active outbound + address-change/redirect auto-reply → conclude do_not_contact; ! OOO pause/resume — → .spec/check-extras.md §V161
 V162: touch-context-parse — context.touch N or T<n> or "n" → int; SQL never raw ::int; unparseable → NULL; first-touch writer emits 1 — → .spec/check-extras.md §V162
 V163: bounce enrollment hard-stop — outbound bounce → every active outbound enrollment do_not_contact + cancel follow-ups — → .spec/check-extras.md §V163
 V164: thread-alias inbound bind — inbound on existing outbound thread binds enrolled contact when From local-part differs; ! auto-enroll alias — → .spec/check-extras.md §V164
@@ -213,6 +213,7 @@ V165: live-e2e-dev-only — campaign-test + reply-test ! read settings.logfire_e
 V166: show-queue — `mailpilot show queue` human report hub; default ASCII table; `--format json` opt-in; `--detail` task grain; every workflow status; pending tasks only; no LLM; no write — → .spec/check-extras.md §V166
 V167: company-create-oneshot — `company create` accepts §V.140 profile flags + repeatable `--tag` same invocation; one txn all-or-nothing; `--tag` additive never invent (§V.116); undefined tag → not_found; invalid profile → validation_error; second `--upsert` exit 0, update profile if flags, no tag dups — → .spec/check-extras.md §V167
 V168: company-view-full — `company view --full` embeds `contacts[]` + `tags[]` + `notes[]` on company envelope; omit `verification_meta` unless `--include-meta`; lean view unchanged; distinct from `company list --full`
+V169: ooo-pause-resume — active outbound + inbound OOO/temporary-absence auto-reply (detect: subject Automatic reply / Auto-Submitted / agent OOO class) → no reply incl. no §V.131 fallback ACK; ! conclude (distinct §V.161); ! bump last_touch/emails_sent; §V.123 cancel pending follow-ups; harness schedule resume @ parseable return date (context.touch numeric §V.162, reason=ooo_pause); unparseable → +touch_interval_days (or +3d if NULL cadence); enrollment stays active, disposition null
 
 ## §T TASKS
 
@@ -271,6 +272,7 @@ T271|x|impl §V.103 + §I — workflow import --file recurse **/*.toml; per-row 
 T272|x|impl §V.143(∆) + §I — merge allow disabled source + disabled survivor; keep survivor reason; tests + help (#221)|V143,V114,V142,V4,I.cli
 T273|x|impl §V.168(+) + §I — company view --full embeds contacts/tags/notes; lean unchanged; tests + help (#222)|V168,V8,V4,I.cli
 T274|x|impl §V.116(∆) + §I — company|contact list --tag repeatable AND; help documents AND; tests two-tag intersection (#223)|V116,V4,I.cli
+T275|.|impl §V.169(+) + §V.131(∆) + §V.161(∆) — OOO/auto-reply inbound never fallback ACK; failed inbound ! bump last_touch/emails_sent; harness pause + resume @ parseable return date; distinct §V.161 DNC; fixtures fail-path (no ACK, no burned touch) + success-path (resume scheduled) (#225)|V169,V131,V161,V123,V162,V136,B136
 
 ## §B BUGS
 
@@ -321,3 +323,4 @@ B132|2026-08-12|OOO-resume task stored context.touch="T2"; `(context->>'touch'):
 B133|2026-08-12|bounce disables contact, leaves enrollment active + T2 pending|V163
 B134|2026-08-12|inbound thread reply From local-part alias mints new contact + DNC that row; original enrollment stays active + T2 pending|V164
 B135|2026-08-12|campaign-test preflight never checked logfire_environment; live skill ran against production CRM/DB/pubsub|V165
+B136|2026-08-13|OOO inbound: fallback ACK burned last_touch/emails_sent, or V123 cancel left next_scheduled_at null w/ no resume|V169
