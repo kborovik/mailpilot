@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `company create` accepts profile flags and repeatable `--tag` in one
+  call. Combined with `--upsert`, a second identical call exits 0,
+  updates the profile when flags are present, and does not duplicate
+  tags. Invalid profile or undefined tag writes nothing.
+
 ## [v0.23.1] - 2026-08-13
 
 ### Changed

@@ -267,10 +267,24 @@ Success envelopes include top-level `created: true` (insert) or
 `created: false` (update). Contact upsert updates only flags present on the
 call (`title`, `email_confidence`, `company_domain`, `--meta-json`); omitted
 fields are not clobbered. Company upsert updates non-empty `--name` and
-registers missing `--alias` values only — it never wipes profile.
+registers missing `--alias` values only — it never wipes profile unless
+profile flags are also passed.
+
+Company create is oneshot: the same invocation accepts profile write flags
+(`--profile-file` / `--profile -` / `--profile-json` or field-patch
+`--summary` / `--product` / `--source` / `--timezone` /
+`--target-customers`) plus repeatable `--tag`. One transaction writes the
+company, optional profile, and additive tag links. Invalid profile returns
+`validation_error` and writes nothing. Undefined `--tag` returns
+`not_found` and never auto-creates the tag. `--tag` is additive (already
+linked is an ok skip, not a replace). Success company payload includes
+`has_profile` and `tags`. A second identical `--upsert` call exits 0,
+updates the profile when flags are present, and does not duplicate tags.
 
 ```
-mailpilot company create --domain example.com --name "Example Co" --upsert
+mailpilot company create --domain example.com --name "Example Co" --upsert \
+  --profile-file /tmp/profile.json \
+  --tag sage-var --tag acumatica-var
 mailpilot contact create --email lead@example.com \
     --first-name "Ada" --last-name "Lovelace" \
     --company-domain <COMPANY_REF> --title "VP Sales" --upsert
@@ -376,6 +390,10 @@ Prefer file or stdin over inline JSON (avoids shell-escape footguns). Profile
 objects must include non-empty `summary`, `products`, `target_customers`, and
 `sources`; `timezone` is optional. Invalid profiles fail with
 `validation_error` and write nothing.
+
+Prefer oneshot `company create --upsert --profile-file --tag ...` when the
+company may not exist yet. Use `company update` to patch an existing
+company without a create/upsert.
 
 Full replace (exclusive: one of `--profile-file`, `--profile -`, or short
 `--profile-json`):

@@ -200,6 +200,13 @@ def output_entity(key: str, model: Any, **extra: object) -> None:
     output({key: model.model_dump(mode="json"), **extra})
 
 
+def _output_company_create_entity(model: Any, *, created: bool) -> None:
+    """Emit company create/upsert envelope with ``has_profile`` (§V.167)."""
+    payload = model.model_dump(mode="json")
+    payload["has_profile"] = payload.get("profile") is not None
+    output({"company": payload, "created": created})
+
+
 def _emit_formatted(
     envelope_key: str,
     payload: dict[str, Any],
@@ -1760,6 +1767,127 @@ def company() -> None:
     """Manage target companies."""
 
 
+def _company_profile_options(fn: Any) -> Any:
+    """Stack profile write flags shared by ``company create`` and ``update``."""
+    fn = click.option(
+        "--target-customers",
+        default=None,
+        help="Patch profile.target_customers (merge).",
+    )(fn)
+    fn = click.option(
+        "--timezone",
+        default=None,
+        help="Patch profile.timezone (empty string clears to null).",
+    )(fn)
+    fn = click.option(
+        "--source",
+        multiple=True,
+        help="Patch profile.sources (repeatable; replaces the sources list).",
+    )(fn)
+    fn = click.option(
+        "--product",
+        multiple=True,
+        help="Patch profile.products (repeatable; replaces the products list).",
+    )(fn)
+    fn = click.option("--summary", default=None, help="Patch profile.summary (merge).")(
+        fn
+    )
+    fn = click.option(
+        "--profile",
+        default=None,
+        help="Full-replace profile; pass '-' to read a JSON object from stdin.",
+    )(fn)
+    fn = click.option(
+        "--profile-file",
+        default=None,
+        type=click.Path(exists=True, dir_okay=False),
+        help="Full-replace profile from a JSON file path.",
+    )(fn)
+    fn = click.option(
+        "--profile-json",
+        default=None,
+        help=(
+            "Full-replace profile as an inline JSON object "
+            "(prefer --profile-file or --profile -)."
+        ),
+    )(fn)
+    return fn
+
+
+def _profile_replace_and_patch_flags(
+    profile_json: str | None,
+    profile_file: str | None,
+    profile: str | None,
+    summary: str | None,
+    product: tuple[str, ...],
+    source: tuple[str, ...],
+    timezone: str | None,
+    target_customers: str | None,
+) -> tuple[list[str], bool]:
+    """Return (replace flag names, has_patch); error on exclusive violations."""
+    replace_flags: list[str] = []
+    if profile_json is not None:
+        replace_flags.append("--profile-json")
+    if profile_file is not None:
+        replace_flags.append("--profile-file")
+    if profile is not None:
+        replace_flags.append("--profile")
+    has_patch = any(
+        (
+            summary is not None,
+            bool(product),
+            bool(source),
+            timezone is not None,
+            target_customers is not None,
+        )
+    )
+    if len(replace_flags) > 1:
+        output_error(
+            "full-replace profile options are exclusive: " + ", ".join(replace_flags),
+            "validation_error",
+        )
+    if replace_flags and has_patch:
+        output_error(
+            "full-replace profile options are exclusive with field-patch flags",
+            "validation_error",
+        )
+    if profile is not None and profile != "-":
+        output_error(
+            "--profile only accepts '-' for stdin; use --profile-file for a path",
+            "validation_error",
+        )
+    return replace_flags, has_patch
+
+
+def _read_replace_profile(
+    profile_json: str | None,
+    profile_file: str | None,
+    profile: str | None,
+) -> dict[str, object]:
+    """Load a full-replace profile dict from json / file / stdin."""
+    import pathlib
+    import sys
+
+    if profile_json is not None:
+        return _parse_company_profile_json(profile_json)
+    if profile_file is not None:
+        raw = pathlib.Path(profile_file).read_text(encoding="utf-8")
+        return _parse_company_profile_json(raw)
+    return _parse_company_profile_json(sys.stdin.read())
+
+
+def _validate_company_profile_payload(payload: dict[str, object]) -> dict[str, object]:
+    """Validate a profile dict before any CRM write (§V.72 / §V.167)."""
+    from pydantic import ValidationError
+
+    from mailpilot.models import CompanyProfile
+
+    try:
+        return CompanyProfile.model_validate(payload).model_dump(exclude_unset=True)
+    except ValidationError as exc:
+        output_error(str(exc), "validation_error")
+
+
 @company.command("create")
 @click.option("--domain", required=True, help="Primary domain.")
 @click.option("--name", default="", help="Company name.")
@@ -1783,40 +1911,103 @@ def company() -> None:
     default=False,
     help=(
         "On natural-key conflict, update name when non-empty and register "
-        "missing aliases only (never wipe profile). Without this flag, "
-        "duplicate domain returns already_exists. Preferred agent path."
+        "missing aliases only (never wipe profile unless profile flags "
+        "are also passed). Without this flag, duplicate domain returns "
+        "already_exists. Preferred agent path."
     ),
 )
-def company_create(  # noqa: C901
+@_company_profile_options
+@click.option(
+    "--tag",
+    "tags",
+    multiple=True,
+    help=(
+        "Defined vocabulary tag to link (repeatable, additive). "
+        "Undefined names return not_found; never auto-created."
+    ),
+)
+def company_create(  # noqa: C901, PLR0912, PLR0915
     domain: str,
     name: str,
     aliases: tuple[str, ...],
     note: str | None,
     upsert: bool,
+    profile_json: str | None,
+    profile_file: str | None,
+    profile: str | None,
+    summary: str | None,
+    product: tuple[str, ...],
+    source: tuple[str, ...],
+    timezone: str | None,
+    target_customers: str | None,
+    tags: tuple[str, ...],
 ) -> None:
-    """Create a new company, optionally with alias domains."""
+    """Create a company; optional profile flags and --tag are one transaction."""
     from mailpilot.database import (
         add_company_alias,
         add_company_note,
+        assign_tag_to_company,
         create_company,
         get_company_by_domain_exact,
         initialize_database,
         load_company_view,
-        update_company,
+        write_company_fields,
     )
     from mailpilot.operator_log import cli_mutation, operator_event
 
     if not domain.strip():
         output_error("domain cannot be empty", "validation_error")
+    replace_flags, has_patch = _profile_replace_and_patch_flags(
+        profile_json,
+        profile_file,
+        profile,
+        summary,
+        product,
+        source,
+        timezone,
+        target_customers,
+    )
+    replace_payload = (
+        _read_replace_profile(profile_json, profile_file, profile)
+        if replace_flags
+        else None
+    )
+    tag_names = list(dict.fromkeys(tags))
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
+        tag_rows = [_resolve_tag(connection, tag_name) for tag_name in tag_names]
         with cli_mutation("company", "create", domain=domain, upsert=upsert):
+            existing_before = (
+                get_company_by_domain_exact(connection, domain) if has_patch else None
+            )
+            profile_payload: dict[str, object] | None = None
+            if replace_payload is not None:
+                profile_payload = _validate_company_profile_payload(replace_payload)
+            elif has_patch:
+                existing_profile = (
+                    existing_before.profile
+                    if existing_before is not None
+                    and isinstance(existing_before.profile, dict)
+                    else None
+                )
+                profile_payload = _validate_company_profile_payload(
+                    _merge_company_profile_patch(
+                        existing_profile,
+                        summary=summary,
+                        products=product,
+                        sources=source,
+                        timezone=timezone,
+                        target_customers=target_customers,
+                    )
+                )
             created_row = create_company(
                 connection,
                 name=name,
                 domain=domain,
                 aliases=list(aliases) if aliases else None,
+                commit=False,
             )
+            created = created_row is not None
             if created_row is None:
                 if not upsert:
                     output_error(
@@ -1825,62 +2016,69 @@ def company_create(  # noqa: C901
                     )
                 # Canonical domain only — alias-of-other stays already_exists
                 # (never move ownership, §V.147 / §V.142).
-                existing = get_company_by_domain_exact(connection, domain)
+                existing = existing_before or get_company_by_domain_exact(
+                    connection, domain
+                )
                 if existing is None:
                     output_error(
                         f"company domain or alias already exists: {domain!r}",
                         "already_exists",
                     )
-                changed: list[str] = []
-                if name:
-                    updated = update_company(connection, existing.id, name=name)
-                    if updated is not None:
-                        existing = updated
+                row = existing
+            else:
+                row = created_row
+            changed: list[str] = []
+            if created:
+                changed.extend(["name", "domain"])
+                if aliases:
+                    changed.append("aliases")
+            update_fields: dict[str, object] = {}
+            if not created and name:
+                update_fields["name"] = name
+            if profile_payload is not None:
+                update_fields["profile"] = profile_payload
+            if update_fields:
+                updated = write_company_fields(
+                    connection, row.id, update_fields, commit=False
+                )
+                if updated is not None:
+                    row = updated
+                    if "name" in update_fields and "name" not in changed:
                         changed.append("name")
+                    if "profile" in update_fields:
+                        changed.append("profile")
+            if not created:
                 for alias in aliases:
                     try:
                         if (
-                            add_company_alias(
-                                connection, existing.id, alias, commit=True
-                            )
+                            add_company_alias(connection, row.id, alias, commit=False)
                             and "aliases" not in changed
                         ):
                             changed.append("aliases")
                     except ValueError as exc:
                         output_error(str(exc), "already_exists")
-                # Bare upsert never touches profile (§V.147 / §V.140).
-                operator_event(
-                    "company.upsert",
-                    entity_id=existing.id,
-                    domain=existing.domain,
-                    created=False,
-                    changed=changed or ["none"],
+            for tag_row in tag_rows:
+                assign_tag_to_company(
+                    connection, tag_id=tag_row.id, company_id=row.id, commit=False
                 )
-                viewed = load_company_view(connection, existing.id)
-                output_entity(
-                    "company",
-                    viewed if viewed is not None else existing,
-                    created=False,
-                )
-                return
-            changed = ["name", "domain"]
-            if aliases:
-                changed.append("aliases")
+            if tag_names:
+                changed.append("tags")
             if note:
-                add_company_note(connection, created_row.id, note)
+                add_company_note(connection, row.id, note, commit=False)
                 changed.append("note")
+            connection.commit()
+            event_name = "company.create" if created else "company.upsert"
             operator_event(
-                "company.create",
-                entity_id=created_row.id,
-                domain=created_row.domain,
-                changed=changed,
+                event_name,
+                entity_id=row.id,
+                domain=row.domain,
+                created=created,
+                changed=changed or ["none"],
             )
-            # View projection includes aliases[] (§V.8 / §V.142).
-            viewed = load_company_view(connection, created_row.id)
-            output_entity(
-                "company",
-                viewed if viewed is not None else created_row,
-                created=True,
+            viewed = load_company_view(connection, row.id)
+            _output_company_create_entity(
+                viewed if viewed is not None else row,
+                created=created,
             )
     finally:
         connection.close()

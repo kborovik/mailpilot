@@ -1229,6 +1229,7 @@ def create_company(
     domain: str,
     *,
     aliases: Sequence[str] | None = None,
+    commit: bool = True,
 ) -> Company | None:
     """Create a new company, optionally with alias domains (§V.142).
 
@@ -1243,6 +1244,8 @@ def create_company(
         name: Company name.
         domain: Primary domain.
         aliases: Optional alternate domains (repeatable CLI ``--alias``).
+        commit: When False, leave the insert uncommitted for a caller txn
+            (§V.167 oneshot).
 
     Returns:
         Created company, or ``None`` if the domain space was already taken.
@@ -1275,7 +1278,8 @@ def create_company(
         {"id": company_id, "name": name, "domain": normalized},
     ).fetchone()
     if row is None:
-        connection.commit()
+        if commit:
+            connection.commit()
         return None
     for alias in alias_list:
         connection.execute(
@@ -1285,7 +1289,8 @@ def create_company(
             """,
             {"domain": alias, "company_id": company_id},
         )
-    connection.commit()
+    if commit:
+        connection.commit()
     return Company.model_validate(row)
 
 
@@ -1940,6 +1945,17 @@ def update_company(
     Returns:
         Updated company, or None if not found.
     """
+    return write_company_fields(connection, company_id, fields, commit=True)
+
+
+def write_company_fields(
+    connection: psycopg.Connection[dict[str, Any]],
+    company_id: str,
+    fields: dict[str, object],
+    *,
+    commit: bool = True,
+) -> Company | None:
+    """Apply a company field map; ``commit=False`` defers for a caller txn."""
     allowed = set(Company.model_fields) - {"id", "created_at"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if "profile" in updates and updates["profile"] is not None:
@@ -1950,7 +1966,8 @@ def update_company(
     updates["id"] = company_id
     query = _build_update("company", updates, SQL("id = %(id)s"))
     row = connection.execute(query, updates).fetchone()
-    connection.commit()
+    if commit:
+        connection.commit()
     if row is None:
         return None
     return Company.model_validate(row)
@@ -5998,6 +6015,8 @@ def assign_tag_to_company(
     connection: psycopg.Connection[dict[str, Any]],
     tag_id: str,
     company_id: str,
+    *,
+    commit: bool = True,
 ) -> TagAssignment | None:
     """Link a vocabulary tag to a company and emit ``tag_added`` (§V.91/§V.116).
 
@@ -6029,7 +6048,8 @@ def assign_tag_to_company(
         {"id": _new_id(), "tag_id": tag_id, "company_id": company_id},
     ).fetchone()
     if assignment_row is None:
-        connection.commit()
+        if commit:
+            connection.commit()
         return None
     connection.execute(
         """\
@@ -6048,7 +6068,8 @@ def assign_tag_to_company(
             "detail": Json({"tag": tag_row["name"]}),
         },
     )
-    connection.commit()
+    if commit:
+        connection.commit()
     return TagAssignment.model_validate(assignment_row)
 
 
@@ -6530,6 +6551,8 @@ def add_company_note(
     connection: psycopg.Connection[dict[str, Any]],
     company_id: str,
     body: str,
+    *,
+    commit: bool = True,
 ) -> Note:
     """Add a note to a company and emit a `note_added` company activity atomically."""
     if (
@@ -6565,7 +6588,8 @@ def add_company_note(
             "detail": Json({"note_id": note.id}),
         },
     )
-    connection.commit()
+    if commit:
+        connection.commit()
     return note
 
 

@@ -1096,7 +1096,11 @@ def test_company_create(runner: CliRunner, mock_connection: MagicMock) -> None:
 
     assert result.exit_code == 0
     mock_create.assert_called_once_with(
-        mock_connection, name="Acme Corp", domain="acme.com", aliases=None
+        mock_connection,
+        name="Acme Corp",
+        domain="acme.com",
+        aliases=None,
+        commit=False,
     )
     data = json.loads(result.output)
     assert data["ok"] is True
@@ -1151,7 +1155,9 @@ def test_company_create_upsert_updates_name_preserves_profile(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.create_company", return_value=None),
         patch("mailpilot.database.get_company_by_domain_exact", return_value=existing),
-        patch("mailpilot.database.update_company", return_value=updated) as mock_update,
+        patch(
+            "mailpilot.database.write_company_fields", return_value=updated
+        ) as mock_update,
         patch("mailpilot.database.load_company_view", return_value=view),
     ):
         result = runner.invoke(
@@ -1168,8 +1174,10 @@ def test_company_create_upsert_updates_name_preserves_profile(
         )
 
     assert result.exit_code == 0, result.output
-    mock_update.assert_called_once_with(mock_connection, existing.id, name="New Name")
-    assert "profile" not in mock_update.call_args.kwargs
+    mock_update.assert_called_once_with(
+        mock_connection, existing.id, {"name": "New Name"}, commit=False
+    )
+    assert "profile" not in mock_update.call_args.args[2]
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["created"] is False
@@ -1200,7 +1208,7 @@ def test_company_create_domain_only(
 
     assert result.exit_code == 0
     mock_create.assert_called_once_with(
-        mock_connection, name="", domain="acme.com", aliases=None
+        mock_connection, name="", domain="acme.com", aliases=None, commit=False
     )
 
 
@@ -1243,6 +1251,7 @@ def test_company_create_with_aliases(
         name="Acme",
         domain="acme.com",
         aliases=["consulting.acme.com"],
+        commit=False,
     )
     data = json.loads(result.output)
     assert data["company"]["aliases"] == ["consulting.acme.com"]
@@ -1282,7 +1291,9 @@ def test_company_create_with_note_appends_note_atomically(
         )
 
     assert result.exit_code == 0
-    mock_note.assert_called_once_with(mock_connection, company.id, "Met at conference.")
+    mock_note.assert_called_once_with(
+        mock_connection, company.id, "Met at conference.", commit=False
+    )
 
 
 def test_company_create_without_note_skips_note_call(
@@ -1309,6 +1320,327 @@ def test_company_create_without_note_skips_note_call(
 
     assert result.exit_code == 0
     mock_note.assert_not_called()
+
+
+def test_company_create_oneshot_profile_file_and_tags(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    """§V.167: create --upsert --profile-file --tag returns has_profile + tags."""
+    company = _make_company()
+    sage = _make_tag(id="tag-sage", name="sage-var")
+    acumatica = _make_tag(id="tag-acu", name="acumatica-var")
+    assignment = _make_tag_assignment()
+    view = CompanyView(
+        id=company.id,
+        name=company.name,
+        domain=company.domain,
+        profile=_VALID_PROFILE,
+        tags=["acumatica-var", "sage-var"],
+        aliases=[],
+        created_at=company.created_at,
+        updated_at=company.updated_at,
+    )
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(json.dumps(_VALID_PROFILE), encoding="utf-8")
+
+    def _resolve_tag(_conn: object, name: str) -> Tag:
+        return {"sage-var": sage, "acumatica-var": acumatica}[name]
+
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_company", return_value=company) as mock_create,
+        patch(
+            "mailpilot.database.write_company_fields", return_value=company
+        ) as mock_update,
+        patch(
+            "mailpilot.database.assign_tag_to_company", return_value=assignment
+        ) as mock_assign,
+        patch("mailpilot.database.get_tag_by_name", side_effect=_resolve_tag),
+        patch("mailpilot.database.load_company_view", return_value=view),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "create",
+                "--domain",
+                "acme.com",
+                "--name",
+                "Acme Corp",
+                "--upsert",
+                "--profile-file",
+                str(profile_path),
+                "--tag",
+                "sage-var",
+                "--tag",
+                "acumatica-var",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_create.assert_called_once()
+    assert mock_create.call_args.kwargs.get("commit") is False
+    mock_update.assert_called_once()
+    assert mock_update.call_args.args[2]["profile"] == _VALID_PROFILE
+    assert mock_update.call_args.kwargs.get("commit") is False
+    assert mock_assign.call_count == 2
+    mock_connection.commit.assert_called()
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["created"] is True
+    assert data["record_count"] == 1
+    assert data["company"]["has_profile"] is True
+    assert data["company"]["tags"] == ["acumatica-var", "sage-var"]
+
+
+def test_company_create_oneshot_second_upsert_updates_profile_no_tag_dup(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    """§V.167: second identical oneshot exits 0, updates profile, skips tag dups."""
+    existing = _make_company(profile=dict(_VALID_PROFILE))
+    updated = _make_company(
+        name="Acme Corp",
+        profile={**_VALID_PROFILE, "summary": "Updated summary."},
+    )
+    sage = _make_tag(id="tag-sage", name="sage-var")
+    view = CompanyView(
+        id=updated.id,
+        name=updated.name,
+        domain=updated.domain,
+        profile=updated.profile,
+        tags=["sage-var"],
+        aliases=[],
+        created_at=updated.created_at,
+        updated_at=updated.updated_at,
+    )
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(json.dumps(updated.profile), encoding="utf-8")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_company", return_value=None),
+        patch("mailpilot.database.get_company_by_domain_exact", return_value=existing),
+        patch(
+            "mailpilot.database.write_company_fields", return_value=updated
+        ) as mock_update,
+        patch(
+            "mailpilot.database.assign_tag_to_company", return_value=None
+        ) as mock_assign,
+        patch("mailpilot.database.get_tag_by_name", return_value=sage),
+        patch("mailpilot.database.load_company_view", return_value=view),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "create",
+                "--domain",
+                "acme.com",
+                "--name",
+                "Acme Corp",
+                "--upsert",
+                "--profile-file",
+                str(profile_path),
+                "--tag",
+                "sage-var",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_update.assert_called_once()
+    assert mock_update.call_args.args[2]["profile"] == updated.profile
+    assert mock_update.call_args.kwargs.get("commit") is False
+    mock_assign.assert_called_once()
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["created"] is False
+    assert data["record_count"] == 1
+    assert data["company"]["has_profile"] is True
+    assert data["company"]["tags"] == ["sage-var"]
+
+
+def test_company_create_oneshot_invalid_profile_zero_writes(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    """§V.167/§V.72: invalid profile is validation_error with zero writes."""
+    profile_path = tmp_path / "bad.json"
+    profile_path.write_text(json.dumps({"summary": "only summary"}), encoding="utf-8")
+    sage = _make_tag(name="sage-var")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_company") as mock_create,
+        patch("mailpilot.database.write_company_fields") as mock_update,
+        patch("mailpilot.database.assign_tag_to_company") as mock_assign,
+        patch("mailpilot.database.get_tag_by_name", return_value=sage),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "create",
+                "--domain",
+                "acme.com",
+                "--name",
+                "Acme",
+                "--upsert",
+                "--profile-file",
+                str(profile_path),
+                "--tag",
+                "sage-var",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "validation_error"
+    mock_create.assert_not_called()
+    mock_update.assert_not_called()
+    mock_assign.assert_not_called()
+    mock_connection.commit.assert_not_called()
+
+
+def test_company_create_oneshot_undefined_tag_zero_writes(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    """§V.167/§V.116: undefined --tag is not_found and never auto-creates."""
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(json.dumps(_VALID_PROFILE), encoding="utf-8")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.create_company") as mock_create,
+        patch("mailpilot.database.write_company_fields") as mock_update,
+        patch("mailpilot.database.assign_tag_to_company") as mock_assign,
+        patch("mailpilot.database.get_tag_by_name", return_value=None),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "create",
+                "--domain",
+                "acme.com",
+                "--name",
+                "Acme",
+                "--upsert",
+                "--profile-file",
+                str(profile_path),
+                "--tag",
+                "ghost-var",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "not_found"
+    assert "ghost-var" in data["message"]
+    mock_create.assert_not_called()
+    mock_update.assert_not_called()
+    mock_assign.assert_not_called()
+    mock_connection.commit.assert_not_called()
+
+
+def test_company_create_help_documents_oneshot(runner: CliRunner) -> None:
+    """§V.167/§V.111: create --help lists profile + tag flags without SPEC cites."""
+    result = runner.invoke(main, ["company", "create", "--help"])
+    assert result.exit_code == 0
+    assert "--profile-file" in result.output
+    assert "--tag" in result.output
+    assert "--upsert" in result.output
+    assert "§V." not in result.output
+
+
+def test_skill_documents_company_create_oneshot() -> None:
+    """§V.167: packaged SKILL.md documents create oneshot profile+tags."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "company create" in body
+    assert "--profile-file" in body
+    assert "--tag" in body
+    assert "oneshot" in body.lower() or "--tag" in body
+    assert "§V." not in body
+    assert "§T." not in body
+
+
+def test_company_create_oneshot_undefined_tag_leaves_no_row(
+    runner: CliRunner, database_connection: Any, tmp_path: pathlib.Path
+) -> None:
+    """§V.167: undefined tag rolls back the company + profile (one txn)."""
+    from mailpilot.database import get_company_by_domain
+
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(json.dumps(_VALID_PROFILE), encoding="utf-8")
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "create",
+                "--domain",
+                "newco.com",
+                "--name",
+                "New Co",
+                "--upsert",
+                "--profile-file",
+                str(profile_path),
+                "--tag",
+                "ghost-var",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+    assert get_company_by_domain(database_connection, "newco.com") is None
+
+
+def test_company_create_oneshot_live_second_call_no_tag_dup(
+    runner: CliRunner, database_connection: Any, tmp_path: pathlib.Path
+) -> None:
+    """§V.167: live second oneshot exits 0, updates profile, no tag dups."""
+    from mailpilot.database import create_tag, get_company_by_domain, list_tags
+
+    create_tag(database_connection, "sage-var")
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(json.dumps(_VALID_PROFILE), encoding="utf-8")
+    argv = [
+        "company",
+        "create",
+        "--domain",
+        "liveco.com",
+        "--name",
+        "Live Co",
+        "--upsert",
+        "--profile-file",
+        str(profile_path),
+        "--tag",
+        "sage-var",
+    ]
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        first = runner.invoke(main, argv)
+        second = runner.invoke(main, argv)
+
+    assert first.exit_code == 0, first.output
+    first_data = json.loads(first.output)
+    assert first_data["created"] is True
+    assert first_data["company"]["has_profile"] is True
+    assert "sage-var" in first_data["company"]["tags"]
+
+    assert second.exit_code == 0, second.output
+    second_data = json.loads(second.output)
+    assert second_data["created"] is False
+    assert second_data["company"]["has_profile"] is True
+    assert second_data["company"]["tags"].count("sage-var") == 1
+
+    company = get_company_by_domain(database_connection, "liveco.com")
+    assert company is not None
+    tags = list_tags(database_connection, company_id=company.id, include_disabled=True)
+    assert [tag.name for tag in tags] == ["sage-var"]
 
 
 def test_company_merge_cli(runner: CliRunner, mock_connection: MagicMock) -> None:

@@ -269,7 +269,7 @@ T263|x|`release.yml` GH notes from CHANGELOG version section via `scripts/change
 T264|x|README release path + CHANGELOG Unreleased duty for user-facing work|V62,T262
 T265|x|impl §V.165(+) — campaign-test + reply-test preflight block unless logfire_environment=development; skill step before account ensure; unit tests development pass / production fail; no mutate on fail|V165,B135,V52,V122,V104
 T266|x|impl §V.166(+) + §I — `show queue` + `--detail`; tabulate simple; tests + SKILL|V166,V3,V4,V107,V111,V155,V156,V162,I.cli
-T267|.|impl §V.167(+) + §V.140(∆) + §V.141(∆) + §V.147(∆) + §I — company create --upsert --profile-file --tag oneshot; one txn; has_profile+tags[]; second call exit 0 no tag dup; tests + SKILL (#217)|V167,V140,V141,V147,V72,V116,V94,V4,I.cli
+T267|x|impl §V.167(+) + §V.140(∆) + §V.141(∆) + §V.147(∆) + §I — company create --upsert --profile-file --tag oneshot; one txn; has_profile+tags[]; second call exit 0 no tag dup; tests + SKILL (#217)|V167,V140,V141,V147,V72,V116,V94,V4,I.cli
 
 ## §B BUGS
 
