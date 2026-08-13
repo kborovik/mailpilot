@@ -384,9 +384,11 @@ ok). Lean `company list` omits aliases.
 
 Absorb an absorbed brand into a survivor with `company merge`. The source
 domain becomes an alias on the survivor; the source is soft-disabled with
-reason `merged:into <survivor.domain>`. Pass `--move-contacts` to reassign
-contacts; omit it to leave contacts on the disabled source. Re-running the
-same merge is an ok no-op.
+reason `merged:into <survivor.domain>`. Source and survivor may already be
+disabled — no prior `company enable` is required. A disabled survivor
+keeps its existing `disabled_reason` (merge never re-enables it). Pass
+`--move-contacts` to reassign contacts; omit it to leave contacts on the
+disabled source. Re-running the same merge is an ok no-op.
 
 ```
 mailpilot company merge --from nexvue.com --into netatwork.com

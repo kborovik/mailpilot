@@ -1692,6 +1692,65 @@ def test_company_merge_cli(runner: CliRunner, mock_connection: MagicMock) -> Non
     assert data["company"]["aliases"] == ["nexvue.com"]
 
 
+def test_company_merge_cli_allows_disabled_survivor(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.143: CLI does not reject a disabled survivor before merge."""
+    source = _make_company(id="from-id", domain="marcumllp.com", name="Marcum")
+    survivor = _make_company(
+        id="into-id",
+        domain="cbiz.com",
+        name="CBIZ",
+        disabled_reason="out-of-icp",
+    )
+    view = CompanyView(
+        id=survivor.id,
+        name=survivor.name,
+        domain=survivor.domain,
+        aliases=["marcumllp.com"],
+        disabled_reason="out-of-icp",
+        created_at=survivor.created_at,
+        updated_at=survivor.updated_at,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_company_by_domain_exact", return_value=source),
+        patch("mailpilot.database.get_company_by_domain", return_value=survivor),
+        patch(
+            "mailpilot.database.merge_companies", return_value=survivor
+        ) as mock_merge,
+        patch("mailpilot.database.load_company_view", return_value=view),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "company",
+                "merge",
+                "--from",
+                "marcumllp.com",
+                "--into",
+                "cbiz.com",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_merge.assert_called_once()
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["company"]["disabled_reason"] == "out-of-icp"
+
+
+def test_company_merge_help_documents_disabled(runner: CliRunner) -> None:
+    """§V.143/§V.111: merge --help documents disabled source and survivor."""
+    result = runner.invoke(main, ["company", "merge", "--help"])
+    assert result.exit_code == 0
+    assert "disabled" in result.output
+    assert "survivor" in result.output
+    assert "§V." not in result.output
+    assert "§T." not in result.output
+
+
 def test_skill_documents_company_aliases_and_merge() -> None:
     """§V.142/§V.143: packaged SKILL.md documents alias + merge recipes."""
     from importlib.resources import files
@@ -1702,6 +1761,8 @@ def test_skill_documents_company_aliases_and_merge() -> None:
     assert "--move-contacts" in body
     assert "merged:into" in body
     assert "aliases" in body
+    assert "disabled" in body
+    assert "company enable" in body
     assert "§V." not in body
     assert "§T." not in body
 

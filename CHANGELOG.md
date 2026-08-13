@@ -32,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `company merge` accepts a disabled source and a disabled survivor. The
+  survivor keeps its `disabled_reason`; the source is recorded as an
+  alias with `merged:into <survivor.domain>`.
+
 - `workflow check --file` always path-scopes to discovered TOML files
   (file or directory; directories recurse `**/*.toml`). A directory is
   no longer a full-catalog check. Other account workflows no longer

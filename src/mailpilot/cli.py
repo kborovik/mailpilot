@@ -2444,7 +2444,9 @@ def company_merge(from_ref: str, into_ref: str, move_contacts: bool) -> None:
 
     Records the source domain as an alias on the survivor, soft-disables the
     source with reason `merged:into <survivor.domain>`, and optionally moves
-    contacts. Re-running the same merge is an ok no-op.
+    contacts. Source and survivor may already be disabled — no prior enable
+    is required. A disabled survivor stays disabled with its existing
+    reason. Re-running the same merge is an ok no-op.
     """
     from mailpilot.database import (
         get_company,
@@ -2458,14 +2460,9 @@ def company_merge(from_ref: str, into_ref: str, move_contacts: bool) -> None:
 
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
-        # Survivor resolves aliases (canonical firm).
+        # Survivor resolves aliases (canonical firm). Disabled survivor is
+        # allowed; merge keeps its disabled_reason (§V.143).
         into_company = _resolve_company(connection, into_ref)
-        if into_company.disabled_reason is not None:
-            reason = into_company.disabled_reason
-            output_error(
-                f"survivor company is disabled (reason: {reason})",
-                "invalid_state",
-            )
 
         # Source: exact domain first so an already-merged alias is not treated
         # as a second live firm. UUID still resolves by id.

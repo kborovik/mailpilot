@@ -1837,9 +1837,11 @@ def merge_companies(
 
     Records ``original_from_domain`` (or the source's current domain) as an
     alias on the survivor, soft-disables the source with
-    ``merged:into <into.domain>``, and rewrites the source domain to a
-    tombstone so the shared domain space stays unique (§V.142). Optional
-    contact reassignment runs in the same transaction.
+    ``merged:into <into.domain>`` (overwriting any prior source reason),
+    and rewrites the source domain to a tombstone so the shared domain
+    space stays unique (§V.142). Optional contact reassignment runs in the
+    same transaction. Disabled source and disabled survivor are allowed;
+    the survivor's ``disabled_reason`` is never cleared (§V.143 / §V.114).
 
     Idempotent when the source is already disabled with the matching reason
     and the original domain is already an alias of the survivor.
@@ -1853,10 +1855,6 @@ def merge_companies(
     survivor = get_company(connection, into_company_id)
     if source is None or survivor is None:
         return None
-    if survivor.disabled_reason is not None:
-        raise ValueError(
-            f"survivor company is disabled (reason: {survivor.disabled_reason})"
-        )
     absorbed_domain = _normalize_company_domain(
         original_from_domain if original_from_domain is not None else source.domain
     )
@@ -1874,10 +1872,6 @@ def merge_companies(
         and existing_alias["company_id"] == survivor.id
     ):
         return survivor
-    if source.disabled_reason is not None and source.disabled_reason != expected_reason:
-        raise ValueError(
-            f"source company is disabled (reason: {source.disabled_reason})"
-        )
     tombstone = _tombstone_merged_domain(source.id)
     # Free the canonical domain before inserting the alias (shared space).
     if source.domain == absorbed_domain or not source.domain.startswith("__merged__."):

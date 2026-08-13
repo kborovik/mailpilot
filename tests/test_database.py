@@ -7681,6 +7681,87 @@ def test_merge_companies_without_move_leaves_contacts(
     assert contact_after.company_id == source.id
 
 
+def test_merge_companies_allows_disabled_source(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.143: disabled source merges without a prior enable."""
+    survivor = create_company(database_connection, name="Into", domain="into.com")
+    source = create_company(database_connection, name="From", domain="from.com")
+    assert survivor is not None
+    assert source is not None
+    disabled = disable_company(database_connection, source.id, "absorbed-park")
+    assert disabled is not None
+    assert disabled.disabled_reason == "absorbed-park"
+
+    merged = merge_companies(
+        database_connection,
+        source.id,
+        survivor.id,
+        original_from_domain="from.com",
+    )
+    assert merged is not None
+    assert merged.id == survivor.id
+    assert merged.disabled_reason is None
+    assert "from.com" in list_company_aliases(database_connection, survivor.id)
+
+    source_after = get_company(database_connection, source.id)
+    assert source_after is not None
+    assert source_after.disabled_reason == "merged:into into.com"
+
+
+def test_merge_companies_allows_disabled_survivor_keeps_reason(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.143/§V.114: disabled survivor stays disabled with its reason."""
+    survivor = create_company(database_connection, name="Into", domain="into.com")
+    source = create_company(database_connection, name="From", domain="from.com")
+    assert survivor is not None
+    assert source is not None
+    parked = disable_company(database_connection, survivor.id, "out-of-icp")
+    assert parked is not None
+    assert parked.disabled_reason == "out-of-icp"
+
+    merged = merge_companies(
+        database_connection,
+        source.id,
+        survivor.id,
+        original_from_domain="from.com",
+    )
+    assert merged is not None
+    assert merged.id == survivor.id
+    assert merged.disabled_reason == "out-of-icp"
+    assert "from.com" in list_company_aliases(database_connection, survivor.id)
+
+    source_after = get_company(database_connection, source.id)
+    assert source_after is not None
+    assert source_after.disabled_reason == "merged:into into.com"
+
+
+def test_merge_companies_both_disabled(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.143: both sides disabled — source absorbed, survivor reason kept."""
+    survivor = create_company(database_connection, name="Into", domain="into.com")
+    source = create_company(database_connection, name="From", domain="from.com")
+    assert survivor is not None
+    assert source is not None
+    assert disable_company(database_connection, survivor.id, "out-of-icp") is not None
+    assert disable_company(database_connection, source.id, "absorbed-park") is not None
+
+    merged = merge_companies(
+        database_connection,
+        source.id,
+        survivor.id,
+        original_from_domain="from.com",
+    )
+    assert merged is not None
+    assert merged.disabled_reason == "out-of-icp"
+
+    source_after = get_company(database_connection, source.id)
+    assert source_after is not None
+    assert source_after.disabled_reason == "merged:into into.com"
+
+
 def test_create_contact_returns_none_on_duplicate_email(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
