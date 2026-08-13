@@ -30,7 +30,7 @@ recurs. Promotion path: seed a §T row.
 
 ## §V4 — CLI envelope + record_count
 
-Every cmd output MUST match the §I.cli envelope. ok:true envelope carries top-level int `record_count` = records displayed: array-bearing payload (`list`/`search`/`sync`/`export`/`import`) -> array len; single-object payload (single-entity verbs + aggregate `stats`/`check` + `status`) -> 1. Error path -> `{"error", "message", "ok": false}` + exit 1; `record_count` omitted on error. Envelope key vocabulary per §I.cli (plural for arrays, singular for single-object; `workflow_stats`/`task_stats`/`workflow_check`/`db` aggregate exceptions).
+Every cmd output MUST match the §I.cli envelope. ok:true envelope carries top-level int `record_count` = records displayed: array-bearing payload (`list`/`search`/`sync`/`export`/`import`) -> array len; single-object payload (single-entity verbs + aggregate `stats`/`check` + `status`) -> 1; `show queue` JSON -> len(rows) not 1. Error path -> `{"error", "message", "ok": false}` + exit 1; `record_count` omitted on error. Envelope key vocabulary per §I.cli (plural for arrays, singular for single-object; `workflow_stats`/`task_stats`/`workflow_check`/`db`/`queue` aggregate exceptions).
 
 Trigger: `src/mailpilot/cli.py` changed.
 - `rg 'record_count' src/mailpilot/cli.py` -> output helper stamps record_count on every ok:true envelope
@@ -882,11 +882,12 @@ enrollment tag-cohort dry-run — `enrollment add --workflow-id <ref> --tag <nam
 
 ## §V3 — stdout strict JSON + stderr lifecycle
 
-stdout = strict JSON only by default (all flags, incl --debug); opt-in non-JSON via `--format` per §V.156 only; operator lifecycle + errors -> stderr; Logfire console exporter ! target stderr (ConsoleOptions output=sys.stderr), never stdout — output unset defaults stdout so console lines corrupt JSON envelope
+stdout = strict JSON only by default (all flags, incl --debug); opt-in non-JSON via `--format` per §V.156 on report/list; `show` group table-default + `--format json` opt-in per §V.166 (not §V.156); operator lifecycle + errors -> stderr; Logfire console exporter ! target stderr (ConsoleOptions output=sys.stderr), never stdout — output unset defaults stdout so console lines corrupt JSON envelope
 
 Trigger: `src/mailpilot/cli.py` or logging config changed.
 - `rg 'ConsoleOptions' src/mailpilot/ --type py` -> console exporter targets stderr
 - `rg 'format.*table|table.*csv|ndjson' src/mailpilot/cli.py` -> opt-in --format surface present
+- `rg 'show.*queue|--format' src/mailpilot/cli.py` -> show group format surface present
 
 ## §V48 — provider transport timeout 240s
 
@@ -951,7 +952,7 @@ Trigger: stuck/overdue filter paths changed.
 
 ## §V156 — CLI output format modes
 
-CLI output format modes — `--format json|table|csv|ndjson` on report/list surfaces (default json = §V.4 envelope); table human stdout; csv|ndjson prefer `--out`; JSON-path errors/exits unchanged; exclusion from strict-JSON-only §V.3
+CLI output format modes — `--format json|table|csv|ndjson` on report/list surfaces (default json = §V.4 envelope); table human stdout; csv|ndjson prefer `--out`; JSON-path errors/exits unchanged; exclusion from strict-JSON-only §V.3; `show` group not this set (table-default, json|table only, §V.166)
 
 Trigger: CLI format output path changed.
 - `rg 'table|csv|ndjson|--format' src/mailpilot/cli.py` -> format modes present
@@ -1028,3 +1029,18 @@ Trigger: campaign-test or reply-test scripts/skills changed.
 - `rg 'logfire_environment' .claude/skills/mailpilot-reply-test/scripts/preflight.py` -> gate present
 - `rg 'development' .claude/skills/mailpilot-campaign-test/scripts/preflight.py` -> required value
 - `rg 'development' .claude/skills/mailpilot-reply-test/scripts/preflight.py` -> required value
+
+## §V166 — show queue human report hub
+
+`mailpilot show queue` = read-only operator report hub (not CRM noun). Default stdout ASCII table via `tabulate` `tablefmt=simple` (no Unicode box, no ANSI color, no TTY-variant bytes). `--format json|table` (default table). No csv/ndjson. Errors stay JSON stderr + exit 1. `--format json` envelope `{"queue":{grain,tz,rows},"ok":true,"record_count":N}` N=len(rows). `grain` in {`workflow`,`task`}. `--detail` -> task grain else workflow grain.
+
+Workflow grain: 1 row / workflow in scope incl draft|active|paused; omit `--workflow-id` = every workflow; columns {workflow, status, active, pending, overdue, due_today, next_at, failed_24h, never_sent}; sort next_at ASC (empty last) then name; no `--limit`.
+
+Task grain: 1 row / pending task; sort scheduled_at ASC (queue order; ! change `list_tasks` DESC); table columns {when, contact, email, company, workflow, touch, trigger, state, attempts}; hide UUIDs on table; JSON ? include task_id + enrollment_id; `--limit` default 100; `--overdue` = pending + scheduled_at < now; stuck-without-task ! rows (stays §V.155 enrollment/report `--stuck`).
+
+`--workflow-id` name|UUID §V.107 unknown -> not_found. `--tz` IANA default UTC (due_today + relative when). `when` relative (`overdue 2d`, `today 14:00`, `in 3d`) + ISO in JSON. `touch` parse §V.162 (`T2` or empty). `never_sent` / `failed_24h` reuse §V.157 / §V.155 24h SLA. No LLM. No CRM write. Entity JSON verbs byte-stable. Empty -> `(no rows)` exit 0.
+
+Trigger: `show queue` path changed.
+- `rg 'show.*queue|def show_queue' src/mailpilot/cli.py` -> command present
+- `rg 'tabulate|tablefmt' src/mailpilot/` -> tabulate simple renderer
+- `rg 'QueueWorkflowRow|QueueTaskRow|QueueReport' src/mailpilot/models.py` -> read models
