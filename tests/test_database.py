@@ -4688,6 +4688,199 @@ def test_preview_enrollment_tag_cohort_no_writes(
     assert list_enrollments(database_connection, workflow_id=workflow.id) == []
 
 
+def test_preview_enrollment_contact_tag_sales_seat_not_zero(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.150: --tag sales-seat (contact tag) returns unenrolled seats, not 0."""
+    from mailpilot.database import preview_enrollment_tag_cohort
+
+    account = make_test_account(database_connection, email="seat@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="seat-wf"
+    )
+    tag = make_test_tag(database_connection, name="sales-seat")
+    company = make_test_company(
+        database_connection, domain="seat-firm.test", name="Seat Firm"
+    )
+    seat = make_test_contact(
+        database_connection, email="rep@seat-firm.test", company_id=company.id
+    )
+    make_test_tag_assignment(database_connection, contact_id=seat.id, name=tag.name)
+
+    preview = preview_enrollment_tag_cohort(
+        database_connection, workflow, tag, account_email=account.email
+    )
+
+    assert preview.count == 1
+    assert preview.contacts[0].email == seat.email
+    assert preview.contacts[0].contact_tags == ["sales-seat"]
+
+
+def test_preview_enrollment_tag_cohort_union_dedup(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.150: company-tag + contact-tag union is unique by contact id."""
+    from mailpilot.database import preview_enrollment_tag_cohort
+
+    account = make_test_account(database_connection, email="union@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="union-wf"
+    )
+    tag = make_test_tag(database_connection, name="union-tag")
+    firm = make_test_company(database_connection, domain="union-firm.test", name="Firm")
+    other = make_test_company(
+        database_connection, domain="union-other.test", name="Other"
+    )
+    make_test_tag_assignment(database_connection, company_id=firm.id, name=tag.name)
+    ada = make_test_contact(
+        database_connection, email="ada@union-firm.test", company_id=firm.id
+    )
+    grace = make_test_contact(
+        database_connection, email="grace@union-firm.test", company_id=firm.id
+    )
+    lee = make_test_contact(
+        database_connection, email="lee@union-other.test", company_id=other.id
+    )
+    make_test_tag_assignment(database_connection, contact_id=ada.id, name=tag.name)
+    make_test_tag_assignment(database_connection, contact_id=lee.id, name=tag.name)
+
+    preview = preview_enrollment_tag_cohort(
+        database_connection, workflow, tag, account_email=account.email
+    )
+
+    emails = {c.email for c in preview.contacts}
+    assert emails == {ada.email, grace.email, lee.email}
+    assert preview.count == 3
+
+
+def test_preview_enrollment_tag_cohort_enriched_fields_and_sort(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.150: preview rows carry title/tags/peers and sort company then email."""
+    from mailpilot.database import preview_enrollment_tag_cohort
+
+    account = make_test_account(database_connection, email="enrich@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="enrich-wf"
+    )
+    peer = make_test_workflow(
+        database_connection, account_id=account.id, name="peer-wf"
+    )
+    seat = make_test_tag(database_connection, name="sales-seat")
+    firm_tag = make_test_tag(database_connection, name="acumatica-var")
+    co_b = make_test_company(database_connection, domain="b-enrich.test", name="B")
+    co_a = make_test_company(database_connection, domain="a-enrich.test", name="A")
+    make_test_tag_assignment(
+        database_connection, company_id=co_a.id, name=firm_tag.name
+    )
+    zed = make_test_contact(
+        database_connection, email="zed@a-enrich.test", company_id=co_a.id
+    )
+    ada = make_test_contact(
+        database_connection, email="ada@a-enrich.test", company_id=co_a.id
+    )
+    lee = make_test_contact(
+        database_connection, email="lee@b-enrich.test", company_id=co_b.id
+    )
+    update_contact(database_connection, zed.id, title="AE", email_confidence=90)
+    update_contact(database_connection, ada.id, title="VP Sales", email_confidence=98)
+    update_contact(database_connection, lee.id, title="Director", email_confidence=80)
+    make_test_tag_assignment(database_connection, contact_id=zed.id, name=seat.name)
+    make_test_tag_assignment(database_connection, contact_id=ada.id, name=seat.name)
+    make_test_tag_assignment(database_connection, contact_id=lee.id, name=seat.name)
+    make_test_enrollment(database_connection, peer.id, lee.id)
+
+    preview = preview_enrollment_tag_cohort(
+        database_connection, workflow, seat, account_email=account.email
+    )
+
+    assert [c.email for c in preview.contacts] == [
+        ada.email,
+        zed.email,
+        lee.email,
+    ]
+    assert preview.contacts[0].title == "VP Sales"
+    assert preview.contacts[0].company_tags == ["acumatica-var"]
+    assert preview.contacts[0].contact_tags == ["sales-seat"]
+    assert preview.contacts[0].email_confidence == 98
+    assert preview.contacts[0].peer_workflows == []
+    assert preview.contacts[2].peer_workflows == ["peer-wf"]
+    assert preview.contacts[2].company_tags == []
+
+
+def test_preview_enrollment_contact_tag_excludes_disabled_company(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.150/§V.114: contact-tag expand drops contacts at disabled companies."""
+    from mailpilot.database import preview_enrollment_tag_cohort
+
+    account = make_test_account(database_connection, email="ctag@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="ctag-wf"
+    )
+    tag = make_test_tag(database_connection, name="leadership-seat")
+    dead = make_test_company(database_connection, domain="dead-seat.test", name="Dead")
+    live = make_test_company(database_connection, domain="live-seat.test", name="Live")
+    dead_c = make_test_contact(
+        database_connection, email="gone@dead-seat.test", company_id=dead.id
+    )
+    live_c = make_test_contact(
+        database_connection, email="ok@live-seat.test", company_id=live.id
+    )
+    make_test_tag_assignment(database_connection, contact_id=dead_c.id, name=tag.name)
+    make_test_tag_assignment(database_connection, contact_id=live_c.id, name=tag.name)
+    disable_company(database_connection, dead.id, "merged")
+
+    preview = preview_enrollment_tag_cohort(
+        database_connection, workflow, tag, account_email=account.email
+    )
+
+    assert preview.count == 1
+    assert preview.contacts[0].email == live_c.email
+    assert preview.excluded.disabled_companies == 1
+
+
+def test_preview_enrollment_contact_tag_min_contacts(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.150: contact-tag --min-contacts uses the contact's company count."""
+    from mailpilot.database import preview_enrollment_tag_cohort
+
+    account = make_test_account(database_connection, email="cmin@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="cmin-wf"
+    )
+    tag = make_test_tag(database_connection, name="cmin-seat")
+    lonely = make_test_company(
+        database_connection, domain="lonely-seat.test", name="Lonely"
+    )
+    packed = make_test_company(
+        database_connection, domain="packed-seat.test", name="Packed"
+    )
+    only = make_test_contact(
+        database_connection, email="only@lonely-seat.test", company_id=lonely.id
+    )
+    a = make_test_contact(
+        database_connection, email="a@packed-seat.test", company_id=packed.id
+    )
+    make_test_contact(
+        database_connection, email="b@packed-seat.test", company_id=packed.id
+    )
+    make_test_tag_assignment(database_connection, contact_id=only.id, name=tag.name)
+    make_test_tag_assignment(database_connection, contact_id=a.id, name=tag.name)
+
+    preview = preview_enrollment_tag_cohort(
+        database_connection,
+        workflow,
+        tag,
+        min_contacts=2,
+        account_email=account.email,
+    )
+
+    assert preview.count == 1
+    assert preview.contacts[0].email == a.email
+
+
 def test_enrollment_row_carries_parent_denorm_fields(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:

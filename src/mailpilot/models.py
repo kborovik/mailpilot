@@ -510,7 +510,12 @@ class EnrollmentPreviewContact(BaseModel):
     """One candidate contact in a tag-cohort enrollment dry-run (§V.150)."""
 
     email: str
-    company_domain: str | None
+    title: str | None = None
+    company_domain: str | None = None
+    company_tags: list[str] = Field(default_factory=list)
+    contact_tags: list[str] = Field(default_factory=list)
+    email_confidence: int | None = None
+    peer_workflows: list[str] = Field(default_factory=list)
 
 
 class EnrollmentPreviewExcluded(BaseModel):
@@ -523,10 +528,11 @@ class EnrollmentPreviewExcluded(BaseModel):
 
 
 class EnrollmentPreview(BaseModel):
-    """Read-only enrollment dry-run report for a company-tag cohort (§V.150).
+    """Read-only enrollment dry-run report for a company-or-contact tag (§V.150).
 
     No rows are written. ``count`` equals ``len(contacts)`` and is the
-    ``record_count`` the CLI envelope reports.
+    ``record_count`` the CLI envelope reports. ``--tag`` is a union of
+    company-tag and contact-tag owners, deduped by contact id.
     """
 
     workflow: str

@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `enrollment add --tag --dry-run` matches company tags or contact tags
+  (union, unique by contact). Preview rows include title, company tags,
+  contact tags, email confidence, and peer-workflow names, grouped by
+  company.
+
 - `company create` accepts profile flags and repeatable `--tag` in one
   call. Combined with `--upsert`, a second identical call exits 0,
   updates the profile when flags are present, and does not duplicate

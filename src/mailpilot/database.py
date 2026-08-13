@@ -3764,7 +3764,76 @@ def list_enrollments(
     return [Enrollment.model_validate(row) for row in rows]
 
 
-def preview_enrollment_tag_cohort(
+def _preview_companies_by_id(
+    connection: psycopg.Connection[dict[str, Any]],
+    company_ids: set[str],
+) -> dict[str, tuple[str | None, int]]:
+    """Map company id -> (disabled_reason, contact_count) for preview (§V.150)."""
+    if not company_ids:
+        return {}
+    rows = connection.execute(
+        """\
+        SELECT c.id, c.disabled_reason, COUNT(ct.id)::int AS contact_count
+        FROM company c
+        LEFT JOIN contact ct ON ct.company_id = c.id
+        WHERE c.id = ANY(%(ids)s)
+        GROUP BY c.id
+        """,
+        {"ids": list(company_ids)},
+    ).fetchall()
+    return {
+        str(row["id"]): (row["disabled_reason"], int(row["contact_count"]))
+        for row in rows
+    }
+
+
+def _preview_owner_tag_names(
+    connection: psycopg.Connection[dict[str, Any]],
+    owner_ids: list[str],
+    owner_column: str,
+) -> dict[str, list[str]]:
+    """Assigned tag names keyed by owner id (company_id or contact_id)."""
+    if not owner_ids:
+        return {}
+    query = SQL(
+        "SELECT ta.{} AS owner_id, array_agg(t.name ORDER BY t.name) AS names "
+        "FROM tag_assignment ta JOIN tag t ON t.id = ta.tag_id "
+        "WHERE ta.{} = ANY(%(ids)s) "
+        "GROUP BY ta.{}"
+    ).format(
+        Identifier(owner_column),
+        Identifier(owner_column),
+        Identifier(owner_column),
+    )
+    rows = connection.execute(query, {"ids": owner_ids}).fetchall()
+    return {str(row["owner_id"]): list(row["names"] or []) for row in rows}
+
+
+def _preview_peer_workflows(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact_ids: list[str],
+    workflow_id: str,
+) -> dict[str, list[str]]:
+    """Other-workflow names with an active enrollment, keyed by contact id."""
+    if not contact_ids:
+        return {}
+    rows = connection.execute(
+        """\
+        SELECT e.contact_id,
+               array_agg(w.name ORDER BY w.name) AS names
+        FROM enrollment e
+        JOIN workflow w ON w.id = e.workflow_id
+        WHERE e.contact_id = ANY(%(ids)s)
+          AND e.status = 'active'
+          AND e.workflow_id <> %(workflow_id)s
+        GROUP BY e.contact_id
+        """,
+        {"ids": contact_ids, "workflow_id": workflow_id},
+    ).fetchall()
+    return {str(row["contact_id"]): list(row["names"] or []) for row in rows}
+
+
+def preview_enrollment_tag_cohort(  # noqa: C901
     connection: psycopg.Connection[dict[str, Any]],
     workflow: Workflow,
     tag: Tag,
@@ -3772,14 +3841,15 @@ def preview_enrollment_tag_cohort(
     min_contacts: int | None = None,
     account_email: str | None = None,
 ) -> EnrollmentPreview:
-    """Dry-run company-tag enrollment cohort for one workflow (§V.150).
+    """Dry-run company-or-contact tag enrollment cohort for one workflow (§V.150).
 
-    Read-only: expands companies carrying ``tag`` (disabled companies excluded
-    from candidates but counted), then enabled contacts on those companies.
-    Drops already-enrolled contacts for the workflow, self-loop contacts
-    (§V.33: contact email matches the workflow account email), and disabled
-    contacts. Optional ``min_contacts`` filters companies before expand
-    (same contact_count grain as ``list_companies``, incl. disabled children).
+    Read-only union: company-tag expand (enabled contacts at tagged companies)
+    plus contact-tag expand (enabled contacts carrying the tag). Deduped by
+    contact id. Disabled companies are excluded from candidates but counted
+    (§V.114). Drops already-enrolled contacts for the workflow, self-loop
+    contacts (§V.33), and disabled contacts. Optional ``min_contacts`` filters
+    companies before expand (company-tag) or the contact's company
+    ``contact_count`` (contact-tag).
 
     Args:
         connection: Open database connection.
@@ -3790,7 +3860,8 @@ def preview_enrollment_tag_cohort(
             None, the self-loop branch never fires.
 
     Returns:
-        ``EnrollmentPreview`` with candidate contacts + exclusion counters.
+        ``EnrollmentPreview`` with enriched candidate contacts + exclusion
+        counters, sorted by ``company_domain`` then ``email``.
     """
     companies = list_companies(
         connection,
@@ -3800,13 +3871,43 @@ def preview_enrollment_tag_cohort(
         limit=100_000,
         sort="domain",
     )
+    tagged_contacts = list_contacts(
+        connection,
+        tag=tag.id,
+        include_disabled=True,
+        limit=100_000,
+    )
     enrolled_ids = {e.contact_id for e in list_enrollments(connection, workflow.id)}
     account_email_lower = account_email.lower() if account_email is not None else None
+    disabled_company_ids: set[str] = set()
+    seen_contact_ids: set[str] = set()
     excluded = EnrollmentPreviewExcluded()
-    contacts: list[EnrollmentPreviewContact] = []
+    raw: list[ContactSummary] = []
+
+    def consider(contact: ContactSummary, *, company_disabled: bool) -> None:
+        if contact.id in seen_contact_ids:
+            return
+        seen_contact_ids.add(contact.id)
+        if company_disabled:
+            return
+        if contact.disabled_reason is not None:
+            excluded.disabled_contacts += 1
+            return
+        if (
+            account_email_lower is not None
+            and contact.email.lower() == account_email_lower
+        ):
+            excluded.self_loop += 1
+            return
+        if contact.id in enrolled_ids:
+            excluded.already_enrolled += 1
+            return
+        raw.append(contact)
+
+    company_ids = {company.id for company in companies}
     for company in companies:
         if company.disabled_reason is not None:
-            excluded.disabled_companies += 1
+            disabled_company_ids.add(company.id)
             continue
         for contact in list_contacts(
             connection,
@@ -3814,24 +3915,58 @@ def preview_enrollment_tag_cohort(
             include_disabled=True,
             limit=100_000,
         ):
-            if contact.disabled_reason is not None:
-                excluded.disabled_contacts += 1
-                continue
-            if (
-                account_email_lower is not None
-                and contact.email.lower() == account_email_lower
-            ):
-                excluded.self_loop += 1
-                continue
-            if contact.id in enrolled_ids:
-                excluded.already_enrolled += 1
-                continue
-            contacts.append(
-                EnrollmentPreviewContact(
-                    email=contact.email,
-                    company_domain=company.domain,
-                )
-            )
+            consider(contact, company_disabled=False)
+
+    extra_ids = {
+        contact.company_id
+        for contact in tagged_contacts
+        if contact.company_id is not None and contact.company_id not in company_ids
+    }
+    extra_companies = _preview_companies_by_id(connection, extra_ids)
+    company_meta: dict[str, tuple[str | None, int]] = {
+        company.id: (company.disabled_reason, company.contact_count)
+        for company in companies
+    }
+    company_meta.update(extra_companies)
+
+    for contact in tagged_contacts:
+        meta = (
+            company_meta.get(contact.company_id)
+            if contact.company_id is not None
+            else None
+        )
+        if contact.company_id is not None and meta is not None and meta[0] is not None:
+            disabled_company_ids.add(contact.company_id)
+            consider(contact, company_disabled=True)
+            continue
+        contact_count = 0 if meta is None else meta[1]
+        if min_contacts is not None and contact_count < min_contacts:
+            continue
+        consider(contact, company_disabled=False)
+
+    excluded.disabled_companies = len(disabled_company_ids)
+
+    candidate_ids = [contact.id for contact in raw]
+    company_owner_ids = [
+        contact.company_id for contact in raw if contact.company_id is not None
+    ]
+    company_tags = _preview_owner_tag_names(connection, company_owner_ids, "company_id")
+    contact_tags = _preview_owner_tag_names(connection, candidate_ids, "contact_id")
+    peers = _preview_peer_workflows(connection, candidate_ids, workflow.id)
+    contacts = [
+        EnrollmentPreviewContact(
+            email=contact.email,
+            title=contact.title,
+            company_domain=contact.company_domain,
+            company_tags=company_tags.get(contact.company_id, [])
+            if contact.company_id is not None
+            else [],
+            contact_tags=contact_tags.get(contact.id, []),
+            email_confidence=contact.email_confidence,
+            peer_workflows=peers.get(contact.id, []),
+        )
+        for contact in raw
+    ]
     contacts.sort(key=lambda c: (c.company_domain or "", c.email))
     return EnrollmentPreview(
         workflow=workflow.name,

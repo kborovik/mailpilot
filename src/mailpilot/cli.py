@@ -5732,7 +5732,7 @@ def _enrollment_add_tag_preview(
     tag_ref: str,
     min_contacts: int | None,
 ) -> None:
-    """Dry-run company-tag cohort enrollment preview (no writes)."""
+    """Dry-run company-or-contact tag cohort enrollment preview (no writes)."""
     from mailpilot.database import get_account, preview_enrollment_tag_cohort
 
     tag = _resolve_tag(connection, tag_ref)
@@ -5839,13 +5839,13 @@ def _enrollment_add_contact(
     "--tag",
     "tag_ref",
     default=None,
-    help="Company-tag cohort dry-run path (requires --dry-run).",
+    help="Company-or-contact tag cohort dry-run path (requires --dry-run).",
 )
 @click.option(
     "--dry-run",
     is_flag=True,
     default=False,
-    help="Preview company-tag cohort enrollments; no writes (requires --tag).",
+    help="Preview tag-cohort enrollments; no writes (requires --tag).",
 )
 @click.option(
     "--min-contacts",
@@ -5870,13 +5870,14 @@ def enrollment_add(
     min_contacts: int | None,
     scheduled_at: str | None,
 ) -> None:
-    """Enroll a contact, or dry-run a company-tag cohort preview.
+    """Enroll a contact, or dry-run a tag-cohort preview.
 
     Single-contact path: ``--workflow-id`` + ``--contact-email``. When
     ``--scheduled-at`` is given on an outbound workflow, a pending task is
-    inserted for the run loop. Tag cohort path (MVP dry-run only):
+    inserted for the run loop. Tag cohort path (dry-run only):
     ``--workflow-id`` + ``--tag`` + ``--dry-run`` [optional ``--min-contacts``]
-    returns an ``enrollment_preview`` with no writes.
+    returns an ``enrollment_preview`` with no writes. ``--tag`` matches
+    company tags or contact tags (union, unique by contact).
     """
     from mailpilot.database import get_workflow, initialize_database
 

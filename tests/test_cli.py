@@ -10002,7 +10002,17 @@ def test_enrollment_add_tag_dry_run_preview(
         workflow="cohort-wf",
         tag="acumatica-var",
         count=1,
-        contacts=[EnrollmentPreviewContact(email="ada@a.com", company_domain="a.com")],
+        contacts=[
+            EnrollmentPreviewContact(
+                email="ada@a.com",
+                title="VP Sales",
+                company_domain="a.com",
+                company_tags=["acumatica-var"],
+                contact_tags=["sales-seat"],
+                email_confidence=98,
+                peer_workflows=["peer-wf"],
+            )
+        ],
         excluded=EnrollmentPreviewExcluded(disabled_companies=1),
     )
     with (
@@ -10040,7 +10050,36 @@ def test_enrollment_add_tag_dry_run_preview(
     assert data["enrollment_preview"]["tag"] == "acumatica-var"
     assert data["enrollment_preview"]["count"] == 1
     assert data["enrollment_preview"]["contacts"][0]["email"] == "ada@a.com"
+    assert data["enrollment_preview"]["contacts"][0]["title"] == "VP Sales"
+    assert data["enrollment_preview"]["contacts"][0]["company_tags"] == [
+        "acumatica-var"
+    ]
+    assert data["enrollment_preview"]["contacts"][0]["contact_tags"] == ["sales-seat"]
+    assert data["enrollment_preview"]["contacts"][0]["email_confidence"] == 98
+    assert data["enrollment_preview"]["contacts"][0]["peer_workflows"] == ["peer-wf"]
     assert data["enrollment_preview"]["excluded"]["disabled_companies"] == 1
+
+
+def test_skill_documents_enrollment_tag_cohort_one_call() -> None:
+    """§V.150: packaged SKILL.md documents contact-tag union + one-call recipe."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "--tag sales-seat" in body
+    assert "peer_workflows" in body
+    assert "one-call" in body
+    assert "company tags or a" in body or "company tag or a" in body
+    assert "§V." not in body
+    assert "§T." not in body
+
+
+def test_enrollment_add_help_tag_is_company_or_contact(runner: CliRunner) -> None:
+    """§V.150/§V.111: help names company-or-contact tag; no SPEC cites."""
+    result = runner.invoke(main, ["enrollment", "add", "--help"])
+    assert result.exit_code == 0
+    assert "company-or-contact" in result.output.lower()
+    assert "§V." not in result.output
+    assert "§T." not in result.output
 
 
 def test_enrollment_add_tag_without_dry_run_errors(

@@ -635,19 +635,34 @@ changes.
 
 ### Preview a tag-cohort enrollment (dry-run)
 
-Before mass-enrolling, preview which contacts would enroll for companies
-carrying a vocabulary tag. Dry-run only (no apply writes). Requires
-`--tag` and `--dry-run` together. Optional `--min-contacts N` filters
-companies before expand. Disabled companies are excluded by default and
-counted under `excluded.disabled_companies`. Candidates drop already-
-enrolled contacts for the workflow, self-loop contacts (email matches the
-workflow account), and disabled contacts.
+One call for a scheduled-batch preview. `--tag` matches a company tag or a
+contact tag (union, unique by contact id) — `sales-seat` and
+`leadership-seat` work the same way as a firm tag such as `acumatica-var`.
+Dry-run only (no apply writes). Requires `--tag` and `--dry-run` together.
+Optional `--min-contacts N` filters companies before expand (company tag)
+or the contact's company contact count (contact tag). Disabled companies
+are excluded and counted under `excluded.disabled_companies`. Candidates
+drop already-enrolled contacts for this workflow, self-loop contacts
+(email matches the workflow account), and disabled contacts.
+
+Do not walk `tag list` + `contact list --tag` + `company list --tag` +
+`enrollment list` to assemble the same set. This preview is the one-call
+recipe: title, company tags, contact tags, email_confidence, and
+`peer_workflows` (other workflows with an active enrollment) land on each
+row. Rows are grouped by `company_domain` then email.
 
 ```
 mailpilot enrollment add --workflow-id acumatica-outreach \
-  --tag acumatica-var --dry-run
+  --tag sales-seat --dry-run
 mailpilot enrollment add --workflow-id acumatica-outreach \
   --tag acumatica-var --dry-run --min-contacts 1
+```
+
+Then enroll chosen rows one contact at a time:
+
+```
+mailpilot enrollment add --workflow-id acumatica-outreach \
+  --contact-email ada@a.com --scheduled-at 2026-08-14T14:00:00+00:00
 ```
 
 Envelope (no writes):
@@ -656,11 +671,27 @@ Envelope (no writes):
 {
   "enrollment_preview": {
     "workflow": "acumatica-outreach",
-    "tag": "acumatica-var",
+    "tag": "sales-seat",
     "count": 2,
     "contacts": [
-      {"email": "ada@a.com", "company_domain": "a.com"},
-      {"email": "grace@b.com", "company_domain": "b.com"}
+      {
+        "email": "ada@a.com",
+        "title": "VP Sales",
+        "company_domain": "a.com",
+        "company_tags": ["acumatica-var"],
+        "contact_tags": ["sales-seat"],
+        "email_confidence": 98,
+        "peer_workflows": []
+      },
+      {
+        "email": "grace@b.com",
+        "title": "Director",
+        "company_domain": "b.com",
+        "company_tags": [],
+        "contact_tags": ["sales-seat"],
+        "email_confidence": 90,
+        "peer_workflows": ["other-outbound"]
+      }
     ],
     "excluded": {
       "disabled_companies": 1,
