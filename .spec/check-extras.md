@@ -28,6 +28,21 @@ operator-judged — the runner collapses the execute step, not the verdict.
 Overlaps /sdd:check's interactive recipe runs; implement only if hand-running
 recurs. Promotion path: seed a §T row.
 
+## Flipped-§T pytest verify
+
+`/sdd:build` verify and `/sdd:check` flipped-since-clean re-verify share one
+shape: collect test files once, run one `uv run pytest`. Do not re-issue the
+same selector list after format-only or lint-only follow-ups unless
+`tests/**` changed.
+
+Trigger: `/sdd:build` verify step, or check audit
+`tasks|ADVISORY|flipped-since-clean` non-empty.
+- `git diff --name-only <last_clean_sha> -- tests/` -> test files in the
+  flip (check memo `last_clean_sha`; build uses the §T working tree)
+- `uv run pytest <files> -q` -> pass = HOLD / verify pass; fail = STALE /
+  verify FAIL
+- same selector after ruff format or basedpyright only -> skip re-run
+
 ## §V4 — CLI envelope + record_count
 
 Every cmd output MUST match the §I.cli envelope. ok:true envelope carries top-level int `record_count` = records displayed: array-bearing payload (`list`/`search`/`sync`/`export`/`import`) -> array len; single-object payload (single-entity verbs + aggregate `stats`/`check` + `status`) -> 1; `show queue` JSON -> len(rows) not 1. Error path -> `{"error", "message", "ok": false}` + exit 1; `record_count` omitted on error. Envelope key vocabulary per §I.cli (plural for arrays, singular for single-object; `workflow_stats`/`task_stats`/`workflow_check`/`db`/`queue` aggregate exceptions).
