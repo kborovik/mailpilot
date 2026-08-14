@@ -38,6 +38,7 @@ Agent-operated CRM. Gmail = comms layer. Claude Code = strategist; internal Pyda
   - `workflow status <workflow>` (§V.157) = read-only ops-health composite (not funnel): workflow meta + wording state (reuse §V.134) + run_loop from global status heartbeat + overdue_tasks + failed_tasks_24h + enrollments_never_sent + optional funnel_active; envelope `{"workflow_status": {...}, "ok": true}`; no LLM.
   - `show queue` (§V.166) = read-only operator report hub (not CRM noun): default ASCII table (`tabulate` `simple`); `--format json` opt-in envelope `{"queue":{grain,tz,rows},"ok":true,"record_count":N}` N=len(rows); `--detail` switches grain workflow->task; `--workflow-name` name|UUID (§V.107) omit=every workflow (draft/active/paused); workflow-grain table+JSON cols {workflow_name, status, t1, t2, t3, t4p, next_at} (status = workflow status; tN = pending count resolved touch N; t4p = resolved touch ≥4); `--detail` table+JSON cols {workflow_name, company_domain, contact, email, touch, attempts, next_at} (touch = T<n>); next_at table+JSON full ISO in `--tz` (offset required, both grains); `--tz` IANA default host local (unresolvable → UTC); detailed `--limit` 100 + `--overdue`; no csv/ndjson; no LLM; no CRM write; errors JSON stderr; empty -> `(no rows)` exit 0.
   - `task stats` (§V.133) = read-only task-cadence aggregate, optional `--workflow-id` (§V.107) + `--trigger` (§V.26 taxonomy): per-status counts {pending, completed, failed, cancelled} + `total`, `distinct_scheduled_days` (bucketed by `--bucket-tz` IANA, default UTC), first/last `scheduled_at`; envelope `{"task_stats": {...}, "ok": true}` (aggregate not a task row). `task list` + `task stats` share `--trigger` (deterministic first-touch select via `enrollment_schedule` §V.32, never reads `description`). `task list --overdue` (§V.155) = pending + `scheduled_at < now`.
+  - `task retry` (§V.170) = reset failed|cancelled row; `--scheduled-at ISO` optional override; omit + stored scheduled_at still future → keep stored; omit + stored past/now → now; `--scheduled-at` past → `validation_error`; completed|pending → `invalid_state`.
   - enrollment projection (§V.152): default `enrollment list` lean rows stay {id, workflow_id, workflow_name, contact_id, contact_email, contact_name, status, updated_at}; `--full` denser projection adds company_domain, company_name, emails_sent, last_touch, next_scheduled_at, next_touch, disposition, created_at; filters `--has-pending-task`, `--touch N`, `--disposition` (§V.160 ∈ {do_not_contact, contact_later, meeting_booked}; unknown → `validation_error` + allowed set); `--touch 1` matches never-sent + pending first-touch (`emails_sent=0` + non-null `next_scheduled_at`) even when `next_touch` null; `--full` projects `next_touch=1` on that row; `--touch N` N>=2 unchanged; sort by `next_scheduled_at`; envelope key `enrollments` unchanged; view ? same denser fields when useful.
   - activity/email scope (§V.154): `activity list` requires ≥1 of `--contact-email` | `--company-domain` | `--workflow-id` (missing → `missing_filter`); `email list` requires ≥1 scope filter (contact, account, workflow, thread, or other existing scope — no unbounded full-table dump); `--workflow-id` name|UUID (§V.107) composes w/ type/direction/since/until/limit.
   - stuck filters (§V.155): `enrollment list --stuck` / `workflow report --stuck` share heuristics (active + no pending + no terminal + never-sent past SLA or cadence lag; bounced w/o disposition; high attempt_count failed tasks); default first-send SLA 24h; read-only (mutate stays `task retry` / `enrollment disable`).
@@ -109,7 +110,7 @@ V45: protocol compose order tool-loop; compose-only touch §V.136; deferred §V.
 V46: template name = <direction>-<data-system>; prefix == direction field
 V47: provider-aware model config — llm_provider dispatches `_build_model`; Anthropic cache/thinking/effort; xAI reasoning_effort; enums validated — → .spec/check-extras.md §V47
 V48: provider transport timeout = 240s terminal (Anthropic HTTP + xAI `XaiProvider`); mid-turn tool side-effects → retry unsafe — → .spec/check-extras.md §V48
-V49: bounded auto-retry — 4 attempts, execute_task per-task classification, manual retry = failed/cancelled only — retry matrix → .spec/check-extras.md §V49
+V49: bounded auto-retry — 4 attempts, execute_task per-task classification, manual retry = failed/cancelled only; schedule → §V.170 — retry matrix → .spec/check-extras.md §V49
 V51: every logfire.exception site reachable from `mailpilot run` ! paired operator_event("error", source=..., message=...); contract test sweeps run-reachable modules; → .spec/check-extras.md §V51
 V52: logfire.configure(environment=settings.logfire_environment) -> spans carry deployment_environment; cloud queries filter by env
 V53: agent tool spans from instrument_pydantic_ai; no logfire.span in tools — → .spec/check-extras.md §V53
@@ -130,7 +131,7 @@ V79: send/reply guards + account soft-disable lifecycle — → .spec/check-extr
 V80: bounce/unsubscribe handling + contact disable; reason prefix in {bounced:, unsubscribed:} — → .spec/check-extras.md §V80
 V81: tool-loop ! ≥1 tool; noop escape; compose-only exempt §V.136 — → .spec/check-extras.md §V81
 V82: agent email history scoped to (account_id, contact_id, workflow_id) — other workflows' mail excluded
-V83: execute_task pre-flight cancels stale tasks (inactive workflow/contact/enrollment; terminal or replied-after touch) w/ zero LLM calls (complements §V.123) — → .spec/check-extras.md §V83
+V83: execute_task pre-flight cancels stale tasks (inactive workflow/contact/enrollment; terminal or replied-after touch excl OOO §V.169) w/ zero LLM calls (complements §V.123) — → .spec/check-extras.md §V83
 V84: pubsub notification callback acks unconditionally (decode error + missing emailAddress included); sets wakeup_event when supplied
 V85: settings precedence kwargs > env > `.env` > config.json > defaults — → .spec/check-extras.md §V85
 V86: secret settings (`anthropic_api_key`, `xai_api_key`, `logfire_token`, `database_url`) redacted as '***' in telemetry; config.set event logs key + changed flag
@@ -213,7 +214,8 @@ V165: live-e2e-dev-only — campaign-test + reply-test ! read settings.logfire_e
 V166: show-queue — `mailpilot show queue` human report hub; default ASCII table; `--format json` opt-in; `--detail` task grain; next_at table+JSON ISO in `--tz` (default host local); every workflow status; pending tasks only; no LLM; no write — → .spec/check-extras.md §V166
 V167: company-create-oneshot — `company create` accepts §V.140 profile flags + repeatable `--tag` same invocation; one txn all-or-nothing; `--tag` additive never invent (§V.116); undefined tag → not_found; invalid profile → validation_error; second `--upsert` exit 0, update profile if flags, no tag dups — → .spec/check-extras.md §V167
 V168: company-view-full — `company view --full` embeds `contacts[]` + `tags[]` + `notes[]`; omit `verification_meta` unless `--include-meta`; lean unchanged — → .spec/check-extras.md §V168
-V169: ooo-pause-resume — OOO inbound → no reply incl. no §V.131 ACK; ! conclude (distinct §V.161); ! bump last_touch/emails_sent; harness resume @ return date — → .spec/check-extras.md §V169
+V169: ooo-pause-resume — OOO inbound → no reply incl. no §V.131 ACK; ! conclude (distinct §V.161); ! bump last_touch/emails_sent; harness resume @ return date; OOO inbound ! §V.83 replied-after — → .spec/check-extras.md §V169
+V170: task-retry-schedule — `task retry` failed|cancelled only (§V.49); omit `--scheduled-at` + stored scheduled_at still future → keep stored; `--scheduled-at ISO` → that instant; omit + stored past/now → now; `--scheduled-at` past → validation_error — → .spec/check-extras.md §V170
 
 ## §T TASKS
 
@@ -271,6 +273,7 @@ T278|x|impl §V.166 + §I — show queue --detail cols {workflow_name,company_do
 T279|x|impl §V.166(∆)+§I — show queue table+JSON next_at ISO in --tz (offset); JSON no longer stored-UTC; tests + SKILL|V166,V4,I.cli
 T280|x|impl §V.166 + §I — show queue --tz default host local IANA (unresolvable → UTC); explicit --tz overrides; tests + SKILL|V166,V4,I.cli
 T281|x|impl §V.131(∆) — `_FALLBACK_ACKNOWLEDGEMENT` first-person singular (`I`) not we/our team; stay fixed content-free ASCII never model-generated; tests pin exact body (#226)|V131,B139
+T282|.|impl §V.170(+) + §V.83(∆) + §V.169(∆) + §I — task retry keep-future scheduled_at + --scheduled-at; OOO inbound ! V83 replied-after; enrollment --full next_touch=2; tests + SKILL one-call (#227)|V170,V49,V83,V169,V152,V129,V4,I.cli
 
 ## §B BUGS
 

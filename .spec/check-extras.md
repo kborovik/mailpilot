@@ -261,7 +261,7 @@ Trigger: `src/mailpilot/agent/invoke.py`, `src/mailpilot/agent/classify.py`, or 
 
 ## §V49 — bounded auto-retry parameters
 
-4 attempts total; backoff [30, 120, 300]s; transient allow-list = Google 429/5xx, Anthropic 502/503/529, socket/TimeoutError; Drive socket timeout 60s feeds classifier; manual retry only failed/cancelled (completed + pending refused); retry UPDATE fires task_pending_trigger.
+4 attempts total; backoff [30, 120, 300]s; transient allow-list = Google 429/5xx, Anthropic 502/503/529, socket/TimeoutError; Drive socket timeout 60s feeds classifier; manual retry only failed/cancelled (completed + pending refused); schedule policy → §V.170; retry UPDATE fires task_pending_trigger.
 
 ## §V51 — logfire.exception + operator_event("error") pairing
 
@@ -401,7 +401,7 @@ Trigger: `src/mailpilot/routing.py` or `src/mailpilot/sync.py` changed.
 
 ## §V83 — execute_task pre-flight cancellation
 
-execute_task pre-flight cancels the task (zero LLM calls) when: workflow inactive/missing; contact disabled/missing; enrollment missing or status != active. Touch tasks (context.touch) additionally cancelled when the latest enrollment outcome is terminal OR an inbound email from the contact arrived after the prior touch — belt complementing reply-time cancellation (§V.123).
+execute_task pre-flight cancels the task (zero LLM calls) when: workflow inactive/missing; contact disabled/missing; enrollment missing or status != active. Touch tasks (context.touch) additionally cancelled when the latest enrollment outcome is terminal OR an inbound email from the contact arrived after the prior touch — belt complementing reply-time cancellation (§V.123). inbound-after excludes OOO/auto-reply inbound (V169 detect) — pause not reply; operator retry of cancelled cadence T2 may proceed.
 
 Trigger: `src/mailpilot/run.py` changed.
 - `rg 'status="cancelled"' src/mailpilot/run.py` -> pre-flight cancel sites present
@@ -1085,12 +1085,22 @@ Trigger: `company view` path changed.
 
 ## §V169 — OOO pause-resume
 
-active outbound + inbound OOO/temporary-absence auto-reply (detect: subject Automatic reply / Auto-Submitted / agent OOO class) → no reply incl. no §V.131 fallback ACK; ! conclude (distinct §V.161); ! bump last_touch/emails_sent; §V.123 cancel pending follow-ups; harness schedule resume @ parseable return date (context.touch numeric §V.162, reason=ooo_pause); unparseable → +touch_interval_days (or +3d if NULL cadence); enrollment stays active, disposition null
+active outbound + inbound OOO/temporary-absence auto-reply (detect: subject Automatic reply / Auto-Submitted / agent OOO class) → no reply incl. no §V.131 fallback ACK; ! conclude (distinct §V.161); ! bump last_touch/emails_sent; §V.123 cancel pending follow-ups; harness schedule resume @ parseable return date (context.touch numeric §V.162, reason=ooo_pause); unparseable → +touch_interval_days (or +3d if NULL cadence); enrollment stays active, disposition null; OOO inbound ! count as inbound-reply for §V.83 pre-flight
 
 Trigger: inbound OOO / auto-reply / cadence resume path changed.
 - `rg 'ooo_pause|_maybe_ooo_pause' src/mailpilot/` -> pause+resume path
 - `rg 'Automatic reply|Auto-Submitted' src/mailpilot/ooo.py` -> mechanical detect
 - `rg '_FALLBACK_ACKNOWLEDGEMENT|_ack_or_ooo_pause' src/mailpilot/run.py` -> OOO exempt from fallback ACK
+- `rg 'is_mechanical_ooo|is_ooo_auto_reply' src/mailpilot/run.py src/mailpilot/database.py` -> OOO excluded from §V.83 replied-after
+
+## §V170 — task-retry-schedule
+
+`task retry` resets failed|cancelled only (§V.49). omit `--scheduled-at` + stored scheduled_at still future → keep stored (no now-reset). `--scheduled-at ISO` → that instant. omit + stored past/now → now (fail-retry). `--scheduled-at` past → validation_error. completed|pending → invalid_state. envelope task entity. retry UPDATE fires task_pending_trigger.
+
+Trigger: `src/mailpilot/cli.py` or `src/mailpilot/database.py` `manual_retry_task` changed.
+- `rg 'scheduled-at' src/mailpilot/cli.py` -> task retry flag present
+- `rg 'manual_retry_task' src/mailpilot/database.py` -> scheduled_at keep-or-override
+- `rg 'task retry' src/mailpilot/SKILL.md` -> one-call recipe present
 
 ## §V16 — race-safe create
 
