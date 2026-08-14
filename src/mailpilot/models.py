@@ -523,26 +523,62 @@ class EnrollmentPreviewContact(BaseModel):
 
 
 class EnrollmentPreviewExcluded(BaseModel):
-    """Drop counters for a tag-cohort enrollment dry-run (§V.150)."""
+    """Drop counters for enrollment dry-run / batch packing (§V.150 / §V.171)."""
 
     disabled_companies: int = 0
     already_enrolled: int = 0
     self_loop: int = 0
     disabled_contacts: int = 0
+    peer: int = 0
+    over_limit: int = 0
+    not_found: int = 0
 
 
 class EnrollmentPreview(BaseModel):
-    """Read-only enrollment dry-run report for a company-or-contact tag (§V.150).
+    """Read-only enrollment dry-run report for a tag or file cohort (§V.150).
 
     No rows are written. ``count`` equals ``len(contacts)`` and is the
     ``record_count`` the CLI envelope reports. ``--tag`` is a union of
-    company-tag and contact-tag owners, deduped by contact id.
+    company-tag and contact-tag owners, deduped by contact id. ``tag`` is
+    None for the ``--file`` preview path.
     """
 
     workflow: str
-    tag: str
+    tag: str | None = None
     count: int
     contacts: list[EnrollmentPreviewContact]
+    excluded: EnrollmentPreviewExcluded
+
+
+EnrollmentBatchAction = Literal["created", "scheduled_first_send", "unchanged"]
+
+
+class EnrollmentBatchRow(BaseModel):
+    """One enrolled seat in a scheduled-batch apply (§V.171)."""
+
+    email: str
+    company_domain: str | None = None
+    enrollment_id: str
+    scheduled_at: str
+    action: EnrollmentBatchAction
+
+
+class EnrollmentBatch(BaseModel):
+    """Scheduled-batch apply report (§V.171).
+
+    ``count`` equals ``len(enrolled)`` and is the CLI ``record_count``.
+    ``source`` is ``file`` or ``tag``. ``tag`` / ``limit`` are omitted from
+    meaning when the flag was not passed (serialized as null).
+    """
+
+    workflow: str
+    scheduled_at: str
+    source: Literal["file", "tag"]
+    tag: str | None = None
+    limit: int | None = None
+    company_atomic: bool
+    count: int
+    enrolled: list[EnrollmentBatchRow]
     excluded: EnrollmentPreviewExcluded
 
 

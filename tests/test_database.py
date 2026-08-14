@@ -4973,6 +4973,82 @@ def test_preview_enrollment_contact_tag_min_contacts(
     assert preview.contacts[0].email == a.email
 
 
+def _preview_contact(email: str, domain: str, *, peers: list[str] | None = None):
+    from mailpilot.models import EnrollmentPreviewContact
+
+    return EnrollmentPreviewContact(
+        email=email,
+        company_domain=domain,
+        peer_workflows=peers or [],
+    )
+
+
+def test_apply_enrollment_packing_hard_cap() -> None:
+    """§V.171: --limit without --company-atomic is a hard first-N cap."""
+    from mailpilot.database import apply_enrollment_packing
+    from mailpilot.models import EnrollmentPreviewExcluded
+
+    contacts = [
+        _preview_contact("a1@a.test", "a.test"),
+        _preview_contact("a2@a.test", "a.test"),
+        _preview_contact("b1@b.test", "b.test"),
+        _preview_contact("c1@c.test", "c.test"),
+    ]
+    packed, excluded = apply_enrollment_packing(
+        contacts, EnrollmentPreviewExcluded(), limit=2
+    )
+    assert [c.email for c in packed] == ["a1@a.test", "a2@a.test"]
+    assert excluded.over_limit == 2
+
+
+def test_apply_enrollment_packing_soft_cap_last_atom() -> None:
+    """§V.171: --company-atomic may exceed --limit to fit the last domain."""
+    from mailpilot.database import apply_enrollment_packing
+    from mailpilot.models import EnrollmentPreviewExcluded
+
+    contacts = [
+        _preview_contact("a1@a.test", "a.test"),
+        _preview_contact("a2@a.test", "a.test"),
+        _preview_contact("b1@b.test", "b.test"),
+        _preview_contact("b2@b.test", "b.test"),
+        _preview_contact("c1@c.test", "c.test"),
+    ]
+    packed, excluded = apply_enrollment_packing(
+        contacts,
+        EnrollmentPreviewExcluded(),
+        limit=3,
+        company_atomic=True,
+    )
+    assert [c.email for c in packed] == [
+        "a1@a.test",
+        "a2@a.test",
+        "b1@b.test",
+        "b2@b.test",
+    ]
+    assert excluded.over_limit == 1
+
+
+def test_apply_enrollment_packing_exclude_peer_then_limit() -> None:
+    """§V.171: --exclude-peer drops peers before the seat cap."""
+    from mailpilot.database import apply_enrollment_packing
+    from mailpilot.models import EnrollmentPreviewExcluded
+
+    contacts = [
+        _preview_contact("a1@a.test", "a.test", peers=["other-wf"]),
+        _preview_contact("b1@b.test", "b.test"),
+        _preview_contact("c1@c.test", "c.test"),
+    ]
+    packed, excluded = apply_enrollment_packing(
+        contacts,
+        EnrollmentPreviewExcluded(),
+        limit=1,
+        exclude_peer=True,
+    )
+    assert [c.email for c in packed] == ["b1@b.test"]
+    assert excluded.peer == 1
+    assert excluded.over_limit == 1
+
+
 def test_enrollment_row_carries_parent_denorm_fields(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
