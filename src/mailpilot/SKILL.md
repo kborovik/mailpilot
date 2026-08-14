@@ -323,7 +323,13 @@ mailpilot company disable example.com --reason-file /tmp/reason.txt
 mailpilot contact search alice
 mailpilot contact search "David Drouin"
 mailpilot contact search "VP Engineering"
+mailpilot contact list
+mailpilot contact view lead@example.com
 ```
+
+`contact list`, `contact search`, and `contact view` project `tags`
+(assigned names, empty array ok) — same shape as company `tags`. One call
+is enough to read seats without a separate `tag list`.
 
 Single-token queries substring-match email, first_name, last_name, or title.
 A quoted full name matches `first last` in order (e.g. first=David,
@@ -539,10 +545,10 @@ profile); default list never ships products, target_customers, or sources.
 (sorted alternate domains), full profile, and inlined notes.
 
 Pass `company view --full` to inspect one firm in a single call: the
-company envelope embeds `contacts[]` (lean contact fields, including
-disabled), plus the existing `tags[]` and `notes[]`. Distinct from
-`company list --full`. Omit `verification_meta` unless `--include-meta`.
-Lean `company view` (no `--full`) is unchanged.
+company envelope embeds `contacts[]` (lean contact fields including
+`tags[]`, including disabled), plus the existing company `tags[]` and
+`notes[]`. Distinct from `company list --full`. Omit `verification_meta`
+unless `--include-meta`. Lean `company view` (no `--full`) is unchanged.
 
 ```
 mailpilot company view example.com --full

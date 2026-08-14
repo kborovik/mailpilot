@@ -2675,8 +2675,9 @@ def company_list(
     is_flag=True,
     default=False,
     help=(
-        "Embed contacts (lean fields) with existing tags and notes. "
-        "Distinct from company list --full (profile.summary only)."
+        "Embed contacts (lean fields including tags) with existing "
+        "company tags and notes. Distinct from company list --full "
+        "(profile.summary only)."
     ),
 )
 @click.option(
@@ -2692,10 +2693,10 @@ def company_view(company_ref: str, full: bool, include_meta: bool) -> None:
     """Show a company by domain or ID with inlined notes.
 
     Lean view is unchanged (profile, tags, aliases, notes). Pass --full to
-    embed contacts[] (lean contact fields) in the same envelope. Pass
-    --include-meta with --full to project verification_meta on those
-    contacts. Distinct from company list --full, which only embeds
-    profile.summary.
+    embed contacts[] (lean contact fields including tags) in the same
+    envelope. Pass --include-meta with --full to project verification_meta
+    on those contacts. Distinct from company list --full, which only
+    embeds profile.summary.
     """
     from mailpilot.database import (
         initialize_database,
@@ -3305,10 +3306,11 @@ def contact_enable(contact_ref: str) -> None:
 def contact_search(query: str, limit: int) -> None:
     """Search contacts by email, name, or title.
 
-    Single-token: substring match on email, first_name, last_name, or title.
-    Full name (e.g. "David Drouin"): order-preserving match on first+last.
-    Multi-token: every token must match at least one of those fields (AND).
-    Disabled contacts remain searchable.
+    Rows project tags (assigned names, empty ok) with title and
+    company_domain. Single-token: substring match on email, first_name,
+    last_name, or title. Full name (e.g. "David Drouin"): order-preserving
+    match on first+last. Multi-token: every token must match at least one
+    of those fields (AND). Disabled contacts remain searchable.
     """
     from mailpilot.database import initialize_database, search_contacts
 
@@ -3354,8 +3356,10 @@ def contact_list(
 ) -> None:
     """List contacts as summaries.
 
-    Repeatable --tag is AND (row must carry every named tag). Repeatable
-    --no-tag is AND (row must carry none of the named tags).
+    Each row projects tags (assigned names, empty ok) with title and
+    company_domain. Repeatable --tag is AND (row must carry every named
+    tag). Repeatable --no-tag is AND (row must carry none of the named
+    tags).
     """
     from mailpilot.database import initialize_database, list_contacts
 
@@ -3421,8 +3425,9 @@ def contact_view(
 ) -> None:
     """Show a contact by email or ID with inlined notes (own + parent company).
 
-    Pass --timeline for a bounded dossier (enrollments + emails + activities).
-    Default path stays notes-only for agent prompt budget.
+    Projects tags (assigned names, empty ok). Pass --timeline for a
+    bounded dossier (enrollments + emails + activities). Default path
+    stays notes-only for agent prompt budget.
     """
     from mailpilot.database import (
         get_contact,

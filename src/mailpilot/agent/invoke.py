@@ -577,9 +577,11 @@ def _build_user_prompt(  # noqa: PLR0913
     records (§V.135). ``invoke_workflow_agent`` loads them via
     ``load_contact_view`` / ``load_company_view`` -- the same loaders that back
     CLI ``contact view`` / ``company view`` -- so the agent and the operator see
-    byte-identical context (§V.8). Each is rendered as a JSON ``Contact
-    record:`` / ``Company record:`` section; the company section is omitted when
-    the contact has no parent company (``company_view`` is None).
+    byte-identical context except contact ``tags[]``, which is CLI-inspect
+    only and stripped from ``Contact record:`` (§V.8). Each is rendered as a
+    JSON ``Contact record:`` / ``Company record:`` section; the company
+    section is omitted when the contact has no parent company
+    (``company_view`` is None).
     """
     sections: list[str] = [
         f"Workflow: {workflow.name}",
@@ -594,10 +596,12 @@ def _build_user_prompt(  # noqa: PLR0913
 
     # §V.135: pre-feed the contact + company records (with inlined notes) so the
     # agent grounds on them directly instead of spending a read-tool round-trip.
-    # The JSON is the loader's own serialization, byte-identical to the CLI view
-    # (§V.8).
+    # Contact tags[] stay CLI-inspect only (§V.8); the rest matches CLI view.
     if contact_view is not None:
-        sections.append("\nContact record:\n" + contact_view.model_dump_json(indent=2))
+        sections.append(
+            "\nContact record:\n"
+            + contact_view.model_dump_json(indent=2, exclude={"tags"})
+        )
     if company_view is not None:
         sections.append("\nCompany record:\n" + company_view.model_dump_json(indent=2))
 
