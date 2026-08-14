@@ -87,11 +87,11 @@ Trigger: `src/mailpilot/database.py` or `src/mailpilot/models.py` changed.
 
 ## §V8 — view model projections
 
-ContactView = base Contact superset + company_domain (LEFT JOIN company). CompanyView = base Company superset + `tags` (assigned tag names, empty ok; same shape as CompanySummary.tags / `db export` company.tags §V.121). CompanySummary lean list row carries `tags` + `disabled_reason` (null when enabled) + `contact_count`/`has_profile`; `--full` opts in `profile.summary` only (null when no profile) — never default full profile. CompanyView carries `aliases[]` (sorted lowercased alias domains, empty ok; view-only — list lean omits). ContactView omits `verification_meta` by default (operator-only via `contact view --include-meta` §V.144; meta opt-in = CLI-only, never agent path). MeetingView = base Meeting superset + attendee contacts (list_meeting_attendees join). All three views: inline <=10 latest notes (`_INLINE_NOTES_CAP`) + total count; field set test-tracked vs base model (Pydantic `extra=ignore` silently strips fields omitted from the view model — test catches drift). `meeting list` rows carry compact attendee summary (emails or count). `meeting view` inlines full attendee list. Workflow-agent prompt pre-feed (`Contact record:` / `Company record:` sections, §V.135) routes through load_contact_view/load_company_view — agent + CLI context byte-identical. `company view --full` inspect dossier (`contacts[]`+`tags[]`+`notes[]`) → §V.168; lean CompanyView unchanged.
+ContactView = base Contact superset + company_domain (LEFT JOIN company) + `tags[]` (assigned names, empty ok; same shape as CompanyView.tags / `db export` company.tags §V.121). ContactSummary lean list|search row carries `tags[]` same shape. `contact list|search|view` always project `tags[]`. `company view --full` lean contacts inherit ContactSummary so they carry `tags[]` (§V.168). CompanyView = base Company superset + `tags` (assigned tag names, empty ok; same shape as CompanySummary.tags / `db export` company.tags §V.121). CompanySummary lean list row carries `tags` + `disabled_reason` (null when enabled) + `contact_count`/`has_profile`; `--full` opts in `profile.summary` only (null when no profile) — never default full profile. CompanyView carries `aliases[]` (sorted lowercased alias domains, empty ok; view-only — list lean omits). ContactView omits `verification_meta` by default (operator-only via `contact view --include-meta` §V.144; meta opt-in = CLI-only, never agent path). MeetingView = base Meeting superset + attendee contacts (list_meeting_attendees join). All three views: inline <=10 latest notes (`_INLINE_NOTES_CAP`) + total count; field set test-tracked vs base model (Pydantic `extra=ignore` silently strips fields omitted from the view model — test catches drift). `meeting list` rows carry compact attendee summary (emails or count). `meeting view` inlines full attendee list. Workflow-agent prompt pre-feed (`Contact record:` / `Company record:` sections, §V.135) routes through load_contact_view/load_company_view — agent + CLI context byte-identical except contact `tags[]` stripped from `Contact record:` (CLI inspect only; allowlist unchanged). `company view --full` inspect dossier (`contacts[]`+`tags[]`+`notes[]`) → §V.168; lean CompanyView unchanged.
 
 Trigger: `src/mailpilot/models.py` or `src/mailpilot/database.py` changed.
 - `rg 'ContactView|CompanyView|MeetingView' src/mailpilot/models.py` -> all three present
-- `rg 'tags.*list|tags: list' src/mailpilot/models.py` -> CompanySummary + CompanyView carry tags
+- `rg 'tags.*list|tags: list' src/mailpilot/models.py` -> CompanySummary + CompanyView + ContactSummary + ContactView carry tags
 - `rg '_INLINE_NOTES_CAP' src/mailpilot/database.py` -> cap constant present
 - `rg 'load_contact_view|load_company_view|load_meeting_view' src/mailpilot/database.py` -> loaders present
 - `rg 'test.*view.*field|ContactView.*Contact\b|CompanyView.*Company\b' src/mailpilot/tests/` -> field-set invariant test present
@@ -646,13 +646,13 @@ Trigger: `src/mailpilot/cli.py` or `src/mailpilot/_filters.py` changed.
 
 ## §V116 — tags controlled vocabulary
 
-Two tables: `tag` (vocabulary, one row/defined tag, `name` globally unique §V.90, soft-delete via `disabled_reason`) + `tag_assignment` (link, one row/(tag, owner), owner XOR company|contact). CLI verbs: `tag create <name>`, `tag view`, `tag disable <name>`, `tag enable <name>`, `tag add`, `tag remove`, `tag list`, `tag search`. `tag add` errors `not_found` on undefined tag, NEVER auto-creates. `tag list` = vocabulary + projected `usage_count`. `company list --tag` / `contact list --tag` = membership filter, repeatable, AND-compose (row ! carry every named tag). `company list --no-tag` / `contact list --no-tag` = negated membership filter, repeatable, AND-compose (carry none of the named tags). Both resolve through vocabulary (undefined → `not_found`). `company list` + `company view` project assigned tags as `tags[]` names (empty ok; list/view shape identical; same as `db export` company.tags) — membership filter alone ! substitute for projection (agent triage needs tags on the list row).
+Two tables: `tag` (vocabulary, one row/defined tag, `name` globally unique §V.90, soft-delete via `disabled_reason`) + `tag_assignment` (link, one row/(tag, owner), owner XOR company|contact). CLI verbs: `tag create <name>`, `tag view`, `tag disable <name>`, `tag enable <name>`, `tag add`, `tag remove`, `tag list`, `tag search`. `tag add` errors `not_found` on undefined tag, NEVER auto-creates. `tag list` = vocabulary + projected `usage_count`. `company list --tag` / `contact list --tag` = membership filter, repeatable, AND-compose (row ! carry every named tag). `company list --no-tag` / `contact list --no-tag` = negated membership filter, repeatable, AND-compose (carry none of the named tags). Both resolve through vocabulary (undefined → `not_found`). `company list|view` + `contact list|search|view` project assigned tags as `tags[]` names (empty ok; list/view shape identical; company same as `db export` company.tags) — membership filter alone ! substitute for projection.
 
 Trigger: `src/mailpilot/cli.py` or `src/mailpilot/database.py` changed.
 - `rg '"tag"\b.*"create"\|"tag create"' src/mailpilot/cli.py` -> all verbs registered
 - `rg 'not_found.*tag\b\|tag.*not_found' src/mailpilot/cli.py src/mailpilot/database.py` -> `not_found` on undefined (no auto-create)
 - `rg '"--no-tag".*multiple.*True\|multiple.*True.*"--no-tag"' src/mailpilot/cli.py` -> `--no-tag` is repeatable
-- `rg 'tags' src/mailpilot/models.py | rg 'CompanySummary|CompanyView'` -> company list/view project tags
+- `rg 'tags' src/mailpilot/models.py | rg 'CompanySummary|CompanyView|ContactSummary|ContactView'` -> company+contact list/view project tags
 
 ## §V117 — batch-gate option distinctness
 
@@ -1092,7 +1092,7 @@ Trigger: `company create` path changed.
 
 ## §V168 — company view --full inspect dossier
 
-`company view --full` embeds `contacts[]` (lean contact fields; omit `verification_meta` unless `--include-meta`) + existing `tags[]` + `notes[]` on the company envelope. Lean `company view` (no `--full`) unchanged. Distinct from `company list --full` (profile.summary only, §V.8).
+`company view --full` embeds `contacts[]` (lean contact fields incl. `tags[]`; omit `verification_meta` unless `--include-meta`) + existing `tags[]` + `notes[]` on the company envelope. Lean `company view` (no `--full`) unchanged. Distinct from `company list --full` (profile.summary only, §V.8).
 
 Trigger: `company view` path changed.
 - `rg 'list_company_inspect_contacts' src/mailpilot/` -> inspect-dossier loader
