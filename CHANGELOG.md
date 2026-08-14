@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- Fallback acknowledgement on a terminal inbound failure is first-person
+  singular (`I`). The previous we / our-team wording is gone.
+
 ## [v0.25.1] - 2026-08-13
 
 ### Changed

@@ -270,7 +270,7 @@ T277|x|impl §V.162+§V.132+§V.166+§I — resolve-touch fallback on stats pend
 T278|x|impl §V.166 + §I — show queue --detail cols {workflow_name,company_domain,contact,email,touch,attempts,next_at}; drop when/trigger/state; next_at ISO in --tz; tests + SKILL|V166,V162,V4,I.cli
 T279|x|impl §V.166(∆)+§I — show queue table+JSON next_at ISO in --tz (offset); JSON no longer stored-UTC; tests + SKILL|V166,V4,I.cli
 T280|x|impl §V.166 + §I — show queue --tz default host local IANA (unresolvable → UTC); explicit --tz overrides; tests + SKILL|V166,V4,I.cli
-T281|.|impl §V.131(∆) — `_FALLBACK_ACKNOWLEDGEMENT` first-person singular (`I`) not we/our team; stay fixed content-free ASCII never model-generated; tests pin exact body (#226)|V131,B139
+T281|x|impl §V.131(∆) — `_FALLBACK_ACKNOWLEDGEMENT` first-person singular (`I`) not we/our team; stay fixed content-free ASCII never model-generated; tests pin exact body (#226)|V131,B139
 
 ## §B BUGS
 

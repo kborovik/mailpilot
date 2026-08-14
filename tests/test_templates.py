@@ -649,14 +649,23 @@ def test_registered_tool_source_docstrings_carry_no_spec_citation() -> None:
 def test_fallback_acknowledgement_is_fixed_content_free_ascii() -> None:
     """§V.131: the fallback acknowledgement is a code-defined, content-free,
     ASCII body -- never model-generated and never partial -- so the grounding
-    risk the agent failed on cannot reach the sender (§B.116). It carries no
+    risk the agent failed on cannot reach the sender (§B.116). It is
+    first-person singular (`I`), not we/our team (§B.139). It carries no
     SPEC cite (§C ASCII-only project artifact) and is not composed into any
     template protocol (it is an email body, not a prompt fragment)."""
     body = templates_module._FALLBACK_ACKNOWLEDGEMENT  # pyright: ignore[reportPrivateUsage]
+    assert body == (
+        "Thank you for your message. I have received it and will follow "
+        "up with you shortly.\n"
+    )
     assert isinstance(body, str)
     assert body.strip()
     assert body.isascii()
     assert _SPEC_CITE.search(body) is None
+    lowered = body.lower()
+    assert " we " not in f" {lowered} "
+    assert "our team" not in lowered
+    assert re.search(r"\bi\b", lowered)
     for template in TEMPLATES.values():
         for trigger in _ALL_TRIGGERS:
             assert body not in template.build_protocol(trigger)
