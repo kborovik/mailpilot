@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (assigned names, empty array ok). `company view --full` lean contacts
   include the same `tags[]` shape.
 
+- `enrollment add --file` or `--tag` plus `--scheduled-at` enrolls a
+  reviewed batch in one envelope. `--limit` is a hard cap, or a soft
+  cap with `--company-atomic` (same calendar day per domain; last
+  company may exceed the cap). `--exclude-peer` drops seats already
+  active in another workflow. Tag apply never restamps seats already
+  enrolled in this workflow. Dry-run packing flags reuse the same pack.
+
 ## [v0.26.0] - 2026-08-14
 
 ### Added
