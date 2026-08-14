@@ -175,7 +175,7 @@ V126: CalendarClient mirrors Gmail/Drive; poll from run-interval + account sync;
 V127: conclude_enrollment = sole agent terminal; disposition enum; system side-effects; record_enrollment_outcome not agent tool — → .spec/check-extras.md §V127
 V128: calendar booking concludes active outbound enrollments + cancels follow-ups, no agent turn — → .spec/check-extras.md §V128
 V129: agent timestamps grounded (current-date inject) + future-checked at create_task + conclude_enrollment.reschedule_at — → .spec/check-extras.md §V129
-V131: terminal inbound agent failure → one `_FALLBACK_ACKNOWLEDGEMENT`; outbound first-touch silent; auto-reply/OOO inbound silent; fallback-send fail → task failed — → .spec/check-extras.md §V131
+V131: terminal inbound agent failure → one `_FALLBACK_ACKNOWLEDGEMENT` first-person singular (`I`) not we/our team; outbound first-touch silent; auto-reply/OOO inbound silent; fallback-send fail → task failed — → .spec/check-extras.md §V131
 V132: workflow stats funnel single-SQL enrollment grain; 8 stages + touch slices + awaiting_first_touch + disabled; no LLM — → .spec/check-extras.md §V132
 V133: task stats aggregate single-SQL; filters --workflow-id + --trigger; per-status counts + scheduled day buckets — → .spec/check-extras.md §V133
 V134: workflow check SHA-256; --file always path-scope (file|dir recurse); --account-email+--file ? full envelope; states {in_sync,out_of_sync,not_imported,orphaned}; report-only — → .spec/check-extras.md §V134
@@ -270,6 +270,7 @@ T277|x|impl §V.162+§V.132+§V.166+§I — resolve-touch fallback on stats pend
 T278|x|impl §V.166 + §I — show queue --detail cols {workflow_name,company_domain,contact,email,touch,attempts,next_at}; drop when/trigger/state; next_at ISO in --tz; tests + SKILL|V166,V162,V4,I.cli
 T279|x|impl §V.166(∆)+§I — show queue table+JSON next_at ISO in --tz (offset); JSON no longer stored-UTC; tests + SKILL|V166,V4,I.cli
 T280|x|impl §V.166 + §I — show queue --tz default host local IANA (unresolvable → UTC); explicit --tz overrides; tests + SKILL|V166,V4,I.cli
+T281|.|impl §V.131(∆) — `_FALLBACK_ACKNOWLEDGEMENT` first-person singular (`I`) not we/our team; stay fixed content-free ASCII never model-generated; tests pin exact body (#226)|V131,B139
 
 ## §B BUGS
 
@@ -323,3 +324,4 @@ B135|2026-08-12|campaign-test preflight never checked logfire_environment; live 
 B136|2026-08-13|OOO inbound: fallback ACK burned last_touch/emails_sent, or V123 cancel left next_scheduled_at null w/ no resume|V169
 B137|2026-08-13|enrollment add --scheduled-at re-run skips existing first-reach; ok:true changed=[]|V32
 B138|2026-08-13|queue/stats hide enrollment_schedule as T1 when context.touch absent|V162,V132,V166
+B139|2026-08-14|`_FALLBACK_ACKNOWLEDGEMENT` we/our team; live sender is one person; campaign bodies use I|V131
