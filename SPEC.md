@@ -275,7 +275,7 @@ T280|x|impl §V.166 + §I — show queue --tz default host local IANA (unresolva
 T281|x|impl §V.131(∆) — `_FALLBACK_ACKNOWLEDGEMENT` first-person singular (`I`) not we/our team; stay fixed content-free ASCII never model-generated; tests pin exact body (#226)|V131,B139
 T282|x|impl §V.170(+) + §V.83(∆) + §V.169(∆) + §I — task retry keep-future scheduled_at + --scheduled-at; OOO inbound ! V83 replied-after; enrollment --full next_touch=2; tests + SKILL one-call (#227)|V170,V49,V83,V169,V152,V129,V4,I.cli
 T283|x|impl §V.141(∆) + §I — tag remove repeatable --company-domain|--contact-email matching tag add; one invocation unlinks every listed owner; N>1 results[]; already-unlinked ok skip; help documents flags (#230)|V141,V139,V116,V4,V111,I.cli
-T284|.|impl I.nouns/I.verbs set-diff hook `.spec/scripts/check-extras.sh`; parse SPEC §I lists vs cli.py noun-group @command; emit MATCH/MISSING/EXTRA/DRIFT; tests|I.nouns,I.verbs,I.cli
+T284|x|impl I.nouns/I.verbs set-diff hook `.spec/scripts/check-extras.sh`; parse SPEC §I lists vs cli.py noun-group @command; emit MATCH/MISSING/EXTRA/DRIFT; tests|I.nouns,I.verbs,I.cli
 
 ## §B BUGS
 
