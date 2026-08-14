@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from importlib.metadata import distribution
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
 import click
 
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
     from logfire import ScrubMatch
 
-    from mailpilot.models import Account, Company, Contact
+    from mailpilot.models import Account, Company, Contact, EnrollmentBatchAction
 
 # Hex digit set for the UUID-shape probe in _looks_like_uuid (natural-key vs id).
 _HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
@@ -5901,6 +5901,7 @@ def _maybe_schedule_first_touch(
     *,
     enrollment_status: str,
     emails_sent: int,
+    commit: bool = True,
 ) -> None:
     """Insert or last-write-wins a pending first-touch task per §V.32.
 
@@ -5928,7 +5929,10 @@ def _maybe_schedule_first_touch(
         if _same_scheduled_instant(existing.scheduled_at, scheduled_iso):
             return
         update_pending_first_touch_schedule(
-            connection, task=existing, scheduled_at=scheduled_iso
+            connection,
+            task=existing,
+            scheduled_at=scheduled_iso,
+            commit=commit,
         )
         changed.append("scheduled_first_send")
         return
@@ -5943,58 +5947,194 @@ def _maybe_schedule_first_touch(
         scheduled_at=scheduled_iso,
         context={"trigger": "enrollment_schedule", "touch": 1},
         email_id=None,
+        commit=commit,
     )
     changed.append("scheduled_first_send")
 
 
-def _validate_enrollment_add_args(
+def _reject_enrollment_add_source_xor(
     contact_email: str | None,
     tag_ref: str | None,
+    file_path: str | None,
     dry_run: bool,
-    min_contacts: int | None,
     scheduled_at: str | None,
-) -> str | None:
-    """Validate flag combinations for ``enrollment add``; return scheduled ISO."""
-    from datetime import datetime
-
+) -> None:
+    """Reject exclusive / required source flag combinations."""
     if tag_ref is not None and contact_email is not None:
         output_error(
             "--tag is exclusive with --contact-email",
             "validation_error",
         )
-    if tag_ref is not None and not dry_run:
+    if file_path is not None and tag_ref is not None:
+        output_error("--file is exclusive with --tag", "validation_error")
+    if file_path is not None and contact_email is not None:
         output_error(
-            "--tag requires --dry-run (cohort apply not implemented)",
+            "--file is exclusive with --contact-email",
             "validation_error",
         )
-    if dry_run and tag_ref is None:
+    if dry_run and tag_ref is None and file_path is None:
         output_error(
-            "--dry-run requires --tag",
+            "--dry-run requires --tag or --file",
             "validation_error",
         )
-    if min_contacts is not None and not dry_run:
+    if tag_ref is not None and not dry_run and scheduled_at is None:
         output_error(
-            "--min-contacts is only valid with --tag --dry-run",
+            "--tag apply requires --scheduled-at (or pass --dry-run)",
+            "validation_error",
+        )
+    if file_path is not None and not dry_run and scheduled_at is None:
+        output_error(
+            "--file apply requires --scheduled-at (or pass --dry-run)",
+            "validation_error",
+        )
+    if tag_ref is None and file_path is None and contact_email is None:
+        output_error(
+            "--contact-email is required (or --tag / --file for a batch)",
+            "validation_error",
+        )
+
+
+def _reject_enrollment_add_pack_flags(
+    tag_ref: str | None,
+    file_path: str | None,
+    min_contacts: int | None,
+    limit: int | None,
+    company_atomic: bool,
+    exclude_peer: bool,
+) -> None:
+    """Reject packing / filter flags used on the wrong source."""
+    if min_contacts is not None and tag_ref is None:
+        output_error(
+            "--min-contacts is only valid with --tag",
             "validation_error",
         )
     if min_contacts is not None and min_contacts < 0:
         output_error("--min-contacts must be >= 0", "validation_error")
+    if limit is not None and limit < 1:
+        output_error("--limit must be >= 1", "validation_error")
+    batch_source = tag_ref is not None or file_path is not None
+    if (limit is not None or company_atomic or exclude_peer) and not batch_source:
+        output_error(
+            "--limit / --company-atomic / --exclude-peer require --file or --tag",
+            "validation_error",
+        )
+
+
+def _validate_enrollment_add_args(
+    contact_email: str | None,
+    tag_ref: str | None,
+    file_path: str | None,
+    dry_run: bool,
+    min_contacts: int | None,
+    scheduled_at: str | None,
+    limit: int | None,
+    company_atomic: bool,
+    exclude_peer: bool,
+) -> str | None:
+    """Validate flag combinations for ``enrollment add``; return scheduled ISO."""
+    from datetime import datetime
+
+    _reject_enrollment_add_source_xor(
+        contact_email, tag_ref, file_path, dry_run, scheduled_at
+    )
+    _reject_enrollment_add_pack_flags(
+        tag_ref, file_path, min_contacts, limit, company_atomic, exclude_peer
+    )
     if dry_run and scheduled_at is not None:
         output_error(
             "--scheduled-at is exclusive with --dry-run",
             "validation_error",
         )
-    if tag_ref is None and contact_email is None:
-        output_error(
-            "--contact-email is required (or --tag --dry-run for cohort preview)",
-            "validation_error",
-        )
     if scheduled_at is None:
         return None
+    if (tag_ref is not None or file_path is not None) and not dry_run:
+        return _parse_future_scheduled_at(scheduled_at)
     try:
         return datetime.fromisoformat(scheduled_at).isoformat()
     except ValueError as exc:
         output_error(f"invalid --scheduled-at value: {exc}", "validation_error")
+
+
+def _calendar_day(iso: str) -> Any:
+    """Local calendar date of an ISO instant (naive treated as UTC)."""
+    from datetime import UTC, datetime
+
+    parsed = datetime.fromisoformat(iso)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.date()
+
+
+def _read_enrollment_batch_file(path: str) -> list[tuple[str, str | None]]:
+    """Parse ``--file`` JSON into ``(email, scheduled_at_override)`` rows."""
+    import pathlib
+
+    file_path = pathlib.Path(path)
+    if not file_path.is_file():
+        output_error(f"file not found: {path}", "not_found")
+    try:
+        raw: object = json.loads(file_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        output_error(f"invalid JSON: {exc}", "validation_error")
+    if not isinstance(raw, list):
+        output_error("enrollment file must be a JSON array", "validation_error")
+    rows: dict[str, str | None] = {}
+    for index, item in enumerate(raw):
+        if isinstance(item, str):
+            email = item.strip()
+            if not email:
+                output_error(f"missing email at index {index}", "validation_error")
+            rows[email.lower()] = None
+            continue
+        if isinstance(item, dict):
+            email_val = item.get("email")
+            if not isinstance(email_val, str) or not email_val.strip():
+                output_error(f"missing email at index {index}", "validation_error")
+            override = item.get("scheduled_at")
+            if override is not None and not isinstance(override, str):
+                output_error(
+                    f"scheduled_at must be a string at index {index}",
+                    "validation_error",
+                )
+            rows[email_val.strip().lower()] = override
+            continue
+        output_error(f"invalid entry at index {index}", "validation_error")
+    return list(rows.items())
+
+
+def _pack_enrollment_preview(
+    preview: Any,
+    *,
+    limit: int | None,
+    company_atomic: bool,
+    exclude_peer: bool,
+) -> Any:
+    """Apply §V.171 packing flags onto a dry-run preview (no writes)."""
+    from mailpilot.database import apply_enrollment_packing
+    from mailpilot.models import EnrollmentPreview
+
+    contacts, excluded = apply_enrollment_packing(
+        preview.contacts,
+        preview.excluded,
+        limit=limit,
+        company_atomic=company_atomic,
+        exclude_peer=exclude_peer,
+    )
+    return EnrollmentPreview(
+        workflow=preview.workflow,
+        tag=preview.tag,
+        count=len(contacts),
+        contacts=contacts,
+        excluded=excluded,
+    )
+
+
+def _emit_enrollment_preview(preview: Any) -> None:
+    """Write the ``enrollment_preview`` envelope."""
+    output(
+        {"enrollment_preview": preview.model_dump(mode="json")},
+        record_count=preview.count,
+    )
 
 
 def _enrollment_add_tag_preview(
@@ -6002,6 +6142,10 @@ def _enrollment_add_tag_preview(
     workflow: Any,
     tag_ref: str,
     min_contacts: int | None,
+    *,
+    limit: int | None = None,
+    company_atomic: bool = False,
+    exclude_peer: bool = False,
 ) -> None:
     """Dry-run company-or-contact tag cohort enrollment preview (no writes)."""
     from mailpilot.database import get_account, preview_enrollment_tag_cohort
@@ -6016,10 +6160,133 @@ def _enrollment_add_tag_preview(
         min_contacts=min_contacts,
         account_email=account_email,
     )
-    output(
-        {"enrollment_preview": preview.model_dump(mode="json")},
-        record_count=preview.count,
+    packed = _pack_enrollment_preview(
+        preview,
+        limit=limit,
+        company_atomic=company_atomic,
+        exclude_peer=exclude_peer,
     )
+    _emit_enrollment_preview(packed)
+
+
+def _enrollment_add_file_preview(
+    connection: Any,
+    workflow: Any,
+    file_rows: list[tuple[str, str | None]],
+    *,
+    limit: int | None = None,
+    company_atomic: bool = False,
+    exclude_peer: bool = False,
+) -> None:
+    """Dry-run ``--file`` cohort preview (no writes)."""
+    from mailpilot.database import get_account, preview_enrollment_file_cohort
+
+    rows = file_rows
+    account = get_account(connection, workflow.account_id)
+    account_email = account.email if account is not None else None
+    preview, _missing = preview_enrollment_file_cohort(
+        connection,
+        workflow,
+        [email for email, _override in rows],
+        account_email=account_email,
+        drop_already_enrolled=False,
+    )
+    packed = _pack_enrollment_preview(
+        preview,
+        limit=limit,
+        company_atomic=company_atomic,
+        exclude_peer=exclude_peer,
+    )
+    _emit_enrollment_preview(packed)
+
+
+def _apply_one_enrollment(
+    connection: Any,
+    workflow: Any,
+    contact: Any,
+    scheduled_iso: str | None,
+    *,
+    commit: bool = True,
+) -> tuple[Any, list[str]] | None:
+    """Create or reuse an enrollment and optionally schedule first touch.
+
+    Returns ``(enrollment, changed)`` or None when the existing row cannot
+    be loaded after an insert race.
+    """
+    from mailpilot.database import (
+        count_outbound_sent,
+        create_activity,
+        create_enrollment,
+        get_enrollment,
+    )
+
+    created = create_enrollment(connection, workflow.id, contact.id, commit=commit)
+    if created is not None:
+        create_activity(
+            connection,
+            contact_id=contact.id,
+            activity_type="enrollment_added",
+            summary=f"Assigned to {workflow.name}",
+            detail={"workflow_name": workflow.name},
+            company_id=contact.company_id,
+            workflow_id=workflow.id,
+            enrollment_id=created.id,
+            commit=commit,
+        )
+        target = created
+        changed = ["status"]
+        emails_sent = 0
+    else:
+        existing = get_enrollment(connection, workflow.id, contact.id)
+        if existing is None:
+            return None
+        target = existing
+        changed = []
+        emails_sent = (
+            count_outbound_sent(connection, workflow.id, contact.id)
+            if scheduled_iso is not None
+            else 0
+        )
+    _maybe_schedule_first_touch(
+        connection,
+        target.id,
+        workflow.id,
+        contact.id,
+        scheduled_iso,
+        changed,
+        enrollment_status=target.status,
+        emails_sent=emails_sent,
+        commit=commit,
+    )
+    return target, changed
+
+
+def _batch_action(created: bool, changed: list[str]) -> EnrollmentBatchAction:
+    """Map single-seat changed tokens to a batch ``action`` (§V.171)."""
+    if created:
+        return "created"
+    if "scheduled_first_send" in changed:
+        return "scheduled_first_send"
+    return "unchanged"
+
+
+def _assert_company_atomic_days(
+    seats: list[tuple[Any, str]],
+) -> None:
+    """Reject mixed calendar days on one domain when ``--company-atomic``."""
+    days: dict[str, Any] = {}
+    for contact, iso in seats:
+        domain = contact.company_domain
+        if not domain:
+            continue
+        day = _calendar_day(iso)
+        previous = days.get(domain)
+        if previous is not None and previous != day:
+            output_error(
+                f"--company-atomic: {domain} has seats on more than one calendar day",
+                "validation_error",
+            )
+        days[domain] = day
 
 
 def _enrollment_add_contact(
@@ -6029,13 +6296,7 @@ def _enrollment_add_contact(
     scheduled_iso: str | None,
 ) -> None:
     """Enroll a single contact, optionally scheduling first touch."""
-    from mailpilot.database import (
-        count_outbound_sent,
-        create_activity,
-        create_enrollment,
-        get_account,
-        get_enrollment,
-    )
+    from mailpilot.database import get_account
     from mailpilot.operator_log import cli_mutation, operator_event
 
     if scheduled_iso is not None and workflow.type != "outbound":
@@ -6044,63 +6305,179 @@ def _enrollment_add_contact(
             "invalid_state",
         )
     contact = _resolve_contact(connection, contact_email)
-    contact_id = contact.id
-    workflow_id = workflow.id
     account = get_account(connection, workflow.account_id)
     _reject_enrollment_self_loop(account, contact, workflow.name)
     mutation_attrs: dict[str, Any] = {
-        "workflow_id": workflow_id,
-        "contact_id": contact_id,
+        "workflow_id": workflow.id,
+        "contact_id": contact.id,
     }
     if scheduled_iso is not None:
         mutation_attrs["scheduled_at"] = scheduled_iso
     with cli_mutation("enrollment", "add", **mutation_attrs):
-        created = create_enrollment(connection, workflow_id, contact_id)
-        if created is not None:
-            create_activity(
-                connection,
-                contact_id=contact_id,
-                activity_type="enrollment_added",
-                summary=f"Assigned to {workflow.name}",
-                detail={"workflow_name": workflow.name},
-                company_id=contact.company_id,
-                workflow_id=workflow_id,
-                enrollment_id=created.id,
-            )
-            target = created
-            changed = ["status"]
-            emails_sent = 0
-        else:
-            existing = get_enrollment(connection, workflow_id, contact_id)
-            if existing is None:
-                return
-            target = existing
-            changed = []
-            emails_sent = (
-                count_outbound_sent(connection, workflow_id, contact_id)
-                if scheduled_iso is not None
-                else 0
-            )
-        _maybe_schedule_first_touch(
-            connection,
-            target.id,
-            workflow_id,
-            contact_id,
-            scheduled_iso,
-            changed,
-            enrollment_status=target.status,
-            emails_sent=emails_sent,
-        )
+        applied = _apply_one_enrollment(connection, workflow, contact, scheduled_iso)
+        if applied is None:
+            return
+        target, changed = applied
         event_fields: dict[str, Any] = {
             "enrollment_id": target.id,
-            "workflow_id": workflow_id,
-            "contact_id": contact_id,
+            "workflow_id": workflow.id,
+            "contact_id": contact.id,
         }
         if scheduled_iso is not None:
             event_fields["scheduled_at"] = scheduled_iso
         event_fields["changed"] = changed
         operator_event("enrollment.add", **event_fields)
         output_entity("enrollment", target)
+
+
+def _resolve_seat_schedule(
+    override: str | None,
+    scheduled_iso: str,
+) -> str:
+    """Per-row ``scheduled_at`` override, else the batch flag instant."""
+    if override is None:
+        return scheduled_iso
+    parsed = _parse_future_scheduled_at(override)
+    assert parsed is not None
+    return parsed
+
+
+def _enrollment_add_batch(
+    connection: Any,
+    workflow: Any,
+    *,
+    scheduled_iso: str,
+    source: Literal["file", "tag"],
+    tag_name: str | None,
+    file_rows: list[tuple[str, str | None]] | None,
+    min_contacts: int | None,
+    limit: int | None,
+    company_atomic: bool,
+    exclude_peer: bool,
+) -> None:
+    """Apply a reviewed tag or file cohort with first-touch schedules."""
+    from mailpilot.database import (
+        apply_enrollment_packing,
+        get_account,
+        get_contact_by_email,
+        preview_enrollment_file_cohort,
+        preview_enrollment_tag_cohort,
+    )
+    from mailpilot.models import EnrollmentBatch, EnrollmentBatchRow
+    from mailpilot.operator_log import cli_mutation, operator_event
+
+    if workflow.type != "outbound":
+        output_error(
+            "--scheduled-at only valid for outbound workflows",
+            "invalid_state",
+        )
+    account = get_account(connection, workflow.account_id)
+    account_email = account.email if account is not None else None
+    overrides: dict[str, str | None] = {}
+    if source == "tag":
+        assert tag_name is not None
+        tag = _resolve_tag(connection, tag_name)
+        preview = preview_enrollment_tag_cohort(
+            connection,
+            workflow,
+            tag,
+            min_contacts=min_contacts,
+            account_email=account_email,
+        )
+    else:
+        assert file_rows is not None
+        rows = file_rows
+        overrides = dict(rows)
+        preview, missing = preview_enrollment_file_cohort(
+            connection,
+            workflow,
+            [email for email, _override in rows],
+            account_email=account_email,
+            drop_already_enrolled=False,
+        )
+        if missing:
+            output_error(
+                "contact not found: " + ", ".join(missing),
+                "not_found",
+            )
+    contacts, excluded = apply_enrollment_packing(
+        preview.contacts,
+        preview.excluded,
+        limit=limit,
+        company_atomic=company_atomic,
+        exclude_peer=exclude_peer,
+    )
+    seats: list[tuple[Any, str]] = [
+        (
+            contact,
+            _resolve_seat_schedule(overrides.get(contact.email.lower()), scheduled_iso),
+        )
+        for contact in contacts
+    ]
+    if company_atomic:
+        _assert_company_atomic_days(seats)
+    enrolled: list[EnrollmentBatchRow] = []
+    mutation_attrs: dict[str, Any] = {
+        "workflow_id": workflow.id,
+        "source": source,
+        "scheduled_at": scheduled_iso,
+        "count": len(seats),
+    }
+    with cli_mutation("enrollment", "add", **mutation_attrs):
+        try:
+            for contact_row, seat_iso in seats:
+                contact = get_contact_by_email(connection, contact_row.email)
+                if contact is None:
+                    output_error(
+                        f"contact not found: {contact_row.email}",
+                        "not_found",
+                    )
+                applied = _apply_one_enrollment(
+                    connection,
+                    workflow,
+                    contact,
+                    seat_iso,
+                    commit=False,
+                )
+                if applied is None:
+                    continue
+                target, changed = applied
+                enrolled.append(
+                    EnrollmentBatchRow(
+                        email=contact_row.email,
+                        company_domain=contact_row.company_domain,
+                        enrollment_id=target.id,
+                        scheduled_at=seat_iso,
+                        action=_batch_action("status" in changed, changed),
+                    )
+                )
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        operator_event(
+            "enrollment.add",
+            workflow_id=workflow.id,
+            source=source,
+            count=len(enrolled),
+            scheduled_at=scheduled_iso,
+            changed=["scheduled_first_send"] if enrolled else ["none"],
+        )
+    batch = EnrollmentBatch(
+        workflow=workflow.name,
+        scheduled_at=scheduled_iso,
+        source=source,
+        tag=preview.tag,
+        limit=limit,
+        company_atomic=company_atomic,
+        count=len(enrolled),
+        enrolled=enrolled,
+        excluded=excluded,
+    )
+    output(
+        {"enrollment_batch": batch.model_dump(mode="json")},
+        record_count=batch.count,
+    )
 
 
 @enrollment.command("add")
@@ -6113,25 +6490,63 @@ def _enrollment_add_contact(
 @click.option(
     "--contact-email",
     default=None,
-    help="Contact (email or ID). Required when not using --tag --dry-run.",
+    help="Contact (email or ID). Required when not using --tag or --file.",
 )
 @click.option(
     "--tag",
     "tag_ref",
     default=None,
-    help="Company-or-contact tag cohort dry-run path (requires --dry-run).",
+    help=(
+        "Company-or-contact tag cohort. With --dry-run: preview. With "
+        "--scheduled-at: apply the packed set."
+    ),
+)
+@click.option(
+    "--file",
+    "file_path",
+    default=None,
+    type=click.Path(dir_okay=False),
+    help=(
+        "JSON array of email strings or {email, scheduled_at} objects. "
+        "Exclusive with --tag and --contact-email."
+    ),
 )
 @click.option(
     "--dry-run",
     is_flag=True,
     default=False,
-    help="Preview tag-cohort enrollments; no writes (requires --tag).",
+    help="Preview a --tag or --file cohort; no writes.",
 )
 @click.option(
     "--min-contacts",
     type=int,
     default=None,
-    help="Dry-run only: include companies with at least N contacts.",
+    help="Tag path only: include companies with at least N contacts.",
+)
+@click.option(
+    "--limit",
+    "seat_limit",
+    type=int,
+    default=None,
+    help=(
+        "Cap included seats (first N by company_domain then email). "
+        "Soft cap when combined with --company-atomic."
+    ),
+)
+@click.option(
+    "--company-atomic",
+    is_flag=True,
+    default=False,
+    help=(
+        "Never split a domain. Last company may exceed --limit. Included "
+        "seats on a domain share the same calendar day."
+    ),
+)
+@click.option(
+    "--exclude-peer",
+    is_flag=True,
+    default=False,
+    help="Drop contacts with an active enrollment in another workflow.",
 )
 @click.option(
     "--scheduled-at",
@@ -6139,31 +6554,48 @@ def _enrollment_add_contact(
     default=None,
     help=(
         "ISO 8601 timestamp for scheduled first reach-out (outbound workflows "
-        "only). Re-run updates an existing pending first-reach in place."
+        "only). Required for --file / --tag apply. Re-run updates an existing "
+        "pending first-reach in place. File rows may override per contact."
     ),
 )
 def enrollment_add(
     workflow_ref: str,
     contact_email: str | None,
     tag_ref: str | None,
+    file_path: str | None,
     dry_run: bool,
     min_contacts: int | None,
+    seat_limit: int | None,
+    company_atomic: bool,
+    exclude_peer: bool,
     scheduled_at: str | None,
 ) -> None:
-    """Enroll a contact, or dry-run a tag-cohort preview.
+    """Enroll a contact, preview a cohort, or apply a scheduled batch.
 
     Single-contact path: ``--workflow-id`` + ``--contact-email``. When
     ``--scheduled-at`` is given on an outbound workflow, a pending first
     reach-out is inserted, or an existing never-sent first-reach is
-    updated in place. Tag cohort path (dry-run only):
-    ``--workflow-id`` + ``--tag`` + ``--dry-run`` [optional ``--min-contacts``]
-    returns an ``enrollment_preview`` with no writes. ``--tag`` matches
-    company tags or contact tags (union, unique by contact).
+    updated in place. Tag / file dry-run: ``--tag`` or ``--file`` plus
+    ``--dry-run`` returns ``enrollment_preview`` with no writes. Tag /
+    file apply: same source plus ``--scheduled-at`` writes one
+    ``enrollment_batch`` envelope. ``--tag`` matches company tags or
+    contact tags (union, unique by contact).
     """
     from mailpilot.database import get_workflow, initialize_database
 
     scheduled_iso = _validate_enrollment_add_args(
-        contact_email, tag_ref, dry_run, min_contacts, scheduled_at
+        contact_email,
+        tag_ref,
+        file_path,
+        dry_run,
+        min_contacts,
+        scheduled_at,
+        seat_limit,
+        company_atomic,
+        exclude_peer,
+    )
+    file_rows = (
+        _read_enrollment_batch_file(file_path) if file_path is not None else None
     )
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
@@ -6171,9 +6603,42 @@ def enrollment_add(
         workflow = get_workflow(connection, workflow_id)
         if workflow is None:
             output_error(f"workflow not found: {workflow_ref}", "not_found")
-        if dry_run:
-            assert tag_ref is not None
-            _enrollment_add_tag_preview(connection, workflow, tag_ref, min_contacts)
+        if dry_run and tag_ref is not None:
+            _enrollment_add_tag_preview(
+                connection,
+                workflow,
+                tag_ref,
+                min_contacts,
+                limit=seat_limit,
+                company_atomic=company_atomic,
+                exclude_peer=exclude_peer,
+            )
+            return
+        if dry_run and file_path is not None:
+            assert file_rows is not None
+            _enrollment_add_file_preview(
+                connection,
+                workflow,
+                file_rows,
+                limit=seat_limit,
+                company_atomic=company_atomic,
+                exclude_peer=exclude_peer,
+            )
+            return
+        if tag_ref is not None or file_path is not None:
+            assert scheduled_iso is not None
+            _enrollment_add_batch(
+                connection,
+                workflow,
+                scheduled_iso=scheduled_iso,
+                source="tag" if tag_ref is not None else "file",
+                tag_name=tag_ref,
+                file_rows=file_rows,
+                min_contacts=min_contacts,
+                limit=seat_limit,
+                company_atomic=company_atomic,
+                exclude_peer=exclude_peer,
+            )
             return
         assert contact_email is not None
         _enrollment_add_contact(connection, workflow, contact_email, scheduled_iso)

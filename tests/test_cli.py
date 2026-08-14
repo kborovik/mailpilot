@@ -10784,7 +10784,9 @@ def test_enrollment_add(runner: CliRunner, mock_connection: MagicMock) -> None:
         )
 
     assert result.exit_code == 0
-    mock_create.assert_called_once_with(mock_connection, _WORKFLOW_ID, _CONTACT_ID)
+    mock_create.assert_called_once_with(
+        mock_connection, _WORKFLOW_ID, _CONTACT_ID, commit=True
+    )
     activity_kwargs = mock_activity.call_args.kwargs
     assert activity_kwargs["activity_type"] == "enrollment_added"
     assert activity_kwargs["contact_id"] == _CONTACT_ID
@@ -10887,6 +10889,21 @@ def test_skill_documents_enrollment_tag_cohort_one_call() -> None:
     assert "§T." not in body
 
 
+def test_skill_documents_enrollment_batch_one_call() -> None:
+    """§V.171: packaged SKILL.md documents one-call batch apply (not N-loop)."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "--file /tmp/emails.json" in body
+    assert "--company-atomic" in body
+    assert "--exclude-peer" in body
+    assert "enrollment_batch" in body
+    assert "Do not loop" in body
+    assert "enrollment add --contact-email" in body
+    assert "§V." not in body
+    assert "§T." not in body
+
+
 def test_enrollment_add_help_tag_is_company_or_contact(runner: CliRunner) -> None:
     """§V.150/§V.111: help names company-or-contact tag; no SPEC cites."""
     result = runner.invoke(main, ["enrollment", "add", "--help"])
@@ -10899,6 +10916,7 @@ def test_enrollment_add_help_tag_is_company_or_contact(runner: CliRunner) -> Non
 def test_enrollment_add_tag_without_dry_run_errors(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
+    """§V.171: --tag apply without --scheduled-at is validation_error."""
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
@@ -10919,7 +10937,7 @@ def test_enrollment_add_tag_without_dry_run_errors(
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["error"] == "validation_error"
-    assert "--dry-run" in data["message"]
+    assert "--scheduled-at" in data["message"]
     mock_create.assert_not_called()
 
 
@@ -11456,6 +11474,733 @@ def test_enrollment_add_contact_not_found(
     data = json.loads(result.output)
     assert data["error"] == "not_found"
     assert "contact" in data["message"]
+
+
+_BATCH_AT = "2026-12-01T09:00:00-04:00"
+
+
+def test_enrollment_add_file_exclusive_with_tag(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    """§V.171: --file is exclusive with --tag."""
+    emails = tmp_path / "emails.json"
+    emails.write_text('["ada@a.com"]', encoding="utf-8")
+    result = runner.invoke(
+        main,
+        [
+            "enrollment",
+            "add",
+            "--workflow-id",
+            _WORKFLOW_ID,
+            "--file",
+            str(emails),
+            "--tag",
+            "sales-seat",
+            "--scheduled-at",
+            _BATCH_AT,
+        ],
+    )
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "--file" in data["message"]
+
+
+def test_enrollment_add_file_missing_path(runner: CliRunner) -> None:
+    """§V.171: missing --file path is not_found."""
+    result = runner.invoke(
+        main,
+        [
+            "enrollment",
+            "add",
+            "--workflow-id",
+            _WORKFLOW_ID,
+            "--file",
+            "/tmp/mailpilot-missing-emails.json",
+            "--scheduled-at",
+            _BATCH_AT,
+        ],
+    )
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+
+
+def test_enrollment_add_file_bad_json(
+    runner: CliRunner, tmp_path: pathlib.Path
+) -> None:
+    """§V.171: bad JSON is validation_error."""
+    emails = tmp_path / "bad.json"
+    emails.write_text("{not-json", encoding="utf-8")
+    result = runner.invoke(
+        main,
+        [
+            "enrollment",
+            "add",
+            "--workflow-id",
+            _WORKFLOW_ID,
+            "--file",
+            str(emails),
+            "--scheduled-at",
+            _BATCH_AT,
+        ],
+    )
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+
+
+def test_enrollment_add_limit_below_one_errors(runner: CliRunner) -> None:
+    """§V.171: --limit < 1 is validation_error."""
+    result = runner.invoke(
+        main,
+        [
+            "enrollment",
+            "add",
+            "--workflow-id",
+            _WORKFLOW_ID,
+            "--tag",
+            "sales-seat",
+            "--scheduled-at",
+            _BATCH_AT,
+            "--limit",
+            "0",
+        ],
+    )
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "--limit" in data["message"]
+
+
+def test_enrollment_add_help_documents_batch_flags(runner: CliRunner) -> None:
+    """§V.171/§V.111: help names batch flags; no SPEC cites."""
+    result = runner.invoke(main, ["enrollment", "add", "--help"])
+    assert result.exit_code == 0
+    assert "--file" in result.output
+    assert "--company-atomic" in result.output
+    assert "--exclude-peer" in result.output
+    assert "soft cap" in result.output.lower() or "Soft cap" in result.output
+    assert "§V." not in result.output
+    assert "§T." not in result.output
+
+
+def test_enrollment_add_tag_apply_scheduled_batch_live(
+    runner: CliRunner, database_connection: Any
+) -> None:
+    """§V.171: --tag --scheduled-at enrolls a packed batch in one envelope."""
+    from conftest import (
+        make_test_account,
+        make_test_company,
+        make_test_contact,
+        make_test_tag,
+        make_test_tag_assignment,
+        make_test_workflow,
+    )
+    from mailpilot.database import list_enrollments
+
+    account = make_test_account(database_connection, email="batch@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="batch-tag-wf"
+    )
+    tag = make_test_tag(database_connection, name="sales-seat")
+    firm = make_test_company(database_connection, domain="a-batch.test", name="A Batch")
+    ada = make_test_contact(
+        database_connection, email="ada@a-batch.test", company_id=firm.id
+    )
+    make_test_tag_assignment(database_connection, contact_id=ada.id, name=tag.name)
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.name,
+                "--tag",
+                tag.name,
+                "--scheduled-at",
+                _BATCH_AT,
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 1
+    batch = data["enrollment_batch"]
+    assert batch["workflow"] == workflow.name
+    assert batch["source"] == "tag"
+    assert batch["tag"] == tag.name
+    assert batch["company_atomic"] is False
+    assert batch["count"] == 1
+    assert batch["enrolled"][0]["email"] == ada.email
+    assert batch["enrolled"][0]["company_domain"] == firm.domain
+    assert batch["enrolled"][0]["action"] == "created"
+    assert batch["enrolled"][0]["scheduled_at"] == _BATCH_AT
+    rows = list_enrollments(database_connection, workflow_id=workflow.id)
+    assert len(rows) == 1
+
+
+def test_enrollment_add_file_apply_and_unknown_zero_writes(
+    runner: CliRunner, database_connection: Any, tmp_path: pathlib.Path
+) -> None:
+    """§V.171: --file apply writes; unknown email is not_found with zero writes."""
+    from conftest import (
+        make_test_account,
+        make_test_company,
+        make_test_contact,
+        make_test_workflow,
+    )
+    from mailpilot.database import list_enrollments
+
+    account = make_test_account(database_connection, email="filebatch@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="batch-file-wf"
+    )
+    firm = make_test_company(
+        database_connection, domain="file-batch.test", name="File Batch"
+    )
+    ada = make_test_contact(
+        database_connection, email="ada@file-batch.test", company_id=firm.id
+    )
+    good = tmp_path / "good.json"
+    good.write_text(json.dumps([ada.email]), encoding="utf-8")
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps([ada.email, "ghost@file-batch.test"]), encoding="utf-8")
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        ok = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.name,
+                "--file",
+                str(good),
+                "--scheduled-at",
+                _BATCH_AT,
+            ],
+        )
+        failed = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.name,
+                "--file",
+                str(bad),
+                "--scheduled-at",
+                "2026-12-02T09:00:00-04:00",
+            ],
+        )
+
+    assert ok.exit_code == 0, ok.output
+    data = json.loads(ok.output)
+    assert data["enrollment_batch"]["source"] == "file"
+    assert data["enrollment_batch"]["count"] == 1
+    assert data["enrollment_batch"]["enrolled"][0]["action"] == "created"
+    assert failed.exit_code == 1, failed.output
+    err = json.loads(failed.output)
+    assert err["error"] == "not_found"
+    rows = list_enrollments(database_connection, workflow_id=workflow.id)
+    assert len(rows) == 1
+    from mailpilot.database import find_pending_first_touch_task
+
+    task = find_pending_first_touch_task(database_connection, rows[0].id)
+    assert task is not None
+    assert task.scheduled_at == datetime(2026, 12, 1, 13, 0, tzinfo=UTC)
+
+
+def test_enrollment_add_company_atomic_soft_cap_live(
+    runner: CliRunner, database_connection: Any
+) -> None:
+    """§V.171: --limit + --company-atomic takes the last domain whole."""
+    from conftest import (
+        make_test_account,
+        make_test_company,
+        make_test_contact,
+        make_test_tag,
+        make_test_tag_assignment,
+        make_test_workflow,
+    )
+
+    account = make_test_account(database_connection, email="atomic@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="atomic-wf"
+    )
+    tag = make_test_tag(database_connection, name="atomic-seat")
+    firm_a = make_test_company(database_connection, domain="a-atomic.test", name="A")
+    firm_b = make_test_company(database_connection, domain="b-atomic.test", name="B")
+    firm_c = make_test_company(database_connection, domain="c-atomic.test", name="C")
+    seats = [
+        make_test_contact(
+            database_connection, email="a1@a-atomic.test", company_id=firm_a.id
+        ),
+        make_test_contact(
+            database_connection, email="a2@a-atomic.test", company_id=firm_a.id
+        ),
+        make_test_contact(
+            database_connection, email="b1@b-atomic.test", company_id=firm_b.id
+        ),
+        make_test_contact(
+            database_connection, email="b2@b-atomic.test", company_id=firm_b.id
+        ),
+        make_test_contact(
+            database_connection, email="c1@c-atomic.test", company_id=firm_c.id
+        ),
+    ]
+    for seat in seats:
+        make_test_tag_assignment(database_connection, contact_id=seat.id, name=tag.name)
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.name,
+                "--tag",
+                tag.name,
+                "--scheduled-at",
+                _BATCH_AT,
+                "--limit",
+                "3",
+                "--company-atomic",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    batch = data["enrollment_batch"]
+    emails = [row["email"] for row in batch["enrolled"]]
+    assert emails == [
+        "a1@a-atomic.test",
+        "a2@a-atomic.test",
+        "b1@b-atomic.test",
+        "b2@b-atomic.test",
+    ]
+    assert batch["count"] == 4
+    assert data["record_count"] == 4
+    assert batch["limit"] == 3
+    assert batch["company_atomic"] is True
+    assert batch["excluded"]["over_limit"] == 1
+    days = {_calendar_day_iso(row["scheduled_at"]) for row in batch["enrolled"]}
+    assert days == {datetime(2026, 12, 1).date()}
+
+
+def test_enrollment_add_limit_hard_cap_live(
+    runner: CliRunner, database_connection: Any
+) -> None:
+    """§V.171: --limit without --company-atomic is a hard first-N cap."""
+    from conftest import (
+        make_test_account,
+        make_test_company,
+        make_test_contact,
+        make_test_tag,
+        make_test_tag_assignment,
+        make_test_workflow,
+    )
+
+    account = make_test_account(database_connection, email="hardcap@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="hardcap-wf"
+    )
+    tag = make_test_tag(database_connection, name="hardcap-seat")
+    firm_a = make_test_company(database_connection, domain="a-hard.test", name="A")
+    firm_b = make_test_company(database_connection, domain="b-hard.test", name="B")
+    for email, company in (
+        ("a1@a-hard.test", firm_a),
+        ("a2@a-hard.test", firm_a),
+        ("b1@b-hard.test", firm_b),
+        ("b2@b-hard.test", firm_b),
+    ):
+        seat = make_test_contact(
+            database_connection, email=email, company_id=company.id
+        )
+        make_test_tag_assignment(database_connection, contact_id=seat.id, name=tag.name)
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.name,
+                "--tag",
+                tag.name,
+                "--scheduled-at",
+                _BATCH_AT,
+                "--limit",
+                "3",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    emails = [row["email"] for row in data["enrollment_batch"]["enrolled"]]
+    assert emails == ["a1@a-hard.test", "a2@a-hard.test", "b1@b-hard.test"]
+    assert data["enrollment_batch"]["excluded"]["over_limit"] == 1
+
+
+def test_enrollment_add_company_atomic_conflicting_days(
+    runner: CliRunner, database_connection: Any, tmp_path: pathlib.Path
+) -> None:
+    """§V.171: --company-atomic + mixed days on one domain is validation_error."""
+    from conftest import (
+        make_test_account,
+        make_test_company,
+        make_test_contact,
+        make_test_workflow,
+    )
+    from mailpilot.database import list_enrollments
+
+    account = make_test_account(database_connection, email="days@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="days-wf"
+    )
+    firm = make_test_company(database_connection, domain="days-batch.test", name="Days")
+    ada = make_test_contact(
+        database_connection, email="ada@days-batch.test", company_id=firm.id
+    )
+    grace = make_test_contact(
+        database_connection, email="grace@days-batch.test", company_id=firm.id
+    )
+    emails = tmp_path / "days.json"
+    emails.write_text(
+        json.dumps(
+            [
+                {"email": ada.email, "scheduled_at": "2026-12-01T09:00:00-04:00"},
+                {"email": grace.email, "scheduled_at": "2026-12-02T09:00:00-04:00"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.name,
+                "--file",
+                str(emails),
+                "--scheduled-at",
+                _BATCH_AT,
+                "--company-atomic",
+            ],
+        )
+
+    assert result.exit_code == 1, result.output
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "calendar day" in data["message"]
+    assert list_enrollments(database_connection, workflow_id=workflow.id) == []
+
+
+def test_enrollment_add_exclude_peer_live(
+    runner: CliRunner, database_connection: Any
+) -> None:
+    """§V.171: --exclude-peer drops other-workflow active enrollments."""
+    from conftest import (
+        make_test_account,
+        make_test_company,
+        make_test_contact,
+        make_test_enrollment,
+        make_test_tag,
+        make_test_tag_assignment,
+        make_test_workflow,
+    )
+
+    account = make_test_account(database_connection, email="peer@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="peer-target-wf"
+    )
+    peer = make_test_workflow(
+        database_connection, account_id=account.id, name="peer-other-wf"
+    )
+    tag = make_test_tag(database_connection, name="peer-seat")
+    firm = make_test_company(database_connection, domain="peer-batch.test", name="Peer")
+    ada = make_test_contact(
+        database_connection, email="ada@peer-batch.test", company_id=firm.id
+    )
+    lee = make_test_contact(
+        database_connection, email="lee@peer-batch.test", company_id=firm.id
+    )
+    make_test_tag_assignment(database_connection, contact_id=ada.id, name=tag.name)
+    make_test_tag_assignment(database_connection, contact_id=lee.id, name=tag.name)
+    make_test_enrollment(database_connection, peer.id, lee.id)
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.name,
+                "--tag",
+                tag.name,
+                "--scheduled-at",
+                _BATCH_AT,
+                "--exclude-peer",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    emails = [row["email"] for row in data["enrollment_batch"]["enrolled"]]
+    assert emails == [ada.email]
+    assert data["enrollment_batch"]["excluded"]["peer"] == 1
+
+
+def test_enrollment_add_tag_never_restamps_already_enrolled(
+    runner: CliRunner, database_connection: Any
+) -> None:
+    """§V.171: tag apply never restamps already-enrolled seats."""
+    from conftest import (
+        make_test_account,
+        make_test_company,
+        make_test_contact,
+        make_test_enrollment,
+        make_test_tag,
+        make_test_tag_assignment,
+        make_test_workflow,
+    )
+    from mailpilot.database import create_task, find_pending_first_touch_task
+
+    account = make_test_account(database_connection, email="restamp@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="restamp-wf"
+    )
+    tag = make_test_tag(database_connection, name="restamp-seat")
+    firm = make_test_company(database_connection, domain="restamp.test", name="Restamp")
+    ada = make_test_contact(
+        database_connection, email="ada@restamp.test", company_id=firm.id
+    )
+    make_test_tag_assignment(database_connection, contact_id=ada.id, name=tag.name)
+    enrollment = make_test_enrollment(database_connection, workflow.id, ada.id)
+    created = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=ada.id,
+        description="scheduled first reach-out",
+        scheduled_at="2026-11-01T13:00:00+00:00",
+        context={"trigger": "enrollment_schedule", "touch": 1},
+    )
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.name,
+                "--tag",
+                tag.name,
+                "--scheduled-at",
+                _BATCH_AT,
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["enrollment_batch"]["count"] == 0
+    assert data["enrollment_batch"]["excluded"]["already_enrolled"] == 1
+    kept = find_pending_first_touch_task(database_connection, enrollment.id)
+    assert kept is not None
+    assert kept.id == created.id
+    assert kept.scheduled_at == datetime(2026, 11, 1, 13, 0, tzinfo=UTC)
+
+
+def test_enrollment_add_file_last_write_wins(
+    runner: CliRunner, database_connection: Any, tmp_path: pathlib.Path
+) -> None:
+    """§V.32/§V.171: --file restamps an existing never-sent first-reach."""
+    from conftest import (
+        make_test_account,
+        make_test_company,
+        make_test_contact,
+        make_test_enrollment,
+        make_test_workflow,
+    )
+    from mailpilot.database import create_task, find_pending_first_touch_task
+
+    account = make_test_account(database_connection, email="filelww@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="file-lww-wf"
+    )
+    firm = make_test_company(database_connection, domain="file-lww.test", name="LWW")
+    ada = make_test_contact(
+        database_connection, email="ada@file-lww.test", company_id=firm.id
+    )
+    enrollment = make_test_enrollment(database_connection, workflow.id, ada.id)
+    created = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=ada.id,
+        description="scheduled first reach-out",
+        scheduled_at="2026-11-01T13:00:00+00:00",
+        context={"trigger": "enrollment_schedule"},
+    )
+    emails = tmp_path / "lww.json"
+    emails.write_text(json.dumps([ada.email]), encoding="utf-8")
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.name,
+                "--file",
+                str(emails),
+                "--scheduled-at",
+                _BATCH_AT,
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["enrollment_batch"]["count"] == 1
+    assert data["enrollment_batch"]["enrolled"][0]["action"] == "scheduled_first_send"
+    updated = find_pending_first_touch_task(database_connection, enrollment.id)
+    assert updated is not None
+    assert updated.id == created.id
+    assert updated.scheduled_at == datetime(2026, 12, 1, 13, 0, tzinfo=UTC)
+    assert updated.context.get("touch") == 1
+
+
+def test_enrollment_add_file_dry_run_packing(
+    runner: CliRunner, database_connection: Any, tmp_path: pathlib.Path
+) -> None:
+    """§V.150/§V.171: --file --dry-run + packing flags preview packed set."""
+    from conftest import (
+        make_test_account,
+        make_test_company,
+        make_test_contact,
+        make_test_enrollment,
+        make_test_workflow,
+    )
+    from mailpilot.database import list_enrollments
+
+    account = make_test_account(database_connection, email="prevfile@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="prev-file-wf"
+    )
+    peer = make_test_workflow(
+        database_connection, account_id=account.id, name="prev-peer-wf"
+    )
+    firm_a = make_test_company(database_connection, domain="a-prev.test", name="A")
+    firm_b = make_test_company(database_connection, domain="b-prev.test", name="B")
+    ada = make_test_contact(
+        database_connection, email="ada@a-prev.test", company_id=firm_a.id
+    )
+    zed = make_test_contact(
+        database_connection, email="zed@a-prev.test", company_id=firm_a.id
+    )
+    lee = make_test_contact(
+        database_connection, email="lee@b-prev.test", company_id=firm_b.id
+    )
+    make_test_enrollment(database_connection, peer.id, lee.id)
+    emails = tmp_path / "preview.json"
+    emails.write_text(
+        json.dumps([ada.email, zed.email, lee.email, "ghost@x.test"]),
+        encoding="utf-8",
+    )
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.name,
+                "--file",
+                str(emails),
+                "--dry-run",
+                "--limit",
+                "1",
+                "--company-atomic",
+                "--exclude-peer",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    preview = data["enrollment_preview"]
+    assert preview["count"] == 2
+    assert [c["email"] for c in preview["contacts"]] == [ada.email, zed.email]
+    assert preview["excluded"]["peer"] == 1
+    assert preview["excluded"]["over_limit"] == 0
+    assert preview["excluded"]["not_found"] == 1
+    assert list_enrollments(database_connection, workflow_id=workflow.id) == []
+
+
+def test_enrollment_add_batch_inbound_rejected(
+    runner: CliRunner, database_connection: Any
+) -> None:
+    """§V.171/§V.32: batch apply on inbound workflow is invalid_state."""
+    from conftest import (
+        make_test_account,
+        make_test_company,
+        make_test_contact,
+        make_test_tag,
+        make_test_tag_assignment,
+        make_test_workflow,
+    )
+
+    account = make_test_account(database_connection, email="inb@lab5.test")
+    workflow = make_test_workflow(
+        database_connection,
+        account_id=account.id,
+        name="inb-batch-wf",
+        workflow_type="inbound",
+    )
+    tag = make_test_tag(database_connection, name="inb-seat")
+    firm = make_test_company(database_connection, domain="inb-batch.test", name="Inb")
+    ada = make_test_contact(
+        database_connection, email="ada@inb-batch.test", company_id=firm.id
+    )
+    make_test_tag_assignment(database_connection, contact_id=ada.id, name=tag.name)
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.name,
+                "--tag",
+                tag.name,
+                "--scheduled-at",
+                _BATCH_AT,
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "invalid_state"
+
+
+def _calendar_day_iso(iso: str) -> Any:
+    parsed = datetime.fromisoformat(iso)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.date()
 
 
 def test_enrollment_add_self_loop_outbound_rejected(

@@ -740,11 +740,13 @@ mailpilot enrollment add --workflow-id acumatica-outreach \
   --tag acumatica-var --dry-run --min-contacts 1
 ```
 
-Then enroll chosen rows one contact at a time:
+Optional packing flags on dry-run reuse the apply pack (still no writes):
+`--limit N`, `--company-atomic`, `--exclude-peer`. Packed contacts stay
+in `contacts`; dropped seats increment `excluded.peer` / `excluded.over_limit`.
 
 ```
 mailpilot enrollment add --workflow-id acumatica-outreach \
-  --contact-email ada@a.com --scheduled-at 2026-08-14T14:00:00+00:00
+  --tag sales-seat --dry-run --limit 20 --company-atomic --exclude-peer
 ```
 
 Envelope (no writes):
@@ -788,8 +790,72 @@ Envelope (no writes):
 ```
 
 Undefined tag → `not_found`. Zero candidates → ok empty (`record_count` 0).
-`--tag` without `--dry-run` → `validation_error`. `--dry-run` without
-`--tag` → `validation_error`.
+`--tag` without `--dry-run` and without `--scheduled-at` → `validation_error`.
+`--dry-run` without `--tag` or `--file` → `validation_error`.
+
+### Enroll a scheduled batch (one call)
+
+After reviewing the dry-run, apply in one call. Do not loop
+`enrollment add --contact-email`.
+
+```
+mailpilot enrollment add --workflow-id acumatica-outreach \
+  --tag sales-seat --scheduled-at 2026-08-17T09:00:00-04:00 \
+  --limit 20 --company-atomic --exclude-peer
+mailpilot enrollment add --workflow-id acumatica-outreach \
+  --file /tmp/emails.json --scheduled-at 2026-08-17T09:00:00-04:00 \
+  --limit 20 --company-atomic
+```
+
+`--file` is a JSON array of email strings or `{email, scheduled_at}`
+objects. Per-row `scheduled_at` overrides the flag. `--company-atomic`
+keeps every included seat on a domain on the same calendar day and may
+exceed `--limit` to fit the last company. `--limit` without
+`--company-atomic` is a hard cap (first N by company_domain then email).
+`--exclude-peer` drops contacts already active in another workflow.
+Tag apply never restamps seats already enrolled in this workflow.
+File apply last-write-wins an existing never-sent first-reach.
+
+Envelope:
+
+```json
+{
+  "enrollment_batch": {
+    "workflow": "acumatica-outreach",
+    "scheduled_at": "2026-08-17T09:00:00-04:00",
+    "source": "tag",
+    "tag": "sales-seat",
+    "limit": 20,
+    "company_atomic": true,
+    "count": 2,
+    "enrolled": [
+      {
+        "email": "ada@a.com",
+        "company_domain": "a.com",
+        "enrollment_id": "...",
+        "scheduled_at": "2026-08-17T09:00:00-04:00",
+        "action": "created"
+      }
+    ],
+    "excluded": {
+      "disabled_companies": 0,
+      "already_enrolled": 0,
+      "self_loop": 0,
+      "disabled_contacts": 0,
+      "peer": 0,
+      "over_limit": 0,
+      "not_found": 0
+    }
+  },
+  "record_count": 2,
+  "ok": true
+}
+```
+
+`action` is `created`, `scheduled_first_send`, or `unchanged`. Missing
+`--file` path or unknown file email → `not_found` (zero writes). Bad
+JSON → `validation_error`. `--limit` below 1 → `validation_error`.
+
 ### Send and reply by hand
 
 ```

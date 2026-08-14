@@ -3622,6 +3622,8 @@ def create_enrollment(
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str,
     contact_id: str,
+    *,
+    commit: bool = True,
 ) -> Enrollment | None:
     """Enroll a contact in a workflow.
 
@@ -3634,6 +3636,7 @@ def create_enrollment(
         connection: Open database connection.
         workflow_id: Workflow FK.
         contact_id: Contact FK.
+        commit: When False, leave the insert uncommitted for a caller txn.
 
     Returns:
         Created enrollment, or None if it already existed.
@@ -3661,7 +3664,8 @@ def create_enrollment(
         """,
         {"id": _new_id(), "workflow_id": workflow_id, "contact_id": contact_id},
     ).fetchone()
-    connection.commit()
+    if commit:
+        connection.commit()
     if row is None:
         return None
     return Enrollment.model_validate(row)
@@ -3993,6 +3997,187 @@ def preview_enrollment_tag_cohort(  # noqa: C901
         contacts=contacts,
         excluded=excluded,
     )
+
+
+def preview_enrollment_file_cohort(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow: Workflow,
+    emails: Sequence[str],
+    *,
+    account_email: str | None = None,
+    drop_already_enrolled: bool = False,
+) -> tuple[EnrollmentPreview, list[str]]:
+    """Resolve a ``--file`` email list into a packed-ready preview (§V.171).
+
+    Unknown emails are listed in the second return value and counted under
+    ``excluded.not_found``. Found contacts drop disabled company/contact
+    (§V.114) and self-loop (§V.33). ``drop_already_enrolled`` is True for
+    tag-like preview; file apply keeps already-enrolled seats for last-write-
+    wins restamp.
+
+    Args:
+        connection: Open database connection.
+        workflow: Resolved workflow row.
+        emails: File emails (case-insensitive; duplicates collapse).
+        account_email: Workflow account email for self-loop exclusion.
+        drop_already_enrolled: When True, already-enrolled this workflow
+            increment ``already_enrolled`` and are omitted.
+
+    Returns:
+        ``(preview, missing_emails)``. Preview ``tag`` is None. Contacts
+        are sorted by ``company_domain`` then ``email``.
+    """
+    unique: list[str] = list(dict.fromkeys(email.lower() for email in emails))
+    found = get_contacts_by_emails(connection, unique)
+    missing = [email for email in unique if email not in found]
+    enrolled_ids = {e.contact_id for e in list_enrollments(connection, workflow.id)}
+    account_email_lower = account_email.lower() if account_email is not None else None
+    excluded = EnrollmentPreviewExcluded(not_found=len(missing))
+    disabled_company_ids: set[str] = set()
+    raw: list[Contact] = []
+    for email in unique:
+        contact = found.get(email)
+        if contact is None:
+            continue
+        company = (
+            get_company(connection, contact.company_id)
+            if contact.company_id is not None
+            else None
+        )
+        if company is not None and company.disabled_reason is not None:
+            disabled_company_ids.add(company.id)
+            continue
+        if contact.disabled_reason is not None:
+            excluded.disabled_contacts += 1
+            continue
+        if (
+            account_email_lower is not None
+            and contact.email.lower() == account_email_lower
+        ):
+            excluded.self_loop += 1
+            continue
+        if drop_already_enrolled and contact.id in enrolled_ids:
+            excluded.already_enrolled += 1
+            continue
+        raw.append(contact)
+    excluded.disabled_companies = len(disabled_company_ids)
+    candidate_ids = [contact.id for contact in raw]
+    company_owner_ids = [
+        contact.company_id for contact in raw if contact.company_id is not None
+    ]
+    company_tags = _preview_owner_tag_names(connection, company_owner_ids, "company_id")
+    contact_tags = _preview_owner_tag_names(connection, candidate_ids, "contact_id")
+    peers = _preview_peer_workflows(connection, candidate_ids, workflow.id)
+    company_domains: dict[str, str | None] = {}
+    for contact in raw:
+        if contact.company_id is None:
+            company_domains[contact.id] = None
+            continue
+        company = get_company(connection, contact.company_id)
+        company_domains[contact.id] = company.domain if company is not None else None
+    contacts = [
+        EnrollmentPreviewContact(
+            email=contact.email,
+            title=contact.title,
+            company_domain=company_domains.get(contact.id),
+            company_tags=company_tags.get(contact.company_id, [])
+            if contact.company_id is not None
+            else [],
+            contact_tags=contact_tags.get(contact.id, []),
+            email_confidence=contact.email_confidence,
+            peer_workflows=peers.get(contact.id, []),
+        )
+        for contact in raw
+    ]
+    contacts.sort(key=lambda c: (c.company_domain or "", c.email))
+    preview = EnrollmentPreview(
+        workflow=workflow.name,
+        tag=None,
+        count=len(contacts),
+        contacts=contacts,
+        excluded=excluded,
+    )
+    return preview, missing
+
+
+def apply_enrollment_packing(
+    contacts: list[EnrollmentPreviewContact],
+    excluded: EnrollmentPreviewExcluded,
+    *,
+    limit: int | None = None,
+    company_atomic: bool = False,
+    exclude_peer: bool = False,
+) -> tuple[list[EnrollmentPreviewContact], EnrollmentPreviewExcluded]:
+    """Apply ``--exclude-peer`` then ``--limit`` / ``--company-atomic`` (§V.171).
+
+    Contacts must already be sorted by ``company_domain`` then ``email``.
+    ``--exclude-peer`` drops rows with a non-empty ``peer_workflows``.
+    Without ``--company-atomic``, ``--limit N`` is a hard cap (first N).
+    With ``--company-atomic``, whole domain atoms are taken in that order;
+    the last included atom may exceed N and a domain is never split.
+    Contacts with no ``company_domain`` are each their own atom.
+
+    Args:
+        contacts: Candidate seats (group-stable sorted).
+        excluded: Existing drop counters (copied; packing adds peer /
+            over_limit).
+        limit: Inclusive seat cap, or None for no cap.
+        company_atomic: Soft-cap whole-domain atoms when limit is set.
+        exclude_peer: Drop other-workflow active enrollments first.
+
+    Returns:
+        Packed contacts and an excluded copy with packing counters added.
+    """
+    packed_excluded = excluded.model_copy()
+    remaining = list(contacts)
+    if exclude_peer:
+        kept: list[EnrollmentPreviewContact] = []
+        for contact in remaining:
+            if contact.peer_workflows:
+                packed_excluded.peer += 1
+            else:
+                kept.append(contact)
+        remaining = kept
+    if limit is None:
+        return remaining, packed_excluded
+    if not company_atomic:
+        packed_excluded.over_limit += max(0, len(remaining) - limit)
+        return remaining[:limit], packed_excluded
+    included: list[EnrollmentPreviewContact] = []
+    taking = True
+    for group in _company_atomic_groups(remaining):
+        if not taking or (included and len(included) >= limit):
+            taking = False
+            packed_excluded.over_limit += len(group)
+            continue
+        included.extend(group)
+        if len(included) >= limit:
+            taking = False
+    return included, packed_excluded
+
+
+def _company_atomic_groups(
+    contacts: list[EnrollmentPreviewContact],
+) -> list[list[EnrollmentPreviewContact]]:
+    """Group seats by domain; no-domain contacts are singleton atoms."""
+    groups: list[list[EnrollmentPreviewContact]] = []
+    current_key: str | None = None
+    current: list[EnrollmentPreviewContact] = []
+    for contact in contacts:
+        key = contact.company_domain if contact.company_domain else f"\0{contact.email}"
+        if current_key is None:
+            current_key = key
+            current = [contact]
+            continue
+        if key == current_key:
+            current.append(contact)
+            continue
+        groups.append(current)
+        current_key = key
+        current = [contact]
+    if current:
+        groups.append(current)
+    return groups
 
 
 def list_enrollments_with_outcomes(
@@ -5173,6 +5358,8 @@ def create_task(
     scheduled_at: str,
     context: dict[str, object] | None = None,
     email_id: str | None = None,
+    *,
+    commit: bool = True,
 ) -> Task:
     """Create a deferred task.
 
@@ -5191,6 +5378,7 @@ def create_task(
         scheduled_at: When to execute (ISO timestamp).
         context: Arbitrary JSON context for the agent.
         email_id: Optional triggering email FK.
+        commit: When False, leave the insert uncommitted for a caller txn.
 
     Returns:
         Created task.
@@ -5214,7 +5402,8 @@ def create_task(
             "scheduled_at": scheduled_at,
         },
     ).fetchone()
-    connection.commit()
+    if commit:
+        connection.commit()
     return Task.model_validate(row)
 
 
@@ -5320,6 +5509,7 @@ def update_pending_first_touch_schedule(
     *,
     task: Task,
     scheduled_at: str,
+    commit: bool = True,
 ) -> Task | None:
     """Move a pending first-reach ``scheduled_at`` in place (§V.32).
 
@@ -5345,7 +5535,8 @@ def update_pending_first_touch_schedule(
             "context": Json(context),
         },
     ).fetchone()
-    connection.commit()
+    if commit:
+        connection.commit()
     if row is None:
         return None
     return Task.model_validate(row)
@@ -5831,6 +6022,8 @@ def create_activity(
     workflow_id: str | None = None,
     task_id: str | None = None,
     enrollment_id: str | None = None,
+    *,
+    commit: bool = True,
 ) -> Activity:
     """Create an activity event.
 
@@ -5873,7 +6066,8 @@ def create_activity(
             "detail": Json(detail or {}),
         },
     ).fetchone()
-    connection.commit()
+    if commit:
+        connection.commit()
     return Activity.model_validate(row)
 
 
