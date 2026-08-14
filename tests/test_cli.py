@@ -9300,6 +9300,213 @@ def test_tag_remove_undefined_tag_not_found(
     assert data["error"] == "not_found"
 
 
+def test_tag_remove_no_owner(runner: CliRunner, mock_connection: MagicMock) -> None:
+    """§V.141: tag remove without an owner flag errors validation_error."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(main, ["tag", "remove", "--tag", "prospect"])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+
+
+def test_tag_remove_mixed_owner_kinds_rejected(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.141: owner-kind XOR — cannot mix company and contact owners."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "tag",
+                "remove",
+                "--tag",
+                "prospect",
+                "--company-domain",
+                "a.com",
+                "--contact-email",
+                "x@y.com",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "not both" in data["message"]
+
+
+def test_tag_remove_multi_company_results_envelope(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.141/§V.4: one invocation unlinks every listed owner; results envelope."""
+    tag = _make_tag(name="acumatica-var")
+    company_a = _make_company(id=_TAG_COMPANY_ID, domain="a.com")
+    company_b_id = "01234567-0000-7000-0000-0000000000b2"
+    company_b = _make_company(id=company_b_id, domain="b.com")
+    assignment = _make_tag_assignment(contact_id=None, company_id=_TAG_COMPANY_ID)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_tag_by_name", return_value=tag),
+        patch(
+            "mailpilot.database.get_company_by_domain",
+            side_effect=lambda _c, domain: {
+                "a.com": company_a,
+                "b.com": company_b,
+            }.get(domain),
+        ),
+        patch(
+            "mailpilot.database.remove_tag_from_company", return_value=assignment
+        ) as mock_remove,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "tag",
+                "remove",
+                "--tag",
+                "acumatica-var",
+                "--company-domain",
+                "a.com",
+                "--company-domain",
+                "b.com",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 2
+    assert data["results"] == [
+        {"ref": "a.com", "status": "ok"},
+        {"ref": "b.com", "status": "ok"},
+    ]
+    assert mock_remove.call_count == 2
+    mock_remove.assert_any_call(
+        mock_connection, tag_id=_TAG_ID, company_id=_TAG_COMPANY_ID
+    )
+    mock_remove.assert_any_call(
+        mock_connection, tag_id=_TAG_ID, company_id=company_b_id
+    )
+
+
+def test_tag_remove_multi_already_unlinked_ok_skip(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.141: multi-owner already-unlinked row is status ok skip, not error."""
+    tag = _make_tag(name="vip")
+    company_a = _make_company(id=_TAG_COMPANY_ID, domain="a.com")
+    company_b_id = "01234567-0000-7000-0000-0000000000b2"
+    company_b = _make_company(id=company_b_id, domain="b.com")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_tag_by_name", return_value=tag),
+        patch(
+            "mailpilot.database.get_company_by_domain",
+            side_effect=lambda _c, domain: {
+                "a.com": company_a,
+                "b.com": company_b,
+            }.get(domain),
+        ),
+        patch(
+            "mailpilot.database.remove_tag_from_company",
+            side_effect=[
+                None,
+                _make_tag_assignment(contact_id=None, company_id=company_b_id),
+            ],
+        ),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "tag",
+                "remove",
+                "--tag",
+                "vip",
+                "--company-domain",
+                "a.com",
+                "--company-domain",
+                "b.com",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["results"] == [
+        {"ref": "a.com", "status": "ok"},
+        {"ref": "b.com", "status": "ok"},
+    ]
+
+
+def test_tag_remove_multi_partial_not_found_exit_1(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.141/§V.139: multi partial not_found still emits full results, exit 1."""
+    tag = _make_tag(name="vip")
+    company_a = _make_company(id=_TAG_COMPANY_ID, domain="a.com")
+    assignment = _make_tag_assignment(contact_id=None, company_id=_TAG_COMPANY_ID)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_tag_by_name", return_value=tag),
+        patch(
+            "mailpilot.database.get_company_by_domain",
+            side_effect=lambda _c, domain: {
+                "a.com": company_a,
+            }.get(domain),
+        ),
+        patch("mailpilot.database.remove_tag_from_company", return_value=assignment),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "tag",
+                "remove",
+                "--tag",
+                "vip",
+                "--company-domain",
+                "a.com",
+                "--company-domain",
+                "ghost.com",
+            ],
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 2
+    assert data["results"][0] == {"ref": "a.com", "status": "ok"}
+    assert data["results"][1]["ref"] == "ghost.com"
+    assert data["results"][1]["status"] == "error"
+    assert data["results"][1]["error"] == "not_found"
+
+
+def test_tag_remove_help_documents_repeatable_flags(runner: CliRunner) -> None:
+    """§V.141/§V.111: tag remove --help documents repeatable owner flags."""
+    result = runner.invoke(main, ["tag", "remove", "--help"])
+    assert result.exit_code == 0
+    assert "--company-domain" in result.output
+    assert "--contact-email" in result.output
+    assert "repeatable" in result.output
+    assert "§V." not in result.output
+    assert "§T." not in result.output
+
+
+def test_skill_documents_tag_remove_repeatable() -> None:
+    """§V.141/§V.111: packaged SKILL.md (top-level --help) documents multi-owner remove."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "tag remove --tag acumatica-var" in body
+
+
 # -- tag disable ---------------------------------------------------------------
 
 

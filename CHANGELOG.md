@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `tag remove` accepts repeatable `--company-domain` or `--contact-email`
+  (same owner-kind XOR as `tag add`). One invocation unlinks every listed
+  owner. Multiple owners return a `results` envelope; an already-unlinked
+  row is an ok skip.
+
 - Out-of-office inbound no longer counts as a reply for the touch
   pre-flight cancel. Retrying a cancelled T2 after OOO no longer
   re-cancels immediately.

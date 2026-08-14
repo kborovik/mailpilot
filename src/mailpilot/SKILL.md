@@ -795,11 +795,13 @@ mailpilot email reply --account-email <ADDR> --email-id <EMAIL_ID> --body "..."
 ### Tag, note, and audit
 
 Tags are a controlled vocabulary: `tag create` defines a name first;
-`tag add` never auto-creates. `tag add` links one defined tag to one or
-more owners (repeatable `--company-domain` or repeatable `--contact-email`,
-owner-kind XOR). One owner returns a `tag_assignment` entity; multiple
-owners return a `results` batch envelope (already-linked multi rows are
-ok skips; exit 0 only when every row is ok).
+`tag add` never auto-creates. `tag add` and `tag remove` share the same
+owner flags: one defined tag to one or more owners (repeatable
+`--company-domain` or repeatable `--contact-email`, owner-kind XOR). One
+owner returns a `tag_assignment` entity; multiple owners return a
+`results` batch envelope. Already-linked multi `add` rows and
+already-unlinked multi `remove` rows are ok skips; exit 0 only when every
+row is ok.
 
 ```
 mailpilot tag create vip
@@ -809,6 +811,8 @@ mailpilot tag add --tag vip --contact-email <ADDR>
 mailpilot tag add --tag acumatica-var \
   --company-domain a.com --company-domain b.com
 mailpilot tag remove --tag vip --contact-email <ADDR>
+mailpilot tag remove --tag acumatica-var \
+  --company-domain a.com --company-domain b.com
 mailpilot tag disable vip --reason "<text>"
 ```
 
