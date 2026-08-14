@@ -1059,7 +1059,7 @@ Workflow grain: 1 row / workflow in scope incl draft|active|paused; omit `--work
 
 Task grain: 1 row / pending task; sort scheduled_at ASC (queue order; ! change `list_tasks` DESC); table+JSON cols {workflow_name, company_domain, contact, email, touch, attempts, next_at} only (drop when, trigger, state); hide UUIDs on table; JSON ? include task_id + enrollment_id; `--limit` default 100; `--overdue` = pending + scheduled_at < now; stuck-without-task ! rows (stays §V.155 enrollment/report `--stuck`).
 
-`--workflow-name` name|UUID §V.107 unknown -> not_found; flag matches table+JSON col `workflow_name` (name, not UUID). `--tz` IANA default UTC. table+JSON `next_at` = full ISO datetime in `--tz` (same both grains; ISO offset required). Envelope `tz` = IANA name. `touch` = T<n> via §V.162 parse + first-touch trigger fallback (`enrollment_schedule` / `enrollment_run` → T1 when touch absent). No LLM. No CRM write. Entity JSON verbs byte-stable. Empty -> `(no rows)` exit 0.
+`--workflow-name` name|UUID §V.107 unknown -> not_found; flag matches table+JSON col `workflow_name` (name, not UUID). `--tz` IANA default host local (TZ env or OS zoneinfo); omit → host TZ; explicit `--tz` overrides; unresolvable local → UTC. table+JSON `next_at` = full ISO datetime in `--tz` (same both grains; ISO offset required). Envelope `tz` = resolved IANA name. `touch` = T<n> via §V.162 parse + first-touch trigger fallback (`enrollment_schedule` / `enrollment_run` → T1 when touch absent). No LLM. No CRM write. Entity JSON verbs byte-stable. Empty -> `(no rows)` exit 0.
 
 Trigger: `show queue` path changed.
 - `rg 'show.*queue|def show_queue' src/mailpilot/cli.py` -> command present
