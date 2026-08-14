@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [v0.25.0] - 2026-08-13
+
 ### Fixed
 
 - `enrollment add --scheduled-at` on an existing never-sent first-reach
