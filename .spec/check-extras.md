@@ -1074,6 +1074,23 @@ Trigger: `company create` path changed.
 - `rg '--tag|profile.file|profile_file' src/mailpilot/cli.py` -> create accepts profile + tag flags
 - `rg 'def create_company|company create' src/mailpilot/cli.py` -> create handler present
 
+## §V168 — company view --full inspect dossier
+
+`company view --full` embeds `contacts[]` (lean contact fields; omit `verification_meta` unless `--include-meta`) + existing `tags[]` + `notes[]` on the company envelope. Lean `company view` (no `--full`) unchanged. Distinct from `company list --full` (profile.summary only, §V.8).
+
+Trigger: `company view` path changed.
+- `rg 'list_company_inspect_contacts' src/mailpilot/` -> inspect-dossier loader
+- `rg 'company view --full|include-meta' src/mailpilot/cli.py` -> --full + meta opt-in
+
+## §V169 — OOO pause-resume
+
+active outbound + inbound OOO/temporary-absence auto-reply (detect: subject Automatic reply / Auto-Submitted / agent OOO class) → no reply incl. no §V.131 fallback ACK; ! conclude (distinct §V.161); ! bump last_touch/emails_sent; §V.123 cancel pending follow-ups; harness schedule resume @ parseable return date (context.touch numeric §V.162, reason=ooo_pause); unparseable → +touch_interval_days (or +3d if NULL cadence); enrollment stays active, disposition null
+
+Trigger: inbound OOO / auto-reply / cadence resume path changed.
+- `rg 'ooo_pause|_maybe_ooo_pause' src/mailpilot/` -> pause+resume path
+- `rg 'Automatic reply|Auto-Submitted' src/mailpilot/ooo.py` -> mechanical detect
+- `rg '_FALLBACK_ACKNOWLEDGEMENT|_ack_or_ooo_pause' src/mailpilot/run.py` -> OOO exempt from fallback ACK
+
 ## §V16 — race-safe create
 
 UNIQUE-bearing `create_X` uses `ON CONFLICT DO NOTHING` -> None to race loser, exactly 1 row persists; bulk variants converge to shared ids; CLI surfaces `duplicate_key` envelope

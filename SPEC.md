@@ -212,21 +212,13 @@ V164: thread-alias inbound bind — inbound on existing outbound thread binds en
 V165: live-e2e-dev-only — campaign-test + reply-test ! read settings.logfire_environment before any CRM/Gmail mutate; != development → preflight fail + skill bail; pytest unit tests exempt — → .spec/check-extras.md §V165
 V166: show-queue — `mailpilot show queue` human report hub; default ASCII table; `--format json` opt-in; `--detail` task grain; next_at table+JSON ISO in `--tz`; every workflow status; pending tasks only; no LLM; no write — → .spec/check-extras.md §V166
 V167: company-create-oneshot — `company create` accepts §V.140 profile flags + repeatable `--tag` same invocation; one txn all-or-nothing; `--tag` additive never invent (§V.116); undefined tag → not_found; invalid profile → validation_error; second `--upsert` exit 0, update profile if flags, no tag dups — → .spec/check-extras.md §V167
-V168: company-view-full — `company view --full` embeds `contacts[]` + `tags[]` + `notes[]` on company envelope; omit `verification_meta` unless `--include-meta`; lean view unchanged; distinct from `company list --full`
-V169: ooo-pause-resume — active outbound + inbound OOO/temporary-absence auto-reply (detect: subject Automatic reply / Auto-Submitted / agent OOO class) → no reply incl. no §V.131 fallback ACK; ! conclude (distinct §V.161); ! bump last_touch/emails_sent; §V.123 cancel pending follow-ups; harness schedule resume @ parseable return date (context.touch numeric §V.162, reason=ooo_pause); unparseable → +touch_interval_days (or +3d if NULL cadence); enrollment stays active, disposition null
+V168: company-view-full — `company view --full` embeds `contacts[]` + `tags[]` + `notes[]`; omit `verification_meta` unless `--include-meta`; lean unchanged — → .spec/check-extras.md §V168
+V169: ooo-pause-resume — OOO inbound → no reply incl. no §V.131 ACK; ! conclude (distinct §V.161); ! bump last_touch/emails_sent; harness resume @ return date — → .spec/check-extras.md §V169
 
 ## §T TASKS
 
-## archived: §T.109..§T.221 → SPEC.archive.md (108 rows)
+## archived: §T.109..§T.229 → SPEC.archive.md (116 rows)
 id|status|task|cites
-T222|x|impl §V.142(+) + §V.143(+) + §I — company domain aliases + merge into survivor; migration 011 company_alias; resolve on view/contact; create --alias; merge --move-contacts; export aliases[]; tests + --skill (#193)|V142,V143,V8,V90,V107,V114,V121,V16,V4,V94,I.cli
-T223|x|impl §V.144(+) + §V.8(∆) + §I — contact verification_meta JSONB; create|update --meta-json; view --include-meta; agent allowlist + context-builder tests; migration; --skill docs (#194)|V144,V8,V95,V135,V4,I.cli
-T224|x|impl §V.145(+) + §I — company export jsonl; list-family filters; --full profile; --out status envelope or stdout stream; shape tests; --skill (#195)|V145,V138,V116,V114,V96,V3,V4,I.cli
-T225|x|impl §V.146(+) + §I — company import --from jsonl --dry-run diff buckets; filter-scoped CRM; tests; --skill (#195)|V146,V145,V138,V4,I.cli
-T226|x|impl §V.147(+) + §V.139(∆) + §I — company create --upsert + contact create --upsert; field-selective update; `created` flag; preserve non-upsert errors; stdin upsert line; tests create vs update + profile non-wipe; --skill agent recipe (#196)|V147,V139,V16,V142,V140,V90,V4,I.cli
-T227|x|impl §V.148(+) + §V.115(∆) + §I — company list|search --sort/--desc/--offset; company default limit 500; pin search lean fields; tests; --skill defaults/sort keys (#197)|V148,V115,V8,V116,V114,V96,V3,V4,I.cli
-T228|x|impl §V.149(+) + §I — company/contact disable --reason-file XOR --reason; tests empty/missing/XOR; --skill (#197)|V149,V114,V3,V4,I.cli
-T229|x|impl §V.14(∆) + §I — note remove owner bulk (--company-domain|--contact-email + required --yes); single-id path unchanged; delete_notes fn; tests empty/missing-yes/XOR; --skill (#198)|V14,I.cli
 T230|x|impl §V.150(+) + §I — enrollment add --tag --dry-run company-tag cohort preview; disabled companies out; exclude enrolled + self-loop; optional --min-contacts; envelope + tests; --skill (#198)|V150,V33,V114,V116,V107,V4,I.cli
 T231|x|impl §V.111(∆)+§I — top-level `--help` emits SKILL.md body; drop `--skill` flag; SKILL Grammar/Discovery; tests (body==package; tree zero §-cites)|V111,I.cli
 T232|x|drop tests/test_contact_finder_verify.py — sole non-package pytest (detached contact-finder.md); V113 stays via .spec/check-extras lead-contacts greps|V113
