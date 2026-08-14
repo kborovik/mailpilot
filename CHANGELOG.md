@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- `show queue` table and JSON `next_at` are a full ISO datetime in `--tz`
+  (offset included). JSON no longer emits stored UTC.
+
 ## [v0.25.0] - 2026-08-13
 
 ### Fixed

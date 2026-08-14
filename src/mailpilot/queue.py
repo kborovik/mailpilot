@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from mailpilot.cadence import resolve_touch_number
@@ -35,7 +36,7 @@ _QUEUE_TASK_TABLE_HEADERS = (
 def format_queue_next_at(next_at: datetime | str | None, *, tz: ZoneInfo) -> str:
     """Render ``next_at`` as full ISO datetime in ``tz``.
 
-    Empty when unset. JSON keeps the stored ISO; table converts to ``tz``.
+    Empty when unset. Table and JSON both convert to ``tz`` (offset required).
     """
     if next_at is None or next_at == "":
         return ""
@@ -43,6 +44,25 @@ def format_queue_next_at(next_at: datetime | str | None, *, tz: ZoneInfo) -> str
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed.astimezone(tz).isoformat()
+
+
+def project_queue_json_next_at(
+    payload: dict[str, Any], *, tz: ZoneInfo
+) -> dict[str, Any]:
+    """Rewrite each row ``next_at`` to ISO in ``tz``. Null stays null."""
+    rows = payload.get("rows")
+    if not isinstance(rows, list):
+        return payload
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        value = row.get("next_at")
+        if value is None:
+            continue
+        if isinstance(value, (datetime, str)):
+            formatted = format_queue_next_at(value, tz=tz)
+            row["next_at"] = formatted if formatted else None
+    return payload
 
 
 def format_queue_touch(context: dict[str, object] | None, trigger: str = "") -> str:

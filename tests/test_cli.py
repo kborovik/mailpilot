@@ -13853,6 +13853,55 @@ def test_show_queue_json_envelope_record_count(
     assert data["queue"]["rows"][0]["next_at"].startswith("2024-01-01T")
 
 
+def test_show_queue_json_next_at_is_iso_in_tz(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.166: JSON next_at is ISO in --tz (offset), not stored UTC."""
+    from mailpilot.models import QueueReport, QueueWorkflowRow
+
+    report = QueueReport(
+        grain="workflow",
+        tz="America/Toronto",
+        rows=[
+            QueueWorkflowRow(
+                workflow_name="alpha-outreach",
+                status="active",
+                t1=1,
+                t2=0,
+                t3=0,
+                t4p=0,
+                next_at=_NOW,
+            ),
+            QueueWorkflowRow(
+                workflow_name="draft-outreach",
+                status="draft",
+                t1=0,
+                t2=0,
+                t3=0,
+                t4p=0,
+                next_at=None,
+            ),
+        ],
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_queue_report", return_value=report),
+    ):
+        result = runner.invoke(
+            main,
+            ["show", "queue", "--format", "json", "--tz", "America/Toronto"],
+        )
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["queue"]["tz"] == "America/Toronto"
+    assert data["queue"]["rows"][0]["next_at"] == "2023-12-31T19:00:00-05:00"
+    assert data["queue"]["rows"][1]["next_at"] is None
+    assert not data["queue"]["rows"][0]["next_at"].endswith("+00:00")
+    assert not data["queue"]["rows"][0]["next_at"].endswith("Z")
+
+
 def test_show_queue_empty_prints_no_rows(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
@@ -13980,6 +14029,8 @@ def test_skill_documents_show_queue() -> None:
     assert "t4p" in body
     assert "company_domain" in body
     assert "next_at" in body
+    assert "JSON keeps the stored ISO" not in body
+    assert "table and JSON" in body
 
 
 def test_show_queue_help_uses_workflow_name(runner: CliRunner) -> None:

@@ -1023,7 +1023,7 @@ def show() -> None:
     "tz_name",
     default="UTC",
     show_default=True,
-    help="IANA timezone for table next_at.",
+    help="IANA timezone for table and JSON next_at.",
 )
 @click.option(
     "--format",
@@ -1060,7 +1060,11 @@ def show_queue(
     from tabulate import tabulate
 
     from mailpilot.database import get_queue_report, get_workflow, initialize_database
-    from mailpilot.queue import queue_table_cells, queue_table_headers
+    from mailpilot.queue import (
+        project_queue_json_next_at,
+        queue_table_cells,
+        queue_table_headers,
+    )
 
     try:
         zone = ZoneInfo(tz_name)
@@ -1085,7 +1089,7 @@ def show_queue(
     finally:
         connection.close()
 
-    dumped = report.model_dump(mode="json")
+    dumped = project_queue_json_next_at(report.model_dump(mode="json"), tz=zone)
     if output_format.lower() == "json":
         output({"queue": dumped}, record_count=len(report.rows))
         return

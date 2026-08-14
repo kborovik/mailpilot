@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from mailpilot.queue import (
     format_queue_next_at,
     format_queue_touch,
+    project_queue_json_next_at,
     queue_table_cells,
     queue_table_headers,
 )
@@ -28,6 +29,22 @@ def test_format_queue_next_at_is_iso_in_tz() -> None:
         format_queue_next_at("2026-08-14T02:00:00+00:00", tz=toronto)
         == "2026-08-13T22:00:00-04:00"
     )
+
+
+def test_project_queue_json_next_at_is_iso_in_tz() -> None:
+    """§V.166: JSON next_at is ISO in --tz with offset; null stays null."""
+    toronto = ZoneInfo("America/Toronto")
+    payload = {
+        "grain": "workflow",
+        "tz": "America/Toronto",
+        "rows": [
+            {"workflow_name": "alpha", "next_at": "2026-08-14T02:00:00+00:00"},
+            {"workflow_name": "draft", "next_at": None},
+        ],
+    }
+    projected = project_queue_json_next_at(payload, tz=toronto)
+    assert projected["rows"][0]["next_at"] == "2026-08-13T22:00:00-04:00"
+    assert projected["rows"][1]["next_at"] is None
 
 
 def test_queue_table_cells_next_at_is_iso() -> None:
