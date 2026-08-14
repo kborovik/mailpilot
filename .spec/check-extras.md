@@ -17,6 +17,21 @@ Checks:
 (iii) settings key list in `## Settings` == `Settings.model_fields` keys in `settings.py` — `src/mailpilot/SKILL.md` only.
 (iv) env-var-prefix description in `## Settings` == `SettingsConfigDict(env_prefix=...)` value in `settings.py` (`MAILPILOT_*`) — `src/mailpilot/SKILL.md` only.
 
+## I.nouns / I.verbs set-diff
+
+Mechanical. SPEC §I list-shape vs cli.py registrations.
+Hook `.spec/scripts/check-extras.sh` (audit probe); stdout rows `id|verdict|evidence` (no header).
+
+I.nouns: parse `- nouns:` backtick list in SPEC.md §I.
+Code nouns = `@main.group()` names minus {show, config}.
+I.verbs: parse `- verbs:` pipe-list in SPEC.md §I.
+Code verbs = `@<noun>.command` names on those noun groups only
+(top-level show.queue / config.get excluded by construction).
+
+Verdicts: MATCH (equal) / MISSING (spec − code) / EXTRA (code − spec) / DRIFT (both nonempty).
+Trigger: SPEC.md or src/mailpilot/cli.py changed.
+Distinct from SKILL.md Drift Check (skill-body vs cli.py).
+
 ## Recipe grep-runner — mechanization candidate (not implemented)
 
 Observed 2026-07-02 (T212 build probe + §V.123/§V.128 amends): recipe `rg` lines
