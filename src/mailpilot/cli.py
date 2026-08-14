@@ -4264,14 +4264,30 @@ def tag_set(
 @click.option(
     "--tag", "tag_name", required=True, help="Defined tag to unlink (name or ID)."
 )
-@click.option("--contact-email", default=None, help="Owner contact (email or ID).")
-@click.option("--company-domain", default=None, help="Owner company (domain or ID).")
-def tag_remove(
-    tag_name: str, contact_email: str | None, company_domain: str | None
+@click.option(
+    "--contact-email",
+    "contact_emails",
+    multiple=True,
+    help="Owner contact (email or ID); repeatable. XOR with --company-domain.",
+)
+@click.option(
+    "--company-domain",
+    "company_domains",
+    multiple=True,
+    help="Owner company (domain or ID); repeatable. XOR with --contact-email.",
+)
+def tag_remove(  # noqa: C901, PLR0912
+    tag_name: str,
+    contact_emails: tuple[str, ...],
+    company_domains: tuple[str, ...],
 ) -> None:
-    """Unlink a tag from a contact or company (inverse of `tag add`).
+    """Unlink a defined tag from one or more contacts or companies.
 
-    Removes only the link; the tag vocabulary entry and the owner both survive.
+    Pass repeatable ``--company-domain`` or repeatable ``--contact-email``
+    (owner-kind XOR, at least one owner). One owner returns a
+    ``tag_assignment`` entity envelope; multiple owners return a ``results``
+    batch envelope (already-unlinked rows are ok skips). Removes only the
+    link; the tag vocabulary entry and the owners both survive.
     """
     from mailpilot.database import (
         initialize_database,
@@ -4280,43 +4296,100 @@ def tag_remove(
     )
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    if (contact_email is None) == (company_domain is None):
+    has_contacts = len(contact_emails) > 0
+    has_companies = len(company_domains) > 0
+    if has_contacts and has_companies:
         output_error(
-            "exactly one of --contact-email or --company-domain is required",
+            "pass --contact-email or --company-domain, not both",
             "validation_error",
         )
+    if not has_contacts and not has_companies:
+        output_error(
+            "at least one --contact-email or --company-domain is required",
+            "validation_error",
+        )
+    owner_kind = "contact" if has_contacts else "company"
+    owner_refs = contact_emails if has_contacts else company_domains
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         tag_row = _resolve_tag(connection, tag_name)
-        if contact_email is not None:
-            owner = ("contact", _resolve_contact(connection, contact_email).id)
-        else:
-            assert company_domain is not None
-            owner = ("company", _resolve_company(connection, company_domain).id)
-        with cli_mutation(
-            "tag", "remove", name=tag_row.name, owner_type=owner[0], owner_id=owner[1]
-        ):
-            if owner[0] == "contact":
-                removed = remove_tag_from_contact(
-                    connection, tag_id=tag_row.id, contact_id=owner[1]
-                )
+        if len(owner_refs) == 1:
+            ref = owner_refs[0]
+            if owner_kind == "contact":
+                owner_id = _resolve_contact(connection, ref).id
             else:
-                removed = remove_tag_from_company(
-                    connection, tag_id=tag_row.id, company_id=owner[1]
-                )
-            if removed is None:
-                output_error(
-                    f"tag '{tag_row.name}' not on {owner[0]} {owner[1]}",
-                    "not_found",
-                )
-            operator_event(
-                "tag.remove",
+                owner_id = _resolve_company(connection, ref).id
+            with cli_mutation(
+                "tag",
+                "remove",
                 name=tag_row.name,
-                owner_type=owner[0],
-                owner_id=owner[1],
-                changed=["tag_id"],
-            )
-            output_entity("tag_assignment", removed)
+                owner_type=owner_kind,
+                owner_id=owner_id,
+            ):
+                if owner_kind == "contact":
+                    removed = remove_tag_from_contact(
+                        connection, tag_id=tag_row.id, contact_id=owner_id
+                    )
+                else:
+                    removed = remove_tag_from_company(
+                        connection, tag_id=tag_row.id, company_id=owner_id
+                    )
+                if removed is None:
+                    output_error(
+                        f"tag '{tag_row.name}' not on {owner_kind} {owner_id}",
+                        "not_found",
+                    )
+                operator_event(
+                    "tag.remove",
+                    name=tag_row.name,
+                    owner_type=owner_kind,
+                    owner_id=owner_id,
+                    changed=["tag_id"],
+                )
+                output_entity("tag_assignment", removed)
+            return
+
+        with cli_mutation(
+            "tag",
+            "remove",
+            name=tag_row.name,
+            owner_type=owner_kind,
+            owner_count=len(owner_refs),
+        ):
+            results: list[dict[str, object]] = []
+            for ref in owner_refs:
+                if owner_kind == "contact":
+                    owner = _lookup_contact_soft(connection, ref)
+                else:
+                    owner = _lookup_company_soft(connection, ref)
+                if owner is None:
+                    results.append(
+                        _batch_error(
+                            ref,
+                            "not_found",
+                            f"{owner_kind} not found: {ref}",
+                        )
+                    )
+                    continue
+                if owner_kind == "contact":
+                    removed = remove_tag_from_contact(
+                        connection, tag_id=tag_row.id, contact_id=owner.id
+                    )
+                else:
+                    removed = remove_tag_from_company(
+                        connection, tag_id=tag_row.id, company_id=owner.id
+                    )
+                if removed is not None:
+                    operator_event(
+                        "tag.remove",
+                        name=tag_row.name,
+                        owner_type=owner_kind,
+                        owner_id=owner.id,
+                        changed=["tag_id"],
+                    )
+                # Already-unlinked multi row is status ok skip (§V.141).
+                results.append(_batch_ok(ref))
+            _emit_batch_results(results)
     finally:
         connection.close()
 

@@ -861,7 +861,7 @@ company profile write paths — `company create` + `company update` full-replace
 
 ## §V141
 
-multi-owner tag link + set-replace — `tag add --tag <name>` accepts repeatable `--company-domain` or repeatable `--contact-email`; owner-kind XOR per call (companies or contacts, not mixed; ≥1 owner); undefined tag → `not_found` never auto-create (§V.116); N>1 → results envelope §V.139 shape + exit 0 iff zero errors; N=1 → `tag_assignment` entity envelope; already-linked multi row → status ok skip; `tag set` owner XOR + `--tags` comma-list replaces owner's full assignment set one txn (add missing, remove extras, activity per change §V.14); empty `--tags` clears all; undefined name in set → `not_found` zero writes; `company create --tag` (repeatable) additive same as tag add (§V.167); company list|view `tags[]` always (§V.8/§V.116); help/--skill zero SPEC cites §V.111
+multi-owner tag link + set-replace — `tag add`/`tag remove --tag <name>` accept repeatable `--company-domain` or repeatable `--contact-email`; owner-kind XOR per call (companies or contacts, not mixed; ≥1 owner); undefined tag → `not_found` never auto-create (§V.116); N>1 → results envelope §V.139 shape + exit 0 iff zero errors; N=1 → `tag_assignment` entity envelope; already-linked multi `add` row → status ok skip; already-unlinked multi `remove` row → status ok skip; `tag set` owner XOR + `--tags` comma-list replaces owner's full assignment set one txn (add missing, remove extras, activity per change §V.14); empty `--tags` clears all; undefined name in set → `not_found` zero writes; `company create --tag` (repeatable) additive same as tag add (§V.167); company list|view `tags[]` always (§V.8/§V.116); help/--skill zero SPEC cites §V.111
 
 ## §V142
 
