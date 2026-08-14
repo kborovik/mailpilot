@@ -913,12 +913,45 @@ def test_build_user_prompt_renders_contact_and_company_records(
 
     assert "Contact record:" in prompt
     assert "Company record:" in prompt
-    # Byte-identical to the loader serialization (§V.8).
-    assert contact_view.model_dump_json(indent=2) in prompt
+    # CLI ContactView may carry tags[]; Contact record strips them (§V.8).
+    assert contact_view.model_dump_json(indent=2, exclude={"tags"}) in prompt
     assert company_view.model_dump_json(indent=2) in prompt
     # The inlined notes only the loaders surface came through.
     assert "MET_AT_CONF_MARKER" in prompt
     assert "TOP_CUSTOMER_MARKER" in prompt
+
+
+def test_build_user_prompt_strips_contact_tags(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.8: Contact record: omits tags[] even when ContactView carries them."""
+    from conftest import make_test_company, make_test_tag_assignment
+    from mailpilot.database import load_contact_view
+
+    _account, _c, workflow = _setup(database_connection)
+    company = make_test_company(database_connection, name="Acme", domain="acme.com")
+    contact = make_test_contact(
+        database_connection, email="tagged@acme.com", company_id=company.id
+    )
+    make_test_tag_assignment(
+        database_connection, contact_id=contact.id, name="sales-seat"
+    )
+
+    contact_view = load_contact_view(database_connection, contact.id)
+    assert contact_view is not None
+    assert contact_view.tags == ["sales-seat"]
+
+    prompt = _build_user_prompt(
+        workflow=workflow,
+        contact=contact,
+        email_history=[],
+        contact_view=contact_view,
+    )
+
+    contact_block = prompt.split("Contact record:\n", 1)[1]
+    assert '"tags"' not in contact_block
+    assert "sales-seat" not in contact_block
+    assert contact_view.model_dump_json(indent=2, exclude={"tags"}) in prompt
 
 
 def test_build_user_prompt_omits_company_record_without_company_view(

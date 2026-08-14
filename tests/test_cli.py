@@ -20,6 +20,7 @@ from mailpilot.models import (
     CompanySummary,
     CompanyView,
     Contact,
+    ContactSummary,
     ContactView,
     Email,
     Enrollment,
@@ -2944,6 +2945,7 @@ def test_company_view_full_embeds_contacts(
             "company_domain": company.domain,
             "email_confidence": 98,
             "disabled_reason": None,
+            "tags": ["sales-seat"],
             "created_at": _NOW.isoformat(),
         }
     ]
@@ -2968,6 +2970,7 @@ def test_company_view_full_embeds_contacts(
     assert data["company"]["tags"] == ["vip"]
     assert data["company"]["notes"] == []
     assert data["company"]["contacts"] == contacts
+    assert data["company"]["contacts"][0]["tags"] == ["sales-seat"]
     assert "verification_meta" not in data["company"]["contacts"][0]
 
 
@@ -3725,6 +3728,23 @@ def _make_contact(**overrides: Any) -> Contact:
         "updated_at": _NOW,
     }
     return Contact(**{**defaults, **overrides})
+
+
+def _make_contact_summary(**overrides: Any) -> ContactSummary:
+    defaults: dict[str, Any] = {
+        "id": "01234567-0000-7000-0000-000000000003",
+        "email": "alice@example.com",
+        "first_name": "Alice",
+        "last_name": None,
+        "title": "VP Sales",
+        "company_id": None,
+        "company_domain": None,
+        "email_confidence": None,
+        "disabled_reason": None,
+        "tags": [],
+        "created_at": _NOW,
+    }
+    return ContactSummary(**{**defaults, **overrides})
 
 
 # -- contact create ------------------------------------------------------------
@@ -4527,6 +4547,33 @@ def test_contact_search(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert len(data["contacts"]) == 1
 
 
+def test_contact_search_envelope_projects_tags(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.8/§V.116: search JSON rows include tags[] (empty ok)."""
+    contacts = [
+        _make_contact_summary(tags=["vip", "sales-seat"]),
+        _make_contact_summary(
+            id="01234567-0000-7000-0000-0000000000bb",
+            email="bare@example.com",
+            tags=[],
+        ),
+    ]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.search_contacts", return_value=contacts),
+    ):
+        result = runner.invoke(main, ["contact", "search", "alice"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 2
+    assert data["contacts"][0]["tags"] == ["vip", "sales-seat"]
+    assert data["contacts"][1]["tags"] == []
+
+
 def test_contact_search_with_limit(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
@@ -4560,6 +4607,33 @@ def test_contact_list(runner: CliRunner, mock_connection: MagicMock) -> None:
     data = json.loads(result.output)
     assert data["ok"] is True
     assert len(data["contacts"]) == 2
+
+
+def test_contact_list_envelope_projects_tags(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.8/§V.116: list JSON rows include tags[] (empty ok)."""
+    contacts = [
+        _make_contact_summary(tags=["vip", "sales-seat"]),
+        _make_contact_summary(
+            id="01234567-0000-7000-0000-0000000000bb",
+            email="bare@example.com",
+            tags=[],
+        ),
+    ]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_contacts", return_value=contacts),
+    ):
+        result = runner.invoke(main, ["contact", "list"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 2
+    assert data["contacts"][0]["tags"] == ["vip", "sales-seat"]
+    assert data["contacts"][1]["tags"] == []
 
 
 def test_contact_list_empty(runner: CliRunner, mock_connection: MagicMock) -> None:
@@ -4845,6 +4919,7 @@ def test_contact_view(runner: CliRunner, mock_connection: MagicMock) -> None:
         disabled_reason=contact.disabled_reason,
         created_at=contact.created_at,
         updated_at=contact.updated_at,
+        tags=["sales-seat"],
         notes=[],
         notes_total=0,
         company_notes=[],
@@ -4862,11 +4937,46 @@ def test_contact_view(runner: CliRunner, mock_connection: MagicMock) -> None:
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["contact"]["id"] == contact.id
+    assert data["contact"]["tags"] == ["sales-seat"]
     assert data["contact"]["notes"] == []
     assert data["contact"]["notes_total"] == 0
     assert data["contact"]["company_notes"] == []
     assert data["contact"]["company_notes_total"] == 0
     assert "verification_meta" not in data["contact"]
+
+
+def test_contact_view_projects_empty_tags(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.8: contact view projects tags[] as [] when none are assigned."""
+    contact = _make_contact()
+    view = ContactView(
+        id=contact.id,
+        email=contact.email,
+        company_id=contact.company_id,
+        first_name=contact.first_name,
+        last_name=contact.last_name,
+        disabled_reason=contact.disabled_reason,
+        created_at=contact.created_at,
+        updated_at=contact.updated_at,
+        tags=[],
+        notes=[],
+        notes_total=0,
+        company_notes=[],
+        company_notes_total=0,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.load_contact_view", return_value=view),
+    ):
+        result = runner.invoke(main, ["contact", "view", contact.id])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 1
+    assert data["contact"]["tags"] == []
 
 
 def test_contact_view_include_meta(
@@ -4969,6 +5079,37 @@ def test_skill_documents_contact_timeline() -> None:
     assert "--timeline" in body
     assert "hard max 50" in body or "Hard max 50" in body or "hard cap 50" in body
     assert "§V." not in body
+
+
+def test_contact_view_help_documents_tags(runner: CliRunner) -> None:
+    """§V.8/§V.111: contact view --help documents tags[]."""
+    result = runner.invoke(main, ["contact", "view", "--help"])
+    assert result.exit_code == 0
+    assert "tags" in result.output
+    assert "§V." not in result.output
+    assert "§T." not in result.output
+
+
+def test_contact_list_help_documents_tags(runner: CliRunner) -> None:
+    """§V.8/§V.111: contact list --help documents tags[]."""
+    result = runner.invoke(main, ["contact", "list", "--help"])
+    assert result.exit_code == 0
+    assert "tags" in result.output
+    assert "§V." not in result.output
+    assert "§T." not in result.output
+
+
+def test_skill_documents_contact_tags() -> None:
+    """§V.8/§V.111: packaged SKILL.md documents contact tags[] projection."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "contact list" in body
+    assert "contact search" in body
+    assert "contact view" in body
+    assert "project `tags`" in body or "project tags" in body
+    assert "§V." not in body
+    assert "§T." not in body
 
 
 def test_contact_view_not_found(runner: CliRunner, mock_connection: MagicMock) -> None:

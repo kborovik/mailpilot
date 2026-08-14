@@ -217,6 +217,8 @@ class ContactSummary(BaseModel):
     Carries ``title`` + ``company_domain`` (joined via LEFT JOIN company per
     §V.5) so the operator reads role + org from the CLI without a separate
     company lookup; ``company_domain`` is NULL when ``company_id`` is NULL.
+    ``tags`` is the assigned tag-name list (empty ok; same shape as
+    ``CompanySummary.tags`` / ``ContactView.tags``, §V.8 / §V.116).
     """
 
     id: str
@@ -228,6 +230,7 @@ class ContactSummary(BaseModel):
     company_domain: str | None
     email_confidence: int | None
     disabled_reason: str | None
+    tags: list[str] = []
     created_at: datetime
 
 
@@ -956,9 +959,10 @@ class ContactView(BaseModel):
     columns: every ``Contact`` column except operator-only
     ``verification_meta`` (§V.144; opt-in via ``contact view --include-meta``)
     plus ``company_domain`` (LEFT JOIN company per §V.5, NULL when
-    ``company_id`` is NULL). Omitting an agent-facing base column would let
-    Pydantic ``extra=ignore`` silently strip it from ``**contact.model_dump()``
-    (§B.94).
+    ``company_id`` is NULL) and ``tags`` (assigned names, empty ok; CLI
+    inspect only — stripped from the agent ``Contact record:`` allowlist).
+    Omitting an agent-facing base column would let Pydantic ``extra=ignore``
+    silently strip it from ``**contact.model_dump()`` (§B.94).
     """
 
     id: str
@@ -970,6 +974,7 @@ class ContactView(BaseModel):
     title: str | None = None
     email_confidence: int | None = None
     disabled_reason: str | None = None
+    tags: list[str] = []
     notes: list[Note] = []
     notes_total: int = 0
     company_notes: list[Note] = []

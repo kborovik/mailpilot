@@ -1417,6 +1417,15 @@ _COMPANY_TAGS_SQL = (
 )
 """Correlated assigned-tag names for company list/search rows (§V.8 / §V.116)."""
 
+_CONTACT_TAGS_SQL = (
+    "COALESCE("
+    "(SELECT array_agg(t.name ORDER BY t.name) "
+    "FROM tag_assignment ta JOIN tag t ON t.id = ta.tag_id "
+    "WHERE ta.contact_id = c.id), "
+    "ARRAY[]::text[]) AS tags"
+)
+"""Correlated assigned-tag names for contact list/search rows (§V.8 / §V.116)."""
+
 _COMPANY_SORT_SQL: dict[str, SQL] = {
     "name": SQL("LOWER(c.name)"),
     "domain": SQL("LOWER(c.domain)"),
@@ -2379,7 +2388,8 @@ def list_contacts(
 
     Joins ``company`` once (LEFT JOIN) so each summary carries
     ``company_domain`` without an N+1 lookup per §V.5; ``company_domain``
-    is NULL when ``company_id`` is NULL.
+    is NULL when ``company_id`` is NULL. Every row projects ``tags``
+    (assigned names, empty ok), mirroring ``search_contacts`` / view.
 
     Args:
         connection: Open database connection.
@@ -2448,10 +2458,11 @@ def list_contacts(
     query = SQL(
         "SELECT c.id, c.email, c.first_name, c.last_name, c.title, "
         "c.company_id, co.domain AS company_domain, "
-        "c.email_confidence, c.disabled_reason, c.created_at "
+        "c.email_confidence, c.disabled_reason, c.created_at, "
+        "{tags} "
         "FROM contact c LEFT JOIN company co ON c.company_id = co.id "
-        "{} ORDER BY c.email LIMIT %(limit)s"
-    ).format(where)
+        "{where} ORDER BY c.email LIMIT %(limit)s"
+    ).format(tags=SQL(_CONTACT_TAGS_SQL), where=where)
     rows = connection.execute(query, params).fetchall()
     return [ContactSummary.model_validate(row) for row in rows]
 
@@ -2470,8 +2481,8 @@ def search_contacts(
 
     Returns:
         Matching contact summaries ordered by email. Each carries
-        ``title`` + ``company_domain`` (LEFT JOIN company per §V.5),
-        mirroring ``list_contacts``.
+        ``title`` + ``company_domain`` (LEFT JOIN company per §V.5) and
+        ``tags`` (assigned names, empty ok), mirroring ``list_contacts``.
 
     Match rules (§V.158):
         - Single-token: per-field LIKE on email / first_name / last_name /
@@ -2514,14 +2525,15 @@ def search_contacts(
         """\
         SELECT c.id, c.email, c.first_name, c.last_name, c.title,
                c.company_id, co.domain AS company_domain,
-               c.email_confidence, c.disabled_reason, c.created_at
+               c.email_confidence, c.disabled_reason, c.created_at,
+               {tags}
         FROM contact c
         LEFT JOIN company co ON c.company_id = co.id
-        WHERE {}
+        WHERE {where}
         ORDER BY c.email
         LIMIT %(limit)s
         """
-    ).format(where)
+    ).format(tags=SQL(_CONTACT_TAGS_SQL), where=where)
     rows = connection.execute(query_sql, params).fetchall()
     return [ContactSummary.model_validate(row) for row in rows]
 
@@ -7304,8 +7316,9 @@ def load_contact_view(
     §V.8: every ``Contact`` column except operator-only
     ``verification_meta`` (§V.144) is forwarded, and ``company_domain`` is
     fetched from the parent company (LEFT JOIN semantics, NULL when the
-    contact has no company). Meta is never on this path — operators use
-    ``contact view --include-meta``.
+    contact has no company). ``tags`` is the assigned tag-name list
+    (empty ok; same shape as ``ContactSummary.tags``). Meta is never on
+    this path — operators use ``contact view --include-meta``.
     """
     contact = get_contact(connection, contact_id)
     if contact is None:
@@ -7321,11 +7334,18 @@ def load_contact_view(
         company_domain = None
         company_notes = []
         company_notes_total = 0
+    owner_tags = list_tags(
+        connection,
+        contact_id=contact_id,
+        limit=1_000_000,
+        include_disabled=True,
+    )
     # Strip operator-only meta so agent prompt + default CLI stay byte-identical
     # and never carry verification trails (§V.144 / §V.8).
     return ContactView(
         **contact.model_dump(exclude={"verification_meta"}),
         company_domain=company_domain,
+        tags=[t.name for t in owner_tags],
         notes=notes,
         notes_total=notes_total,
         company_notes=company_notes,

@@ -276,7 +276,7 @@ T281|x|impl §V.131(∆) — `_FALLBACK_ACKNOWLEDGEMENT` first-person singular (
 T282|x|impl §V.170(+) + §V.83(∆) + §V.169(∆) + §I — task retry keep-future scheduled_at + --scheduled-at; OOO inbound ! V83 replied-after; enrollment --full next_touch=2; tests + SKILL one-call (#227)|V170,V49,V83,V169,V152,V129,V4,I.cli
 T283|x|impl §V.141(∆) + §I — tag remove repeatable --company-domain|--contact-email matching tag add; one invocation unlinks every listed owner; N>1 results[]; already-unlinked ok skip; help documents flags (#230)|V141,V139,V116,V4,V111,I.cli
 T284|x|impl I.nouns/I.verbs set-diff hook `.spec/scripts/check-extras.sh`; parse SPEC §I lists vs cli.py noun-group @command; emit MATCH/MISSING/EXTRA/DRIFT; tests|I.nouns,I.verbs,I.cli
-T285|.|impl §V.8 + §V.168 + §I — contact view|list|search project tags[] (empty ok); company view --full lean contacts include tags[]; help documents field; agent Contact-record allowlist unchanged; tests (#232)|V8,V168,V116,V111,V4,I.cli
+T285|x|impl §V.8 + §V.168 + §I — contact view|list|search project tags[] (empty ok); company view --full lean contacts include tags[]; help documents field; agent Contact-record allowlist unchanged; tests (#232)|V8,V168,V116,V111,V4,I.cli
 
 ## §B BUGS
 

@@ -1417,6 +1417,25 @@ def test_list_contacts_summary_carries_title_and_company_domain(
     assert orphan.company_domain is None
 
 
+def test_list_contacts_projects_tags(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.8/§V.116: list rows project assigned tag names (empty ok)."""
+    tagged = create_contact(database_connection, email="tagged@example.com")
+    bare = create_contact(database_connection, email="bare@example.com")
+    assert tagged is not None
+    assert bare is not None
+    make_test_tag_assignment(database_connection, contact_id=tagged.id, name="vip")
+    make_test_tag_assignment(
+        database_connection, contact_id=tagged.id, name="sales-seat"
+    )
+
+    by_id = {c.id: c for c in list_contacts(database_connection)}
+
+    assert by_id[tagged.id].tags == ["sales-seat", "vip"]
+    assert by_id[bare.id].tags == []
+
+
 def test_search_contacts_summary_carries_title_and_company_domain(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
@@ -1433,6 +1452,29 @@ def test_search_contacts_summary_carries_title_and_company_domain(
     assert len(results) == 1
     assert results[0].title == "Head of Ops"
     assert results[0].company_domain == "acme.com"
+
+
+def test_search_contacts_projects_tags(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.8/§V.116: search rows project the same tags[] shape as list."""
+    tagged = create_contact(database_connection, email="tagged@example.com")
+    bare = create_contact(database_connection, email="bare@example.com")
+    assert tagged is not None
+    assert bare is not None
+    make_test_tag_assignment(database_connection, contact_id=tagged.id, name="vip")
+    make_test_tag_assignment(
+        database_connection, contact_id=tagged.id, name="sales-seat"
+    )
+
+    tagged_row = search_contacts(database_connection, "tagged@example.com")[0]
+    bare_row = search_contacts(database_connection, "bare@example.com")[0]
+    listed = {c.id: c for c in list_contacts(database_connection)}
+
+    assert tagged_row.tags == ["sales-seat", "vip"]
+    assert bare_row.tags == []
+    assert tagged_row.tags == listed[tagged.id].tags
+    assert bare_row.tags == listed[bare.id].tags
 
 
 def test_list_contacts_min_email_confidence_filter(
@@ -7589,6 +7631,8 @@ def test_list_company_inspect_contacts_lean_omits_meta(
         assert "verification_meta" not in row
         assert "title" in row
         assert "email" in row
+        assert "tags" in row
+        assert row["tags"] == []
 
 
 def test_list_company_inspect_contacts_include_meta(
@@ -7619,6 +7663,32 @@ def test_list_company_inspect_contacts_include_meta(
     }
     assert payloads["ada@acme.com"]["verification_meta"] == meta
     assert payloads["grace@acme.com"]["verification_meta"] is None
+
+
+def test_list_company_inspect_contacts_includes_tags(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.168: --full lean contacts inherit ContactSummary tags[] (empty ok)."""
+    company = make_test_company(database_connection, name="Acme", domain="acme.com")
+    tagged = create_contact(
+        database_connection, email="ada@acme.com", company_id=company.id
+    )
+    bare = create_contact(
+        database_connection, email="grace@acme.com", company_id=company.id
+    )
+    assert tagged is not None
+    assert bare is not None
+    make_test_tag_assignment(
+        database_connection, contact_id=tagged.id, name="sales-seat"
+    )
+    make_test_tag_assignment(database_connection, contact_id=tagged.id, name="vip")
+
+    payloads = {
+        row["email"]: row
+        for row in list_company_inspect_contacts(database_connection, company.id)
+    }
+    assert payloads["ada@acme.com"]["tags"] == ["sales-seat", "vip"]
+    assert payloads["grace@acme.com"]["tags"] == []
 
 
 def test_list_company_inspect_contacts_empty(
@@ -7722,6 +7792,33 @@ def test_load_contact_view_carries_company_domain(
     assert orphan_view.company_domain is None
 
 
+def test_load_contact_view_projects_tags_same_shape_as_list(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.8/§V.116: contact view tags[] matches list projection (names, empty ok)."""
+    from mailpilot.database import load_contact_view
+
+    tagged = create_contact(database_connection, email="tagged@example.com")
+    bare = create_contact(database_connection, email="bare@example.com")
+    assert tagged is not None
+    assert bare is not None
+    make_test_tag_assignment(database_connection, contact_id=tagged.id, name="vip")
+    make_test_tag_assignment(
+        database_connection, contact_id=tagged.id, name="sales-seat"
+    )
+
+    view = load_contact_view(database_connection, tagged.id)
+    bare_view = load_contact_view(database_connection, bare.id)
+    listed = {c.id: c for c in list_contacts(database_connection)}
+
+    assert view is not None
+    assert bare_view is not None
+    assert view.tags == ["sales-seat", "vip"]
+    assert bare_view.tags == []
+    assert view.tags == listed[tagged.id].tags
+    assert bare_view.tags == listed[bare.id].tags
+
+
 def test_contact_view_field_set_superset_of_base_and_summary() -> None:
     """§V.8/§B.94: ContactView field set ⊇ agent-facing Contact + ContactSummary.
 
@@ -7742,7 +7839,7 @@ def test_contact_view_field_set_superset_of_base_and_summary() -> None:
 
     assert base <= view, f"ContactView missing base columns: {base - view}"
     assert summary <= view, f"ContactView missing summary denorm: {summary - view}"
-    assert {"title", "email_confidence", "company_domain"} <= view
+    assert {"title", "email_confidence", "company_domain", "tags"} <= view
     assert "verification_meta" not in view
 
 
