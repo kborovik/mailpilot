@@ -5771,6 +5771,23 @@ def _reject_enrollment_self_loop(
         )
 
 
+def _parse_future_scheduled_at(value: str | None) -> str | None:
+    """Parse ``--scheduled-at`` and reject past or unparseable values."""
+    if value is None:
+        return None
+    from datetime import UTC, datetime
+
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        output_error(f"invalid --scheduled-at value: {exc}", "validation_error")
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    if parsed <= datetime.now(UTC):
+        output_error("--scheduled-at must be in the future", "validation_error")
+    return parsed.isoformat()
+
+
 def _same_scheduled_instant(existing: Any, scheduled_iso: str) -> bool:
     """True when ``existing`` and the parsed ISO string are the same instant."""
     from datetime import UTC, datetime
@@ -6564,11 +6581,21 @@ def task_cancel(task_id: str) -> None:
 
 @task.command("retry")
 @click.argument("task_id")
-def task_retry(task_id: str) -> None:
+@click.option(
+    "--scheduled-at",
+    "scheduled_at",
+    default=None,
+    help=(
+        "ISO 8601 timestamp to requeue at. Omit to keep a still-future "
+        "stored time, or now when the stored time is past."
+    ),
+)
+def task_retry(task_id: str, scheduled_at: str | None) -> None:
     """Reset a failed or cancelled task for a fresh attempt.
 
     Refuses ``completed`` rows (tools already fired -- replay risks
     duplicate side-effects) and ``pending`` rows (already queued).
+    Omit ``--scheduled-at`` to keep a still-future stored time.
     """
     from mailpilot.database import (
         get_task,
@@ -6576,12 +6603,13 @@ def task_retry(task_id: str) -> None:
         manual_retry_task,
     )
 
+    scheduled_iso = _parse_future_scheduled_at(scheduled_at)
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         existing = get_task(connection, task_id)
         if existing is None:
             output_error(f"task not found: {task_id}", "not_found")
-        reset = manual_retry_task(connection, task_id)
+        reset = manual_retry_task(connection, task_id, scheduled_at=scheduled_iso)
         if reset is None:
             output_error(
                 f"task not retryable in status {existing.status!r}: {task_id}",

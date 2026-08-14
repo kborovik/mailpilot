@@ -7,10 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `task retry --scheduled-at` parks a failed or cancelled task on a
+  future instant. Omit the flag to keep a still-future stored time, or
+  requeue at now when the stored time is past.
+
 ### Changed
 
 - Fallback acknowledgement on a terminal inbound failure is first-person
   singular (`I`). The previous we / our-team wording is gone.
+
+### Fixed
+
+- Out-of-office inbound no longer counts as a reply for the touch
+  pre-flight cancel. Retrying a cancelled T2 after OOO no longer
+  re-cancels immediately.
 
 ## [v0.25.1] - 2026-08-13
 

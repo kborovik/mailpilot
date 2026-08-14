@@ -4918,6 +4918,37 @@ def get_emails_by_gmail_thread_id(
     return [Email.model_validate(row) for row in rows]
 
 
+def list_inbound_emails_from_contact_after(
+    connection: psycopg.Connection[dict[str, Any]],
+    contact_id: str,
+    after: datetime,
+) -> list[Email]:
+    """Return inbound emails from the contact after ``after`` (§V.83).
+
+    The touch pre-flight classifies each row (OOO vs real reply) so an
+    out-of-office auto-reply does not cancel a queued follow-up.
+
+    Args:
+        connection: Open database connection.
+        contact_id: Contact FK (set on inbound rows via sender resolution).
+        after: The prior touch's send moment -- only later inbound counts.
+
+    Returns:
+        Matching inbound emails, oldest first.
+    """
+    rows = connection.execute(
+        """\
+        SELECT * FROM email
+        WHERE contact_id = %(contact_id)s
+          AND direction = 'inbound'
+          AND COALESCE(received_at, sent_at) > %(after)s
+        ORDER BY COALESCE(received_at, sent_at) ASC
+        """,
+        {"contact_id": contact_id, "after": after},
+    ).fetchall()
+    return [Email.model_validate(row) for row in rows]
+
+
 def has_inbound_email_from_contact_after(
     connection: psycopg.Connection[dict[str, Any]],
     contact_id: str,
@@ -4940,17 +4971,7 @@ def has_inbound_email_from_contact_after(
     Returns:
         True when at least one such inbound email exists.
     """
-    row = connection.execute(
-        """\
-        SELECT 1 FROM email
-        WHERE contact_id = %(contact_id)s
-          AND direction = 'inbound'
-          AND COALESCE(received_at, sent_at) > %(after)s
-        LIMIT 1
-        """,
-        {"contact_id": contact_id, "after": after},
-    ).fetchone()
-    return row is not None
+    return bool(list_inbound_emails_from_contact_after(connection, contact_id, after))
 
 
 def get_latest_email_in_thread(
@@ -5647,6 +5668,8 @@ def reschedule_task_for_lock_contention(
 def manual_retry_task(
     connection: psycopg.Connection[dict[str, Any]],
     task_id: str,
+    *,
+    scheduled_at: str | None = None,
 ) -> Task | None:
     """Reset a terminal task row for a fresh retry, operator-initiated.
 
@@ -5654,14 +5677,17 @@ def manual_retry_task(
     Refuses ``completed`` rows (tools already fired - retry would
     duplicate side-effects) and ``pending`` rows (already queued, no-op).
 
-    Resets ``status='pending'``, ``attempt_count=0``, ``scheduled_at=now()``,
-    and clears ``completed_at``. The row's ``UPDATE`` of ``status`` and
-    ``scheduled_at`` fires ``pg_notify('task_pending')`` via
-    ``task_pending_trigger`` so the run loop wakes immediately.
+    Resets ``status='pending'``, ``attempt_count=0``, and clears
+    ``completed_at``. ``scheduled_at``: explicit override when given;
+    otherwise keep the stored instant when it is still in the future,
+    else now. The row's ``UPDATE`` of ``status`` and ``scheduled_at``
+    fires ``pg_notify('task_pending')`` via ``task_pending_trigger``
+    so the run loop wakes.
 
     Args:
         connection: Open database connection.
         task_id: Task ID.
+        scheduled_at: Optional ISO timestamp override.
 
     Returns:
         Reset task, or ``None`` if the row does not exist or is not in
@@ -5672,12 +5698,17 @@ def manual_retry_task(
         UPDATE task
         SET status = 'pending',
             attempt_count = 0,
-            scheduled_at = CURRENT_TIMESTAMP,
+            scheduled_at = CASE
+                WHEN %(scheduled_at)s::text IS NOT NULL
+                    THEN (%(scheduled_at)s::text)::timestamptz
+                WHEN scheduled_at > CURRENT_TIMESTAMP THEN scheduled_at
+                ELSE CURRENT_TIMESTAMP
+            END,
             completed_at = NULL
         WHERE id = %(id)s AND status IN ('failed', 'cancelled')
         RETURNING *
         """,
-        {"id": task_id},
+        {"id": task_id, "scheduled_at": scheduled_at},
     ).fetchone()
     connection.commit()
     if row is None:

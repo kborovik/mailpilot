@@ -33,8 +33,8 @@ from mailpilot.database import (
     get_enrollment,
     get_latest_enrollment_outcome,
     get_workflow,
-    has_inbound_email_from_contact_after,
     list_emails,
+    list_inbound_emails_from_contact_after,
     reschedule_task_for_lock_contention,
     reschedule_task_for_retry,
 )
@@ -312,9 +312,12 @@ def _touch_cancel_reason(
     if get_latest_enrollment_outcome(connection, task.enrollment_id) is not None:
         return "enrollment already concluded"
     prior_touch_at = _prior_touch_sent_at(connection, task)
-    if prior_touch_at is not None and has_inbound_email_from_contact_after(
+    if prior_touch_at is None:
+        return None
+    inbounds = list_inbound_emails_from_contact_after(
         connection, task.contact_id, prior_touch_at
-    ):
+    )
+    if any(not is_ooo_auto_reply(email) for email in inbounds):
         return "contact replied after prior touch"
     return None
 

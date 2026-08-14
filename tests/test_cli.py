@@ -12351,7 +12351,7 @@ def test_task_retry_resets_failed_row(
         result = runner.invoke(main, ["task", "retry", failed.id])
 
     assert result.exit_code == 0, result.output
-    mock_retry.assert_called_once_with(mock_connection, failed.id)
+    mock_retry.assert_called_once_with(mock_connection, failed.id, scheduled_at=None)
     data = json.loads(result.output)
     assert data["task"]["status"] == "pending"
     assert data["task"]["attempt_count"] == 0
@@ -12416,6 +12416,74 @@ def test_task_retry_rejects_task_id_option(runner: CliRunner) -> None:
 
     assert result.exit_code == 2
     assert "No such option" in result.output
+
+
+def test_task_retry_passes_scheduled_at(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.170: --scheduled-at is forwarded as a future ISO instant."""
+    failed = _make_task(status="failed")
+    reset = _make_task(status="pending", attempt_count=0)
+    when = "2099-08-17T13:01:49-04:00"
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_task", return_value=failed),
+        patch("mailpilot.database.manual_retry_task", return_value=reset) as mock_retry,
+    ):
+        result = runner.invoke(
+            main, ["task", "retry", failed.id, "--scheduled-at", when]
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_retry.assert_called_once()
+    _args, kwargs = mock_retry.call_args
+    assert kwargs["scheduled_at"] is not None
+    parsed = datetime.fromisoformat(kwargs["scheduled_at"])
+    assert parsed == datetime.fromisoformat(when)
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 1
+
+
+def test_task_retry_past_scheduled_at_validation_error(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.170 / §V.129: past --scheduled-at is validation_error."""
+    failed = _make_task(status="failed")
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_task", return_value=failed),
+        patch("mailpilot.database.manual_retry_task") as mock_retry,
+    ):
+        result = runner.invoke(
+            main,
+            ["task", "retry", failed.id, "--scheduled-at", "2020-01-01T00:00:00Z"],
+        )
+
+    assert result.exit_code == 1
+    mock_retry.assert_not_called()
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert data["ok"] is False
+    assert "record_count" not in data
+
+
+def test_task_retry_invalid_scheduled_at_validation_error(
+    runner: CliRunner,
+) -> None:
+    """§V.170: unparseable --scheduled-at is validation_error."""
+    failed = _make_task(status="failed")
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main, ["task", "retry", failed.id, "--scheduled-at", "not-a-date"]
+        )
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert data["ok"] is False
 
 
 # -- run command ---------------------------------------------------------------

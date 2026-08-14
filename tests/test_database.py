@@ -90,6 +90,7 @@ from mailpilot.database import (
     list_contacts,
     list_emails,
     list_enrollments_detailed,
+    list_inbound_emails_from_contact_after,
     list_meeting_attendees,
     list_meetings,
     list_notes,
@@ -5864,6 +5865,39 @@ def test_has_inbound_email_from_contact_after_false_when_none_later(
     )
 
 
+def test_list_inbound_emails_from_contact_after_returns_later_rows(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.83: list later inbound rows so the run-loop can drop OOO."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection)
+    prior_touch_at = datetime(2024, 1, 1, tzinfo=UTC)
+    later = create_email(
+        database_connection,
+        account_id=account.id,
+        contact_id=contact.id,
+        direction="inbound",
+        subject="Automatic reply: out of office",
+        gmail_message_id="msg_ooo_list",
+        received_at=datetime(2024, 1, 2, tzinfo=UTC),
+    )
+    assert later is not None
+    create_email(
+        database_connection,
+        account_id=account.id,
+        contact_id=contact.id,
+        direction="inbound",
+        subject="old",
+        gmail_message_id="msg_old_list",
+        received_at=datetime(2023, 12, 31, tzinfo=UTC),
+    )
+
+    rows = list_inbound_emails_from_contact_after(
+        database_connection, contact.id, prior_touch_at
+    )
+    assert [row.id for row in rows] == [later.id]
+
+
 # -- get_workflow_stats (§V.132) -----------------------------------------------
 
 
@@ -6712,7 +6746,7 @@ def test_reschedule_task_for_retry_returns_none_for_unknown_id(
 def test_manual_retry_task_resets_failed_row(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.49: failed -> pending, attempt_count=0, scheduled_at=now()."""
+    """§V.49: failed -> pending, attempt_count=0."""
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
@@ -6802,6 +6836,133 @@ def test_manual_retry_task_refuses_pending_row(
         scheduled_at="2026-04-22T12:00:00Z",
     )
     assert manual_retry_task(database_connection, task.id) is None
+
+
+def test_manual_retry_task_keeps_future_scheduled_at(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.170: omit override + stored still future -> keep stored."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    task = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="Touch 2 of 3",
+        scheduled_at="2099-12-31T13:01:49+00:00",
+        context={"touch": 2},
+    )
+    cancel_task(database_connection, task.id)
+
+    reset = manual_retry_task(database_connection, task.id)
+
+    assert reset is not None
+    assert reset.status == "pending"
+    assert reset.scheduled_at == datetime(2099, 12, 31, 13, 1, 49, tzinfo=UTC)
+
+
+def test_manual_retry_task_override_scheduled_at(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.170: scheduled_at override parks the row on that instant."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    task = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="Touch 2 of 3",
+        scheduled_at="2099-12-31T00:00:00Z",
+        context={"touch": 2},
+    )
+    cancel_task(database_connection, task.id)
+
+    reset = manual_retry_task(
+        database_connection,
+        task.id,
+        scheduled_at="2099-08-17T17:01:49+00:00",
+    )
+
+    assert reset is not None
+    assert reset.scheduled_at == datetime(2099, 8, 17, 17, 1, 49, tzinfo=UTC)
+
+
+def test_manual_retry_task_past_stored_resets_to_now(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.170: omit override + stored past/now -> now."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    task = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="follow up",
+        scheduled_at="2020-01-01T00:00:00Z",
+    )
+    complete_task(
+        database_connection,
+        task.id,
+        status="failed",
+        result={"reason": "boom"},
+    )
+
+    before = datetime.now(UTC)
+    reset = manual_retry_task(database_connection, task.id)
+    after = datetime.now(UTC)
+
+    assert reset is not None
+    assert reset.status == "pending"
+    assert before <= reset.scheduled_at <= after
+
+
+def test_manual_retry_cancelled_t2_projects_next_touch(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.152 / §V.170: retry of cancelled future T2 shows next_touch=2."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        direction="outbound",
+        subject="Touch 1",
+        status="sent",
+        sent_at=datetime(2026, 8, 13, 17, 1, tzinfo=UTC),
+    )
+    task = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="Touch 2 of 3",
+        scheduled_at="2099-08-17T17:01:49+00:00",
+        context={"touch": 2},
+    )
+    cancel_task(database_connection, task.id)
+
+    reset = manual_retry_task(database_connection, task.id)
+    assert reset is not None
+
+    rows = list_enrollments_detailed(
+        database_connection, workflow_id=workflow.id, full=True
+    )
+    assert len(rows) == 1
+    assert rows[0].next_touch == 2
+    assert rows[0].next_scheduled_at == datetime(2099, 8, 17, 17, 1, 49, tzinfo=UTC)
 
 
 # -- List vs view contract -----------------------------------------------------

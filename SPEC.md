@@ -273,7 +273,7 @@ T278|x|impl §V.166 + §I — show queue --detail cols {workflow_name,company_do
 T279|x|impl §V.166(∆)+§I — show queue table+JSON next_at ISO in --tz (offset); JSON no longer stored-UTC; tests + SKILL|V166,V4,I.cli
 T280|x|impl §V.166 + §I — show queue --tz default host local IANA (unresolvable → UTC); explicit --tz overrides; tests + SKILL|V166,V4,I.cli
 T281|x|impl §V.131(∆) — `_FALLBACK_ACKNOWLEDGEMENT` first-person singular (`I`) not we/our team; stay fixed content-free ASCII never model-generated; tests pin exact body (#226)|V131,B139
-T282|.|impl §V.170(+) + §V.83(∆) + §V.169(∆) + §I — task retry keep-future scheduled_at + --scheduled-at; OOO inbound ! V83 replied-after; enrollment --full next_touch=2; tests + SKILL one-call (#227)|V170,V49,V83,V169,V152,V129,V4,I.cli
+T282|x|impl §V.170(+) + §V.83(∆) + §V.169(∆) + §I — task retry keep-future scheduled_at + --scheduled-at; OOO inbound ! V83 replied-after; enrollment --full next_touch=2; tests + SKILL one-call (#227)|V170,V49,V83,V169,V152,V129,V4,I.cli
 
 ## §B BUGS
 

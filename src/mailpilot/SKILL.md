@@ -872,8 +872,15 @@ mailpilot task stats --workflow-id <NAME_OR_ID>
 mailpilot task stats --workflow-id <NAME_OR_ID> --trigger enrollment_schedule
 mailpilot task view <TID>
 mailpilot task cancel <TID>
-mailpilot task retry <TID>     # only on failed or cancelled rows
+mailpilot task retry <TID>
+mailpilot task retry <TID> --scheduled-at 2026-08-17T13:01:49-04:00
 ```
+
+`task retry` is one call for a failed or cancelled row. Omit
+`--scheduled-at` to keep a still-future stored time (resume T2 on the
+original date after an out-of-office cancel). Pass `--scheduled-at` to
+park it on a later instant. A past override is rejected. Then confirm
+with `enrollment list --full --has-pending-task --touch 2`.
 
 ### Run the sync loop
 

@@ -22,6 +22,7 @@ from mailpilot.database import (
     get_latest_enrollment_outcome,
     get_task,
     list_enrollments_detailed,
+    manual_retry_task,
     update_workflow,
 )
 from mailpilot.models import Email
@@ -463,6 +464,49 @@ def test_execute_task_ooo_fail_path_no_ack_no_burned_touch(
     assert len(pending) == 1
     assert pending[0]["context"]["reason"] == "ooo_pause"
     assert pending[0]["context"]["touch"] == 2
+
+
+def test_retried_t2_not_recancelled_by_ooo_inbound(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.83 / §V.169 / §V.170: retry of OOO-cancelled T2 does not re-cancel."""
+    account, contact, _workflow, _enrollment, t2 = _seed_t1(
+        database_connection, suffix="retryooo"
+    )
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Automatic reply: out of the office until 2026-08-17",
+        body_text="I am out of the office until 2026-08-17.",
+        gmail_thread_id="t-ooo-retryooo",
+        contact_id=contact.id,
+        sender=contact.email,
+        received_at=_NOW + timedelta(hours=1),
+    )
+    assert inbound is not None
+    route_email(database_connection, inbound, contact.email, make_test_settings())
+
+    cancelled = get_task(database_connection, t2.id)
+    assert cancelled is not None
+    assert cancelled.status == "cancelled"
+
+    reset = manual_retry_task(database_connection, t2.id)
+    assert reset is not None
+    assert reset.status == "pending"
+    assert reset.scheduled_at == t2.scheduled_at
+
+    with patch(
+        "mailpilot.run.invoke_workflow_agent",
+        return_value={"tool_calls": 0, "reasoning": "sent touch 2"},
+    ) as mock_invoke:
+        execute_task(database_connection, make_test_settings(), reset)
+
+    mock_invoke.assert_called_once()
+    done = get_task(database_connection, t2.id)
+    assert done is not None
+    assert done.status == "completed"
+    assert done.result.get("reason") != "contact replied after prior touch"
 
 
 def test_schedule_ooo_resume_is_idempotent(
