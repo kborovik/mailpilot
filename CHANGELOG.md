@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [v0.27.0] - 2026-08-14
+
 ### Added
 
 - `contact view`, `contact list`, and `contact search` project `tags[]`
