@@ -10,7 +10,7 @@ description: >
   auto-resolve GitHub issues, drain the issue backlog, run the SDD
   issue loop, or runs /resolve-gh-issue.
 argument-hint: "[N | --all] [--no-wait]"
-allowed-tools: ask_user_question, read_file, run_terminal_command, spawn_subagent, get_command_or_subagent_output, monitor, todo_write
+allowed-tools: ask_user_question, read_file, run_terminal_command, spawn_subagent, monitor, todo_write
 ---
 
 # resolve-gh-issue
