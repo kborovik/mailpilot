@@ -13820,7 +13820,7 @@ def test_show_queue_default_is_table(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_queue_report", return_value=report),
     ):
-        result = runner.invoke(main, ["show", "queue"])
+        result = runner.invoke(main, ["show", "queue", "--tz", "UTC"])
     assert result.exit_code == 0
     assert not result.output.lstrip().startswith("{")
     assert "workflow_name" in result.output
@@ -13841,7 +13841,9 @@ def test_show_queue_json_envelope_record_count(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_queue_report", return_value=report),
     ):
-        result = runner.invoke(main, ["show", "queue", "--format", "json"])
+        result = runner.invoke(
+            main, ["show", "queue", "--format", "json", "--tz", "UTC"]
+        )
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data["ok"] is True
@@ -13947,7 +13949,7 @@ def test_show_queue_detail_json_hides_no_ids(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_queue_report", return_value=report),
     ):
-        table = runner.invoke(main, ["show", "queue", "--detail"])
+        table = runner.invoke(main, ["show", "queue", "--detail", "--tz", "UTC"])
         js = runner.invoke(
             main, ["show", "queue", "--detail", "--format", "json", "--tz", "UTC"]
         )
@@ -14031,6 +14033,7 @@ def test_skill_documents_show_queue() -> None:
     assert "next_at" in body
     assert "JSON keeps the stored ISO" not in body
     assert "table and JSON" in body
+    assert "host local" in body.lower()
 
 
 def test_show_queue_help_uses_workflow_name(runner: CliRunner) -> None:
@@ -14039,3 +14042,80 @@ def test_show_queue_help_uses_workflow_name(runner: CliRunner) -> None:
     assert result.exit_code == 0
     assert "--workflow-name" in result.output
     assert "--workflow-id" not in result.output
+    assert "host local" in result.output.lower()
+
+
+def test_show_queue_omitted_tz_uses_host_local(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.166: omit --tz uses host local IANA; envelope tz is resolved name."""
+    from mailpilot.models import QueueReport, QueueWorkflowRow
+
+    def _report(_connection: Any, **kwargs: Any) -> QueueReport:
+        return QueueReport(
+            grain="workflow",
+            tz=kwargs["tz"],
+            rows=[
+                QueueWorkflowRow(
+                    workflow_name="alpha-outreach",
+                    status="active",
+                    t1=1,
+                    t2=0,
+                    t3=0,
+                    t4p=0,
+                    next_at=_NOW,
+                )
+            ],
+        )
+
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_queue_report", side_effect=_report),
+        patch("mailpilot.queue.resolve_host_tz", return_value="America/Toronto"),
+    ):
+        result = runner.invoke(main, ["show", "queue", "--format", "json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 1
+    assert data["queue"]["tz"] == "America/Toronto"
+    assert data["queue"]["rows"][0]["next_at"] == "2023-12-31T19:00:00-05:00"
+
+
+def test_show_queue_explicit_tz_overrides_host(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.166: explicit --tz wins over host local."""
+    from mailpilot.models import QueueReport, QueueWorkflowRow
+
+    def _report(_connection: Any, **kwargs: Any) -> QueueReport:
+        return QueueReport(
+            grain="workflow",
+            tz=kwargs["tz"],
+            rows=[
+                QueueWorkflowRow(
+                    workflow_name="alpha-outreach",
+                    status="active",
+                    t1=1,
+                    t2=0,
+                    t3=0,
+                    t4p=0,
+                    next_at=_NOW,
+                )
+            ],
+        )
+
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_queue_report", side_effect=_report),
+        patch("mailpilot.queue.resolve_host_tz", return_value="America/Toronto"),
+    ):
+        result = runner.invoke(
+            main, ["show", "queue", "--format", "json", "--tz", "UTC"]
+        )
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["queue"]["tz"] == "UTC"
+    assert data["queue"]["rows"][0]["next_at"] == "2024-01-01T00:00:00+00:00"

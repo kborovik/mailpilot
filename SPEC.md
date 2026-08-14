@@ -269,7 +269,7 @@ T276|x|impl §V.32 last-write-wins --scheduled-at on existing first-reach; chang
 T277|x|impl §V.162+§V.132+§V.166+§I — resolve-touch fallback on stats pending + queue t1/t2/t3/t4p + --detail T1; workflow-grain cols {workflow_name,status,t1,t2,t3,t4p,next_at}; next_at ISO; tests + SKILL (#228)|V162,V132,V166,V32,V4,I.cli
 T278|x|impl §V.166 + §I — show queue --detail cols {workflow_name,company_domain,contact,email,touch,attempts,next_at}; drop when/trigger/state; next_at ISO in --tz; tests + SKILL|V166,V162,V4,I.cli
 T279|x|impl §V.166(∆)+§I — show queue table+JSON next_at ISO in --tz (offset); JSON no longer stored-UTC; tests + SKILL|V166,V4,I.cli
-T280|.|impl §V.166 + §I — show queue --tz default host local IANA (unresolvable → UTC); explicit --tz overrides; tests + SKILL|V166,V4,I.cli
+T280|x|impl §V.166 + §I — show queue --tz default host local IANA (unresolvable → UTC); explicit --tz overrides; tests + SKILL|V166,V4,I.cli
 
 ## §B BUGS
 

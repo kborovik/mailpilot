@@ -139,14 +139,17 @@ mailpilot email list --account-email <ACCOUNT_REF> --limit 50
 Human hub for "what is due?". Default is an ASCII table (not JSON). One row
 per workflow (draft, active, paused) with pending-task counts by resolved
 touch (`t1`, `t2`, `t3`, `t4p` for touch 4+) and next send as a full ISO
-datetime in `--tz` (offset included) for table and JSON. `--detail` switches
-to pending-task grain in queue order (oldest first). Detail columns:
-`workflow_name`, `company_domain`, `contact`, `email`, `touch`, `attempts`,
-`next_at`. `touch` is `T<n>`; first-reach rows (`enrollment_schedule` with
-no `touch`) print `T1`. Table and JSON `next_at` is a full ISO datetime in
-`--tz` (offset required). `--workflow-name` accepts name or UUID and
-matches the `workflow_name` table/JSON column. Empty prints `(no rows)`
-and exits 0. Read-only; no LLM.
+datetime in `--tz` (offset included) for table and JSON. Omit `--tz` to
+use the host local IANA timezone (`TZ` env or OS zoneinfo); an
+unresolvable host zone falls back to UTC. Explicit `--tz` overrides.
+`--detail` switches to pending-task grain in queue order (oldest first).
+Detail columns: `workflow_name`, `company_domain`, `contact`, `email`,
+`touch`, `attempts`, `next_at`. `touch` is `T<n>`; first-reach rows
+(`enrollment_schedule` with no `touch`) print `T1`. Table and JSON
+`next_at` is a full ISO datetime in `--tz` (offset required).
+`--workflow-name` accepts name or UUID and matches the `workflow_name`
+table/JSON column. Empty prints `(no rows)` and exits 0. Read-only; no
+LLM.
 
 ```
 mailpilot show queue

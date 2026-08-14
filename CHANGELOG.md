@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `show queue --tz` defaults to the host local IANA timezone (`TZ` env or
+  OS zoneinfo). An unresolvable host zone falls back to UTC. Explicit
+  `--tz` still overrides.
 - `show queue` table and JSON `next_at` are a full ISO datetime in `--tz`
   (offset included). JSON no longer emits stored UTC.
 

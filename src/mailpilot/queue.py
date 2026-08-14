@@ -6,12 +6,17 @@ Formatting only -- SQL lives in ``database.get_queue_report``. Kept out of
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from mailpilot.cadence import resolve_touch_number
+
+_LOCALTIME_PATH = Path("/etc/localtime")
+_TIMEZONE_PATH = Path("/etc/timezone")
 
 _QUEUE_WORKFLOW_HEADERS = (
     "workflow_name",
@@ -31,6 +36,62 @@ _QUEUE_TASK_TABLE_HEADERS = (
     "attempts",
     "next_at",
 )
+
+
+def _iana_name_or_none(raw: str | None) -> str | None:
+    """Return a ZoneInfo-resolvable IANA name, or None."""
+    if raw is None:
+        return None
+    name = raw.strip().lstrip(":")
+    if not name:
+        return None
+    normalized = name.replace("\\", "/")
+    if "zoneinfo/" in normalized:
+        name = normalized.split("zoneinfo/", 1)[1]
+    try:
+        ZoneInfo(name)
+    except ZoneInfoNotFoundError, ValueError:
+        return None
+    return name
+
+
+def _zoneinfo_suffix(path: Path) -> str | None:
+    """Take the IANA suffix after a ``zoneinfo/`` path segment."""
+    parts = path.parts
+    if "zoneinfo" not in parts:
+        return None
+    suffix = "/".join(parts[parts.index("zoneinfo") + 1 :])
+    return suffix or None
+
+
+def _os_zoneinfo_name() -> str | None:
+    """Read host IANA from ``/etc/localtime`` or ``/etc/timezone``."""
+    try:
+        resolved = _LOCALTIME_PATH.resolve()
+    except OSError:
+        resolved = None
+    if resolved is not None:
+        name = _iana_name_or_none(_zoneinfo_suffix(resolved))
+        if name is not None:
+            return name
+    try:
+        text = _TIMEZONE_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    first = text.splitlines()[0] if text else None
+    return _iana_name_or_none(first)
+
+
+def resolve_host_tz() -> str:
+    """Host IANA name for ``show queue --tz`` default (§V.166).
+
+    Prefer ``TZ`` when set and non-empty; else OS zoneinfo. Unresolvable
+    host local returns ``UTC``.
+    """
+    env = os.environ.get("TZ")
+    if env is not None and env.strip():
+        return _iana_name_or_none(env) or "UTC"
+    return _os_zoneinfo_name() or "UTC"
 
 
 def format_queue_next_at(next_at: datetime | str | None, *, tz: ZoneInfo) -> str:

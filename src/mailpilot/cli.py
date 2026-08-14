@@ -1021,8 +1021,8 @@ def show() -> None:
 @click.option(
     "--tz",
     "tz_name",
-    default="UTC",
-    show_default=True,
+    default=None,
+    show_default="host local",
     help="IANA timezone for table and JSON next_at.",
 )
 @click.option(
@@ -1043,7 +1043,7 @@ def show() -> None:
 def show_queue(
     detail: bool,
     workflow_name: str | None,
-    tz_name: str,
+    tz_name: str | None,
     output_format: str,
     limit: int,
     overdue: bool,
@@ -1064,12 +1064,14 @@ def show_queue(
         project_queue_json_next_at,
         queue_table_cells,
         queue_table_headers,
+        resolve_host_tz,
     )
 
+    resolved_tz = resolve_host_tz() if tz_name is None else tz_name
     try:
-        zone = ZoneInfo(tz_name)
+        zone = ZoneInfo(resolved_tz)
     except ZoneInfoNotFoundError, ValueError:
-        output_error(f"unknown timezone: {tz_name}", "validation_error")
+        output_error(f"unknown timezone: {resolved_tz}", "validation_error")
 
     connection = initialize_database(_database_url())
     try:
@@ -1082,7 +1084,7 @@ def show_queue(
             connection,
             detail=detail,
             workflow_id=resolved_workflow_id,
-            tz=tz_name,
+            tz=resolved_tz,
             limit=limit if detail else 100,
             overdue=overdue if detail else False,
         )

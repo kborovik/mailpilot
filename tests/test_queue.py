@@ -1,7 +1,10 @@
 """Unit tests for show-queue formatting (§V.166)."""
 
 from datetime import UTC, datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
+
+import pytest
 
 from mailpilot.queue import (
     format_queue_next_at,
@@ -9,6 +12,7 @@ from mailpilot.queue import (
     project_queue_json_next_at,
     queue_table_cells,
     queue_table_headers,
+    resolve_host_tz,
 )
 
 
@@ -124,3 +128,50 @@ def test_format_queue_touch_first_reach_fallback() -> None:
     assert format_queue_touch({}, "enrollment_schedule") == "T1"
     assert format_queue_touch({"touch": "oops"}, "enrollment_schedule") == "T1"
     assert format_queue_touch({"touch": 2, "trigger": "enrollment_schedule"}) == "T2"
+
+
+def test_resolve_host_tz_uses_tz_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """§V.166: TZ env is the host local IANA when set and valid."""
+    monkeypatch.setenv("TZ", "America/Toronto")
+    assert resolve_host_tz() == "America/Toronto"
+
+
+def test_resolve_host_tz_invalid_tz_env_falls_back_utc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """§V.166: unresolvable TZ env → UTC (not a CLI validation_error)."""
+    monkeypatch.setenv("TZ", "Not/AZone")
+    assert resolve_host_tz() == "UTC"
+
+
+def test_resolve_host_tz_uses_os_zoneinfo_when_tz_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """§V.166: omit TZ → OS zoneinfo name."""
+    monkeypatch.delenv("TZ", raising=False)
+    monkeypatch.setattr("mailpilot.queue._os_zoneinfo_name", lambda: "Europe/Paris")
+    assert resolve_host_tz() == "Europe/Paris"
+
+
+def test_resolve_host_tz_os_unresolvable_falls_back_utc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """§V.166: unresolvable host local (no TZ, no OS zone) → UTC."""
+    monkeypatch.delenv("TZ", raising=False)
+    monkeypatch.setattr("mailpilot.queue._os_zoneinfo_name", lambda: None)
+    assert resolve_host_tz() == "UTC"
+
+
+def test_os_zoneinfo_name_from_localtime_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§V.166: /etc/localtime symlink suffix after zoneinfo/ is the IANA name."""
+    zone = tmp_path / "zoneinfo" / "America" / "Chicago"
+    zone.parent.mkdir(parents=True)
+    zone.write_bytes(b"")
+    localtime = tmp_path / "localtime"
+    localtime.symlink_to(zone)
+    monkeypatch.delenv("TZ", raising=False)
+    monkeypatch.setattr("mailpilot.queue._LOCALTIME_PATH", localtime)
+    monkeypatch.setattr("mailpilot.queue._TIMEZONE_PATH", tmp_path / "missing-timezone")
+    assert resolve_host_tz() == "America/Chicago"
