@@ -140,10 +140,13 @@ Human hub for "what is due?". Default is an ASCII table (not JSON). One row
 per workflow (draft, active, paused) with pending-task counts by resolved
 touch (`t1`, `t2`, `t3`, `t4p` for touch 4+) and next send as a full ISO
 datetime (table in `--tz`; JSON keeps the stored ISO). `--detail` switches
-to pending-task grain in queue order (oldest first); first-reach rows
-(`enrollment_schedule` with no `touch`) print `T1`. `--workflow-name`
-accepts name or UUID and matches the `workflow_name` table/JSON column.
-Empty prints `(no rows)` and exits 0. Read-only; no LLM.
+to pending-task grain in queue order (oldest first). Detail columns:
+`workflow_name`, `company_domain`, `contact`, `email`, `touch`, `attempts`,
+`next_at`. `touch` is `T<n>`; first-reach rows (`enrollment_schedule` with
+no `touch`) print `T1`. Table `next_at` is a full ISO datetime in `--tz`;
+JSON keeps the stored ISO. `--workflow-name` accepts name or UUID and
+matches the `workflow_name` table/JSON column. Empty prints `(no rows)`
+and exits 0. Read-only; no LLM.
 
 ```
 mailpilot show queue

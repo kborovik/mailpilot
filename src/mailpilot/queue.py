@@ -7,7 +7,7 @@ Formatting only -- SQL lives in ``database.get_queue_report``. Kept out of
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 from mailpilot.cadence import resolve_touch_number
@@ -22,35 +22,18 @@ _QUEUE_WORKFLOW_HEADERS = (
     "next_at",
 )
 _QUEUE_TASK_TABLE_HEADERS = (
-    "when",
+    "workflow_name",
+    "company_domain",
     "contact",
     "email",
-    "company",
-    "workflow_name",
     "touch",
-    "trigger",
-    "state",
     "attempts",
+    "next_at",
 )
 
 
-def format_queue_when(scheduled_at: datetime, *, now: datetime, tz: ZoneInfo) -> str:
-    """Render a relative ``when`` cell for the task-grain queue.
-
-    Shapes: ``overdue 2d``, ``today 14:00``, ``in 3d`` (hours/minutes when
-    the delta is under a day). Past wins over same-calendar-day.
-    """
-    local_sched = scheduled_at.astimezone(tz)
-    local_now = now.astimezone(tz)
-    if local_sched < local_now:
-        return f"overdue {_format_queue_delta(local_now - local_sched)}"
-    if local_sched.date() == local_now.date():
-        return f"today {local_sched.strftime('%H:%M')}"
-    return f"in {_format_queue_delta(local_sched - local_now)}"
-
-
 def format_queue_next_at(next_at: datetime | str | None, *, tz: ZoneInfo) -> str:
-    """Render workflow-grain ``next_at`` as full ISO datetime in ``tz``.
+    """Render ``next_at`` as full ISO datetime in ``tz``.
 
     Empty when unset. JSON keeps the stored ISO; table converts to ``tz``.
     """
@@ -77,17 +60,6 @@ def format_queue_touch(context: dict[str, object] | None, trigger: str = "") -> 
     if parsed is None:
         return ""
     return f"T{parsed}"
-
-
-def _format_queue_delta(delta: timedelta) -> str:
-    """Compact duration for relative when: Nd, Nh, or Nm."""
-    days = delta.days
-    if days >= 1:
-        return f"{days}d"
-    hours = delta.seconds // 3600
-    if hours >= 1:
-        return f"{hours}h"
-    return f"{delta.seconds // 60}m"
 
 
 def queue_table_headers(*, detail: bool) -> tuple[str, ...]:

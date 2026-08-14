@@ -3122,7 +3122,6 @@ def get_queue_report(
     tz: str = "UTC",
     limit: int = 100,
     overdue: bool = False,
-    now: datetime | None = None,
 ) -> QueueReport:
     """Build the ``show queue`` report (§V.166).
 
@@ -3135,15 +3134,12 @@ def get_queue_report(
     from zoneinfo import ZoneInfo
 
     ZoneInfo(tz)  # raise ZoneInfoNotFoundError for the CLI to map
-    clock = now if now is not None else datetime.now(UTC)
     if detail:
         rows = _queue_task_rows(
             connection,
             workflow_id=workflow_id,
-            tz=tz,
             limit=limit,
             overdue=overdue,
-            now=clock,
         )
         return QueueReport(grain="task", tz=tz, rows=rows)
     workflow_rows = _queue_workflow_rows(connection, workflow_id=workflow_id)
@@ -3207,17 +3203,12 @@ def _queue_task_rows(
     connection: psycopg.Connection[dict[str, Any]],
     *,
     workflow_id: str | None,
-    tz: str,
     limit: int,
     overdue: bool,
-    now: datetime,
 ) -> list[QueueTaskRow]:
     """Pending-task grain, queue order (scheduled_at ASC)."""
-    from zoneinfo import ZoneInfo
+    from mailpilot.queue import format_queue_touch
 
-    from mailpilot.queue import format_queue_touch, format_queue_when
-
-    zone = ZoneInfo(tz)
     conditions: list[SQL] = [SQL("t.status = 'pending'")]
     params: dict[str, object] = {"limit": limit}
     if workflow_id is not None:
@@ -3231,7 +3222,7 @@ def _queue_task_rows(
         SELECT
             t.id AS task_id,
             t.enrollment_id,
-            t.scheduled_at,
+            t.scheduled_at AS next_at,
             COALESCE(
                 NULLIF(
                     TRIM(BOTH FROM CONCAT_WS(' ', c.first_name, c.last_name)),
@@ -3240,11 +3231,10 @@ def _queue_task_rows(
                 c.email
             ) AS contact,
             c.email AS email,
-            COALESCE(co.domain, '') AS company,
+            COALESCE(co.domain, '') AS company_domain,
             w.name AS workflow_name,
             t.context,
             COALESCE(t.context->>'trigger', '') AS trigger,
-            t.status AS state,
             t.attempt_count AS attempts
         FROM task t
         JOIN workflow w ON w.id = t.workflow_id
@@ -3262,16 +3252,13 @@ def _queue_task_rows(
         context_dict = context if isinstance(context, dict) else None
         result.append(
             QueueTaskRow(
-                when=format_queue_when(row["scheduled_at"], now=now, tz=zone),
-                scheduled_at=row["scheduled_at"],
+                workflow_name=row["workflow_name"],
+                company_domain=row["company_domain"],
                 contact=row["contact"],
                 email=row["email"],
-                company=row["company"],
-                workflow_name=row["workflow_name"],
                 touch=format_queue_touch(context_dict, row["trigger"]),
-                trigger=row["trigger"],
-                state=row["state"],
                 attempts=row["attempts"],
+                next_at=row["next_at"],
                 task_id=row["task_id"],
                 enrollment_id=row["enrollment_id"],
             )

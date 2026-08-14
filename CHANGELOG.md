@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `show queue` workflow-grain columns are `workflow_name`, `status`,
   `t1`, `t2`, `t3`, `t4p`, `next_at`. Table `next_at` is a full ISO
   datetime in `--tz`; JSON keeps the stored ISO.
+- `show queue --detail` columns are `workflow_name`, `company_domain`,
+  `contact`, `email`, `touch`, `attempts`, `next_at`. Relative `when`,
+  `trigger`, and `state` are gone. Table `next_at` is a full ISO datetime
+  in `--tz`; JSON keeps the stored ISO.
 
 ## [v0.24.0] - 2026-08-13
 

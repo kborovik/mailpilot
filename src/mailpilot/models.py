@@ -699,20 +699,17 @@ class QueueWorkflowRow(BaseModel):
 class QueueTaskRow(BaseModel):
     """One pending-task row for ``show queue --detail`` (§V.166).
 
-    Table render hides ``task_id``, ``enrollment_id``, and ``scheduled_at``.
-    JSON keeps those plus relative ``when``.
+    Table+JSON public cols: workflow_name, company_domain, contact, email,
+    touch, attempts, next_at. Table hides ``task_id`` and ``enrollment_id``.
     """
 
-    when: str
-    scheduled_at: datetime
+    workflow_name: str
+    company_domain: str = ""
     contact: str
     email: str
-    company: str = ""
-    workflow_name: str
     touch: str = ""
-    trigger: str = ""
-    state: str
     attempts: int
+    next_at: datetime
     task_id: str
     enrollment_id: str
 

@@ -13873,7 +13873,7 @@ def test_show_queue_empty_prints_no_rows(
 def test_show_queue_detail_json_hides_no_ids(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    """§V.166: task-grain JSON includes task_id; table does not."""
+    """§V.166: --detail cols; JSON includes task_id; table does not."""
     from mailpilot.models import QueueReport, QueueTaskRow
 
     report = QueueReport(
@@ -13881,16 +13881,13 @@ def test_show_queue_detail_json_hides_no_ids(
         tz="UTC",
         rows=[
             QueueTaskRow(
-                when="in 3d",
-                scheduled_at=_NOW,
+                workflow_name="alpha-outreach",
+                company_domain="example.com",
                 contact="Ada Lovelace",
                 email="ada@example.com",
-                company="example.com",
-                workflow_name="alpha-outreach",
                 touch="T2",
-                trigger="task",
-                state="pending",
                 attempts=0,
+                next_at=_NOW,
                 task_id="01234567-0000-7000-0000-000000000099",
                 enrollment_id="01234567-0000-7000-0000-000000000088",
             )
@@ -13902,14 +13899,31 @@ def test_show_queue_detail_json_hides_no_ids(
         patch("mailpilot.database.get_queue_report", return_value=report),
     ):
         table = runner.invoke(main, ["show", "queue", "--detail"])
-        js = runner.invoke(main, ["show", "queue", "--detail", "--format", "json"])
+        js = runner.invoke(
+            main, ["show", "queue", "--detail", "--format", "json", "--tz", "UTC"]
+        )
     assert table.exit_code == 0
+    header = table.output.splitlines()[0]
+    assert "workflow_name" in header
+    assert "company_domain" in header
+    assert "next_at" in header
+    assert "when" not in header
+    assert "trigger" not in header
+    assert "state" not in header
     assert "01234567-0000-7000-0000-000000000099" not in table.output
     assert "Ada Lovelace" in table.output
     assert "T2" in table.output
+    assert "2024-01-01T00:00:00+00:00" in table.output
     data = json.loads(js.output)
     assert data["queue"]["grain"] == "task"
-    assert data["queue"]["rows"][0]["task_id"].endswith("099")
+    row = data["queue"]["rows"][0]
+    assert row["task_id"].endswith("099")
+    assert row["company_domain"] == "example.com"
+    assert row["next_at"].startswith("2024-01-01T")
+    assert "when" not in row
+    assert "trigger" not in row
+    assert "state" not in row
+    assert "company" not in row
     assert data["record_count"] == 1
 
 
@@ -13964,6 +13978,8 @@ def test_skill_documents_show_queue() -> None:
     assert "--workflow-name" in body
     assert "t1" in body
     assert "t4p" in body
+    assert "company_domain" in body
+    assert "next_at" in body
 
 
 def test_show_queue_help_uses_workflow_name(runner: CliRunner) -> None:

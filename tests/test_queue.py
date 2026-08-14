@@ -6,33 +6,9 @@ from zoneinfo import ZoneInfo
 from mailpilot.queue import (
     format_queue_next_at,
     format_queue_touch,
-    format_queue_when,
     queue_table_cells,
+    queue_table_headers,
 )
-
-
-def test_format_queue_when_overdue_days() -> None:
-    now = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
-    scheduled = datetime(2026, 8, 11, 12, 0, tzinfo=UTC)
-    assert format_queue_when(scheduled, now=now, tz=ZoneInfo("UTC")) == "overdue 2d"
-
-
-def test_format_queue_when_today() -> None:
-    now = datetime(2026, 8, 13, 10, 0, tzinfo=UTC)
-    scheduled = datetime(2026, 8, 13, 14, 0, tzinfo=UTC)
-    assert format_queue_when(scheduled, now=now, tz=ZoneInfo("UTC")) == "today 14:00"
-
-
-def test_format_queue_when_in_days() -> None:
-    now = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
-    scheduled = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
-    assert format_queue_when(scheduled, now=now, tz=ZoneInfo("UTC")) == "in 3d"
-
-
-def test_format_queue_when_past_same_day_is_overdue() -> None:
-    now = datetime(2026, 8, 13, 15, 0, tzinfo=UTC)
-    scheduled = datetime(2026, 8, 13, 10, 0, tzinfo=UTC)
-    assert format_queue_when(scheduled, now=now, tz=ZoneInfo("UTC")) == "overdue 5h"
 
 
 def test_format_queue_next_at_is_iso_in_tz() -> None:
@@ -73,6 +49,46 @@ def test_queue_table_cells_next_at_is_iso() -> None:
         "0",
         "0",
         "2026-08-13T14:30:00+00:00",
+    ]
+
+
+def test_queue_table_cells_detail_cols_and_next_at_iso() -> None:
+    """§V.166: --detail table cols + next_at ISO in --tz."""
+    row = {
+        "workflow_name": "alpha-outreach",
+        "company_domain": "acme.com",
+        "contact": "Ada Lovelace",
+        "email": "ada@acme.com",
+        "touch": "T2",
+        "attempts": 0,
+        "next_at": "2026-08-14T02:00:00+00:00",
+        "task_id": "01234567-0000-7000-0000-000000000099",
+        "when": "in 3d",
+        "trigger": "task",
+        "state": "pending",
+    }
+    headers = queue_table_headers(detail=True)
+    assert headers == (
+        "workflow_name",
+        "company_domain",
+        "contact",
+        "email",
+        "touch",
+        "attempts",
+        "next_at",
+    )
+    assert "when" not in headers
+    assert "trigger" not in headers
+    assert "state" not in headers
+    cells = queue_table_cells(row, detail=True, tz=ZoneInfo("America/Toronto"))
+    assert cells == [
+        "alpha-outreach",
+        "acme.com",
+        "Ada Lovelace",
+        "ada@acme.com",
+        "T2",
+        "0",
+        "2026-08-13T22:00:00-04:00",
     ]
 
 

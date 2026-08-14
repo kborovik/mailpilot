@@ -1023,7 +1023,7 @@ def show() -> None:
     "tz_name",
     default="UTC",
     show_default=True,
-    help="IANA timezone for table next_at and relative when.",
+    help="IANA timezone for table next_at.",
 )
 @click.option(
     "--format",
@@ -1051,8 +1051,9 @@ def show_queue(
     """Show the outbound queue as a human table (JSON opt-in).
 
     Default grain is one row per workflow (draft, active, paused) with
-    pending counts by touch (t1/t2/t3/t4p). --detail switches to pending
-    tasks in queue order. Empty prints (no rows).
+    pending counts by touch (t1/t2/t3/t4p). --detail lists pending tasks
+    (workflow_name, company_domain, contact, email, touch, attempts,
+    next_at). Empty prints (no rows).
     """
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 

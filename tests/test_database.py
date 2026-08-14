@@ -9241,20 +9241,21 @@ def test_get_queue_report_task_grain_pending_asc_touch(
     )
     database_connection.commit()
 
-    report = get_queue_report(
-        database_connection,
-        detail=True,
-        now=datetime(2026, 8, 13, 12, 0, tzinfo=UTC),
-    )
+    report = get_queue_report(database_connection, detail=True)
     assert report.grain == "task"
     rows = [row for row in report.rows if isinstance(row, QueueTaskRow)]
     assert [row.touch for row in rows] == ["T1", "T2"]
-    assert rows[0].when == "in 137d" or rows[0].when.startswith("in ")
+    assert rows[0].next_at == datetime(2099, 1, 1, tzinfo=UTC)
     assert rows[0].contact == "Lead Person"
     assert rows[0].email == "lead@acme.com"
-    assert rows[0].company == "acme.com"
+    assert rows[0].company_domain == "acme.com"
     assert rows[0].workflow_name == "queue-tasks"
+    assert rows[0].attempts == 0
     assert rows[0].task_id
+    assert not hasattr(rows[0], "when")
+    assert not hasattr(rows[0], "trigger")
+    assert not hasattr(rows[0], "state")
+    assert not hasattr(rows[0], "company")
     listed = list_tasks(database_connection, workflow_id=workflow.id)
     assert [t.description for t in listed if t.status == "pending"] == [
         "later T2",
@@ -9290,8 +9291,9 @@ def test_get_queue_report_detail_t1_for_empty_touch_schedule(
     row = report.rows[0]
     assert isinstance(row, QueueTaskRow)
     assert row.touch == "T1"
-    assert row.trigger == "enrollment_schedule"
     assert row.email == "jmayer@mayererp.com"
+    assert row.next_at == datetime(2099, 1, 1, 9, 0, tzinfo=UTC)
+    assert not hasattr(row, "trigger")
 
 
 def test_get_queue_report_overdue_and_limit(
@@ -9329,13 +9331,13 @@ def test_get_queue_report_overdue_and_limit(
     assert len(overdue.rows) == 1
     first_overdue = overdue.rows[0]
     assert isinstance(first_overdue, QueueTaskRow)
-    assert first_overdue.when.startswith("overdue")
+    assert first_overdue.next_at == datetime(2020, 1, 1, tzinfo=UTC)
     limited = get_queue_report(database_connection, detail=True, limit=1)
     assert len(limited.rows) == 1
     first_limited = limited.rows[0]
     assert isinstance(first_limited, QueueTaskRow)
-    assert first_limited.when.startswith("overdue")
+    assert first_limited.next_at == datetime(2020, 1, 1, tzinfo=UTC)
     all_pending = get_queue_report(database_connection, detail=True)
     pending_rows = [row for row in all_pending.rows if isinstance(row, QueueTaskRow)]
     assert len(pending_rows) == 2
-    assert pending_rows[0].scheduled_at < pending_rows[1].scheduled_at
+    assert pending_rows[0].next_at < pending_rows[1].next_at
