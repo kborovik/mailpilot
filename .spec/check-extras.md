@@ -1100,7 +1100,7 @@ Trigger: `company view` path changed.
 
 ## §V169 — OOO pause-resume
 
-active outbound + inbound OOO/temporary-absence auto-reply (detect: subject Automatic reply / Auto-Submitted / agent OOO class) → no reply incl. no §V.131 fallback ACK; ! conclude (distinct §V.161); ! bump last_touch/emails_sent; §V.123 cancel pending follow-ups; harness schedule resume @ parseable return date (context.touch numeric §V.162, reason=ooo_pause); unparseable → +touch_interval_days (or +3d if NULL cadence); enrollment stays active, disposition null; OOO inbound ! count as inbound-reply for §V.83 pre-flight
+active outbound + inbound OOO/temporary-absence auto-reply (detect: subject Automatic reply / Auto-Submitted / agent OOO class) → no reply incl. no §V.131 fallback ACK; ! conclude (distinct §V.161); ! bump last_touch/emails_sent; §V.123 cancel pending follow-ups; harness schedule resume @ parseable return date (context.touch numeric §V.162, reason=ooo_pause); explicit year in body wins; year-less week-range containing now → resume day-after range-end same year (! next-year on range-start ≤ now); year-less weekday-month-day leave-start/notice (effective/begins, not until/returning/back) + this-year date months past → unparseable ! next-year; unparseable → +touch_interval_days (or +3d if NULL cadence); enrollment stays active, disposition null; OOO inbound ! count as inbound-reply for §V.83 pre-flight
 
 Trigger: inbound OOO / auto-reply / cadence resume path changed.
 - `rg 'ooo_pause|_maybe_ooo_pause' src/mailpilot/` -> pause+resume path

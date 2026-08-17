@@ -215,7 +215,7 @@ V165: live-e2e-dev-only — campaign-test + reply-test ! read settings.logfire_e
 V166: show-queue — `mailpilot show queue` human report hub; default ASCII table; `--format json` opt-in; `--detail` task grain; next_at table+JSON ISO in `--tz` (default host local); every workflow status; pending tasks only; no LLM; no write — → .spec/check-extras.md §V166
 V167: company-create-oneshot — `company create` accepts §V.140 profile flags + repeatable `--tag` same invocation; one txn all-or-nothing; `--tag` additive never invent (§V.116); undefined tag → not_found; invalid profile → validation_error; second `--upsert` exit 0, update profile if flags, no tag dups — → .spec/check-extras.md §V167
 V168: company-view-full — `company view --full` embeds `contacts[]` + `tags[]` + `notes[]`; lean contacts include `tags[]`; omit `verification_meta` unless `--include-meta`; lean company view unchanged — → .spec/check-extras.md §V168
-V169: ooo-pause-resume — OOO inbound → no reply incl. no §V.131 ACK; ! conclude (distinct §V.161); ! bump last_touch/emails_sent; harness resume @ return date; OOO inbound ! §V.83 replied-after — → .spec/check-extras.md §V169
+V169: ooo-pause-resume — OOO inbound → no reply incl. no §V.131 ACK; ! conclude (distinct §V.161); ! bump last_touch/emails_sent; harness resume @ return date (year-less range containing now → same year; leave-start past ! next-year; explicit year wins); OOO inbound ! §V.83 replied-after — → .spec/check-extras.md §V169
 V170: task-retry-schedule — `task retry` failed|cancelled only (§V.49); omit `--scheduled-at` + stored scheduled_at still future → keep stored; `--scheduled-at ISO` → that instant; omit + stored past/now → now; `--scheduled-at` past → validation_error — → .spec/check-extras.md §V170
 V171: enrollment-add-scheduled-batch — `enrollment add --file|--tag` + `--scheduled-at` one envelope; `--limit` soft cap w/ `--company-atomic`; `--exclude-peer`; per-row §V.32 — → .spec/check-extras.md §V171
 
@@ -280,6 +280,7 @@ T283|x|impl §V.141(∆) + §I — tag remove repeatable --company-domain|--cont
 T284|x|impl I.nouns/I.verbs set-diff hook `.spec/scripts/check-extras.sh`; parse SPEC §I lists vs cli.py noun-group @command; emit MATCH/MISSING/EXTRA/DRIFT; tests|I.nouns,I.verbs,I.cli
 T285|x|impl §V.8 + §V.168 + §I — contact view|list|search project tags[] (empty ok); company view --full lean contacts include tags[]; help documents field; agent Contact-record allowlist unchanged; tests (#232)|V8,V168,V116,V111,V4,I.cli
 T286|x|impl §V.171(+) + §V.150(∆) + §I — enrollment add scheduled batch: --file JSON or --tag apply + --scheduled-at; --limit soft cap; --company-atomic same-day; --exclude-peer; one envelope; tests + SKILL one-call (#233)|V171,V150,V32,V33,V114,V4,I.cli
+T287|x|impl §V.169(∆) — OOO resume-year: week-range w/o year containing now → same-year day-after range-end; weekday-month-day leave-start months past → unparseable not next-year; explicit year wins; fixtures week-range + weekday-month-day (#236)|V169,B140
 
 ## §B BUGS
 
@@ -334,3 +335,4 @@ B136|2026-08-13|OOO inbound: fallback ACK burned last_touch/emails_sent, or V123
 B137|2026-08-13|enrollment add --scheduled-at re-run skips existing first-reach; ok:true changed=[]|V32
 B138|2026-08-13|queue/stats hide enrollment_schedule as T1 when context.touch absent|V162,V132,V166
 B139|2026-08-14|`_FALLBACK_ACKNOWLEDGEMENT` we/our team; live sender is one person; campaign bodies use I|V131
+B140|2026-08-17|OOO year-less month-day/range: start ≤ now → next year (week-range containing now + leave-start months past)|V169

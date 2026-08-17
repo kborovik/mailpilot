@@ -64,10 +64,30 @@ for _index, _name in enumerate(month_abbr):
 _MONTH_PATTERN = "|".join(
     re.escape(name) for name in sorted(_MONTH_LOOKUP, key=len, reverse=True)
 )
+_RANGE_SEP = r"[\-\u2013\u2014]"
 _MONTH_DAY = re.compile(
-    rf"\b({_MONTH_PATTERN})\s+(\d{{1,2}})(?:st|nd|rd|th)?(?:,?\s+(20\d{{2}}))?\b",
+    rf"\b({_MONTH_PATTERN})\s+(\d{{1,2}})(?:st|nd|rd|th)?"
+    rf"(?!\s*{_RANGE_SEP}\s*\d)"
+    rf"(?:,?\s+(20\d{{2}}))?\b",
     re.IGNORECASE,
 )
+_MONTH_DAY_RANGE = re.compile(
+    rf"\b({_MONTH_PATTERN})\s+(\d{{1,2}})(?:st|nd|rd|th)?"
+    rf"\s*{_RANGE_SEP}\s*"
+    rf"(\d{{1,2}})(?:st|nd|rd|th)?"
+    rf"(?:,?\s+(20\d{{2}}))?\b",
+    re.IGNORECASE,
+)
+_LEAVE_START_CUE = re.compile(r"\b(?:effective|begins)\b", re.IGNORECASE)
+_RETURN_CUE = re.compile(
+    r"\b(?:until|returning|return(?:ing)?(?:\s+on)?|back(?:\s+on)?)\b",
+    re.IGNORECASE,
+)
+_WEEKDAY_PREFIX = re.compile(
+    rf"(?:{'|'.join(_WEEKDAY_NAMES)})\s*,?\s*$",
+    re.IGNORECASE,
+)
+_MONTHS_PAST_MIN = 2
 
 
 def auto_submitted_label(header_value: str | None) -> str | None:
@@ -123,13 +143,17 @@ def is_ooo_auto_reply(email: Email) -> bool:
 def parse_ooo_return_at(text: str, *, now: datetime) -> datetime | None:
     """Parse a return instant from OOO prose, or None when unparseable.
 
-    Prefers an ISO date, then a month-day, then a weekday after
-    until/returning/back. Naive dates take ``now``'s time of day in UTC.
-    A parsed instant at or before ``now`` is treated as unparseable.
+    Prefers an ISO date, then a year-less week-range containing ``now``
+    (resume = day after range end, same year), then a month-day (explicit
+    year wins; year-less leave-start months past is unparseable), then a
+    weekday after until/returning/back. Naive dates take ``now``'s time of
+    day in UTC. A parsed instant at or before ``now`` is unparseable.
     """
     if now.tzinfo is None:
         now = now.replace(tzinfo=UTC)
     parsed = _parse_iso_date(text, now=now)
+    if parsed is None:
+        parsed = _parse_week_range(text, now=now)
     if parsed is None:
         parsed = _parse_month_day(text, now=now)
     if parsed is None:
@@ -160,6 +184,27 @@ def _parse_iso_date(text: str, *, now: datetime) -> datetime | None:
     return _at_time_of_day(day, now)
 
 
+def _parse_week_range(text: str, *, now: datetime) -> datetime | None:
+    """Year-less range containing now → day after end, same year (§V.169)."""
+    match = _MONTH_DAY_RANGE.search(text)
+    if match is None:
+        return None
+    month = _MONTH_LOOKUP[match.group(1).lower()]
+    start_n = int(match.group(2))
+    end_n = int(match.group(3))
+    year = int(match.group(4)) if match.group(4) else now.year
+    if end_n < start_n:
+        return None
+    try:
+        start = datetime(year, month, start_n)
+        end = datetime(year, month, end_n)
+    except ValueError:
+        return None
+    if not (start.date() <= now.date() <= end.date()):
+        return None
+    return _at_time_of_day(end + timedelta(days=1), now)
+
+
 def _parse_month_day(text: str, *, now: datetime) -> datetime | None:
     match = _MONTH_DAY.search(text)
     if match is None:
@@ -173,11 +218,36 @@ def _parse_month_day(text: str, *, now: datetime) -> datetime | None:
         return None
     target = _at_time_of_day(day, now)
     if target <= now and match.group(3) is None:
+        if _is_past_leave_start(text, match, target, now):
+            return None
         try:
             target = target.replace(year=now.year + 1)
         except ValueError:
             return None
     return target
+
+
+def _is_past_leave_start(
+    text: str,
+    match: re.Match[str],
+    target: datetime,
+    now: datetime,
+) -> bool:
+    """True for weekday-month-day leave-start months past (§V.169 / §B.140)."""
+    if not _is_months_past(target, now):
+        return False
+    if _RETURN_CUE.search(text) is not None:
+        return False
+    if _LEAVE_START_CUE.search(text) is None:
+        return False
+    return _WEEKDAY_PREFIX.search(text[: match.start()]) is not None
+
+
+def _is_months_past(target: datetime, now: datetime) -> bool:
+    if target.date() >= now.date():
+        return False
+    months = (now.year - target.year) * 12 + (now.month - target.month)
+    return months >= _MONTHS_PAST_MIN
 
 
 def _parse_weekday(text: str, *, now: datetime) -> datetime | None:
