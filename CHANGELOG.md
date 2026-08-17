@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `task list` projects `result.reason` on failed rows so campaign-review
   can classify fail cause without `task view`.
 
+### Fixed
+
+- Out-of-office year-less return dates stay in the current year. A
+  week-range containing today resumes the day after the range end. A
+  weekday-month-day leave-start months in the past is unparseable
+  (cadence fallback), not next year. Explicit year still wins.
+
 ## [v0.27.0] - 2026-08-14
 
 ### Added
