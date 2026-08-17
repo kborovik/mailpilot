@@ -5018,10 +5018,12 @@ def list_emails(
         )
         params["recipient_pattern"] = f"%{recipient}%"
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
+    # list_emails projects snippet (first 500 of body_text)
     query = SQL(
         "SELECT id, account_id, contact_id, workflow_id, direction, "
         "subject, sender, recipients, status, is_routed, route_method, "
-        "gmail_thread_id, sent_at, received_at "
+        "gmail_thread_id, sent_at, received_at, "
+        "LEFT(body_text, 500) AS snippet "
         "FROM email {} "
         "ORDER BY COALESCE(sent_at, received_at) DESC LIMIT %(limit)s"
     ).format(where)
@@ -5052,10 +5054,12 @@ def search_emails(
     if account_id is not None:
         account_filter = SQL("AND account_id = %(account_id)s")
         params["account_id"] = account_id
+    # search_emails projects snippet (first 500 of body_text)
     query_sql = SQL(
         "SELECT id, account_id, contact_id, workflow_id, direction, "
         "subject, sender, recipients, status, is_routed, route_method, "
-        "gmail_thread_id, sent_at, received_at "
+        "gmail_thread_id, sent_at, received_at, "
+        "LEFT(body_text, 500) AS snippet "
         "FROM email "
         "WHERE (LOWER(subject) LIKE LOWER(%(pattern)s) "
         "   OR LOWER(body_text) LIKE LOWER(%(pattern)s) "
@@ -5708,7 +5712,8 @@ def list_tasks(
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
         "SELECT id, enrollment_id, workflow_id, contact_id, email_id, "
-        "description, scheduled_at, status, attempt_count "
+        "description, scheduled_at, status, attempt_count, "
+        "jsonb_build_object('reason', result->>'reason') AS result "
         "FROM task {} ORDER BY scheduled_at DESC LIMIT %(limit)s"
     ).format(where)
     rows = connection.execute(query, params).fetchall()

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `email list` and `email search` project `snippet` (first 500 characters
+  of `body_text`) so inbound out-of-office / left-company / referral
+  classification does not need `email view`.
+- `task list` projects `result.reason` on failed rows so campaign-review
+  can classify fail cause without `task view`.
+
 ## [v0.27.0] - 2026-08-14
 
 ### Added

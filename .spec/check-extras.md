@@ -77,13 +77,15 @@ Trigger: `src/mailpilot/database.py` changed.
 
 ## §V7 — EmailSummary projection
 
-`EmailSummary` MUST include `gmail_thread_id`, `is_routed`, `route_method`, and `recipients` (To/Cc/Bcc address map mirroring the Email base field). Operator audits routing from CLI without Logfire. A single bulk `email list` exposes each message's recipients without a per-row `email view`. `list_emails` SELECT projects `recipients` so the map populates (not default-empty). §V.122 keys campaign-test delivery on the recipients projection.
+`EmailSummary` MUST include `gmail_thread_id`, `is_routed`, `route_method`, `recipients` (To/Cc/Bcc address map mirroring the Email base field), and `snippet` (first 500 chars of `body_text`; empty when body empty). Operator audits routing from CLI without Logfire. A single bulk `email list` exposes each message's recipients + snippet without a per-row `email view`. `snippet` suffices to classify OOO / left-company / referral. Full `body_text` stays `email view`. No `--include-body` — snippet always on every EmailSummary row (`list_emails` + `search_emails`). `list_emails` + `search_emails` SELECT project `recipients` + `snippet` so fields populate (not default-empty). §V.122 keys campaign-test delivery on the recipients projection.
 
 Trigger: `src/mailpilot/database.py` or `src/mailpilot/models.py` changed.
 - `rg 'gmail_thread_id\b' src/mailpilot/models.py | grep EmailSummary` -> gmail_thread_id in EmailSummary
 - `rg 'route_method\b' src/mailpilot/models.py | grep EmailSummary` -> route_method in EmailSummary
 - `rg 'recipients\b' src/mailpilot/models.py | grep EmailSummary` -> recipients in EmailSummary
+- `rg 'snippet\b' src/mailpilot/models.py | grep EmailSummary` -> snippet in EmailSummary
 - `rg 'recipients\b' src/mailpilot/database.py | grep list_emails` -> recipients projected in list_emails SELECT
+- `rg 'snippet\b' src/mailpilot/database.py | grep -E 'list_emails|search_emails'` -> snippet projected in list+search SELECT
 
 ## §V8 — view model projections
 
@@ -1125,6 +1127,14 @@ Trigger: enrollment add flags / first-touch path changed.
 - `rg 'company-atomic|--exclude-peer' src/mailpilot/cli.py` -> batch packing flags present
 - `rg 'enrollment_batch' src/mailpilot/` -> apply envelope present
 - `rg 'enrollment add' src/mailpilot/SKILL.md` -> one-call batch recipe present
+
+## §V172 — TaskSummary projection
+
+`TaskSummary` ! project `result.reason` (string or null). `task list` failed rows ! carry stored reason so campaign-review classifies fail cause without `task view`. null when unset. Full `result` other keys + `context` stay `task view`. `list_tasks` SELECT projects `result->>'reason'`. Agent one-call recipe drops N `task view` loop.
+
+Trigger: `src/mailpilot/database.py` or `src/mailpilot/models.py` changed.
+- `rg 'result.reason|result_reason' src/mailpilot/models.py` -> TaskSummary carries reason
+- `rg "result->>'reason'|result_reason" src/mailpilot/database.py` -> list_tasks SELECT projects reason
 
 ## §V16 — race-safe create
 
