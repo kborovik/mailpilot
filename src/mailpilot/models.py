@@ -628,6 +628,7 @@ class EmailSummary(BaseModel):
     gmail_thread_id: str | None
     sent_at: datetime | None
     received_at: datetime | None
+    snippet: str = ""  # EmailSummary: first 500 chars of body_text (§V.7)
 
 
 TaskStatus = Literal["pending", "completed", "failed", "cancelled"]
@@ -651,6 +652,12 @@ class Task(BaseModel):
     created_at: datetime
 
 
+class TaskSummaryResult(BaseModel):
+    """Slim result.reason projection for ``task list`` (§V.172)."""
+
+    reason: str | None = None
+
+
 class TaskSummary(BaseModel):
     """List-view projection of `Task`."""
 
@@ -663,6 +670,7 @@ class TaskSummary(BaseModel):
     scheduled_at: datetime
     status: TaskStatus
     attempt_count: int = 0
+    result: TaskSummaryResult = Field(default_factory=TaskSummaryResult)
 
 
 class TaskStats(BaseModel):

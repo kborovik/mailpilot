@@ -2833,6 +2833,116 @@ def test_list_emails_summary_includes_recipients(
     }
 
 
+def test_list_emails_summary_includes_snippet(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.7: EmailSummary.snippet is the first 500 chars of body_text."""
+    account = make_test_account(database_connection)
+    short = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="msg_short_snippet",
+        subject="short body",
+        body_text="I am out of the office until Monday.",
+    )
+    empty = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="msg_empty_snippet",
+        subject="empty body",
+        body_text="",
+    )
+    long_body = ("x" * 500) + "OUT-OF-RANGE tail"
+    long_email = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="msg_long_snippet",
+        subject="long body",
+        body_text=long_body,
+    )
+    assert short is not None
+    assert empty is not None
+    assert long_email is not None
+
+    results = {row.id: row for row in list_emails(database_connection)}
+    assert results[short.id].snippet == "I am out of the office until Monday."
+    assert results[empty.id].snippet == ""
+    assert results[long_email.id].snippet == "x" * 500
+    assert "OUT-OF-RANGE" not in results[long_email.id].snippet
+    assert not hasattr(results[short.id], "body_text")
+
+
+def test_list_emails_snippet_classifies_ooo_left_company_referral(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.7 / #237: inbound list snippets classify OOO / left-company / referral."""
+    account = make_test_account(database_connection)
+    ooo = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="msg_ooo_classify",
+        subject="Automatic reply: Out of Office",
+        body_text=(
+            "I am out of the office until 2026-08-25. I will respond when I return."
+        ),
+    )
+    left = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="msg_left_classify",
+        subject="Automatic reply: no longer with the company",
+        body_text=(
+            "I have left the company. Please contact "
+            "jane@example.com for all future correspondence."
+        ),
+    )
+    referral = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="msg_referral_classify",
+        subject="Re: intro",
+        body_text=(
+            "Thanks for reaching out. Please contact my colleague "
+            "referral: Sam Lee at sam@example.com instead."
+        ),
+    )
+    assert ooo is not None
+    assert left is not None
+    assert referral is not None
+
+    results = {row.id: row for row in list_emails(database_connection)}
+    assert "out of the office" in results[ooo.id].snippet.lower()
+    assert "left the company" in results[left.id].snippet.lower()
+    assert "sam@example.com" in results[referral.id].snippet.lower()
+
+
+def test_search_emails_summary_includes_snippet(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.7: search_emails projects the same snippet as list_emails."""
+    account = make_test_account(database_connection)
+    created = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="msg_search_snippet",
+        subject="pricing question",
+        body_text="Please send the pricing sheet next week.",
+    )
+    assert created is not None
+
+    results = search_emails(database_connection, "pricing")
+    matched = {row.id: row for row in results}
+    assert matched[created.id].snippet == "Please send the pricing sheet next week."
+    assert not hasattr(matched[created.id], "body_text")
+
+
 def test_list_emails_by_status(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
@@ -5251,6 +5361,55 @@ def test_list_tasks_with_filters(
     assert pending[0].contact_id == contact_a.id
 
 
+def test_list_tasks_failed_includes_result_reason(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.172 / #237: failed task list rows project result.reason."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    failed = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="follow up",
+        scheduled_at="2026-08-17T12:00:00Z",
+    )
+    pending = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="later follow up",
+        scheduled_at="2026-08-18T12:00:00Z",
+    )
+    complete_task(
+        database_connection,
+        failed.id,
+        status="failed",
+        result={
+            "reason": "agent completed without calling any tools",
+            "trace": "view-only extra",
+        },
+    )
+
+    rows = {row.id: row for row in list_tasks(database_connection)}
+    assert rows[failed.id].status == "failed"
+    assert rows[failed.id].result.reason == "agent completed without calling any tools"
+    assert rows[pending.id].result.reason is None
+    dumped = rows[failed.id].model_dump(mode="json")
+    assert dumped["result"] == {"reason": "agent completed without calling any tools"}
+    assert "trace" not in dumped["result"]
+    assert not hasattr(rows[failed.id], "context")
+
+    full = get_task(database_connection, failed.id)
+    assert full is not None
+    assert full.result["reason"] == "agent completed without calling any tools"
+    assert full.result["trace"] == "view-only extra"
+
+
 def test_list_tasks_filters_by_trigger(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
@@ -7187,6 +7346,7 @@ def test_email_list_summary_get_full(
     assert not hasattr(emails[0], "labels")
     # recipients rides the summary now (§V.7) -- the campaign-test delivery key.
     assert emails[0].recipients == {"to": ["x@y.com"]}
+    assert emails[0].snippet == "body"
     full = get_email(database_connection, emails[0].id)
     assert full is not None
     assert full.body_text == "body"
@@ -7257,6 +7417,7 @@ def test_email_search_summary_get_full(
     assert not hasattr(emails[0], "labels")
     # recipients rides the summary now (§V.7) -- both projections carry it.
     assert emails[0].recipients == {"to": ["client@example.com"]}
+    assert emails[0].snippet == "Let's schedule a call"
     full = get_email(database_connection, emails[0].id)
     assert full is not None
     assert full.body_text == "Let's schedule a call"
@@ -7283,7 +7444,12 @@ def test_task_list_summary(
     tasks = list_tasks(database_connection, workflow_id=workflow.id)
     assert isinstance(tasks[0], TaskSummary)
     assert not hasattr(tasks[0], "context")
-    assert not hasattr(tasks[0], "result")
+    # result.reason is the slim list projection; full result stays on view.
+    assert tasks[0].result.reason is None
+    full = get_task(database_connection, tasks[0].id)
+    assert full is not None
+    assert full.context == {}
+    assert full.result == {}
 
 
 def test_activity_list_summary(

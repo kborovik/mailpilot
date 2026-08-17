@@ -245,7 +245,25 @@ mailpilot email list --workflow-id <NAME_OR_ID> --direction outbound
 
 `activity list` requires at least one of `--contact-email`, `--company-domain`,
 or `--workflow-id`. `email list` requires at least one scope or filter (no
-unbounded full-table dump).
+unbounded full-table dump). Each `email list` / `email search` row carries
+`snippet` (first 500 characters of the body; empty ok). Full `body_text`
+stays on `email view`.
+
+### Campaign review (one call)
+
+Classify inbound auto-replies and failed tasks from list rows. Do not
+loop `email view` or `task view`.
+
+```
+mailpilot email list --workflow-id <NAME_OR_ID> --direction inbound \
+  --since <ISO> --until <ISO> --limit 200
+mailpilot task list --workflow-id <NAME_OR_ID> --status failed
+```
+
+Each inbound `email list` row carries `snippet` sufficient to classify
+out-of-office, left-company, and referral. Each failed `task list` row
+carries `result.reason` (string or null). Full `result` and `context`
+stay on `task view`.
 
 ### Provision and migrate the schema
 
@@ -944,6 +962,7 @@ agent tool.
 mailpilot task list --status pending
 mailpilot task list --workflow-id <NAME_OR_ID>
 mailpilot task list --workflow-id <NAME_OR_ID> --overdue
+mailpilot task list --workflow-id <NAME_OR_ID> --status failed
 mailpilot task stats --workflow-id <NAME_OR_ID>
 mailpilot task stats --workflow-id <NAME_OR_ID> --trigger enrollment_schedule
 mailpilot task view <TID>
@@ -951,6 +970,10 @@ mailpilot task cancel <TID>
 mailpilot task retry <TID>
 mailpilot task retry <TID> --scheduled-at 2026-08-17T13:01:49-04:00
 ```
+
+Failed `task list` rows carry `result.reason` (string or null). Do not
+loop `task view` to classify fail cause; full `result` and `context`
+stay on view.
 
 `task retry` is one call for a failed or cancelled row. Omit
 `--scheduled-at` to keep a still-future stored time (resume T2 on the

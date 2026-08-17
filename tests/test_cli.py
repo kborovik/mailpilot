@@ -5421,6 +5421,47 @@ def test_email_list_body_text_with_newlines_is_valid_json(
     assert data["emails"][0]["body_text"] == body
 
 
+def test_email_list_cli_projects_snippet(
+    runner: CliRunner, database_connection: Any
+) -> None:
+    """§V.7 / #237: live email list inbound rows include snippet."""
+    from conftest import make_test_account
+    from mailpilot.database import create_email
+
+    account = make_test_account(database_connection, email="snippet-list@lab5.test")
+    created = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        gmail_message_id="cli_ooo_snippet",
+        subject="Automatic reply: Out of Office",
+        body_text="I am out of the office until Monday. Please email jane@x.com.",
+    )
+    assert created is not None
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "email",
+                "list",
+                "--account-email",
+                account.email,
+                "--direction",
+                "inbound",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 1
+    row = data["emails"][0]
+    assert "out of the office" in row["snippet"].lower()
+    assert "jane@x.com" in row["snippet"]
+    assert "body_text" not in row
+
+
 def test_email_view_body_text_with_newlines_is_valid_json(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
@@ -13055,6 +13096,75 @@ def test_task_list(runner: CliRunner, mock_connection: MagicMock) -> None:
     )
     data = json.loads(result.output)
     assert len(data["tasks"]) == 1
+
+
+def test_task_list_cli_failed_projects_result_reason(
+    runner: CliRunner, database_connection: Any
+) -> None:
+    """§V.172 / #237: live task list failed rows include result.reason."""
+    from conftest import (
+        make_test_account,
+        make_test_contact,
+        make_test_enrollment,
+        make_test_workflow,
+    )
+    from mailpilot.database import complete_task, create_task
+
+    account = make_test_account(database_connection, email="reason-list@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="reason-list-wf"
+    )
+    contact = make_test_contact(database_connection, email="eddie@reason-list.test")
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    failed = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="follow up",
+        scheduled_at="2026-08-17T12:00:00Z",
+    )
+    complete_task(
+        database_connection,
+        failed.id,
+        status="failed",
+        result={"reason": "agent completed without calling any tools"},
+    )
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "task",
+                "list",
+                "--workflow-id",
+                workflow.name,
+                "--status",
+                "failed",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 1
+    row = data["tasks"][0]
+    assert row["result"]["reason"] == "agent completed without calling any tools"
+    assert "context" not in row
+
+
+def test_skill_documents_campaign_review_one_call() -> None:
+    """#237: packaged SKILL.md one-call drops N email view + task view."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "Campaign review" in body
+    assert "snippet" in body
+    assert "result.reason" in body
+    assert "loop `email view`" in body
+    assert "task view" in body
+    assert "§V." not in body
+    assert "§T." not in body
 
 
 def test_task_list_with_filters(runner: CliRunner, mock_connection: MagicMock) -> None:
