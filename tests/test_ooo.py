@@ -21,6 +21,7 @@ from mailpilot.database import (
     create_task,
     get_latest_enrollment_outcome,
     get_task,
+    get_workflow,
     list_enrollments_detailed,
     manual_retry_task,
     update_workflow,
@@ -39,7 +40,22 @@ from mailpilot.routing import route_email
 from mailpilot.run import execute_task
 
 _NOW = datetime(2026, 8, 13, 16, 0, tzinfo=UTC)
+# Issue 236: today sits inside the week-range (August 17-22).
+_INSIDE_WEEK = datetime(2026, 8, 17, 11, 13, tzinfo=UTC)
 _FAR_FUTURE = "2099-12-31T00:00:00Z"
+
+# §V.169 / §B.140 fixtures — year-less week-range + weekday-month-day.
+_FIXTURE_WEEK_RANGE = (
+    "Automatic reply: The team is out of the office this week "
+    "(August 17-22) for Ascent."
+)
+_FIXTURE_LEAVE_START = (
+    "Automatic reply: Effective Monday, February 16th he begins a "
+    "transition away from CLA."
+)
+_FIXTURE_EXPLICIT_YEAR = (
+    "Automatic reply: I am out of the office until Tuesday August 18, 2026."
+)
 
 
 def _email(**overrides: Any) -> Email:
@@ -224,6 +240,27 @@ def test_parse_unparseable_returns_none() -> None:
     assert parse_ooo_return_at("I am away for a bit.", now=_NOW) is None
 
 
+def test_parse_week_range_containing_now_same_year() -> None:
+    """§V.169 / §B.140: year-less week-range containing now → day after end."""
+    parsed = parse_ooo_return_at(_FIXTURE_WEEK_RANGE, now=_INSIDE_WEEK)
+    assert parsed is not None
+    assert parsed.date().isoformat() == "2026-08-23"
+    assert parsed.year == 2026
+
+
+def test_parse_leave_start_weekday_month_day_unparseable() -> None:
+    """§V.169 / §B.140: leave-start months past is not a next-year return."""
+    assert parse_ooo_return_at(_FIXTURE_LEAVE_START, now=_INSIDE_WEEK) is None
+
+
+def test_parse_explicit_year_wins() -> None:
+    """§V.169: explicit year in the body is the return date (Lynn 2026)."""
+    parsed = parse_ooo_return_at(_FIXTURE_EXPLICIT_YEAR, now=_INSIDE_WEEK)
+    assert parsed is not None
+    assert parsed.date().isoformat() == "2026-08-18"
+    assert parsed.year == 2026
+
+
 def test_resolve_unparseable_uses_interval(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
@@ -256,7 +293,42 @@ def test_resolve_unparseable_null_cadence_plus_three_days(
     assert resolved.date().isoformat() == "2026-08-17"
 
 
-# -- schedule + route + execute ----------------------------------------------
+def test_resolve_week_range_resume_same_year(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.169 / §B.140: week-range resume stays 2026 (Sunday rolls to Monday)."""
+    account = make_test_account(database_connection, email="ooo-weekrng@lab5.example")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="ooo-weekrng"
+    )
+    _activate_outbound(
+        database_connection, workflow.id, touches=3, touch_interval_days=4
+    )
+    email = _email(subject=_FIXTURE_WEEK_RANGE, body_text=_FIXTURE_WEEK_RANGE)
+    resolved = resolve_ooo_resume_at(email, workflow, now=_INSIDE_WEEK)
+    assert resolved.year == 2026
+    # Day-after range-end is Sunday 2026-08-23 → Monday 2026-08-24.
+    assert resolved.date().isoformat() == "2026-08-24"
+
+
+def test_resolve_leave_start_uses_interval_not_next_year(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.169 / §B.140: leave-start months past falls back to cadence, not 2027."""
+    account = make_test_account(database_connection, email="ooo-leavest@lab5.example")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="ooo-leavest"
+    )
+    _activate_outbound(
+        database_connection, workflow.id, touches=3, touch_interval_days=4
+    )
+    email = _email(subject=_FIXTURE_LEAVE_START, body_text=_FIXTURE_LEAVE_START)
+    loaded = get_workflow(database_connection, workflow.id)
+    assert loaded is not None
+    resolved = resolve_ooo_resume_at(email, loaded, now=_INSIDE_WEEK)
+    assert resolved.year == 2026
+    # Monday 2026-08-17 + 4 days = Friday 2026-08-21.
+    assert resolved.date().isoformat() == "2026-08-21"
 
 
 def test_route_ooo_cancels_t2_and_schedules_resume(
