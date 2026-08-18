@@ -217,7 +217,7 @@ V165: live-e2e-dev-only — campaign-test + reply-test ! read settings.logfire_e
 V166: show-queue — `mailpilot show queue` human report hub; default ASCII table; `--format json` opt-in; `--detail` task grain; next_at table+JSON ISO in `--tz` (default host local); every workflow status; pending tasks only; no LLM; no write — → .spec/check-extras.md §V166
 V167: company-create-oneshot — `company create` accepts §V.140 profile flags + repeatable `--tag` same invocation; one txn all-or-nothing; `--tag` additive never invent (§V.116); undefined tag → not_found; invalid profile → validation_error; second `--upsert` exit 0, update profile if flags, no tag dups — → .spec/check-extras.md §V167
 V168: company-view-full — `company view --full` embeds `contacts[]` + `tags[]` + `notes[]`; lean contacts include `tags[]`; omit `verification_meta` unless `--include-meta`; lean company view unchanged — → .spec/check-extras.md §V168
-V169: ooo-pause-resume — OOO inbound → no reply incl. no §V.131 ACK; ! conclude (distinct §V.161); ! bump last_touch/emails_sent; harness resume @ return date (year-less range containing now → same year; leave-start past ! next-year; explicit year wins); OOO inbound ! §V.83 replied-after — → .spec/check-extras.md §V169
+V169: ooo-pause-resume — OOO inbound → no reply incl. no §V.131 ACK; ! conclude (distinct §V.161); ! bump last_touch/emails_sent; harness resume @ return date (year-less range containing now → same year; year-less same-day month+day → same year not next; leave-start past ! next-year; explicit year wins); OOO inbound ! §V.83 replied-after — → .spec/check-extras.md §V169
 V170: task-retry-schedule — `task retry` failed|cancelled only (§V.49); omit `--scheduled-at` + stored scheduled_at still future → keep stored; `--scheduled-at ISO` → that instant; omit + stored past/now → now; `--scheduled-at` past → validation_error — → .spec/check-extras.md §V170
 V171: enrollment-add-scheduled-batch — `enrollment add --file|--tag` + `--scheduled-at` one envelope; `--limit` soft cap w/ `--company-atomic`; `--exclude-peer`; per-row §V.32 — → .spec/check-extras.md §V171
 V172: TaskSummary projection includes result.reason — failed list rows carry stored reason; full result+context stay view-only — → .spec/check-extras.md §V172
@@ -289,6 +289,7 @@ T288|x|impl §V.7(∆) + §V.172(+) + §I — email list snippet (first 500 body
 T289|x|impl §V.173(+) + §I — task cancel filter-mode + --touch (repeatable); task list --touch; one envelope cancelled_count+ids+leftover_pending_by_touch; SKILL one-call; tests (#240)|V173,V162,V115,V4,V111,I.cli
 T290|x|impl §V.47(∆) — run empty active-provider key abort pre-drain; zero due tasks claimed or written failed; error names MAILPILOT_*_API_KEY env not prescribe config set only; fixture missing-key + due T1 (#241)|V47,B141,I.config
 T291|x|incident failed T1 requeue via `task retry` (§V.170); same enrollment; no second enrollment (#241)|V170,V49,V32,V47
+T292|.|impl §V.169(∆) — OOO resume-year: same-day month+day w/o year → same-year ≥ next day not next-year; explicit-year #236 still wins; fixture same-day `on <Month> <D>` no year (#242)|V169,B142
 
 ## §B BUGS
 
@@ -345,3 +346,4 @@ B138|2026-08-13|queue/stats hide enrollment_schedule as T1 when context.touch ab
 B139|2026-08-14|`_FALLBACK_ACKNOWLEDGEMENT` we/our team; live sender is one person; campaign bodies use I|V131
 B140|2026-08-17|OOO year-less month-day/range: start ≤ now → next year (week-range containing now + leave-start months past)|V169
 B141|2026-08-18|run `_build_model` empty `xai_api_key` ValueError inside execute_task → every due T1 marked failed|V47
+B142|2026-08-18|OOO year-less same-day `on <Month> <D>`: named day = today → next year|V169
