@@ -90,6 +90,7 @@ from mailpilot.database import (
     list_company_inspect_contacts,
     list_contacts,
     list_emails,
+    list_enrollments,
     list_enrollments_detailed,
     list_inbound_emails_from_contact_after,
     list_meeting_attendees,
@@ -7441,6 +7442,49 @@ def test_manual_retry_cancelled_t2_projects_next_touch(
     assert len(rows) == 1
     assert rows[0].next_touch == 2
     assert rows[0].next_scheduled_at == datetime(2099, 8, 17, 17, 1, 49, tzinfo=UTC)
+
+
+def test_manual_retry_failed_t1_keeps_single_enrollment(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.170 / §T.291: retry a B141-failed T1; no second enrollment."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    task = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="scheduled first reach-out",
+        scheduled_at="2020-01-01T00:00:00Z",
+        context={"trigger": "enrollment_schedule", "touch": 1},
+    )
+    complete_task(
+        database_connection,
+        task.id,
+        status="failed",
+        result={
+            "reason": (
+                "xai_api_key is required when llm_provider=xai; "
+                "set it via `mailpilot config set xai_api_key ...`"
+            ),
+            "attempt_count": 1,
+            "terminal": "non_transient",
+        },
+    )
+
+    reset = manual_retry_task(database_connection, task.id)
+
+    assert reset is not None
+    assert reset.status == "pending"
+    assert reset.enrollment_id == enrollment.id
+    assert reset.attempt_count == 0
+    assert create_enrollment(database_connection, workflow.id, contact.id) is None
+    rows = list_enrollments(database_connection, workflow.id)
+    assert len(rows) == 1
+    assert rows[0].id == enrollment.id
 
 
 # -- List vs view contract -----------------------------------------------------
