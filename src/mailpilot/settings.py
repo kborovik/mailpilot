@@ -180,6 +180,36 @@ def get_settings() -> Settings:
     return load_settings()
 
 
+def require_active_provider_key(settings: Settings) -> None:
+    """Raise if the selected LLM provider's API key is missing or empty.
+
+    §V.47 / §I.config: ``mailpilot run`` calls this before drain so a
+    missing key never claims or fails due tasks. ``_build_model`` calls
+    it so model construction stays fail-closed if preflight is skipped.
+    The error names the env var; keys also load from cwd ``.env`` and
+    process env per §V.85.
+
+    Args:
+        settings: Loaded application settings.
+
+    Raises:
+        ValueError: Active-provider key is missing or empty.
+    """
+    if settings.llm_provider == "anthropic":
+        if not settings.anthropic_api_key:
+            raise ValueError(
+                "MAILPILOT_ANTHROPIC_API_KEY is required when "
+                "llm_provider=anthropic; set the environment variable "
+                "or a cwd .env file"
+            )
+        return
+    if not settings.xai_api_key:
+        raise ValueError(
+            "MAILPILOT_XAI_API_KEY is required when llm_provider=xai; "
+            "set the environment variable or a cwd .env file"
+        )
+
+
 def set_setting(key: str, value: object, config_path: Path = CONFIG_PATH) -> Settings:
     """Update a single config key, persist, and emit telemetry.
 

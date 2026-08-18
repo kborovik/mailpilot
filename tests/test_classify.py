@@ -184,7 +184,7 @@ def test_missing_api_key_raises() -> None:
     """Without the active provider API key, classification must fail fast."""
     workflow = make_workflow("wf-1", "Sales", "Pricing")
     settings = make_test_settings(llm_provider="xai", xai_api_key="")
-    with pytest.raises(ValueError, match="xai_api_key"):
+    with pytest.raises(ValueError, match="MAILPILOT_XAI_API_KEY"):
         classify_email(
             subject="hi",
             body="hello",
@@ -200,7 +200,7 @@ def test_missing_anthropic_api_key_raises_when_selected() -> None:
     settings = make_test_settings(
         llm_provider="anthropic", anthropic_api_key="", xai_api_key="unused"
     )
-    with pytest.raises(ValueError, match="anthropic_api_key"):
+    with pytest.raises(ValueError, match="MAILPILOT_ANTHROPIC_API_KEY"):
         classify_email(
             subject="hi",
             body="hello",

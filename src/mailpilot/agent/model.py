@@ -1,8 +1,9 @@
 """Provider-aware LLM model construction for classifier and workflow agents.
 
 §V.47: ``llm_provider`` dispatches to Anthropic or xAI. Active-provider API key
-is required at build; inactive-provider keys may be empty. Workflow-role model
-settings (thinking/effort/max_tokens) never apply to the classifier.
+is required at build (and at ``mailpilot run`` start before drain); inactive-
+provider keys may be empty. Workflow-role model settings (thinking/effort/
+max_tokens) never apply to the classifier.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from pydantic_ai.models.xai import XaiModel, XaiModelSettings
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.xai import XaiProvider
 
-from mailpilot.settings import Settings
+from mailpilot.settings import Settings, require_active_provider_key
 
 ModelRole = Literal["classifier", "workflow"]
 
@@ -47,6 +48,7 @@ def _build_model(  # pyright: ignore[reportUnusedFunction]
     Raises:
         ValueError: If the active provider's API key is empty.
     """
+    require_active_provider_key(settings)
     if settings.llm_provider == "anthropic":
         return _build_anthropic_model(settings, role=role)
     return _build_xai_model(settings, role=role)
@@ -71,11 +73,7 @@ def _build_anthropic_model(settings: Settings, *, role: ModelRole) -> AnthropicM
     so default-active thinking cannot exhaust the provider-default budget
     before reply text (§B.115). The classifier never receives these knobs.
     """
-    if not settings.anthropic_api_key:
-        raise ValueError(
-            "anthropic_api_key is required when llm_provider=anthropic; "
-            "set it via `mailpilot config set anthropic_api_key ...`",
-        )
+    require_active_provider_key(settings)
     model_settings = AnthropicModelSettings(
         anthropic_cache_tool_definitions=True,
         anthropic_cache_instructions=True,
@@ -109,11 +107,7 @@ def _build_xai_model(settings: Settings, *, role: ModelRole) -> XaiModel:
     (effort has no empty/none; Grok 4.5 always reasons). Classifier role omits
     both.
     """
-    if not settings.xai_api_key:
-        raise ValueError(
-            "xai_api_key is required when llm_provider=xai; "
-            "set it via `mailpilot config set xai_api_key ...`",
-        )
+    require_active_provider_key(settings)
     provider_kwargs: dict[str, object] = {
         "api_key": settings.xai_api_key,
         "timeout": _PROVIDER_TIMEOUT_SECONDS,

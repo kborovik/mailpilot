@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- `mailpilot run` aborts before draining tasks when the active LLM
+  provider API key is missing. The error names `MAILPILOT_XAI_API_KEY`
+  or `MAILPILOT_ANTHROPIC_API_KEY` and does not prescribe
+  `mailpilot config set` as the only fix.
+
 ### Added
 
 - `task cancel` accepts the same filters as `task list` plus repeatable
