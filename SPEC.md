@@ -289,7 +289,7 @@ T288|x|impl §V.7(∆) + §V.172(+) + §I — email list snippet (first 500 body
 T289|x|impl §V.173(+) + §I — task cancel filter-mode + --touch (repeatable); task list --touch; one envelope cancelled_count+ids+leftover_pending_by_touch; SKILL one-call; tests (#240)|V173,V162,V115,V4,V111,I.cli
 T290|x|impl §V.47(∆) — run empty active-provider key abort pre-drain; zero due tasks claimed or written failed; error names MAILPILOT_*_API_KEY env not prescribe config set only; fixture missing-key + due T1 (#241)|V47,B141,I.config
 T291|x|incident failed T1 requeue via `task retry` (§V.170); same enrollment; no second enrollment (#241)|V170,V49,V32,V47
-T292|.|impl §V.169(∆) — OOO resume-year: same-day month+day w/o year → same-year ≥ next day not next-year; explicit-year #236 still wins; fixture same-day `on <Month> <D>` no year (#242)|V169,B142
+T292|x|impl §V.169(∆) — OOO resume-year: same-day month+day w/o year → same-year ≥ next day not next-year; explicit-year #236 still wins; fixture same-day `on <Month> <D>` no year (#242)|V169,B142
 
 ## §B BUGS
 

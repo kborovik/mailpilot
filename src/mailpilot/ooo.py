@@ -83,6 +83,7 @@ _RETURN_CUE = re.compile(
     r"\b(?:until|returning|return(?:ing)?(?:\s+on)?|back(?:\s+on)?)\b",
     re.IGNORECASE,
 )
+_ON_PREFIX = re.compile(r"\bon\s+$", re.IGNORECASE)
 _WEEKDAY_PREFIX = re.compile(
     rf"(?:{'|'.join(_WEEKDAY_NAMES)})\s*,?\s*$",
     re.IGNORECASE,
@@ -145,9 +146,11 @@ def parse_ooo_return_at(text: str, *, now: datetime) -> datetime | None:
 
     Prefers an ISO date, then a year-less week-range containing ``now``
     (resume = day after range end, same year), then a month-day (explicit
-    year wins; year-less leave-start months past is unparseable), then a
-    weekday after until/returning/back. Naive dates take ``now``'s time of
-    day in UTC. A parsed instant at or before ``now`` is unparseable.
+    year wins; year-less same-day ``on <Month> <D>`` resumes the next
+    calendar day same year; year-less leave-start months past is
+    unparseable), then a weekday after until/returning/back. Naive dates
+    take ``now``'s time of day in UTC. A parsed instant at or before
+    ``now`` is unparseable.
     """
     if now.tzinfo is None:
         now = now.replace(tzinfo=UTC)
@@ -220,11 +223,25 @@ def _parse_month_day(text: str, *, now: datetime) -> datetime | None:
     if target <= now and match.group(3) is None:
         if _is_past_leave_start(text, match, target, now):
             return None
+        if _is_same_day_on_absence(text, match, target, now):
+            return _at_time_of_day(day + timedelta(days=1), now)
         try:
             target = target.replace(year=now.year + 1)
         except ValueError:
             return None
     return target
+
+
+def _is_same_day_on_absence(
+    text: str,
+    match: re.Match[str],
+    target: datetime,
+    now: datetime,
+) -> bool:
+    """True for year-less ``on <Month> <D>`` named today (§V.169 / §B.142)."""
+    if target.date() != now.date():
+        return False
+    return _ON_PREFIX.search(text[: match.start()]) is not None
 
 
 def _is_past_leave_start(
