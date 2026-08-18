@@ -5102,6 +5102,72 @@ def workflow_report(
         connection.close()
 
 
+@workflow.command("review")
+@click.argument("workflow_ref")
+@click.option(
+    "--since",
+    default=None,
+    help="ISO datetime inclusive lower bound on the review window.",
+)
+@click.option(
+    "--until",
+    default=None,
+    help="ISO datetime inclusive upper bound on the review window.",
+)
+def workflow_review(
+    workflow_ref: str,
+    since: str | None,
+    until: str | None,
+) -> None:
+    """Dated campaign collect: funnel, tasks, window mail, enrollments."""
+    from datetime import UTC, datetime
+
+    from mailpilot.database import (
+        get_workflow,
+        get_workflow_review,
+        initialize_database,
+        list_active_workflows,
+    )
+
+    if since is None or until is None:
+        output_error(
+            "--since and --until are required ISO datetimes",
+            "validation_error",
+        )
+    try:
+        since_dt = datetime.fromisoformat(since)
+        until_dt = datetime.fromisoformat(until)
+    except ValueError as exc:
+        output_error(f"invalid --since/--until value: {exc}", "validation_error")
+    if since_dt.tzinfo is None:
+        since_dt = since_dt.replace(tzinfo=UTC)
+    if until_dt.tzinfo is None:
+        until_dt = until_dt.replace(tzinfo=UTC)
+
+    connection = initialize_database(_database_url())
+    try:
+        if workflow_ref.casefold() == "all":
+            workflow_ids = [w.id for w in list_active_workflows(connection)]
+        else:
+            workflow_id = _resolve_workflow_id(connection, workflow_ref)
+            found = get_workflow(connection, workflow_id)
+            if found is None:
+                output_error(f"workflow not found: {workflow_ref}", "not_found")
+            workflow_ids = [workflow_id]
+        review = get_workflow_review(
+            connection,
+            workflow_ids,
+            since=since_dt.isoformat(),
+            until=until_dt.isoformat(),
+        )
+        output(
+            {"workflow_review": review.model_dump(mode="json")},
+            record_count=len(review.reviews),
+        )
+    finally:
+        connection.close()
+
+
 @workflow.command("status")
 @click.argument("workflow_ref")
 def workflow_status_cmd(workflow_ref: str) -> None:

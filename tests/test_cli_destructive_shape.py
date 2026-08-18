@@ -27,6 +27,7 @@ ALLOWED_VERBS = {
     "view",
     "stats",
     "report",
+    "review",  # dated campaign collect (§V.174 / §I Read)
     "create",
     "update",
     "disable",

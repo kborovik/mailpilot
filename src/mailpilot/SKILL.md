@@ -20,12 +20,13 @@ command-scoped flag discovery.
 Nouns: `account`, `company`, `contact`, `workflow`, `enrollment`, `task`,
 `email`, `activity`, `tag`, `note`, `template`, `db`.
 
-Verbs: `list`, `search`, `view`, `stats`, `report`, `create`, `update`,
-`disable`, `enable`, `add`, `remove`, `set`, `merge`, `reply`, `send`,
-`start`, `stop`, `cancel`, `retry`, `run`, `sync`, `export`, `import`,
-`init`, `migrate`, `check`. Not every verb applies to every noun -- use
-`mailpilot <noun> --help` to enumerate. `config` exposes the `get` and `set`
-subverbs for reading and writing persistent configuration.
+Verbs: `list`, `search`, `view`, `stats`, `report`, `review`, `status`,
+`create`, `update`, `disable`, `enable`, `add`, `remove`, `set`, `merge`,
+`reply`, `send`, `start`, `stop`, `cancel`, `retry`, `run`, `sync`,
+`export`, `import`, `init`, `migrate`, `check`. Not every verb applies to
+every noun -- use `mailpilot <noun> --help` to enumerate. `config` exposes
+the `get` and `set` subverbs for reading and writing persistent
+configuration.
 
 ## JSON envelope
 
@@ -43,10 +44,14 @@ it defaults to an ASCII table; pass `--format json` for the `queue` envelope.
 - `task cancel` with filters (no TASK_ID):
   `{"task_cancel": {"cancelled_count": N, "ids": [...], "leftover_pending_by_touch": {"1": N}}, "record_count": N, "ok": true}`
   (`record_count` is `cancelled_count`; zero match is an ok no-op)
+- `workflow review`:
+  `{"workflow_review": {"since": "...", "until": "...", "reviews": [...]}, "record_count": N, "ok": true}`
+  (`record_count` is the number of workflow reviews; `all` is every active)
 
 Every `ok: true` envelope carries a top-level integer `record_count`: the
 array length for array payloads, `1` for single-object payloads,
-`cancelled_count` for filter-mode `task cancel`. Error envelopes omit it.
+`cancelled_count` for filter-mode `task cancel`, review count for
+`workflow review`. Error envelopes omit it.
 
 Plural keys mirror the noun (`accounts`, `companies`, `contacts`,
 `workflows`, `enrollments`, `tasks`, `emails`, `activities`, `tags`, `notes`,
@@ -254,19 +259,28 @@ stays on `email view`.
 
 ### Campaign review (one call)
 
-Classify inbound auto-replies and failed tasks from list rows. Do not
-loop `email view` or `task view`.
+One dated collect for a slug or every active workflow. Do not loop
+`workflow stats`, `workflow report`, `enrollment list`, `task list`,
+`activity list`, or `email list`. Do not follow with `email view` or
+`task view`.
 
 ```
-mailpilot email list --workflow-id <NAME_OR_ID> --direction inbound \
-  --since <ISO> --until <ISO> --limit 200
-mailpilot task list --workflow-id <NAME_OR_ID> --status failed
+mailpilot workflow review <NAME_OR_ID> --since <ISO> --until <ISO>
+mailpilot workflow review all --since <ISO> --until <ISO>
 ```
 
-Each inbound `email list` row carries `snippet` sufficient to classify
-out-of-office, left-company, and referral. Each failed `task list` row
-carries `result.reason` (string or null). Full `result` and `context`
-stay on `task view`.
+`--since` and `--until` are required ISO datetimes. Envelope key
+`workflow_review`. `record_count` is the number of reviews (1 for a
+slug; active-workflow count for `all`). Each review carries funnel,
+`task_counts` (`failed` / `overdue` / `pending`), window emails with
+`snippet`, window activities including inbound `email_received` with
+`snippet`, failed tasks with `contact_email` and `result.reason`, and
+every enrollment (not capped below the live enrolled count).
+
+Window email `snippet` is the first 500 characters of the body (empty
+ok) and is enough to classify out-of-office, left-company, and
+referral. Failed-task `result.reason` is a string or null. Full
+`body_text`, `result`, and `context` stay on `email view` / `task view`.
 
 ### Provision and migrate the schema
 
