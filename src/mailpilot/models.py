@@ -673,6 +673,20 @@ class TaskSummary(BaseModel):
     result: TaskSummaryResult = Field(default_factory=TaskSummaryResult)
 
 
+class TaskCancelResult(BaseModel):
+    """Filter-mode ``task cancel`` join envelope (§V.173).
+
+    ``leftover_pending_by_touch`` is remaining pending in the same scope
+    after the cancel, keyed by resolved touch number (string). Zero-count
+    touches are omitted. ``record_count`` on the CLI envelope is
+    ``cancelled_count``.
+    """
+
+    cancelled_count: int
+    ids: list[str]
+    leftover_pending_by_touch: dict[str, int] = Field(default_factory=dict)
+
+
 class TaskStats(BaseModel):
     """Task-cadence aggregate over the task queue at task grain (§V.133).
 

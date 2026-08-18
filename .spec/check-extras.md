@@ -1136,6 +1136,15 @@ Trigger: `src/mailpilot/database.py` or `src/mailpilot/models.py` changed.
 - `rg 'result.reason|result_reason' src/mailpilot/models.py` -> TaskSummary carries reason
 - `rg "result->>'reason'|result_reason" src/mailpilot/database.py` -> list_tasks SELECT projects reason
 
+## §V173 — task-cancel-filter
+
+`task cancel` dual-mode: positional TASK_ID XOR filter flags. Filter set = `task list` {`--workflow-id`,`--contact-email`,`--status`,`--trigger`,`--overdue`,`--since`,`--until`} + repeatable `--touch N` (parse §V.162). `--touch` also on `task list`. Filter-mode requires ≥1 of {`--touch`,`--workflow-id`,`--contact-email`,`--trigger`,`--overdue`}. `--status` default pending; other → `validation_error`. TASK_ID+filters → `validation_error`. One txn cancel every matching pending; no default `--limit`. Envelope `{"task_cancel":{cancelled_count,ids[],leftover_pending_by_touch},"ok":true}` record_count=cancelled_count. Zero match → ok no-op. Id-mode entity envelope unchanged. Never `--description`. SKILL one-call replaces list-then-N-cancel.
+
+Trigger: `task cancel` / `task list` path changed.
+- `rg 'cancel_tasks_matching|leftover_pending_by_touch' src/mailpilot/` -> filter-mode join present
+- `rg 'touch_option|--touch' src/mailpilot/cli.py src/mailpilot/_filters.py` -> --touch on list + cancel
+- `rg 'task cancel --workflow-id|leftover_pending_by_touch' src/mailpilot/SKILL.md` -> one-call recipe present
+
 ## §V16 — race-safe create
 
 UNIQUE-bearing `create_X` uses `ON CONFLICT DO NOTHING` -> None to race loser, exactly 1 row persists; bulk variants converge to shared ids; CLI surfaces `duplicate_key` envelope

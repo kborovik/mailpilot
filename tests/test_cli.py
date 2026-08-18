@@ -13093,6 +13093,7 @@ def test_task_list(runner: CliRunner, mock_connection: MagicMock) -> None:
         since=None,
         until=None,
         overdue=False,
+        touches=None,
     )
     data = json.loads(result.output)
     assert len(data["tasks"]) == 1
@@ -13207,6 +13208,7 @@ def test_task_list_with_filters(runner: CliRunner, mock_connection: MagicMock) -
         since=None,
         until=None,
         overdue=False,
+        touches=None,
     )
 
 
@@ -13535,6 +13537,284 @@ def test_task_cancel_not_pending(runner: CliRunner, mock_connection: MagicMock) 
     data = json.loads(result.output)
     assert data["error"] == "not_found"
     assert "not pending" in data["message"]
+
+
+def test_task_cancel_filter_mode_envelope(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.173/§V.4: filter-mode returns task_cancel join; record_count=cancelled."""
+    from mailpilot.models import TaskCancelResult
+
+    join = TaskCancelResult(
+        cancelled_count=2,
+        ids=["id-a", "id-b"],
+        leftover_pending_by_touch={"1": 4},
+    )
+    workflow = _make_workflow()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=workflow),
+        patch(
+            "mailpilot.database.cancel_tasks_matching", return_value=join
+        ) as mock_cancel,
+    ):
+        result = runner.invoke(
+            main,
+            ["task", "cancel", "--workflow-id", _WORKFLOW_ID, "--touch", "2"],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_cancel.assert_called_once_with(
+        mock_connection,
+        workflow_id=_WORKFLOW_ID,
+        contact_id=None,
+        trigger=None,
+        overdue=False,
+        since=None,
+        until=None,
+        touches=[2],
+    )
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 2
+    assert data["task_cancel"]["cancelled_count"] == 2
+    assert data["task_cancel"]["ids"] == ["id-a", "id-b"]
+    assert data["task_cancel"]["leftover_pending_by_touch"] == {"1": 4}
+
+
+def test_task_cancel_filter_mode_repeatable_touch_and_label(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.173/§V.162: --touch is repeatable and accepts T<n>."""
+    from mailpilot.models import TaskCancelResult
+
+    join = TaskCancelResult(cancelled_count=0, ids=[], leftover_pending_by_touch={})
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.cancel_tasks_matching", return_value=join
+        ) as mock_cancel,
+    ):
+        result = runner.invoke(
+            main,
+            ["task", "cancel", "--touch", "2", "--touch", "T3"],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_cancel.assert_called_once()
+    assert mock_cancel.call_args.kwargs["touches"] == [2, 3]
+
+
+def test_task_cancel_task_id_plus_filters_validation_error(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.173: TASK_ID XOR filters; both together is validation_error."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.cancel_task") as mock_id,
+        patch("mailpilot.database.cancel_tasks_matching") as mock_filter,
+    ):
+        result = runner.invoke(
+            main,
+            ["task", "cancel", "some-id", "--touch", "2"],
+        )
+
+    assert result.exit_code == 1
+    mock_id.assert_not_called()
+    mock_filter.assert_not_called()
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert data["ok"] is False
+    assert "record_count" not in data
+
+
+def test_task_cancel_filter_mode_requires_scope(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.173: filter-mode needs --touch/workflow/contact/trigger/overdue."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.cancel_tasks_matching") as mock_filter,
+    ):
+        result = runner.invoke(main, ["task", "cancel"])
+
+    assert result.exit_code == 1
+    mock_filter.assert_not_called()
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+
+
+def test_task_cancel_since_only_validation_error(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.173: --since/--until alone are not enough for filter-mode."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.cancel_tasks_matching") as mock_filter,
+    ):
+        result = runner.invoke(
+            main, ["task", "cancel", "--since", "2026-01-01T00:00:00Z"]
+        )
+
+    assert result.exit_code == 1
+    mock_filter.assert_not_called()
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+
+
+def test_task_cancel_non_pending_status_validation_error(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.173: filter-mode --status other than pending is validation_error."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.cancel_tasks_matching") as mock_filter,
+    ):
+        result = runner.invoke(
+            main, ["task", "cancel", "--touch", "2", "--status", "completed"]
+        )
+
+    assert result.exit_code == 1
+    mock_filter.assert_not_called()
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "pending" in data["message"]
+
+
+def test_task_cancel_zero_match_ok(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.173/§V.4: zero match is ok no-op; record_count=0."""
+    from mailpilot.models import TaskCancelResult
+
+    join = TaskCancelResult(cancelled_count=0, ids=[], leftover_pending_by_touch={})
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.cancel_tasks_matching", return_value=join),
+    ):
+        result = runner.invoke(main, ["task", "cancel", "--overdue"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 0
+    assert data["task_cancel"]["cancelled_count"] == 0
+    assert data["task_cancel"]["ids"] == []
+
+
+def test_task_cancel_rejects_description_flag(runner: CliRunner) -> None:
+    """§V.173: never --description; touch is from context."""
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main, ["task", "cancel", "--description", "Touch 3 of 3"]
+        )
+
+    assert result.exit_code == 2
+    assert "No such option" in result.output
+
+
+def test_task_cancel_help_documents_touch(runner: CliRunner) -> None:
+    """§V.173/§V.111: help documents dual-mode + --touch; no SPEC cites."""
+    result = runner.invoke(main, ["task", "cancel", "--help"])
+    assert result.exit_code == 0
+    assert "--touch" in result.output
+    assert "TASK_ID" in result.output or "task_id" in result.output.lower()
+    assert (
+        "description" not in result.output.lower() or "not description" in result.output
+    )
+    assert "§V." not in result.output
+    assert "§T." not in result.output
+
+
+def test_task_list_touch_flows_to_db(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.173: task list --touch is repeatable and accepts T<n>."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.list_tasks", return_value=[]) as mock_list,
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(main, ["task", "list", "--touch", "2", "--touch", "T3"])
+
+    assert result.exit_code == 0, result.output
+    _, kwargs = mock_list.call_args
+    assert kwargs["touches"] == [2, 3]
+
+
+def test_task_cancel_live_filter_mode(
+    runner: CliRunner, database_connection: Any
+) -> None:
+    """§V.173: live filter cancel returns the join and leaves leftover T1."""
+    from conftest import (
+        make_test_account,
+        make_test_contact,
+        make_test_enrollment,
+        make_test_workflow,
+    )
+    from mailpilot.database import create_task, get_task
+
+    account = make_test_account(database_connection, email="cancel-filter@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="cancel-filter-wf"
+    )
+    contact = make_test_contact(database_connection, email="lead@cancel-filter.test")
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    t2 = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="Touch 2 of 3",
+        scheduled_at="2026-08-18T12:00:00Z",
+        context={"touch": 2},
+    )
+    create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="first reach",
+        scheduled_at="2026-08-18T13:00:00Z",
+        context={"trigger": "enrollment_schedule"},
+    )
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            ["task", "cancel", "--workflow-id", workflow.name, "--touch", "2"],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 1
+    assert data["task_cancel"]["cancelled_count"] == 1
+    assert data["task_cancel"]["ids"] == [t2.id]
+    assert data["task_cancel"]["leftover_pending_by_touch"] == {"1": 1}
+    assert get_task(database_connection, t2.id).status == "cancelled"  # type: ignore[union-attr]
+
+
+def test_skill_documents_task_cancel_one_call() -> None:
+    """§V.173: packaged SKILL.md one-call replaces list-then-N-cancel."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "Cancel pending tasks (one call)" in body
+    assert "Do not list then loop" in body
+    assert "leftover_pending_by_touch" in body
+    assert "task cancel --workflow-id" in body
+    assert "--touch 3" in body
+    assert "never description" in body
+    assert "§V." not in body
+    assert "§T." not in body
 
 
 # -- task retry ---------------------------------------------------------------

@@ -18,6 +18,7 @@ from mailpilot._filters import (
     scope_option,
     sort_option,
     time_window_options,
+    touch_option,
 )
 
 
@@ -174,3 +175,21 @@ def test_include_disabled_flag_defaults_false() -> None:
 
 def test_directions_axis_is_inbound_outbound() -> None:
     assert DIRECTIONS == ["inbound", "outbound"]
+
+
+def test_touch_option_repeatable_and_parses_label() -> None:
+    """§V.173/§V.162: --touch is repeatable and accepts N or T<n>."""
+
+    @click.command()
+    @touch_option
+    def cmd(touches: tuple[int, ...]) -> None:
+        click.echo(",".join(str(n) for n in touches))
+
+    empty = CliRunner().invoke(cmd, [])
+    assert empty.exit_code == 0
+    assert empty.output.strip() == ""
+    parsed = CliRunner().invoke(cmd, ["--touch", "2", "--touch", "T3"])
+    assert parsed.exit_code == 0
+    assert parsed.output.strip() == "2,3"
+    bad = CliRunner().invoke(cmd, ["--touch", "nope"])
+    assert bad.exit_code != 0

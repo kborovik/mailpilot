@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `task cancel` accepts the same filters as `task list` plus repeatable
+  `--touch N` (or `T<n>`). One call cancels matching pending tasks and
+  returns `cancelled_count`, `ids`, and `leftover_pending_by_touch`.
+  `task list --touch` shares the filter. `task cancel <id>` is unchanged.
+
 ## [v0.28.0] - 2026-08-17
 
 ### Added

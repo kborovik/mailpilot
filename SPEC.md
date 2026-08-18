@@ -286,7 +286,7 @@ T285|x|impl §V.8 + §V.168 + §I — contact view|list|search project tags[] (e
 T286|x|impl §V.171(+) + §V.150(∆) + §I — enrollment add scheduled batch: --file JSON or --tag apply + --scheduled-at; --limit soft cap; --company-atomic same-day; --exclude-peer; one envelope; tests + SKILL one-call (#233)|V171,V150,V32,V33,V114,V4,I.cli
 T287|x|impl §V.169(∆) — OOO resume-year: week-range w/o year containing now → same-year day-after range-end; weekday-month-day leave-start months past → unparseable not next-year; explicit year wins; fixtures week-range + weekday-month-day (#236)|V169,B140
 T288|x|impl §V.7(∆) + §V.172(+) + §I — email list snippet (first 500 body_text); task list failed result.reason; SKILL one-call drops N email view + task view; tests (#237)|V7,V172,V4,I.cli
-T289|.|impl §V.173(+) + §I — task cancel filter-mode + --touch (repeatable); task list --touch; one envelope cancelled_count+ids+leftover_pending_by_touch; SKILL one-call; tests (#240)|V173,V162,V115,V4,V111,I.cli
+T289|x|impl §V.173(+) + §I — task cancel filter-mode + --touch (repeatable); task list --touch; one envelope cancelled_count+ids+leftover_pending_by_touch; SKILL one-call; tests (#240)|V173,V162,V115,V4,V111,I.cli
 
 ## §B BUGS
 

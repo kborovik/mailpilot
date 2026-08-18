@@ -40,10 +40,13 @@ it defaults to an ASCII table; pass `--format json` for the `queue` envelope.
   `migrate`, `check`:
   `{"<singular>": {...}, "record_count": 1, "ok": true}`
 - error: `{"error": "<code>", "message": "<text>", "ok": false}`
+- `task cancel` with filters (no TASK_ID):
+  `{"task_cancel": {"cancelled_count": N, "ids": [...], "leftover_pending_by_touch": {"1": N}}, "record_count": N, "ok": true}`
+  (`record_count` is `cancelled_count`; zero match is an ok no-op)
 
 Every `ok: true` envelope carries a top-level integer `record_count`: the
-array length for array payloads, `1` for single-object payloads. Error
-envelopes omit it.
+array length for array payloads, `1` for single-object payloads,
+`cancelled_count` for filter-mode `task cancel`. Error envelopes omit it.
 
 Plural keys mirror the noun (`accounts`, `companies`, `contacts`,
 `workflows`, `enrollments`, `tasks`, `emails`, `activities`, `tags`, `notes`,
@@ -963,10 +966,13 @@ mailpilot task list --status pending
 mailpilot task list --workflow-id <NAME_OR_ID>
 mailpilot task list --workflow-id <NAME_OR_ID> --overdue
 mailpilot task list --workflow-id <NAME_OR_ID> --status failed
+mailpilot task list --workflow-id <NAME_OR_ID> --touch 2
+mailpilot task list --workflow-id <NAME_OR_ID> --touch 2 --touch 3
 mailpilot task stats --workflow-id <NAME_OR_ID>
 mailpilot task stats --workflow-id <NAME_OR_ID> --trigger enrollment_schedule
 mailpilot task view <TID>
 mailpilot task cancel <TID>
+mailpilot task cancel --workflow-id <NAME_OR_ID> --touch 2
 mailpilot task retry <TID>
 mailpilot task retry <TID> --scheduled-at 2026-08-17T13:01:49-04:00
 ```
@@ -974,6 +980,43 @@ mailpilot task retry <TID> --scheduled-at 2026-08-17T13:01:49-04:00
 Failed `task list` rows carry `result.reason` (string or null). Do not
 loop `task view` to classify fail cause; full `result` and `context`
 stay on view.
+
+`task list --touch` is repeatable and reads resolved `context.touch`
+(N or `T<n>`), never description text.
+
+### Cancel pending tasks (one call)
+
+Do not list then loop `task cancel <id>`. One call cancels every matching
+pending row and returns the join.
+
+Filter-mode needs at least one of `--touch`, `--workflow-id`,
+`--contact-email`, `--trigger`, or `--overdue`. `--status` defaults to
+pending; any other status is rejected. TASK_ID and filters are exclusive.
+
+```
+mailpilot task cancel --workflow-id <NAME_OR_ID> --touch 3
+mailpilot task cancel --workflow-id <NAME_OR_ID> --touch 2 --touch 3
+mailpilot task cancel --workflow-id <NAME_OR_ID> --overdue
+```
+
+Envelope:
+
+```json
+{
+  "task_cancel": {
+    "cancelled_count": 2,
+    "ids": ["...", "..."],
+    "leftover_pending_by_touch": {"1": 4}
+  },
+  "record_count": 2,
+  "ok": true
+}
+```
+
+Zero match is an ok no-op (`cancelled_count` 0).
+`leftover_pending_by_touch` is remaining pending in the same scope,
+grouped by resolved touch, after the cancel. `task cancel <TID>` still
+returns the single task entity.
 
 `task retry` is one call for a failed or cancelled row. Omit
 `--scheduled-at` to keep a still-future stored time (resume T2 on the
