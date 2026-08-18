@@ -9799,6 +9799,255 @@ def test_get_workflow_status_health(
     assert health.funnel_active == 1
 
 
+_REVIEW_SINCE = "2026-08-17T11:43:13-04:00"
+_REVIEW_UNTIL = "2026-08-18T11:43:13-04:00"
+_REVIEW_INSIDE = datetime(2026, 8, 17, 16, 0, tzinfo=UTC)
+_REVIEW_OUTSIDE = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
+
+
+def test_get_workflow_review_collects_funnel_and_window(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.174: one envelope carries funnel, task counts, window mail, enrollments."""
+    from mailpilot.database import get_workflow_review
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection, email="rev@testcorp.com")
+    make_test_enrollment(database_connection, workflow.id, contact.id)
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        gmail_message_id="rev_in",
+        subject="OOO",
+        body_text="I am out of the office until Monday.",
+        received_at=_REVIEW_INSIDE,
+        is_routed=True,
+        route_method="thread_match",
+    )
+    assert inbound is not None
+    outside = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        gmail_message_id="rev_out",
+        subject="old",
+        body_text="stale",
+        received_at=_REVIEW_OUTSIDE,
+        is_routed=True,
+        route_method="thread_match",
+    )
+    assert outside is not None
+
+    review = get_workflow_review(
+        database_connection,
+        [workflow.id],
+        since=_REVIEW_SINCE,
+        until=_REVIEW_UNTIL,
+    )
+    assert len(review.reviews) == 1
+    item = review.reviews[0]
+    assert item.workflow.name == workflow.name
+    assert item.funnel.enrolled == 1
+    assert item.task_counts.failed == 0
+    assert item.task_counts.pending == 0
+    email_ids = {row.id for row in item.emails}
+    assert inbound.id in email_ids
+    assert outside.id not in email_ids
+    assert item.emails[0].snippet == "I am out of the office until Monday."
+    assert len(item.enrollments) == 1
+    assert item.enrollments[0].contact_email == "rev@testcorp.com"
+
+
+def test_get_workflow_review_includes_inbound_activity_snippet(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.174: inbound email_received appears with snippet without activity.workflow_id."""
+    from mailpilot.database import get_workflow_review
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection, email="ooo@testcorp.com")
+    make_test_enrollment(database_connection, workflow.id, contact.id)
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        gmail_message_id="rev_ooo",
+        subject="Out of office",
+        body_text="I am out of the office until next week. Jane@x.com",
+        received_at=_REVIEW_INSIDE,
+        is_routed=True,
+        route_method="thread_match",
+    )
+    assert inbound is not None
+    activity = create_activity(
+        database_connection,
+        activity_type="email_received",
+        contact_id=contact.id,
+        email_id=inbound.id,
+        summary=inbound.subject,
+        detail={"subject": inbound.subject},
+    )
+    database_connection.execute(
+        "UPDATE activity SET created_at = %(ts)s WHERE id = %(id)s",
+        {"ts": _REVIEW_INSIDE, "id": activity.id},
+    )
+    database_connection.commit()
+    assert activity.workflow_id is None
+
+    review = get_workflow_review(
+        database_connection,
+        [workflow.id],
+        since=_REVIEW_SINCE,
+        until=_REVIEW_UNTIL,
+    )
+    item = review.reviews[0]
+    received = [row for row in item.activities if row.type == "email_received"]
+    assert len(received) == 1
+    assert received[0].id == activity.id
+    assert "out of the office" in received[0].snippet.lower()
+    assert "jane@x.com" in received[0].snippet.lower()
+
+
+def test_get_workflow_review_failed_task_contact_email_reason(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.174: failed tasks carry contact_email and result.reason."""
+    from mailpilot.database import get_workflow_review
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection, email="fail@testcorp.com")
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    failed = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="touch 1",
+        scheduled_at="2026-08-17T12:00:00+00:00",
+    )
+    pending = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="touch 2",
+        scheduled_at="2099-01-01T00:00:00+00:00",
+    )
+    overdue = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="late",
+        scheduled_at="2020-01-01T00:00:00+00:00",
+    )
+    complete_task(
+        database_connection,
+        failed.id,
+        status="failed",
+        result={"reason": "agent completed without calling any tools"},
+    )
+
+    review = get_workflow_review(
+        database_connection,
+        [workflow.id],
+        since=_REVIEW_SINCE,
+        until=_REVIEW_UNTIL,
+    )
+    item = review.reviews[0]
+    assert item.task_counts.failed == 1
+    assert item.task_counts.overdue == 1
+    assert item.task_counts.pending == 2
+    assert len(item.failed_tasks) == 1
+    row = item.failed_tasks[0]
+    assert row.id == failed.id
+    assert row.contact_email == "fail@testcorp.com"
+    assert row.result.reason == "agent completed without calling any tools"
+    assert pending.id not in {t.id for t in item.failed_tasks}
+    assert overdue.id not in {t.id for t in item.failed_tasks}
+
+
+def test_get_workflow_review_enrollments_uncapped(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.174: enrollment list is not capped below the live enrolled count."""
+    from mailpilot.database import get_workflow_review
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    enrolled = 201
+    for i in range(enrolled):
+        contact = make_test_contact(database_connection, email=f"seat{i:03d}@cap.test")
+        make_test_enrollment(database_connection, workflow.id, contact.id)
+
+    review = get_workflow_review(
+        database_connection,
+        [workflow.id],
+        since=_REVIEW_SINCE,
+        until=_REVIEW_UNTIL,
+    )
+    item = review.reviews[0]
+    assert item.funnel.enrolled == enrolled
+    assert len(item.enrollments) == enrolled
+
+
+def test_list_active_workflows_excludes_draft(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.174: all = every active workflow, drafts omitted."""
+    from mailpilot.database import list_active_workflows
+
+    account = make_test_account(database_connection)
+    live = make_test_workflow(
+        database_connection, account_id=account.id, name="live-flow"
+    )
+    make_test_workflow(database_connection, account_id=account.id, name="draft-flow")
+    update_workflow(
+        database_connection,
+        live.id,
+        goal="Book demo",
+        instructions="You are a sales rep.",
+    )
+    activate_workflow(database_connection, live.id)
+    active = list_active_workflows(database_connection)
+    assert [w.name for w in active] == ["live-flow"]
+
+
+def test_get_workflow_review_all_active(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.174: review of every active workflow is one envelope, two items."""
+    from mailpilot.database import get_workflow_review, list_active_workflows
+
+    account = make_test_account(database_connection)
+    a = make_test_workflow(database_connection, account_id=account.id, name="alpha")
+    b = make_test_workflow(database_connection, account_id=account.id, name="beta")
+    make_test_workflow(database_connection, account_id=account.id, name="drafty")
+    for workflow in (a, b):
+        update_workflow(
+            database_connection,
+            workflow.id,
+            goal="Book demo",
+            instructions="You are a sales rep.",
+        )
+        activate_workflow(database_connection, workflow.id)
+    ids = [w.id for w in list_active_workflows(database_connection)]
+    review = get_workflow_review(
+        database_connection, ids, since=_REVIEW_SINCE, until=_REVIEW_UNTIL
+    )
+    assert [item.workflow.name for item in review.reviews] == ["alpha", "beta"]
+
+
 def test_get_queue_report_workflow_grain_includes_draft_and_sorts(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
