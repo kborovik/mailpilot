@@ -111,6 +111,40 @@ def include_disabled_option(fn: Callable[..., Any]) -> Callable[..., Any]:
     )(fn)
 
 
+class TouchNumber(click.ParamType):
+    """Parse ``--touch`` as N or ``T<n>`` (same rules as context.touch)."""
+
+    name = "touch"
+
+    def convert(
+        self, value: Any, param: click.Parameter | None, ctx: click.Context | None
+    ) -> int:
+        from mailpilot.cadence import parse_touch_number
+
+        parsed = parse_touch_number(value)
+        if parsed is None or parsed < 1:
+            self.fail(
+                f"invalid touch {value!r}; use a positive N or T<n>",
+                param,
+                ctx,
+            )
+        return parsed
+
+
+def touch_option(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Add repeatable ``--touch N`` (or ``T<n>``) resolved-touch filter."""
+    return click.option(
+        "--touch",
+        "touches",
+        multiple=True,
+        type=TouchNumber(),
+        help=(
+            "Filter by resolved touch number (repeatable). Accepts N or T<n>. "
+            "Touch is read from task context, not description."
+        ),
+    )(fn)
+
+
 def time_window_options(column: str) -> _Decorator:
     """Build ``--since`` / ``--until``: a closed inclusive window over ``column``.
 

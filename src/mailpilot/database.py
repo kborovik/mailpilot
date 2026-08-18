@@ -64,6 +64,7 @@ from mailpilot.models import (
     TagAssignment,
     TagSummary,
     Task,
+    TaskCancelResult,
     TaskStats,
     TaskSummary,
     TouchStageCounts,
@@ -5655,39 +5656,24 @@ def cancel_enrollment_followup_tasks(
     return [Task.model_validate(row) for row in rows]
 
 
-def list_tasks(
-    connection: psycopg.Connection[dict[str, Any]],
+def _task_filter_clauses(
+    params: dict[str, object],
+    *,
     workflow_id: str | None = None,
     contact_id: str | None = None,
     status: str | None = None,
     trigger: str | None = None,
-    limit: int = 100,
+    overdue: bool = False,
     since: str | None = None,
     until: str | None = None,
-    *,
-    overdue: bool = False,
-) -> list[TaskSummary]:
-    """List tasks as summaries with optional filters.
+    touches: Sequence[int] | None = None,
+) -> list[Composable]:
+    """Build shared ``task list`` / ``task cancel`` filter clauses.
 
-    Args:
-        connection: Open database connection.
-        workflow_id: Filter by workflow ID.
-        contact_id: Filter by contact ID.
-        status: Filter by task status.
-        trigger: Filter by caller path stored in ``context->>'trigger'``
-            (§V.26 taxonomy); deterministic first-touch select on
-            ``enrollment_schedule`` (§V.32), never reads ``description``.
-        limit: Maximum results.
-        since: ISO datetime inclusive lower bound on ``scheduled_at``.
-        until: ISO datetime inclusive upper bound on ``scheduled_at``.
-        overdue: When True (§V.155), only pending tasks with
-            ``scheduled_at < now()``.
-
-    Returns:
-        List of task summaries ordered by scheduled_at descending.
+    Touch match uses ``_sql_resolve_touch`` (parse §V.162 + first-touch
+    fallback). Never filters on ``description``.
     """
-    conditions: list[SQL] = []
-    params: dict[str, object] = {"limit": limit}
+    conditions: list[Composable] = []
     if workflow_id is not None:
         conditions.append(SQL("workflow_id = %(workflow_id)s"))
         params["workflow_id"] = workflow_id
@@ -5709,6 +5695,60 @@ def list_tasks(
     if until is not None:
         conditions.append(SQL("scheduled_at <= %(until)s"))
         params["until"] = until
+    if touches:
+        conditions.append(
+            SQL("{} = ANY(%(touches)s)").format(_sql_resolve_touch(SQL("context")))
+        )
+        params["touches"] = list(touches)
+    return conditions
+
+
+def list_tasks(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str | None = None,
+    contact_id: str | None = None,
+    status: str | None = None,
+    trigger: str | None = None,
+    limit: int = 100,
+    since: str | None = None,
+    until: str | None = None,
+    *,
+    overdue: bool = False,
+    touches: Sequence[int] | None = None,
+) -> list[TaskSummary]:
+    """List tasks as summaries with optional filters.
+
+    Args:
+        connection: Open database connection.
+        workflow_id: Filter by workflow ID.
+        contact_id: Filter by contact ID.
+        status: Filter by task status.
+        trigger: Filter by caller path stored in ``context->>'trigger'``
+            (§V.26 taxonomy); deterministic first-touch select on
+            ``enrollment_schedule`` (§V.32), never reads ``description``.
+        limit: Maximum results.
+        since: ISO datetime inclusive lower bound on ``scheduled_at``.
+        until: ISO datetime inclusive upper bound on ``scheduled_at``.
+        overdue: When True (§V.155), only pending tasks with
+            ``scheduled_at < now()``.
+        touches: When set, only tasks whose resolved touch is in this set
+            (parse §V.162; also first-touch trigger fallback).
+
+    Returns:
+        List of task summaries ordered by scheduled_at descending.
+    """
+    params: dict[str, object] = {"limit": limit}
+    conditions = _task_filter_clauses(
+        params,
+        workflow_id=workflow_id,
+        contact_id=contact_id,
+        status=status,
+        trigger=trigger,
+        overdue=overdue,
+        since=since,
+        until=until,
+        touches=touches,
+    )
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
         "SELECT id, enrollment_id, workflow_id, contact_id, email_id, "
@@ -5718,6 +5758,88 @@ def list_tasks(
     ).format(where)
     rows = connection.execute(query, params).fetchall()
     return [TaskSummary.model_validate(row) for row in rows]
+
+
+def cancel_tasks_matching(
+    connection: psycopg.Connection[dict[str, Any]],
+    *,
+    workflow_id: str | None = None,
+    contact_id: str | None = None,
+    trigger: str | None = None,
+    overdue: bool = False,
+    since: str | None = None,
+    until: str | None = None,
+    touches: Sequence[int] | None = None,
+) -> TaskCancelResult:
+    """Cancel every matching pending task in one transaction (§V.173).
+
+    No default limit. ``leftover_pending_by_touch`` uses the same scope
+    filters except ``touches``, so a ``--touch 2`` cancel still reports
+    remaining T1/T3 pending. Zero matches is an ok no-op.
+
+    Args:
+        connection: Open database connection.
+        workflow_id: Filter by workflow ID.
+        contact_id: Filter by contact ID.
+        trigger: Filter by ``context->>'trigger'``.
+        overdue: When True, only pending tasks with ``scheduled_at < now()``.
+        since: Inclusive lower bound on ``scheduled_at``.
+        until: Inclusive upper bound on ``scheduled_at``.
+        touches: Resolved touch numbers to cancel (parse §V.162).
+
+    Returns:
+        Join envelope: cancelled ids plus leftover pending-by-touch.
+    """
+    params: dict[str, object] = {}
+    conditions = _task_filter_clauses(
+        params,
+        workflow_id=workflow_id,
+        contact_id=contact_id,
+        status="pending",
+        trigger=trigger,
+        overdue=overdue,
+        since=since,
+        until=until,
+        touches=touches,
+    )
+    where = SQL("WHERE ") + SQL(" AND ").join(conditions)
+    rows = connection.execute(
+        SQL(
+            "UPDATE task SET status = 'cancelled', completed_at = CURRENT_TIMESTAMP "
+            "{} RETURNING id"
+        ).format(where),
+        params,
+    ).fetchall()
+    ids = sorted(str(row["id"]) for row in rows)
+
+    leftover_params: dict[str, object] = {}
+    leftover_conditions = _task_filter_clauses(
+        leftover_params,
+        workflow_id=workflow_id,
+        contact_id=contact_id,
+        status="pending",
+        trigger=trigger,
+        overdue=overdue,
+        since=since,
+        until=until,
+        touches=None,
+    )
+    touch_expr = _sql_resolve_touch(SQL("context"))
+    leftover_conditions.append(SQL("{} IS NOT NULL").format(touch_expr))
+    leftover_where = SQL("WHERE ") + SQL(" AND ").join(leftover_conditions)
+    leftover_rows = connection.execute(
+        SQL(
+            "SELECT {} AS touch, COUNT(*)::int AS n FROM task {} GROUP BY 1 ORDER BY 1"
+        ).format(touch_expr, leftover_where),
+        leftover_params,
+    ).fetchall()
+    leftover = {str(row["touch"]): int(row["n"]) for row in leftover_rows}
+    connection.commit()
+    return TaskCancelResult(
+        cancelled_count=len(ids),
+        ids=ids,
+        leftover_pending_by_touch=leftover,
+    )
 
 
 def get_task_stats(

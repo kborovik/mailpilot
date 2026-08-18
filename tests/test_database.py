@@ -24,6 +24,7 @@ from mailpilot.database import (
     activate_workflow,
     cancel_enrollment_followup_tasks,
     cancel_task,
+    cancel_tasks_matching,
     check_workflow_wording,
     company_import_diff,
     complete_task,
@@ -5453,6 +5454,206 @@ def test_list_tasks_filters_by_trigger(
     deferred = list_tasks(database_connection, trigger="task")
     assert len(deferred) == 1
     assert deferred[0].description == "deferred follow-up"
+
+
+def test_list_tasks_filters_by_touch(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.173/§V.162: --touch matches resolved context.touch, not description."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    t2 = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="Touch 3 of 3",
+        scheduled_at="2026-08-18T12:00:00Z",
+        context={"touch": 2},
+    )
+    t2_label = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="follow up",
+        scheduled_at="2026-08-18T13:00:00Z",
+        context={"touch": "T2"},
+    )
+    t3 = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="Touch 2 of 3",
+        scheduled_at="2026-08-18T14:00:00Z",
+        context={"touch": 3},
+    )
+    first = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="first reach",
+        scheduled_at="2026-08-18T15:00:00Z",
+        context={"trigger": "enrollment_schedule"},
+    )
+
+    by_t2 = list_tasks(database_connection, workflow_id=workflow.id, touches=[2])
+    assert {row.id for row in by_t2} == {t2.id, t2_label.id}
+
+    by_t1 = list_tasks(database_connection, workflow_id=workflow.id, touches=[1])
+    assert [row.id for row in by_t1] == [first.id]
+
+    by_repeat = list_tasks(database_connection, workflow_id=workflow.id, touches=[2, 3])
+    assert {row.id for row in by_repeat} == {t2.id, t2_label.id, t3.id}
+
+
+def test_cancel_tasks_matching_one_txn_and_leftover(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.173: one txn cancels matching pending; leftover is remaining by touch."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    t2_a = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="Touch 2 of 3",
+        scheduled_at="2026-08-18T12:00:00Z",
+        context={"touch": 2},
+    )
+    t2_b = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="Touch 2 of 3",
+        scheduled_at="2026-08-18T13:00:00Z",
+        context={"touch": "T2"},
+    )
+    t3 = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="Touch 3 of 3",
+        scheduled_at="2026-08-18T14:00:00Z",
+        context={"touch": 3},
+    )
+    first = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="first reach",
+        scheduled_at="2026-08-18T15:00:00Z",
+        context={"trigger": "enrollment_schedule"},
+    )
+    already = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="already done",
+        scheduled_at="2026-08-18T16:00:00Z",
+        context={"touch": 2},
+    )
+    complete_task(database_connection, already.id, status="completed", result={})
+
+    result = cancel_tasks_matching(
+        database_connection, workflow_id=workflow.id, touches=[2]
+    )
+    assert result.cancelled_count == 2
+    assert set(result.ids) == {t2_a.id, t2_b.id}
+    assert result.leftover_pending_by_touch == {"1": 1, "3": 1}
+
+    assert get_task(database_connection, t2_a.id).status == "cancelled"  # type: ignore[union-attr]
+    assert get_task(database_connection, t2_b.id).status == "cancelled"  # type: ignore[union-attr]
+    assert get_task(database_connection, t3.id).status == "pending"  # type: ignore[union-attr]
+    assert get_task(database_connection, first.id).status == "pending"  # type: ignore[union-attr]
+    assert get_task(database_connection, already.id).status == "completed"  # type: ignore[union-attr]
+
+
+def test_cancel_tasks_matching_zero_match_is_noop(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.173: zero match is an ok no-op with empty leftover when none pending."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="Touch 1 of 3",
+        scheduled_at="2026-08-18T12:00:00Z",
+        context={"touch": 1},
+    )
+    result = cancel_tasks_matching(
+        database_connection, workflow_id=workflow.id, touches=[9]
+    )
+    assert result.cancelled_count == 0
+    assert result.ids == []
+    assert result.leftover_pending_by_touch == {"1": 1}
+    remaining = list_tasks(
+        database_connection, workflow_id=workflow.id, status="pending"
+    )
+    assert len(remaining) == 1
+
+
+def test_cancel_tasks_matching_repeatable_touch_and_overdue(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.173: repeatable --touch and --overdue compose in one cancel."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    overdue_t2 = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="overdue T2",
+        scheduled_at="2020-01-01T00:00:00+00:00",
+        context={"touch": 2},
+    )
+    overdue_t3 = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="overdue T3",
+        scheduled_at="2020-01-02T00:00:00+00:00",
+        context={"touch": 3},
+    )
+    future_t2 = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="future T2",
+        scheduled_at="2099-01-01T00:00:00+00:00",
+        context={"touch": 2},
+    )
+    result = cancel_tasks_matching(
+        database_connection,
+        workflow_id=workflow.id,
+        overdue=True,
+        touches=[2, 3],
+    )
+    assert set(result.ids) == {overdue_t2.id, overdue_t3.id}
+    assert result.cancelled_count == 2
+    assert result.leftover_pending_by_touch == {}
+    assert get_task(database_connection, future_t2.id).status == "pending"  # type: ignore[union-attr]
 
 
 # -- get_task_stats (§V.133) ---------------------------------------------------

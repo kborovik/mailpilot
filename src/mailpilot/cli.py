@@ -29,6 +29,7 @@ from mailpilot._filters import (
     sort_option,
     tag_filter_options,
     time_window_options,
+    touch_option,
 )
 
 if TYPE_CHECKING:
@@ -6995,6 +6996,7 @@ def task() -> None:
     default=False,
     help="Only pending tasks with scheduled_at in the past.",
 )
+@touch_option
 @time_window_options("scheduled_at")
 @limit_option
 def task_list(
@@ -7003,6 +7005,7 @@ def task_list(
     status: str | None,
     trigger: str | None,
     overdue: bool,
+    touches: tuple[int, ...],
     limit: int,
     since: str | None,
     until: str | None,
@@ -7038,6 +7041,7 @@ def task_list(
             since=since,
             until=until,
             overdue=overdue,
+            touches=list(touches) if touches else None,
         )
         output({"tasks": [t.model_dump(mode="json") for t in tasks]})
     finally:
@@ -7107,17 +7111,109 @@ def task_view(task_id: str) -> None:
 
 
 @task.command("cancel")
-@click.argument("task_id")
-def task_cancel(task_id: str) -> None:
-    """Cancel a pending task."""
-    from mailpilot.database import cancel_task, initialize_database
+@click.argument("task_id", required=False, default=None)
+@scope_option("--workflow-id", "workflow_id", "Filter by workflow (name or ID).")
+@scope_option("--contact-email", "contact_email", "Filter by contact (email or ID).")
+@enum_option("--status", "status", _TASK_STATUSES, "Filter by task status.")
+@enum_option("--trigger", "trigger", _TASK_TRIGGERS, "Filter by task trigger.")
+@click.option(
+    "--overdue",
+    is_flag=True,
+    default=False,
+    help="Only pending tasks with scheduled_at in the past.",
+)
+@touch_option
+@time_window_options("scheduled_at")
+def task_cancel(
+    task_id: str | None,
+    workflow_id: str | None,
+    contact_email: str | None,
+    status: str | None,
+    trigger: str | None,
+    overdue: bool,
+    touches: tuple[int, ...],
+    since: str | None,
+    until: str | None,
+) -> None:
+    """Cancel one pending task by ID, or every matching pending task.
+
+    Filter-mode (no TASK_ID) needs at least one of --touch, --workflow-id,
+    --contact-email, --trigger, or --overdue. --status defaults to pending;
+    any other status is rejected. TASK_ID and filters are exclusive.
+    """
+    from mailpilot.database import (
+        cancel_task,
+        cancel_tasks_matching,
+        get_workflow,
+        initialize_database,
+    )
+
+    has_required_filter = bool(
+        touches
+        or workflow_id is not None
+        or contact_email is not None
+        or trigger is not None
+        or overdue
+    )
+    has_any_filter = bool(
+        has_required_filter
+        or status is not None
+        or since is not None
+        or until is not None
+    )
+    if task_id is not None and has_any_filter:
+        output_error(
+            "TASK_ID is exclusive with filter flags",
+            "validation_error",
+        )
+    if task_id is None and not has_required_filter:
+        output_error(
+            "TASK_ID or a filter (--touch, --workflow-id, "
+            "--contact-email, --trigger, --overdue) is required",
+            "validation_error",
+        )
+    if task_id is None and status is not None and status != "pending":
+        output_error(
+            f"filter-mode --status must be pending, got {status!r}",
+            "validation_error",
+        )
 
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
-        cancelled = cancel_task(connection, task_id)
-        if cancelled is None:
-            output_error(f"task not found or not pending: {task_id}", "not_found")
-        output_entity("task", cancelled)
+        if task_id is not None:
+            cancelled = cancel_task(connection, task_id)
+            if cancelled is None:
+                output_error(
+                    f"task not found or not pending: {task_id}",
+                    "not_found",
+                )
+            output_entity("task", cancelled)
+            return
+
+        resolved_workflow_id: str | None = None
+        if workflow_id is not None:
+            resolved_workflow_id = _resolve_workflow_id(connection, workflow_id)
+            if get_workflow(connection, resolved_workflow_id) is None:
+                output_error(f"workflow not found: {workflow_id}", "not_found")
+        contact_id = (
+            _resolve_contact(connection, contact_email).id
+            if contact_email is not None
+            else None
+        )
+        result = cancel_tasks_matching(
+            connection,
+            workflow_id=resolved_workflow_id,
+            contact_id=contact_id,
+            trigger=trigger,
+            overdue=overdue,
+            since=since,
+            until=until,
+            touches=list(touches) if touches else None,
+        )
+        output(
+            {"task_cancel": result.model_dump(mode="json")},
+            record_count=result.cancelled_count,
+        )
     finally:
         connection.close()
 
