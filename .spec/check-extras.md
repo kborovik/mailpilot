@@ -260,7 +260,7 @@ Registered tool docstring scope = functions named in `TEMPLATES[*].tools` (send_
 
 ## §V47 — provider-aware model config: dispatch + caching + model settings
 
-`llm_provider` in {`anthropic`, `xai`} (default `xai`) selects factory branch for **both** classifier + workflow agent via `_build_model(settings, *, role)`. Active-provider API key required at model build; missing key fails closed (no fallthrough). Inactive-provider keys may be empty. Dep: `pydantic-ai-slim[anthropic,xai]`.
+`llm_provider` in {`anthropic`, `xai`} (default `xai`) selects factory branch for **both** classifier + workflow agent via `_build_model(settings, *, role)`. Active-provider API key required @ `mailpilot run` start before drain (and still @ model build). Missing/empty key → abort; zero due tasks claimed or marked `failed` (closes §B.141). Model-build remains fail-closed (no provider fallthrough) if preflight skipped. Inactive-provider keys may be empty. Error names env `MAILPILOT_XAI_API_KEY` (provider=xai) or `MAILPILOT_ANTHROPIC_API_KEY` (provider=anthropic); ! prescribe `mailpilot config set` as only fix — keys also load cwd `.env` / process env per §V.85. Dep: `pydantic-ai-slim[anthropic,xai]`.
 
 **Anthropic branch** (`llm_provider=anthropic`): Caching (both call sites — classifier + workflow agent): `anthropic_cache_instructions=True` + `anthropic_cache_tool_definitions=True`. Telemetry attribute names: `agent.invoke` rollup span carries bare `cache_read_input_tokens` + `cache_creation_input_tokens` (from `usage.cache_read_tokens`/`cache_write_tokens`); per-call `chat` span carries OTel `gen_ai.usage.cache_read.input_tokens` + `gen_ai.usage.details.cache_creation_input_tokens` — verify caching against these exact names. `gen_ai.usage.cache_read_input_tokens` exists on neither span (null = false caching-off diagnosis, §B.113). Model settings (workflow agent only — classifier excluded): `_build_anthropic_model` reads `anthropic_thinking`, `anthropic_effort`, `anthropic_max_tokens` into `AnthropicModelSettings`. `anthropic_max_tokens` ALWAYS passed as `max_tokens=<int>` (not empty-gated). `anthropic_thinking` and `anthropic_effort` added ONLY when non-empty. Defaults: `anthropic_model=claude-sonnet-5`, `anthropic_thinking=adaptive`, `anthropic_effort=high`, `anthropic_max_tokens=32768`. `xhigh` effort requires Opus 4.7+.
 
@@ -268,13 +268,15 @@ Registered tool docstring scope = functions named in `TEMPLATES[*].tools` (send_
 
 **Effort enums** (settings load / `config set`, not first agent turn): `anthropic_effort` in {unset, `low`, `medium`, `high`, `xhigh`, `max`}; `xai_reasoning_effort` in {`low`, `medium`, `high`} (no `none` — Grok 4.5 always reasons). Invalid value rejected at settings layer.
 
-Trigger: `src/mailpilot/agent/invoke.py`, `src/mailpilot/agent/classify.py`, or `src/mailpilot/settings.py` changed.
+Trigger: `src/mailpilot/agent/invoke.py`, `src/mailpilot/agent/classify.py`, `src/mailpilot/agent/model.py`, `src/mailpilot/run.py`, or `src/mailpilot/settings.py` changed.
 - `rg 'llm_provider|_build_model\b' src/mailpilot/agent/` -> provider dispatch present
 - Anthropic path (when selected): `rg 'anthropic_cache_instructions.*True\|anthropic_cache_tool_definitions.*True' src/mailpilot/agent/` -> caching flags on both Anthropic call sites
 - Anthropic path: `rg 'max_tokens.*anthropic_max_tokens\|anthropic_max_tokens.*max_tokens' src/mailpilot/agent/` -> `max_tokens` always set (not in an `if` guard)
 - xAI path: `rg 'XaiModel|XaiProvider|xai_reasoning_effort|xai_max_tokens' src/mailpilot/agent/` -> xAI factory + settings wiring
 - `rg 'max_tokens\b' src/mailpilot/agent/classify.py` -> zero hits (classifier excluded from max_tokens)
 - settings: `rg 'AnthropicEffort|XaiReasoningEffort|llm_provider' src/mailpilot/settings.py` -> closed enums + provider field
+- `rg 'MAILPILOT_XAI_API_KEY|MAILPILOT_ANTHROPIC_API_KEY' src/mailpilot/` -> missing-key error names env
+- fixture: missing key + due T1 batch → zero tasks written `failed`
 
 ## §V49 — bounded auto-retry parameters
 
