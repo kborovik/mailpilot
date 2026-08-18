@@ -44,7 +44,8 @@ _NOW = datetime(2026, 8, 13, 16, 0, tzinfo=UTC)
 _INSIDE_WEEK = datetime(2026, 8, 17, 11, 13, tzinfo=UTC)
 _FAR_FUTURE = "2099-12-31T00:00:00Z"
 
-# §V.169 / §B.140 fixtures — year-less week-range + weekday-month-day.
+# §V.169 / §B.140 / §B.142 fixtures — year-less week-range, leave-start,
+# explicit year, and same-day `on <Month> <D>`.
 _FIXTURE_WEEK_RANGE = (
     "Automatic reply: The team is out of the office this week "
     "(August 17-22) for Ascent."
@@ -55,6 +56,10 @@ _FIXTURE_LEAVE_START = (
 )
 _FIXTURE_EXPLICIT_YEAR = (
     "Automatic reply: I am out of the office until Tuesday August 18, 2026."
+)
+_FIXTURE_SAME_DAY_ON = (
+    "Automatic reply: I'll be out of the office on August 17 "
+    "with very limited access to email."
 )
 
 
@@ -261,6 +266,14 @@ def test_parse_explicit_year_wins() -> None:
     assert parsed.year == 2026
 
 
+def test_parse_same_day_on_month_day_same_year() -> None:
+    """§V.169 / §B.142: year-less same-day `on <Month> <D>` stays this year."""
+    parsed = parse_ooo_return_at(_FIXTURE_SAME_DAY_ON, now=_INSIDE_WEEK)
+    assert parsed is not None
+    assert parsed.date().isoformat() == "2026-08-18"
+    assert parsed.year == 2026
+
+
 def test_resolve_unparseable_uses_interval(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
@@ -329,6 +342,25 @@ def test_resolve_leave_start_uses_interval_not_next_year(
     assert resolved.year == 2026
     # Monday 2026-08-17 + 4 days = Friday 2026-08-21.
     assert resolved.date().isoformat() == "2026-08-21"
+
+
+def test_resolve_same_day_on_month_day_same_year(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.169 / §B.142: same-day `on August 17` resumes 2026-08-18, not 2027."""
+    account = make_test_account(database_connection, email="ooo-sameday@lab5.example")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="ooo-sameday"
+    )
+    _activate_outbound(
+        database_connection, workflow.id, touches=3, touch_interval_days=4
+    )
+    email = _email(subject=_FIXTURE_SAME_DAY_ON, body_text=_FIXTURE_SAME_DAY_ON)
+    resolved = resolve_ooo_resume_at(email, workflow, now=_INSIDE_WEEK)
+    assert resolved.year == 2026
+    # Next calendar day is Tuesday 2026-08-18 (no weekend roll).
+    assert resolved.date().isoformat() == "2026-08-18"
+    assert resolved.date().isoformat() != "2027-08-17"
 
 
 def test_route_ooo_cancels_t2_and_schedules_resume(

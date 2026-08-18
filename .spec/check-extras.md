@@ -1104,13 +1104,14 @@ Trigger: `company view` path changed.
 
 ## §V169 — OOO pause-resume
 
-active outbound + inbound OOO/temporary-absence auto-reply (detect: subject Automatic reply / Auto-Submitted / agent OOO class) → no reply incl. no §V.131 fallback ACK; ! conclude (distinct §V.161); ! bump last_touch/emails_sent; §V.123 cancel pending follow-ups; harness schedule resume @ parseable return date (context.touch numeric §V.162, reason=ooo_pause); explicit year in body wins; year-less week-range containing now → resume day-after range-end same year (! next-year on range-start ≤ now); year-less weekday-month-day leave-start/notice (effective/begins, not until/returning/back) + this-year date months past → unparseable ! next-year; unparseable → +touch_interval_days (or +3d if NULL cadence); enrollment stays active, disposition null; OOO inbound ! count as inbound-reply for §V.83 pre-flight
+active outbound + inbound OOO/temporary-absence auto-reply (detect: subject Automatic reply / Auto-Submitted / agent OOO class) → no reply incl. no §V.131 fallback ACK; ! conclude (distinct §V.161); ! bump last_touch/emails_sent; §V.123 cancel pending follow-ups; harness schedule resume @ parseable return date (context.touch numeric §V.162, reason=ooo_pause); explicit year in body wins; year-less week-range containing now → resume day-after range-end same year (! next-year on range-start ≤ now); year-less same-day month+day (`on <Month> <D>`, named day = today, no year) → resume ≥ next calendar day same year (! next-year) (closes §B.142); year-less weekday-month-day leave-start/notice (effective/begins, not until/returning/back) + this-year date months past → unparseable ! next-year; unparseable → +touch_interval_days (or +3d if NULL cadence); enrollment stays active, disposition null; OOO inbound ! count as inbound-reply for §V.83 pre-flight
 
 Trigger: inbound OOO / auto-reply / cadence resume path changed.
 - `rg 'ooo_pause|_maybe_ooo_pause' src/mailpilot/` -> pause+resume path
 - `rg 'Automatic reply|Auto-Submitted' src/mailpilot/ooo.py` -> mechanical detect
 - `rg '_FALLBACK_ACKNOWLEDGEMENT|_ack_or_ooo_pause' src/mailpilot/run.py` -> OOO exempt from fallback ACK
 - `rg 'is_mechanical_ooo|is_ooo_auto_reply' src/mailpilot/run.py src/mailpilot/database.py` -> OOO excluded from §V.83 replied-after
+- fixture: same-day `on <Month> <D>` no year → resume ≥ next day same year not next-year
 
 ## §V170 — task-retry-schedule
 
