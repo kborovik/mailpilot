@@ -287,7 +287,7 @@ T286|x|impl §V.171(+) + §V.150(∆) + §I — enrollment add scheduled batch: 
 T287|x|impl §V.169(∆) — OOO resume-year: week-range w/o year containing now → same-year day-after range-end; weekday-month-day leave-start months past → unparseable not next-year; explicit year wins; fixtures week-range + weekday-month-day (#236)|V169,B140
 T288|x|impl §V.7(∆) + §V.172(+) + §I — email list snippet (first 500 body_text); task list failed result.reason; SKILL one-call drops N email view + task view; tests (#237)|V7,V172,V4,I.cli
 T289|x|impl §V.173(+) + §I — task cancel filter-mode + --touch (repeatable); task list --touch; one envelope cancelled_count+ids+leftover_pending_by_touch; SKILL one-call; tests (#240)|V173,V162,V115,V4,V111,I.cli
-T290|.|impl §V.47(∆) — run empty active-provider key abort pre-drain; zero due tasks claimed or written failed; error names MAILPILOT_*_API_KEY env not prescribe config set only; fixture missing-key + due T1 (#241)|V47,B141,I.config
+T290|x|impl §V.47(∆) — run empty active-provider key abort pre-drain; zero due tasks claimed or written failed; error names MAILPILOT_*_API_KEY env not prescribe config set only; fixture missing-key + due T1 (#241)|V47,B141,I.config
 T291|.|incident failed T1 requeue via `task retry` (§V.170); same enrollment; no second enrollment (#241)|V170,V49,V32,V47
 
 ## §B BUGS

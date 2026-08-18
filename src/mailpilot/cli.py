@@ -1110,10 +1110,14 @@ def show_queue(
 def run() -> None:
     """Start the sync loop (Pub/Sub + task runner, foreground)."""
     from mailpilot.database import initialize_database
-    from mailpilot.settings import get_settings
+    from mailpilot.settings import get_settings, require_active_provider_key
     from mailpilot.sync import start_sync_loop
 
     settings = get_settings()
+    try:
+        require_active_provider_key(settings)
+    except ValueError as exc:
+        output_error(str(exc), "validation_error")
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
         start_sync_loop(connection, settings)

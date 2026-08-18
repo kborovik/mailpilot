@@ -1099,7 +1099,7 @@ def test_missing_api_key_raises(
     with (
         patch("mailpilot.agent.invoke.GmailClient"),
         patch("mailpilot.agent.invoke.DriveClient"),
-        pytest.raises(ValueError, match="xai_api_key is required"),
+        pytest.raises(ValueError, match="MAILPILOT_XAI_API_KEY"),
     ):
         invoke_workflow_agent(
             database_connection,
@@ -2226,8 +2226,9 @@ def test_build_anthropic_model_requires_api_key() -> None:
         anthropic_api_key="",
         anthropic_model="claude-sonnet-5",
     )
-    with pytest.raises(ValueError, match="anthropic_api_key"):
+    with pytest.raises(ValueError, match="MAILPILOT_ANTHROPIC_API_KEY") as exc_info:
         _build_anthropic_model(settings, role="workflow")
+    assert "mailpilot config set" not in str(exc_info.value)
 
 
 def test_build_anthropic_model_uses_240s_read_timeout() -> None:
@@ -2342,8 +2343,9 @@ def test_build_xai_model_classifier_omits_workflow_settings() -> None:
 def test_build_xai_model_requires_api_key() -> None:
     """Missing xai_api_key fails closed when provider is xai."""
     settings = make_test_settings(llm_provider="xai", xai_api_key="")
-    with pytest.raises(ValueError, match="xai_api_key"):
+    with pytest.raises(ValueError, match="MAILPILOT_XAI_API_KEY") as exc_info:
         _build_xai_model(settings, role="workflow")
+    assert "mailpilot config set" not in str(exc_info.value)
 
 
 def test_build_xai_model_threads_api_host() -> None:

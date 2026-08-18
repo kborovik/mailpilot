@@ -13973,15 +13973,16 @@ def test_task_retry_invalid_scheduled_at_validation_error(
 
 
 def test_run_command(runner: CliRunner, mock_connection: MagicMock) -> None:
+    settings = make_test_settings(xai_api_key="xai-test")
     with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.settings.get_settings", return_value=settings),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.sync.start_sync_loop") as mock_loop,
     ):
         result = runner.invoke(main, ["run"])
 
     assert result.exit_code == 0, result.output
-    mock_loop.assert_called_once_with(mock_connection, make_test_settings())
+    mock_loop.assert_called_once_with(mock_connection, settings)
 
 
 # -- envelope shape contract (SPEC §V.4) --------------------------------------
@@ -14431,7 +14432,10 @@ def test_run_dead_stops_when_schema_not_current(runner: CliRunner) -> None:
         pending=0,
     )
     with (
-        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch(
+            "mailpilot.settings.get_settings",
+            return_value=make_test_settings(xai_api_key="xai-test"),
+        ),
         patch("mailpilot.database.psycopg.connect", return_value=_gate_db_mock()),
         patch("mailpilot.database.determine_schema_verdict", return_value=drift),
         patch("mailpilot.sync.start_sync_loop") as mock_loop,
