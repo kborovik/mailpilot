@@ -13155,14 +13155,15 @@ def test_task_list_cli_failed_projects_result_reason(
 
 
 def test_skill_documents_campaign_review_one_call() -> None:
-    """#237: packaged SKILL.md one-call drops N email view + task view."""
+    """#237 / #243: packaged SKILL.md one-call is workflow review."""
     from importlib.resources import files
 
     body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
     assert "Campaign review" in body
+    assert "workflow review" in body
     assert "snippet" in body
     assert "result.reason" in body
-    assert "loop `email view`" in body
+    assert "email view" in body
     assert "task view" in body
     assert "§V." not in body
     assert "§T." not in body
@@ -15312,6 +15313,301 @@ def test_workflow_status_envelope(
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data["workflow_status"]["run_loop"] == "stopped"
+
+
+def test_workflow_review_envelope(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.174: workflow review ships under workflow_review; record_count = reviews."""
+    from datetime import UTC
+
+    from mailpilot.models import (
+        TouchStageCounts,
+        WorkflowReportMeta,
+        WorkflowReview,
+        WorkflowReviewItem,
+        WorkflowReviewTaskCounts,
+        WorkflowStats,
+    )
+
+    review = WorkflowReview(
+        since=datetime(2026, 8, 17, 15, 43, 13, tzinfo=UTC),
+        until=datetime(2026, 8, 18, 15, 43, 13, tzinfo=UTC),
+        reviews=[
+            WorkflowReviewItem(
+                workflow=WorkflowReportMeta(name="Demo", status="active"),
+                funnel=WorkflowStats(
+                    workflow_id=_WORKFLOW_ID,
+                    workflow_name="Demo",
+                    enrolled=1,
+                    sent=0,
+                    bounced=0,
+                    replied=0,
+                    meeting_booked=0,
+                    contact_later=0,
+                    do_not_contact=0,
+                    active=1,
+                    touches={"1": TouchStageCounts()},
+                    awaiting_first_touch=1,
+                    disabled=0,
+                ),
+                task_counts=WorkflowReviewTaskCounts(failed=0, overdue=0, pending=0),
+                emails=[],
+                activities=[],
+                failed_tasks=[],
+                enrollments=[],
+            )
+        ],
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=_make_workflow()),
+        patch("mailpilot.database.get_workflow_review", return_value=review),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "review",
+                _WORKFLOW_ID,
+                "--since",
+                "2026-08-17T11:43:13-04:00",
+                "--until",
+                "2026-08-18T11:43:13-04:00",
+            ],
+        )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 1
+    assert "workflow_review" in data
+    assert data["workflow_review"]["reviews"][0]["workflow"]["name"] == "Demo"
+    assert data["workflow_review"]["reviews"][0]["funnel"]["enrolled"] == 1
+    assert data["workflow_review"]["reviews"][0]["task_counts"]["failed"] == 0
+
+
+def test_workflow_review_missing_since_until(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.174: missing --since/--until is validation_error."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(main, ["workflow", "review", _WORKFLOW_ID])
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+
+
+def test_workflow_review_invalid_iso(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.174: unparseable ISO window is validation_error."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "review",
+                _WORKFLOW_ID,
+                "--since",
+                "not-iso",
+                "--until",
+                "2026-08-18T11:43:13-04:00",
+            ],
+        )
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+
+
+def test_workflow_review_not_found(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.107: unknown slug exits not_found."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow_by_name", return_value=None),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "review",
+                "nope",
+                "--since",
+                "2026-08-17T00:00:00Z",
+                "--until",
+                "2026-08-18T00:00:00Z",
+            ],
+        )
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "not_found"
+
+
+def test_workflow_review_all_uses_active_ids(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.174: `all` reviews every active workflow."""
+    from datetime import UTC
+
+    from mailpilot.models import WorkflowReview
+
+    live_a = _make_workflow(id="aaaaaaaa-0000-7000-0000-000000000001", name="alpha")
+    live_b = _make_workflow(id="bbbbbbbb-0000-7000-0000-000000000002", name="beta")
+    review = WorkflowReview(
+        since=datetime(2026, 8, 17, tzinfo=UTC),
+        until=datetime(2026, 8, 18, tzinfo=UTC),
+        reviews=[],
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.list_active_workflows",
+            return_value=[live_a, live_b],
+        ) as mock_active,
+        patch(
+            "mailpilot.database.get_workflow_review", return_value=review
+        ) as mock_review,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "review",
+                "all",
+                "--since",
+                "2026-08-17T00:00:00Z",
+                "--until",
+                "2026-08-18T00:00:00Z",
+            ],
+        )
+    assert result.exit_code == 0, result.output
+    mock_active.assert_called_once()
+    passed_ids = mock_review.call_args.args[1]
+    assert passed_ids == [live_a.id, live_b.id]
+    data = json.loads(result.output)
+    assert data["record_count"] == 0
+
+
+def test_workflow_review_cli_live_inbound_and_failed(
+    runner: CliRunner, database_connection: Any
+) -> None:
+    """§V.174 / #243: live review includes inbound snippet + failed contact_email."""
+    from conftest import (
+        make_test_account,
+        make_test_contact,
+        make_test_enrollment,
+        make_test_workflow,
+    )
+    from mailpilot.database import (
+        complete_task,
+        create_activity,
+        create_email,
+        create_task,
+    )
+
+    account = make_test_account(database_connection, email="review-cli@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="review-cli-wf"
+    )
+    contact = make_test_contact(database_connection, email="matt@review-cli.test")
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    inside = datetime(2026, 8, 17, 16, 0, tzinfo=UTC)
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        gmail_message_id="review_cli_ooo",
+        subject="OOO",
+        body_text="I am out of the office until Monday.",
+        received_at=inside,
+        is_routed=True,
+        route_method="thread_match",
+    )
+    assert inbound is not None
+    activity = create_activity(
+        database_connection,
+        activity_type="email_received",
+        contact_id=contact.id,
+        email_id=inbound.id,
+        summary=inbound.subject,
+    )
+    database_connection.execute(
+        "UPDATE activity SET created_at = %(ts)s WHERE id = %(id)s",
+        {"ts": inside, "id": activity.id},
+    )
+    database_connection.commit()
+    failed = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="touch 1",
+        scheduled_at="2026-08-17T12:00:00Z",
+    )
+    complete_task(
+        database_connection,
+        failed.id,
+        status="failed",
+        result={"reason": "agent completed without calling any tools"},
+    )
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "review",
+                workflow.name,
+                "--since",
+                "2026-08-17T11:43:13-04:00",
+                "--until",
+                "2026-08-18T11:43:13-04:00",
+            ],
+        )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 1
+    item = data["workflow_review"]["reviews"][0]
+    assert item["funnel"]["enrolled"] == 1
+    assert len(item["enrollments"]) == 1
+    assert any("out of the office" in row["snippet"].lower() for row in item["emails"])
+    received = [row for row in item["activities"] if row["type"] == "email_received"]
+    assert received
+    assert "out of the office" in received[0]["snippet"].lower()
+    assert item["failed_tasks"][0]["contact_email"] == "matt@review-cli.test"
+    assert (
+        item["failed_tasks"][0]["result"]["reason"]
+        == "agent completed without calling any tools"
+    )
+
+
+def test_skill_documents_workflow_review_one_call() -> None:
+    """#243: packaged SKILL.md one-call is workflow review, not 7 verbs."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "workflow review" in body
+    assert "mailpilot workflow review all" in body
+    assert "email_received" in body
+    assert "contact_email" in body
+    assert "result.reason" in body
+    assert "Do not loop" in body
+    assert "`workflow stats`" in body
+    assert "§V." not in body
+    assert "§T." not in body
 
 
 def test_activity_list_requires_scope(

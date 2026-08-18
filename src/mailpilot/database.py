@@ -73,6 +73,11 @@ from mailpilot.models import (
     WorkflowCheckEntry,
     WorkflowReport,
     WorkflowReportMeta,
+    WorkflowReview,
+    WorkflowReviewActivity,
+    WorkflowReviewFailedTask,
+    WorkflowReviewItem,
+    WorkflowReviewTaskCounts,
     WorkflowStats,
     WorkflowStatusHealth,
     WorkflowSummary,
@@ -3127,6 +3132,174 @@ def get_workflow_status_health(
     )
 
 
+def list_active_workflows(
+    connection: psycopg.Connection[dict[str, Any]],
+) -> list[Workflow]:
+    """Return every active workflow, name-sorted, with no list cap (§V.174)."""
+    return [w for w in list_workflows_full(connection) if w.status == "active"]
+
+
+def _review_task_counts(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+) -> WorkflowReviewTaskCounts:
+    """Count failed, overdue, and pending tasks for one workflow."""
+    row = connection.execute(
+        """\
+        SELECT
+            COUNT(*) FILTER (WHERE status = 'failed')::int AS failed,
+            COUNT(*) FILTER (
+                WHERE status = 'pending' AND scheduled_at < NOW()
+            )::int AS overdue,
+            COUNT(*) FILTER (WHERE status = 'pending')::int AS pending
+        FROM task
+        WHERE workflow_id = %(workflow_id)s
+        """,
+        {"workflow_id": workflow_id},
+    ).fetchone()
+    assert row is not None
+    return WorkflowReviewTaskCounts(
+        failed=row["failed"], overdue=row["overdue"], pending=row["pending"]
+    )
+
+
+def _review_window_emails(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+    since: str,
+    until: str,
+) -> list[EmailSummary]:
+    """Window emails for one workflow, uncapped, with snippet (§V.7)."""
+    rows = connection.execute(
+        """\
+        SELECT id, account_id, contact_id, workflow_id, direction,
+            subject, sender, recipients, status, is_routed, route_method,
+            gmail_thread_id, sent_at, received_at,
+            LEFT(body_text, 500) AS snippet
+        FROM email
+        WHERE workflow_id = %(workflow_id)s
+          AND COALESCE(sent_at, received_at) >= %(since)s
+          AND COALESCE(sent_at, received_at) <= %(until)s
+        ORDER BY COALESCE(sent_at, received_at) DESC
+        """,
+        {"workflow_id": workflow_id, "since": since, "until": until},
+    ).fetchall()
+    return [EmailSummary.model_validate(row) for row in rows]
+
+
+def _review_window_activities(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+    since: str,
+    until: str,
+) -> list[WorkflowReviewActivity]:
+    """Window activities including inbound email_received via email FK.
+
+    Inbound ``email_received`` rows are stored without ``activity.workflow_id``
+    (sync path). Join ``email.workflow_id`` so they still appear with snippet.
+    """
+    rows = connection.execute(
+        """\
+        SELECT a.id, a.contact_id, a.company_id, a.email_id, a.workflow_id,
+            a.task_id, a.enrollment_id, a.type, a.summary, a.created_at,
+            COALESCE(LEFT(e.body_text, 500), '') AS snippet
+        FROM activity a
+        LEFT JOIN email e ON e.id = a.email_id
+        WHERE a.created_at >= %(since)s
+          AND a.created_at <= %(until)s
+          AND (
+              a.workflow_id = %(workflow_id)s
+              OR e.workflow_id = %(workflow_id)s
+          )
+        ORDER BY a.created_at DESC
+        """,
+        {"workflow_id": workflow_id, "since": since, "until": until},
+    ).fetchall()
+    return [WorkflowReviewActivity.model_validate(row) for row in rows]
+
+
+def _review_failed_tasks(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+) -> list[WorkflowReviewFailedTask]:
+    """Failed tasks with contact_email and result.reason (§V.172)."""
+    rows = connection.execute(
+        """\
+        SELECT t.id, t.enrollment_id, t.workflow_id, t.contact_id, t.email_id,
+            t.description, t.scheduled_at, t.status, t.attempt_count,
+            jsonb_build_object('reason', t.result->>'reason') AS result,
+            c.email AS contact_email
+        FROM task t
+        JOIN contact c ON c.id = t.contact_id
+        WHERE t.workflow_id = %(workflow_id)s
+          AND t.status = 'failed'
+        ORDER BY t.scheduled_at DESC
+        """,
+        {"workflow_id": workflow_id},
+    ).fetchall()
+    return [WorkflowReviewFailedTask.model_validate(row) for row in rows]
+
+
+def _review_one_workflow(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow: Workflow,
+    since: str,
+    until: str,
+) -> WorkflowReviewItem:
+    """Build one dated campaign collect for a resolved workflow."""
+    funnel = get_workflow_stats(connection, workflow.id)
+    assert funnel is not None
+    enrollments = list_enrollments_detailed(
+        connection,
+        workflow_id=workflow.id,
+        full=True,
+        limit=None,
+        sort="next_scheduled_at",
+    )
+    return WorkflowReviewItem(
+        workflow=WorkflowReportMeta(
+            name=workflow.name,
+            touches=workflow.touches,
+            touch_interval_days=workflow.touch_interval_days,
+            status=workflow.status,
+        ),
+        funnel=funnel,
+        task_counts=_review_task_counts(connection, workflow.id),
+        emails=_review_window_emails(connection, workflow.id, since, until),
+        activities=_review_window_activities(connection, workflow.id, since, until),
+        failed_tasks=_review_failed_tasks(connection, workflow.id),
+        enrollments=enrollments,
+    )
+
+
+def get_workflow_review(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_ids: Sequence[str],
+    *,
+    since: str,
+    until: str,
+) -> WorkflowReview:
+    """Dated one-envelope campaign collect for one or more workflows (§V.174).
+
+    Pure SQL / deterministic. No LLM, no CRM writes. Enrollments are not
+    capped. Window emails and activities include inbound ``email_received``
+    with snippet even when ``activity.workflow_id`` is unset.
+    """
+    since_dt = datetime.fromisoformat(since)
+    until_dt = datetime.fromisoformat(until)
+    if since_dt.tzinfo is None:
+        since_dt = since_dt.replace(tzinfo=UTC)
+    if until_dt.tzinfo is None:
+        until_dt = until_dt.replace(tzinfo=UTC)
+    reviews: list[WorkflowReviewItem] = []
+    for workflow_id in workflow_ids:
+        workflow = get_workflow(connection, workflow_id)
+        if workflow is None:
+            continue
+        reviews.append(_review_one_workflow(connection, workflow, since, until))
+    return WorkflowReview(since=since_dt, until=until_dt, reviews=reviews)
+
+
 def get_queue_report(
     connection: psycopg.Connection[dict[str, Any]],
     *,
@@ -4542,7 +4715,7 @@ def list_enrollments_detailed(  # noqa: C901, PLR0912
     workflow_id: str | None = None,
     contact_id: str | None = None,
     status: str | None = None,
-    limit: int = 100,
+    limit: int | None = 100,
     since: str | None = None,
     until: str | None = None,
     *,
@@ -4570,7 +4743,7 @@ def list_enrollments_detailed(  # noqa: C901, PLR0912
         workflow_id: Optional workflow FK filter.
         contact_id: Optional contact FK filter.
         status: Filter by enrollment status.
-        limit: Maximum results.
+        limit: Maximum results. ``None`` omits LIMIT (review path §V.174).
         since: ISO datetime inclusive lower bound on ``e.updated_at``.
         until: ISO datetime inclusive upper bound on ``e.updated_at``.
         full: When True, denser execution projection (§V.152).
@@ -4591,9 +4764,10 @@ def list_enrollments_detailed(  # noqa: C901, PLR0912
         List of enrollment summaries.
     """
     params: dict[str, object] = {
-        "limit": limit,
         "first_send_sla_hours": first_send_sla_hours,
     }
+    if limit is not None:
+        params["limit"] = limit
     where_parts: list[Composed | SQL] = []
     if workflow_id is not None:
         where_parts.append(SQL("e.workflow_id = %(workflow_id)s"))
@@ -4795,6 +4969,7 @@ def list_enrollments_detailed(  # noqa: C901, PLR0912
         else SQL("e.updated_at")
     )
     order_dir = SQL("DESC") if desc else SQL("ASC")
+    limit_sql = SQL(" LIMIT %(limit)s") if limit is not None else SQL("")
     query = (
         select_cols
         + from_joins
@@ -4803,7 +4978,8 @@ def list_enrollments_detailed(  # noqa: C901, PLR0912
         + order_col
         + SQL(" ")
         + order_dir
-        + SQL(" NULLS LAST LIMIT %(limit)s")
+        + SQL(" NULLS LAST")
+        + limit_sql
     )
     rows = connection.execute(query, params).fetchall()
     return [EnrollmentSummary.model_validate(row) for row in rows]

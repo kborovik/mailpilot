@@ -841,6 +841,50 @@ class ActivitySummary(BaseModel):
     created_at: datetime
 
 
+class WorkflowReviewTaskCounts(BaseModel):
+    """Current task snapshot for ``workflow review`` (§V.174)."""
+
+    failed: int
+    overdue: int
+    pending: int
+
+
+class WorkflowReviewFailedTask(TaskSummary):
+    """Failed task row with seat email for campaign review (§V.174)."""
+
+    contact_email: str
+
+
+class WorkflowReviewActivity(ActivitySummary):
+    """Window activity with optional email snippet (§V.174 / §V.7)."""
+
+    snippet: str = ""
+
+
+class WorkflowReviewItem(BaseModel):
+    """One workflow's dated campaign collect (§V.174)."""
+
+    workflow: WorkflowReportMeta
+    funnel: WorkflowStats
+    task_counts: WorkflowReviewTaskCounts
+    emails: list[EmailSummary]
+    activities: list[WorkflowReviewActivity]
+    failed_tasks: list[WorkflowReviewFailedTask]
+    enrollments: list[EnrollmentSummary]
+
+
+class WorkflowReview(BaseModel):
+    """Dated one-envelope campaign collect (§V.174).
+
+    ``record_count`` on the CLI envelope is ``len(reviews)``. ``all`` fills
+    one item per active workflow; a slug fills one item.
+    """
+
+    since: datetime
+    until: datetime
+    reviews: list[WorkflowReviewItem]
+
+
 class Tag(BaseModel):
     """A defined tag in the operator-maintained controlled vocabulary (§V.116).
 
