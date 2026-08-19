@@ -65,6 +65,8 @@ from mailpilot.models import (
     TagSummary,
     Task,
     TaskCancelResult,
+    TaskRetryCompany,
+    TaskRetryResult,
     TaskStats,
     TaskSummary,
     TouchStageCounts,
@@ -5844,7 +5846,7 @@ def _task_filter_clauses(
     until: str | None = None,
     touches: Sequence[int] | None = None,
 ) -> list[Composable]:
-    """Build shared ``task list`` / ``task cancel`` filter clauses.
+    """Build shared ``task list`` / ``task cancel`` / ``task retry`` clauses.
 
     Touch match uses ``_sql_resolve_touch`` (parse §V.162 + first-touch
     fallback). Never filters on ``description``.
@@ -6015,6 +6017,121 @@ def cancel_tasks_matching(
         cancelled_count=len(ids),
         ids=ids,
         leftover_pending_by_touch=leftover,
+    )
+
+
+def retry_tasks_matching(
+    connection: psycopg.Connection[dict[str, Any]],
+    *,
+    workflow_id: str | None = None,
+    contact_id: str | None = None,
+    status: str = "failed",
+    trigger: str | None = None,
+    overdue: bool = False,
+    since: str | None = None,
+    until: str | None = None,
+    touches: Sequence[int] | None = None,
+    scheduled_at: str | None = None,
+    dry_run: bool = False,
+    task_id: str | None = None,
+) -> TaskRetryResult:
+    """Retry every matching failed or cancelled task in one txn (§V.175).
+
+    No default limit. ``--scheduled-at`` (when set) is the same instant
+    for every selected row; omit it to apply §V.170 per row (keep a
+    still-future stored time, else now). ``dry_run`` selects ids and
+    companies with no writes. Zero matches is an ok no-op.
+
+    Args:
+        connection: Open database connection.
+        workflow_id: Filter by workflow ID.
+        contact_id: Filter by contact ID.
+        status: ``failed`` (default) or ``cancelled``.
+        trigger: Filter by ``context->>'trigger'``.
+        overdue: When True, compose with task-list overdue (pending +
+            past ``scheduled_at``); that conjunction is typically empty.
+        since: Inclusive lower bound on ``scheduled_at``.
+        until: Inclusive upper bound on ``scheduled_at``.
+        touches: Resolved touch numbers to retry (parse §V.162).
+        scheduled_at: Optional ISO override applied to every selected row.
+        dry_run: When True, preview only (no UPDATE).
+        task_id: Optional single-id restriction (id-mode ``--dry-run``).
+
+    Returns:
+        Join envelope: retried ids, override scheduled_at, companies.
+    """
+    params: dict[str, object] = {}
+    conditions = _task_filter_clauses(
+        params,
+        workflow_id=workflow_id,
+        contact_id=contact_id,
+        status=status,
+        trigger=trigger,
+        overdue=overdue,
+        since=since,
+        until=until,
+        touches=touches,
+    )
+    if task_id is not None:
+        conditions.append(SQL("id = %(task_id)s"))
+        params["task_id"] = task_id
+    conditions.append(SQL("status IN ('failed', 'cancelled')"))
+    where = SQL("WHERE ") + SQL(" AND ").join(conditions)
+
+    if dry_run:
+        rows = connection.execute(
+            SQL("SELECT id FROM task {}").format(where),
+            params,
+        ).fetchall()
+    else:
+        params["scheduled_at"] = scheduled_at
+        rows = connection.execute(
+            SQL(
+                """\
+                UPDATE task
+                SET status = 'pending',
+                    attempt_count = 0,
+                    scheduled_at = CASE
+                        WHEN %(scheduled_at)s::text IS NOT NULL
+                            THEN (%(scheduled_at)s::text)::timestamptz
+                        WHEN scheduled_at > CURRENT_TIMESTAMP THEN scheduled_at
+                        ELSE CURRENT_TIMESTAMP
+                    END,
+                    completed_at = NULL
+                {}
+                RETURNING id
+                """
+            ).format(where),
+            params,
+        ).fetchall()
+
+    ids = sorted(str(row["id"]) for row in rows)
+    companies: list[TaskRetryCompany] = []
+    if ids:
+        company_rows = connection.execute(
+            """\
+            SELECT co.domain AS domain, COUNT(*)::int AS n
+            FROM task t
+            JOIN contact c ON c.id = t.contact_id
+            JOIN company co ON co.id = c.company_id
+            WHERE t.id = ANY(%(ids)s)
+            GROUP BY co.domain
+            ORDER BY co.domain
+            """,
+            {"ids": ids},
+        ).fetchall()
+        companies = [
+            TaskRetryCompany(domain=str(row["domain"]), count=int(row["n"]))
+            for row in company_rows
+        ]
+    if not dry_run:
+        connection.commit()
+    return TaskRetryResult(
+        retried_count=len(ids),
+        ids=ids,
+        scheduled_at=scheduled_at,
+        companies=companies,
+        dry_run=dry_run,
     )
 
 

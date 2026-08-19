@@ -295,7 +295,7 @@ T290|x|impl §V.47(∆) — run empty active-provider key abort pre-drain; zero 
 T291|x|incident failed T1 requeue via `task retry` (§V.170); same enrollment; no second enrollment (#241)|V170,V49,V32,V47
 T292|x|impl §V.174(+) + §I — workflow review <slug|all> --since --until; one envelope funnel+failed/overdue/pending+window email/activity (inbound+snippet)+failed contact_email+reason+enrollments uncapped; tests + SKILL (#243)|V174,V132,V7,V172,V152,V107,V4,I.cli
 T293|x|impl §V.169(∆) — OOO resume-year: same-day month+day w/o year → same-year ≥ next day not next-year; explicit-year #236 still wins; fixture same-day `on <Month> <D>` no year (#242)|V169,B142
-T294|.|impl §V.175(+) + §I — task retry filter-mode + --touch (repeatable) + --scheduled-at on set + --dry-run preview ids+companies; one envelope retried_count+ids+scheduled_at+companies; SKILL one-call; tests (#244)|V175,V170,V49,V162,V115,V4,V111,I.cli
+T294|x|impl §V.175(+) + §I — task retry filter-mode + --touch (repeatable) + --scheduled-at on set + --dry-run preview ids+companies; one envelope retried_count+ids+scheduled_at+companies; SKILL one-call; tests (#244)|V175,V170,V49,V162,V115,V4,V111,I.cli
 
 ## §B BUGS
 

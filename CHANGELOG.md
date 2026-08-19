@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `task retry` accepts the same filters as `task list` plus repeatable
+  `--touch N` (or `T<n>`). One call retries matching failed (default)
+  or cancelled tasks and returns `retried_count`, `ids`, `scheduled_at`,
+  and `companies`. `--scheduled-at` applies to the selected set.
+  `--dry-run` previews ids and companies with no writes.
+  `task retry <id>` is unchanged unless `--dry-run`.
+
 - `workflow review <slug|all> --since --until` returns one dated
   campaign envelope: funnel, failed/overdue/pending counts, window
   emails with snippet, window activities including inbound
