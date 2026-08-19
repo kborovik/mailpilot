@@ -687,6 +687,30 @@ class TaskCancelResult(BaseModel):
     leftover_pending_by_touch: dict[str, int] = Field(default_factory=dict)
 
 
+class TaskRetryCompany(BaseModel):
+    """Company bucket in a filter-mode ``task retry`` envelope (§V.175)."""
+
+    domain: str
+    count: int
+
+
+class TaskRetryResult(BaseModel):
+    """Filter-mode ``task retry`` join envelope (§V.175).
+
+    ``scheduled_at`` is the ``--scheduled-at`` override (ISO), or null
+    when omitted (per-row keep-future / now per §V.170). ``companies``
+    groups selected rows by contact company domain. ``record_count`` on
+    the CLI envelope is ``retried_count``. ``dry_run`` is true when no
+    writes were applied.
+    """
+
+    retried_count: int
+    ids: list[str]
+    scheduled_at: str | None = None
+    companies: list[TaskRetryCompany] = Field(default_factory=list)
+    dry_run: bool = False
+
+
 class TaskStats(BaseModel):
     """Task-cadence aggregate over the task queue at task grain (§V.133).
 

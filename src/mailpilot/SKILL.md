@@ -44,14 +44,18 @@ it defaults to an ASCII table; pass `--format json` for the `queue` envelope.
 - `task cancel` with filters (no TASK_ID):
   `{"task_cancel": {"cancelled_count": N, "ids": [...], "leftover_pending_by_touch": {"1": N}}, "record_count": N, "ok": true}`
   (`record_count` is `cancelled_count`; zero match is an ok no-op)
+- `task retry` with filters (no TASK_ID), or `--dry-run` (including with TASK_ID):
+  `{"task_retry": {"retried_count": N, "ids": [...], "scheduled_at": "...", "companies": [{"domain": "...", "count": N}], "dry_run": false}, "record_count": N, "ok": true}`
+  (`record_count` is `retried_count`; zero match is an ok no-op; `scheduled_at` is the override or null)
 - `workflow review`:
   `{"workflow_review": {"since": "...", "until": "...", "reviews": [...]}, "record_count": N, "ok": true}`
   (`record_count` is the number of workflow reviews; `all` is every active)
 
 Every `ok: true` envelope carries a top-level integer `record_count`: the
 array length for array payloads, `1` for single-object payloads,
-`cancelled_count` for filter-mode `task cancel`, review count for
-`workflow review`. Error envelopes omit it.
+`cancelled_count` for filter-mode `task cancel`, `retried_count` for
+filter-mode `task retry`, review count for `workflow review`. Error
+envelopes omit it.
 
 Plural keys mirror the noun (`accounts`, `companies`, `contacts`,
 `workflows`, `enrollments`, `tasks`, `emails`, `activities`, `tags`, `notes`,
@@ -989,6 +993,9 @@ mailpilot task cancel <TID>
 mailpilot task cancel --workflow-id <NAME_OR_ID> --touch 2
 mailpilot task retry <TID>
 mailpilot task retry <TID> --scheduled-at 2026-08-17T13:01:49-04:00
+mailpilot task retry --workflow-id <NAME_OR_ID> --touch 1 --dry-run
+mailpilot task retry --workflow-id <NAME_OR_ID> --status failed \
+  --touch 1 --scheduled-at 2026-08-24T09:00:00-04:00
 ```
 
 Failed `task list` rows carry `result.reason` (string or null). Do not
@@ -1032,7 +1039,48 @@ Zero match is an ok no-op (`cancelled_count` 0).
 grouped by resolved touch, after the cancel. `task cancel <TID>` still
 returns the single task entity.
 
-`task retry` is one call for a failed or cancelled row. Omit
+### Retry failed tasks (one call)
+
+Do not list then loop `task retry <id>`. One call retries every matching
+failed (default) or cancelled row and returns the join.
+
+Filter-mode needs at least one of `--touch`, `--workflow-id`,
+`--contact-email`, or `--trigger`. `--status` defaults to failed; only
+failed and cancelled are allowed. TASK_ID and filters are exclusive.
+`--scheduled-at` applies the same instant to every selected row. Omit
+it to keep a still-future stored time, or now when the stored time is
+past. `--dry-run` previews ids and companies with no writes. Touch is
+read from task context, never description text. Distinct from
+`task cancel`.
+
+```
+mailpilot task retry --workflow-id <NAME_OR_ID> --touch 1 --dry-run
+mailpilot task retry --workflow-id <NAME_OR_ID> --status failed \
+  --touch 1 --scheduled-at 2026-08-24T09:00:00-04:00
+mailpilot task retry --workflow-id <NAME_OR_ID> --touch 2 --touch 3
+mailpilot task retry <TID> --dry-run
+```
+
+Envelope:
+
+```json
+{
+  "task_retry": {
+    "retried_count": 2,
+    "ids": ["...", "..."],
+    "scheduled_at": "2026-08-24T09:00:00-04:00",
+    "companies": [{"domain": "a.com", "count": 2}],
+    "dry_run": false
+  },
+  "record_count": 2,
+  "ok": true
+}
+```
+
+Zero match is an ok no-op (`retried_count` 0). `task retry <TID>` without
+`--dry-run` still returns the single task entity.
+
+`task retry <TID>` is one call for a failed or cancelled row. Omit
 `--scheduled-at` to keep a still-future stored time (resume T2 on the
 original date after an out-of-office cancel). Pass `--scheduled-at` to
 park it on a later instant. A past override is rejected. Then confirm

@@ -106,6 +106,7 @@ from mailpilot.database import (
     pause_workflow,
     record_enrollment_outcome,
     reschedule_task_for_retry,
+    retry_tasks_matching,
     search_companies,
     search_contacts,
     search_emails,
@@ -5655,6 +5656,245 @@ def test_cancel_tasks_matching_repeatable_touch_and_overdue(
     assert result.cancelled_count == 2
     assert result.leftover_pending_by_touch == {}
     assert get_task(database_connection, future_t2.id).status == "pending"  # type: ignore[union-attr]
+
+
+def test_retry_tasks_matching_one_txn_and_companies(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.175: one txn retries matching failed; companies grouped by domain."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    company_a = make_test_company(
+        database_connection, name="A Co", domain="retry-a.example"
+    )
+    company_b = make_test_company(
+        database_connection, name="B Co", domain="retry-b.example"
+    )
+    contact_a = make_test_contact(
+        database_connection, email="ada@retry-a.example", company_id=company_a.id
+    )
+    contact_b = make_test_contact(
+        database_connection, email="grace@retry-b.example", company_id=company_b.id
+    )
+    en_a = make_test_enrollment(database_connection, workflow.id, contact_a.id)
+    en_b = make_test_enrollment(database_connection, workflow.id, contact_b.id)
+    failed_a = create_task(
+        database_connection,
+        enrollment_id=en_a.id,
+        workflow_id=workflow.id,
+        contact_id=contact_a.id,
+        description="Touch 1 of 3",
+        scheduled_at="2020-01-01T12:00:00Z",
+        context={"touch": 1},
+    )
+    failed_b = create_task(
+        database_connection,
+        enrollment_id=en_b.id,
+        workflow_id=workflow.id,
+        contact_id=contact_b.id,
+        description="Touch 1 of 3",
+        scheduled_at="2020-01-01T13:00:00Z",
+        context={"touch": 1},
+    )
+    failed_t2 = create_task(
+        database_connection,
+        enrollment_id=en_a.id,
+        workflow_id=workflow.id,
+        contact_id=contact_a.id,
+        description="Touch 2 of 3",
+        scheduled_at="2020-01-01T14:00:00Z",
+        context={"touch": 2},
+    )
+    pending = create_task(
+        database_connection,
+        enrollment_id=en_a.id,
+        workflow_id=workflow.id,
+        contact_id=contact_a.id,
+        description="still queued",
+        scheduled_at="2099-01-01T00:00:00Z",
+        context={"touch": 3},
+    )
+    complete_task(
+        database_connection, failed_a.id, status="failed", result={"reason": "boom"}
+    )
+    complete_task(
+        database_connection, failed_b.id, status="failed", result={"reason": "boom"}
+    )
+    complete_task(
+        database_connection, failed_t2.id, status="failed", result={"reason": "boom"}
+    )
+
+    when = "2099-08-24T13:00:00+00:00"
+    result = retry_tasks_matching(
+        database_connection,
+        workflow_id=workflow.id,
+        touches=[1],
+        scheduled_at=when,
+    )
+    assert result.retried_count == 2
+    assert set(result.ids) == {failed_a.id, failed_b.id}
+    assert result.scheduled_at == when
+    assert result.dry_run is False
+    assert [c.model_dump() for c in result.companies] == [
+        {"domain": "retry-a.example", "count": 1},
+        {"domain": "retry-b.example", "count": 1},
+    ]
+
+    reset_a = get_task(database_connection, failed_a.id)
+    reset_b = get_task(database_connection, failed_b.id)
+    assert reset_a is not None
+    assert reset_a.status == "pending"
+    assert reset_b is not None
+    assert reset_b.status == "pending"
+    assert reset_a.scheduled_at == datetime(2099, 8, 24, 13, tzinfo=UTC)
+    assert reset_b.scheduled_at == datetime(2099, 8, 24, 13, tzinfo=UTC)
+    assert get_task(database_connection, failed_t2.id).status == "failed"  # type: ignore[union-attr]
+    assert get_task(database_connection, pending.id).status == "pending"  # type: ignore[union-attr]
+
+
+def test_retry_tasks_matching_dry_run_no_write(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.175: dry-run previews ids+companies and writes nothing."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    company = make_test_company(
+        database_connection, name="Dry Co", domain="retry-dry.example"
+    )
+    contact = make_test_contact(
+        database_connection, email="lead@retry-dry.example", company_id=company.id
+    )
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    task = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="Touch 1 of 3",
+        scheduled_at="2020-01-01T12:00:00Z",
+        context={"touch": 1},
+    )
+    complete_task(
+        database_connection, task.id, status="failed", result={"reason": "boom"}
+    )
+
+    result = retry_tasks_matching(
+        database_connection,
+        workflow_id=workflow.id,
+        touches=[1],
+        scheduled_at="2099-08-24T13:00:00+00:00",
+        dry_run=True,
+    )
+    assert result.retried_count == 1
+    assert result.ids == [task.id]
+    assert result.dry_run is True
+    assert [c.model_dump() for c in result.companies] == [
+        {"domain": "retry-dry.example", "count": 1}
+    ]
+    stored = get_task(database_connection, task.id)
+    assert stored is not None
+    assert stored.status == "failed"
+    assert stored.scheduled_at == datetime(2020, 1, 1, 12, tzinfo=UTC)
+
+
+def test_retry_tasks_matching_zero_match_is_noop(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.175: zero match is an ok no-op."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="Touch 1 of 3",
+        scheduled_at="2026-08-18T12:00:00Z",
+        context={"touch": 1},
+    )
+    result = retry_tasks_matching(
+        database_connection, workflow_id=workflow.id, touches=[9]
+    )
+    assert result.retried_count == 0
+    assert result.ids == []
+    assert result.companies == []
+    remaining = list_tasks(
+        database_connection, workflow_id=workflow.id, status="pending"
+    )
+    assert len(remaining) == 1
+
+
+def test_retry_tasks_matching_cancelled_status_and_keep_future(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.175/§V.170: --status cancelled; omit scheduled_at keeps future."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    future = datetime(2099, 12, 31, 13, 1, 49, tzinfo=UTC)
+    task = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="Touch 2 of 3",
+        scheduled_at="2099-12-31T13:01:49+00:00",
+        context={"touch": 2},
+    )
+    cancel_task(database_connection, task.id)
+
+    result = retry_tasks_matching(
+        database_connection,
+        workflow_id=workflow.id,
+        status="cancelled",
+        touches=[2],
+    )
+    assert result.retried_count == 1
+    assert result.ids == [task.id]
+    assert result.scheduled_at is None
+    reset = get_task(database_connection, task.id)
+    assert reset is not None
+    assert reset.status == "pending"
+    assert reset.scheduled_at == future
+
+
+def test_retry_tasks_matching_skips_completed_and_pending(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.49/§V.175: completed and pending rows are not retried."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    pending = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="queued",
+        scheduled_at="2099-01-01T00:00:00Z",
+        context={"touch": 1},
+    )
+    completed = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="done",
+        scheduled_at="2020-01-01T00:00:00Z",
+        context={"touch": 1},
+    )
+    complete_task(database_connection, completed.id, status="completed", result={})
+
+    result = retry_tasks_matching(
+        database_connection, workflow_id=workflow.id, touches=[1]
+    )
+    assert result.retried_count == 0
+    assert get_task(database_connection, pending.id).status == "pending"  # type: ignore[union-attr]
+    assert get_task(database_connection, completed.id).status == "completed"  # type: ignore[union-attr]
 
 
 # -- get_task_stats (§V.133) ---------------------------------------------------

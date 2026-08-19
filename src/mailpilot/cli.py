@@ -7288,43 +7288,182 @@ def task_cancel(
         connection.close()
 
 
+def _validate_task_retry_mode(
+    *,
+    task_id: str | None,
+    touches: tuple[int, ...],
+    workflow_id: str | None,
+    contact_email: str | None,
+    trigger: str | None,
+    status: str | None,
+    overdue: bool,
+    since: str | None,
+    until: str | None,
+) -> None:
+    """Reject TASK_ID+filters XOR, missing scope, and non-retryable status."""
+    has_required_filter = bool(
+        touches
+        or workflow_id is not None
+        or contact_email is not None
+        or trigger is not None
+    )
+    has_any_filter = bool(
+        has_required_filter
+        or status is not None
+        or overdue
+        or since is not None
+        or until is not None
+    )
+    if task_id is not None and has_any_filter:
+        output_error(
+            "TASK_ID is exclusive with filter flags",
+            "validation_error",
+        )
+    if task_id is None and not has_required_filter:
+        output_error(
+            "TASK_ID or a filter (--touch, --workflow-id, "
+            "--contact-email, --trigger) is required",
+            "validation_error",
+        )
+    if task_id is None and status is not None and status not in ("failed", "cancelled"):
+        output_error(
+            f"filter-mode --status must be failed or cancelled, got {status!r}",
+            "validation_error",
+        )
+
+
 @task.command("retry")
-@click.argument("task_id")
+@click.argument("task_id", required=False, default=None)
+@scope_option("--workflow-id", "workflow_id", "Filter by workflow (name or ID).")
+@scope_option("--contact-email", "contact_email", "Filter by contact (email or ID).")
+@enum_option("--status", "status", _TASK_STATUSES, "Filter by task status.")
+@enum_option("--trigger", "trigger", _TASK_TRIGGERS, "Filter by task trigger.")
+@click.option(
+    "--overdue",
+    is_flag=True,
+    default=False,
+    help="Only pending tasks with scheduled_at in the past.",
+)
+@touch_option
+@time_window_options("scheduled_at")
 @click.option(
     "--scheduled-at",
     "scheduled_at",
     default=None,
     help=(
-        "ISO 8601 timestamp to requeue at. Omit to keep a still-future "
-        "stored time, or now when the stored time is past."
+        "ISO 8601 timestamp to requeue at. Applies to every selected row. "
+        "Omit to keep a still-future stored time, or now when the stored "
+        "time is past."
     ),
 )
-def task_retry(task_id: str, scheduled_at: str | None) -> None:
-    """Reset a failed or cancelled task for a fresh attempt.
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Preview matching ids and companies; do not write.",
+)
+def task_retry(
+    task_id: str | None,
+    workflow_id: str | None,
+    contact_email: str | None,
+    status: str | None,
+    trigger: str | None,
+    overdue: bool,
+    touches: tuple[int, ...],
+    since: str | None,
+    until: str | None,
+    scheduled_at: str | None,
+    dry_run: bool,
+) -> None:
+    """Reset failed or cancelled tasks for a fresh attempt.
 
-    Refuses ``completed`` rows (tools already fired -- replay risks
-    duplicate side-effects) and ``pending`` rows (already queued).
-    Omit ``--scheduled-at`` to keep a still-future stored time.
+    Pass TASK_ID to retry one row, or filters to retry every matching
+    failed (default) or cancelled row. Filter-mode needs at least one of
+    --touch, --workflow-id, --contact-email, or --trigger. --status
+    defaults to failed; only failed and cancelled are allowed. TASK_ID
+    and filters are exclusive. --scheduled-at applies to every selected
+    row. --dry-run previews ids and companies with no writes.
     """
     from mailpilot.database import (
         get_task,
+        get_workflow,
         initialize_database,
         manual_retry_task,
+        retry_tasks_matching,
     )
 
+    _validate_task_retry_mode(
+        task_id=task_id,
+        touches=touches,
+        workflow_id=workflow_id,
+        contact_email=contact_email,
+        trigger=trigger,
+        status=status,
+        overdue=overdue,
+        since=since,
+        until=until,
+    )
     scheduled_iso = _parse_future_scheduled_at(scheduled_at)
     connection = initialize_database(_database_url(), require_current_schema=True)
     try:
-        existing = get_task(connection, task_id)
-        if existing is None:
-            output_error(f"task not found: {task_id}", "not_found")
-        reset = manual_retry_task(connection, task_id, scheduled_at=scheduled_iso)
-        if reset is None:
-            output_error(
-                f"task not retryable in status {existing.status!r}: {task_id}",
-                "invalid_state",
-            )
-        output_entity("task", reset)
+        if task_id is not None:
+            existing = get_task(connection, task_id)
+            if existing is None:
+                output_error(f"task not found: {task_id}", "not_found")
+            if existing.status not in ("failed", "cancelled"):
+                output_error(
+                    f"task not retryable in status {existing.status!r}: {task_id}",
+                    "invalid_state",
+                )
+            if dry_run:
+                result = retry_tasks_matching(
+                    connection,
+                    status=existing.status,
+                    scheduled_at=scheduled_iso,
+                    dry_run=True,
+                    task_id=task_id,
+                )
+                output(
+                    {"task_retry": result.model_dump(mode="json")},
+                    record_count=result.retried_count,
+                )
+                return
+            reset = manual_retry_task(connection, task_id, scheduled_at=scheduled_iso)
+            if reset is None:
+                output_error(
+                    f"task not retryable in status {existing.status!r}: {task_id}",
+                    "invalid_state",
+                )
+            output_entity("task", reset)
+            return
+
+        resolved_workflow_id: str | None = None
+        if workflow_id is not None:
+            resolved_workflow_id = _resolve_workflow_id(connection, workflow_id)
+            if get_workflow(connection, resolved_workflow_id) is None:
+                output_error(f"workflow not found: {workflow_id}", "not_found")
+        contact_id = (
+            _resolve_contact(connection, contact_email).id
+            if contact_email is not None
+            else None
+        )
+        result = retry_tasks_matching(
+            connection,
+            workflow_id=resolved_workflow_id,
+            contact_id=contact_id,
+            status=status if status is not None else "failed",
+            trigger=trigger,
+            overdue=overdue,
+            since=since,
+            until=until,
+            touches=list(touches) if touches else None,
+            scheduled_at=scheduled_iso,
+            dry_run=dry_run,
+        )
+        output(
+            {"task_retry": result.model_dump(mode="json")},
+            record_count=result.retried_count,
+        )
     finally:
         connection.close()
 
