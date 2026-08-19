@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [v0.29.0] - 2026-08-19
+
 ### Fixed
 
 - `mailpilot run` aborts before draining tasks when the active LLM
