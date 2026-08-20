@@ -10,7 +10,7 @@ Priority (highest to lowest):
 
 import json
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, Protocol
 
 import logfire
 from pydantic import PostgresDsn, computed_field
@@ -42,6 +42,12 @@ SECRET_KEYS = frozenset(
     {"anthropic_api_key", "xai_api_key", "logfire_token", "database_url"}
 )
 REDACTED = "***"
+
+
+class _SettingsSource(Protocol):
+    """Duck-typed pydantic-settings source: callable returning field values."""
+
+    def __call__(self) -> dict[str, Any]: ...
 
 
 class JsonConfigSource:
@@ -102,21 +108,22 @@ class Settings(BaseSettings):
         return f"mailpilot-sub-{self.environment}"
 
     @classmethod
-    def settings_customise_sources(
+    def settings_customise_sources(  # pyright: ignore[reportIncompatibleMethodOverride]
         cls,
         settings_cls: type[BaseSettings],
         init_settings: PydanticBaseSettingsSource,
         env_settings: PydanticBaseSettingsSource,
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
-    ) -> tuple[PydanticBaseSettingsSource, ...]:
+    ) -> tuple[_SettingsSource, ...]:
         """Set source priority: kwargs > process env > cwd .env > config file."""
         del file_secret_settings  # unused; secrets stay in env / config / dotenv
+        json_source: _SettingsSource = JsonConfigSource(settings_cls)
         return (
             init_settings,
             env_settings,
             dotenv_settings,
-            cast(PydanticBaseSettingsSource, JsonConfigSource(settings_cls)),
+            json_source,
         )
 
 

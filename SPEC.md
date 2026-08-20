@@ -167,7 +167,7 @@ V111: CLI help agent surface — top-level `--help` emits packaged SKILL.md; Cli
 V112: lead-companies scoped enrich-scope; domain/URL arg enriches only rows seeded this run, never global backlog — → .spec/check-extras.md §V112
 V113: Bouncer single GET /v1.1/email/verify?email= per contact; POST /email/verify/batch/sync absent — → .spec/check-extras.md §V113
 V114: company soft-disable — disabled_reason TEXT NULL, uniform disable/enable verb pairing — → .spec/check-extras.md §V114
-V115: list filter six-family taxonomy + result-control {limit,offset,sort,desc}; `contact|email|workflow search` `--limit` via `@limit_option`; company policy → §V.148 — → .spec/check-extras.md §V115
+V115: list filter six-family taxonomy + result-control {limit,offset,sort,desc}; `contact|email|workflow search` uses the same `--limit` result-control as list (default 100); company policy → §V.148 — → .spec/check-extras.md §V115
 V116: tag vocabulary + tag_assignment; never auto-create; multi-owner/set → §V.141; list `--tag`/`--no-tag` repeatable AND; company|contact tags[] — → .spec/check-extras.md §V116
 V117: batch-gate option distinctness — fixed cap suppressed when stale-count <= cap — → .spec/check-extras.md §V117
 V119: destructive DB op backs up first via `mailpilot db export`; failed export aborts drop (fail-closed) — → .spec/check-extras.md §V119

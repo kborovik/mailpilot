@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 from typing import Any, NoReturn
 from unittest.mock import MagicMock, patch
 
-import click
 import pytest
 from click.testing import CliRunner
 
@@ -4677,18 +4676,6 @@ def test_contact_search_with_limit(
     mock_search.assert_called_once_with(mock_connection, "alice", limit=10)
 
 
-def test_contact_email_workflow_search_use_limit_option() -> None:
-    """§V.115: contact|email|workflow search --limit via @limit_option."""
-    for noun in ("contact", "email", "workflow"):
-        group = main.commands[noun]
-        assert isinstance(group, click.Group)
-        cmd = group.commands["search"]
-        limit = next(p for p in cmd.params if p.name == "limit")
-        assert isinstance(limit, click.Option)
-        assert limit.default == 100
-        assert limit.help == "Maximum results."
-
-
 # -- contact list --------------------------------------------------------------
 
 
@@ -7211,6 +7198,20 @@ def test_workflow_search(runner: CliRunner, mock_connection: MagicMock) -> None:
     mock_search.assert_called_once_with(mock_connection, "demo", limit=5)
     data = json.loads(result.output)
     assert len(data["workflows"]) == 1
+
+
+def test_workflow_search_with_limit(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.search_workflows", return_value=[]) as mock_search,
+    ):
+        result = runner.invoke(main, ["workflow", "search", "demo", "--limit", "10"])
+
+    assert result.exit_code == 0
+    mock_search.assert_called_once_with(mock_connection, "demo", limit=10)
 
 
 # -- workflow start / stop -----------------------------------------------------

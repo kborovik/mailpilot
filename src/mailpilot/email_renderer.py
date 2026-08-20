@@ -366,6 +366,16 @@ def _sig_color_bar() -> str:
     )
 
 
+def _signature_empty(signature: AccountSignature | None) -> bool:
+    """True when there is no signature content to render."""
+    return signature is None or (
+        signature.full_name is None
+        and signature.title is None
+        and signature.website is None
+        and signature.phone is None
+    )
+
+
 def render_signature_html(
     signature: AccountSignature | None,
 ) -> str:
@@ -378,16 +388,15 @@ def render_signature_html(
     the empty string (no block). Logo + colour bar always accompany a
     non-empty signature. Inline styles only; body theme never recolors.
     """
-    if signature is None:
+    if _signature_empty(signature):
         return ""
+    assert signature is not None
     full_name, title, website, phone = (
         signature.full_name,
         signature.title,
         signature.website,
         signature.phone,
     )
-    if full_name is None and title is None and website is None and phone is None:
-        return ""
 
     details = _sig_detail_rows(full_name, title, website, phone)
     bar = _sig_color_bar()
@@ -435,16 +444,15 @@ def render_signature_text(
     appending to the body. Empty fields are omitted; all-empty returns the
     empty string.
     """
-    if signature is None:
+    if _signature_empty(signature):
         return ""
+    assert signature is not None
     full_name, title, website, phone = (
         signature.full_name,
         signature.title,
         signature.website,
         signature.phone,
     )
-    if full_name is None and title is None and website is None and phone is None:
-        return ""
     lines: list[str] = []
     if full_name is not None:
         lines.append(full_name)
