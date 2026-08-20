@@ -10,8 +10,11 @@ Two LLM systems run in mailpilot, each composing its prompt differently:
   outbound agent. Its system prompt is ``template.build_protocol(trigger) +
   workflow.instructions`` (§V.44-45): code-defined protocol fragments from
   ``agent/templates.py`` followed by the workflow's own TOML ``instructions``.
-  The deferred-task fragment branches on ``trigger`` (§V.31), so this script
-  records both the terminal-outcome (``task``) and initial-send branches.
+  The deferred-task fragment is direction-scoped (§V.31 / §V.136): outbound
+  tool-loop uses the terminal-outcome branch; inbound uses the reply-once
+  branch; outbound first reach-out is compose-only (``_TOUCH_COMPOSE``). This
+  script records the tool-loop prompt and, for outbound, the compose-only
+  prompt.
 
 The script reads live workflow rows from the database (their ids match the
 Logfire ``workflow_id`` attribute, so telemetry joins back to a system) and
@@ -40,12 +43,15 @@ def _fragment_inventory() -> dict[str, dict[str, object]]:
     from mailpilot.agent import templates as t
 
     named = {
-        "_BASE": "brevity + GFM spec-table mandate + inline trigger/contact reuse",
-        "_DEFERRED_TASK_TASK": "terminal disposition via conclude_enrollment (trigger=task)",
-        "_DEFERRED_TASK_INITIAL": "initial-send-only; no premature conclude (other triggers)",
+        "_BASE": "brevity + trigger/contact reuse; records are pre-fed (§V.135)",
+        "_PRODUCT_SPECS": "product-spec facts as list/prose (inbound protocol_pre only)",
+        "_DEFERRED_TASK_TASK": "terminal disposition via conclude_enrollment (outbound tool-loop)",
+        "_DEFERRED_TASK_INBOUND": "reply once then stop; system records outcome (inbound)",
+        "_TOUCH_COMPOSE": "compose-only outbound touch; structured subject+body, no tools (§V.136)",
         "_MUST_SEND": "end every trigger turn in a real send or explicit noop (§V.120)",
         "_DECLINE": "polite decline without invented facts; still one tool call",
         "_NO_FABRICATION": "never fabricate specs / numbers / claims; decline when unsure",
+        "_FALLBACK_ACKNOWLEDGEMENT": "fixed inbound-failure receipt body; model never sees this",
     }
     inventory: dict[str, dict[str, object]] = {}
     for name, rule in named.items():
@@ -120,8 +126,9 @@ def _workflow_systems(
     filter (not a name heuristic) is how the operator narrows to live systems.
     """
     from mailpilot.agent.templates import (
-        _DEFERRED_TASK_INITIAL,
+        _DEFERRED_TASK_INBOUND,
         _DEFERRED_TASK_TASK,
+        _TOUCH_COMPOSE,
         TEMPLATES,
     )
     from mailpilot.database import get_workflow, list_workflows
@@ -138,10 +145,19 @@ def _workflow_systems(
         if template is None:
             continue
 
+        # Direction-scoped tool-loop protocol (§V.31 / §V.136): trigger no
+        # longer selects a fragment. Outbound first reach-out is compose-only
+        # (_TOUCH_COMPOSE); inbound uses _DEFERRED_TASK_INBOUND.
         protocol_task = template.build_protocol("task")
-        protocol_initial = template.build_protocol("enrollment_run")
         system_task = protocol_task + workflow.instructions
-        system_initial = protocol_initial + workflow.instructions
+        if template.direction == "outbound":
+            system_initial = _TOUCH_COMPOSE + workflow.instructions
+            deferred_branch = _DEFERRED_TASK_TASK
+            deferred_compose = _TOUCH_COMPOSE
+        else:
+            system_initial = system_task
+            deferred_branch = _DEFERRED_TASK_INBOUND
+            deferred_compose = _DEFERRED_TASK_INBOUND
 
         systems.append(
             {
@@ -177,8 +193,8 @@ def _workflow_systems(
                 # instruction text from the shared protocol prefix / suffix.
                 "protocol": {
                     "pre": template.protocol_pre,
-                    "deferred_task": _DEFERRED_TASK_TASK,
-                    "deferred_initial": _DEFERRED_TASK_INITIAL,
+                    "deferred_task": deferred_branch,
+                    "deferred_initial": deferred_compose,
                     "post": template.protocol_post,
                     "edit_target": "code (templates.py) -- shared, change + PR per §V.44",
                 },
