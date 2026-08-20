@@ -1,5 +1,5 @@
 ---
-name: resolve-gh-issue
+name: github-resolve-issue
 description: >
   Orchestrate resolving open GitHub issues on an issue-linked branch:
   checkout via gh issue develop, fold with /sdd:spec github issue N
@@ -9,12 +9,12 @@ description: >
   walks issues in that order, one at a time. Never merges without
   an explicit operator choice. Use when the user wants to
   auto-resolve GitHub issues, drain the issue backlog, run the SDD
-  issue loop, or runs /resolve-gh-issue.
+  issue loop, or runs /github-resolve-issue.
 argument-hint: "[N | --all] [--no-wait]"
 allowed-tools: ask_user_question, read_file, run_terminal_command, spawn_subagent, monitor, todo_write
 ---
 
-# resolve-gh-issue
+# github-resolve-issue
 
 Operator-facing loop over open GitHub issues. This skill owns
 orchestration only. Spec fold, implementation, branch/PR/merge shape,
@@ -355,7 +355,7 @@ After a merged issue:
 ```
 ## Next
 
-1. /resolve-gh-issue --all
+1. /github-resolve-issue --all
 2. gh issue list --state open
 ```
 
@@ -365,7 +365,7 @@ After a PR left open:
 ## Next
 
 1. open <pr-url>
-2. /resolve-gh-issue --no-wait
+2. /github-resolve-issue --no-wait
 ```
 
 After FAIL:
@@ -375,5 +375,5 @@ After FAIL:
 
 1. git status
 2. /sdd:spec <cause>   (only if the fail was spec-shaped)
-3. /resolve-gh-issue <N>
+3. /github-resolve-issue <N>
 ```

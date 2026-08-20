@@ -9,7 +9,7 @@ Mechanical audit (no LLM-judgment); trigger when `src/mailpilot/SKILL.md`, `.gro
 
 File-set scope:
 - `src/mailpilot/SKILL.md` — packaged skill body (external LLM agents); all four checks apply.
-- `.grok/skills/**/*.md` — operator-facing skill bodies (campaign-test, reply-test, prompt-audit, resolve-gh-issue); per `§B.65` only checks (i) and (ii) apply (skill bodies do not enumerate settings so (iii) and (iv) do not apply).
+- `.grok/skills/**/*.md` — operator-facing skill bodies (campaign-test, reply-test, prompt-audit, github-resolve-issue); per `§B.65` only checks (i) and (ii) apply (skill bodies do not enumerate settings so (iii) and (iv) do not apply).
 
 Checks:
 (i) per-noun verb roster is a superset of `@<noun>.command("<verb>")` set in `cli.py` — fail mode: skill names a retired verb (e.g. `enrollment remove` post-T92).
