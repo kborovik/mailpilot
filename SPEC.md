@@ -132,19 +132,19 @@ V75: sync incremental History API; 404 → full INBOX; first sync full; mid-batc
 V76: routing eligibility window — stale/no-workflow/predates → skipped_* no LLM — → .spec/check-extras.md §V76
 V77: outbound email row persists only after Gmail accepts send; orphan recovery via get_email_by_gmail_message_id on conflict — → .spec/check-extras.md §V77
 V78: outbound MIME headers (X-MailPilot-*) + thread_id threading via send path — → .spec/check-extras.md §V78
-V79: send/reply guards + account soft-disable lifecycle — → .spec/check-extras.md §V79
+V79: send/reply guards + account soft-disable lifecycle; cooldown typed err = `email_ops.CooldownError` (not `exceptions.CooldownError`); no unused `ClassificationError` — → .spec/check-extras.md §V79
 V80: bounce/unsubscribe handling + contact disable; reason prefix in {bounced:, unsubscribed:} — → .spec/check-extras.md §V80
 V81: tool-loop ! ≥1 tool; noop escape; compose-only exempt §V.136 — → .spec/check-extras.md §V81
 V82: agent email history scoped to (account_id, contact_id, workflow_id) — other workflows' mail excluded
-V83: execute_task pre-flight cancels stale tasks (inactive workflow/contact/enrollment; terminal or replied-after touch excl OOO §V.169) w/ zero LLM calls (complements §V.123) — → .spec/check-extras.md §V83
+V83: execute_task pre-flight cancels stale tasks (inactive workflow/contact/enrollment; terminal or replied-after touch excl OOO §V.169) w/ zero LLM calls (complements §V.123); inbound-after = `list_inbound_emails_from_contact_after` (no bool wrapper) — → .spec/check-extras.md §V83
 V84: pubsub notification callback acks unconditionally (decode error + missing emailAddress included); sets wakeup_event when supplied
-V85: settings precedence kwargs > env > `.env` > config.json > defaults — → .spec/check-extras.md §V85
+V85: settings precedence kwargs > env > `.env` > config.json > field-literal defaults (no unused `DEFAULT_*`) — → .spec/check-extras.md §V85
 V86: secret settings (`anthropic_api_key`, `xai_api_key`, `logfire_token`, `database_url`) redacted as '***' in telemetry; config.set event logs key + changed flag
 V87: cross-account isolation — thread + RFC message-id lookups scoped to account_id; agent read_email cross-account -> None (prompt-injection guard)
 V88: entity enums schema CHECK; value sets authoritative in schema.sql — → .spec/check-extras.md §V88
 V89: singleton rows — schema_metadata id=1, sync_status id='singleton'
 V90: natural-key UNIQUE constraints = canonical CLI identifiers; unknown key -> not_found — → .spec/check-extras.md §V90
-V92: email render Markdown→HTML inline; hard_wrap; fluid; THEMES; unknown→blue — → .spec/check-extras.md §V92
+V92: email render Markdown→HTML inline; hard_wrap; fluid; THEMES; unknown→blue; no pass-through `strong`/`emphasis`/`table_*` hooks — → .spec/check-extras.md §V92
 V93: operator_event -> stderr single line "HH:MM:SS event=NAME k=v ..."; newlines collapsed to space; whitespace values double-quoted, inner quotes escaped
 V94: CLI FK validation precedes mutation — referenced entity missing -> error envelope, no partial write
 V95: contact lead-metadata flat cols: title TEXT, email_confidence INT; NULL = high risk; --max-email-confidence includes NULL — → .spec/check-extras.md §V95
@@ -167,7 +167,7 @@ V111: CLI help agent surface — top-level `--help` emits packaged SKILL.md; Cli
 V112: lead-companies scoped enrich-scope; domain/URL arg enriches only rows seeded this run, never global backlog — → .spec/check-extras.md §V112
 V113: Bouncer single GET /v1.1/email/verify?email= per contact; POST /email/verify/batch/sync absent — → .spec/check-extras.md §V113
 V114: company soft-disable — disabled_reason TEXT NULL, uniform disable/enable verb pairing — → .spec/check-extras.md §V114
-V115: list filter six-family taxonomy + result-control {limit,offset,sort,desc}; company policy → §V.148 — → .spec/check-extras.md §V115
+V115: list filter six-family taxonomy + result-control {limit,offset,sort,desc}; `contact|email|workflow search` `--limit` via `@limit_option`; company policy → §V.148 — → .spec/check-extras.md §V115
 V116: tag vocabulary + tag_assignment; never auto-create; multi-owner/set → §V.141; list `--tag`/`--no-tag` repeatable AND; company|contact tags[] — → .spec/check-extras.md §V116
 V117: batch-gate option distinctness — fixed cap suppressed when stale-count <= cap — → .spec/check-extras.md §V117
 V119: destructive DB op backs up first via `mailpilot db export`; failed export aborts drop (fail-closed) — → .spec/check-extras.md §V119
@@ -201,7 +201,7 @@ V147: company/contact create upsert — `--upsert` field-selective update + top-
 V148: company list/search order + page — `--sort`/`--desc`/`--offset`; company default `--limit` 500; lean row fields pinned — → .spec/check-extras.md §V148
 V149: disable reason-file — `company|contact disable` `--reason-file` XOR `--reason`; empty/missing/XOR validation — → .spec/check-extras.md §V149
 V150: enrollment tag-cohort dry-run — `enrollment add --tag --dry-run` company-or-contact tag; enriched preview; packing flags ? reuse §V.171; tag apply → §V.171 — → .spec/check-extras.md §V150
-V151: account email signature — AccountSignature cols + nested CLI projection + harness HTML/text render all outbound MIME; agent never drafts; ! persist into email.body — → .spec/check-extras.md §V151
+V151: account email signature — AccountSignature cols + nested CLI projection + harness HTML/text render takes `AccountSignature | None` via `account_signature()`; agent never drafts; ! persist into email.body — → .spec/check-extras.md §V151
 V152: enrollment execution projection — list lean default; `--full` denser + filters/sort; `--touch 1` = never-sent + scheduled; `--workflow-id` name|UUID — → .spec/check-extras.md §V152
 V153: workflow report — pure-SQL composite meta+funnel+tasks+enrollment matrix; filters stuck/touch/status; no LLM — → .spec/check-extras.md §V153
 V154: activity/email list require ≥1 scope filter; `--workflow-id` composes; no unbounded dump — → .spec/check-extras.md §V154
@@ -288,6 +288,7 @@ T296|x|impl §V.176(∆) + §V.52(∆) + §I.config — drop `logfire_environmen
 T297|x|impl §V.177(+) — `_db(*, mutate=False)` lazy-import initialize_database; cmds use helper; mutate=True → require_current_schema; cli_mutation stays per-cmd; close success+error; sweep `initialize_database(` in `src/mailpilot/cli.py`; existing CLI tests (#254)|V177,V2,V54,V109
 T298|x|impl §V.140(∆) — company_update @_company_profile_options + _profile_replace_and_patch_flags + _read_replace_profile; one _parse_json_object(text, *, what); flag names+XOR unchanged; --help snapshot if Click param order shifts; create+update tests (#255)|V140,V72,V144,V111,I.cli
 T299|x|impl §V.178(+) — `_company_scope_clauses` used by list+export+search companies; CLI `_company_cohort_kwargs` tag ids+include-disabled; `--no-tag` via `_resolve_tag_ids`; EmailSummary SELECT one fragment; review calls `list_emails`; workflow+tag summary SELECTs share column list each; export unlimited ORDER BY domain + tracker dicts; existing list/export/search tests (#256)|V178,V145,V116,V7,V174
+T300|.|impl §V.79(∆)+§V.83(∆)+§V.85(∆)+§V.92(∆)+§V.115(∆)+§V.151(∆) — drop unused ClassificationError+CooldownError in exceptions.py; drop has_inbound bool wrapper (tests call list helper); drop pass-through renderer strong/emphasis/table_*; signature render AccountSignature via account_signature(); Settings field-literal defaults drop DEFAULT_* + get_field_value stub; contact|email|workflow search @limit_option; contact disable unchanged (#257)|V79,V83,V85,V92,V115,V151
 
 ## §B BUGS
 
