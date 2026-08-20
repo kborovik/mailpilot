@@ -1498,11 +1498,9 @@ def _company_scope_clauses(
     exclude_tags: Sequence[str] | None = None,
     status: str | None = None,
 ) -> tuple[list[Composed | SQL], list[SQL]]:
-    """Build has_profile, pipeline, contact-count, and tag predicates (§V.177).
+    """Build has_profile, pipeline, contact-count, and tag predicates.
 
-    Shared by ``list_companies``, ``export_companies``, and
-    ``search_companies``. Mutates ``params`` with tag and contact-count
-    placeholders.
+    Mutates ``params`` with tag and contact-count placeholders.
     """
     conditions: list[Composed | SQL] = []
     having: list[SQL] = []
@@ -2820,7 +2818,6 @@ _WORKFLOW_SUMMARY_COLUMNS = SQL(
     "workflow.account_id, account.email AS account_email, "
     "workflow.status, workflow.created_at"
 )
-"""Shared WorkflowSummary SELECT list for list + search (§V.177)."""
 
 
 def list_workflows(
@@ -3211,22 +3208,6 @@ def _review_task_counts(
     )
 
 
-def _review_window_emails(
-    connection: psycopg.Connection[dict[str, Any]],
-    workflow_id: str,
-    since: str,
-    until: str,
-) -> list[EmailSummary]:
-    """Window emails for one workflow, uncapped, with snippet (§V.7)."""
-    return list_emails(
-        connection,
-        workflow_id=workflow_id,
-        since=since,
-        until=until,
-        limit=None,
-    )
-
-
 def _review_window_activities(
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str,
@@ -3305,7 +3286,13 @@ def _review_one_workflow(
         ),
         funnel=funnel,
         task_counts=_review_task_counts(connection, workflow.id),
-        emails=_review_window_emails(connection, workflow.id, since, until),
+        emails=list_emails(
+            connection,
+            workflow_id=workflow.id,
+            since=since,
+            until=until,
+            limit=None,
+        ),
         activities=_review_window_activities(connection, workflow.id, since, until),
         failed_tasks=_review_failed_tasks(connection, workflow.id),
         enrollments=enrollments,
@@ -5164,7 +5151,6 @@ _EMAIL_SUMMARY_COLUMNS = SQL(
     "gmail_thread_id, sent_at, received_at, "
     "LEFT(body_text, 500) AS snippet"
 )
-"""Shared EmailSummary SELECT list for list, search, and review (§V.177)."""
 
 
 def list_emails(
@@ -6720,7 +6706,6 @@ _TAG_SUMMARY_COLUMNS = SQL(
     "(SELECT COUNT(*) FROM tag_assignment a WHERE a.tag_id = t.id) "
     "AS usage_count"
 )
-"""Shared TagSummary SELECT list for list + search (§V.177)."""
 
 
 def list_tags(

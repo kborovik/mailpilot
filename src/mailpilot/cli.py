@@ -13,7 +13,7 @@ import json
 from collections.abc import Generator
 from contextlib import contextmanager
 from importlib.metadata import distribution
-from typing import TYPE_CHECKING, Any, Literal, NoReturn
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypedDict
 
 import click
 
@@ -908,14 +908,22 @@ def _resolve_tag_ids(connection: Any, tag_refs: tuple[str, ...]) -> list[str]:
     return [_resolve_tag(connection, name).id for name in tag_refs]
 
 
+class _CompanyCohortKwargs(TypedDict):
+    """Resolved ``--tag``/``--no-tag`` ids and include-disabled."""
+
+    tag: list[str] | None
+    exclude_tags: list[str]
+    include_disabled: bool
+
+
 def _company_cohort_kwargs(
     connection: Any,
     tag: tuple[str, ...],
     no_tag: tuple[str, ...],
     include_disabled: bool,
     status: str | None,
-) -> dict[str, Any]:
-    """Resolve tag ids and include-disabled for company list|export|import (§V.177)."""
+) -> _CompanyCohortKwargs:
+    """Resolve ``--tag``/``--no-tag`` ids and include-disabled."""
     return {
         "tag": _resolve_tag_ids(connection, tag) or None,
         "exclude_tags": _resolve_tag_ids(connection, no_tag),
