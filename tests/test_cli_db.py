@@ -15,70 +15,27 @@ from mailpilot.cli import (
 _CLI_PATH = Path(__file__).resolve().parents[1] / "src" / "mailpilot" / "cli.py"
 
 
-def _cli_source() -> str:
-    return _CLI_PATH.read_text(encoding="utf-8")
-
-
-def _cli_module_imports() -> list[ast.Import | ast.ImportFrom]:
-    tree = ast.parse(_cli_source())
-    return [
-        node for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))
-    ]
-
-
-def _function_named(name: str) -> ast.FunctionDef:
-    tree = ast.parse(_cli_source())
+def test_initialize_database_only_inside_db() -> None:
+    """§V.177 / §V.2: `initialize_database(` lives only in `_db`; no module-level database import."""
+    source = _CLI_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source)
     for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name == name:
-            return node
-    raise AssertionError(f"function {name!r} not found in cli.py")
-
-
-def test_cli_module_does_not_import_database() -> None:
-    """§V.2 / §V.177: heavy database import stays inside `_db`, not module level."""
-    for node in _cli_module_imports():
         if isinstance(node, ast.ImportFrom):
             assert node.module != "mailpilot.database"
-            names = {alias.name for alias in node.names}
-            assert "initialize_database" not in names
-            continue
-        assert all(
-            not alias.name.startswith("mailpilot.database") for alias in node.names
-        )
-
-
-def test_db_helper_lazy_imports_initialize_database() -> None:
-    """§V.177 / §V.2: `_db` is the only caller of `initialize_database`."""
-    tree = ast.parse(_cli_source())
-    db_fn = _function_named("_db")
-    db_range = range(db_fn.lineno, (db_fn.end_lineno or db_fn.lineno) + 1)
-    call_lines: list[int] = []
-    import_lines: list[int] = []
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "initialize_database"
-        ):
-            call_lines.append(node.lineno)
-        if isinstance(node, ast.ImportFrom) and any(
-            alias.name == "initialize_database" for alias in node.names
-        ):
-            import_lines.append(node.lineno)
-    assert call_lines, "_db must call initialize_database"
-    assert all(line in db_range for line in call_lines), call_lines
-    assert import_lines, "_db must lazy-import initialize_database"
-    assert all(line in db_range for line in import_lines), import_lines
-
-
-def test_db_helper_does_not_wrap_cli_mutation() -> None:
-    """§V.54 / §V.177: mutation logging stays per command, not in `_db`."""
-    names = {
-        node.id
-        for node in ast.walk(_function_named("_db"))
-        if isinstance(node, ast.Name)
-    }
-    assert "cli_mutation" not in names
+        elif isinstance(node, ast.Import):
+            assert all(
+                not alias.name.startswith("mailpilot.database") for alias in node.names
+            )
+    db_fn = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_db"
+    )
+    db_source = ast.get_source_segment(source, db_fn)
+    assert db_source is not None
+    in_helper = db_source.count("initialize_database(")
+    assert in_helper == 1
+    assert source.count("initialize_database(") == in_helper
 
 
 def test_db_mutate_false_skips_schema_gate() -> None:

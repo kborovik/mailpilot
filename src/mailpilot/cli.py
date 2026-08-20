@@ -104,12 +104,10 @@ def _database_url() -> str:
 
 @contextmanager
 def _db(*, mutate: bool = False) -> Generator[Any]:
-    """Yield a CLI database connection; close on success and on error.
+    """Yield a CLI database connection.
 
-    Lazy-imports ``initialize_database`` so module-level imports stay
-    click-only and ``--help`` stays fast. ``mutate=True`` requests the
-    current-schema gate. Mutation logging stays at the command
-    (``cli_mutation`` is not used here).
+    Lazy-imports ``initialize_database`` so ``--help`` stays click-only.
+    ``mutate=True`` is the write-path schema gate.
     """
     from mailpilot.database import initialize_database
 
