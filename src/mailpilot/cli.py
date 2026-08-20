@@ -1860,11 +1860,11 @@ def _read_replace_profile(
     import sys
 
     if profile_json is not None:
-        return _parse_company_profile_json(profile_json)
+        return _parse_json_object(profile_json, what="profile")
     if profile_file is not None:
         raw = pathlib.Path(profile_file).read_text(encoding="utf-8")
-        return _parse_company_profile_json(raw)
-    return _parse_company_profile_json(sys.stdin.read())
+        return _parse_json_object(raw, what="profile")
+    return _parse_json_object(sys.stdin.read(), what="profile")
 
 
 def _validate_company_profile_payload(payload: dict[str, object]) -> dict[str, object]:
@@ -2071,31 +2071,18 @@ def company_create(  # noqa: C901, PLR0912, PLR0915
             )
 
 
-def _parse_company_profile_json(text: str) -> dict[str, object]:
-    """Parse full-replace profile JSON text into a dict.
+def _parse_json_object(text: str, *, what: str) -> dict[str, object]:
+    """Parse JSON text into an object dict.
 
     Invalid JSON or a non-object root becomes ``validation_error`` (no DB write).
+    ``what`` is the error noun (``profile`` or ``meta``).
     """
     try:
         parsed: object = json.loads(text)
     except json.JSONDecodeError as exc:
         output_error(f"invalid JSON: {exc}", "validation_error")
     if not isinstance(parsed, dict):
-        output_error("profile must be a JSON object", "validation_error")
-    return parsed
-
-
-def _parse_verification_meta_json(text: str) -> dict[str, object]:
-    """Parse operator-only verification meta JSON into a dict (§V.144).
-
-    Invalid JSON or a non-object root becomes ``validation_error`` (no DB write).
-    """
-    try:
-        parsed: object = json.loads(text)
-    except json.JSONDecodeError as exc:
-        output_error(f"invalid JSON: {exc}", "validation_error")
-    if not isinstance(parsed, dict):
-        output_error("meta must be a JSON object", "validation_error")
+        output_error(f"{what} must be a JSON object", "validation_error")
     return parsed
 
 
@@ -2131,47 +2118,8 @@ def _merge_company_profile_patch(
 @company.command("update")
 @click.argument("company_ref")
 @click.option("--name", default=None, help="Company name.")
-@click.option(
-    "--profile-json",
-    default=None,
-    help=(
-        "Full-replace profile as an inline JSON object "
-        "(prefer --profile-file or --profile -)."
-    ),
-)
-@click.option(
-    "--profile-file",
-    default=None,
-    type=click.Path(exists=True, dir_okay=False),
-    help="Full-replace profile from a JSON file path.",
-)
-@click.option(
-    "--profile",
-    default=None,
-    help="Full-replace profile; pass '-' to read a JSON object from stdin.",
-)
-@click.option("--summary", default=None, help="Patch profile.summary (merge).")
-@click.option(
-    "--product",
-    multiple=True,
-    help="Patch profile.products (repeatable; replaces the products list).",
-)
-@click.option(
-    "--source",
-    multiple=True,
-    help="Patch profile.sources (repeatable; replaces the sources list).",
-)
-@click.option(
-    "--timezone",
-    default=None,
-    help="Patch profile.timezone (empty string clears to null).",
-)
-@click.option(
-    "--target-customers",
-    default=None,
-    help="Patch profile.target_customers (merge).",
-)
-def company_update(  # noqa: C901
+@_company_profile_options
+def company_update(
     company_ref: str,
     name: str | None,
     profile_json: str | None,
@@ -2190,43 +2138,19 @@ def company_update(  # noqa: C901
     --source / --timezone / --target-customers. Full-replace and field-patch
     are exclusive. Invalid profiles fail with validation_error and no write.
     """
-    import pathlib
-    import sys
-
     from mailpilot.database import update_company
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    replace_flags: list[str] = []
-    if profile_json is not None:
-        replace_flags.append("--profile-json")
-    if profile_file is not None:
-        replace_flags.append("--profile-file")
-    if profile is not None:
-        replace_flags.append("--profile")
-    has_patch = any(
-        (
-            summary is not None,
-            bool(product),
-            bool(source),
-            timezone is not None,
-            target_customers is not None,
-        )
+    replace_flags, has_patch = _profile_replace_and_patch_flags(
+        profile_json,
+        profile_file,
+        profile,
+        summary,
+        product,
+        source,
+        timezone,
+        target_customers,
     )
-    if len(replace_flags) > 1:
-        output_error(
-            "full-replace profile options are exclusive: " + ", ".join(replace_flags),
-            "validation_error",
-        )
-    if replace_flags and has_patch:
-        output_error(
-            "full-replace profile options are exclusive with field-patch flags",
-            "validation_error",
-        )
-    if profile is not None and profile != "-":
-        output_error(
-            "--profile only accepts '-' for stdin; use --profile-file for a path",
-            "validation_error",
-        )
 
     with _db(mutate=True) as connection:
         before = _resolve_company(connection, company_ref)
@@ -2234,13 +2158,10 @@ def company_update(  # noqa: C901
         fields: dict[str, object] = {}
         if name is not None:
             fields["name"] = name
-        if profile_json is not None:
-            fields["profile"] = _parse_company_profile_json(profile_json)
-        elif profile_file is not None:
-            raw = pathlib.Path(profile_file).read_text(encoding="utf-8")
-            fields["profile"] = _parse_company_profile_json(raw)
-        elif profile == "-":
-            fields["profile"] = _parse_company_profile_json(sys.stdin.read())
+        if replace_flags:
+            fields["profile"] = _read_replace_profile(
+                profile_json, profile_file, profile
+            )
         elif has_patch:
             existing = before.profile if isinstance(before.profile, dict) else None
             fields["profile"] = _merge_company_profile_patch(
@@ -2994,7 +2915,7 @@ def contact_create(  # noqa: C901
             "validation_error",
         )
     verification_meta = (
-        _parse_verification_meta_json(meta_json) if meta_json is not None else None
+        _parse_json_object(meta_json, what="meta") if meta_json is not None else None
     )
     with _db(mutate=True) as connection:
         company_id = (
@@ -3126,7 +3047,7 @@ def contact_update(
         if email_confidence is not None:
             fields["email_confidence"] = email_confidence
         if meta_json is not None:
-            fields["verification_meta"] = _parse_verification_meta_json(meta_json)
+            fields["verification_meta"] = _parse_json_object(meta_json, what="meta")
         with cli_mutation("contact", "update", entity_id=contact_id):
             updated = update_contact(connection, contact_id, **fields)
             if updated is None:
