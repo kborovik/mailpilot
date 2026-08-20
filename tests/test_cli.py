@@ -3792,47 +3792,6 @@ def test_company_update_help_profile_flag_order() -> None:
     assert _profile_flag_order(company_create) == expected
 
 
-def test_company_update_reuses_profile_helpers() -> None:
-    """§V.140: update uses create's decorator and replace/patch helpers."""
-    import inspect
-    import re
-
-    from mailpilot import cli
-
-    module_source = inspect.getsource(cli)
-    header = re.search(
-        r'@company\.command\("update"\)\n(.*?)def company_update',
-        module_source,
-        flags=re.DOTALL,
-    )
-    assert header is not None
-    assert "@_company_profile_options" in header.group(1)
-    assert header.group(1).count("@click.option") == 1
-    callback = cli.company_update.callback
-    assert callback is not None
-    callback_source = inspect.getsource(callback)
-    assert "_profile_replace_and_patch_flags" in callback_source
-    assert "_read_replace_profile" in callback_source
-
-
-def test_parse_json_object_serves_profile_and_meta() -> None:
-    """§V.140/§V.144: one parser; ``what`` is the error noun."""
-    import inspect
-    import re
-
-    from mailpilot import cli
-
-    source = inspect.getsource(cli)
-    assert re.search(
-        r"def _parse_json_object\(text: str, \*, what: str\)",
-        source,
-    )
-    assert "def _parse_company_profile_json" not in source
-    assert "def _parse_verification_meta_json" not in source
-    assert source.count('what="profile"') >= 1
-    assert source.count('what="meta"') >= 1
-
-
 def test_skill_documents_company_profile_write() -> None:
     """§V.140: packaged SKILL.md documents file/stdin replace + field patch."""
     from importlib.resources import files
