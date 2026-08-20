@@ -1850,6 +1850,20 @@ def _profile_replace_and_patch_flags(
     return replace_flags, has_patch
 
 
+def _parse_json_object(text: str, *, what: str) -> dict[str, object]:
+    """Parse JSON text into an object dict.
+
+    Invalid JSON or a non-object root becomes ``validation_error`` (no DB write).
+    """
+    try:
+        parsed: object = json.loads(text)
+    except json.JSONDecodeError as exc:
+        output_error(f"invalid JSON: {exc}", "validation_error")
+    if not isinstance(parsed, dict):
+        output_error(f"{what} must be a JSON object", "validation_error")
+    return parsed
+
+
 def _read_replace_profile(
     profile_json: str | None,
     profile_file: str | None,
@@ -2069,21 +2083,6 @@ def company_create(  # noqa: C901, PLR0912, PLR0915
                 viewed if viewed is not None else row,
                 created=created,
             )
-
-
-def _parse_json_object(text: str, *, what: str) -> dict[str, object]:
-    """Parse JSON text into an object dict.
-
-    Invalid JSON or a non-object root becomes ``validation_error`` (no DB write).
-    ``what`` is the error noun (``profile`` or ``meta``).
-    """
-    try:
-        parsed: object = json.loads(text)
-    except json.JSONDecodeError as exc:
-        output_error(f"invalid JSON: {exc}", "validation_error")
-    if not isinstance(parsed, dict):
-        output_error(f"{what} must be a JSON object", "validation_error")
-    return parsed
 
 
 def _merge_company_profile_patch(
