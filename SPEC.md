@@ -287,7 +287,7 @@ T295|x|impl §V.176(+) + §I.config + §I.pubsub — environment ∈ {dev, prd};
 T296|x|impl §V.176(∆) + §V.52(∆) + §I.config — drop `logfire_environment` setting/projection; map internally at logfire.configure (dev→development, prd→production); persist environment only; load compat kept; tests+SKILL|V176,V52,I.config
 T297|x|impl §V.177(+) — `_db(*, mutate=False)` lazy-import initialize_database; cmds use helper; mutate=True → require_current_schema; cli_mutation stays per-cmd; close success+error; sweep `initialize_database(` in `src/mailpilot/cli.py`; existing CLI tests (#254)|V177,V2,V54,V109
 T298|x|impl §V.140(∆) — company_update @_company_profile_options + _profile_replace_and_patch_flags + _read_replace_profile; one _parse_json_object(text, *, what); flag names+XOR unchanged; --help snapshot if Click param order shifts; create+update tests (#255)|V140,V72,V144,V111,I.cli
-T299|.|impl §V.178(+) — `_company_scope_clauses` used by list+export+search companies; CLI `_company_cohort_kwargs` tag ids+include-disabled; `--no-tag` via `_resolve_tag_ids`; EmailSummary SELECT one fragment; review calls `list_emails`; workflow+tag summary SELECTs share column list each; export unlimited ORDER BY domain + tracker dicts; existing list/export/search tests (#256)|V178,V145,V116,V7,V174
+T299|x|impl §V.178(+) — `_company_scope_clauses` used by list+export+search companies; CLI `_company_cohort_kwargs` tag ids+include-disabled; `--no-tag` via `_resolve_tag_ids`; EmailSummary SELECT one fragment; review calls `list_emails`; workflow+tag summary SELECTs share column list each; export unlimited ORDER BY domain + tracker dicts; existing list/export/search tests (#256)|V178,V145,V116,V7,V174
 
 ## §B BUGS
 

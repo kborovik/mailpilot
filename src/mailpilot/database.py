@@ -1487,6 +1487,47 @@ def _company_pipeline_status_predicates(
     return conditions, having
 
 
+def _company_scope_clauses(
+    params: dict[str, object],
+    *,
+    has_profile: bool | None = None,
+    max_contacts: int | None = None,
+    min_contacts: int | None = None,
+    include_disabled: bool = False,
+    tag: str | Sequence[str] | None = None,
+    exclude_tags: Sequence[str] | None = None,
+    status: str | None = None,
+) -> tuple[list[Composed | SQL], list[SQL]]:
+    """Build has_profile, pipeline, contact-count, and tag predicates (§V.177).
+
+    Shared by ``list_companies``, ``export_companies``, and
+    ``search_companies``. Mutates ``params`` with tag and contact-count
+    placeholders.
+    """
+    conditions: list[Composed | SQL] = []
+    having: list[SQL] = []
+    if has_profile is True:
+        conditions.append(SQL("c.profile IS NOT NULL"))
+    elif has_profile is False:
+        conditions.append(SQL("c.profile IS NULL"))
+    status_conditions, status_having = _company_pipeline_status_predicates(
+        status, include_disabled
+    )
+    conditions.extend(status_conditions)
+    having.extend(status_having)
+    if max_contacts is not None:
+        having.append(SQL("COUNT(ct.id) <= %(max_contacts)s"))
+        params["max_contacts"] = max_contacts
+    if min_contacts is not None:
+        having.append(SQL("COUNT(ct.id) >= %(min_contacts)s"))
+        params["min_contacts"] = min_contacts
+    conditions.extend(
+        _include_tags_conditions(_normalize_tag_ids(tag), "company_id", params)
+    )
+    conditions.extend(_exclude_tags_conditions(exclude_tags, "company_id", params))
+    return conditions, having
+
+
 def list_companies(
     connection: psycopg.Connection[dict[str, Any]],
     limit: int = 100,
@@ -1566,7 +1607,6 @@ def list_companies(
         List of company summaries ordered by ``sort`` (default name).
     """
     conditions: list[Composed | SQL] = []
-    having: list[SQL] = []
     params: dict[str, object] = {"limit": limit, "offset": offset}
     if since is not None:
         conditions.append(SQL("c.created_at >= %(since)s"))
@@ -1574,25 +1614,17 @@ def list_companies(
     if until is not None:
         conditions.append(SQL("c.created_at <= %(until)s"))
         params["until"] = until
-    if has_profile is True:
-        conditions.append(SQL("c.profile IS NOT NULL"))
-    elif has_profile is False:
-        conditions.append(SQL("c.profile IS NULL"))
-    status_conditions, status_having = _company_pipeline_status_predicates(
-        status, include_disabled
+    scope_conditions, having = _company_scope_clauses(
+        params,
+        has_profile=has_profile,
+        max_contacts=max_contacts,
+        min_contacts=min_contacts,
+        include_disabled=include_disabled,
+        tag=tag,
+        exclude_tags=exclude_tags,
+        status=status,
     )
-    conditions.extend(status_conditions)
-    having.extend(status_having)
-    if max_contacts is not None:
-        having.append(SQL("COUNT(ct.id) <= %(max_contacts)s"))
-        params["max_contacts"] = max_contacts
-    if min_contacts is not None:
-        having.append(SQL("COUNT(ct.id) >= %(min_contacts)s"))
-        params["min_contacts"] = min_contacts
-    conditions.extend(
-        _include_tags_conditions(_normalize_tag_ids(tag), "company_id", params)
-    )
-    conditions.extend(_exclude_tags_conditions(exclude_tags, "company_id", params))
+    conditions.extend(scope_conditions)
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     having_clause = SQL("HAVING ") + SQL(" AND ").join(having) if having else SQL("")
     profile_select = (
@@ -1648,27 +1680,46 @@ def search_companies(
     """
     pattern = f"%{query}%"
     order_by = _company_order_by(sort, desc)
+    params: dict[str, object] = {
+        "pattern": pattern,
+        "limit": limit,
+        "offset": offset,
+    }
+    # Search returns disabled when matched (§I); skip the default hide.
+    conditions, having = _company_scope_clauses(params, include_disabled=True)
+    conditions.append(
+        SQL(
+            "("
+            "LOWER(c.name) LIKE LOWER(%(pattern)s) "
+            "OR LOWER(c.domain) LIKE LOWER(%(pattern)s) "
+            "OR EXISTS ("
+            "  SELECT 1 FROM company_alias a "
+            "  WHERE a.company_id = c.id "
+            "    AND LOWER(a.domain) LIKE LOWER(%(pattern)s)"
+            ")"
+            ")"
+        )
+    )
+    where = SQL("WHERE ") + SQL(" AND ").join(conditions)
+    having_clause = SQL("HAVING ") + SQL(" AND ").join(having) if having else SQL("")
     sql = SQL(
         "SELECT c.id, c.name, c.domain, (c.profile IS NOT NULL) AS has_profile, "
         "c.disabled_reason, c.created_at, COUNT(ct.id) AS contact_count, "
         "{tags} "
         "FROM company c "
         "LEFT JOIN contact ct ON ct.company_id = c.id "
-        "WHERE LOWER(c.name) LIKE LOWER(%(pattern)s) "
-        "OR LOWER(c.domain) LIKE LOWER(%(pattern)s) "
-        "OR EXISTS ("
-        "  SELECT 1 FROM company_alias a "
-        "  WHERE a.company_id = c.id "
-        "    AND LOWER(a.domain) LIKE LOWER(%(pattern)s)"
-        ") "
+        "{where} "
         "GROUP BY c.id "
+        "{having} "
         "{order} "
         "LIMIT %(limit)s OFFSET %(offset)s"
-    ).format(tags=SQL(_COMPANY_TAGS_SQL), order=order_by)
-    rows = connection.execute(
-        sql,
-        {"pattern": pattern, "limit": limit, "offset": offset},
-    ).fetchall()
+    ).format(
+        tags=SQL(_COMPANY_TAGS_SQL),
+        where=where,
+        having=having_clause,
+        order=order_by,
+    )
+    rows = connection.execute(sql, params).fetchall()
     return [CompanySummary.model_validate(row) for row in rows]
 
 
@@ -1705,28 +1756,17 @@ def export_companies(
     Returns:
         List of tracker-shaped dicts ordered by domain ASC.
     """
-    conditions: list[Composed | SQL] = []
-    having: list[SQL] = []
     params: dict[str, object] = {}
-    if has_profile is True:
-        conditions.append(SQL("c.profile IS NOT NULL"))
-    elif has_profile is False:
-        conditions.append(SQL("c.profile IS NULL"))
-    status_conditions, status_having = _company_pipeline_status_predicates(
-        status, include_disabled
+    conditions, having = _company_scope_clauses(
+        params,
+        has_profile=has_profile,
+        max_contacts=max_contacts,
+        min_contacts=min_contacts,
+        include_disabled=include_disabled,
+        tag=tag,
+        exclude_tags=exclude_tags,
+        status=status,
     )
-    conditions.extend(status_conditions)
-    having.extend(status_having)
-    if max_contacts is not None:
-        having.append(SQL("COUNT(ct.id) <= %(max_contacts)s"))
-        params["max_contacts"] = max_contacts
-    if min_contacts is not None:
-        having.append(SQL("COUNT(ct.id) >= %(min_contacts)s"))
-        params["min_contacts"] = min_contacts
-    conditions.extend(
-        _include_tags_conditions(_normalize_tag_ids(tag), "company_id", params)
-    )
-    conditions.extend(_exclude_tags_conditions(exclude_tags, "company_id", params))
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     having_clause = SQL("HAVING ") + SQL(" AND ").join(having) if having else SQL("")
     profile_select = SQL(", c.profile") if full else SQL("")
@@ -2775,6 +2815,14 @@ def get_workflow_by_name(
     return Workflow.model_validate(row)
 
 
+_WORKFLOW_SUMMARY_COLUMNS = SQL(
+    "workflow.id, workflow.name, workflow.template, workflow.type, "
+    "workflow.account_id, account.email AS account_email, "
+    "workflow.status, workflow.created_at"
+)
+"""Shared WorkflowSummary SELECT list for list + search (§V.177)."""
+
+
 def list_workflows(
     connection: psycopg.Connection[dict[str, Any]],
     account_id: str | None = None,
@@ -2822,12 +2870,10 @@ def list_workflows(
         params["until"] = until
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
-        "SELECT workflow.id, workflow.name, workflow.template, workflow.type, "
-        "workflow.account_id, account.email AS account_email, "
-        "workflow.status, workflow.created_at "
+        "SELECT {} "
         "FROM workflow JOIN account ON account.id = workflow.account_id "
         "{} ORDER BY workflow.created_at LIMIT %(limit)s"
-    ).format(where)
+    ).format(_WORKFLOW_SUMMARY_COLUMNS, where)
     rows = connection.execute(query, params).fetchall()
     return [WorkflowSummary.model_validate(row) for row in rows]
 
@@ -3172,21 +3218,13 @@ def _review_window_emails(
     until: str,
 ) -> list[EmailSummary]:
     """Window emails for one workflow, uncapped, with snippet (§V.7)."""
-    rows = connection.execute(
-        """\
-        SELECT id, account_id, contact_id, workflow_id, direction,
-            subject, sender, recipients, status, is_routed, route_method,
-            gmail_thread_id, sent_at, received_at,
-            LEFT(body_text, 500) AS snippet
-        FROM email
-        WHERE workflow_id = %(workflow_id)s
-          AND COALESCE(sent_at, received_at) >= %(since)s
-          AND COALESCE(sent_at, received_at) <= %(until)s
-        ORDER BY COALESCE(sent_at, received_at) DESC
-        """,
-        {"workflow_id": workflow_id, "since": since, "until": until},
-    ).fetchall()
-    return [EmailSummary.model_validate(row) for row in rows]
+    return list_emails(
+        connection,
+        workflow_id=workflow_id,
+        since=since,
+        until=until,
+        limit=None,
+    )
 
 
 def _review_window_activities(
@@ -3636,17 +3674,16 @@ def search_workflows(
         Matching workflow summaries ordered by name.
     """
     pattern = f"%{query}%"
+    query_sql = SQL(
+        "SELECT {} "
+        "FROM workflow JOIN account ON account.id = workflow.account_id "
+        "WHERE LOWER(workflow.name) LIKE LOWER(%(pattern)s) "
+        "   OR LOWER(workflow.goal) LIKE LOWER(%(pattern)s) "
+        "ORDER BY LOWER(workflow.name) "
+        "LIMIT %(limit)s"
+    ).format(_WORKFLOW_SUMMARY_COLUMNS)
     rows = connection.execute(
-        """\
-        SELECT workflow.id, workflow.name, workflow.template, workflow.type,
-               workflow.account_id, account.email AS account_email,
-               workflow.status, workflow.created_at
-        FROM workflow JOIN account ON account.id = workflow.account_id
-        WHERE LOWER(workflow.name) LIKE LOWER(%(pattern)s)
-           OR LOWER(workflow.goal) LIKE LOWER(%(pattern)s)
-        ORDER BY LOWER(workflow.name)
-        LIMIT %(limit)s
-        """,
+        query_sql,
         {"pattern": pattern, "limit": limit},
     ).fetchall()
     return [WorkflowSummary.model_validate(row) for row in rows]
@@ -5121,9 +5158,18 @@ def get_email(
     return Email.model_validate(row)
 
 
+_EMAIL_SUMMARY_COLUMNS = SQL(
+    "id, account_id, contact_id, workflow_id, direction, "
+    "subject, sender, recipients, status, is_routed, route_method, "
+    "gmail_thread_id, sent_at, received_at, "
+    "LEFT(body_text, 500) AS snippet"
+)
+"""Shared EmailSummary SELECT list for list, search, and review (§V.177)."""
+
+
 def list_emails(
     connection: psycopg.Connection[dict[str, Any]],
-    limit: int = 100,
+    limit: int | None = 100,
     contact_id: str | None = None,
     account_id: str | None = None,
     since: str | None = None,
@@ -5140,7 +5186,7 @@ def list_emails(
 
     Args:
         connection: Open database connection.
-        limit: Maximum results.
+        limit: Maximum results. ``None`` omits LIMIT (review path §V.174).
         contact_id: Filter by contact ID.
         account_id: Filter by account ID.
         since: ISO datetime inclusive lower bound for
@@ -5164,7 +5210,9 @@ def list_emails(
         ``EmailSummary``.
     """
     conditions: list[Composable] = []
-    params: dict[str, object] = {"limit": limit}
+    params: dict[str, object] = {}
+    if limit is not None:
+        params["limit"] = limit
     # Simple equality filters keyed (param_name -> (column_name, value)).
     equality_filters: dict[str, tuple[str, str | None]] = {
         "contact_id": ("contact_id", contact_id),
@@ -5197,15 +5245,10 @@ def list_emails(
         )
         params["recipient_pattern"] = f"%{recipient}%"
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
-    # list_emails projects snippet (first 500 of body_text)
+    limit_sql = SQL(" LIMIT %(limit)s") if limit is not None else SQL("")
     query = SQL(
-        "SELECT id, account_id, contact_id, workflow_id, direction, "
-        "subject, sender, recipients, status, is_routed, route_method, "
-        "gmail_thread_id, sent_at, received_at, "
-        "LEFT(body_text, 500) AS snippet "
-        "FROM email {} "
-        "ORDER BY COALESCE(sent_at, received_at) DESC LIMIT %(limit)s"
-    ).format(where)
+        "SELECT {} FROM email {} ORDER BY COALESCE(sent_at, received_at) DESC{}"
+    ).format(_EMAIL_SUMMARY_COLUMNS, where, limit_sql)
     rows = connection.execute(query, params).fetchall()
     return [EmailSummary.model_validate(row) for row in rows]
 
@@ -5233,13 +5276,8 @@ def search_emails(
     if account_id is not None:
         account_filter = SQL("AND account_id = %(account_id)s")
         params["account_id"] = account_id
-    # search_emails projects snippet (first 500 of body_text)
     query_sql = SQL(
-        "SELECT id, account_id, contact_id, workflow_id, direction, "
-        "subject, sender, recipients, status, is_routed, route_method, "
-        "gmail_thread_id, sent_at, received_at, "
-        "LEFT(body_text, 500) AS snippet "
-        "FROM email "
+        "SELECT {} FROM email "
         "WHERE (LOWER(subject) LIKE LOWER(%(pattern)s) "
         "   OR LOWER(body_text) LIKE LOWER(%(pattern)s) "
         "   OR LOWER(sender) LIKE LOWER(%(pattern)s) "
@@ -5247,7 +5285,7 @@ def search_emails(
         "{} "
         "ORDER BY created_at DESC "
         "LIMIT %(limit)s"
-    ).format(account_filter)
+    ).format(_EMAIL_SUMMARY_COLUMNS, account_filter)
     rows = connection.execute(query_sql, params).fetchall()
     return [EmailSummary.model_validate(row) for row in rows]
 
@@ -6677,6 +6715,14 @@ def get_tag_summary_by_name(
     return TagSummary.model_validate(row)
 
 
+_TAG_SUMMARY_COLUMNS = SQL(
+    "t.id, t.name, t.disabled_reason, t.created_at, "
+    "(SELECT COUNT(*) FROM tag_assignment a WHERE a.tag_id = t.id) "
+    "AS usage_count"
+)
+"""Shared TagSummary SELECT list for list + search (§V.177)."""
+
+
 def list_tags(
     connection: psycopg.Connection[dict[str, Any]],
     contact_id: str | None = None,
@@ -6729,12 +6775,8 @@ def list_tags(
 
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
-        "SELECT t.id, t.name, t.disabled_reason, t.created_at, "
-        "(SELECT COUNT(*) FROM tag_assignment a WHERE a.tag_id = t.id) "
-        "AS usage_count "
-        "FROM tag t {owner_join} {where} "
-        "ORDER BY t.name LIMIT %(limit)s"
-    ).format(owner_join=owner_join, where=where)
+        "SELECT {cols} FROM tag t {owner_join} {where} ORDER BY t.name LIMIT %(limit)s"
+    ).format(cols=_TAG_SUMMARY_COLUMNS, owner_join=owner_join, where=where)
     rows = connection.execute(query, params).fetchall()
     return [TagSummary.model_validate(row) for row in rows]
 
@@ -6762,12 +6804,10 @@ def search_tags(
         SQL("") if include_disabled else SQL("AND t.disabled_reason IS NULL")
     )
     query = SQL(
-        "SELECT t.id, t.name, t.disabled_reason, t.created_at, "
-        "(SELECT COUNT(*) FROM tag_assignment a WHERE a.tag_id = t.id) "
-        "AS usage_count "
+        "SELECT {cols} "
         "FROM tag t WHERE t.name LIKE %(pattern)s {disabled_filter} "
         "ORDER BY t.name LIMIT %(limit)s"
-    ).format(disabled_filter=disabled_filter)
+    ).format(cols=_TAG_SUMMARY_COLUMNS, disabled_filter=disabled_filter)
     rows = connection.execute(query, params).fetchall()
     return [TagSummary.model_validate(row) for row in rows]
 
