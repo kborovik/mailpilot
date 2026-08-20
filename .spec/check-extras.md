@@ -1073,12 +1073,14 @@ Trigger: campaign-test or reply-test scripts/skills changed.
 
 ## §V176 — target-env derived pubsub + logfire
 
-settings.environment ∈ {dev, prd} default dev. Operator knob: `MAILPILOT_ENVIRONMENT` / config.json `environment` / `config set environment`. Derived: `google_pubsub_topic` = `mailpilot-topic-{environment}`; `google_pubsub_subscription` = `mailpilot-sub-{environment}`; `logfire_environment` = `development` if dev else `production`. Derived keys not independently settable (`config set` → `invalid_key`; `MAILPILOT_GOOGLE_PUBSUB_TOPIC` / `MAILPILOT_GOOGLE_PUBSUB_SUBSCRIPTION` / `MAILPILOT_LOGFIRE_ENVIRONMENT` not sources). Persist `environment` only (`save_settings` omits derived keys). Load compat: `environment` unset → map `logfire_environment` `production`→`prd` else `dev`. `config get` + status `config` block project `environment` + resolved topic/sub + derived `logfire_environment`.
+settings.environment ∈ {dev, prd} default dev. Sole env setting. Operator knob: `MAILPILOT_ENVIRONMENT` / config.json `environment` / `config set environment`. Pair map (internal, not a setting): dev=development, prd=production — used only at `logfire.configure(environment=...)`. Derived pubsub: `google_pubsub_topic` = `mailpilot-topic-{environment}`; `google_pubsub_subscription` = `mailpilot-sub-{environment}`. No `logfire_environment` field / Settings key / config get key / status config key. Derived pubsub keys not independently settable (`config set` → `invalid_key`; `MAILPILOT_GOOGLE_PUBSUB_TOPIC` / `MAILPILOT_GOOGLE_PUBSUB_SUBSCRIPTION` / `MAILPILOT_LOGFIRE_ENVIRONMENT` not sources). Persist `environment` only (`save_settings` omits derived keys and never writes `logfire_environment`). Load compat: `environment` unset → map legacy config key `logfire_environment` `production`→`prd` else `dev`; never expose as a setting. `config get` + status `config` block project `environment` + resolved topic/sub only.
 
 Trigger: `src/mailpilot/settings.py` changed.
 - `rg 'environment' src/mailpilot/settings.py` -> field present (Literal dev|prd)
 - `rg 'mailpilot-topic-|mailpilot-sub-' src/mailpilot/settings.py` -> derive formula
-- `rg 'google_pubsub_topic|google_pubsub_subscription|logfire_environment' src/mailpilot/database.py` -> status config block projects resolved names
+- `rg 'def logfire_environment' src/mailpilot/settings.py` -> zero Settings property
+- `rg 'logfire_environment' src/mailpilot/database.py src/mailpilot/cli.py` -> zero status/config projection
+- `rg 'google_pubsub_topic|google_pubsub_subscription' src/mailpilot/database.py` -> status config block projects resolved topic/sub
 
 ## §V166 — show queue human report hub
 
