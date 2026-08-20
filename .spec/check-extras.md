@@ -1063,13 +1063,22 @@ Trigger: inbound routing / thread match / contact bind changed.
 
 ## §V165 — live E2E skills DEV-only
 
-Live skill tests (`.claude/skills/mailpilot-campaign-test` + `.claude/skills/mailpilot-reply-test`; `.grok/skills/mailpilot-campaign-test` orchestrator) MUST read `settings.logfire_environment` before any CRM or Gmail mutate (account create/update, send, inject, handle). Value != `development` → blocking preflight issue + skill bail. Gate is `logfire_environment` (same field §V.52 tags spans with), not a host heuristic. Pytest unit tests exempt (constructor kwargs / fixtures). Skill procedure checks env before account-ensure (step 0b).
+Live skill tests (`.claude/skills/mailpilot-campaign-test` + `.claude/skills/mailpilot-reply-test`; `.grok/skills/mailpilot-campaign-test` orchestrator) MUST read `settings.environment` before any CRM or Gmail mutate (account create/update, send, inject, handle). Value != `dev` → blocking preflight issue + skill bail. Gate is `environment` (source of truth §V.176; derived `logfire_environment=development` is equivalent), not a host heuristic. Pytest unit tests exempt (constructor kwargs / fixtures). Skill procedure checks env before account-ensure (step 0b).
 
 Trigger: campaign-test or reply-test scripts/skills changed.
-- `rg 'logfire_environment' .claude/skills/mailpilot-campaign-test/scripts/preflight.py` -> gate present
-- `rg 'logfire_environment' .claude/skills/mailpilot-reply-test/scripts/preflight.py` -> gate present
-- `rg 'development' .claude/skills/mailpilot-campaign-test/scripts/preflight.py` -> required value
-- `rg 'development' .claude/skills/mailpilot-reply-test/scripts/preflight.py` -> required value
+- `rg 'environment' .claude/skills/mailpilot-campaign-test/scripts/preflight.py` -> gate present
+- `rg 'environment' .claude/skills/mailpilot-reply-test/scripts/preflight.py` -> gate present
+- `rg '"dev"' .claude/skills/mailpilot-campaign-test/scripts/preflight.py` -> required value
+- `rg '"dev"' .claude/skills/mailpilot-reply-test/scripts/preflight.py` -> required value
+
+## §V176 — target-env derived pubsub + logfire
+
+settings.environment ∈ {dev, prd} default dev. Operator knob: `MAILPILOT_ENVIRONMENT` / config.json `environment` / `config set environment`. Derived: `google_pubsub_topic` = `mailpilot-topic-{environment}`; `google_pubsub_subscription` = `mailpilot-sub-{environment}`; `logfire_environment` = `development` if dev else `production`. Derived keys not independently settable (`config set` → `invalid_key`; `MAILPILOT_GOOGLE_PUBSUB_TOPIC` / `MAILPILOT_GOOGLE_PUBSUB_SUBSCRIPTION` / `MAILPILOT_LOGFIRE_ENVIRONMENT` not sources). Persist `environment` only (`save_settings` omits derived keys). Load compat: `environment` unset → map `logfire_environment` `production`→`prd` else `dev`. `config get` + status `config` block project `environment` + resolved topic/sub + derived `logfire_environment`.
+
+Trigger: `src/mailpilot/settings.py` changed.
+- `rg 'environment' src/mailpilot/settings.py` -> field present (Literal dev|prd)
+- `rg 'mailpilot-topic-|mailpilot-sub-' src/mailpilot/settings.py` -> derive formula
+- `rg 'google_pubsub_topic|google_pubsub_subscription|logfire_environment' src/mailpilot/database.py` -> status config block projects resolved names
 
 ## §V166 — show queue human report hub
 
