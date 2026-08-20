@@ -19,7 +19,9 @@ skill is the Grok orchestrator.
 
 **Scripts / references (do not copy):**
 `.claude/skills/mailpilot-campaign-test/scripts/` and
-`.claude/skills/mailpilot-campaign-test/references/`.
+`.claude/skills/mailpilot-campaign-test/references/`
+(`reply-scenarios.json` is the branch catalog; `mechanical` scenarios are
+stamped AUTO_SUBMITTED before handle; date tokens are filled at inject).
 
 **Default workflow file:**
 `/Users/kb/github/lab5-campaigns/campaigns/var-sales-coclose/workflows/var-sales-coclose.toml`
@@ -241,6 +243,11 @@ Scoped route + agent invoke per scenario; re-enables prospect between scenarios.
 ```bash
 uv run python .claude/skills/mailpilot-campaign-test/scripts/verify_branches.py --run-id $RUN_ID
 ```
+
+Catalog gates besides branch outcome: `resume_within_days` (OOO must not
+year-pause), `last_touch` (OOO must not burn a touch / ACK), `task_status`
+(handle-inbound must complete, not fail with zero tools),
+`enrollment_updated` (DNC must bump `enrollment.updated_at`).
 
 ### 8. Critique (optional advisory)
 

@@ -11,7 +11,9 @@ import importlib.util
 import inspect
 import sys
 import types
+from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 _SCRIPTS = (
     Path(__file__).resolve().parents[1]
@@ -48,6 +50,8 @@ def test_handle_scenario_clears_prospect_notes_before_agent() -> None:
     clear_at = body.index("clear_contact_notes(PROSPECT_EMAIL)")
     execute_at = body.index("execute_task(")
     assert enable_at < clear_at < execute_at
+    stamp_at = body.index("_stamp_mechanical(")
+    assert clear_at < stamp_at < execute_at
 
 
 def test_question_scenario_reply_is_answerable_without_product_kb() -> None:
@@ -89,3 +93,59 @@ def test_address_change_scenario_hard_stop_distinct_from_ooo() -> None:
     assert ooo["expect"]["contact_disabled"] is False
     assert ooo["expect"]["agent_replied"] is False
     assert ooo["expect"]["outcome"] == "none"
+    assert ooo.get("mechanical") is True
+    assert ooo["expect"]["task_status"] == "completed"
+    assert ooo["expect"]["last_touch"] == 1
+    assert ooo["expect"]["resume_within_days"] == 21
+    assert "{event_week_month_day}" in ooo["reply_body"]
+    assert "{return_weekday_month_day}" in ooo["reply_body"]
+    assert "week of" in ooo["reply_body"].lower()
+    assert "fully back online" in ooo["reply_body"].lower()
+
+
+def test_left_company_last_day_is_hard_stop_not_ooo_pause() -> None:
+    """#251: past-tense last-day auto-reply is DNC, not a year-pause."""
+    common = _load("_common")
+    by_key = {s["key"]: s for s in common.load_scenarios()}
+    left = by_key["left_company"]
+    body = left["reply_body"].lower()
+    assert "last day" in body
+    assert "was" in body
+    assert left.get("mechanical") is True
+    assert left["expect"]["contact_disabled"] is True
+    assert left["expect"]["outcome"] == "any"
+    assert left["expect"]["enrollment_updated"] is True
+    assert "@" not in left["reply_body"]
+
+
+def test_dnc_scenarios_require_enrollment_updated_at() -> None:
+    """#253: setting do_not_contact must bump enrollment.updated_at."""
+    common = _load("_common")
+    dnc_keys = {"opt_out", "left_company", "address_change", "wrong_person"}
+    by_key = {s["key"]: s for s in common.load_scenarios()}
+    for key in dnc_keys:
+        assert by_key[key]["expect"].get("enrollment_updated") is True, key
+
+
+def test_ooo_date_tokens_event_week_past_return_next_monday() -> None:
+    """#250: event week is already past; return Monday is this month, not +1y."""
+    common = _load("_common")
+    now = datetime(2026, 8, 20, 9, 0, tzinfo=ZoneInfo("America/New_York"))
+    tokens = common.reply_date_tokens(now=now)
+    assert tokens["event_week_month_day"] == "August 17th"
+    assert tokens["return_weekday_month_day"] == "Monday, August 24th"
+    ooo = next(s for s in common.load_scenarios() if s["key"] == "auto_reply")
+    rendered = common.render_reply_body(ooo["reply_body"], now=now)
+    assert "week of August 17th" in rendered
+    assert "Monday, August 24th" in rendered
+    assert "{" not in rendered
+    # Thursday + 21d window excludes a 2027 year-pause.
+    resume = datetime(2026, 8, 24, tzinfo=now.tzinfo)
+    year_pause = datetime(2027, 8, 17, tzinfo=now.tzinfo)
+    assert (resume - now) < timedelta(days=21)
+    assert (year_pause - now) > timedelta(days=21)
+
+    monday = datetime(2026, 8, 24, 9, 0, tzinfo=now.tzinfo)
+    monday_tokens = common.reply_date_tokens(now=monday)
+    assert monday_tokens["event_week_month_day"] == "August 17th"
+    assert monday_tokens["return_weekday_month_day"] == "Monday, August 31st"

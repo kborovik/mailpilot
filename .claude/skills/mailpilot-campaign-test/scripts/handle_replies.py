@@ -41,6 +41,7 @@ from _common import (
     PROSPECT_EMAIL,
     SENDER_EMAIL,
     clear_contact_notes,
+    load_scenarios,
     mp,
     read_json,
     repo_root,
@@ -127,6 +128,34 @@ def _wait_for_routing(
     return routed
 
 
+def _stamp_mechanical(connection: object, email_id: str) -> None:
+    """Mark an injected reply as a Gmail auto-reply before execute_task.
+
+    Campaign-test injects via ``email reply`` (subject ``Re:``, no
+    Auto-Submitted). Real OOO / left-company auto-replies arrive with
+    ``Automatic reply`` + ``AUTO_SUBMITTED``. Stamp both so the harness
+    path in ``execute_task`` sees the same signal as production.
+    """
+    from psycopg.types.json import Json
+
+    from mailpilot.database import get_email
+    from mailpilot.ooo import AUTO_SUBMITTED_LABEL
+
+    email = get_email(connection, email_id)
+    if email is None:
+        return
+    labels = list(email.labels or [])
+    if AUTO_SUBMITTED_LABEL not in labels:
+        labels.append(AUTO_SUBMITTED_LABEL)
+    subject = email.subject or ""
+    if not subject.lower().startswith("automatic reply"):
+        subject = f"Automatic reply: {subject}"
+    connection.execute(
+        "UPDATE email SET labels = %(labels)s, subject = %(subject)s WHERE id = %(id)s",
+        {"labels": Json(labels), "subject": subject, "id": email_id},
+    )
+
+
 def _handle_scenario(
     entry: dict,
     routed: dict[str, str],
@@ -170,6 +199,8 @@ def _handle_scenario(
     clear_contact_notes(PROSPECT_EMAIL)
     worker_conn = psycopg.connect(database_url, row_factory=dict_row)
     try:
+        if entry.get("mechanical") and reply_email_id:
+            _stamp_mechanical(worker_conn, reply_email_id)
         execute_task(worker_conn, settings, task)
         worker_conn.commit()
         record["handled_status"] = "handled"
@@ -242,9 +273,14 @@ def main() -> int:
         tasks_by_workflow.setdefault(task.workflow_id, []).append(task)
 
     # 3. Handle one scenario at a time, re-enabling the contact between each.
+    mechanical_keys = {s["key"] for s in load_scenarios() if s.get("mechanical")}
     handled = [
         _handle_scenario(
-            entries_by_key[key], routed, tasks_by_workflow, settings, database_url
+            {**entries_by_key[key], "mechanical": key in mechanical_keys},
+            routed,
+            tasks_by_workflow,
+            settings,
+            database_url,
         )
         for key in handle_keys
     ]

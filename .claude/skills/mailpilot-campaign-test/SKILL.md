@@ -6,7 +6,8 @@ description: >-
   sends a personalized cold Touch 1 to a controlled prospect mailbox
   (inbound@lab5.ca), then the test replies to that email with content crafted to
   drive each branch of the workflow's reply handling -- positive/booked,
-  question, not-now, opt-out, auto-reply/out-of-office, address-change, and
+  question, not-now, opt-out, auto-reply/out-of-office (year-less return
+  date), left-company last-day, address-change, and
   wrong-person -- and the live agent handles each reply. The test then verifies
   the agent took the right branch (booked the call, declined, disabled the
   contact, or did nothing)
@@ -100,8 +101,8 @@ from the repo root with `uv run python`.
   address is never a recipient, and the real contact row is never modified.
 - This sends **real Gmail**: one Touch 1 per scenario from `outbound@lab5.ca` to
   `inbound@lab5.ca`, one crafted reply per scenario back the other way, and the
-  agent's own handling replies. With the default seven scenarios that is up to
-  about a dozen messages, all between the two test mailboxes.
+  agent's own handling replies. With the default eight scenarios that is up to
+  about sixteen messages, all between the two test mailboxes.
 - The skill creates persistent test scaffolding in the live database: one prospect
   contact (`inbound@lab5.ca`) and one neutral disabled test company
   (`campaign-test.invalid`, hidden from `company list` and lead discovery). These

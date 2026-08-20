@@ -15,6 +15,13 @@ behind and compares it to the scenario's expectations in the catalog:
     ``contact_later`` re-enrollment or a soft follow-up).
   - **reply text** -- substring checks against the agent's reply body (e.g. the
     calendar link for the booked branch).
+  - **task_status** -- handle-inbound task status (OOO must complete, not fail
+    with zero tools).
+  - **last_touch** -- enrollment last_touch (OOO must not burn a touch).
+  - **resume_within_days** -- ``next_scheduled_at`` set and within N days
+    (year-pause is a fail).
+  - **enrollment_updated** -- DNC bumps ``enrollment.updated_at`` off
+    ``created_at`` and into the handle window.
 
 Expectations are tolerant of the wording-vs-tool gap by design: the gating keys
 on the branch-defining signal, and a divergent outcome type is reported, not
@@ -28,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import datetime
 
 from _common import (
     PROSPECT_EMAIL,
@@ -105,6 +113,44 @@ def _has_pending_task(workflow_id: str) -> bool:
     return bool(listing.get("tasks"))
 
 
+def _enrollment_full(workflow_id: str) -> dict:
+    """Return the prospect's --full enrollment row on the ephemeral workflow."""
+    listing = mp(
+        [
+            "enrollment",
+            "list",
+            "--workflow-id",
+            workflow_id,
+            "--contact-email",
+            PROSPECT_EMAIL,
+            "--full",
+            "--limit",
+            "5",
+        ],
+        check=False,
+    )
+    rows = listing.get("enrollments") or []
+    return rows[0] if rows else {}
+
+
+def _parse_dt(value: object) -> datetime | None:
+    """Parse an ISO datetime from a CLI field, or None."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.astimezone()
+    return parsed
+
+
 def _reply_excerpt(rows: list[dict], touch1_email_id: str | None) -> str:
     """Return the body of the agent's reply (the outbound that is not Touch 1)."""
     for row in rows:
@@ -136,6 +182,53 @@ def _outcome_note(
     return None
 
 
+def _evaluate_harness_gates(expect: dict, observed: dict) -> list[str]:
+    """Notes for OOO resume / last_touch / task_status / DNC updated_at."""
+    notes: list[str] = []
+    exp_task_status = expect.get("task_status")
+    if exp_task_status is not None and observed.get("task_status") != exp_task_status:
+        notes.append(
+            f"expected task_status={exp_task_status}; "
+            f"found {observed.get('task_status')}"
+        )
+    exp_last_touch = expect.get("last_touch")
+    if exp_last_touch is not None and observed.get("last_touch") != exp_last_touch:
+        notes.append(
+            f"expected last_touch={exp_last_touch}; found {observed.get('last_touch')}"
+        )
+    exp_days = expect.get("resume_within_days")
+    if exp_days is not None:
+        nxt = _parse_dt(observed.get("next_scheduled_at"))
+        if nxt is None:
+            notes.append("expected a resume send; next_scheduled_at is null")
+        else:
+            now = datetime.now(nxt.tzinfo)
+            delta_days = (nxt - now).total_seconds() / 86400
+            if delta_days < -0.5 or delta_days > float(exp_days):
+                notes.append(
+                    f"expected resume within {exp_days}d; "
+                    f"found {observed.get('next_scheduled_at')}"
+                )
+    if not expect.get("enrollment_updated"):
+        return notes
+    updated = _parse_dt(observed.get("enrollment_updated_at"))
+    created = _parse_dt(observed.get("enrollment_created_at"))
+    handle_start = _parse_dt(observed.get("handle_window_start"))
+    if updated is None or created is None:
+        notes.append("enrollment.updated_at / created_at missing")
+    elif updated <= created:
+        notes.append(
+            "enrollment.updated_at was not bumped (still created_at) "
+            "after do_not_contact"
+        )
+    elif handle_start is not None and updated < handle_start:
+        notes.append(
+            "enrollment.updated_at predates the handle window; "
+            "disposition did not bump updated_at"
+        )
+    return notes
+
+
 def _evaluate(expect: dict, observed: dict) -> tuple[bool, list[str]]:
     """Compare observed state to the scenario expectations. Return (pass, notes)."""
     notes: list[str] = []
@@ -165,7 +258,7 @@ def _evaluate(expect: dict, observed: dict) -> tuple[bool, list[str]]:
         for needle in expect.get("reply_contains", [])
         if needle.lower() not in excerpt
     )
-
+    notes.extend(_evaluate_harness_gates(expect, observed))
     return not notes, notes
 
 
@@ -201,6 +294,7 @@ def main() -> int:
         enrollment_id = entry["enrollment_id"]
         rows = _outbound_rows(workflow_id)
         touch1_email_id = (touch1_by_key.get(key) or {}).get("outbound_email_id")
+        enrollment = _enrollment_full(workflow_id)
 
         observed = {
             "outcome": outcomes.get(enrollment_id, "none"),
@@ -211,6 +305,13 @@ def main() -> int:
             "reply_excerpt": _reply_excerpt(rows, touch1_email_id),
             "outbound_count": len(rows),
             "tool_calls": handle.get("tool_calls"),
+            "task_status": handle.get("task_status"),
+            "last_touch": enrollment.get("last_touch"),
+            "next_scheduled_at": enrollment.get("next_scheduled_at"),
+            "disposition": enrollment.get("disposition"),
+            "enrollment_updated_at": enrollment.get("updated_at"),
+            "enrollment_created_at": enrollment.get("created_at"),
+            "handle_window_start": handled.get("handle_window_start"),
         }
 
         handled_status = handle.get("handled_status")

@@ -30,6 +30,7 @@ from _common import (
     load_scenarios,
     mp,
     read_json,
+    render_reply_body,
     run_dir,
     write_json,
 )
@@ -106,7 +107,7 @@ def main() -> int:
     directory = run_dir(args.run_id)
     touch1 = read_json(directory / "touch1.json")
     sends = [s for s in touch1["sends"] if s["status"] == "sent"]
-    bodies = {s["key"]: s["reply_body"] for s in load_scenarios()}
+    bodies = {s["key"]: render_reply_body(s["reply_body"]) for s in load_scenarios()}
 
     expected = {s["scenario_key"] for s in sends}
     found: dict[str, str] = {}

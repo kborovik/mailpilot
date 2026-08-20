@@ -29,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -111,6 +112,52 @@ def load_scenarios() -> list[dict[str, Any]]:
     """Return the reply-branch scenario catalog (list of scenario dicts)."""
     path = skill_root() / SCENARIOS_FILE
     return read_json(path)["scenarios"]
+
+
+def _ordinal(day: int) -> str:
+    """Return 1st/2nd/3rd/4th… for a calendar day."""
+    if 10 <= day % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+    return f"{day}{suffix}"
+
+
+def reply_date_tokens(*, now: datetime | None = None) -> dict[str, str]:
+    """Date tokens for OOO fixtures so resume stays this-month relative.
+
+    ``event_week_month_day`` is this week's Monday (last week when today is
+    Monday) so the event-week date is already past. ``return_weekday_month_day``
+    is next Monday as ``Monday, August 24th``.
+    """
+    if now is None:
+        now = datetime.now().astimezone()
+    today = now.date()
+    this_monday = today - timedelta(days=today.weekday())
+    if today.weekday() == 0:
+        event_monday = this_monday - timedelta(days=7)
+        return_monday = this_monday + timedelta(days=7)
+    else:
+        event_monday = this_monday
+        return_monday = this_monday + timedelta(days=7)
+    return {
+        "event_week_month_day": (
+            f"{event_monday.strftime('%B')} {_ordinal(event_monday.day)}"
+        ),
+        "return_weekday_month_day": (
+            f"{return_monday.strftime('%A')}, "
+            f"{return_monday.strftime('%B')} {_ordinal(return_monday.day)}"
+        ),
+    }
+
+
+def render_reply_body(body: str, *, now: datetime | None = None) -> str:
+    """Fill ``{event_week_month_day}`` / ``{return_weekday_month_day}`` tokens."""
+    tokens = reply_date_tokens(now=now)
+    rendered = body
+    for key, value in tokens.items():
+        rendered = rendered.replace("{" + key + "}", value)
+    return rendered
 
 
 def ephemeral_workflow_name(run_id: str, scenario_key: str) -> str:
