@@ -284,7 +284,7 @@ T293|x|impl §V.169(∆) — OOO resume-year: same-day month+day w/o year → sa
 T294|x|impl §V.175(+) + §I — task retry filter-mode + --touch (repeatable) + --scheduled-at on set + --dry-run preview ids+companies; one envelope retried_count+ids+scheduled_at+companies; SKILL one-call; tests (#244)|V175,V170,V49,V162,V115,V4,V111,I.cli
 T295|x|impl §V.176(+) + §I.config + §I.pubsub — environment ∈ {dev, prd}; derive topic/sub + logfire_environment; persist environment only; config set derived keys invalid_key; load compat; status projects resolved; V165 gate on environment=dev; SKILL/tests|V176,V52,V165,V85,V11,I.config,I.pubsub
 T296|x|impl §V.176(∆) + §V.52(∆) + §I.config — drop `logfire_environment` setting/projection; map internally at logfire.configure (dev→development, prd→production); persist environment only; load compat kept; tests+SKILL|V176,V52,I.config
-T297|.|impl §V.177(+) — `_db(*, mutate=False)` lazy-import initialize_database; cmds use helper; mutate=True → require_current_schema; cli_mutation stays per-cmd; close success+error; sweep `initialize_database(` in `src/mailpilot/cli.py`; existing CLI tests (#254)|V177,V2,V54,V109
+T297|x|impl §V.177(+) — `_db(*, mutate=False)` lazy-import initialize_database; cmds use helper; mutate=True → require_current_schema; cli_mutation stays per-cmd; close success+error; sweep `initialize_database(` in `src/mailpilot/cli.py`; existing CLI tests (#254)|V177,V2,V54,V109
 
 ## §B BUGS
 
