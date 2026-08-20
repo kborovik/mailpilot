@@ -190,7 +190,7 @@ V136: system-owned touch cadence — def touches+interval; compose-only agent; f
 V137: connect-fail operator UX — OperationalError → SystemExit hint; expected fail → logfire.error + operator_event, zero console Traceback — → .spec/check-extras.md §V137
 V138: company cohort pipeline status — `company list --status` Enum ∈ {ready, needs_contacts, needs_profile, disabled}; AND-composes w/ list filters; no `company audit` verb — → .spec/check-extras.md §V138
 V139: stdin NDJSON batch mutation — selected Mutate verbs accept `--stdin`; results envelope + partial-success exit policy; MVP `company disable --stdin` + `contact create --stdin` — → .spec/check-extras.md §V139
-V140: company profile write paths — `company create|update` full-replace XOR profile flags + field-patch merge; CompanyProfile validation; no partial write — → .spec/check-extras.md §V140
+V140: company profile write paths — `company create|update` full-replace XOR profile flags + field-patch merge; CompanyProfile validation; no partial write; update ! reuse `_company_profile_options` + `_profile_replace_and_patch_flags` + `_read_replace_profile`; one `_parse_json_object(text, *, what)` — → .spec/check-extras.md §V140
 V141: multi-owner tag link + set-replace — `tag add`/`tag remove` repeatable owner XOR; `tag set` full assignment replace; `company create --tag` additive; company list|view `tags[]` always — → .spec/check-extras.md §V141
 V142: company domain aliases — `company_alias` shared domain space; polymorphic resolve; create `--alias`; view `aliases[]`; migration 011 — → .spec/check-extras.md §V142
 V143: company merge into survivor — `company merge --from/--into [--move-contacts]`; alias + soft-disable source; disabled source or disabled survivor allowed (keep survivor reason); enable blocked when domain is alias — → .spec/check-extras.md §V143
@@ -285,6 +285,7 @@ T294|x|impl §V.175(+) + §I — task retry filter-mode + --touch (repeatable) +
 T295|x|impl §V.176(+) + §I.config + §I.pubsub — environment ∈ {dev, prd}; derive topic/sub + logfire_environment; persist environment only; config set derived keys invalid_key; load compat; status projects resolved; V165 gate on environment=dev; SKILL/tests|V176,V52,V165,V85,V11,I.config,I.pubsub
 T296|x|impl §V.176(∆) + §V.52(∆) + §I.config — drop `logfire_environment` setting/projection; map internally at logfire.configure (dev→development, prd→production); persist environment only; load compat kept; tests+SKILL|V176,V52,I.config
 T297|x|impl §V.177(+) — `_db(*, mutate=False)` lazy-import initialize_database; cmds use helper; mutate=True → require_current_schema; cli_mutation stays per-cmd; close success+error; sweep `initialize_database(` in `src/mailpilot/cli.py`; existing CLI tests (#254)|V177,V2,V54,V109
+T298|.|impl §V.140(∆) — company_update @_company_profile_options + _profile_replace_and_patch_flags + _read_replace_profile; one _parse_json_object(text, *, what); flag names+XOR unchanged; --help snapshot if Click param order shifts; create+update tests (#255)|V140,V72,V144,V111,I.cli
 
 ## §B BUGS
 
