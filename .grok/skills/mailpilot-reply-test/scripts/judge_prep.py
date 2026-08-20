@@ -1,6 +1,6 @@
-"""Assemble the Sonnet judge's inputs for the NL-graded cases (out-scope + compare).
+"""Assemble the judge subagent's inputs for the NL-graded cases (out-scope + compare).
 
-``score_replies.py`` defers out-scope and compare verdicts to a Sonnet judge
+``score_replies.py`` defers out-scope and compare verdicts to a judge subagent
 (§V.105): it emits advisory signals but no verdict. This script bundles, per such
 case that received a reply, everything the judge reads -- the question, the reply
 body, the case rubric, the advisory signals, and (for compare) the source

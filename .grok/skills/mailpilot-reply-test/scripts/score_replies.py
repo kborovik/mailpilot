@@ -6,9 +6,9 @@ Per case type the verdict source differs (§V.105):
                false FAIL.
   out-scope -> NOT decided here. Emits advisory signals (fabrication_candidates,
                decline_signals_found) and a ``"JUDGE"`` sentinel verdict; a
-               Sonnet judge sub-agent is the verdict of record.
+               judge subagent is the verdict of record.
   compare   -> NOT decided here. Emits advisory signals (token_hits, has_table)
-               and a ``"JUDGE"`` sentinel; the Sonnet judge decides.
+               and a ``"JUDGE"`` sentinel; the judge subagent decides.
   no reply  -> NO_REPLY (any type).
 
 Deterministic substring/regex grading of free-form NL replies (polite decline,
@@ -34,7 +34,7 @@ from _common import read_json, run_dir, write_json
 
 TABLE_SEPARATOR = re.compile(r"\|\s*:?-{3,}")
 
-# Sentinel verdict for cases whose verdict of record is the Sonnet judge's, not
+# Sentinel verdict for cases whose verdict of record is the judge subagent's, not
 # this script's. ``apply_judgments.py`` replaces it with the judged PASS/FAIL.
 JUDGE = "JUDGE"
 
@@ -162,7 +162,7 @@ def grade(case_type: str, body: str, grading: dict) -> tuple[str, dict]:
     """Return (verdict, detail) for a replied case.
 
     in-scope is decided here; out-scope and compare get a ``"JUDGE"`` sentinel
-    verdict plus advisory signals (§V.105) for the Sonnet judge to resolve.
+    verdict plus advisory signals (§V.105) for the judge subagent to resolve.
     """
     if case_type == "inscope":
         return _grade_inscope(body, grading)

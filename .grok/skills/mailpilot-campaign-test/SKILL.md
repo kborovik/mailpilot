@@ -14,12 +14,10 @@ allowed-tools: run_terminal_command, spawn_subagent, search_tool, use_tool
 # mailpilot-campaign-test
 
 Test the real outbound workflow agent end-to-end without emailing a real
-prospect. Deterministic work lives in the shared Claude skill scripts; this
-skill is the Grok orchestrator.
+prospect. Deterministic work lives in `scripts/`; this skill is the Grok
+orchestrator.
 
-**Scripts / references (do not copy):**
-`.claude/skills/mailpilot-campaign-test/scripts/` and
-`.claude/skills/mailpilot-campaign-test/references/`
+**Scripts / references:** `scripts/` and `references/`
 (`reply-scenarios.json` is the branch catalog; `mechanical` scenarios are
 stamped AUTO_SUBMITTED before handle; date tokens are filled at inject).
 
@@ -132,7 +130,7 @@ share shell state). Artifacts: `reports/campaign-test/<run_id>/` (git-ignored).
 ### 0. Mint run id
 
 ```bash
-uv run python .claude/skills/mailpilot-campaign-test/scripts/new_run_id.py
+uv run python .grok/skills/mailpilot-campaign-test/scripts/new_run_id.py
 ```
 
 ### 0a. Confirm DEV environment
@@ -184,7 +182,7 @@ field mismatches.
 ### 1. Preflight
 
 ```bash
-uv run python .claude/skills/mailpilot-campaign-test/scripts/preflight.py \
+uv run python .grok/skills/mailpilot-campaign-test/scripts/preflight.py \
   --run-id $RUN_ID \
   --workflow-file /Users/kb/github/lab5-campaigns/campaigns/var-sales-coclose/workflows/var-sales-coclose.toml
 ```
@@ -194,7 +192,7 @@ Stop if `verdict != "ok"`. WARNING lines are non-blocking.
 ### 2. Select grounding contact
 
 ```bash
-uv run python .claude/skills/mailpilot-campaign-test/scripts/select_contacts.py \
+uv run python .grok/skills/mailpilot-campaign-test/scripts/select_contacts.py \
   --run-id $RUN_ID [--company-domain <domain>] [--min-confidence N]
 ```
 
@@ -204,7 +202,7 @@ company + contact) first.
 ### 3. Set up scenarios
 
 ```bash
-uv run python .claude/skills/mailpilot-campaign-test/scripts/setup_scenarios.py --run-id $RUN_ID
+uv run python .grok/skills/mailpilot-campaign-test/scripts/setup_scenarios.py --run-id $RUN_ID
 ```
 
 From here on, always run cleanup before finish.
@@ -214,7 +212,7 @@ From here on, always run cleanup before finish.
 **Start the Logfire error-watch window** (record UTC now). Then:
 
 ```bash
-uv run python .claude/skills/mailpilot-campaign-test/scripts/send_touch1.py --run-id $RUN_ID
+uv run python .grok/skills/mailpilot-campaign-test/scripts/send_touch1.py --run-id $RUN_ID
 ```
 
 Captures `rfc2822_message_id` per scenario (§V.122). Show the user one sent body.
@@ -223,7 +221,7 @@ Captures `rfc2822_message_id` per scenario (§V.122). Show the user one sent bod
 ### 5. Inject replies
 
 ```bash
-uv run python .claude/skills/mailpilot-campaign-test/scripts/inject_replies.py --run-id $RUN_ID
+uv run python .grok/skills/mailpilot-campaign-test/scripts/inject_replies.py --run-id $RUN_ID
 ```
 
 Matches received Touch 1 by Message-ID; subject is fallback only.
@@ -232,7 +230,7 @@ Matches received Touch 1 by Message-ID; subject is fallback only.
 ### 6. Handle replies
 
 ```bash
-uv run python .claude/skills/mailpilot-campaign-test/scripts/handle_replies.py --run-id $RUN_ID
+uv run python .grok/skills/mailpilot-campaign-test/scripts/handle_replies.py --run-id $RUN_ID
 ```
 
 Scoped route + agent invoke per scenario; re-enables prospect between scenarios.
@@ -241,7 +239,7 @@ Scoped route + agent invoke per scenario; re-enables prospect between scenarios.
 ### 7. Verify branches
 
 ```bash
-uv run python .claude/skills/mailpilot-campaign-test/scripts/verify_branches.py --run-id $RUN_ID
+uv run python .grok/skills/mailpilot-campaign-test/scripts/verify_branches.py --run-id $RUN_ID
 ```
 
 Catalog gates besides branch outcome: `resume_within_days` (OOO must not
@@ -252,13 +250,13 @@ year-pause), `last_touch` (OOO must not burn a touch / ACK), `task_status`
 ### 8. Critique (optional advisory)
 
 ```bash
-uv run python .claude/skills/mailpilot-campaign-test/scripts/critique_prep.py --run-id $RUN_ID
+uv run python .grok/skills/mailpilot-campaign-test/scripts/critique_prep.py --run-id $RUN_ID
 ```
 
 Spawn one subagent. Give it:
 
 - `reports/campaign-test/<RUN_ID>/critique_input.json`
-- `.claude/skills/mailpilot-campaign-test/references/marketing-rubric.md`
+- `.grok/skills/mailpilot-campaign-test/references/marketing-rubric.md`
 - Write `critiques.json` + `critiques.md` under the run dir
 - Return only: overall score + highest-impact edit
 
@@ -267,7 +265,7 @@ Score never gates the verdict.
 ### 9. Report
 
 ```bash
-uv run python .claude/skills/mailpilot-campaign-test/scripts/generate_report.py --run-id $RUN_ID
+uv run python .grok/skills/mailpilot-campaign-test/scripts/generate_report.py --run-id $RUN_ID
 ```
 
 Present `reports/campaign-test/$RUN_ID/report.md`. PASS only when every scenario matched.
@@ -275,7 +273,7 @@ Present `reports/campaign-test/$RUN_ID/report.md`. PASS only when every scenario
 ### 10. Clean up (always)
 
 ```bash
-uv run python .claude/skills/mailpilot-campaign-test/scripts/cleanup.py --run-id $RUN_ID
+uv run python .grok/skills/mailpilot-campaign-test/scripts/cleanup.py --run-id $RUN_ID
 ```
 
 ### 11. Logfire telemetry (digest)

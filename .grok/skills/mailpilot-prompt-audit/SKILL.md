@@ -9,7 +9,7 @@ description: >-
   instructions). The skill composes each system's actual prompt deterministically
   from code and the live workflow rows, pulls per-system Logfire telemetry
   (token economics, cache-read share, tool-call and tool-error counts, status
-  distribution, latency, sample reasoning), then an Opus sub-agent reviews the
+  distribution, latency, sample reasoning), then an isolated subagent reviews the
   system prompt plus workflow instructions against the telemetry and writes a
   prioritized list of concrete edits -- each flagged as a workflow TOML change or
   a code change plus PR. Use this whenever the user wants to analyze, audit, or
@@ -18,8 +18,9 @@ description: >-
   they only say "audit the prompts", "analyze prompt composition", "review the
   system prompt", or "suggest workflow-instruction improvements". This is
   read-only: no Gmail traffic, no `mailpilot run`, no database mutation.
+  Use when the user runs /mailpilot-prompt-audit.
 argument-hint: "[--status active|all] [--days N] [--environment development|production]"
-allowed-tools: Bash(uv run *), Read, Agent, mcp__claude_ai_logfire__query_run, mcp__claude_ai_logfire__query_schema_reference
+allowed-tools: run_terminal_command, spawn_subagent, search_tool, use_tool
 ---
 
 # mailpilot-prompt-audit
@@ -61,7 +62,7 @@ every command from the repo root with `uv run python`.
 - **Join.** Merges telemetry onto each composed system and computes the derived
   rates deterministically (cache-read share, tokens per invocation, tool-error
   rate, failed-run rate).
-- **Analyze.** An Opus sub-agent reviews each system prompt plus the workflow
+- **Analyze.** An isolated subagent reviews each system prompt plus the workflow
   instructions against the rubric (`references/audit-rubric.md`) and the
   telemetry, and writes a prioritized list of concrete edits -- each flagged as
   a workflow TOML change or a code change plus PR (§V.44).
@@ -98,23 +99,23 @@ every command from the repo root with `uv run python`.
 | Phase | Model | Why |
 |---|---|---|
 | Compose, Join, Report | Orchestrator, directly | Deterministic scripts; trivial commands that emit compact JSON. |
-| Telemetry pull | **Sonnet** sub-agent | Runs two aggregate SQL queries through the Logfire MCP and shapes the result JSON. Mechanical; keeps the raw rows out of the orchestrator. |
-| Prompt analysis | **Opus** sub-agent | Judgment-heavy critique of the system prompt and workflow instructions against the telemetry; isolated so the full prompt text never enters the orchestrator's window. |
+| Telemetry pull | isolated subagent | Runs two aggregate SQL queries through the Logfire MCP and shapes the result JSON. Mechanical; keeps the raw rows out of the orchestrator. |
+| Prompt analysis | isolated subagent | Judgment-heavy critique of the system prompt and workflow instructions against the telemetry; isolated so the full prompt text never enters the orchestrator's window. |
 
-Spawn each sub-agent with the Agent tool and the stated `model`. Pass it the
+Spawn each sub-agent with `spawn_subagent` (`subagent_type: general-purpose`; do not pass `model`). Pass it the
 literal `RUN_ID` and the exact commands; require it to return only the small
 summary described.
 
 ## Procedure
 
-The orchestrator runs the deterministic steps directly. Step 2 (telemetry) is a
-Sonnet sub-agent that queries the Logfire MCP. Step 4 (analysis) is an Opus
-sub-agent. The heavy reading -- full prompt text, telemetry rows -- stays inside
+The orchestrator runs the deterministic steps directly. Step 2 (telemetry) is an
+isolated subagent that queries Logfire MCP. Step 4 (analysis) is an isolated
+subagent. The heavy reading -- full prompt text, telemetry rows -- stays inside
 the scripts and sub-agents.
 
 ### 0. Mint a run id (orchestrator)
 ```bash
-uv run python .claude/skills/mailpilot-prompt-audit/scripts/new_run_id.py
+uv run python .grok/skills/mailpilot-prompt-audit/scripts/new_run_id.py
 ```
 Reuse the printed value (e.g. `2026-06-26-142305_56f7ec48`) as a **literal**
 wherever `$RUN_ID` appears below -- substitute the actual string into each command. Separate tool
@@ -123,7 +124,7 @@ calls do not share shell state. Artifacts go to `reports/prompt-audit/<run_id>/`
 
 ### 1. Compose the prompts (orchestrator, directly)
 ```bash
-uv run python .claude/skills/mailpilot-prompt-audit/scripts/compose_prompts.py --run-id $RUN_ID --status active
+uv run python .grok/skills/mailpilot-prompt-audit/scripts/compose_prompts.py --run-id $RUN_ID --status active
 ```
 Writes `composition.json` (full system-prompt text per system, sizes, fragment
 inventory) and prints a compact summary: the workflow count, the templates in
@@ -132,16 +133,15 @@ use, and per-workflow instruction / system-prompt sizes. Note the
 workflow count is 0, tell the user no workflows match the status filter and
 suggest `--status all`.
 
-### 2. Pull Logfire telemetry -- Sonnet sub-agent
+### 2. Pull Logfire telemetry -- isolated subagent
 Skip this step only if the Logfire token is unavailable (note it in the report;
-the analysis then degrades to a static review). Otherwise spawn one Sonnet
-sub-agent. Give it `RUN_ID`, the environment (default `development`), the
+the analysis then degrades to a static review). Otherwise spawn one subagent. Give it `RUN_ID`, the environment (default `development`), the
 lookback (default 13 days), and the composed `workflow_id`s from step 1, and
 this contract:
 
 > You pull per-system telemetry for the mailpilot prompt audit. Run each query
-> through the Logfire MCP with `mcp__claude_ai_logfire__query_run`
-> (`project: mailpilot`); call `mcp__claude_ai_logfire__query_schema_reference`
+> through Logfire MCP via `use_tool` (`logfire__query_run`,
+> `project: mailpilot`); call `logfire__query_schema_reference` via `use_tool`
 > once if you need the schema. Run the two queries below over the last `<DAYS>` days in
 > `deployment_environment = '<ENVIRONMENT>'`. Set the MCP `start_timestamp` /
 > `end_timestamp` to span the lookback; the MCP enforces a strict 14-day maximum
@@ -258,14 +258,14 @@ static composition review.
 
 ### 3. Join telemetry onto the composition (orchestrator, directly)
 ```bash
-uv run python .claude/skills/mailpilot-prompt-audit/scripts/analyze_prep.py --run-id $RUN_ID
+uv run python .grok/skills/mailpilot-prompt-audit/scripts/analyze_prep.py --run-id $RUN_ID
 ```
 Writes `analysis_input.json`: each composed system enriched with a `telemetry`
 block and the derived rates, ordered so the busiest systems lead. Prints
 whether telemetry was available and the top systems by invocation count.
 
-### 4. Analyze -- Opus sub-agent
-Spawn one Opus sub-agent. Give it `RUN_ID` and this contract:
+### 4. Analyze -- isolated subagent
+Spawn one subagent. Give it `RUN_ID` and this contract:
 
 > You are a prompt-composition auditor. The unit of critique is the authored
 > prompt text -- the code-defined system prompt (template fragments, classifier
@@ -280,8 +280,8 @@ Spawn one Opus sub-agent. Give it `RUN_ID` and this contract:
 > every tool name and argument a workflow instruction references against it, and
 > `derived_formulas` spells out each derived rate so you can verify a number
 > against the raw sums. Also read
-> `.claude/skills/mailpilot-prompt-audit/references/audit-rubric.md` and the
-> project `CLAUDE.md`. For the exact text of a code fragment you want to change,
+> `.grok/skills/mailpilot-prompt-audit/references/audit-rubric.md`. For the
+> exact text of a code fragment you want to change,
 > read `src/mailpilot/agent/templates.py` or `src/mailpilot/agent/classify.py`;
 > for workflow instruction text, the composed prompt is already in the JSON
 > (source of truth is `workflows/*.toml`).
@@ -308,7 +308,7 @@ Substitute the literal run id for `<RUN_ID>`.
 
 ### 5. Report (orchestrator, directly)
 ```bash
-uv run python .claude/skills/mailpilot-prompt-audit/scripts/generate_report.py --run-id $RUN_ID
+uv run python .grok/skills/mailpilot-prompt-audit/scripts/generate_report.py --run-id $RUN_ID
 ```
 Reads `reports/prompt-audit/$RUN_ID/report.md` and presents its summary to the user. The
 report folds in `analysis.md` automatically.

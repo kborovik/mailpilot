@@ -6,7 +6,7 @@ prompt (template fragments in `agent/templates.py`, the classifier
 `instructions`. Score each system against the dimensions below, using the
 Logfire telemetry as evidence, then propose concrete edits.
 
-Read the project principles in `CLAUDE.md` first — "minimal decision surface",
+Read SPEC.md §C harness-over-LLM first — "minimal decision surface",
 "system-driven not agent-driven", and "simplicity above all" are the lens.
 
 ## Dimensions (score each 1-5)

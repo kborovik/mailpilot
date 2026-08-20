@@ -127,7 +127,7 @@ V69: tick classifying >= 1 inbound -> next tick forces full sweep + wakeup_event
 V71: no format-rejection path — send_email|reply_email|compose body never format-reject; no reply_rejection_scope / cap / bypass
 V72: company.profile JSONB vs CompanyProfile; required non-empty; malformed → validation_error — → .spec/check-extras.md §V72
 V73: skill-body-embedded Workflow snippet runnable as authored — (a) zero free vars; (b) args-as-collection guard; (c) prose-matches-dispatch; (d) saved-workflow byte-identical — recipe → .spec/check-extras.md §V73
-V74: CSV ingestion uses RFC-4180 parser (csv module / csv.DictReader); redirect resolution = hop-agnostic curl -sL; scope .claude/skills/**; .claude/workflows/*.js excluded — recipe → .spec/check-extras.md §V74
+V74: CSV ingestion uses RFC-4180 parser (csv module / csv.DictReader); redirect resolution = hop-agnostic curl -sL; scope .grok/skills/**; .claude/workflows/*.js excluded — recipe → .spec/check-extras.md §V74
 V75: sync incremental History API; 404 → full INBOX; first sync full; mid-batch 429|5xx backoff never drop; checkpoint past persisted only — → .spec/check-extras.md §V75
 V76: routing eligibility window — stale/no-workflow/predates → skipped_* no LLM — → .spec/check-extras.md §V76
 V77: outbound email row persists only after Gmail accepts send; orphan recovery via get_email_by_gmail_message_id on conflict — → .spec/check-extras.md §V77
@@ -151,9 +151,9 @@ V95: contact lead-metadata flat cols: title TEXT, email_confidence INT; NULL = h
 V96: lead-contacts discover set + negative-verdict memoization on typed reason_code — → .spec/check-extras.md §V96
 V97: lead-* run-summary completeness — batch-gate under-process → deferred = stale-count - processed; bare created|enriched|seeded never sole remainder — → .spec/check-extras.md §V97
 V98: lead-companies seed collision visibility — name-divergent apex merge → collapsed in run-summary; bare existing:N never sole merge signal — → .spec/check-extras.md §V98
-V99: every path `.claude/skills/**` cites resolves on disk; cited-but-absent = erroring recovery instruction — recipe → .spec/check-extras.md §V99
+V99: every path `.grok/skills/**` cites resolves on disk; cited-but-absent = erroring recovery instruction — recipe → .spec/check-extras.md §V99
 V100: skill-body progressive-disclosure — live procedure inline; rarely-loaded material + sibling shared prose in `references/*.md`; body >~500 lines -> extract — recipe → .spec/check-extras.md §V100
-V101: skill-body obligation vocabulary — MUST/required never bare ` ! ` as must; scope `.claude/skills/**` prose — → .spec/check-extras.md §V101
+V101: skill-body obligation vocabulary — MUST/required never bare ` ! ` as must; scope `.grok/skills/**` prose — → .spec/check-extras.md §V101
 V102: project-skill frontmatter hygiene — allowed-tools + argument-hint required; zero-body-use grant banned — → .spec/check-extras.md §V102
 V103: workflow defs; name=kebab stem; --file recurse `**/*.toml`; import-only def fields; per-row `{action,in_sync,changed}`; TOML-only — → .spec/check-extras.md §V103
 V104: reply-test reply-loop guard — outbound@lab5.ca has no active workflow (test precondition) — → .spec/check-extras.md §V104
@@ -244,7 +244,7 @@ T254|x|impl §V.160(+) + §V.152(∆) + §I — enrollment list --disposition; v
 T255|x|impl §V.107(∆) — task list|stats --workflow-id name|UUID via _resolve_workflow_id; help "name or ID"; UUID still works; not_found when missing; tests name+uuid+unknown; SKILL/help (#211)|V107,V133,V90,V4,I.cli
 T256|x|impl §V.107 — email list --workflow-id name|UUID via _resolve_workflow_id; help "name or ID"; UUID still works; not_found when missing; tests name+uuid+unknown; SKILL/help (#213)|V107,V154,V90,V4,I.cli
 T257|x|impl §V.161(+) — address-change auto-reply hard-stop: protocol/tool guidance + campaign-test scenario + fixture/test; note records new email when present; distinct from OOO auto_reply scenario (#212)|V161,V127,V123,B131
-T258|x|swap mailpilot-campaign-test default workflow → `/Users/kb/github/lab5-campaigns/campaigns/var-sales-coclose/workflows/var-sales-coclose.toml` — `_common.DEFAULT_WORKFLOW_FILE` + `.claude`/`.grok` SKILL.md defaults; `--workflow-file` override kept|V122
+T258|x|swap mailpilot-campaign-test default workflow → `/Users/kb/github/lab5-campaigns/campaigns/var-sales-coclose/workflows/var-sales-coclose.toml` — `_common.DEFAULT_WORKFLOW_FILE` + `.grok` SKILL.md defaults; `--workflow-file` override kept|V122
 T259|x|impl §V.162(+) — SQL touch parse (stats + enrollment --full/--touch) + resolve_touch_number accept 2 and "T2"; new OOO-resume writes numeric; regression pending context.touch="T2"; workflow stats|report|status + enrollment --full JSON (#214)|V162,V132,V152,V136,V157,V153
 T260|x|impl §V.163(+) — bounce handler conclude do_not_contact + cancel follow-ups on every active outbound enrollment; test bounced T1 → no pending T2 (#215)|V163,V80,V123,V127,B133
 T261|x|impl §V.164(+) — thread-bound inbound binds enrolled contact when From local-part differs; ! auto-enroll alias; left-company/retired auto-reply concludes original + cancels T2; fixture T1 a@domain reply afull@domain (#216)|V164,V161,V27,V123,B134

@@ -7,7 +7,7 @@ parts: the ``workflow`` block (name, goal, instructions, read from the
 source workflow TOML the run imported) and a ``scenarios`` list. Each scenario
 record carries the crafted inbound reply, the agent's handling reply, the branch
 the agent was expected to take, and the observed outcome (whether it took it).
-The Opus critique sub-agent reads this single file instead of running many CLI
+The critique subagent reads this single file instead of running many CLI
 queries. Deterministic data plumbing, no LLM.
 
 Usage:

@@ -5,16 +5,17 @@ description: >-
   water-treatment product questions from outbound@lab5.ca to inbound@lab5.ca,
   let the inbound-google-drive workflow auto-reply, grade replies against
   QA-Pairs.json, measure token use + reply latency from Logfire, review the demo
-  workflow wording with an Opus sub-agent, and emit a brief report —
-  auto-escalating to an Opus root-cause investigation and solution analysis if
+  workflow wording with an isolated subagent, and emit a brief report —
+  auto-escalating to an isolated subagent root-cause investigation and solution analysis if
   anything fails. Use this whenever the user wants to test,
   smoke-test, or validate the MailPilot inbound reply agent or demo workflow,
   run a Run-A / Run-B email-delivery test, check reply grounding or polite-
   decline behavior, or measure reply latency and token cost — even when they
   only say "test the mailpilot reply", "run the demo test", or "smoke-test the
   agent". This is LIVE Gmail traffic; do not invoke it for unit tests.
+  Use when the user runs /mailpilot-reply-test.
 argument-hint: (no arguments)
-allowed-tools: Bash(uv run *), Bash(pkill *), Read, Agent, AskUserQuestion
+allowed-tools: run_terminal_command, spawn_subagent
 ---
 
 # MailPilot reply test
@@ -28,7 +29,7 @@ rows, code) stay inside sub-agents.
 
 Run all commands from the repo root with `uv run python` so the project venv,
 the `mailpilot` console script, and the package are importable. Scripts live in
-`.claude/skills/mailpilot-reply-test/scripts/`.
+`.grok/skills/mailpilot-reply-test/scripts/`.
 
 ## What it does
 
@@ -37,9 +38,9 @@ the `mailpilot` console script, and the package are importable. Scripts live in
   exercises grounded answers, cross-datasheet compare, and polite decline under
   concurrency, and measures the parallel task drain.
 - Grades each reply (see `references/grading.md`): in-scope deterministically,
-  out-scope + compare by a Sonnet judge sub-agent (§V.105). Pulls per-reply
+  out-scope + compare by a judge subagent (§V.105). Pulls per-reply
   tokens + latency from Logfire, writes `report.md`, and investigates failures.
-- Reviews every reply with an Opus sub-agent and recommends concrete edits to the
+- Reviews every reply with an isolated subagent and recommends concrete edits to the
   demo workflow file (`workflows/mailpilot-demo.toml`). Runs on every pass, not
   only on failure.
 
@@ -67,14 +68,14 @@ the `mailpilot` console script, and the package are importable. Scripts live in
 
 | Phase | Model | Why |
 |---|---|---|
-| Setup checks, Run-A, Run-B | **Sonnet** sub-agents | Mechanical: run scripts, return a short summary. |
-| Reply judging (out-scope + compare) | **Sonnet** sub-agent | NL-shaped grading a deterministic script cannot do reliably (§V.105): reads the reply, rubric, advisory signals, and source datasheet, returns PASS/FAIL + rationale. |
-| Analysis (Logfire metrics) | **Opus** sub-agent | Runs one SQL query, reconciles column names to the live Logfire schema, and interprets token economics and latency; isolated so the raw query rows never enter the orchestrator's window. |
-| Workflow improvement review | **Opus** sub-agent | Judgment-heavy critique of reply quality and workflow wording; runs on every pass, isolated so the reply bodies and the workflow file never enter the orchestrator's window. |
-| Failure investigation, Solution analysis | **Opus** sub-agents | Hard reasoning; isolated in sub-agents so the heavy Logfire/code reading never enters the orchestrator's window. |
+| Setup checks, Run-A, Run-B | isolated subagents | Mechanical: run scripts, return a short summary. |
+| Reply judging (out-scope + compare) | isolated subagent | NL-shaped grading a deterministic script cannot do reliably (§V.105): reads the reply, rubric, advisory signals, and source datasheet, returns PASS/FAIL + rationale. |
+| Analysis (Logfire metrics) | isolated subagent | Runs one SQL query via `use_tool` `logfire__query_run`, reconciles column names to the live Logfire schema, and interprets token economics and latency; isolated so the raw query rows never enter the orchestrator's window. |
+| Workflow improvement review | isolated subagent | Judgment-heavy critique of reply quality and workflow wording; runs on every pass, isolated so the reply bodies and the workflow file never enter the orchestrator's window. |
+| Failure investigation, Solution analysis | isolated subagents | Hard reasoning; isolated in sub-agents so the heavy Logfire/code reading never enters the orchestrator's window. |
 | Run-loop start + stop, report generation | Orchestrator, directly | The loop must outlive every phase, so the one process alive across all of them owns it; pairing start+stop there guarantees teardown always runs. Trivial deterministic commands. |
 
-Spawn each sub-agent with the Agent tool and the stated `model`. Pass it `RUN_ID`
+Spawn each sub-agent with `spawn_subagent` (`subagent_type: general-purpose`; do not pass `model`). Pass it `RUN_ID`
 and the exact commands; require it to return **only** the small JSON/summary
 described — never the raw bodies or query rows.
 
@@ -82,7 +83,7 @@ described — never the raw bodies or query rows.
 
 ### 0. Mint a run id (orchestrator)
 ```bash
-uv run python .claude/skills/mailpilot-reply-test/scripts/new_run_id.py
+uv run python .grok/skills/mailpilot-reply-test/scripts/new_run_id.py
 ```
 Reuse the printed value (e.g. `2026-06-26-142305_746e35cd`) as a **literal**
 wherever `$RUN_ID` appears below — substitute the actual string into each command. Do not rely on a
@@ -96,12 +97,12 @@ uv run mailpilot config get environment
 Stop if `value` is not `dev`. Do not run setup checks (preflight may
 import the demo workflow). Restore DEV `~/.mailpilot/config.json` and retry.
 
-### 1. Setup checks — Sonnet sub-agent
+### 1. Setup checks — isolated subagent
 Have it run, in order, and report the result of each:
 ```bash
-uv run python .claude/skills/mailpilot-reply-test/scripts/preflight.py    --run-id $RUN_ID
-uv run python .claude/skills/mailpilot-reply-test/scripts/validate_qa.py  --run-id $RUN_ID
-uv run python .claude/skills/mailpilot-reply-test/scripts/select_cases.py --run-id $RUN_ID
+uv run python .grok/skills/mailpilot-reply-test/scripts/preflight.py    --run-id $RUN_ID
+uv run python .grok/skills/mailpilot-reply-test/scripts/validate_qa.py  --run-id $RUN_ID
+uv run python .grok/skills/mailpilot-reply-test/scripts/select_cases.py --run-id $RUN_ID
 ```
 Returns: `preflight.verdict` (+ any issues), `validate_qa.verdict` (+ missing),
 and the selected Run-A / Run-B case ids.
@@ -112,37 +113,37 @@ up yet, so there is nothing to stop).
 ### 1b. Start the run loop — orchestrator, directly
 Only after setup checks pass:
 ```bash
-uv run python .claude/skills/mailpilot-reply-test/scripts/run_loop_start.py --run-id $RUN_ID
+uv run python .grok/skills/mailpilot-reply-test/scripts/run_loop_start.py --run-id $RUN_ID
 ```
 The orchestrator owns this process so it outlives every sub-agent phase. If it
 reports `"started": false` with `"process exited"`, read the `log_tail` (usually
 missing Google credentials) and abort to teardown.
 
-### 2. Run-A — Sonnet sub-agent
+### 2. Run-A — isolated subagent
 ```bash
-uv run python .claude/skills/mailpilot-reply-test/scripts/send_emails.py    --run-id $RUN_ID --run A
-uv run python .claude/skills/mailpilot-reply-test/scripts/collect_replies.py --run-id $RUN_ID --run A
-uv run python .claude/skills/mailpilot-reply-test/scripts/score_replies.py   --run-id $RUN_ID --run A
+uv run python .grok/skills/mailpilot-reply-test/scripts/send_emails.py    --run-id $RUN_ID --run A
+uv run python .grok/skills/mailpilot-reply-test/scripts/collect_replies.py --run-id $RUN_ID --run A
+uv run python .grok/skills/mailpilot-reply-test/scripts/score_replies.py   --run-id $RUN_ID --run A
 ```
 Returns: the Run-A verdict + elapsed seconds. Run-A is in-scope only, so
 `score_replies` grades it deterministically — no judge step. `collect_replies`
 polls until the reply arrives or it times out (~5 min); a missing reply is
 recorded as `NO_REPLY`, not an error.
 
-### 3. Run-B — Sonnet sub-agent
+### 3. Run-B — isolated subagent
 Same three commands with `--run B`. `send_emails` fires the 4 emails
 concurrently; `collect_replies` waits up to ~8 min for all four. `score_replies`
 grades the 2 in-scope cases deterministically and writes a `"JUDGE"` sentinel for
 the compare + out-of-scope cases (§V.105) — step 3b resolves those. Returns the 2
 in-scope verdicts, the 2 pending-judge case ids, and elapsed.
 
-### 3b. Reply judging — Sonnet sub-agent
+### 3b. Reply judging — isolated subagent
 Resolves the compare + out-of-scope verdicts that `score_replies` deferred. The
 sub-agent:
 1. Runs `judge_prep.py` to bundle each pending case's question, reply body,
    rubric, advisory signals, and (for compare) the source datasheets:
    ```bash
-   uv run python .claude/skills/mailpilot-reply-test/scripts/judge_prep.py --run-id $RUN_ID --run B
+   uv run python .grok/skills/mailpilot-reply-test/scripts/judge_prep.py --run-id $RUN_ID --run B
    ```
 2. Reads `reports/reply-test/$RUN_ID/judge_B.json`. For each case it decides a verdict:
    - **out-scope** — PASS iff the reply clearly declines and invents no spec for
@@ -155,21 +156,21 @@ sub-agent:
    `{"<case_id>": {"verdict": "PASS"|"FAIL", "rationale": "<one line>"}}`, then
    folds the verdicts in (recomputes `summary` + `failed`):
    ```bash
-   uv run python .claude/skills/mailpilot-reply-test/scripts/apply_judgments.py --run-id $RUN_ID --run B
+   uv run python .grok/skills/mailpilot-reply-test/scripts/apply_judgments.py --run-id $RUN_ID --run B
    ```
 Returns: the finalized compare + out-of-scope verdicts with one-line rationales.
 If `judge_prep` reports a `datasheet_error`, judge grounding from the reply's own
 citations and note the degraded check in the rationale.
 
-### 4. Analysis — Opus sub-agent (Logfire MCP)
+### 4. Analysis — isolated subagent (Logfire MCP)
 Skip if `preflight.logfire_ok` is false (note it in the report). Otherwise the
 sub-agent:
 1. Reads `reports/reply-test/$RUN_ID/replies_A.json` and `replies_B.json` and collects each
    case's `trigger_email_id` (the inbound email id = `agent.invoke.email_id`),
    and `sends_*.json` for `window_start` and `preflight.json` for
    `logfire_environment`.
-2. Runs ONE `query_run` (project `mailpilot`) — adjust column names to the live
-   schema if needed (`query_schema_reference`); latency is the `agent.invoke`
+2. Runs ONE `logfire__query_run` via `use_tool` (project `mailpilot`) — adjust column names to the live
+   schema if needed (`logfire__query_schema_reference`); latency is the `agent.invoke`
    span duration:
    ```sql
    SELECT attributes->>'email_id'                       AS email_id,
@@ -199,10 +200,10 @@ Returns: total tokens, avg/max latency, model(s). Keep raw rows out of the reply
 
 ### 5. Teardown — orchestrator, directly (ALWAYS)
 ```bash
-uv run python .claude/skills/mailpilot-reply-test/scripts/run_loop_stop.py --run-id $RUN_ID
+uv run python .grok/skills/mailpilot-reply-test/scripts/run_loop_stop.py --run-id $RUN_ID
 ```
 
-### 5b. Workflow improvement review — Opus sub-agent (ALWAYS)
+### 5b. Workflow improvement review — isolated subagent (ALWAYS)
 Runs on every pass, not only on failure. The sub-agent grades reply quality and
 recommends concrete edits to the demo workflow file. Scope is wording — distinct
 from step 7, which root-causes failures from Logfire. Give it `RUN_ID` and these
@@ -211,7 +212,7 @@ inputs to read:
 - `reports/reply-test/$RUN_ID/scoring_A.json` and `scoring_B.json` — verdicts and per-case
   detail.
 - `reports/reply-test/$RUN_ID/judgments_B.json` — the judge's rationales (when present).
-- `.claude/skills/mailpilot-reply-test/assets/QA-Pairs.json` — the questions and
+- `.grok/skills/mailpilot-reply-test/assets/QA-Pairs.json` — the questions and
   the facts a grounded reply must carry.
 - `workflows/mailpilot-demo.toml` — the workflow's current objective and
   instructions, the text its edits must target.
@@ -226,7 +227,7 @@ short reply excerpt), and a confidence. It returns a one-paragraph summary. It
 
 ### 6. Report — orchestrator, directly
 ```bash
-uv run python .claude/skills/mailpilot-reply-test/scripts/generate_report.py --run-id $RUN_ID
+uv run python .grok/skills/mailpilot-reply-test/scripts/generate_report.py --run-id $RUN_ID
 ```
 Reads `reports/reply-test/$RUN_ID/report.md` and present its summary to the user. The report
 folds in `workflow_review.md` automatically.
@@ -234,10 +235,10 @@ folds in `workflow_review.md` automatically.
 ### 7. Failure escalation — only if a run scored FAIL or NO_REPLY
 Check `scoring_A.json` / `scoring_B.json` `failed` flags.
 
-**7a. Investigation — Opus sub-agent.** Give it the failed `case_id`s, their
+**7a. Investigation — isolated subagent.** Give it the failed `case_id`s, their
 `trigger_email_id`s, `window_start`, `logfire_environment`, and the paths to
 `scoring_*.json`, `replies_*.json`, `judgments_*.json` (the judge's rationale for
-any judged FAIL), and `run.log`. It uses the Logfire MCP to
+any judged FAIL), and `run.log`. It uses Logfire MCP (`search_tool` then `use_tool` `logfire__query_run`) to
 inspect, for those email ids: `agent.invoke` `status` / `result` /
 `agent_reasoning` / `tool_error_count`; any `is_exception = true` spans in the
 window; `run.task.transient_retry` events; and whether classification routed the
@@ -246,7 +247,7 @@ it). It also greps `run.log` for `event=error`. It writes a concise
 `reports/reply-test/$RUN_ID/investigation.md` (root cause per failed case) and returns a
 one-paragraph summary.
 
-**7b. Solutions — Opus sub-agent.** Give it `investigation.md`. It maps each root
+**7b. Solutions — isolated subagent.** Give it `investigation.md`. It maps each root
 cause to a concrete fix (a workflow-instruction tweak in
 `workflows/mailpilot-demo.toml`, a code/spec change with `file:line` /
 `§V.N`, or an environment fix), notes confidence, and writes

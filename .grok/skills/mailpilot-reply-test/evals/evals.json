@@ -17,7 +17,7 @@
     {
       "id": 3,
       "prompt": "Does the demo agent still politely decline products that aren't in the KB, and does it cite both datasheets on a compare question? Test it and if anything fails, dig into Logfire and tell me why plus how to fix it.",
-      "expected_output": "Runs the suite (Run-B covers compare + out-of-scope), grades decline behavior (no fabricated specs + decline signal) and compare structure (cites sources, names models, uses a table). On any FAIL/NO_REPLY, an Opus sub-agent investigates Logfire for root cause and a second Opus sub-agent proposes concrete fixes, folded into the report.",
+      "expected_output": "Runs the suite (Run-B covers compare + out-of-scope), grades decline behavior (no fabricated specs + decline signal) and compare structure (cites sources, names models, uses a table). On any FAIL/NO_REPLY, an isolated subagent investigates Logfire for root cause and a second isolated subagent proposes concrete fixes, folded into the report.",
       "files": []
     }
   ]

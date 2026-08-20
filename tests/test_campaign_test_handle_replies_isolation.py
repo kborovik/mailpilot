@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 
 _SCRIPTS = (
     Path(__file__).resolve().parents[1]
-    / ".claude"
+    / ".grok"
     / "skills"
     / "mailpilot-campaign-test"
     / "scripts"

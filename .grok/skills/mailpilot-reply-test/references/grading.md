@@ -9,7 +9,7 @@ split by case type (§V.105):
   (a polite decline, a cross-datasheet comparison). Deterministic substring /
   regex grading of them yields false and seed-unstable verdicts (§B.88), so
   `score_replies.py` no longer decides them: it emits **advisory signals** and a
-  `"JUDGE"` sentinel verdict, and a **Sonnet judge sub-agent** (SKILL.md step 3b)
+  `"JUDGE"` sentinel verdict, and a **judge subagent** (SKILL.md step 3b)
   is the verdict of record. The judge reads the reply body, the case rubric, the
   advisory signals, and — for compare — the source datasheets, and returns
   `{verdict, rationale}`. `apply_judgments.py` folds that verdict back into the
@@ -74,4 +74,4 @@ If `collect_replies.py` saw no threaded reply before the timeout, the case is
 `NO_REPLY` (recorded by `score_replies.py`, judge not invoked). This is a real
 failure mode worth surfacing — typically the classifier did not route the email
 to the workflow, the agent errored, or the run loop was not draining tasks — and
-it triggers the Opus investigation.
+it triggers the failure investigation.

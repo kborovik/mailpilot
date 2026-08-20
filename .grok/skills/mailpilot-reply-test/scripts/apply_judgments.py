@@ -1,4 +1,4 @@
-"""Fold the Sonnet judge's verdicts into the scoring file (verdict of record).
+"""Fold the judge subagent's verdicts into the scoring file (verdict of record).
 
 For out-scope + compare cases ``score_replies.py`` writes a ``"JUDGE"`` sentinel
 verdict (§V.105); the judge's PASS/FAIL is authoritative. This script reads the

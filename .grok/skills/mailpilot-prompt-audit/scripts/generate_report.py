@@ -1,7 +1,7 @@
 """Assemble the prompt-composition audit report from the run artifacts.
 
 Reads ``analysis_input.json`` (composed systems joined with derived telemetry)
-and ``analysis.md`` (the Opus sub-agent's findings and prioritized edits), then
+and ``analysis.md`` (the analysis subagent's findings and prioritized edits), then
 writes ``report.md``: a systems-overview table, a per-system composition-sizing
 table, the classifier section, and the folded-in analysis. Deterministic
 formatting only -- every judgment lives in ``analysis.md``.

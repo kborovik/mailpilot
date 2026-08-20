@@ -1,6 +1,6 @@
 """Grading-logic guards for the mailpilot-reply-test scoring scripts (§V.105, §B.88).
 
-The skill scripts live under ``.claude/skills/`` (outside the package roots) and
+The skill scripts live under ``.grok/skills/`` (outside the package roots) and
 import a sibling ``_common`` module, so they are loaded by file path here rather
 than imported as a package.
 """
@@ -16,7 +16,7 @@ from typing import Any
 
 _SCRIPTS = (
     Path(__file__).resolve().parents[1]
-    / ".claude"
+    / ".grok"
     / "skills"
     / "mailpilot-reply-test"
     / "scripts"

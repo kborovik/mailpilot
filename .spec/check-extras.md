@@ -5,11 +5,11 @@
 
 ## SKILL.md Drift Check
 
-Mechanical audit (no LLM-judgment); trigger when `src/mailpilot/SKILL.md`, `.claude/skills/**/*.md`, `src/mailpilot/cli.py`, or `src/mailpilot/settings.py` changed.
+Mechanical audit (no LLM-judgment); trigger when `src/mailpilot/SKILL.md`, `.grok/skills/**/*.md`, `src/mailpilot/cli.py`, or `src/mailpilot/settings.py` changed.
 
 File-set scope:
 - `src/mailpilot/SKILL.md` — packaged skill body (external LLM agents); all four checks apply.
-- `.claude/skills/**/*.md` — operator-facing skill bodies (test-google-drive, lead-companies, etc.); per `§B.65` only checks (i) and (ii) apply (skill bodies do not enumerate settings so (iii) and (iv) do not apply).
+- `.grok/skills/**/*.md` — operator-facing skill bodies (campaign-test, reply-test, prompt-audit, resolve-gh-issue); per `§B.65` only checks (i) and (ii) apply (skill bodies do not enumerate settings so (iii) and (iv) do not apply).
 
 Checks:
 (i) per-noun verb roster is a superset of `@<noun>.command("<verb>")` set in `cli.py` — fail mode: skill names a retired verb (e.g. `enrollment remove` post-T92).
@@ -325,18 +325,18 @@ Trigger: `makefile`, `.github/workflows/release.yml`, `CHANGELOG.md`, `scripts/c
 
 ## §V73 — Skill-body Workflow snippet executability
 
-Mechanical audit; trigger when `.claude/skills/**/*.md` or `.claude/workflows/*.js` changed. Scope = every fenced ```js block that calls `parallel(`, `pipeline(`, or `agent(`, plus the saved-workflow byte-identity check (d).
+Mechanical audit; trigger when `.grok/skills/**/*.md` or `.claude/workflows/*.js` changed. Scope = every fenced ```js block that calls `parallel(`, `pipeline(`, or `agent(`, plus the saved-workflow byte-identity check (d).
 
 Per ```js block:
 (a) Free-symbol scan — every identifier used as a value ! resolve to an in-block definition (`const` / `let` / `function` / param) OR a runtime global. Runtime globals (do not flag): `meta`, `agent`, `parallel`, `pipeline`, `phase`, `log`, `args`, `budget`, `workflow`, plus JS built-ins (`JSON`, `Math`, `Array`, `Object`, `Promise`, `console`, ...). Any other bare identifier (e.g. `stale`, `buildPrompt`, `ENRICH_RESULT_SCHEMA`) ! be defined in the block — fail mode: free var crashes `ReferenceError` on paste (`§B.68`: bare `stale`).
 (b) `args`-as-collection guard — if the block calls `args.map` / `args.filter` / `args.slice` / `args.length` / `args.forEach` or spreads `args`, it ! first `JSON.parse(args)` (or guard `typeof args === 'string'`). Why: runtime delivers `args` as a JSON STRING so `args.map` throws `is not a function` (`§B.68`).
 (c) Prose-vs-`parallel` divergence — if surrounding prose claims "concurrency N" / "N concurrent" / "Default N", the block ! chunk to N (batch loop of size N around `parallel(batch.map(...))`). A bare `parallel(xs.map(...))` dispatches all `xs.length`, bounded only by runtime cap `min(16, cores-2)` — not N. Fail mode: prose promises 3, snippet runs all (`§B.68` secondary).
-(d) Saved-workflow byte-identity — every embedded workflow snippet's post-`meta` body (each `.claude/skills/<skill>/SKILL.md` FIRST js-fenced block, sliced @ first `\n}\n` after `export const meta`) ! be byte-identical to its saved `.claude/workflows/<name>.js`'s post-`meta` body (same slice). Audited pairs (extend the PAIRS list below when a new skill+workflow lands): `lead-companies/SKILL.md` <-> `lead-companies-enrich.js`; `lead-contacts/SKILL.md` <-> `lead-contacts-find.js`. Why: the skill-body embedded snippet is the spec-of-record; the saved file is invoked by name @ runtime so silent divergence ships an unaudited workflow ((a)-(c) cover the saved file only transitively, when bodies match). Saved `meta` MAY add registry-only fields (`whenToUse`, fuller `description`) so compare the post-`meta` slice only, not the whole file. Fail mode: divergence -> saved-file unaudited drift.
+(d) Saved-workflow byte-identity — every embedded workflow snippet's post-`meta` body (each `.grok/skills/<skill>/SKILL.md` FIRST js-fenced block, sliced @ first `\n}\n` after `export const meta`) ! be byte-identical to its saved `.claude/workflows/<name>.js`'s post-`meta` body (same slice). Audited pairs (extend the PAIRS list below when a new skill+workflow lands): `lead-companies/SKILL.md` <-> `lead-companies-enrich.js`; `lead-contacts/SKILL.md` <-> `lead-contacts-find.js`. Why: the skill-body embedded snippet is the spec-of-record; the saved file is invoked by name @ runtime so silent divergence ships an unaudited workflow ((a)-(c) cover the saved file only transitively, when bodies match). Saved `meta` MAY add registry-only fields (`whenToUse`, fuller `description`) so compare the post-`meta` slice only, not the whole file. Fail mode: divergence -> saved-file unaudited drift.
 
 Mechanical greps (manual judgment on hits):
-- `rg -n '```js' .claude/skills/` — enumerate blocks.
-- `rg -nE '\bargs\.(map|filter|slice|length|forEach)\b' .claude/skills/` not preceded by `JSON.parse(args)` or `typeof args` -> (b) fail.
-- prose `rg -niE 'concurrency [0-9]|[0-9] concurrent|default [0-9]' .claude/skills/` near a block with bare `parallel(` and no batch loop (`for .* += N` / `.slice(`) -> (c) fail.
+- `rg -n '```js' .grok/skills/` — enumerate blocks.
+- `rg -nE '\bargs\.(map|filter|slice|length|forEach)\b' .grok/skills/` not preceded by `JSON.parse(args)` or `typeof args` -> (b) fail.
+- prose `rg -niE 'concurrency [0-9]|[0-9] concurrent|default [0-9]' .grok/skills/` near a block with bare `parallel(` and no batch loop (`for .* += N` / `.slice(`) -> (c) fail.
 - (d) byte-identity — extract both post-`meta` bodies (slice each @ first `\n}\n` after `export const meta`, `.strip()`), compare equal:
   ```
   python3 - <<'PY'
@@ -356,15 +356,15 @@ Mechanical greps (manual judgment on hits):
 
 ## §V74 — RFC-4180 CSV-ingestion parser mandate
 
-Mechanical audit; trigger when `.claude/skills/**/*.md`, `.claude/skills/**/scripts/*.py`, or `src/**` changed. Scope = CSV-ingestion sites (handle a `.csv` path, a "CSV mode", or a comma-delimited lead export). The grep scope `.claude/skills/ src/` already recurses into `scripts/` so a `.py`-under-`scripts/` change is covered once the trigger-glob (previously `.md`-only) names it.
+Mechanical audit; trigger when `.grok/skills/**/*.md`, `.grok/skills/**/scripts/*.py`, or `src/**` changed. Scope = CSV-ingestion sites (handle a `.csv` path, a "CSV mode", or a comma-delimited lead export). The grep scope `.grok/skills/ src/` already recurses into `scripts/` so a `.py`-under-`scripts/` change is covered once the trigger-glob (previously `.md`-only) names it.
 
 Checks:
 (i) CSV ingestion ! use an RFC-4180 parser (`csv.DictReader` / `csv.reader` / the `csv` module). Fail mode: physical-line iteration, `.splitlines()`, `.split("\n")`, or `.split(",")` over CSV content — quoted fields carry embedded newlines and commas so one logical row spans many physical lines (`§B.69`: theirstack.csv 25 logical rows over 217 physical lines).
 (ii) Redirect resolution ! use `curl -sL -o /dev/null -w '%{url_effective}'` (full chain, CR-free). Fail mode: HEAD `curl -sLI | grep '^location:' | awk` — 403 bot-blocking origins answer HEAD differently; awk retains the header trailing CR so corrupts a bare-host redirect target (`§B.69`).
 
 Mechanical greps (manual judgment on hits — flag only in CSV context):
-- `rg -n 'splitlines|\.split\(' .claude/skills/ src/` near `csv` / `CSV` / `.csv` context -> (i) fail. Non-CSV `splitlines` (email-body normalization, markdown line scan) not flagged.
-- `rg -n 'curl -sLI' .claude/skills/ src/` -> (ii) fail (HEAD-grep redirect resolution).
+- `rg -n 'splitlines|\.split\(' .grok/skills/ src/` near `csv` / `CSV` / `.csv` context -> (i) fail. Non-CSV `splitlines` (email-body normalization, markdown line scan) not flagged.
+- `rg -n 'curl -sLI' .grok/skills/ src/` -> (ii) fail (HEAD-grep redirect resolution).
 
 Plain-text (non-CSV) line iteration is admitted (per-line domain/URL, `#`-comment skip) — do not flag.
 
@@ -460,57 +460,57 @@ Trigger: `.claude/skills/lead-contacts/**` or `.claude/skills/lead-companies/**`
 
 ## §V99 — Skill-path resolution check
 
-Trigger when `.claude/skills/**/*.md` changed.
+Trigger when `.grok/skills/**/*.md` changed.
 
 Checks:
-(i) Script refs (`uv run python .claude/skills/**/scripts/*.py`) each resolve on disk.
+(i) Script refs (`uv run python .grok/skills/**/scripts/*.py`) each resolve on disk.
 (ii) Source-of-truth dirs named in prose or runtime recovery gates exist.
 
 Cited-but-absent path = recovery instruction that errors when the operator needs it.
 
 Mechanical greps (manual judgment on hits):
-- `rg -n '\.claude/skills/\S+\.py' .claude/skills/` -> each cited `.py` path must exist at that path.
-- Backticked dir refs: `rg -n '`\.claude/skills/[^`]+/`' .claude/skills/` -> each cited dir must exist on disk. Non-dir backtick refs exempt.
+- `rg -n '\.grok/skills/\S+\.py' .grok/skills/` -> each cited `.py` path must exist at that path.
+- Backticked dir refs: `rg -n '`\.grok/skills/[^`]+/`' .grok/skills/` -> each cited dir must exist on disk. Non-dir backtick refs exempt.
 
 ## §V100 — Skill-body progressive-disclosure audit
 
-Trigger when `.claude/skills/**/*.md` changed.
+Trigger when `.grok/skills/**/*.md` changed.
 
 Checks:
 (i) Body >~500 lines = VIOLATE (procedure buried among run-end-only material -> extract to `references/*.md`).
 (ii) Near-verbatim prose shared across sibling skills MUST live in one shared `references/*.md` both cite, not copied per-skill.
 
 Mechanical checks:
-- `wc -l .claude/skills/*/SKILL.md | sort -rn` -> flag files over 500 lines for extraction review.
-- `rg -c 'Conventions|batch gate|Next block' .claude/skills/*/SKILL.md` -> any term in multiple skill bodies -> check for shared-reference extraction opportunity.
+- `wc -l .grok/skills/*/SKILL.md | sort -rn` -> flag files over 500 lines for extraction review.
+- `rg -c 'Conventions|batch gate|Next block' .grok/skills/*/SKILL.md` -> any term in multiple skill bodies -> check for shared-reference extraction opportunity.
 
 ## §V101 — must-sense ` ! ` ban
 
-Mechanical audit; trigger when `.claude/skills/**/*.md` changed. Scope = skill-body prose. A hard requirement ! be marked w/ an explicit word (`MUST` / `required`); a bare telegraph ` ! ` (must-glyph) in prose reads as negation in code, so a model executing the skill can invert the constraint (silent constraint flip — the failure §V.101 was authored to block).
+Mechanical audit; trigger when `.grok/skills/**/*.md` changed. Scope = skill-body prose. A hard requirement ! be marked w/ an explicit word (`MUST` / `required`); a bare telegraph ` ! ` (must-glyph) in prose reads as negation in code, so a model executing the skill can invert the constraint (silent constraint flip — the failure §V.101 was authored to block).
 
 Exempt (not flagged):
 - backticked / fenced-code ` ! ` — `[ ! -f ]`, `!=`, `! cmd` inside an inline-code span or a ```fence``` (shell test / negation operator, not a prose obligation).
-- SPEC.md + this file (`.claude/check-extras.md`) — telegraph register, both outside the `.claude/skills/**` scope; their ` ! ` is the authored must-glyph, not a violation.
+- SPEC.md + this file (`.spec/check-extras.md`) — telegraph register, both outside the `.grok/skills/**` scope; their ` ! ` is the authored must-glyph, not a violation.
 
 Checks:
-(i) zero bare must-sense ` ! ` in `.claude/skills/**/*.md` prose. Fail mode: ` ! ` standing in for "must" in an instruction line (e.g. `the body below meta ! stay byte-identical`, `CSV mode ! parse with an RFC-4180 parser`) — convert to `MUST`.
+(i) zero bare must-sense ` ! ` in `.grok/skills/**/*.md` prose. Fail mode: ` ! ` standing in for "must" in an instruction line (e.g. `the body below meta ! stay byte-identical`, `CSV mode ! parse with an RFC-4180 parser`) — convert to `MUST`.
 
 Mechanical grep (manual judgment on hits — flag only must-sense prose, not backticked/fenced shell):
-- `rg -n ' ! ' .claude/skills/` -> classify each hit: backticked-shell / fenced-code -> exempt; prose obligation -> (i) fail (convert to `MUST`). Zero hits -> pass.
+- `rg -n ' ! ' .grok/skills/` -> classify each hit: backticked-shell / fenced-code -> exempt; prose obligation -> (i) fail (convert to `MUST`). Zero hits -> pass.
 
 ## §V102 — Skill frontmatter hygiene audit
 
-Trigger when `.claude/skills/**/*.md` changed.
+Trigger when `.grok/skills/**/*.md` changed.
 
 Checks:
-(i) Every `.claude/skills/**/SKILL.md` sets `allowed-tools` (scoped safety rail).
-(ii) Every `.claude/skills/**/SKILL.md` sets `argument-hint` (invocation shape).
+(i) Every `.grok/skills/**/SKILL.md` sets `allowed-tools` (scoped safety rail).
+(ii) Every `.grok/skills/**/SKILL.md` sets `argument-hint` (invocation shape).
 (iii) `description:` = triggering intent; vendor names + pipeline-stage rosters belong in body.
 
 Mechanical greps (manual judgment on hits):
-- `rg --files-without-match 'allowed-tools' .claude/skills/*/SKILL.md` -> each listed file = missing key (VIOLATE). (`rg -L` is `--follow`, not files-without-match — it prints matches, inverting the read.)
-- `rg --files-without-match 'argument-hint' .claude/skills/*/SKILL.md` -> each listed file = missing key (VIOLATE).
-- `rg -n '^description:' .claude/skills/*/SKILL.md` -> review for vendor roster or full pipeline-stage detail in trigger text.
+- `rg --files-without-match 'allowed-tools' .grok/skills/*/SKILL.md` -> each listed file = missing key (VIOLATE). (`rg -L` is `--follow`, not files-without-match — it prints matches, inverting the read.)
+- `rg --files-without-match 'argument-hint' .grok/skills/*/SKILL.md` -> each listed file = missing key (VIOLATE).
+- `rg -n '^description:' .grok/skills/*/SKILL.md` -> review for vendor roster or full pipeline-stage detail in trigger text.
 
 ## §V103 — workflow definition files
 
@@ -526,20 +526,20 @@ Trigger: `src/mailpilot/cli.py` or `workflows/` changed.
 
 ## §V104 — reply-test reply-loop guard
 
-Live reply-test (`.claude/skills/mailpilot-reply-test`) requires `outbound@lab5.ca` have no active workflow. `inbound-google-drive` agent reply lands in outbound mailbox → `skipped_no_workflows` (§V.76), no second reply. Any active outbound workflow re-enters routing → inbound↔outbound auto-reply loop. No-outbound-workflow is a load-bearing test precondition, not incidental.
+Live reply-test (`.grok/skills/mailpilot-reply-test`) requires `outbound@lab5.ca` have no active workflow. `inbound-google-drive` agent reply lands in outbound mailbox → `skipped_no_workflows` (§V.76), no second reply. Any active outbound workflow re-enters routing → inbound↔outbound auto-reply loop. No-outbound-workflow is a load-bearing test precondition, not incidental.
 
-Trigger: `.claude/skills/mailpilot-reply-test/**` changed.
-- `rg 'outbound@lab5.ca\b' .claude/skills/mailpilot-reply-test/SKILL.md | grep -i 'no.*workflow\|precondition'` -> guard stated in skill body
-- `rg 'skipped_no_workflows\b' .claude/skills/mailpilot-reply-test/SKILL.md` -> expected routing outcome named
+Trigger: `.grok/skills/mailpilot-reply-test/**` changed.
+- `rg 'outbound@lab5.ca\b' .grok/skills/mailpilot-reply-test/SKILL.md | grep -i 'no.*workflow\|precondition'` -> guard stated in skill body
+- `rg 'skipped_no_workflows\b' .grok/skills/mailpilot-reply-test/SKILL.md` -> expected routing outcome named
 
 ## §V105 — mailpilot-reply-test grading model
 
-In-scope cases graded deterministically: `score_replies.py` checks expected-token substring presence at runtime; false-PASS-at-worst, never false-FAIL. `expected_tokens` MUST be atomic: each token a single contiguous value the reply cannot restructure away — allowlist = {model id, bare number, number+short-unit (with optional short qualifier), label <=2 words}. NOT a `Label (Qualifier)` header (§B.102), a 3-plus-word phrase, a verb-bearing sentence fragment, or a layout-dependent phrase. Atomicity enforced test-time, NOT in the runtime grader: `_is_brittle_inscope_token` allowlist (not denylist) lives in `tests/test_reply_test_scoring.py`, and `test_inscope_expected_tokens_are_atomic` iterates the live QA-Pairs.json tokens (§B.117). `select_cases.py` selection guard (>=2 tokens, len>=5) keeps real signal after brittle tokens split. Out-scope + compare cases: `score_replies.py` emits advisory signals (token_hits, fabrication_candidates, has_table) but NOT verdicts. Sonnet judge sub-agent reads {reply body, case rubric, signals, source datasheet} → {verdict PASS|FAIL, rationale} (verdict of record for NL-shaped cases).
+In-scope cases graded deterministically: `score_replies.py` checks expected-token substring presence at runtime; false-PASS-at-worst, never false-FAIL. `expected_tokens` MUST be atomic: each token a single contiguous value the reply cannot restructure away — allowlist = {model id, bare number, number+short-unit (with optional short qualifier), label <=2 words}. NOT a `Label (Qualifier)` header (§B.102), a 3-plus-word phrase, a verb-bearing sentence fragment, or a layout-dependent phrase. Atomicity enforced test-time, NOT in the runtime grader: `_is_brittle_inscope_token` allowlist (not denylist) lives in `tests/test_reply_test_scoring.py`, and `test_inscope_expected_tokens_are_atomic` iterates the live QA-Pairs.json tokens (§B.117). `select_cases.py` selection guard (>=2 tokens, len>=5) keeps real signal after brittle tokens split. Out-scope + compare cases: `score_replies.py` emits advisory signals (token_hits, fabrication_candidates, has_table) but NOT verdicts. Judge subagent reads {reply body, case rubric, signals, source datasheet} → {verdict PASS|FAIL, rationale} (verdict of record for NL-shaped cases).
 
-Trigger: `.claude/skills/mailpilot-reply-test/scripts/score_replies.py` or `tests/test_reply_test_scoring.py` changed.
+Trigger: `.grok/skills/mailpilot-reply-test/scripts/score_replies.py` or `tests/test_reply_test_scoring.py` changed.
 - `rg '_is_brittle_inscope_token\|allowlist' tests/test_reply_test_scoring.py` -> allowlist logic present (not denylist); the atomicity guard is test-time, NOT in score_replies.py (§B.117)
-- `rg 'advisory\|emit.*signal\|signal.*emit' .claude/skills/mailpilot-reply-test/scripts/score_replies.py` -> advisory signals, not verdicts, for out-scope/compare
-- `rg 'judge.*Sonnet\|Sonnet.*judge\|verdict.*judge' .claude/skills/mailpilot-reply-test/SKILL.md` -> Sonnet judge sub-agent for NL-shaped verdict
+- `rg 'advisory\|emit.*signal\|signal.*emit' .grok/skills/mailpilot-reply-test/scripts/score_replies.py` -> advisory signals, not verdicts, for out-scope/compare
+- `rg 'judge.*subagent\|subagent.*judge\|verdict.*judge' .grok/skills/mailpilot-reply-test/SKILL.md` -> judge subagent for NL-shaped verdict
 
 ## §V106 — Drive search whitespace-tokenized OR-joined predicates
 
@@ -704,10 +704,10 @@ Trigger: `src/mailpilot/database.py` or `src/mailpilot/cli.py` db-export/import 
 
 `send_touch1.py` captures `outbound_email_id` + `rfc2822_message_id` per scenario enrollment immediately after each Touch 1 send. One shared prospect contact (`inbound@lab5.ca`) receives all sends; isolation is by ephemeral workflow (one per scenario), not by recipient alias — no `inbound{N}@lab5.ca` aliases exist. `inject_replies.py` matches received Touch 1 emails by `rfc2822_message_id` (primary key); subject match is a fallback only. A scenario whose send status is not `sent` or whose `rfc2822_message_id` is missing fails before reply injection. Subject = agent-generated + collision-prone, NEVER the primary identity key.
 
-Trigger: `.claude/skills/mailpilot-campaign-test/**` changed.
-- `rg 'rfc2822_message_id' .claude/skills/mailpilot-campaign-test/scripts/send_touch1.py` -> message-id captured at send
-- `rg 'rfc2822_message_id' .claude/skills/mailpilot-campaign-test/scripts/inject_replies.py` -> message-id used to match received Touch 1
-- `rg 'inbound[1-9]@lab5\.ca' .claude/skills/mailpilot-campaign-test/scripts/` -> zero hits (no per-scenario aliases)
+Trigger: `.grok/skills/mailpilot-campaign-test/**` changed.
+- `rg 'rfc2822_message_id' .grok/skills/mailpilot-campaign-test/scripts/send_touch1.py` -> message-id captured at send
+- `rg 'rfc2822_message_id' .grok/skills/mailpilot-campaign-test/scripts/inject_replies.py` -> message-id used to match received Touch 1
+- `rg 'inbound[1-9]@lab5\.ca' .grok/skills/mailpilot-campaign-test/scripts/` -> zero hits (no per-scenario aliases)
 
 ## §V123 — reply-cancels-followups
 
@@ -1063,13 +1063,13 @@ Trigger: inbound routing / thread match / contact bind changed.
 
 ## §V165 — live E2E skills DEV-only
 
-Live skill tests (`.claude/skills/mailpilot-campaign-test` + `.claude/skills/mailpilot-reply-test`; `.grok/skills/mailpilot-campaign-test` orchestrator) MUST read `settings.environment` before any CRM or Gmail mutate (account create/update, send, inject, handle). Value != `dev` → blocking preflight issue + skill bail. Gate is `environment` (source of truth §V.176; derived `logfire_environment=development` is equivalent), not a host heuristic. Pytest unit tests exempt (constructor kwargs / fixtures). Skill procedure checks env before account-ensure (step 0b).
+Live skill tests (`.grok/skills/mailpilot-campaign-test` + `.grok/skills/mailpilot-reply-test`) MUST read `settings.environment` before any CRM or Gmail mutate (account create/update, send, inject, handle). Value != `dev` → blocking preflight issue + skill bail. Gate is `environment` (source of truth §V.176; derived `logfire_environment=development` is equivalent), not a host heuristic. Pytest unit tests exempt (constructor kwargs / fixtures). Skill procedure checks env before account-ensure (step 0b).
 
 Trigger: campaign-test or reply-test scripts/skills changed.
-- `rg 'environment' .claude/skills/mailpilot-campaign-test/scripts/preflight.py` -> gate present
-- `rg 'environment' .claude/skills/mailpilot-reply-test/scripts/preflight.py` -> gate present
-- `rg '"dev"' .claude/skills/mailpilot-campaign-test/scripts/preflight.py` -> required value
-- `rg '"dev"' .claude/skills/mailpilot-reply-test/scripts/preflight.py` -> required value
+- `rg 'environment' .grok/skills/mailpilot-campaign-test/scripts/preflight.py` -> gate present
+- `rg 'environment' .grok/skills/mailpilot-reply-test/scripts/preflight.py` -> gate present
+- `rg '"dev"' .grok/skills/mailpilot-campaign-test/scripts/preflight.py` -> required value
+- `rg '"dev"' .grok/skills/mailpilot-reply-test/scripts/preflight.py` -> required value
 
 ## §V176 — target-env derived pubsub + logfire
 

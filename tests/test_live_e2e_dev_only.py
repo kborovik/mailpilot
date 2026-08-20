@@ -11,8 +11,8 @@ import pytest
 
 _REPO = Path(__file__).resolve().parents[1]
 _SKILLS = (
-    _REPO / ".claude" / "skills" / "mailpilot-campaign-test" / "scripts",
-    _REPO / ".claude" / "skills" / "mailpilot-reply-test" / "scripts",
+    _REPO / ".grok" / "skills" / "mailpilot-campaign-test" / "scripts",
+    _REPO / ".grok" / "skills" / "mailpilot-reply-test" / "scripts",
 )
 
 

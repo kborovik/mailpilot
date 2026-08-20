@@ -1,6 +1,6 @@
 # Reply-handling wording critique rubric
 
-This rubric guides the Opus critique sub-agent. The unit of critique is the
+This rubric guides the critique subagent. The unit of critique is the
 **workflow wording** -- the `goal` and `instructions` in the workflow TOML
 that drove the agent, in particular its "Handling replies" section. It is not the
 individual replies. The agent's branch behavior across the scenarios is evidence

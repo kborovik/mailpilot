@@ -192,7 +192,7 @@ def _case_note(graded: dict) -> str:
         return ""
     if graded["verdict"] == "JUDGE":
         return "awaiting judge verdict"
-    # Out-scope + compare verdicts come from the Sonnet judge (§V.105); its
+    # Out-scope + compare verdicts come from the judge subagent (§V.105); its
     # rationale is the authoritative note. In-scope keeps the missing-token note.
     rationale = detail.get("rationale")
     if rationale:
@@ -241,11 +241,11 @@ def main() -> int:
     _emit_performance(directory, metrics, metric_cases, lines)
     _fold_in(
         directory / "workflow_review.md",
-        "## Workflow improvement review (Opus)",
+        "## Workflow improvement review",
         lines,
     )
-    _fold_in(directory / "investigation.md", "## Failure investigation (Opus)", lines)
-    _fold_in(directory / "solutions.md", "## Proposed solutions (Opus)", lines)
+    _fold_in(directory / "investigation.md", "## Failure investigation", lines)
+    _fold_in(directory / "solutions.md", "## Proposed solutions", lines)
 
     report_path = directory / "report.md"
     report_path.write_text("\n".join(lines) + "\n")
