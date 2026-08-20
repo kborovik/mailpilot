@@ -1,5 +1,7 @@
 """Tests for Markdown-to-HTML email rendering and account signatures."""
 
+from datetime import UTC, datetime
+
 from mailpilot.email_renderer import (
     THEMES,
     get_theme,
@@ -7,7 +9,7 @@ from mailpilot.email_renderer import (
     render_signature_html,
     render_signature_text,
 )
-from mailpilot.models import AccountSignature
+from mailpilot.models import Account, AccountSignature
 
 
 def test_themes_contains_six_palettes():
@@ -268,3 +270,21 @@ def test_render_signature_text_partial():
 def test_render_signature_text_name_and_title_only():
     text = render_signature_text(AccountSignature(full_name="Ada", title="Engineer"))
     assert text == "Ada\nEngineer"
+
+
+def test_render_signature_takes_account_signature_from_account():
+    """§V.151: harness render takes AccountSignature via account_signature()."""
+    now = datetime.now(tz=UTC)
+    account = Account(
+        id="1",
+        email="a@b.com",
+        signature_full_name="Ada Lovelace",
+        signature_title="Engineer",
+        created_at=now,
+        updated_at=now,
+    )
+    nested = account.account_signature()
+    html = render_signature_html(nested)
+    assert "Ada Lovelace" in html
+    assert "Engineer" in html
+    assert render_signature_text(nested) == "Ada Lovelace\nEngineer"

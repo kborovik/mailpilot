@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any, NoReturn
 from unittest.mock import MagicMock, patch
 
+import click
 import pytest
 from click.testing import CliRunner
 
@@ -4674,6 +4675,18 @@ def test_contact_search_with_limit(
 
     assert result.exit_code == 0
     mock_search.assert_called_once_with(mock_connection, "alice", limit=10)
+
+
+def test_contact_email_workflow_search_use_limit_option() -> None:
+    """§V.115: contact|email|workflow search --limit via @limit_option."""
+    for noun in ("contact", "email", "workflow"):
+        group = main.commands[noun]
+        assert isinstance(group, click.Group)
+        cmd = group.commands["search"]
+        limit = next(p for p in cmd.params if p.name == "limit")
+        assert isinstance(limit, click.Option)
+        assert limit.default == 100
+        assert limit.help == "Maximum results."
 
 
 # -- contact list --------------------------------------------------------------

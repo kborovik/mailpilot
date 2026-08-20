@@ -14,14 +14,6 @@ class NotFoundError(MailPilotError):
     """Requested entity does not exist."""
 
 
-class CooldownError(MailPilotError):
-    """Outbound email blocked by cooldown period."""
-
-
-class ClassificationError(MailPilotError):
-    """Email classification failed."""
-
-
 class SyncError(MailPilotError):
     """Gmail sync operation failed."""
 

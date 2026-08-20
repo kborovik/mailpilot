@@ -5353,31 +5353,6 @@ def list_inbound_emails_from_contact_after(
     return [Email.model_validate(row) for row in rows]
 
 
-def has_inbound_email_from_contact_after(
-    connection: psycopg.Connection[dict[str, Any]],
-    contact_id: str,
-    after: datetime,
-) -> bool:
-    """Return True if the contact sent an inbound email after ``after`` (§V.83).
-
-    The touch pre-flight (§V.83) reads this to cancel a queued follow-up touch
-    when the contact has replied since the prior touch -- an engaged contact
-    must not receive the next cold touch. Complements the reply-time
-    cancellation (§V.123) by catching the touch already due when the reply
-    landed. Compares against the arrival timestamp (``received_at``, with
-    ``sent_at`` as a fallback for any row lacking it).
-
-    Args:
-        connection: Open database connection.
-        contact_id: Contact FK (set on inbound rows via sender resolution).
-        after: The prior touch's send moment -- only later inbound counts.
-
-    Returns:
-        True when at least one such inbound email exists.
-    """
-    return bool(list_inbound_emails_from_contact_after(connection, contact_id, after))
-
-
 def get_latest_email_in_thread(
     connection: psycopg.Connection[dict[str, Any]],
     account_id: str,
