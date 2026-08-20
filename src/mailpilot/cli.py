@@ -126,7 +126,7 @@ def configure_logging(debug: bool = False) -> None:
     settings = get_settings()
     logfire.configure(
         service_name="mailpilot",
-        environment=settings.logfire_environment,
+        environment="development" if settings.environment == "dev" else "production",
         token=settings.logfire_token or None,
         console=logfire.ConsoleOptions(
             min_log_level="debug" if debug else "warn",

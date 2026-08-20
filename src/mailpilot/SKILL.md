@@ -129,13 +129,15 @@ Keys:
 - `max_concurrent_tasks` -- bound on the worker pool that drains the task
   queue. Default `10`.
 
-`config get` and `mailpilot status` also project derived names (not
-settable; `config set` returns `invalid_key`):
+`config get` and `mailpilot status` also project derived Pub/Sub names
+(not settable; `config set` returns `invalid_key`):
 
 - `google_pubsub_topic` -- `mailpilot-topic-{environment}`
 - `google_pubsub_subscription` -- `mailpilot-sub-{environment}`
-- `logfire_environment` -- `development` when `environment` is `dev`,
-  else `production`
+
+Logfire's deployment environment is mapped internally at configure
+(`dev` → `development`, `prd` → `production`). It is not a setting
+and is not projected by `config get` or `mailpilot status`.
 
 `MAILPILOT_GOOGLE_PUBSUB_TOPIC`, `MAILPILOT_GOOGLE_PUBSUB_SUBSCRIPTION`,
 and `MAILPILOT_LOGFIRE_ENVIRONMENT` are not sources. Persist `environment`

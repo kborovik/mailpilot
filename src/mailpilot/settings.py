@@ -24,7 +24,6 @@ MAILPILOT_DIR = Path.home() / ".mailpilot"
 CONFIG_PATH = MAILPILOT_DIR / "config.json"
 
 TargetEnvironment = Literal["dev", "prd"]
-LogfireEnvironment = Literal["development", "production"]
 
 # Global LLM provider switch (§V.47). Default is xAI; Anthropic is opt-in.
 LlmProvider = Literal["anthropic", "xai"]
@@ -111,12 +110,6 @@ class Settings(BaseSettings):
     google_application_credentials: str = DEFAULT_GOOGLE_APPLICATION_CREDENTIALS
     run_interval: int = DEFAULT_RUN_INTERVAL
     max_concurrent_tasks: int = DEFAULT_MAX_CONCURRENT_TASKS
-
-    @computed_field
-    @property
-    def logfire_environment(self) -> LogfireEnvironment:
-        """Logfire deployment env derived from ``environment`` (§V.176)."""
-        return "development" if self.environment == "dev" else "production"
 
     @computed_field
     @property

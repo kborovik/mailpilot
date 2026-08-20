@@ -22,7 +22,9 @@ def test_default_settings():
     assert settings.xai_max_tokens == 32768
     assert settings.xai_api_host == ""
     assert settings.environment == "dev"
-    assert settings.logfire_environment == "development"
+    assert "logfire_environment" not in Settings.model_fields
+    assert "logfire_environment" not in Settings.model_computed_fields
+    assert not hasattr(settings, "logfire_environment")
     assert settings.google_pubsub_topic == "mailpilot-topic-dev"
     assert settings.google_pubsub_subscription == "mailpilot-sub-dev"
 
@@ -156,7 +158,6 @@ def test_max_concurrent_tasks_default_meets_burst_formula(
 def test_settings_from_kwargs():
     settings = Settings(environment="prd", anthropic_api_key="sk-test")
     assert settings.environment == "prd"
-    assert settings.logfire_environment == "production"
     assert settings.anthropic_api_key == "sk-test"
 
 
@@ -164,14 +165,12 @@ def test_settings_env_override(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("MAILPILOT_ENVIRONMENT", "prd")
     settings = Settings()
     assert settings.environment == "prd"
-    assert settings.logfire_environment == "production"
 
 
 def test_settings_kwargs_override_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("MAILPILOT_ENVIRONMENT", "prd")
     settings = Settings(environment="dev")
     assert settings.environment == "dev"
-    assert settings.logfire_environment == "development"
 
 
 def test_dotenv_overrides_config_json(
@@ -189,7 +188,6 @@ def test_dotenv_overrides_config_json(
 
     settings = Settings()
     assert settings.environment == "prd"
-    assert settings.logfire_environment == "production"
 
 
 def test_process_env_beats_dotenv(
@@ -204,7 +202,6 @@ def test_process_env_beats_dotenv(
 
     settings = Settings()
     assert settings.environment == "prd"
-    assert settings.logfire_environment == "production"
 
 
 def test_kwargs_beat_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -216,7 +213,6 @@ def test_kwargs_beat_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
     settings = Settings(environment="dev")
     assert settings.environment == "dev"
-    assert settings.logfire_environment == "development"
 
 
 def test_missing_dotenv_is_noop(
@@ -229,7 +225,6 @@ def test_missing_dotenv_is_noop(
 
     settings = Settings()
     assert settings.environment == "dev"
-    assert settings.logfire_environment == "development"
     assert settings.run_interval == 60
 
 
@@ -256,7 +251,6 @@ def test_save_and_load_settings(tmp_path: Path):
 
     loaded = load_settings(config_path=config_path)
     assert loaded.environment == "prd"
-    assert loaded.logfire_environment == "production"
     assert loaded.anthropic_api_key == "sk-123"
 
 
@@ -265,7 +259,6 @@ def test_load_settings_creates_default_file(tmp_path: Path):
     settings = load_settings(config_path=config_path)
     assert config_path.exists()
     assert settings.environment == "dev"
-    assert settings.logfire_environment == "development"
     data = json.loads(config_path.read_text())
     assert "database_url" in data
     assert data["environment"] == "dev"
@@ -279,7 +272,6 @@ def test_load_settings_ignores_unknown_keys(tmp_path: Path):
     config_path.write_text(json.dumps({"unknown_key": "value", "environment": "prd"}))
     settings = load_settings(config_path=config_path)
     assert settings.environment == "prd"
-    assert settings.logfire_environment == "production"
     assert not hasattr(settings, "unknown_key")
 
 
@@ -307,7 +299,6 @@ def test_set_setting_preserves_other_fields(tmp_path: Path):
     reloaded = load_settings(config_path=config_path)
     assert reloaded.anthropic_api_key == "sk-keep"
     assert reloaded.environment == "prd"
-    assert reloaded.logfire_environment == "production"
     assert reloaded.anthropic_model == "claude-opus-4-7"
 
 
@@ -378,12 +369,11 @@ def test_set_setting_changed_false_when_value_unchanged(
     assert logs[0]["attributes"]["changed"] is False
 
 
-def test_prd_derives_topic_sub_and_logfire_production() -> None:
-    """§V.176: environment=prd derives topic/sub + logfire production."""
+def test_prd_derives_topic_and_sub() -> None:
+    """§V.176: environment=prd derives topic/sub."""
     settings = Settings(environment="prd")
     assert settings.google_pubsub_topic == "mailpilot-topic-prd"
     assert settings.google_pubsub_subscription == "mailpilot-sub-prd"
-    assert settings.logfire_environment == "production"
 
 
 def test_environment_rejects_invalid_value() -> None:
@@ -399,7 +389,6 @@ def test_derived_env_vars_are_not_sources(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("MAILPILOT_GOOGLE_PUBSUB_SUBSCRIPTION", "custom-sub")
     settings = Settings()
     assert settings.environment == "dev"
-    assert settings.logfire_environment == "development"
     assert settings.google_pubsub_topic == "mailpilot-topic-dev"
     assert settings.google_pubsub_subscription == "mailpilot-sub-dev"
 
@@ -421,7 +410,6 @@ def test_load_compat_logfire_production_maps_to_prd(tmp_path: Path) -> None:
     config_path.write_text(json.dumps({"logfire_environment": "production"}))
     settings = load_settings(config_path=config_path)
     assert settings.environment == "prd"
-    assert settings.logfire_environment == "production"
     assert settings.google_pubsub_topic == "mailpilot-topic-prd"
 
 
@@ -431,7 +419,6 @@ def test_load_compat_logfire_development_maps_to_dev(tmp_path: Path) -> None:
     config_path.write_text(json.dumps({"logfire_environment": "development"}))
     settings = load_settings(config_path=config_path)
     assert settings.environment == "dev"
-    assert settings.logfire_environment == "development"
 
 
 def test_environment_in_file_wins_over_legacy_logfire(tmp_path: Path) -> None:
@@ -442,7 +429,6 @@ def test_environment_in_file_wins_over_legacy_logfire(tmp_path: Path) -> None:
     )
     settings = load_settings(config_path=config_path)
     assert settings.environment == "dev"
-    assert settings.logfire_environment == "development"
 
 
 def test_set_setting_rejects_derived_keys(tmp_path: Path) -> None:
@@ -462,7 +448,6 @@ def test_set_setting_environment_round_trip(tmp_path: Path) -> None:
     config_path = tmp_path / "config.json"
     updated = set_setting("environment", "prd", config_path=config_path)
     assert updated.environment == "prd"
-    assert updated.logfire_environment == "production"
     reloaded = load_settings(config_path=config_path)
     assert reloaded.environment == "prd"
     data = json.loads(config_path.read_text())

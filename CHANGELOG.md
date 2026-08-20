@@ -10,15 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `environment` (`dev` or `prd`, default `dev`) is the operator knob for
-  target env. Pub/Sub topic and subscription names and
-  `logfire_environment` are derived from it and cannot be set
-  independently. Existing config files that only store
+  target env. Pub/Sub topic and subscription names are derived from it
+  and cannot be set independently. Existing config files that only store
   `logfire_environment` still load.
 
 ### Changed
 
 - Live campaign-test and reply-test preflight gate on `environment=dev`
   instead of `logfire_environment=development`.
+- `config get` and `mailpilot status` no longer project
+  `logfire_environment`. Logfire's deployment environment is mapped
+  internally at configure (`dev` -> `development`, `prd` -> `production`).
 
 ## [v0.29.0] - 2026-08-19
 

@@ -241,14 +241,14 @@ def test_anthropic_api_key_set_reports_true_and_no_value_leak(
 def test_status_config_projects_environment_and_derived_names(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.176 / §V.11: status config block projects environment + derived names."""
+    """§V.176 / §V.11: status config block projects environment + topic/sub only."""
     payload = get_status_payload(
         database_connection, make_test_settings(environment="prd")
     )
     config = payload["config"]
     assert isinstance(config, dict)
     assert config["environment"] == "prd"
-    assert config["logfire_environment"] == "production"
+    assert "logfire_environment" not in config
     assert config["google_pubsub_topic"] == "mailpilot-topic-prd"
     assert config["google_pubsub_subscription"] == "mailpilot-sub-prd"
 

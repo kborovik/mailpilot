@@ -228,7 +228,7 @@ def test_record_count_single_entity_envelope(
 
 
 def test_config_get_projects_environment_and_derived(runner: CliRunner) -> None:
-    """§V.176: config get projects environment + resolved derived names."""
+    """§V.176: config get projects environment + resolved topic/sub only."""
     with patch(
         "mailpilot.settings.get_settings",
         return_value=make_test_settings(environment="prd"),
@@ -239,7 +239,7 @@ def test_config_get_projects_environment_and_derived(runner: CliRunner) -> None:
     data = json.loads(result.output)
     config = data["config"]
     assert config["environment"] == "prd"
-    assert config["logfire_environment"] == "production"
+    assert "logfire_environment" not in config
     assert config["google_pubsub_topic"] == "mailpilot-topic-prd"
     assert config["google_pubsub_subscription"] == "mailpilot-sub-prd"
 
@@ -258,17 +258,26 @@ def test_config_set_derived_key_invalid(runner: CliRunner, key: str) -> None:
 
 
 def test_config_get_derived_key(runner: CliRunner) -> None:
-    """§V.176: config get of a derived key still returns the resolved value."""
+    """§V.176: config get of a derived pubsub key returns the resolved value."""
     with patch(
         "mailpilot.settings.get_settings",
         return_value=make_test_settings(environment="dev"),
     ):
-        result = runner.invoke(main, ["config", "get", "logfire_environment"])
+        result = runner.invoke(main, ["config", "get", "google_pubsub_topic"])
 
     assert result.exit_code == 0
     data = json.loads(result.output)
-    assert data["key"] == "logfire_environment"
-    assert data["value"] == "development"
+    assert data["key"] == "google_pubsub_topic"
+    assert data["value"] == "mailpilot-topic-dev"
+
+
+def test_config_get_logfire_environment_invalid_key(runner: CliRunner) -> None:
+    """§V.176 / §V.52: logfire_environment is not a config get key."""
+    result = runner.invoke(main, ["config", "get", "logfire_environment"])
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "invalid_key"
 
 
 def test_record_count_multi_key_payload_is_one(runner: CliRunner) -> None:

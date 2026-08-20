@@ -56,3 +56,30 @@ def test_console_exporter_writes_stderr_not_stdout(
     assert parsed["ok"] is True
     assert marker in captured.err
     assert marker not in captured.out
+
+
+@pytest.mark.parametrize(
+    ("target", "logfire_env"),
+    [("dev", "development"), ("prd", "production")],
+)
+def test_configure_logging_maps_environment_internally(
+    target: str,
+    logfire_env: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """§V.52 / §V.176: logfire.configure maps dev→development, prd→production."""
+    captured: list[object] = []
+    real_configure = logfire.configure
+
+    def wrap(*args: object, **kwargs: object) -> object:
+        captured.append(kwargs.get("environment"))
+        return real_configure(*args, **kwargs)
+
+    monkeypatch.setattr(logfire, "configure", wrap)
+    monkeypatch.setattr(
+        "mailpilot.settings.get_settings",
+        lambda: make_test_settings(environment=target),
+    )
+    configure_logging()
+    assert captured
+    assert captured[-1] == logfire_env

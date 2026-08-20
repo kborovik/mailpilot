@@ -819,7 +819,6 @@ def _config_block(settings: Settings) -> dict[str, object]:
         "xai_api_key_set": bool(settings.xai_api_key),
         "xai_model": settings.xai_model,
         "environment": settings.environment,
-        "logfire_environment": settings.logfire_environment,
         "logfire_token_set": bool(settings.logfire_token),
         "google_pubsub_topic": settings.google_pubsub_topic,
         "google_pubsub_subscription": settings.google_pubsub_subscription,
