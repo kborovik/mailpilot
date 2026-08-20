@@ -120,6 +120,22 @@ T226|x|impl §V.147(+) + §V.139(∆) + §I — company create --upsert + contac
 T227|x|impl §V.148(+) + §V.115(∆) + §I — company list|search --sort/--desc/--offset; company default limit 500; pin search lean fields; tests; --skill defaults/sort keys (#197)|V148,V115,V8,V116,V114,V96,V3,V4,I.cli
 T228|x|impl §V.149(+) + §I — company/contact disable --reason-file XOR --reason; tests empty/missing/XOR; --skill (#197)|V149,V114,V3,V4,I.cli
 T229|x|impl §V.14(∆) + §I — note remove owner bulk (--company-domain|--contact-email + required --yes); single-id path unchanged; delete_notes fn; tests empty/missing-yes/XOR; --skill (#198)|V14,I.cli
+T230|x|impl §V.150(+) + §I — enrollment add --tag --dry-run company-tag cohort preview; disabled companies out; exclude enrolled + self-loop; optional --min-contacts; envelope + tests; --skill (#198)|V150,V33,V114,V116,V107,V4,I.cli
+T231|x|impl §V.111(∆)+§I — top-level `--help` emits SKILL.md body; drop `--skill` flag; SKILL Grammar/Discovery; tests (body==package; tree zero §-cites)|V111,I.cli
+T232|x|drop tests/test_contact_finder_verify.py — sole non-package pytest (detached contact-finder.md); V113 stays via .spec/check-extras lead-contacts greps|V113
+T233|x|enable mistune hard_wrap=True in render_email_html + regression test multi-line signature soft newlines -> br|V92,B126
+T234|x|impl §V.151(+) + §I — account signature cols (migration) + nested CLI projection + render_signature_html/text lab5 palette + harness append all outbound MIME paths + tests|V151,V92,V78,V108,I.cli
+T235|x|init `.grok/skills/mailpilot-campaign-test/` SKILL.md — Grok-native campaign-test port; reuse `.claude/.../scripts`+`references`; default workflow acumatica-var-outbound; safety outbound@lab5.ca↔inbound@lab5.ca only|V122,V100,V102
+T236|x|skill setup/preflight — ensure `outbound@lab5.ca` signature {Konstantin Borovik, DevOps Engineer, https://lab5.ca, +1-416-670-0621} + `display_name=Konstantin Borovik` via `account create|update` flags (§V.151); idempotent; block run if missing/mismatched|V151,V122
+T237|x|smoke campaign-test on acumatica-var-outbound — full send→reply→verify path; report under `reports/campaign-test/<run_id>/`; cleanup always|V122,V151
+T238|x|fix campaign-test required outbound identity — `signature.full_name` Borovi→Borovik; ensure+preflight-block `display_name=Konstantin Borovik`; skill step 0c + REQUIRED_OUTBOUND_* + tests|V151,V122,T236
+T239|x|signature two-line redesign (§V.151) — `Name | Title`/`website | phone`, muted-pipe separators, color+size ! bold, drop border-top rule, `tel:` phone link, no dangling separator on missing fields; text mirrors HTML; tests|V151
+T240|x|signature mark layout redesign (§V.151) — table chrome: embedded lab5 logo data-URI + four-colour rule + stacked name/title/web/cell rows (bold name, uppercase mono title, muted labels); text stacked mirror; fields model unchanged; tests|V151
+T241|x|impl §V.152(+) + §I — enrollment list|view --full execution projection + filters/sort; tests + SKILL (#200)|V152,V5,V8,V15,V107,V115,V4,I.cli
+T242|x|impl §V.132(∆) + §I — workflow stats touch slices + awaiting_first_touch + disabled; tests + SKILL (#201)|V132,V136,V107,V4,I.cli
+T243|x|impl §V.153(+) + §I — workflow report funnel+tasks+enrollment matrix + --stuck/--touch/--status; tests + SKILL (#202)|V153,V152,V132,V133,V155,V107,V4,I.cli
+T244|x|impl §V.154(+) + §I — activity list --workflow-id + required scope (contact|company|workflow); email list scope gate; tests + SKILL (#203)|V154,V17,V107,V115,V4,I.cli
+T245|x|impl §V.155(+) + §I — task list --overdue + enrollment/report --stuck heuristics; docs SLA; tests + SKILL (#204)|V155,V153,V152,V115,V4,I.cli
 ## §B BUGS
 
 id|date|cause|fix

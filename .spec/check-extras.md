@@ -1157,6 +1157,14 @@ Trigger: `task cancel` / `task list` path changed.
 - `rg 'touch_option|--touch' src/mailpilot/cli.py src/mailpilot/_filters.py` -> --touch on list + cancel
 - `rg 'task cancel --workflow-id|leftover_pending_by_touch' src/mailpilot/SKILL.md` -> one-call recipe present
 
+## §V174 — workflow-review
+
+`workflow review <slug|all> --since ISO --until ISO` dated one-envelope collect (both ISO ! else `validation_error`). slug = one name|UUID (§V.107); `all` = every active. Payload ! funnel (§V.132) + task counts {failed,overdue,pending} + window emails w/ snippet (§V.7) + window activities incl. inbound email_received w/ snippet + failed tasks w/ contact_email + result.reason (§V.172) + enrollments ! cap below live enrolled count. Envelope `{"workflow_review":{...},"ok":true}`; record_count = review count. No LLM. No CRM write.
+
+Trigger: `workflow review` path changed.
+- `rg 'get_workflow_review|workflow_review' src/mailpilot/` -> collect surface present
+- `rg 'workflow review' src/mailpilot/SKILL.md` -> one-call recipe present
+
 ## §V175 — task-retry-filter
 
 `task retry` dual-mode: positional TASK_ID XOR filter flags. Filter set = `task list` {`--workflow-id`,`--contact-email`,`--status`,`--trigger`,`--overdue`,`--since`,`--until`} + repeatable `--touch N` (parse §V.162). Filter-mode requires ≥1 of {`--touch`,`--workflow-id`,`--contact-email`,`--trigger`}. `--status` default failed; other than failed|cancelled → `validation_error`. TASK_ID+filters → `validation_error`. `--scheduled-at` applies §V.170 to every selected (same day-window). `--dry-run` preview ids+companies no writes. One txn retry every matching failed|cancelled; no default `--limit`. Envelope `{"task_retry":{retried_count,ids[],scheduled_at,companies[{domain,count}],dry_run},"ok":true}` record_count=retried_count. Zero match → ok no-op. Id-mode entity envelope unchanged. `--dry-run` + TASK_ID → `task_retry` envelope no write. Never `--description`. SKILL one-call replaces list-then-N-retry. Distinct from §V.173 cancel.
