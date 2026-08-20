@@ -3,10 +3,11 @@ name: resolve-gh-issue
 description: >
   Orchestrate resolving open GitHub issues on an issue-linked branch:
   checkout via gh issue develop, fold with /sdd:spec github issue N
-  (auto-approve APPLY), isolated /sdd:build --all, make check, push,
-  open a PR, then wait for merge approval. --all analyzes dependencies
-  first and walks issues in that order, one at a time. Never merges
-  without an explicit operator choice. Use when the user wants to
+  (auto-approve APPLY), isolated /sdd:build --all, isolated /review
+  --branch for simplifications, make check, push, open a PR, then
+  wait for merge approval. --all analyzes dependencies first and
+  walks issues in that order, one at a time. Never merges without
+  an explicit operator choice. Use when the user wants to
   auto-resolve GitHub issues, drain the issue backlog, run the SDD
   issue loop, or runs /resolve-gh-issue.
 argument-hint: "[N | --all] [--no-wait]"
@@ -18,7 +19,8 @@ allowed-tools: ask_user_question, read_file, run_terminal_command, spawn_subagen
 Operator-facing loop over open GitHub issues. This skill owns
 orchestration only. Spec fold, implementation, branch/PR/merge shape,
 and acceptance live in the installed sdd plugin skills — load and
-follow them; do not restate their recipes.
+follow them; do not restate their recipes. Simplification review
+lives in the bundled `/review` skill — same rule.
 
 **Plugin skills (load from disk, do not copy):**
 
@@ -29,6 +31,9 @@ follow them; do not restate their recipes.
    `skills/github/SKILL.md`, `skills/_fragments/ACCEPTANCE-GATE.md`.
 3. On every BRANCH / PR / MERGE op, follow the github skill
    (emit `engaged sdd:github — <op>`).
+
+**Bundled review skill (load from disk, do not copy):**
+`$GROK_HOME/bundled/skills/review/SKILL.md`
 
 ## Arguments
 
@@ -50,12 +55,14 @@ A skill cannot run `/new` or `/clear` without killing the loop.
 Shared workspace (`isolation: none`). `subagent_type: general-purpose`.
 `capability_mode: all`. `background: false`.
 
-Never run spec and build in the parent session. Never reuse a
-subagent across phases.
+Never run spec, build, or review in the parent session. Never
+reuse a subagent across phases.
 
 ## Auto-approve
 
-Invoking this skill **is** the operator OK for spec APPLY step 3.
+Invoking this skill **is** the operator OK for spec APPLY step 3
+and for applying behavior-preserving review simplifications
+(step 5).
 
 The spec subagent must apply the fold after the preview exists in
 its return summary. It must not call `ask_user_question` for APPLY
@@ -128,6 +135,7 @@ re-analyze later; only drop or skip numbers.
 - Never merge unless the operator picks **Approve merge now**
   (or the PR reaches `MERGED` on GitHub under the watch option).
 - Push only after `make check` exits 0.
+- Review `bug` findings stop the loop; do not push.
 - `--all` on `/sdd:build` means every `.` row in §T on this branch,
   not only rows folded from this issue. That is intended.
 - Stop the loop on any phase FAIL. Leave the branch; do not push
@@ -135,7 +143,7 @@ re-analyze later; only drop or skip numbers.
 
 ## Procedure
 
-Run from the **repo root**. One issue = one pass of steps 0–8.
+Run from the **repo root**. One issue = one pass of steps 0–9.
 `--all`: after step 0 run **Analysis** once, then pick from that
 queue. Repeat from step 1 after a completed wait (or after PR
 create when `--no-wait`).
@@ -156,6 +164,7 @@ authenticated, working tree dirty (including untracked). The
 operator must commit or stash first.
 
 Resolve the sdd plugin root (see above). Missing plugin → stop.
+Resolve the bundled review skill (see above). Missing → stop.
 
 ### 1. Pick issue
 
@@ -219,7 +228,32 @@ New subagent. Prompt must include:
 Parent: any task still `.` after the child, or verdict BLOCK, or
 child FAIL → **stop**. Do not run step 5 as a pass.
 
-### 5. `make check`
+### 5. REVIEW (isolated)
+
+New subagent. Prompt must include:
+
+- Absolute path to `$GROK_HOME/bundled/skills/review/SKILL.md`
+- Arguments: `--branch <current-branch>`
+- "You are the main agent of this session. Follow the review skill.
+   Prioritize simplification: unnecessary abstraction, duplication,
+   dead code, over-engineering. Still report bugs. Return: issue
+   counts by severity, review_file path, empty-diff if none, FAIL +
+   reason if the skill fails. Do not push. Do not open a PR. Do not
+   edit project source."
+
+Parent:
+
+- child FAIL → **stop**
+- empty-diff → continue to step 6
+- any `bug` → **stop**; quote them
+- `suggestion` issues → new subagent (do not reuse the reviewer):
+  apply behavior-preserving simplifications from `review_file`,
+  commit, return sha or NONE. Dirty tree or FAIL → **stop**.
+- nits only → continue
+
+Do not re-review after apply. `make check` is the next gate.
+
+### 6. `make check`
 
 Parent session, repo root:
 
@@ -229,7 +263,7 @@ make check
 
 Non-zero → **stop**. Do not push. Quote the failing target.
 
-### 6. Push
+### 7. Push
 
 ```bash
 git push -u origin HEAD
@@ -237,7 +271,7 @@ git push -u origin HEAD
 
 Stop on push failure.
 
-### 7. PR
+### 8. PR
 
 Follow github skill **PR**. Load ACCEPTANCE-GATE first.
 
@@ -255,7 +289,7 @@ gh pr create --title "<summary>" --body "<steno>"
 
 Show the PR url.
 
-### 8. Wait for merge approval
+### 9. Wait for merge approval
 
 Skip this step when `--no-wait`.
 
@@ -283,9 +317,9 @@ done
 Never pick merge yourself. Never call MERGE unless the operator
 chose **Approve merge now**.
 
-### 9. Next issue (`--all` only)
+### 10. Next issue (`--all` only)
 
-After MERGED (or after step 7 when `--no-wait`): drop the
+After MERGED (or after step 8 when `--no-wait`): drop the
 finished `#` from the pick-queue.
 
 ```bash
@@ -308,6 +342,7 @@ Per issue, one block:
 branch: <name>
 spec: <sha>  [ADVISORY?]
 build: T<a>,T<b> x  gate=<ALLOW|BLOCK|ADVISORY>
+review: <X>b <Y>s <Z>n  [applied <sha>|none|empty-diff]
 make check: pass|fail
 pr: <url>
 merge: waiting|merged|stopped
