@@ -59,7 +59,7 @@ the `mailpilot` console script, and the package are importable. Scripts live in
   `outbound@lab5.ca`, which has no active workflow, so routing marks it
   `skipped_no_workflows` (§V.76) and sends no second reply — that is what
   prevents a reply-loop.
-- **DEV only:** `logfire_environment` must be `development`. Check before
+- **DEV only:** `environment` must be `dev`. Check before
   setup (step 0a). Preflight imports the demo workflow only after that gate
   passes. Any other value is a hard stop.
 
@@ -91,9 +91,9 @@ shell variable: separate tool calls do not share shell state. Artifacts go to
 
 ### 0a. Confirm DEV environment (orchestrator)
 ```bash
-uv run mailpilot config get logfire_environment
+uv run mailpilot config get environment
 ```
-Stop if `value` is not `development`. Do not run setup checks (preflight may
+Stop if `value` is not `dev`. Do not run setup checks (preflight may
 import the demo workflow). Restore DEV `~/.mailpilot/config.json` and retry.
 
 ### 1. Setup checks — Sonnet sub-agent

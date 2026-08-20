@@ -3,7 +3,7 @@
 Resolves account ids, ensures the demo workflow is active on inbound (importing
 it if needed), reads the Drive folder id from the workflow instructions, and
 checks that the Anthropic key / Google credentials / Logfire token are present,
-and requires ``logfire_environment == development`` (§V.165) before any
+and requires ``environment == "dev"`` (§V.165) before any
 workflow import.
 Writes ``preflight.json`` (the single source of resolved ids for later scripts)
 and exits non-zero when a blocking issue is found.
@@ -33,21 +33,27 @@ from _common import (
 WORKFLOW_TEMPLATE = "inbound-google-drive"
 WORKFLOW_TOML = "workflows/mailpilot-demo.toml"
 DRIVE_ID_RE = re.compile(r"\b([A-Za-z0-9_-]{25,})\b")
-REQUIRED_LOGFIRE_ENVIRONMENT = "development"
+REQUIRED_ENVIRONMENT = "dev"
 
 
-def _check_logfire_environment(
+def _check_environment(
     environment: object, result: dict[str, object], issues: list[str]
 ) -> None:
-    """Block unless logfire_environment is development (§V.165)."""
-    result["logfire_environment"] = environment
-    ok = environment == REQUIRED_LOGFIRE_ENVIRONMENT
-    result["logfire_environment_ok"] = ok
+    """Block unless settings.environment is dev (§V.165 / §V.176)."""
+    result["environment"] = environment
+    if environment == "dev":
+        result["logfire_environment"] = "development"
+    elif environment == "prd":
+        result["logfire_environment"] = "production"
+    else:
+        result["logfire_environment"] = None
+    ok = environment == REQUIRED_ENVIRONMENT
+    result["environment_ok"] = ok
     if not ok:
         issues.append(
-            f"logfire_environment={environment!r} "
-            f"(want {REQUIRED_LOGFIRE_ENVIRONMENT!r}); "
-            "live reply-test runs only in development — restore DEV config "
+            f"environment={environment!r} "
+            f"(want {REQUIRED_ENVIRONMENT!r}); "
+            "live reply-test runs only in dev — restore DEV config "
             "before any workflow import or send"
         )
 
@@ -129,7 +135,7 @@ def _check_settings(result: dict[str, object], issues: list[str]) -> None:
         anthropic_ok = bool(settings.anthropic_api_key)
         google_creds = bool(settings.google_application_credentials)
         logfire_ok = bool(settings.logfire_token)
-        environment: object = settings.logfire_environment
+        environment = settings.environment
     except Exception as exc:
         anthropic_ok = google_creds = logfire_ok = False
         environment = None
@@ -138,7 +144,7 @@ def _check_settings(result: dict[str, object], issues: list[str]) -> None:
     result["anthropic_ok"] = anthropic_ok
     result["google_credentials_configured"] = google_creds
     result["logfire_ok"] = logfire_ok
-    _check_logfire_environment(environment, result, issues)
+    _check_environment(environment, result, issues)
     if not anthropic_ok:
         issues.append("anthropic_api_key not set (agent + classifier cannot run)")
     if not logfire_ok:
@@ -159,7 +165,7 @@ def main() -> int:
     }
 
     _check_settings(result, issues)
-    if result.get("logfire_environment_ok") is True:
+    if result.get("environment_ok") is True:
         _resolve_accounts(result, issues)
         _resolve_workflow(result, issues)
 

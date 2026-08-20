@@ -121,14 +121,26 @@ Keys:
   both modes; ADC mode signs JWTs via the IAM Credentials API and requires the
   active service account to hold `roles/iam.serviceAccountTokenCreator` on
   itself.
-- `google_pubsub_topic` -- default `mailpilot-topic-dev`.
-- `google_pubsub_subscription` -- default `mailpilot-sub-dev`.
+- `environment` -- target env. `dev` or `prd`. Default `dev`. Operator knob
+  via `MAILPILOT_ENVIRONMENT`, config.json, or `config set environment`.
 - `logfire_token` -- optional. Enables cloud telemetry.
-- `logfire_environment` -- `development` or `production`.
 - `run_interval` -- fallback poll interval for the sync loop, in seconds.
   Default `60`.
 - `max_concurrent_tasks` -- bound on the worker pool that drains the task
   queue. Default `10`.
+
+`config get` and `mailpilot status` also project derived names (not
+settable; `config set` returns `invalid_key`):
+
+- `google_pubsub_topic` -- `mailpilot-topic-{environment}`
+- `google_pubsub_subscription` -- `mailpilot-sub-{environment}`
+- `logfire_environment` -- `development` when `environment` is `dev`,
+  else `production`
+
+`MAILPILOT_GOOGLE_PUBSUB_TOPIC`, `MAILPILOT_GOOGLE_PUBSUB_SUBSCRIPTION`,
+and `MAILPILOT_LOGFIRE_ENVIRONMENT` are not sources. Persist `environment`
+only. A config file with `logfire_environment` and no `environment` still
+loads (`production` maps to `prd`, anything else to `dev`).
 
 ## Recipes
 

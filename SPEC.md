@@ -297,7 +297,7 @@ T291|x|incident failed T1 requeue via `task retry` (§V.170); same enrollment; n
 T292|x|impl §V.174(+) + §I — workflow review <slug|all> --since --until; one envelope funnel+failed/overdue/pending+window email/activity (inbound+snippet)+failed contact_email+reason+enrollments uncapped; tests + SKILL (#243)|V174,V132,V7,V172,V152,V107,V4,I.cli
 T293|x|impl §V.169(∆) — OOO resume-year: same-day month+day w/o year → same-year ≥ next day not next-year; explicit-year #236 still wins; fixture same-day `on <Month> <D>` no year (#242)|V169,B142
 T294|x|impl §V.175(+) + §I — task retry filter-mode + --touch (repeatable) + --scheduled-at on set + --dry-run preview ids+companies; one envelope retried_count+ids+scheduled_at+companies; SKILL one-call; tests (#244)|V175,V170,V49,V162,V115,V4,V111,I.cli
-T295|.|impl §V.176(+) + §I.config + §I.pubsub — environment ∈ {dev, prd}; derive topic/sub + logfire_environment; persist environment only; config set derived keys invalid_key; load compat; status projects resolved; V165 gate on environment=dev; SKILL/tests|V176,V52,V165,V85,V11,I.config,I.pubsub
+T295|x|impl §V.176(+) + §I.config + §I.pubsub — environment ∈ {dev, prd}; derive topic/sub + logfire_environment; persist environment only; config set derived keys invalid_key; load compat; status projects resolved; V165 gate on environment=dev; SKILL/tests|V176,V52,V165,V85,V11,I.config,I.pubsub
 
 ## §B BUGS
 

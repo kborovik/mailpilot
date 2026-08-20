@@ -120,7 +120,7 @@ from the repo root with `uv run python`.
   on `outbound@lab5.ca`. Workflows cannot be deleted, so this is expected.
 - The skill never starts `mailpilot run`, so no sync loop or auto-reply fires for
   any other account.
-- **DEV only:** `logfire_environment` must be `development`. Check before any
+- **DEV only:** `environment` must be `dev`. Check before any
   account create/update (step 0a). Any other value is a hard stop.
 
 ## Arguments
@@ -159,9 +159,9 @@ wherever `$RUN_ID` appears below. Separate tool calls do not share shell state. 
 
 ### 0a. Confirm DEV environment
 ```bash
-uv run mailpilot config get logfire_environment
+uv run mailpilot config get environment
 ```
-Stop if `value` is not `development`. Do not create accounts, update identity,
+Stop if `value` is not `dev`. Do not create accounts, update identity,
 or send. Restore DEV `~/.mailpilot/config.json` and retry.
 
 ### 0b. Ensure the test accounts exist -- create if missing
@@ -378,7 +378,7 @@ After a failing run:
 
 - `mailpilot` installed locally with a working DB (`mailpilot config get
   database_url`).
-- `logfire_environment` is `development` (step 0a; preflight also blocks).
+- `environment` is `dev` (step 0a; preflight also blocks).
 - The `outbound@lab5.ca` and `inbound@lab5.ca` accounts present and neither
   disabled. Step 0b creates either if missing but cannot re-enable a disabled one
   -- use `mailpilot account enable`.

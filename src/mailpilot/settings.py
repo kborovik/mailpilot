@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import logfire
-from pydantic import PostgresDsn
+from pydantic import PostgresDsn, computed_field
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -23,6 +23,7 @@ from pydantic_settings import (
 MAILPILOT_DIR = Path.home() / ".mailpilot"
 CONFIG_PATH = MAILPILOT_DIR / "config.json"
 
+TargetEnvironment = Literal["dev", "prd"]
 LogfireEnvironment = Literal["development", "production"]
 
 # Global LLM provider switch (§V.47). Default is xAI; Anthropic is opt-in.
@@ -40,7 +41,7 @@ XaiReasoningEffort = Literal["low", "medium", "high"]
 # Settings field draws its default from one of these named constants.
 DEFAULT_DATABASE_URL = "postgresql://localhost/mailpilot"
 DEFAULT_LOGFIRE_TOKEN = ""
-DEFAULT_LOGFIRE_ENVIRONMENT: LogfireEnvironment = "development"
+DEFAULT_ENVIRONMENT: TargetEnvironment = "dev"
 DEFAULT_LLM_PROVIDER: LlmProvider = "xai"
 DEFAULT_ANTHROPIC_API_KEY = ""
 DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5"
@@ -53,8 +54,6 @@ DEFAULT_XAI_MODEL = "grok-4.5"
 DEFAULT_XAI_API_HOST = ""
 DEFAULT_XAI_REASONING_EFFORT: XaiReasoningEffort = "medium"
 DEFAULT_XAI_MAX_TOKENS = 32768
-DEFAULT_GOOGLE_PUBSUB_TOPIC = "mailpilot-topic-dev"
-DEFAULT_GOOGLE_PUBSUB_SUBSCRIPTION = "mailpilot-sub-dev"
 DEFAULT_GOOGLE_APPLICATION_CREDENTIALS = ""
 DEFAULT_RUN_INTERVAL = 60
 DEFAULT_MAX_CONCURRENT_TASKS = 10
@@ -79,7 +78,7 @@ class JsonConfigSource(PydanticBaseSettingsSource):
         if not CONFIG_PATH.exists():
             return {}
         data: dict[str, Any] = json.loads(CONFIG_PATH.read_text())
-        return {k: v for k, v in data.items() if k in self.settings_cls.model_fields}
+        return _compat_config_payload(data, set(self.settings_cls.model_fields))
 
 
 class Settings(BaseSettings):
@@ -96,7 +95,7 @@ class Settings(BaseSettings):
 
     database_url: PostgresDsn = PostgresDsn(DEFAULT_DATABASE_URL)
     logfire_token: str = DEFAULT_LOGFIRE_TOKEN
-    logfire_environment: LogfireEnvironment = DEFAULT_LOGFIRE_ENVIRONMENT
+    environment: TargetEnvironment = DEFAULT_ENVIRONMENT
     llm_provider: LlmProvider = DEFAULT_LLM_PROVIDER
     anthropic_api_key: str = DEFAULT_ANTHROPIC_API_KEY
     anthropic_model: str = DEFAULT_ANTHROPIC_MODEL
@@ -109,11 +108,27 @@ class Settings(BaseSettings):
     xai_api_host: str = DEFAULT_XAI_API_HOST
     xai_reasoning_effort: XaiReasoningEffort = DEFAULT_XAI_REASONING_EFFORT
     xai_max_tokens: int = DEFAULT_XAI_MAX_TOKENS
-    google_pubsub_topic: str = DEFAULT_GOOGLE_PUBSUB_TOPIC
-    google_pubsub_subscription: str = DEFAULT_GOOGLE_PUBSUB_SUBSCRIPTION
     google_application_credentials: str = DEFAULT_GOOGLE_APPLICATION_CREDENTIALS
     run_interval: int = DEFAULT_RUN_INTERVAL
     max_concurrent_tasks: int = DEFAULT_MAX_CONCURRENT_TASKS
+
+    @computed_field
+    @property
+    def logfire_environment(self) -> LogfireEnvironment:
+        """Logfire deployment env derived from ``environment`` (§V.176)."""
+        return "development" if self.environment == "dev" else "production"
+
+    @computed_field
+    @property
+    def google_pubsub_topic(self) -> str:
+        """Pub/Sub topic derived from ``environment`` (§V.176)."""
+        return f"mailpilot-topic-{self.environment}"
+
+    @computed_field
+    @property
+    def google_pubsub_subscription(self) -> str:
+        """Pub/Sub subscription derived from ``environment`` (§V.176)."""
+        return f"mailpilot-sub-{self.environment}"
 
     @classmethod
     def settings_customise_sources(
@@ -134,6 +149,24 @@ class Settings(BaseSettings):
         )
 
 
+def _compat_config_payload(data: dict[str, Any], fields: set[str]) -> dict[str, Any]:
+    """Keep known persistable keys; map legacy logfire_environment (§V.176)."""
+    known = {k: v for k, v in data.items() if k in fields}
+    if "environment" not in data:
+        if data.get("logfire_environment") == "production":
+            known["environment"] = "prd"
+        elif "logfire_environment" in data:
+            known["environment"] = "dev"
+    return known
+
+
+def persistable_settings_dump(settings: Settings) -> dict[str, Any]:
+    """JSON dict for config.json. Omits derived keys (§V.176)."""
+    return settings.model_dump(
+        mode="json", exclude=set(type(settings).model_computed_fields)
+    )
+
+
 def load_settings(config_path: Path = CONFIG_PATH) -> Settings:
     """Load settings from all sources.
 
@@ -149,7 +182,7 @@ def load_settings(config_path: Path = CONFIG_PATH) -> Settings:
         defaults = Settings()
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(
-            json.dumps(defaults.model_dump(mode="json"), indent=2) + "\n"
+            json.dumps(persistable_settings_dump(defaults), indent=2) + "\n"
         )
         return defaults
 
@@ -159,7 +192,7 @@ def load_settings(config_path: Path = CONFIG_PATH) -> Settings:
     # Non-default path: read file directly and pass as kwargs so
     # JsonConfigSource (which hardcodes CONFIG_PATH) is bypassed.
     data: dict[str, Any] = json.loads(config_path.read_text())
-    overrides = {k: v for k, v in data.items() if k in Settings.model_fields}
+    overrides = _compat_config_payload(data, set(Settings.model_fields))
     return Settings(**overrides)
 
 
@@ -171,7 +204,7 @@ def save_settings(settings: Settings, config_path: Path = CONFIG_PATH) -> None:
         config_path: Path to the config file. Defaults to ~/.mailpilot/config.json.
     """
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    data = json.dumps(settings.model_dump(mode="json"), indent=2)
+    data = json.dumps(persistable_settings_dump(settings), indent=2)
     config_path.write_text(data + "\n")
 
 

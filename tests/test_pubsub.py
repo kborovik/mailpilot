@@ -21,8 +21,6 @@ def test_setup_pubsub_creates_topic_and_subscription() -> None:
 
     settings = make_test_settings(
         google_application_credentials="/tmp/creds.json",
-        google_pubsub_topic="test-topic",
-        google_pubsub_subscription="test-sub",
     )
     with (
         patch("mailpilot.pubsub._resolve_project_id", return_value="my-project"),
@@ -36,12 +34,17 @@ def test_setup_pubsub_creates_topic_and_subscription() -> None:
         setup_pubsub(settings)
 
         mock_publisher.create_topic.assert_called_once_with(
-            name="projects/my-project/topics/test-topic"
+            name="projects/my-project/topics/mailpilot-topic-dev"
         )
         mock_subscriber.create_subscription.assert_called_once()
         call_kwargs = mock_subscriber.create_subscription.call_args
-        assert call_kwargs[1]["name"] == "projects/my-project/subscriptions/test-sub"
-        assert call_kwargs[1]["topic"] == "projects/my-project/topics/test-topic"
+        assert (
+            call_kwargs[1]["name"]
+            == "projects/my-project/subscriptions/mailpilot-sub-dev"
+        )
+        assert (
+            call_kwargs[1]["topic"] == "projects/my-project/topics/mailpilot-topic-dev"
+        )
 
 
 def test_setup_pubsub_passes_service_account_credentials() -> None:
@@ -377,7 +380,6 @@ def test_renew_watches_renews_expiring(
 
     settings = make_test_settings(
         google_application_credentials="/tmp/creds.json",
-        google_pubsub_topic="test-topic",
     )
     # Account with watch expiring in 12 hours (within 24h threshold)
     account = make_test_account(database_connection, email="expiring@example.com")
@@ -415,7 +417,6 @@ def test_renew_watches_emits_error_on_renewal_failure(
 
     settings = make_test_settings(
         google_application_credentials="/tmp/creds.json",
-        google_pubsub_topic="test-topic",
     )
     account = make_test_account(database_connection, email="renew-fail@example.com")
     soon = datetime.now(UTC) + timedelta(hours=12)
@@ -444,7 +445,6 @@ def test_renew_watches_skips_fresh_watches(
 
     settings = make_test_settings(
         google_application_credentials="/tmp/creds.json",
-        google_pubsub_topic="test-topic",
     )
     # Account with watch expiring in 3 days (outside 24h threshold)
     account = make_test_account(database_connection, email="fresh@example.com")
@@ -468,7 +468,6 @@ def test_renew_watches_renews_null_expiration(
 
     settings = make_test_settings(
         google_application_credentials="/tmp/creds.json",
-        google_pubsub_topic="test-topic",
     )
     # Account with no watch set (watch_expiration is NULL)
     make_test_account(database_connection, email="new@example.com")

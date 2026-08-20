@@ -238,6 +238,21 @@ def test_anthropic_api_key_set_reports_true_and_no_value_leak(
     assert secret not in str(payload)
 
 
+def test_status_config_projects_environment_and_derived_names(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.176 / §V.11: status config block projects environment + derived names."""
+    payload = get_status_payload(
+        database_connection, make_test_settings(environment="prd")
+    )
+    config = payload["config"]
+    assert isinstance(config, dict)
+    assert config["environment"] == "prd"
+    assert config["logfire_environment"] == "production"
+    assert config["google_pubsub_topic"] == "mailpilot-topic-prd"
+    assert config["google_pubsub_subscription"] == "mailpilot-sub-prd"
+
+
 def test_xai_api_key_set_reports_true_and_no_value_leak(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):

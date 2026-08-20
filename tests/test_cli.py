@@ -227,6 +227,50 @@ def test_record_count_single_entity_envelope(
     assert data["record_count"] == 1
 
 
+def test_config_get_projects_environment_and_derived(runner: CliRunner) -> None:
+    """§V.176: config get projects environment + resolved derived names."""
+    with patch(
+        "mailpilot.settings.get_settings",
+        return_value=make_test_settings(environment="prd"),
+    ):
+        result = runner.invoke(main, ["config", "get"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    config = data["config"]
+    assert config["environment"] == "prd"
+    assert config["logfire_environment"] == "production"
+    assert config["google_pubsub_topic"] == "mailpilot-topic-prd"
+    assert config["google_pubsub_subscription"] == "mailpilot-sub-prd"
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["logfire_environment", "google_pubsub_topic", "google_pubsub_subscription"],
+)
+def test_config_set_derived_key_invalid(runner: CliRunner, key: str) -> None:
+    """§V.176: config set of derived keys returns invalid_key."""
+    result = runner.invoke(main, ["config", "set", key, "x"])
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "invalid_key"
+
+
+def test_config_get_derived_key(runner: CliRunner) -> None:
+    """§V.176: config get of a derived key still returns the resolved value."""
+    with patch(
+        "mailpilot.settings.get_settings",
+        return_value=make_test_settings(environment="dev"),
+    ):
+        result = runner.invoke(main, ["config", "get", "logfire_environment"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["key"] == "logfire_environment"
+    assert data["value"] == "development"
+
+
 def test_record_count_multi_key_payload_is_one(runner: CliRunner) -> None:
     """Multi-key payload (config get KEY) counts as one record, never a list
     value's len (§V.4)."""

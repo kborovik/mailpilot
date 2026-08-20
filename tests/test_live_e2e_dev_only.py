@@ -1,4 +1,4 @@
-"""Live E2E skills gate on logfire_environment == development (§V.165)."""
+"""Live E2E skills gate on environment == dev (§V.165 / §V.176)."""
 
 from __future__ import annotations
 
@@ -40,34 +40,36 @@ def preflight(request: pytest.FixtureRequest) -> types.ModuleType:
     return _load_preflight(request.param)
 
 
-def test_required_environment_is_development(preflight: types.ModuleType) -> None:
-    assert preflight.REQUIRED_LOGFIRE_ENVIRONMENT == "development"
+def test_required_environment_is_dev(preflight: types.ModuleType) -> None:
+    assert preflight.REQUIRED_ENVIRONMENT == "dev"
 
 
-def test_development_passes(preflight: types.ModuleType) -> None:
+def test_dev_passes(preflight: types.ModuleType) -> None:
     result: dict[str, object] = {}
     issues: list[str] = []
-    preflight._check_logfire_environment("development", result, issues)
+    preflight._check_environment("dev", result, issues)
+    assert result["environment"] == "dev"
+    assert result["environment_ok"] is True
     assert result["logfire_environment"] == "development"
-    assert result["logfire_environment_ok"] is True
     assert issues == []
 
 
-def test_production_blocks(preflight: types.ModuleType) -> None:
+def test_prd_blocks(preflight: types.ModuleType) -> None:
     result: dict[str, object] = {}
     issues: list[str] = []
-    preflight._check_logfire_environment("production", result, issues)
+    preflight._check_environment("prd", result, issues)
+    assert result["environment"] == "prd"
+    assert result["environment_ok"] is False
     assert result["logfire_environment"] == "production"
-    assert result["logfire_environment_ok"] is False
     assert issues
-    assert "logfire_environment" in issues[0]
-    assert "development" in issues[0]
+    assert "environment" in issues[0]
+    assert "dev" in issues[0]
 
 
-@pytest.mark.parametrize("value", [None, "", "staging"])
-def test_non_development_blocks(preflight: types.ModuleType, value: object) -> None:
+@pytest.mark.parametrize("value", [None, "", "staging", "production", "development"])
+def test_non_dev_blocks(preflight: types.ModuleType, value: object) -> None:
     result: dict[str, object] = {}
     issues: list[str] = []
-    preflight._check_logfire_environment(value, result, issues)
-    assert result["logfire_environment_ok"] is False
-    assert any("logfire_environment" in i for i in issues)
+    preflight._check_environment(value, result, issues)
+    assert result["environment_ok"] is False
+    assert any("environment" in i for i in issues)
