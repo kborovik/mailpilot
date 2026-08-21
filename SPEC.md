@@ -295,7 +295,7 @@ T302|x|impl §V.103 — `_persisted_wording_hash` hashes stored columns as-is (n
 T303|x|impl §V.169(∆) — OOO resume: multi year-less month-day prefer return/"fully back online" not first event-week; "week of" past ! year+1; fixture Bonnie body week-of-Aug-17 + Monday Aug 24th → 2026-08-24 not 2027-08-17; campaign-test auto_reply resume_within_days (#250)|V169,B145
 T304|x|incident Bonnie (bonnie@traildsoftware.com acu-isv-leadership) ooo_pause not left 2027-08-17; cancel or task retry --scheduled-at ~2026-08-24 (#250)|V169,V170
 T305|x|impl §V.179(+) + §V.169(∆) — last-day-was past auto-reply terminal not OOO; extend `_TERMINAL_AUTO_REPLY`; fixture Gina-shape; campaign-test left_company DNC; protocol last-day-was; retired/no-longer-with regression (#251)|V179,V169,V161,V164,V127,V123,B146
-T306|.|incident Gina (gina.scozzaro@claconnect.com var-sales-coclose) last-day-was year-paused T2 2027-07-22; conclude do_not_contact + cancel pending (#251)|V179,V127,V123
+T306|x|incident Gina (gina.scozzaro@claconnect.com var-sales-coclose) last-day-was year-paused T2 2027-07-22; conclude do_not_contact + cancel pending (#251)|V179,V127,V123
 
 ## §B BUGS
 
