@@ -633,6 +633,7 @@ def test_workflow_start_emits_status_change(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=activated),
         patch("mailpilot.database.activate_workflow", return_value=activated),
     ):
         result = runner.invoke(main, ["workflow", "start", activated.id])
@@ -654,6 +655,7 @@ def test_workflow_stop_emits_status_change(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=paused),
         patch("mailpilot.database.pause_workflow", return_value=paused),
     ):
         result = runner.invoke(main, ["workflow", "stop", paused.id])
