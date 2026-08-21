@@ -10,6 +10,8 @@ When adding new commands, keep imports inside the function body.
 from __future__ import annotations
 
 import json
+from collections.abc import Generator
+from contextlib import contextmanager
 from importlib.metadata import distribution
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
@@ -98,6 +100,25 @@ def _database_url() -> str:
     from mailpilot.settings import get_settings
 
     return str(get_settings().database_url)
+
+
+@contextmanager
+def _db(*, mutate: bool = False) -> Generator[Any]:
+    """Yield a CLI database connection.
+
+    Lazy-imports ``initialize_database`` so ``--help`` stays click-only.
+    ``mutate=True`` is the write-path schema gate.
+    """
+    from mailpilot.database import initialize_database
+
+    connection = initialize_database(
+        _database_url(),
+        require_current_schema=mutate,
+    )
+    try:
+        yield connection
+    finally:
+        connection.close()
 
 
 def scrub_tool_response_callback(match: ScrubMatch) -> Any:
@@ -485,20 +506,18 @@ def _company_disable_stdin_row(
 
 def _run_company_disable_stdin() -> None:
     """Drive ``company disable --stdin`` NDJSON batch (§V.139)."""
-    from mailpilot.database import initialize_database
     from mailpilot.operator_log import cli_mutation
 
     lines = _read_stdin_ndjson_lines()
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
-        with cli_mutation("company", "disable", mode="stdin", row_count=len(lines)):
-            results = [
-                _company_disable_stdin_row(connection, line_number, line)
-                for line_number, line in lines
-            ]
-            _emit_batch_results(results)
-    finally:
-        connection.close()
+    with (
+        _db(mutate=True) as connection,
+        cli_mutation("company", "disable", mode="stdin", row_count=len(lines)),
+    ):
+        results = [
+            _company_disable_stdin_row(connection, line_number, line)
+            for line_number, line in lines
+        ]
+        _emit_batch_results(results)
 
 
 def _parse_contact_create_fields(
@@ -695,20 +714,18 @@ def _contact_create_stdin_row(  # noqa: C901, PLR0911, PLR0912
 
 def _run_contact_create_stdin() -> None:
     """Drive ``contact create --stdin`` NDJSON batch (§V.139)."""
-    from mailpilot.database import initialize_database
     from mailpilot.operator_log import cli_mutation
 
     lines = _read_stdin_ndjson_lines()
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
-        with cli_mutation("contact", "create", mode="stdin", row_count=len(lines)):
-            results = [
-                _contact_create_stdin_row(connection, line_number, line)
-                for line_number, line in lines
-            ]
-            _emit_batch_results(results)
-    finally:
-        connection.close()
+    with (
+        _db(mutate=True) as connection,
+        cli_mutation("contact", "create", mode="stdin", row_count=len(lines)),
+    ):
+        results = [
+            _contact_create_stdin_row(connection, line_number, line)
+            for line_number, line in lines
+        ]
+        _emit_batch_results(results)
 
 
 def _looks_like_uuid(value: str) -> bool:
@@ -992,15 +1009,12 @@ def main(ctx: click.Context, debug: bool) -> None:
 @main.command()
 def status() -> None:
     """Show application state summary including sync loop status."""
-    from mailpilot.database import get_status_payload, initialize_database
+    from mailpilot.database import get_status_payload
     from mailpilot.settings import get_settings
 
     settings = get_settings()
-    connection = initialize_database(str(settings.database_url))
-    try:
+    with _db() as connection:
         output({"status": get_status_payload(connection, settings)})
-    finally:
-        connection.close()
 
 
 # -- Show report hub -----------------------------------------------------------
@@ -1060,7 +1074,7 @@ def show_queue(
 
     from tabulate import tabulate
 
-    from mailpilot.database import get_queue_report, get_workflow, initialize_database
+    from mailpilot.database import get_queue_report, get_workflow
     from mailpilot.queue import (
         project_queue_json_next_at,
         queue_table_cells,
@@ -1074,8 +1088,7 @@ def show_queue(
     except ZoneInfoNotFoundError, ValueError:
         output_error(f"unknown timezone: {resolved_tz}", "validation_error")
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         resolved_workflow_id: str | None = None
         if workflow_name is not None:
             resolved_workflow_id = _resolve_workflow_id(connection, workflow_name)
@@ -1089,8 +1102,6 @@ def show_queue(
             limit=limit if detail else 100,
             overdue=overdue if detail else False,
         )
-    finally:
-        connection.close()
 
     dumped = project_queue_json_next_at(report.model_dump(mode="json"), tz=zone)
     if output_format.lower() == "json":
@@ -1109,7 +1120,6 @@ def show_queue(
 @main.command()
 def run() -> None:
     """Start the sync loop (Pub/Sub + task runner, foreground)."""
-    from mailpilot.database import initialize_database
     from mailpilot.settings import get_settings, require_active_provider_key
     from mailpilot.sync import start_sync_loop
 
@@ -1118,11 +1128,8 @@ def run() -> None:
         require_active_provider_key(settings)
     except ValueError as exc:
         output_error(str(exc), "validation_error")
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         start_sync_loop(connection, settings)
-    finally:
-        connection.close()
 
 
 # -- DB schema commands --------------------------------------------------------
@@ -1170,13 +1177,10 @@ def db_migrate() -> None:
     Each migration runs in its own transaction and is recorded in
     ``schema_migrations``; a no-op when nothing is pending.
     """
-    from mailpilot.database import initialize_database, migrate_database
+    from mailpilot.database import migrate_database
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         applied = migrate_database(connection)
-    finally:
-        connection.close()
     output({"db": {"applied": applied, "count": len(applied)}})
 
 
@@ -1188,13 +1192,10 @@ def db_check() -> None:
     ``pending``/``drift`` -> ``schema_migration_pending``/``schema_drift``
     error envelope with the report inlined + exit 1.
     """
-    from mailpilot.database import determine_schema_verdict, initialize_database
+    from mailpilot.database import determine_schema_verdict
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         status = determine_schema_verdict(connection)
-    finally:
-        connection.close()
     report: dict[str, object] = {
         "recorded_hash": status.recorded_hash,
         "current_hash": status.current_hash,
@@ -1236,13 +1237,10 @@ def db_export(file: str) -> None:
     """
     import pathlib
 
-    from mailpilot.database import export_snapshot, initialize_database
+    from mailpilot.database import export_snapshot
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         bundle = export_snapshot(connection)
-    finally:
-        connection.close()
     pathlib.Path(file).write_text(json.dumps(bundle, indent=2, ensure_ascii=False))
     output(
         {
@@ -1275,7 +1273,7 @@ def db_import(file: str) -> None:
     """
     import pathlib
 
-    from mailpilot.database import import_snapshot, initialize_database
+    from mailpilot.database import import_snapshot
     from mailpilot.operator_log import cli_mutation, operator_event
 
     raw = pathlib.Path(file).read_text()
@@ -1286,31 +1284,27 @@ def db_import(file: str) -> None:
     if not isinstance(bundle, dict):
         output_error("snapshot bundle must be a JSON object", "validation_error")
 
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
-        with cli_mutation("db", "import", file=file):
-            result = import_snapshot(connection, bundle)
-            operator_event(
-                "db.import",
-                path=file,
-                companies=result["companies"],
-                contacts=result["contacts"],
-                tags=result["tags"],
-                errors=len(result["errors"]),
-            )
-            output(
-                {
-                    "db": {
-                        "path": file,
-                        "companies": result["companies"],
-                        "contacts": result["contacts"],
-                        "tags": result["tags"],
-                        "errors": result["errors"],
-                    }
+    with _db(mutate=True) as connection, cli_mutation("db", "import", file=file):
+        result = import_snapshot(connection, bundle)
+        operator_event(
+            "db.import",
+            path=file,
+            companies=result["companies"],
+            contacts=result["contacts"],
+            tags=result["tags"],
+            errors=len(result["errors"]),
+        )
+        output(
+            {
+                "db": {
+                    "path": file,
+                    "companies": result["companies"],
+                    "contacts": result["contacts"],
+                    "tags": result["tags"],
+                    "errors": result["errors"],
                 }
-            )
-    finally:
-        connection.close()
+            }
+        )
 
 
 # -- Config commands -----------------------------------------------------------
@@ -1425,47 +1419,46 @@ def account_create(
     signature_phone: str | None,
 ) -> None:
     """Create a new Gmail account."""
-    from mailpilot.database import create_account, initialize_database
+    from mailpilot.database import create_account
     from mailpilot.operator_log import cli_mutation, operator_event
 
     if not email.strip():
         output_error("email cannot be empty", "validation_error")
     signature_website = _validate_signature_website(signature_website)
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
-        with cli_mutation("account", "create", email=email):
-            created = create_account(
-                connection,
-                email=email,
-                display_name=display_name,
-                signature_full_name=signature_full_name,
-                signature_title=signature_title,
-                signature_website=signature_website,
-                signature_phone=signature_phone,
+    with (
+        _db(mutate=True) as connection,
+        cli_mutation("account", "create", email=email),
+    ):
+        created = create_account(
+            connection,
+            email=email,
+            display_name=display_name,
+            signature_full_name=signature_full_name,
+            signature_title=signature_title,
+            signature_website=signature_website,
+            signature_phone=signature_phone,
+        )
+        if created is None:
+            output_error(
+                f"account with email={email!r} already exists",
+                "duplicate_key",
             )
-            if created is None:
-                output_error(
-                    f"account with email={email!r} already exists",
-                    "duplicate_key",
-                )
-            changed = ["email", "display_name"]
-            for field in (
-                "signature_full_name",
-                "signature_title",
-                "signature_website",
-                "signature_phone",
-            ):
-                if getattr(created, field) is not None:
-                    changed.append(field)
-            operator_event(
-                "account.create",
-                entity_id=created.id,
-                email=created.email,
-                changed=changed,
-            )
-            output_entity("account", created)
-    finally:
-        connection.close()
+        changed = ["email", "display_name"]
+        for field in (
+            "signature_full_name",
+            "signature_title",
+            "signature_website",
+            "signature_phone",
+        ):
+            if getattr(created, field) is not None:
+                changed.append(field)
+        operator_event(
+            "account.create",
+            entity_id=created.id,
+            email=created.email,
+            changed=changed,
+        )
+        output_entity("account", created)
 
 
 @account.command("list")
@@ -1476,10 +1469,9 @@ def account_list(
     limit: int, since: str | None, until: str | None, include_disabled: bool
 ) -> None:
     """List Gmail accounts as summaries."""
-    from mailpilot.database import initialize_database, list_accounts
+    from mailpilot.database import list_accounts
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         accounts = list_accounts(
             connection,
             limit=limit,
@@ -1488,21 +1480,14 @@ def account_list(
             include_disabled=include_disabled,
         )
         output({"accounts": [a.model_dump(mode="json") for a in accounts]})
-    finally:
-        connection.close()
 
 
 @account.command("view")
 @click.argument("account_ref")
 def account_view(account_ref: str) -> None:
     """Show a Gmail account by email or ID."""
-    from mailpilot.database import initialize_database
-
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         output_entity("account", _resolve_account(connection, account_ref))
-    finally:
-        connection.close()
 
 
 @account.command("update")
@@ -1545,12 +1530,11 @@ def account_update(
     Signature flags are field-selective: omit leaves the field unchanged;
     empty string clears it. Website must be absolute http(s) when non-empty.
     """
-    from mailpilot.database import initialize_database, update_account
+    from mailpilot.database import update_account
     from mailpilot.operator_log import cli_mutation, operator_event
 
     signature_website = _validate_signature_website(signature_website)
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         before = _resolve_account(connection, account_ref)
         account_id = before.id
         fields: dict[str, object] = {}
@@ -1585,8 +1569,6 @@ def account_update(
                 changed=changed,
             )
             output_entity("account", updated)
-    finally:
-        connection.close()
 
 
 @account.command("disable")
@@ -1605,13 +1587,12 @@ def account_disable(account_ref: str, reason: str) -> None:
     reversible -- re-enable with `account enable`. Disabling an already-disabled
     account is rejected.
     """
-    from mailpilot.database import disable_account, initialize_database
+    from mailpilot.database import disable_account
     from mailpilot.operator_log import cli_mutation, operator_event
 
     if reason.strip() == "":
         output_error("reason cannot be empty", "validation_error")
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         before = _resolve_account(connection, account_ref)
         account_id = before.id
         if before.disabled_reason is not None:
@@ -1633,8 +1614,6 @@ def account_disable(account_ref: str, reason: str) -> None:
                 changed=["disabled_reason"],
             )
             output_entity("account", updated)
-    finally:
-        connection.close()
 
 
 @account.command("enable")
@@ -1645,11 +1624,10 @@ def account_enable(account_ref: str) -> None:
     The account reappears in the default `account list` and resumes syncing.
     Enabling an account that is not disabled is rejected.
     """
-    from mailpilot.database import enable_account, initialize_database
+    from mailpilot.database import enable_account
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         before = _resolve_account(connection, account_ref)
         account_id = before.id
         if before.disabled_reason is None:
@@ -1670,8 +1648,6 @@ def account_enable(account_ref: str) -> None:
                 changed=["disabled_reason"],
             )
             output_entity("account", updated)
-    finally:
-        connection.close()
 
 
 @account.command("sync")
@@ -1694,7 +1670,7 @@ def account_sync(account_email: str | None, since: str | None) -> None:
 
     import logfire
 
-    from mailpilot.database import get_account, initialize_database, list_accounts
+    from mailpilot.database import get_account, list_accounts
     from mailpilot.gmail import GmailClient, has_google_credentials
     from mailpilot.settings import get_settings
     from mailpilot.sync import (
@@ -1710,8 +1686,7 @@ def account_sync(account_email: str | None, since: str | None) -> None:
             output_error(f"invalid --since value: {exc}", "validation_error")
 
     settings = get_settings()
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         if account_email is not None:
             accounts = [_resolve_account(connection, account_email)]
         else:
@@ -1773,8 +1748,6 @@ def account_sync(account_email: str | None, since: str | None) -> None:
             span.set_attribute("account_succeeded", account_succeeded)
             span.set_attribute("account_failed", account_failed)
         output({"accounts": rows})
-    finally:
-        connection.close()
 
 
 # -- Company commands ----------------------------------------------------------
@@ -1967,7 +1940,6 @@ def company_create(  # noqa: C901, PLR0912, PLR0915
         assign_tag_to_company,
         create_company,
         get_company_by_domain_exact,
-        initialize_database,
         load_company_view,
         write_company_fields,
     )
@@ -1991,8 +1963,7 @@ def company_create(  # noqa: C901, PLR0912, PLR0915
         else None
     )
     tag_names = list(dict.fromkeys(tags))
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         tag_rows = [_resolve_tag(connection, tag_name) for tag_name in tag_names]
         with cli_mutation("company", "create", domain=domain, upsert=upsert):
             existing_before = (
@@ -2098,8 +2069,6 @@ def company_create(  # noqa: C901, PLR0912, PLR0915
                 viewed if viewed is not None else row,
                 created=created,
             )
-    finally:
-        connection.close()
 
 
 def _parse_company_profile_json(text: str) -> dict[str, object]:
@@ -2202,7 +2171,7 @@ def _merge_company_profile_patch(
     default=None,
     help="Patch profile.target_customers (merge).",
 )
-def company_update(  # noqa: C901, PLR0912
+def company_update(  # noqa: C901
     company_ref: str,
     name: str | None,
     profile_json: str | None,
@@ -2224,7 +2193,7 @@ def company_update(  # noqa: C901, PLR0912
     import pathlib
     import sys
 
-    from mailpilot.database import initialize_database, update_company
+    from mailpilot.database import update_company
     from mailpilot.operator_log import cli_mutation, operator_event
 
     replace_flags: list[str] = []
@@ -2259,8 +2228,7 @@ def company_update(  # noqa: C901, PLR0912
             "validation_error",
         )
 
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         before = _resolve_company(connection, company_ref)
         company_id = before.id
         fields: dict[str, object] = {}
@@ -2298,8 +2266,6 @@ def company_update(  # noqa: C901, PLR0912
                 changed=changed,
             )
             output_entity("company", updated)
-    finally:
-        connection.close()
 
 
 @company.command("disable")
@@ -2346,7 +2312,7 @@ def company_disable(
     rejects an already-disabled company; ``--stdin`` batch mode treats
     re-disable as an ok no-op so a lead pass can re-run safely.
     """
-    from mailpilot.database import disable_company, initialize_database
+    from mailpilot.database import disable_company
     from mailpilot.operator_log import cli_mutation, operator_event
 
     if from_stdin:
@@ -2370,8 +2336,7 @@ def company_disable(
             "validation_error",
         )
     resolved_reason = _resolve_disable_reason(reason, reason_file)
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         before = _resolve_company(connection, company_ref)
         company_id = before.id
         if before.disabled_reason is not None:
@@ -2393,8 +2358,6 @@ def company_disable(
                 changed=["disabled_reason"],
             )
             output_entity("company", updated)
-    finally:
-        connection.close()
 
 
 @company.command("enable")
@@ -2406,11 +2369,10 @@ def company_enable(company_ref: str) -> None:
     that is not disabled is rejected. Enabling a company whose domain is an
     alias of another company is rejected (`invalid_state`).
     """
-    from mailpilot.database import enable_company, initialize_database
+    from mailpilot.database import enable_company
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         before = _resolve_company(connection, company_ref)
         company_id = before.id
         if before.disabled_reason is None:
@@ -2434,8 +2396,6 @@ def company_enable(company_ref: str) -> None:
                 changed=["disabled_reason"],
             )
             output_entity("company", updated)
-    finally:
-        connection.close()
 
 
 @company.command("merge")
@@ -2470,14 +2430,12 @@ def company_merge(from_ref: str, into_ref: str, move_contacts: bool) -> None:
         get_company,
         get_company_by_domain,
         get_company_by_domain_exact,
-        initialize_database,
         load_company_view,
         merge_companies,
     )
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         # Survivor resolves aliases (canonical firm). Disabled survivor is
         # allowed; merge keeps its disabled_reason (§V.143).
         into_company = _resolve_company(connection, into_ref)
@@ -2545,8 +2503,6 @@ def company_merge(from_ref: str, into_ref: str, move_contacts: bool) -> None:
             )
             viewed = load_company_view(connection, merged.id)
             output_entity("company", viewed if viewed is not None else merged)
-    finally:
-        connection.close()
 
 
 @company.command("search")
@@ -2563,10 +2519,9 @@ def company_search(query: str, limit: int, offset: int, sort: str, desc: bool) -
     Sort keys: name (default), domain, created_at, contact_count; pass --desc
     for descending. Use --offset with --limit for pages.
     """
-    from mailpilot.database import initialize_database, search_companies
+    from mailpilot.database import search_companies
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         companies = search_companies(
             connection,
             query,
@@ -2576,8 +2531,6 @@ def company_search(query: str, limit: int, offset: int, sort: str, desc: bool) -
             desc=desc,
         )
         output({"companies": [c.model_dump(mode="json") for c in companies]})
-    finally:
-        connection.close()
 
 
 @company.command("list")
@@ -2643,10 +2596,9 @@ def company_list(
     Repeatable --tag is AND (row must carry every named tag). Repeatable
     --no-tag is AND (row must carry none of the named tags).
     """
-    from mailpilot.database import initialize_database, list_companies
+    from mailpilot.database import list_companies
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         tag_ids = _resolve_tag_ids(connection, tag)
         exclude_tag_ids = [_resolve_tag(connection, name).id for name in no_tag]
         # --status disabled overrides the default hide of disabled rows.
@@ -2669,8 +2621,6 @@ def company_list(
             status=status,
         )
         output({"companies": [c.model_dump(mode="json") for c in companies]})
-    finally:
-        connection.close()
 
 
 @company.command("view")
@@ -2704,13 +2654,11 @@ def company_view(company_ref: str, full: bool, include_meta: bool) -> None:
     embeds profile.summary.
     """
     from mailpilot.database import (
-        initialize_database,
         list_company_inspect_contacts,
         load_company_view,
     )
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         company_id = _resolve_company_id(connection, company_ref)
         found = load_company_view(connection, company_id)
         if found is None:
@@ -2723,8 +2671,6 @@ def company_view(company_ref: str, full: bool, include_meta: bool) -> None:
             connection, found.id, include_meta=include_meta
         )
         output({"company": payload})
-    finally:
-        connection.close()
 
 
 @company.command("export")
@@ -2790,11 +2736,10 @@ def company_export(
     """
     import pathlib
 
-    from mailpilot.database import export_companies, initialize_database
+    from mailpilot.database import export_companies
 
     del export_format  # only jsonl is accepted; Choice already enforced
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         tag_ids = _resolve_tag_ids(connection, tag)
         exclude_tag_ids = [_resolve_tag(connection, name).id for name in no_tag]
         effective_include_disabled = include_disabled or status == "disabled"
@@ -2809,8 +2754,6 @@ def company_export(
             full=full,
             status=status,
         )
-    finally:
-        connection.close()
 
     lines = [json.dumps(row, ensure_ascii=False, separators=(",", ":")) for row in rows]
     body = "\n".join(lines) + ("\n" if lines else "")
@@ -2882,7 +2825,7 @@ def company_import(
     """
     import pathlib
 
-    from mailpilot.database import company_import_diff, initialize_database
+    from mailpilot.database import company_import_diff
 
     if not dry_run:
         output_error(
@@ -2923,8 +2866,7 @@ def company_import(
             )
         file_domains.add(domain.strip().lower())
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         tag_ids = _resolve_tag_ids(connection, tag)
         exclude_tag_ids = [_resolve_tag(connection, name).id for name in no_tag]
         effective_include_disabled = include_disabled or status == "disabled"
@@ -2939,8 +2881,6 @@ def company_import(
             exclude_tags=exclude_tag_ids,
             status=status,
         )
-    finally:
-        connection.close()
 
     record_count = int(diff.pop("record_count"))
     output({"company_import_diff": diff}, record_count=record_count)
@@ -3005,7 +2945,7 @@ def contact() -> None:
         "duplicate_key. Preferred agent path."
     ),
 )
-def contact_create(  # noqa: C901, PLR0912
+def contact_create(  # noqa: C901
     email: str | None,
     first_name: str | None,
     last_name: str | None,
@@ -3022,7 +2962,6 @@ def contact_create(  # noqa: C901, PLR0912
         add_contact_note,
         create_contact,
         get_contact_by_email,
-        initialize_database,
         update_contact,
     )
     from mailpilot.operator_log import cli_mutation, operator_event
@@ -3057,8 +2996,7 @@ def contact_create(  # noqa: C901, PLR0912
     verification_meta = (
         _parse_verification_meta_json(meta_json) if meta_json is not None else None
     )
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         company_id = (
             _resolve_company(connection, company_domain).id
             if company_domain is not None
@@ -3134,8 +3072,6 @@ def contact_create(  # noqa: C901, PLR0912
                 changed=changed,
             )
             output_entity("contact", created_row, created=True)
-    finally:
-        connection.close()
 
 
 @contact.command("update")
@@ -3170,11 +3106,10 @@ def contact_update(
     meta_json: str | None,
 ) -> None:
     """Update a contact (addressed by email or ID)."""
-    from mailpilot.database import initialize_database, update_contact
+    from mailpilot.database import update_contact
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         before = _resolve_contact(connection, contact_ref)
         contact_id = before.id
         fields: dict[str, object] = {}
@@ -3215,8 +3150,6 @@ def contact_update(
                 changed=changed,
             )
             output_entity("contact", updated)
-    finally:
-        connection.close()
 
 
 @contact.command("disable")
@@ -3240,12 +3173,11 @@ def contact_disable(
 
     Pass ``--reason`` or ``--reason-file`` (exactly one).
     """
-    from mailpilot.database import disable_contact, initialize_database
+    from mailpilot.database import disable_contact
     from mailpilot.operator_log import cli_mutation, operator_event
 
     resolved_reason = _resolve_disable_reason(reason, reason_file)
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         before = _resolve_contact(connection, contact_ref)
         contact_id = before.id
         with cli_mutation("contact", "disable", entity_id=contact_id):
@@ -3263,8 +3195,6 @@ def contact_disable(
                 changed=changed,
             )
             output_entity("contact", updated)
-    finally:
-        connection.close()
 
 
 @contact.command("enable")
@@ -3276,11 +3206,10 @@ def contact_enable(contact_ref: str) -> None:
     operator owns consent. Enabling a contact that is not disabled is rejected.
     Addressed by email or ID.
     """
-    from mailpilot.database import enable_contact, initialize_database
+    from mailpilot.database import enable_contact
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         before = _resolve_contact(connection, contact_ref)
         contact_id = before.id
         if before.disabled_reason is None:
@@ -3301,8 +3230,6 @@ def contact_enable(contact_ref: str) -> None:
                 changed=["disabled_reason"],
             )
             output_entity("contact", updated)
-    finally:
-        connection.close()
 
 
 @contact.command("search")
@@ -3317,14 +3244,11 @@ def contact_search(query: str, limit: int) -> None:
     match on first+last. Multi-token: every token must match at least one
     of those fields (AND). Disabled contacts remain searchable.
     """
-    from mailpilot.database import initialize_database, search_contacts
+    from mailpilot.database import search_contacts
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         contacts = search_contacts(connection, query, limit=limit)
         output({"contacts": [c.model_dump(mode="json") for c in contacts]})
-    finally:
-        connection.close()
 
 
 @contact.command("list")
@@ -3366,10 +3290,9 @@ def contact_list(
     tag). Repeatable --no-tag is AND (row must carry none of the named
     tags).
     """
-    from mailpilot.database import initialize_database, list_contacts
+    from mailpilot.database import list_contacts
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         company_id = (
             _resolve_company(connection, company_domain).id
             if company_domain is not None
@@ -3391,8 +3314,6 @@ def contact_list(
             exclude_tags=exclude_tag_ids,
         )
         output({"contacts": [c.model_dump(mode="json") for c in contacts]})
-    finally:
-        connection.close()
 
 
 @contact.command("view")
@@ -3436,13 +3357,11 @@ def contact_view(
     """
     from mailpilot.database import (
         get_contact,
-        initialize_database,
         load_contact_timeline,
         load_contact_view,
     )
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         contact_id = _resolve_contact_id(connection, contact_ref)
         if timeline:
             payload = load_contact_timeline(connection, contact_id, limit=limit)
@@ -3468,8 +3387,6 @@ def contact_view(
             row.verification_meta if row is not None else None
         )
         output({"contact": payload})
-    finally:
-        connection.close()
 
 
 # -- Email commands ------------------------------------------------------------
@@ -3485,14 +3402,11 @@ def email() -> None:
 @click.option("--limit", default=100, help="Maximum number of results.")
 def email_search(query: str, limit: int) -> None:
     """Search emails by subject or body."""
-    from mailpilot.database import initialize_database, search_emails
+    from mailpilot.database import search_emails
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         emails = search_emails(connection, query, limit=limit)
         output({"emails": [e.model_dump(mode="json") for e in emails]})
-    finally:
-        connection.close()
 
 
 @email.command("list")
@@ -3531,7 +3445,6 @@ def email_list(
     """List emails with optional filters (requires at least one scope filter)."""
     from mailpilot.database import (
         get_workflow,
-        initialize_database,
         list_emails,
     )
 
@@ -3554,8 +3467,7 @@ def email_list(
             "--from, --to, --direction, --status, --route-method, or time window)",
             "missing_filter",
         )
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         contact_id = (
             _resolve_contact(connection, contact_email).id
             if contact_email is not None
@@ -3589,24 +3501,19 @@ def email_list(
             route_method=route_method,
         )
         output({"emails": [e.model_dump(mode="json") for e in emails]})
-    finally:
-        connection.close()
 
 
 @email.command("view")
 @click.argument("email_id")
 def email_view(email_id: str) -> None:
     """View a single email by ID."""
-    from mailpilot.database import get_email, initialize_database
+    from mailpilot.database import get_email
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         found = get_email(connection, email_id)
         if found is None:
             output_error(f"email not found: {email_id}", "not_found")
         output_entity("email", found)
-    finally:
-        connection.close()
 
 
 @email.command("send")
@@ -3643,7 +3550,7 @@ def email_send(
     import logfire
 
     from mailpilot import email_ops
-    from mailpilot.database import get_workflow, initialize_database
+    from mailpilot.database import get_workflow
     from mailpilot.gmail import GmailClient
     from mailpilot.settings import get_settings
 
@@ -3654,8 +3561,7 @@ def email_send(
 
     to_joined = ",".join(to)
     settings = get_settings()
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         account = _resolve_account(connection, account_email)
         if workflow_id is not None and get_workflow(connection, workflow_id) is None:
             output_error(f"workflow not found: {workflow_id}", "not_found")
@@ -3683,8 +3589,6 @@ def email_send(
             )
             output_error(str(exc), "send_failed")
         output_entity("email", sent)
-    finally:
-        connection.close()
 
 
 @email.command("reply")
@@ -3718,7 +3622,7 @@ def email_reply(
     import logfire
 
     from mailpilot import email_ops
-    from mailpilot.database import get_workflow, initialize_database
+    from mailpilot.database import get_workflow
     from mailpilot.gmail import GmailClient
     from mailpilot.settings import get_settings
 
@@ -3726,8 +3630,7 @@ def email_reply(
         output_error("body cannot be empty", "validation_error")
 
     settings = get_settings()
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         account = _resolve_account(connection, account_email)
         if workflow_id is not None and get_workflow(connection, workflow_id) is None:
             output_error(f"workflow not found: {workflow_id}", "not_found")
@@ -3754,8 +3657,6 @@ def email_reply(
             )
             output_error(str(exc), "send_failed")
         output_entity("email", sent)
-    finally:
-        connection.close()
 
 
 # -- Activity commands ---------------------------------------------------------
@@ -3791,7 +3692,6 @@ def activity_add(
     """
     from mailpilot.database import (
         create_activity,
-        initialize_database,
     )
 
     if not summary.strip():
@@ -3802,8 +3702,7 @@ def activity_add(
             "validation_error",
         )
     detail_dict: dict[str, object] = json.loads(detail) if detail else {}
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         contact_id = (
             _resolve_contact(connection, contact_email).id
             if contact_email is not None
@@ -3823,8 +3722,6 @@ def activity_add(
             detail=detail_dict,
         )
         output_entity("activity", created)
-    finally:
-        connection.close()
 
 
 @activity.command("list")
@@ -3845,7 +3742,6 @@ def activity_list(
 ) -> None:
     """List activities (requires contact, company, or workflow scope)."""
     from mailpilot.database import (
-        initialize_database,
         list_activities,
     )
 
@@ -3855,8 +3751,7 @@ def activity_list(
             "is required",
             "missing_filter",
         )
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         contact_id = (
             _resolve_contact(connection, contact_email).id
             if contact_email is not None
@@ -3883,8 +3778,6 @@ def activity_list(
             workflow_id=resolved_workflow_id,
         )
         output({"activities": [a.model_dump(mode="json") for a in activities]})
-    finally:
-        connection.close()
 
 
 # -- Tag commands --------------------------------------------------------------
@@ -3906,36 +3799,30 @@ def tag_create(name: str) -> None:
     from mailpilot.database import (
         _normalize_tag_name,  # pyright: ignore[reportPrivateUsage]
         create_tag,
-        initialize_database,
     )
     from mailpilot.operator_log import cli_mutation, operator_event
 
     if not name.strip():
         output_error("tag name cannot be empty", "validation_error")
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
-        with cli_mutation("tag", "create", name=name):
-            try:
-                created = create_tag(connection, name=name)
-            except ValueError as exc:
-                output_error(str(exc), "validation_error")
-            if created is None:
-                normalized = _normalize_tag_name(name)
-                output_error(f"tag '{normalized}' already exists", "already_exists")
-            operator_event("tag.create", name=created.name, changed=["name"])
-            output_entity("tag", created)
-    finally:
-        connection.close()
+    with _db(mutate=True) as connection, cli_mutation("tag", "create", name=name):
+        try:
+            created = create_tag(connection, name=name)
+        except ValueError as exc:
+            output_error(str(exc), "validation_error")
+        if created is None:
+            normalized = _normalize_tag_name(name)
+            output_error(f"tag '{normalized}' already exists", "already_exists")
+        operator_event("tag.create", name=created.name, changed=["name"])
+        output_entity("tag", created)
 
 
 @tag.command("view")
 @click.argument("name")
 def tag_view(name: str) -> None:
     """Show a vocabulary tag by name with its usage_count."""
-    from mailpilot.database import get_tag_summary_by_name, initialize_database
+    from mailpilot.database import get_tag_summary_by_name
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         try:
             found = get_tag_summary_by_name(connection, name)
         except ValueError:
@@ -3943,8 +3830,6 @@ def tag_view(name: str) -> None:
         if found is None:
             output_error(f"tag not found: {name}", "not_found")
         output_entity("tag", found)
-    finally:
-        connection.close()
 
 
 @tag.command("disable")
@@ -3961,13 +3846,12 @@ def tag_disable(name: str, reason: str) -> None:
     default `tag list` but stays linked to its owners. Re-enable by clearing
     disabled_reason. Disabling an already-disabled tag is rejected.
     """
-    from mailpilot.database import disable_tag, initialize_database
+    from mailpilot.database import disable_tag
     from mailpilot.operator_log import cli_mutation, operator_event
 
     if reason.strip() == "":
         output_error("reason cannot be empty", "validation_error")
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         before = _resolve_tag(connection, name)
         if before.disabled_reason is not None:
             output_error(
@@ -3988,8 +3872,6 @@ def tag_disable(name: str, reason: str) -> None:
                 changed=["disabled_reason"],
             )
             output_entity("tag", updated)
-    finally:
-        connection.close()
 
 
 @tag.command("enable")
@@ -4000,11 +3882,10 @@ def tag_enable(name: str) -> None:
     The tag reappears in the default `tag list`. Enabling a tag that is not
     disabled is rejected.
     """
-    from mailpilot.database import enable_tag, initialize_database
+    from mailpilot.database import enable_tag
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         before = _resolve_tag(connection, name)
         if before.disabled_reason is None:
             output_error(
@@ -4024,8 +3905,6 @@ def tag_enable(name: str) -> None:
                 changed=["disabled_reason"],
             )
             output_entity("tag", updated)
-    finally:
-        connection.close()
 
 
 @tag.command("add")
@@ -4061,7 +3940,6 @@ def tag_add(  # noqa: C901, PLR0912
     from mailpilot.database import (
         assign_tag_to_company,
         assign_tag_to_contact,
-        initialize_database,
     )
     from mailpilot.operator_log import cli_mutation, operator_event
 
@@ -4079,8 +3957,7 @@ def tag_add(  # noqa: C901, PLR0912
         )
     owner_kind = "contact" if has_contacts else "company"
     owner_refs = contact_emails if has_contacts else company_domains
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         tag_row = _resolve_tag(connection, tag_name)
         if len(owner_refs) == 1:
             ref = owner_refs[0]
@@ -4159,8 +4036,6 @@ def tag_add(  # noqa: C901, PLR0912
                 # Already-linked multi row is status ok skip (§V.141).
                 results.append(_batch_ok(ref))
             _emit_batch_results(results)
-    finally:
-        connection.close()
 
 
 @tag.command("set")
@@ -4196,7 +4071,6 @@ def tag_set(
     """
     from mailpilot.database import (
         get_tag_by_name,
-        initialize_database,
         load_company_view,
         set_company_tags,
         set_contact_tags,
@@ -4211,8 +4085,7 @@ def tag_set(
     raw_names = [part.strip() for part in tags_csv.split(",")]
     tag_names = [name for name in raw_names if name]
     # Empty CSV ("") or whitespace-only is a clear; bare commas with no names too.
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         tag_ids: list[str] = []
         for name in tag_names:
             try:
@@ -4266,8 +4139,6 @@ def tag_set(
                     tags=",".join(final_names),
                 )
                 output_entity("contact", contact)
-    finally:
-        connection.close()
 
 
 @tag.command("remove")
@@ -4300,7 +4171,6 @@ def tag_remove(  # noqa: C901, PLR0912
     link; the tag vocabulary entry and the owners both survive.
     """
     from mailpilot.database import (
-        initialize_database,
         remove_tag_from_company,
         remove_tag_from_contact,
     )
@@ -4320,8 +4190,7 @@ def tag_remove(  # noqa: C901, PLR0912
         )
     owner_kind = "contact" if has_contacts else "company"
     owner_refs = contact_emails if has_contacts else company_domains
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         tag_row = _resolve_tag(connection, tag_name)
         if len(owner_refs) == 1:
             ref = owner_refs[0]
@@ -4400,8 +4269,6 @@ def tag_remove(  # noqa: C901, PLR0912
                 # Already-unlinked multi row is status ok skip (§V.141).
                 results.append(_batch_ok(ref))
             _emit_batch_results(results)
-    finally:
-        connection.close()
 
 
 @tag.command("list")
@@ -4428,15 +4295,14 @@ def tag_list(
     global usage_count). With --contact-email or --company-domain, lists the
     tags assigned to that owner.
     """
-    from mailpilot.database import initialize_database, list_tags
+    from mailpilot.database import list_tags
 
     if contact_email is not None and company_domain is not None:
         output_error(
             "pass at most one of --contact-email or --company-domain",
             "validation_error",
         )
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         contact_id = (
             _resolve_contact(connection, contact_email).id
             if contact_email is not None
@@ -4457,8 +4323,6 @@ def tag_list(
             include_disabled=include_disabled,
         )
         output({"tags": [t.model_dump(mode="json") for t in tags]})
-    finally:
-        connection.close()
 
 
 @tag.command("search")
@@ -4467,10 +4331,9 @@ def tag_list(
 @limit_option
 def tag_search(name: str, limit: int, include_disabled: bool) -> None:
     """Search the tag vocabulary by name substring."""
-    from mailpilot.database import initialize_database, search_tags
+    from mailpilot.database import search_tags
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         tags = search_tags(
             connection,
             name=name,
@@ -4478,8 +4341,6 @@ def tag_search(name: str, limit: int, include_disabled: bool) -> None:
             include_disabled=include_disabled,
         )
         output({"tags": [t.model_dump(mode="json") for t in tags]})
-    finally:
-        connection.close()
 
 
 # -- Note commands -------------------------------------------------------------
@@ -4499,7 +4360,6 @@ def note_add(contact_email: str | None, company_domain: str | None, body: str) -
     from mailpilot.database import (
         add_company_note,
         add_contact_note,
-        initialize_database,
     )
     from mailpilot.operator_log import cli_mutation, operator_event
 
@@ -4510,8 +4370,7 @@ def note_add(contact_email: str | None, company_domain: str | None, body: str) -
             "exactly one of --contact-email or --company-domain is required",
             "validation_error",
         )
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         if contact_email is not None:
             owner = ("contact", _resolve_contact(connection, contact_email).id)
         else:
@@ -4530,8 +4389,6 @@ def note_add(contact_email: str | None, company_domain: str | None, body: str) -
                 changed=["body"],
             )
             output_entity("note", created)
-    finally:
-        connection.close()
 
 
 @note.command("remove")
@@ -4564,7 +4421,6 @@ def note_remove(
         delete_note,
         delete_notes,
         get_note,
-        initialize_database,
     )
     from mailpilot.operator_log import cli_mutation, operator_event
 
@@ -4591,8 +4447,7 @@ def note_remove(
                 "validation_error",
             )
 
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         if note_id is not None:
             found = get_note(connection, note_id)
             if found is None:
@@ -4637,8 +4492,6 @@ def note_remove(
                 },
                 record_count=len(note_ids),
             )
-    finally:
-        connection.close()
 
 
 @note.command("list")
@@ -4655,7 +4508,6 @@ def note_list(
 ) -> None:
     """List notes on a contact or company."""
     from mailpilot.database import (
-        initialize_database,
         list_notes,
     )
 
@@ -4664,8 +4516,7 @@ def note_list(
             "exactly one of --contact-email or --company-domain is required",
             "validation_error",
         )
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         if contact_email is not None:
             notes = list_notes(
                 connection,
@@ -4684,24 +4535,19 @@ def note_list(
                 until=until,
             )
         output({"notes": [n.model_dump(mode="json") for n in notes]})
-    finally:
-        connection.close()
 
 
 @note.command("view")
 @click.argument("note_id")
 def note_view(note_id: str) -> None:
     """View a note by ID."""
-    from mailpilot.database import get_note, initialize_database
+    from mailpilot.database import get_note
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         found = get_note(connection, note_id)
         if found is None:
             output_error(f"note {note_id} not found", "not_found")
         output_entity("note", found)
-    finally:
-        connection.close()
 
 
 # -- Workflow commands ---------------------------------------------------------
@@ -4832,7 +4678,6 @@ def workflow_create(
     draft: bool,
 ) -> None:
     """Create a new workflow."""
-    from mailpilot.database import initialize_database
     from mailpilot.operator_log import cli_mutation, operator_event
 
     if not name.strip():
@@ -4854,8 +4699,7 @@ def workflow_create(
         )
     resolved = _resolve_instructions(instructions, instructions_file)
     activate = not draft and has_goal and has_instructions
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         account_id = _resolve_account(connection, account_email).id
         with cli_mutation(
             "workflow",
@@ -4887,8 +4731,6 @@ def workflow_create(
                 changed=changed,
             )
             output_entity("workflow", created)
-    finally:
-        connection.close()
 
 
 @workflow.command("update")
@@ -4909,7 +4751,7 @@ def workflow_update(
     only non-def fields -- account binding here, status via ``start`` / ``stop``.
     """
     # Def fields import-only; update restricted to non-def fields per §V.103.
-    from mailpilot.database import get_workflow, initialize_database, update_workflow
+    from mailpilot.database import get_workflow, update_workflow
     from mailpilot.operator_log import cli_mutation, operator_event
 
     if account_email is None:
@@ -4918,8 +4760,7 @@ def workflow_update(
             "(def fields are import-only -- edit the TOML and re-import)",
             "validation_error",
         )
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         workflow_id = _resolve_workflow_id(connection, workflow_ref)
         before = get_workflow(connection, workflow_id)
         if before is None:
@@ -4936,8 +4777,6 @@ def workflow_update(
                 changed=changed,
             )
             output_entity("workflow", updated)
-    finally:
-        connection.close()
 
 
 @workflow.command("search")
@@ -4945,14 +4784,11 @@ def workflow_update(
 @click.option("--limit", default=100, help="Maximum results.")
 def workflow_search(query: str, limit: int) -> None:
     """Search workflows by name or goal."""
-    from mailpilot.database import initialize_database, search_workflows
+    from mailpilot.database import search_workflows
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         workflows = search_workflows(connection, query, limit=limit)
         output({"workflows": [w.model_dump(mode="json") for w in workflows]})
-    finally:
-        connection.close()
 
 
 @workflow.command("list")
@@ -4976,10 +4812,9 @@ def workflow_list(
     until: str | None,
 ) -> None:
     """List workflows as summaries."""
-    from mailpilot.database import initialize_database, list_workflows
+    from mailpilot.database import list_workflows
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         account_id = (
             _resolve_account(connection, account_email).id
             if account_email is not None
@@ -4996,42 +4831,34 @@ def workflow_list(
             until=until,
         )
         output({"workflows": [w.model_dump(mode="json") for w in workflows]})
-    finally:
-        connection.close()
 
 
 @workflow.command("view")
 @click.argument("workflow_ref")
 def workflow_view(workflow_ref: str) -> None:
     """Show a workflow by name or ID."""
-    from mailpilot.database import get_workflow, initialize_database
+    from mailpilot.database import get_workflow
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         workflow_id = _resolve_workflow_id(connection, workflow_ref)
         found = get_workflow(connection, workflow_id)
         if found is None:
             output_error(f"workflow not found: {workflow_ref}", "not_found")
         output_entity("workflow", found)
-    finally:
-        connection.close()
 
 
 @workflow.command("stats")
 @click.argument("workflow_ref")
 def workflow_stats(workflow_ref: str) -> None:
     """Show the per-campaign funnel for a workflow by name or ID."""
-    from mailpilot.database import get_workflow_stats, initialize_database
+    from mailpilot.database import get_workflow_stats
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         workflow_id = _resolve_workflow_id(connection, workflow_ref)
         stats = get_workflow_stats(connection, workflow_id)
         if stats is None:
             output_error(f"workflow not found: {workflow_ref}", "not_found")
         output({"workflow_stats": stats.model_dump(mode="json")})
-    finally:
-        connection.close()
 
 
 @workflow.command("report")
@@ -5075,10 +4902,9 @@ def workflow_report(
     limit: int,
 ) -> None:
     """Composite campaign report: funnel + tasks + enrollment matrix."""
-    from mailpilot.database import get_workflow_report, initialize_database
+    from mailpilot.database import get_workflow_report
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         workflow_id = _resolve_workflow_id(connection, workflow_ref)
         report = get_workflow_report(
             connection,
@@ -5098,8 +4924,6 @@ def workflow_report(
             output_format=output_format,
             out_path=out_path,
         )
-    finally:
-        connection.close()
 
 
 @workflow.command("review")
@@ -5125,7 +4949,6 @@ def workflow_review(
     from mailpilot.database import (
         get_workflow,
         get_workflow_review,
-        initialize_database,
         list_active_workflows,
     )
 
@@ -5144,8 +4967,7 @@ def workflow_review(
     if until_dt.tzinfo is None:
         until_dt = until_dt.replace(tzinfo=UTC)
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         if workflow_ref.casefold() == "all":
             workflow_ids = [w.id for w in list_active_workflows(connection)]
         else:
@@ -5164,25 +4986,20 @@ def workflow_review(
             {"workflow_review": review.model_dump(mode="json")},
             record_count=len(review.reviews),
         )
-    finally:
-        connection.close()
 
 
 @workflow.command("status")
 @click.argument("workflow_ref")
 def workflow_status_cmd(workflow_ref: str) -> None:
     """Ops-health for a workflow (wording, run loop, overdue/failed tasks)."""
-    from mailpilot.database import get_workflow_status_health, initialize_database
+    from mailpilot.database import get_workflow_status_health
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         workflow_id = _resolve_workflow_id(connection, workflow_ref)
         health = get_workflow_status_health(connection, workflow_id)
         if health is None:
             output_error(f"workflow not found: {workflow_ref}", "not_found")
         output({"workflow_status": health.model_dump(mode="json")})
-    finally:
-        connection.close()
 
 
 def _read_workflow_check_catalog(
@@ -5257,11 +5074,10 @@ def workflow_check(files: tuple[str, ...], account_email: str | None) -> None:
     that account's full envelope, where a row with no def surfaces as
     orphaned drift.
     """
-    from mailpilot.database import check_workflow_wording, initialize_database
+    from mailpilot.database import check_workflow_wording
 
     catalog = _read_workflow_check_catalog(files)
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         account_id = None
         scope_to_catalog = True
         if account_email is not None:
@@ -5273,8 +5089,6 @@ def workflow_check(files: tuple[str, ...], account_email: str | None) -> None:
             scope_to_catalog=scope_to_catalog,
             account_id=account_id,
         )
-    finally:
-        connection.close()
     output({"workflow_check": report.model_dump(mode="json")})
 
 
@@ -5282,11 +5096,10 @@ def workflow_check(files: tuple[str, ...], account_email: str | None) -> None:
 @click.argument("workflow_ref")
 def workflow_start(workflow_ref: str) -> None:
     """Start a workflow by name or ID (requires non-empty goal and instructions)."""
-    from mailpilot.database import activate_workflow, initialize_database
+    from mailpilot.database import activate_workflow
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         workflow_id = _resolve_workflow_id(connection, workflow_ref)
         with cli_mutation("workflow", "start", entity_id=workflow_id):
             try:
@@ -5313,19 +5126,16 @@ def workflow_start(workflow_ref: str) -> None:
                 changed=["status"],
             )
             output_entity("workflow", activated)
-    finally:
-        connection.close()
 
 
 @workflow.command("stop")
 @click.argument("workflow_ref")
 def workflow_stop(workflow_ref: str) -> None:
     """Stop an active workflow by name or ID."""
-    from mailpilot.database import initialize_database, pause_workflow
+    from mailpilot.database import pause_workflow
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         workflow_id = _resolve_workflow_id(connection, workflow_ref)
         with cli_mutation("workflow", "stop", entity_id=workflow_id):
             try:
@@ -5338,8 +5148,6 @@ def workflow_stop(workflow_ref: str) -> None:
                 changed=["status"],
             )
             output_entity("workflow", paused)
-    finally:
-        connection.close()
 
 
 def _toml_basic_string(value: str) -> str:
@@ -5410,12 +5218,10 @@ def workflow_export(account_email: str | None, out_dir: str) -> None:
     import pathlib
 
     from mailpilot.database import (
-        initialize_database,
         list_workflows_full,
     )
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         account_id = _resolve_account(connection, account_email).id
         workflows = list_workflows_full(connection, account_id)
         directory = pathlib.Path(out_dir)
@@ -5426,8 +5232,6 @@ def workflow_export(account_email: str | None, out_dir: str) -> None:
             path.write_text(_workflow_to_toml(current))
             written.append({"name": current.name, "path": str(path)})
         output({"workflows": written})
-    finally:
-        connection.close()
 
 
 _WORKFLOW_IMPORT_UPDATABLE = (
@@ -5796,15 +5600,13 @@ def workflow_import(account_email: str | None, file: str | None) -> None:
     success.
     """
     from mailpilot.database import (
-        initialize_database,
         list_workflows_full,
     )
     from mailpilot.operator_log import cli_mutation
 
     entries, pre_errors = _load_workflow_import_entries(file)
 
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         account_id = _resolve_account(connection, account_email).id
         with cli_mutation(
             "workflow",
@@ -5839,8 +5641,6 @@ def workflow_import(account_email: str | None, file: str | None) -> None:
                 {"workflows": results, "applied": applied, "rejected": rejected},
                 record_count=len(results),
             )
-    finally:
-        connection.close()
 
 
 # -- Template commands ---------------------------------------------------------
@@ -6652,7 +6452,7 @@ def enrollment_add(
     ``enrollment_batch`` envelope. ``--tag`` matches company tags or
     contact tags (union, unique by contact).
     """
-    from mailpilot.database import get_workflow, initialize_database
+    from mailpilot.database import get_workflow
 
     scheduled_iso = _validate_enrollment_add_args(
         contact_email,
@@ -6668,8 +6468,7 @@ def enrollment_add(
     file_rows = (
         _read_enrollment_batch_file(file_path) if file_path is not None else None
     )
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         workflow_id = _resolve_workflow_id(connection, workflow_ref)
         workflow = get_workflow(connection, workflow_id)
         if workflow is None:
@@ -6713,8 +6512,6 @@ def enrollment_add(
             return
         assert contact_email is not None
         _enrollment_add_contact(connection, workflow, contact_email, scheduled_iso)
-    finally:
-        connection.close()
 
 
 @enrollment.command("run")
@@ -6733,13 +6530,11 @@ def enrollment_run(enrollment_id: str) -> None:
         get_enrollment_by_id,
         get_unprocessed_inbound_email,
         get_workflow,
-        initialize_database,
     )
     from mailpilot.settings import get_settings
 
     settings = get_settings()
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         record = get_enrollment_by_id(connection, enrollment_id)
         if record is None:
             output_error(f"enrollment not found: {enrollment_id}", "not_found")
@@ -6794,8 +6589,6 @@ def enrollment_run(enrollment_id: str) -> None:
             "tool_calls": result.get("tool_calls", 0),
         }
         output(envelope)
-    finally:
-        connection.close()
 
 
 @enrollment.command("disable")
@@ -6816,14 +6609,12 @@ def enrollment_disable(enrollment_id: str, reason: str) -> None:
     from mailpilot.database import (
         disable_enrollment,
         get_enrollment_by_id,
-        initialize_database,
     )
     from mailpilot.operator_log import cli_mutation, operator_event
 
     if reason.strip() == "":
         output_error("reason cannot be empty", "validation_error")
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         before = get_enrollment_by_id(connection, enrollment_id)
         if before is None:
             output_error(f"enrollment not found: {enrollment_id}", "not_found")
@@ -6842,8 +6633,6 @@ def enrollment_disable(enrollment_id: str, reason: str) -> None:
                 changed=changed,
             )
             output_entity("enrollment", updated)
-    finally:
-        connection.close()
 
 
 @enrollment.command("enable")
@@ -6857,12 +6646,10 @@ def enrollment_enable(enrollment_id: str) -> None:
     from mailpilot.database import (
         enable_enrollment,
         get_enrollment_by_id,
-        initialize_database,
     )
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         before = get_enrollment_by_id(connection, enrollment_id)
         if before is None:
             output_error(f"enrollment not found: {enrollment_id}", "not_found")
@@ -6889,24 +6676,19 @@ def enrollment_enable(enrollment_id: str) -> None:
                 changed=changed,
             )
             output_entity("enrollment", updated)
-    finally:
-        connection.close()
 
 
 @enrollment.command("view")
 @click.argument("enrollment_id")
 def enrollment_view(enrollment_id: str) -> None:
     """View an enrollment by id."""
-    from mailpilot.database import get_enrollment_by_id, initialize_database
+    from mailpilot.database import get_enrollment_by_id
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         record = get_enrollment_by_id(connection, enrollment_id)
         if record is None:
             output_error("enrollment not found", "not_found")
         output_entity("enrollment", record)
-    finally:
-        connection.close()
 
 
 @enrollment.command("list")
@@ -6988,7 +6770,6 @@ def enrollment_list(
     """
     from mailpilot.database import (
         get_workflow,
-        initialize_database,
         list_enrollments_detailed,
     )
     from mailpilot.models import ENROLLMENT_FULL_FIELDS
@@ -7000,8 +6781,7 @@ def enrollment_list(
             "validation_error",
         )
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         # Polymorphic name|UUID resolve (§V.107/§V.152); UUID existence still
         # validated so unknown ids stay not_found (same envelope as today).
         resolved_workflow_id: str | None = None
@@ -7043,8 +6823,6 @@ def enrollment_list(
                 output_format=output_format,
                 out_path=out_path,
             )
-    finally:
-        connection.close()
 
 
 # -- Task commands -------------------------------------------------------------
@@ -7083,12 +6861,10 @@ def task_list(
     """List tasks as summaries with optional filters."""
     from mailpilot.database import (
         get_workflow,
-        initialize_database,
         list_tasks,
     )
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         # Polymorphic name|UUID resolve (§V.107); UUID existence still
         # validated so unknown ids stay not_found (same envelope as today).
         resolved_workflow_id: str | None = None
@@ -7114,8 +6890,6 @@ def task_list(
             touches=list(touches) if touches else None,
         )
         output({"tasks": [t.model_dump(mode="json") for t in tasks]})
-    finally:
-        connection.close()
 
 
 @task.command("stats")
@@ -7137,11 +6911,9 @@ def task_stats(
     from mailpilot.database import (
         get_task_stats,
         get_workflow,
-        initialize_database,
     )
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         # Polymorphic name|UUID resolve (§V.107); UUID existence still
         # validated so unknown ids stay not_found (same envelope as today).
         resolved_workflow_id: str | None = None
@@ -7160,24 +6932,19 @@ def task_stats(
             bucket_tz=bucket_tz,
         )
         output({"task_stats": stats.model_dump(mode="json")})
-    finally:
-        connection.close()
 
 
 @task.command("view")
 @click.argument("task_id")
 def task_view(task_id: str) -> None:
     """Show a task by ID."""
-    from mailpilot.database import get_task, initialize_database
+    from mailpilot.database import get_task
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         found = get_task(connection, task_id)
         if found is None:
             output_error(f"task not found: {task_id}", "not_found")
         output_entity("task", found)
-    finally:
-        connection.close()
 
 
 @task.command("cancel")
@@ -7215,7 +6982,6 @@ def task_cancel(
         cancel_task,
         cancel_tasks_matching,
         get_workflow,
-        initialize_database,
     )
 
     has_required_filter = bool(
@@ -7248,8 +7014,7 @@ def task_cancel(
             "validation_error",
         )
 
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         if task_id is not None:
             cancelled = cancel_task(connection, task_id)
             if cancelled is None:
@@ -7284,8 +7049,6 @@ def task_cancel(
             {"task_cancel": result.model_dump(mode="json")},
             record_count=result.cancelled_count,
         )
-    finally:
-        connection.close()
 
 
 def _validate_task_retry_mode(
@@ -7387,7 +7150,6 @@ def task_retry(
     from mailpilot.database import (
         get_task,
         get_workflow,
-        initialize_database,
         manual_retry_task,
         retry_tasks_matching,
     )
@@ -7404,8 +7166,7 @@ def task_retry(
         until=until,
     )
     scheduled_iso = _parse_future_scheduled_at(scheduled_at)
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         if task_id is not None:
             existing = get_task(connection, task_id)
             if existing is None:
@@ -7464,8 +7225,6 @@ def task_retry(
             {"task_retry": result.model_dump(mode="json")},
             record_count=result.retried_count,
         )
-    finally:
-        connection.close()
 
 
 # -- Meeting commands ----------------------------------------------------------
@@ -7493,10 +7252,9 @@ def meeting_list(
     until: str | None,
 ) -> None:
     """List meetings, newest scheduled first, with optional filters."""
-    from mailpilot.database import initialize_database, list_meetings
+    from mailpilot.database import list_meetings
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         contact_id = (
             _resolve_contact(connection, contact_email).id
             if contact_email is not None
@@ -7511,24 +7269,19 @@ def meeting_list(
             until=until,
         )
         output({"meetings": [m.model_dump(mode="json") for m in meetings]})
-    finally:
-        connection.close()
 
 
 @meeting.command("view")
 @click.argument("meeting_id")
 def meeting_view(meeting_id: str) -> None:
     """Show a meeting by ID with its attendee contacts inlined."""
-    from mailpilot.database import initialize_database, load_meeting_view
+    from mailpilot.database import load_meeting_view
 
-    connection = initialize_database(_database_url())
-    try:
+    with _db() as connection:
         found = load_meeting_view(connection, meeting_id)
         if found is None:
             output_error(f"meeting not found: {meeting_id}", "not_found")
         output_entity("meeting", found)
-    finally:
-        connection.close()
 
 
 @meeting.command("add")
@@ -7546,13 +7299,11 @@ def meeting_add(meeting_id: str, contact_email: str) -> None:
     """
     from mailpilot.database import (
         get_meeting,
-        initialize_database,
         link_meeting_attendee,
     )
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         if get_meeting(connection, meeting_id) is None:
             output_error(f"meeting not found: {meeting_id}", "not_found")
         contact_id = _resolve_contact(connection, contact_email).id
@@ -7572,8 +7323,6 @@ def meeting_add(meeting_id: str, contact_email: str) -> None:
                 changed=["contact_id"],
             )
             output_entity("meeting_attendee", created)
-    finally:
-        connection.close()
 
 
 @meeting.command("update")
@@ -7587,11 +7336,10 @@ def meeting_add(meeting_id: str, contact_email: str) -> None:
 )
 def meeting_update(meeting_id: str, summary: str | None, status: str | None) -> None:
     """Edit a meeting's summary or status."""
-    from mailpilot.database import get_meeting, initialize_database, update_meeting
+    from mailpilot.database import get_meeting, update_meeting
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         before = get_meeting(connection, meeting_id)
         if before is None:
             output_error(f"meeting not found: {meeting_id}", "not_found")
@@ -7611,19 +7359,16 @@ def meeting_update(meeting_id: str, summary: str | None, status: str | None) -> 
             ]
             operator_event("meeting.update", entity_id=meeting_id, changed=changed)
             output_entity("meeting", updated)
-    finally:
-        connection.close()
 
 
 @meeting.command("cancel")
 @click.argument("meeting_id")
 def meeting_cancel(meeting_id: str) -> None:
     """Cancel a meeting by setting its status to `cancelled`."""
-    from mailpilot.database import get_meeting, initialize_database, update_meeting
+    from mailpilot.database import get_meeting, update_meeting
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    connection = initialize_database(_database_url(), require_current_schema=True)
-    try:
+    with _db(mutate=True) as connection:
         if get_meeting(connection, meeting_id) is None:
             output_error(f"meeting not found: {meeting_id}", "not_found")
         with cli_mutation("meeting", "cancel", entity_id=meeting_id):
@@ -7632,5 +7377,3 @@ def meeting_cancel(meeting_id: str) -> None:
                 output_error(f"meeting not found: {meeting_id}", "not_found")
             operator_event("meeting.cancel", entity_id=meeting_id, changed=["status"])
             output_entity("meeting", updated)
-    finally:
-        connection.close()

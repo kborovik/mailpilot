@@ -227,6 +227,7 @@ V173: task-cancel-filter — `task cancel` dual-mode positional TASK_ID XOR `tas
 V174: workflow-review — `workflow review <slug|all> --since --until` dated one-envelope collect; funnel+task counts+window emails/activities+failed reasons+enrollments uncapped; no LLM; no CRM write — → .spec/check-extras.md §V174
 V175: task-retry-filter — `task retry` dual-mode positional TASK_ID XOR `task list` filters + `--touch`; `--scheduled-at` + `--dry-run`; `--status` default failed; SKILL one-call; distinct §V.173 — → .spec/check-extras.md §V175
 V176: target-env — settings.environment ∈ {dev, prd} default dev; sole env setting; topic=`mailpilot-topic-{env}` sub=`mailpilot-sub-{env}`; logfire.configure maps internally (dev→development, prd→production); no `logfire_environment` setting; derived pubsub keys not independently settable + not persisted; load compat legacy `logfire_environment`→environment when unset; status+config get project environment + topic/sub only — → .spec/check-extras.md §V176
+V177: cli-db-context — `_db(*, mutate: bool = False)` sole CLI connection helper; lazy-import `initialize_database` (module-level click-only §V.2); `mutate=True` → `require_current_schema=True` (§V.109); close success+error; `cli_mutation` stays per-cmd outside helper (§V.54); cmds use helper not copy open/close
 
 ## §T TASKS
 
@@ -283,6 +284,7 @@ T293|x|impl §V.169(∆) — OOO resume-year: same-day month+day w/o year → sa
 T294|x|impl §V.175(+) + §I — task retry filter-mode + --touch (repeatable) + --scheduled-at on set + --dry-run preview ids+companies; one envelope retried_count+ids+scheduled_at+companies; SKILL one-call; tests (#244)|V175,V170,V49,V162,V115,V4,V111,I.cli
 T295|x|impl §V.176(+) + §I.config + §I.pubsub — environment ∈ {dev, prd}; derive topic/sub + logfire_environment; persist environment only; config set derived keys invalid_key; load compat; status projects resolved; V165 gate on environment=dev; SKILL/tests|V176,V52,V165,V85,V11,I.config,I.pubsub
 T296|x|impl §V.176(∆) + §V.52(∆) + §I.config — drop `logfire_environment` setting/projection; map internally at logfire.configure (dev→development, prd→production); persist environment only; load compat kept; tests+SKILL|V176,V52,I.config
+T297|x|impl §V.177(+) — `_db(*, mutate=False)` lazy-import initialize_database; cmds use helper; mutate=True → require_current_schema; cli_mutation stays per-cmd; close success+error; sweep `initialize_database(` in `src/mailpilot/cli.py`; existing CLI tests (#254)|V177,V2,V54,V109
 
 ## §B BUGS
 
