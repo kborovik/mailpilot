@@ -5902,7 +5902,7 @@ def _task_filter_clauses(
     until: str | None = None,
     touches: Sequence[int] | None = None,
 ) -> list[Composable]:
-    """Build shared ``task list`` / ``task cancel`` / ``task retry`` clauses.
+    """Shared WHERE clauses for task list, cancel, retry, and stats.
 
     Touch match uses ``_sql_resolve_touch`` (parse §V.162 + first-touch
     fallback). Never filters on ``description``.
@@ -6111,10 +6111,11 @@ def retry_tasks_matching(
         touches: Resolved touch numbers to retry (parse §V.162).
         scheduled_at: Optional ISO override applied to every selected row.
         dry_run: When True, preview only (no UPDATE).
-        task_id: Optional single-id restriction (id-mode ``--dry-run``).
+        task_id: Optional single-id restriction (id-mode retry).
 
     Returns:
         Join envelope: retried ids, override scheduled_at, companies.
+        Id-mode writes set ``reset_task`` from ``RETURNING *``.
     """
     params: dict[str, object] = {}
     conditions = _task_filter_clauses(
@@ -6155,13 +6156,16 @@ def retry_tasks_matching(
                     END,
                     completed_at = NULL
                 {}
-                RETURNING id
+                RETURNING *
                 """
             ).format(where),
             params,
         ).fetchall()
 
     ids = sorted(str(row["id"]) for row in rows)
+    reset_task: Task | None = None
+    if task_id is not None and not dry_run and len(rows) == 1:
+        reset_task = Task.model_validate(rows[0])
     companies: list[TaskRetryCompany] = []
     if ids:
         company_rows = connection.execute(
@@ -6188,6 +6192,7 @@ def retry_tasks_matching(
         scheduled_at=scheduled_at,
         companies=companies,
         dry_run=dry_run,
+        reset_task=reset_task,
     )
 
 
@@ -6225,14 +6230,12 @@ def get_task_stats(
         ``TaskStats`` over the filtered task set (all-zero counts and NULL
         first/last when no task matches).
     """
-    conditions: list[SQL] = []
     params: dict[str, object] = {"bucket_tz": bucket_tz}
-    if workflow_id is not None:
-        conditions.append(SQL("workflow_id = %(workflow_id)s"))
-        params["workflow_id"] = workflow_id
-    if trigger is not None:
-        conditions.append(SQL("COALESCE(context->>'trigger', '') = %(trigger)s"))
-        params["trigger"] = trigger
+    conditions = _task_filter_clauses(
+        params,
+        workflow_id=workflow_id,
+        trigger=trigger,
+    )
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
         """\
@@ -6337,57 +6340,6 @@ def reschedule_task_for_lock_contention(
             "id": task_id,
             "delay": str(backoff_seconds),
         },
-    ).fetchone()
-    connection.commit()
-    if row is None:
-        return None
-    return Task.model_validate(row)
-
-
-def manual_retry_task(
-    connection: psycopg.Connection[dict[str, Any]],
-    task_id: str,
-    *,
-    scheduled_at: str | None = None,
-) -> Task | None:
-    """Reset a terminal task row for a fresh retry, operator-initiated.
-
-    Allowed only on rows with status ``failed`` or ``cancelled``.
-    Refuses ``completed`` rows (tools already fired - retry would
-    duplicate side-effects) and ``pending`` rows (already queued, no-op).
-
-    Resets ``status='pending'``, ``attempt_count=0``, and clears
-    ``completed_at``. ``scheduled_at``: explicit override when given;
-    otherwise keep the stored instant when it is still in the future,
-    else now. The row's ``UPDATE`` of ``status`` and ``scheduled_at``
-    fires ``pg_notify('task_pending')`` via ``task_pending_trigger``
-    so the run loop wakes.
-
-    Args:
-        connection: Open database connection.
-        task_id: Task ID.
-        scheduled_at: Optional ISO timestamp override.
-
-    Returns:
-        Reset task, or ``None`` if the row does not exist or is not in
-        a retryable state.
-    """
-    row = connection.execute(
-        """\
-        UPDATE task
-        SET status = 'pending',
-            attempt_count = 0,
-            scheduled_at = CASE
-                WHEN %(scheduled_at)s::text IS NOT NULL
-                    THEN (%(scheduled_at)s::text)::timestamptz
-                WHEN scheduled_at > CURRENT_TIMESTAMP THEN scheduled_at
-                ELSE CURRENT_TIMESTAMP
-            END,
-            completed_at = NULL
-        WHERE id = %(id)s AND status IN ('failed', 'cancelled')
-        RETURNING *
-        """,
-        {"id": task_id, "scheduled_at": scheduled_at},
     ).fetchone()
     connection.commit()
     if row is None:

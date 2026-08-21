@@ -20,6 +20,7 @@ import click
 from mailpilot._filters import (
     COMPANY_SORT_KEYS,
     DIRECTIONS,
+    TASK_TRIGGERS,
     desc_option,
     enum_option,
     include_disabled_option,
@@ -30,8 +31,8 @@ from mailpilot._filters import (
     scope_option,
     sort_option,
     tag_filter_options,
+    task_scope_options,
     time_window_options,
-    touch_option,
 )
 
 if TYPE_CHECKING:
@@ -79,7 +80,7 @@ _ROUTE_METHODS = [
     "skipped_no_inbound_workflows",
 ]
 
-# workflow.status / enrollment.status / task.status CHECK sets, mirrored from
+# workflow.status / enrollment.status CHECK sets, mirrored from
 # schema.sql so the Choice options reject out-of-set values at parse time.
 _WORKFLOW_STATUSES = ["draft", "active", "paused"]
 _WORKFLOW_TEMPLATES = ["outbound-general", "inbound-general", "inbound-google-drive"]
@@ -87,10 +88,6 @@ _EMAIL_STATUSES = ["sent", "received", "bounced"]
 _ENROLLMENT_STATUSES = ["active", "disabled"]
 # Terminal dispositions on enrollment outcome activity (§V.127 / §V.160).
 _ENROLLMENT_DISPOSITIONS = ["meeting_booked", "do_not_contact", "contact_later"]
-_TASK_STATUSES = ["pending", "completed", "failed", "cancelled"]
-# Caller-path taxonomy stored in task.context->>'trigger' (§V.26); shared by
-# `task list --trigger` and `task stats --trigger`.
-_TASK_TRIGGERS = ["enrollment_run", "enrollment_schedule", "task", "email", "manual"]
 _MEETING_STATUSES = ["scheduled", "completed", "cancelled", "no_show"]
 # Company list pipeline cohort filter (§V.138); derived, not a schema CHECK.
 _COMPANY_PIPELINE_STATUSES = [
@@ -900,6 +897,25 @@ def _resolve_workflow(connection: Any, workflow_ref: str) -> Workflow:
 def _resolve_workflow_id(connection: Any, workflow_ref: str) -> str:
     """Resolve a workflow name or UUID to its id; miss → ``not_found``."""
     return _resolve_workflow(connection, workflow_ref).id
+
+
+def _resolve_task_scope(
+    connection: Any,
+    workflow_id: str | None,
+    contact_email: str | None,
+) -> tuple[str | None, str | None]:
+    """Resolve optional workflow + contact filters to ids (§V.180)."""
+    resolved_workflow_id = (
+        _resolve_workflow_id(connection, workflow_id)
+        if workflow_id is not None
+        else None
+    )
+    contact_id = (
+        _resolve_contact(connection, contact_email).id
+        if contact_email is not None
+        else None
+    )
+    return resolved_workflow_id, contact_id
 
 
 def _resolve_tag(connection: Any, tag_ref: str) -> Any:
@@ -6677,18 +6693,7 @@ def task() -> None:
 
 
 @task.command("list")
-@scope_option("--workflow-id", "workflow_id", "Filter by workflow (name or ID).")
-@scope_option("--contact-email", "contact_email", "Filter by contact (email or ID).")
-@enum_option("--status", "status", _TASK_STATUSES, "Filter by task status.")
-@enum_option("--trigger", "trigger", _TASK_TRIGGERS, "Filter by task trigger.")
-@click.option(
-    "--overdue",
-    is_flag=True,
-    default=False,
-    help="Only pending tasks with scheduled_at in the past.",
-)
-@touch_option
-@time_window_options("scheduled_at")
+@task_scope_options
 @limit_option
 def task_list(
     workflow_id: str | None,
@@ -6707,15 +6712,8 @@ def task_list(
     )
 
     with _db() as connection:
-        resolved_workflow_id: str | None = (
-            _resolve_workflow_id(connection, workflow_id)
-            if workflow_id is not None
-            else None
-        )
-        contact_id = (
-            _resolve_contact(connection, contact_email).id
-            if contact_email is not None
-            else None
+        resolved_workflow_id, contact_id = _resolve_task_scope(
+            connection, workflow_id, contact_email
         )
         tasks = list_tasks(
             connection,
@@ -6734,7 +6732,7 @@ def task_list(
 
 @task.command("stats")
 @scope_option("--workflow-id", "workflow_id", "Filter by workflow (name or ID).")
-@enum_option("--trigger", "trigger", _TASK_TRIGGERS, "Filter by task trigger.")
+@enum_option("--trigger", "trigger", TASK_TRIGGERS, "Filter by task trigger.")
 @click.option(
     "--bucket-tz",
     default="UTC",
@@ -6784,20 +6782,74 @@ def task_view(task_id: str) -> None:
         output_entity("task", found)
 
 
+_TASK_CANCEL_REQUIRED: tuple[str, ...] = (
+    "touch",
+    "workflow-id",
+    "contact-email",
+    "trigger",
+    "overdue",
+)
+_TASK_RETRY_REQUIRED: tuple[str, ...] = (
+    "touch",
+    "workflow-id",
+    "contact-email",
+    "trigger",
+)
+_TASK_CANCEL_STATUS: tuple[str, ...] = ("pending",)
+_TASK_RETRY_STATUS: tuple[str, ...] = ("failed", "cancelled")
+
+
+def _task_filter_mode(
+    task_id: str | None,
+    *,
+    required: tuple[str, ...],
+    allowed_status: tuple[str, ...],
+    workflow_id: str | None = None,
+    contact_email: str | None = None,
+    status: str | None = None,
+    trigger: str | None = None,
+    overdue: bool = False,
+    since: str | None = None,
+    until: str | None = None,
+    touches: tuple[int, ...] = (),
+) -> None:
+    """Encode TASK_ID XOR filters plus filter-mode status (§V.180)."""
+    flags = {
+        "touch": bool(touches),
+        "workflow-id": workflow_id is not None,
+        "contact-email": contact_email is not None,
+        "trigger": trigger is not None,
+        "overdue": overdue,
+    }
+    has_required = any(flags[name] for name in required)
+    has_any_filter = bool(
+        any(flags.values())
+        or status is not None
+        or since is not None
+        or until is not None
+    )
+    if task_id is not None and has_any_filter:
+        output_error(
+            "TASK_ID is exclusive with filter flags",
+            "validation_error",
+        )
+    if task_id is None and not has_required:
+        listed = ", ".join(f"--{name}" for name in required)
+        output_error(
+            f"TASK_ID or a filter ({listed}) is required",
+            "validation_error",
+        )
+    if task_id is None and status is not None and status not in allowed_status:
+        allowed = " or ".join(allowed_status)
+        output_error(
+            f"filter-mode --status must be {allowed}, got {status!r}",
+            "validation_error",
+        )
+
+
 @task.command("cancel")
 @click.argument("task_id", required=False, default=None)
-@scope_option("--workflow-id", "workflow_id", "Filter by workflow (name or ID).")
-@scope_option("--contact-email", "contact_email", "Filter by contact (email or ID).")
-@enum_option("--status", "status", _TASK_STATUSES, "Filter by task status.")
-@enum_option("--trigger", "trigger", _TASK_TRIGGERS, "Filter by task trigger.")
-@click.option(
-    "--overdue",
-    is_flag=True,
-    default=False,
-    help="Only pending tasks with scheduled_at in the past.",
-)
-@touch_option
-@time_window_options("scheduled_at")
+@task_scope_options
 def task_cancel(
     task_id: str | None,
     workflow_id: str | None,
@@ -6820,35 +6872,19 @@ def task_cancel(
         cancel_tasks_matching,
     )
 
-    has_required_filter = bool(
-        touches
-        or workflow_id is not None
-        or contact_email is not None
-        or trigger is not None
-        or overdue
+    _task_filter_mode(
+        task_id,
+        required=_TASK_CANCEL_REQUIRED,
+        allowed_status=_TASK_CANCEL_STATUS,
+        workflow_id=workflow_id,
+        contact_email=contact_email,
+        status=status,
+        trigger=trigger,
+        overdue=overdue,
+        since=since,
+        until=until,
+        touches=touches,
     )
-    has_any_filter = bool(
-        has_required_filter
-        or status is not None
-        or since is not None
-        or until is not None
-    )
-    if task_id is not None and has_any_filter:
-        output_error(
-            "TASK_ID is exclusive with filter flags",
-            "validation_error",
-        )
-    if task_id is None and not has_required_filter:
-        output_error(
-            "TASK_ID or a filter (--touch, --workflow-id, "
-            "--contact-email, --trigger, --overdue) is required",
-            "validation_error",
-        )
-    if task_id is None and status is not None and status != "pending":
-        output_error(
-            f"filter-mode --status must be pending, got {status!r}",
-            "validation_error",
-        )
 
     with _db(mutate=True) as connection:
         if task_id is not None:
@@ -6861,15 +6897,8 @@ def task_cancel(
             output_entity("task", cancelled)
             return
 
-        resolved_workflow_id: str | None = (
-            _resolve_workflow_id(connection, workflow_id)
-            if workflow_id is not None
-            else None
-        )
-        contact_id = (
-            _resolve_contact(connection, contact_email).id
-            if contact_email is not None
-            else None
+        resolved_workflow_id, contact_id = _resolve_task_scope(
+            connection, workflow_id, contact_email
         )
         result = cancel_tasks_matching(
             connection,
@@ -6887,64 +6916,9 @@ def task_cancel(
         )
 
 
-def _validate_task_retry_mode(
-    *,
-    task_id: str | None,
-    touches: tuple[int, ...],
-    workflow_id: str | None,
-    contact_email: str | None,
-    trigger: str | None,
-    status: str | None,
-    overdue: bool,
-    since: str | None,
-    until: str | None,
-) -> None:
-    """Reject TASK_ID+filters XOR, missing scope, and non-retryable status."""
-    has_required_filter = bool(
-        touches
-        or workflow_id is not None
-        or contact_email is not None
-        or trigger is not None
-    )
-    has_any_filter = bool(
-        has_required_filter
-        or status is not None
-        or overdue
-        or since is not None
-        or until is not None
-    )
-    if task_id is not None and has_any_filter:
-        output_error(
-            "TASK_ID is exclusive with filter flags",
-            "validation_error",
-        )
-    if task_id is None and not has_required_filter:
-        output_error(
-            "TASK_ID or a filter (--touch, --workflow-id, "
-            "--contact-email, --trigger) is required",
-            "validation_error",
-        )
-    if task_id is None and status is not None and status not in ("failed", "cancelled"):
-        output_error(
-            f"filter-mode --status must be failed or cancelled, got {status!r}",
-            "validation_error",
-        )
-
-
 @task.command("retry")
 @click.argument("task_id", required=False, default=None)
-@scope_option("--workflow-id", "workflow_id", "Filter by workflow (name or ID).")
-@scope_option("--contact-email", "contact_email", "Filter by contact (email or ID).")
-@enum_option("--status", "status", _TASK_STATUSES, "Filter by task status.")
-@enum_option("--trigger", "trigger", _TASK_TRIGGERS, "Filter by task trigger.")
-@click.option(
-    "--overdue",
-    is_flag=True,
-    default=False,
-    help="Only pending tasks with scheduled_at in the past.",
-)
-@touch_option
-@time_window_options("scheduled_at")
+@task_scope_options
 @click.option(
     "--scheduled-at",
     "scheduled_at",
@@ -6985,20 +6959,21 @@ def task_retry(
     """
     from mailpilot.database import (
         get_task,
-        manual_retry_task,
         retry_tasks_matching,
     )
 
-    _validate_task_retry_mode(
-        task_id=task_id,
-        touches=touches,
+    _task_filter_mode(
+        task_id,
+        required=_TASK_RETRY_REQUIRED,
+        allowed_status=_TASK_RETRY_STATUS,
         workflow_id=workflow_id,
         contact_email=contact_email,
-        trigger=trigger,
         status=status,
+        trigger=trigger,
         overdue=overdue,
         since=since,
         until=until,
+        touches=touches,
     )
     scheduled_iso = _parse_future_scheduled_at(scheduled_at)
     with _db(mutate=True) as connection:
@@ -7006,42 +6981,40 @@ def task_retry(
             existing = get_task(connection, task_id)
             if existing is None:
                 output_error(f"task not found: {task_id}", "not_found")
-            if existing.status not in ("failed", "cancelled"):
+            if existing.status not in _TASK_RETRY_STATUS:
                 output_error(
                     f"task not retryable in status {existing.status!r}: {task_id}",
                     "invalid_state",
                 )
+            result = retry_tasks_matching(
+                connection,
+                status=existing.status,
+                scheduled_at=scheduled_iso,
+                dry_run=dry_run,
+                task_id=task_id,
+            )
             if dry_run:
-                result = retry_tasks_matching(
-                    connection,
-                    status=existing.status,
-                    scheduled_at=scheduled_iso,
-                    dry_run=True,
-                    task_id=task_id,
-                )
                 output(
                     {"task_retry": result.model_dump(mode="json")},
                     record_count=result.retried_count,
                 )
                 return
-            reset = manual_retry_task(connection, task_id, scheduled_at=scheduled_iso)
-            if reset is None:
+            if result.retried_count == 0:
                 output_error(
                     f"task not retryable in status {existing.status!r}: {task_id}",
                     "invalid_state",
                 )
+            reset = result.reset_task
+            if reset is None:
+                output_error(
+                    f"task retry did not return updated row: {task_id}",
+                    "internal_error",
+                )
             output_entity("task", reset)
             return
 
-        resolved_workflow_id: str | None = (
-            _resolve_workflow_id(connection, workflow_id)
-            if workflow_id is not None
-            else None
-        )
-        contact_id = (
-            _resolve_contact(connection, contact_email).id
-            if contact_email is not None
-            else None
+        resolved_workflow_id, contact_id = _resolve_task_scope(
+            connection, workflow_id, contact_email
         )
         result = retry_tasks_matching(
             connection,

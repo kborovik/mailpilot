@@ -1157,9 +1157,9 @@ Trigger: inbound OOO / terminal auto-reply / campaign-test left_company path cha
 
 `task retry` resets failed|cancelled only (§V.49). omit `--scheduled-at` + stored scheduled_at still future → keep stored (no now-reset). `--scheduled-at ISO` → that instant. omit + stored past/now → now (fail-retry). `--scheduled-at` past → validation_error. completed|pending → invalid_state. envelope task entity. retry UPDATE fires task_pending_trigger.
 
-Trigger: `src/mailpilot/cli.py` or `src/mailpilot/database.py` `manual_retry_task` changed.
+Trigger: `src/mailpilot/cli.py` or `src/mailpilot/database.py` `retry_tasks_matching` changed.
 - `rg 'scheduled-at' src/mailpilot/cli.py` -> task retry flag present
-- `rg 'manual_retry_task' src/mailpilot/database.py` -> scheduled_at keep-or-override
+- `rg 'retry_tasks_matching' src/mailpilot/database.py` -> scheduled_at keep-or-override
 - `rg 'task retry' src/mailpilot/SKILL.md` -> one-call recipe present
 
 ## §V171 — enrollment-add-scheduled-batch

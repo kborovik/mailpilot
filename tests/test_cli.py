@@ -14300,18 +14300,31 @@ def test_skill_documents_task_cancel_one_call() -> None:
 def test_task_retry_resets_failed_row(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
+    from mailpilot.models import TaskRetryResult
+
     failed = _make_task(status="failed")
     reset = _make_task(status="pending", attempt_count=0)
+    join = TaskRetryResult(
+        retried_count=1, ids=[failed.id], dry_run=False, reset_task=reset
+    )
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_task", return_value=failed),
-        patch("mailpilot.database.manual_retry_task", return_value=reset) as mock_retry,
+        patch("mailpilot.database.get_task", return_value=failed) as mock_get,
+        patch(
+            "mailpilot.database.retry_tasks_matching", return_value=join
+        ) as mock_retry,
     ):
         result = runner.invoke(main, ["task", "retry", failed.id])
 
     assert result.exit_code == 0, result.output
-    mock_retry.assert_called_once_with(mock_connection, failed.id, scheduled_at=None)
+    mock_get.assert_called_once_with(mock_connection, failed.id)
+    mock_retry.assert_called_once()
+    kwargs = mock_retry.call_args.kwargs
+    assert kwargs["task_id"] == failed.id
+    assert kwargs["status"] == "failed"
+    assert kwargs["scheduled_at"] is None
+    assert kwargs["dry_run"] is False
     data = json.loads(result.output)
     assert data["task"]["status"] == "pending"
     assert data["task"]["attempt_count"] == 0
@@ -14340,11 +14353,12 @@ def test_task_retry_pending_invalid_state(
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_task", return_value=pending),
-        patch("mailpilot.database.manual_retry_task", return_value=None),
+        patch("mailpilot.database.retry_tasks_matching") as mock_retry,
     ):
         result = runner.invoke(main, ["task", "retry", pending.id])
 
     assert result.exit_code == 1
+    mock_retry.assert_not_called()
     data = json.loads(result.output)
     assert data["error"] == "invalid_state"
 
@@ -14359,9 +14373,11 @@ def test_task_retry_completed_invalid_state(
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_task", return_value=completed),
-        patch("mailpilot.database.manual_retry_task", return_value=None),
+        patch("mailpilot.database.retry_tasks_matching") as mock_retry,
     ):
         result = runner.invoke(main, ["task", "retry", completed.id])
+
+    mock_retry.assert_not_called()
 
     assert result.exit_code == 1
     data = json.loads(result.output)
@@ -14382,14 +14398,21 @@ def test_task_retry_passes_scheduled_at(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
     """§V.170: --scheduled-at is forwarded as a future ISO instant."""
+    from mailpilot.models import TaskRetryResult
+
     failed = _make_task(status="failed")
     reset = _make_task(status="pending", attempt_count=0)
+    join = TaskRetryResult(
+        retried_count=1, ids=[failed.id], dry_run=False, reset_task=reset
+    )
     when = "2099-08-17T13:01:49-04:00"
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_task", return_value=failed),
-        patch("mailpilot.database.manual_retry_task", return_value=reset) as mock_retry,
+        patch(
+            "mailpilot.database.retry_tasks_matching", return_value=join
+        ) as mock_retry,
     ):
         result = runner.invoke(
             main, ["task", "retry", failed.id, "--scheduled-at", when]
@@ -14397,13 +14420,62 @@ def test_task_retry_passes_scheduled_at(
 
     assert result.exit_code == 0, result.output
     mock_retry.assert_called_once()
-    _args, kwargs = mock_retry.call_args
+    kwargs = mock_retry.call_args.kwargs
+    assert kwargs["task_id"] == failed.id
     assert kwargs["scheduled_at"] is not None
     parsed = datetime.fromisoformat(kwargs["scheduled_at"])
     assert parsed == datetime.fromisoformat(when)
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["record_count"] == 1
+
+
+def test_task_retry_id_mode_uses_update_snapshot_not_later_select(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """Id-mode envelope is the UPDATE snapshot, not a post-commit get_task."""
+    from mailpilot.models import TaskRetryResult
+
+    failed = _make_task(status="failed")
+    snapshot = _make_task(status="pending", attempt_count=0)
+    later = _make_task(status="completed")
+    join = TaskRetryResult(
+        retried_count=1, ids=[failed.id], dry_run=False, reset_task=snapshot
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_task", side_effect=[failed, later]),
+        patch("mailpilot.database.retry_tasks_matching", return_value=join),
+    ):
+        result = runner.invoke(main, ["task", "retry", failed.id])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["task"]["status"] == "pending"
+    assert data["task"]["attempt_count"] == 0
+
+
+def test_task_retry_id_mode_missing_snapshot_is_internal_error(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """retried_count==1 with no RETURNING row is internal_error, not not_found."""
+    from mailpilot.models import TaskRetryResult
+
+    failed = _make_task(status="failed")
+    join = TaskRetryResult(retried_count=1, ids=[failed.id], dry_run=False)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_task", return_value=failed),
+        patch("mailpilot.database.retry_tasks_matching", return_value=join),
+    ):
+        result = runner.invoke(main, ["task", "retry", failed.id])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "internal_error"
+    assert data["ok"] is False
 
 
 def test_task_retry_past_scheduled_at_validation_error(
@@ -14415,7 +14487,7 @@ def test_task_retry_past_scheduled_at_validation_error(
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_task", return_value=failed),
-        patch("mailpilot.database.manual_retry_task") as mock_retry,
+        patch("mailpilot.database.retry_tasks_matching") as mock_retry,
     ):
         result = runner.invoke(
             main,
@@ -14508,6 +14580,7 @@ def test_task_retry_filter_mode_envelope(
         {"domain": "b.com", "count": 1},
     ]
     assert data["task_retry"]["dry_run"] is False
+    assert "reset_task" not in data["task_retry"]
     assert "task" not in data
 
 
@@ -14542,7 +14615,6 @@ def test_task_retry_task_id_plus_filters_validation_error(
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.manual_retry_task") as mock_id,
         patch("mailpilot.database.retry_tasks_matching") as mock_filter,
     ):
         result = runner.invoke(
@@ -14551,7 +14623,6 @@ def test_task_retry_task_id_plus_filters_validation_error(
         )
 
     assert result.exit_code == 1
-    mock_id.assert_not_called()
     mock_filter.assert_not_called()
     data = json.loads(result.output)
     assert data["error"] == "validation_error"
@@ -14699,7 +14770,6 @@ def test_task_retry_dry_run_preview(
         patch(
             "mailpilot.database.retry_tasks_matching", return_value=join
         ) as mock_retry,
-        patch("mailpilot.database.manual_retry_task") as mock_id,
     ):
         result = runner.invoke(
             main,
@@ -14715,7 +14785,6 @@ def test_task_retry_dry_run_preview(
         )
 
     assert result.exit_code == 0, result.output
-    mock_id.assert_not_called()
     assert mock_retry.call_args.kwargs["dry_run"] is True
     data = json.loads(result.output)
     assert data["task_retry"]["dry_run"] is True
@@ -14742,12 +14811,10 @@ def test_task_retry_dry_run_with_task_id(
         patch(
             "mailpilot.database.retry_tasks_matching", return_value=join
         ) as mock_retry,
-        patch("mailpilot.database.manual_retry_task") as mock_id,
     ):
         result = runner.invoke(main, ["task", "retry", failed.id, "--dry-run"])
 
     assert result.exit_code == 0, result.output
-    mock_id.assert_not_called()
     mock_retry.assert_called_once()
     assert mock_retry.call_args.kwargs["dry_run"] is True
     assert mock_retry.call_args.kwargs["task_id"] == failed.id
@@ -14779,6 +14846,25 @@ def test_task_retry_help_documents_touch(runner: CliRunner) -> None:
     assert "TASK_ID" in result.output or "task_id" in result.output.lower()
     assert "§V." not in result.output
     assert "§T." not in result.output
+
+
+def test_task_list_cancel_retry_share_scope_options() -> None:
+    """§V.180: list, cancel, and retry share the task filter stack."""
+    from mailpilot.cli import task_cancel, task_list, task_retry
+
+    shared = {
+        "workflow_id",
+        "contact_email",
+        "status",
+        "trigger",
+        "overdue",
+        "touches",
+        "since",
+        "until",
+    }
+    for cmd in (task_list, task_cancel, task_retry):
+        names = {p.name for p in cmd.params if p.name is not None}
+        assert shared <= names
 
 
 def test_task_retry_live_filter_mode(

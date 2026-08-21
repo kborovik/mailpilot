@@ -34,6 +34,11 @@ DIRECTIONS = ["inbound", "outbound"]
 # Company list|search sort keys (closed Choice set).
 COMPANY_SORT_KEYS = ["name", "domain", "created_at", "contact_count"]
 
+# task.status CHECK set + context.trigger taxonomy (§V.26), mirrored so
+# Choice rejects out-of-set values at parse time.
+TASK_STATUSES = ["pending", "completed", "failed", "cancelled"]
+TASK_TRIGGERS = ["enrollment_run", "enrollment_schedule", "task", "email", "manual"]
+
 _Decorator = Callable[[Callable[..., Any]], Callable[..., Any]]
 
 
@@ -143,6 +148,33 @@ def touch_option(fn: Callable[..., Any]) -> Callable[..., Any]:
             "Touch is read from task context, not description."
         ),
     )(fn)
+
+
+def task_scope_options(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Add the shared ``task list|cancel|retry`` filter stack (§V.180)."""
+    fn = time_window_options("scheduled_at")(fn)
+    fn = touch_option(fn)
+    fn = click.option(
+        "--overdue",
+        is_flag=True,
+        default=False,
+        help="Only pending tasks with scheduled_at in the past.",
+    )(fn)
+    fn = enum_option("--trigger", "trigger", TASK_TRIGGERS, "Filter by task trigger.")(
+        fn
+    )
+    fn = enum_option("--status", "status", TASK_STATUSES, "Filter by task status.")(fn)
+    fn = scope_option(
+        "--contact-email",
+        "contact_email",
+        "Filter by contact (email or ID).",
+    )(fn)
+    fn = scope_option(
+        "--workflow-id",
+        "workflow_id",
+        "Filter by workflow (name or ID).",
+    )(fn)
+    return fn
 
 
 def time_window_options(column: str) -> _Decorator:

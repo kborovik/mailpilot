@@ -701,7 +701,8 @@ class TaskRetryResult(BaseModel):
     when omitted (per-row keep-future / now per §V.170). ``companies``
     groups selected rows by contact company domain. ``record_count`` on
     the CLI envelope is ``retried_count``. ``dry_run`` is true when no
-    writes were applied.
+    writes were applied. ``reset_task`` is the id-mode ``RETURNING *``
+    snapshot and is excluded from the join envelope dump.
     """
 
     retried_count: int
@@ -709,6 +710,7 @@ class TaskRetryResult(BaseModel):
     scheduled_at: str | None = None
     companies: list[TaskRetryCompany] = Field(default_factory=list)
     dry_run: bool = False
+    reset_task: Task | None = Field(default=None, exclude=True)
 
 
 class TaskStats(BaseModel):
