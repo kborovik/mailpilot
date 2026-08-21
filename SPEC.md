@@ -155,7 +155,7 @@ V99: every path `.grok/skills/**` cites resolves on disk; cited-but-absent = err
 V100: skill-body progressive-disclosure — live procedure inline; rarely-loaded material + sibling shared prose in `references/*.md`; body >~500 lines -> extract — recipe → .spec/check-extras.md §V100
 V101: skill-body obligation vocabulary — MUST/required never bare ` ! ` as must; scope `.grok/skills/**` prose — → .spec/check-extras.md §V101
 V102: project-skill frontmatter hygiene — allowed-tools + argument-hint required; zero-body-use grant banned — → .spec/check-extras.md §V102
-V103: workflow defs; name=kebab stem; --file recurse `**/*.toml`; import-only def fields; per-row `{action,in_sync,catalog_hash,row_hash,changed}`; in_sync = live-row SHA-256 vs catalog (same hash as §V.134); TOML-only — → .spec/check-extras.md §V103
+V103: workflow defs; name=kebab stem; --file recurse `**/*.toml`; import-only def fields; per-row `{action,in_sync,catalog_hash,row_hash,changed}`; in_sync = live-row SHA-256 vs catalog (same hash as §V.134; stored columns as-is, no re-default); TOML-only — → .spec/check-extras.md §V103
 V104: reply-test reply-loop guard — outbound@lab5.ca has no active workflow (test precondition) — → .spec/check-extras.md §V104
 V105: in-scope cases graded deterministically, false-PASS-at-worst; atomicity enforced test-time by allowlist — → .spec/check-extras.md §V105
 V106: Drive search whitespace-tokenized OR-joined fullText predicates; never whole-phrase — → .spec/check-extras.md §V106
@@ -290,6 +290,7 @@ T298|x|impl §V.140(∆) — company_update @_company_profile_options + _profile
 T299|x|impl §V.178(+) — `_company_scope_clauses` used by list+export+search companies; CLI `_company_cohort_kwargs` tag ids+include-disabled; `--no-tag` via `_resolve_tag_ids`; EmailSummary SELECT one fragment; review calls `list_emails`; workflow+tag summary SELECTs share column list each; export unlimited ORDER BY domain + tracker dicts; existing list/export/search tests (#256)|V178,V145,V116,V7,V174
 T300|x|impl §V.79(∆)+§V.83(∆)+§V.85(∆)+§V.92(∆)+§V.115(∆)+§V.151(∆) — drop unused ClassificationError+CooldownError in exceptions.py; drop has_inbound bool wrapper (tests call list helper); drop pass-through renderer strong/emphasis/table_*; signature render AccountSignature via account_signature(); Settings field-literal defaults drop DEFAULT_* + get_field_value stub; contact|email|workflow search @limit_option; contact disable unchanged (#257)|V79,V83,V85,V92,V115,V151
 T301|x|impl §V.103 + §I — import in_sync from live written row (same hash as check); envelope catalog_hash+row_hash; remaining-delta changed when false; drifted TOML apply → in_sync true + check --file same in_sync; SKILL one-call drops check/import/check (#271)|V103,V134,V4,B143,I.cli
+T302|.|impl §V.103 — `_persisted_wording_hash` hashes stored columns as-is (no second defaulting); remaining/changed same equality as hash; test empty-theme live row import in_sync iff check in_sync|V103,V134,B144
 
 ## §B BUGS
 
@@ -348,3 +349,4 @@ B140|2026-08-17|OOO year-less month-day/range: start ≤ now → next year (week
 B141|2026-08-18|run `_build_model` empty `xai_api_key` ValueError inside execute_task → every due T1 marked failed|V47
 B142|2026-08-18|OOO year-less same-day `on <Month> <D>`: named day = today → next year|V169
 B143|2026-08-21|workflow import action=updated still in_sync false; hashed projection not live row; check still out_of_sync|V103
+B144|2026-08-21|import live-row hash re-applies catalog defaults; check hashes stored columns as-is; same row two hashes|V103
