@@ -208,6 +208,141 @@ def _write_minimal_workflow_toml(path: pathlib.Path, name: str) -> None:
     path.write_text(f'name = "{name}"\ntemplate = "outbound-general"\n')
 
 
+def test_workflow_import_drifted_complete_def_in_sync_matches_check(
+    runner: CliRunner,
+    database_connection: psycopg.Connection[dict[str, Any]],
+    tmp_path: pathlib.Path,
+) -> None:
+    """§V.103/§B.143: drifted complete TOML apply → in_sync; same --file check in_sync."""
+    account = make_test_account(database_connection)
+    flow = create_workflow(
+        database_connection,
+        name="demo-outreach",
+        template="outbound-general",
+        account_id=account.id,
+        theme="blue",
+    )
+    assert flow is not None
+    update_workflow(
+        database_connection,
+        flow.id,
+        goal="Old goal",
+        instructions="Old body",
+        touches=4,
+        touch_interval_days=3,
+    )
+
+    toml_path = tmp_path / "demo-outreach.toml"
+    toml_path.write_text(
+        'name = "demo-outreach"\n'
+        'template = "outbound-general"\n'
+        'theme = "green"\n'
+        "touches = 3\n"
+        "touch_interval_days = 7\n"
+        'goal = "New goal"\n'
+        "instructions = '''\nNew body'''\n"
+    )
+    imported = _invoke(
+        runner,
+        database_connection,
+        [
+            "workflow",
+            "import",
+            "--account-email",
+            account.email,
+            "--file",
+            str(toml_path),
+        ],
+    )
+    row = imported["workflows"][0]
+    assert row["action"] == "updated"
+    assert row["in_sync"] is True
+    assert row["catalog_hash"] == row["row_hash"]
+    assert row["changed"]["goal"] == "New goal"
+    assert "New body" in row["changed"]["instructions"]
+
+    live = get_workflow_by_name(database_connection, "demo-outreach")
+    assert live is not None
+    assert live.goal == "New goal"
+    assert live.touches == 3
+    assert live.touch_interval_days == 7
+
+    checked = _invoke(
+        runner,
+        database_connection,
+        ["workflow", "check", "--file", str(toml_path)],
+    )
+    check_row = checked["workflow_check"]["workflows"][0]
+    assert check_row["state"] == "in_sync"
+    assert check_row["catalog_hash"] == row["catalog_hash"]
+    assert check_row["row_hash"] == row["row_hash"]
+
+
+def test_workflow_import_t1_only_toml_clears_cadence_and_matches_check(
+    runner: CliRunner,
+    database_connection: psycopg.Connection[dict[str, Any]],
+    tmp_path: pathlib.Path,
+) -> None:
+    """§V.103/§B.143: touches=1 without interval persists single-touch; check in_sync."""
+    account = make_test_account(database_connection)
+    flow = create_workflow(
+        database_connection,
+        name="demo-outreach",
+        template="outbound-general",
+        account_id=account.id,
+        theme="slate",
+    )
+    assert flow is not None
+    update_workflow(
+        database_connection,
+        flow.id,
+        goal="Old goal",
+        instructions="Old body",
+        theme="slate",
+        touches=4,
+        touch_interval_days=3,
+    )
+
+    toml_path = tmp_path / "demo-outreach.toml"
+    toml_path.write_text(
+        'name = "demo-outreach"\n'
+        'template = "outbound-general"\n'
+        'theme = "slate"\n'
+        "touches = 1\n"
+        'goal = "T1 only"\n'
+        "instructions = '''\nReady copy.'''\n"
+    )
+    imported = _invoke(
+        runner,
+        database_connection,
+        [
+            "workflow",
+            "import",
+            "--account-email",
+            account.email,
+            "--file",
+            str(toml_path),
+        ],
+    )
+    row = imported["workflows"][0]
+    assert row["action"] == "updated"
+    assert row["in_sync"] is True
+    assert row["catalog_hash"] == row["row_hash"]
+
+    live = get_workflow_by_name(database_connection, "demo-outreach")
+    assert live is not None
+    assert live.touches is None
+    assert live.touch_interval_days is None
+    assert live.goal == "T1 only"
+
+    checked = _invoke(
+        runner,
+        database_connection,
+        ["workflow", "check", "--file", str(toml_path)],
+    )
+    assert checked["workflow_check"]["workflows"][0]["state"] == "in_sync"
+
+
 def test_workflow_check_slug_dir_excludes_other_account_workflows(
     runner: CliRunner,
     database_connection: psycopg.Connection[dict[str, Any]],

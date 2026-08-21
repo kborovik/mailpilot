@@ -5187,26 +5187,15 @@ def _import_field_excerpt(value: object) -> str:
     return f"{text[:_IMPORT_EXCERPT_HEAD]}...{text[-_IMPORT_EXCERPT_TAIL:]}"
 
 
-def _projected_import_def(entry: dict[str, Any], current: Any | None) -> dict[str, Any]:
-    """Def fields as import would persist them, for the post-apply hash."""
-
-    def merged(field: str, default: object) -> object:
-        if field in entry:
-            return entry[field]
-        if current is not None:
-            return getattr(current, field)
-        return default
-
-    theme = merged("theme", "blue")
-    goal = merged("goal", "")
-    instructions = merged("instructions", "")
+def _row_def_payload(row: Any) -> dict[str, Any]:
+    """Live workflow def fields for the post-apply wording hash (§V.103)."""
     return {
-        "template": str(entry.get("template") or (current.template if current else "")),
-        "theme": str(theme or "blue"),
-        "goal": str(goal or ""),
-        "instructions": str(instructions or ""),
-        "touches": merged("touches", None),
-        "touch_interval_days": merged("touch_interval_days", None),
+        "template": row.template,
+        "theme": row.theme,
+        "goal": row.goal,
+        "instructions": row.instructions,
+        "touches": row.touches,
+        "touch_interval_days": row.touch_interval_days,
     }
 
 
@@ -5214,20 +5203,30 @@ def _import_applied_preview(
     name: str,
     action: str,
     entry: dict[str, Any],
-    current: Any | None,
-    changed: dict[str, object],
+    written: Any,
+    mutated: dict[str, object],
 ) -> dict[str, object]:
-    """Per-row import preview: action + post-apply sync + changed excerpts."""
-    from mailpilot.database import import_row_in_sync
+    """Per-row import preview from the live written row (§V.103/§B.143)."""
+    from mailpilot.database import workflow_import_sync_report
 
-    projected = _projected_import_def(entry, current)
-    in_sync = import_row_in_sync(entry, projected)
+    report = workflow_import_sync_report(entry, _row_def_payload(written))
+    in_sync = bool(report["in_sync"])
+    remaining = report["remaining"]
+    changed_src: dict[str, object]
+    if in_sync:
+        changed_src = mutated
+    elif isinstance(remaining, dict):
+        changed_src = remaining
+    else:
+        changed_src = {}
     return {
         "name": name,
         "action": action,
         "in_sync": in_sync,
+        "catalog_hash": report["catalog_hash"],
+        "row_hash": report["row_hash"],
         "changed": {
-            key: _import_field_excerpt(value) for key, value in changed.items()
+            key: _import_field_excerpt(value) for key, value in changed_src.items()
         },
     }
 
@@ -5236,21 +5235,23 @@ def _workflow_import_extras(entry: dict[str, Any]) -> dict[str, object]:
     """Def fields an import writes onto a freshly created workflow (§V.103).
 
     Beyond ``name`` / ``template`` / ``theme`` / account set at create time:
-    ``goal`` and ``instructions`` when non-empty, plus the cadence pair
-    ``touches`` / ``touch_interval_days`` when the def carries them (§V.136). The
-    schema CHECK rejects a half-configured cadence, surfacing as a per-row import
-    error.
+    ``goal`` and ``instructions`` when non-empty, plus the cadence pair when
+    the catalog projection carries both ints (§V.136). Incomplete cadence
+    (one side omitted) persists as single-touch NULL/NULL, matching check.
     """
+    from mailpilot.database import catalog_def_fields
+
+    catalog = catalog_def_fields(entry)
     extras: dict[str, object] = {}
-    goal = entry.get("goal")
-    instructions = entry.get("instructions")
+    goal = catalog["goal"]
+    instructions = catalog["instructions"]
     if goal:
         extras["goal"] = goal
     if instructions:
         extras["instructions"] = instructions
-    for cadence_field in ("touches", "touch_interval_days"):
-        if cadence_field in entry:
-            extras[cadence_field] = entry[cadence_field]
+    if catalog["touches"] is not None:
+        extras["touches"] = catalog["touches"]
+        extras["touch_interval_days"] = catalog["touch_interval_days"]
     return extras
 
 
@@ -5283,11 +5284,14 @@ def _import_workflow_create(
             "message": f"workflow {name!r} already exists (name is globally unique)",
         }
     extras = _workflow_import_extras(entry)
+    written = created
     if extras:
-        update_workflow(connection, created.id, **extras)
+        updated = update_workflow(connection, created.id, **extras)
+        if updated is not None:
+            written = updated
     activated = bool(entry.get("goal") and entry.get("instructions"))
     if activated:
-        activate_workflow(connection, created.id)
+        written = activate_workflow(connection, created.id)
     preview_changed: dict[str, object] = {"theme": entry.get("theme") or "blue"}
     preview_changed.update(extras)
     event_changed = ["name", "template", "account_id", "theme", *extras.keys()]
@@ -5300,22 +5304,21 @@ def _import_workflow_create(
         name=name,
         changed=event_changed,
     )
-    return _import_applied_preview(name, "created", entry, None, preview_changed)
+    return _import_applied_preview(name, "created", entry, written, preview_changed)
 
 
 def _import_workflow_update(
     connection: Any, current: Any, entry: dict[str, Any]
 ) -> dict[str, object]:
-    from mailpilot.database import update_workflow
+    from mailpilot.database import catalog_def_fields, update_workflow
     from mailpilot.operator_log import operator_event
 
+    catalog = catalog_def_fields(entry)
     diff: dict[str, object] = {}
     for field in _WORKFLOW_IMPORT_UPDATABLE:
-        if field not in entry:
-            continue
-        payload_value = entry[field] if entry[field] is not None else ""
-        if getattr(current, field) != payload_value:
-            diff[field] = payload_value
+        catalog_value = catalog[field]
+        if getattr(current, field) != catalog_value:
+            diff[field] = catalog_value
     if not diff:
         operator_event(
             "workflow.import",
@@ -5325,7 +5328,7 @@ def _import_workflow_update(
             changed=[],
         )
         return _import_applied_preview(current.name, "unchanged", entry, current, {})
-    update_workflow(connection, current.id, **diff)
+    written = update_workflow(connection, current.id, **diff) or current
     operator_event(
         "workflow.import",
         entity_id=current.id,
@@ -5333,7 +5336,7 @@ def _import_workflow_update(
         name=current.name,
         changed=list(diff.keys()),
     )
-    return _import_applied_preview(current.name, "updated", entry, current, diff)
+    return _import_applied_preview(current.name, "updated", entry, written, diff)
 
 
 def _validate_workflow_import_name(name: str, stem: str) -> str | None:
@@ -5519,12 +5522,13 @@ def workflow_import(account_email: str | None, file: str | None) -> None:
     ``template_immutable`` error, and ``status`` is never written by import.
 
     Applied rows carry ``action`` (created / updated / unchanged), ``in_sync``
-    (post-apply wording-hash match), and ``changed`` (mutated def fields with
-    a short excerpt). The terminal envelope aggregates: top-level ``applied``
-    and ``rejected`` counts on every import envelope; zero applied rows -> an
-    ``import_failed`` error envelope on stderr (per-row rows inlined) and exit
-    1, so scripts gating on the exit code never mistake a no-op import for
-    success.
+    (live-row wording-hash match vs the catalog, same hash as check),
+    ``catalog_hash`` / ``row_hash``, and ``changed`` (mutated def-field
+    excerpts when in sync; remaining differing keys when not). The terminal
+    envelope aggregates: top-level ``applied`` and ``rejected`` counts on
+    every import envelope; zero applied rows -> an ``import_failed`` error
+    envelope on stderr (per-row rows inlined) and exit 1, so scripts gating
+    on the exit code never mistake a no-op import for success.
     """
     from mailpilot.database import (
         list_workflows_full,

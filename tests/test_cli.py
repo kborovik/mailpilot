@@ -7452,23 +7452,46 @@ def _write_workflow_toml(path: pathlib.Path, payload: dict[str, Any]) -> None:
 
     Single-line fields use TOML basic strings; ``instructions`` uses a multi-line
     literal string, mirroring the catalog convention ``workflow export`` emits.
+    Cadence ints emit as bare TOML integers when present.
     """
     lines: list[str] = []
     for key in ("name", "template", "theme", "goal"):
         if key in payload:
-            value = payload[key].replace("\\", "\\\\").replace('"', '\\"')
+            value = str(payload[key]).replace("\\", "\\\\").replace('"', '\\"')
             lines.append(f'{key} = "{value}"')
+    for key in ("touches", "touch_interval_days"):
+        if key in payload and payload[key] is not None:
+            lines.append(f"{key} = {payload[key]}")
     body = "\n".join(lines)
     if "instructions" in payload:
         body += f"\ninstructions = '''\n{payload['instructions']}'''"
     path.write_text(body + "\n")
 
 
+def _written_workflow(
+    payload: dict[str, Any] | None = None, **overrides: Any
+) -> Workflow:
+    """Workflow matching a catalog payload (post-apply live row for import tests)."""
+    data = _import_payload() if payload is None else payload
+    fields: dict[str, Any] = {
+        "name": data["name"],
+        "template": data["template"],
+        "theme": data.get("theme", "blue"),
+        "goal": data.get("goal", ""),
+        "instructions": data.get("instructions", ""),
+        "touches": data.get("touches"),
+        "touch_interval_days": data.get("touch_interval_days"),
+        "status": "active",
+    }
+    fields.update(overrides)
+    return _make_workflow(**fields)
+
+
 def test_workflow_import_create_path_activates(
     runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
 ) -> None:
     account = _make_account()
-    created = _make_workflow(theme="green")
+    created = _written_workflow()
     file = tmp_path / "demo-outreach.toml"
     _write_workflow_toml(file, _import_payload())
     with (
@@ -7519,6 +7542,8 @@ def test_workflow_import_create_path_activates(
     assert created_row["name"] == "demo-outreach"
     assert created_row["action"] == "created"
     assert created_row["in_sync"] is True
+    assert created_row["catalog_hash"] == created_row["row_hash"]
+    assert len(created_row["catalog_hash"]) == 64
     assert created_row["changed"]["goal"] == "Book demos"
     assert "sales rep" in created_row["changed"]["instructions"]
     assert data["applied"] == 1
@@ -7569,15 +7594,14 @@ def test_workflow_import_update_path_diff_only(
         theme="blue",
         status="active",
     )
-    file = tmp_path / "demo-outreach.toml"
-    _write_workflow_toml(
-        file,
-        _import_payload(
-            goal="New goal",
-            instructions="Old instructions",
-            theme="blue",
-        ),
+    payload = _import_payload(
+        goal="New goal",
+        instructions="Old instructions",
+        theme="blue",
     )
+    file = tmp_path / "demo-outreach.toml"
+    _write_workflow_toml(file, payload)
+    written = _written_workflow(payload)
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
@@ -7585,7 +7609,7 @@ def test_workflow_import_update_path_diff_only(
         patch("mailpilot.database.list_workflows_full", return_value=[existing]),
         patch("mailpilot.database.create_workflow") as mock_create,
         patch(
-            "mailpilot.database.update_workflow", return_value=existing
+            "mailpilot.database.update_workflow", return_value=written
         ) as mock_update,
         patch("mailpilot.database.activate_workflow") as mock_activate,
     ):
@@ -7610,7 +7634,64 @@ def test_workflow_import_update_path_diff_only(
     assert updated_row["name"] == "demo-outreach"
     assert updated_row["action"] == "updated"
     assert updated_row["in_sync"] is True
+    assert updated_row["catalog_hash"] == updated_row["row_hash"]
     assert updated_row["changed"] == {"goal": "New goal"}
+
+
+def test_workflow_import_remaining_delta_when_live_row_still_drifts(
+    runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
+) -> None:
+    """§V.103/§B.143: in_sync false → catalog_hash/row_hash + remaining keys."""
+    account = _make_account()
+    existing = _make_workflow(
+        name="demo-outreach",
+        goal="Old goal",
+        instructions="Old instructions",
+        theme="blue",
+        status="active",
+        touches=3,
+        touch_interval_days=7,
+    )
+    payload = _import_payload(
+        goal="New goal",
+        instructions="New instructions",
+        theme="blue",
+        touches=1,
+    )
+    file = tmp_path / "demo-outreach.toml"
+    _write_workflow_toml(file, payload)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.database.list_workflows_full", return_value=[existing]),
+        patch("mailpilot.database.create_workflow") as mock_create,
+        patch("mailpilot.database.update_workflow", return_value=existing),
+        patch("mailpilot.database.activate_workflow"),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "import",
+                "--account-email",
+                _ACCOUNT_ID,
+                "--file",
+                str(file),
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_create.assert_not_called()
+    data = json.loads(result.output)
+    row = data["workflows"][0]
+    assert row["action"] == "updated"
+    assert row["in_sync"] is False
+    assert row["catalog_hash"] != row["row_hash"]
+    assert "goal" in row["changed"]
+    assert "instructions" in row["changed"]
+    assert "touches" in row["changed"]
+    assert "touch_interval_days" in row["changed"]
 
 
 def test_workflow_import_unchanged_no_mutation(
@@ -7656,6 +7737,7 @@ def test_workflow_import_unchanged_no_mutation(
     assert unchanged_row["name"] == "demo-outreach"
     assert unchanged_row["action"] == "unchanged"
     assert unchanged_row["in_sync"] is True
+    assert unchanged_row["catalog_hash"] == unchanged_row["row_hash"]
     assert unchanged_row["changed"] == {}
 
 
@@ -7687,10 +7769,25 @@ def test_workflow_import_template_immutable_row_error(
         patch("mailpilot.database.list_workflows_full", return_value=[existing]),
         patch(
             "mailpilot.database.create_workflow",
-            return_value=_make_workflow(name="other-workflow"),
+            return_value=_written_workflow(
+                _import_payload(name="other-workflow", template="inbound-general"),
+                type="inbound",
+            ),
         ) as mock_create,
-        patch("mailpilot.database.update_workflow", return_value=existing),
-        patch("mailpilot.database.activate_workflow"),
+        patch(
+            "mailpilot.database.update_workflow",
+            return_value=_written_workflow(
+                _import_payload(name="other-workflow", template="inbound-general"),
+                type="inbound",
+            ),
+        ),
+        patch(
+            "mailpilot.database.activate_workflow",
+            return_value=_written_workflow(
+                _import_payload(name="other-workflow", template="inbound-general"),
+                type="inbound",
+            ),
+        ),
     ):
         result = runner.invoke(
             main,
@@ -7870,22 +7967,35 @@ def test_workflow_import_recurses_campaigns_tree(
 ) -> None:
     """§V.103: --file campaigns/ imports campaigns/<slug>/workflows/<slug>.toml."""
     account = _make_account()
-    created = _make_workflow()
-    for slug in ("slug-a", "slug-b"):
+    payloads = {
+        slug: _import_payload(name=slug, goal=f"Goal {slug}")
+        for slug in ("slug-a", "slug-b")
+    }
+    written = {
+        slug: _written_workflow(payload, id=f"01234567-0000-7000-0000-00000000000{i}")
+        for i, (slug, payload) in enumerate(payloads.items(), start=1)
+    }
+    for slug, payload in payloads.items():
         nested = tmp_path / "campaigns" / slug / "workflows"
         nested.mkdir(parents=True)
-        _write_workflow_toml(
-            nested / f"{slug}.toml",
-            _import_payload(name=slug, goal=f"Goal {slug}"),
-        )
+        _write_workflow_toml(nested / f"{slug}.toml", payload)
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_account", return_value=account),
         patch("mailpilot.database.list_workflows_full", return_value=[]),
-        patch("mailpilot.database.create_workflow", return_value=created),
-        patch("mailpilot.database.update_workflow", return_value=created),
-        patch("mailpilot.database.activate_workflow", return_value=created),
+        patch(
+            "mailpilot.database.create_workflow",
+            side_effect=[written["slug-a"], written["slug-b"]],
+        ),
+        patch(
+            "mailpilot.database.update_workflow",
+            side_effect=[written["slug-a"], written["slug-b"]],
+        ),
+        patch(
+            "mailpilot.database.activate_workflow",
+            side_effect=[written["slug-a"], written["slug-b"]],
+        ),
     ):
         result = runner.invoke(
             main,
@@ -7923,18 +8033,19 @@ def test_workflow_import_preview_skips_view(
     ready_copy = "**T1 ready copy: book the 20-minute demo this week.**"
     # Long prefix so the excerpt must keep a tail to stay useful.
     prefix = "Keep the shared preamble. " * 20
+    payload = _import_payload(instructions=prefix + ready_copy)
     file = tmp_path / "demo-outreach.toml"
-    _write_workflow_toml(
-        file,
-        _import_payload(instructions=prefix + ready_copy),
-    )
+    _write_workflow_toml(file, payload)
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_account", return_value=account),
         patch("mailpilot.database.list_workflows_full", return_value=[existing]),
         patch("mailpilot.database.create_workflow") as mock_create,
-        patch("mailpilot.database.update_workflow", return_value=existing),
+        patch(
+            "mailpilot.database.update_workflow",
+            return_value=_written_workflow(payload),
+        ),
         patch("mailpilot.database.activate_workflow"),
     ):
         result = runner.invoke(
@@ -7966,6 +8077,7 @@ def test_workflow_import_help_recurse_no_spec_cite(runner: CliRunner) -> None:
     assert result.exit_code == 0
     assert "recurs" in result.output.lower()
     assert "in_sync" in result.output or "excerpt" in result.output.lower()
+    assert "catalog_hash" in result.output or "row_hash" in result.output
     assert "§V." not in result.output
     assert "§T." not in result.output
 
@@ -7978,7 +8090,11 @@ def test_skill_documents_workflow_import_one_call() -> None:
     assert "Import campaign workflows (one call)" in body
     assert "workflow import --account-email <ACCOUNT_REF> --file campaigns/" in body
     assert "in_sync" in body
+    assert "catalog_hash" in body
+    assert "row_hash" in body
     assert "workflow view" in body
+    assert "Do not follow with" in body
+    assert "workflow check" in body
     assert "§V." not in body
     assert "§T." not in body
 
@@ -8018,7 +8134,15 @@ def test_workflow_import_directory_parse_error_continues_batch(
 ) -> None:
     """§V.63/§V.103: a malformed file in a dir is a per-row error; batch continues."""
     account = _make_account()
-    created = _make_workflow(name="good")
+    created = _written_workflow(
+        {
+            "name": "good",
+            "template": "outbound-general",
+            "theme": "green",
+            "goal": "o",
+            "instructions": "i",
+        }
+    )
     catalog = tmp_path / "catalog"
     catalog.mkdir()
     (catalog / "bad.toml").write_text("template = =\n")

@@ -3523,41 +3523,90 @@ def _compute_workflow_wording_hash(
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _catalog_wording_hash(entry: dict[str, Any]) -> str:
-    """Hash a parsed catalog def the way an import would persist it (§V.134).
+def catalog_def_fields(entry: dict[str, Any]) -> dict[str, Any]:
+    """Def fields as import persists them and check hashes them (§V.103/§V.134).
 
-    Applies the same field defaults ``workflow import`` applies (theme -> blue,
-    goal/instructions -> empty string) so an unchanged def hashes equal to the
-    row it produced. ``template`` defaults to empty so a malformed def without
-    one simply fails to match any row rather than raising. The cadence pair has
-    no default -- an omitted ``touches`` / ``touch_interval_days`` is None,
-    matching a single-touch row's NULL columns (§V.136).
+    Defaults match ``workflow import`` (theme -> blue, goal/instructions ->
+    empty string). ``template`` defaults to empty so a malformed def without
+    one simply fails to match any row rather than raising. Cadence is a pair:
+    both ints persist as-is; either omitted or non-int collapses to
+    ``(None, None)`` so the hash matches a legal single-touch row (schema
+    CHECK forbids ``touches`` without ``touch_interval_days``). File is the
+    sole source of truth -- omitted cadence is single-touch, not "keep live".
     """
+    touches_raw = entry.get("touches")
+    interval_raw = entry.get("touch_interval_days")
+    if isinstance(touches_raw, int) and isinstance(interval_raw, int):
+        touches: int | None = touches_raw
+        interval: int | None = interval_raw
+    else:
+        touches = None
+        interval = None
+    return {
+        "template": str(entry.get("template") or ""),
+        "theme": str(entry.get("theme") or "blue"),
+        "goal": str(entry.get("goal") or ""),
+        "instructions": str(entry.get("instructions") or ""),
+        "touches": touches,
+        "touch_interval_days": interval,
+    }
+
+
+def _catalog_wording_hash(entry: dict[str, Any]) -> str:
+    """Hash a parsed catalog def the way an import would persist it (§V.134)."""
+    return _persisted_wording_hash(catalog_def_fields(entry))
+
+
+def _persisted_wording_hash(persisted: dict[str, Any]) -> str:
+    """Hash live (or projected) def fields with the same function as check."""
     return _compute_workflow_wording_hash(
-        template=str(entry.get("template") or ""),
-        theme=str(entry.get("theme") or "blue"),
-        goal=str(entry.get("goal") or ""),
-        instructions=str(entry.get("instructions") or ""),
-        touches=entry.get("touches"),
-        touch_interval_days=entry.get("touch_interval_days"),
+        template=str(persisted.get("template") or ""),
+        theme=str(persisted.get("theme") or "blue"),
+        goal=str(persisted.get("goal") or ""),
+        instructions=str(persisted.get("instructions") or ""),
+        touches=persisted.get("touches")
+        if isinstance(persisted.get("touches"), int)
+        else None,
+        touch_interval_days=persisted.get("touch_interval_days")
+        if isinstance(persisted.get("touch_interval_days"), int)
+        else None,
     )
+
+
+def workflow_import_sync_report(
+    entry: dict[str, Any], persisted: dict[str, Any]
+) -> dict[str, Any]:
+    """Post-apply import sync vs the live written row (§V.103/§B.143).
+
+    ``in_sync`` is catalog SHA-256 vs persisted SHA-256 (same hash as
+    ``check_workflow_wording``). ``remaining`` maps catalog def fields that
+    still differ from ``persisted`` -- empty when in sync.
+    """
+    catalog = catalog_def_fields(entry)
+    catalog_hash = _catalog_wording_hash(entry)
+    row_hash = _persisted_wording_hash(persisted)
+    remaining: dict[str, object] = {}
+    if catalog_hash != row_hash:
+        for key, catalog_value in catalog.items():
+            if catalog_value != persisted.get(key):
+                remaining[key] = catalog_value
+    return {
+        "in_sync": catalog_hash == row_hash,
+        "catalog_hash": catalog_hash,
+        "row_hash": row_hash,
+        "remaining": remaining,
+    }
 
 
 def import_row_in_sync(entry: dict[str, Any], persisted: dict[str, Any]) -> bool:
     """True when catalog wording hash matches the persisted def fields (§V.103).
 
     Import uses this for the per-row ``in_sync`` flag after create/update.
-    ``persisted`` is the projected post-apply def
+    ``persisted`` is the live written-row def
     ``{template, theme, goal, instructions, touches, touch_interval_days}``.
     """
-    return _catalog_wording_hash(entry) == _compute_workflow_wording_hash(
-        template=str(persisted.get("template") or ""),
-        theme=str(persisted.get("theme") or "blue"),
-        goal=str(persisted.get("goal") or ""),
-        instructions=str(persisted.get("instructions") or ""),
-        touches=persisted.get("touches"),
-        touch_interval_days=persisted.get("touch_interval_days"),
-    )
+    report = workflow_import_sync_report(entry, persisted)
+    return bool(report["in_sync"])
 
 
 def check_workflow_wording(

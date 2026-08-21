@@ -713,14 +713,13 @@ mailpilot workflow import --account-email <ACCOUNT_REF> --file campaigns/
 ```
 
 Each applied row carries `action` (`created` / `updated` / `unchanged`),
-`in_sync` (post-apply wording hash match), and `changed` (mutated def
-fields with a short excerpt). Instruction excerpts keep the tail so
-ready-copy at the end of a long body is visible. Then check the same
-tree:
-
-```
-mailpilot workflow check --file campaigns/
-```
+`in_sync` (live-row wording hash vs the file, same hash as
+`workflow check`), `catalog_hash`, `row_hash`, and `changed`. When
+`in_sync` is true, `changed` is the fields just written (instruction
+excerpts keep the tail so ready-copy is visible). When `in_sync` is
+false, `changed` is the remaining def fields that still differ — not
+only the fields just written. Do not follow with `workflow check` or
+`workflow view`. One import is the verify.
 
 ### Check workflow wording (one call)
 

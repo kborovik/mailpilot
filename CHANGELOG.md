@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- `workflow import` `in_sync` now hashes the live written row with the
+  same SHA-256 as `workflow check`. Each applied row includes
+  `catalog_hash` and `row_hash`. When hashes still differ, `changed`
+  lists the remaining def-field delta, not only the fields just written.
+  A successful import of a drifted TOML leaves `workflow check --file`
+  in sync without a second import. Incomplete cadence (`touches` without
+  `touch_interval_days`) persists as single-touch.
+
 ## [v0.30.0] - 2026-08-20
 
 ### Added

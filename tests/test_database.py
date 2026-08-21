@@ -25,6 +25,7 @@ from mailpilot.database import (
     cancel_enrollment_followup_tasks,
     cancel_task,
     cancel_tasks_matching,
+    catalog_def_fields,
     check_workflow_wording,
     company_import_diff,
     complete_task,
@@ -119,6 +120,7 @@ from mailpilot.database import (
     update_pending_first_touch_schedule,
     update_workflow,
     upsert_meeting,
+    workflow_import_sync_report,
 )
 
 # -- Account -------------------------------------------------------------------
@@ -9968,6 +9970,52 @@ def test_import_row_in_sync_detects_wording_mismatch() -> None:
     drifted = {**matching, "goal": "Old goal"}
     assert import_row_in_sync(entry, matching) is True
     assert import_row_in_sync(entry, drifted) is False
+    synced = workflow_import_sync_report(entry, matching)
+    assert synced["in_sync"] is True
+    assert synced["catalog_hash"] == synced["row_hash"]
+    assert synced["remaining"] == {}
+    leftover = workflow_import_sync_report(entry, drifted)
+    assert leftover["in_sync"] is False
+    assert leftover["catalog_hash"] != leftover["row_hash"]
+    assert leftover["remaining"]["goal"] == "New goal"
+
+
+def test_catalog_incomplete_cadence_hashes_as_single_touch(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.103/§V.134: touches without interval hashes as single-touch NULL/NULL."""
+    from mailpilot.database import check_workflow_wording
+
+    half = catalog_def_fields({**_catalog_entry("t1-only"), "touches": 1})
+    full_none = catalog_def_fields(_catalog_entry("t1-only"))
+    assert half["touches"] is None
+    assert half["touch_interval_days"] is None
+    assert half == full_none
+
+    account = make_test_account(database_connection)
+    flow = create_workflow(
+        database_connection,
+        name="t1-only",
+        template="outbound-general",
+        account_id=account.id,
+        theme="blue",
+    )
+    assert flow is not None
+    update_workflow(
+        database_connection,
+        flow.id,
+        goal="g",
+        instructions="i",
+    )
+    catalog = {
+        "t1-only": {
+            **_catalog_entry("t1-only", goal="g", instructions="i"),
+            "touches": 1,
+        }
+    }
+    report = check_workflow_wording(database_connection, catalog)
+    assert report.workflows[0].state == "in_sync"
+    assert report.workflows[0].catalog_hash == report.workflows[0].row_hash
 
 
 def test_get_workflow_report_matrix(
