@@ -211,7 +211,7 @@ V157: workflow status ops-health composite (meta+wording+run_loop+overdue/failed
 V158: contact search multi-token — full-name TRIM(first||' '||last); multi-token AND across {email,first,last,title}; single-token per-field LIKE retained; disabled searchable — → .spec/check-extras.md §V158
 V159: contact view --timeline — opt-in bounded dossier (notes+enrollments+emails+activities); bare view notes-only; default N=10 + hard cap — → .spec/check-extras.md §V159
 V160: enrollment list --disposition — filter terminal disposition ∈ {do_not_contact, contact_later, meeting_booked}; composes w/ existing filters; unknown → validation_error + allowed set — → .spec/check-extras.md §V160
-V161: address-change auto-reply hard-stop — active outbound + address-change/redirect auto-reply → conclude do_not_contact; ! OOO pause/resume — → .spec/check-extras.md §V161
+V161: address-change auto-reply hard-stop — active outbound + address-change/redirect auto-reply → conclude do_not_contact; ! OOO pause/resume; last-day-was past → §V.179 — → .spec/check-extras.md §V161
 V162: touch-context-parse — context.touch N or T<n> or "n" → int; SQL never raw ::int; unparseable → NULL; first-touch writer emits 1 — → .spec/check-extras.md §V162
 V163: bounce enrollment hard-stop — outbound bounce → every active outbound enrollment do_not_contact + cancel follow-ups — → .spec/check-extras.md §V163
 V164: thread-alias inbound bind — inbound on existing outbound thread binds enrolled contact when From local-part differs; ! auto-enroll alias — → .spec/check-extras.md §V164
@@ -219,7 +219,7 @@ V165: live-e2e-dev-only — campaign-test + reply-test ! read settings.environme
 V166: show-queue — `mailpilot show queue` human report hub; default ASCII table; `--format json` opt-in; `--detail` task grain; next_at table+JSON ISO in `--tz` (default host local); every workflow status; pending tasks only; no LLM; no write — → .spec/check-extras.md §V166
 V167: company-create-oneshot — `company create` accepts §V.140 profile flags + repeatable `--tag` same invocation; one txn all-or-nothing; `--tag` additive never invent (§V.116); undefined tag → not_found; invalid profile → validation_error; second `--upsert` exit 0, update profile if flags, no tag dups — → .spec/check-extras.md §V167
 V168: company-view-full — `company view --full` embeds `contacts[]` + `tags[]` + `notes[]`; lean contacts include `tags[]`; omit `verification_meta` unless `--include-meta`; lean company view unchanged — → .spec/check-extras.md §V168
-V169: ooo-pause-resume — OOO inbound → no reply incl. no §V.131 ACK; ! conclude (distinct §V.161); ! bump last_touch/emails_sent; harness resume @ return date (year-less range containing now → same year; year-less same-day month+day → same year not next; leave-start past ! next-year; explicit year wins; multi year-less month-day → return/"fully back online" not earlier event-week; year-less return still-ahead → same year; past "week of" ! return ! year+1); OOO inbound ! §V.83 replied-after — → .spec/check-extras.md §V169
+V169: ooo-pause-resume — OOO inbound → no reply incl. no §V.131 ACK; ! conclude (distinct §V.161); last-day-was past → §V.179 DNC not pause; ! bump last_touch/emails_sent; harness resume @ return date (year-less range containing now → same year; year-less same-day month+day → same year not next; leave-start past ! next-year; explicit year wins; multi year-less month-day → return/"fully back online" not earlier event-week; year-less return still-ahead → same year; past "week of" ! return ! year+1); OOO inbound ! §V.83 replied-after — → .spec/check-extras.md §V169
 V170: task-retry-schedule — `task retry` failed|cancelled only (§V.49); omit `--scheduled-at` + stored scheduled_at still future → keep stored; `--scheduled-at ISO` → that instant; omit + stored past/now → now; `--scheduled-at` past → validation_error — → .spec/check-extras.md §V170
 V171: enrollment-add-scheduled-batch — `enrollment add --file|--tag` + `--scheduled-at` one envelope; `--limit` soft cap w/ `--company-atomic`; `--exclude-peer`; per-row §V.32 — → .spec/check-extras.md §V171
 V172: TaskSummary projection includes result.reason — failed list rows carry stored reason; full result+context stay view-only — → .spec/check-extras.md §V172
@@ -229,6 +229,7 @@ V175: task-retry-filter — `task retry` dual-mode positional TASK_ID XOR `task 
 V176: target-env — settings.environment ∈ {dev, prd} default dev; sole env setting; topic=`mailpilot-topic-{env}` sub=`mailpilot-sub-{env}`; logfire.configure maps internally (dev→development, prd→production); no `logfire_environment` setting; derived pubsub keys not independently settable + not persisted; load compat legacy `logfire_environment`→environment when unset; status+config get project environment + topic/sub only — → .spec/check-extras.md §V176
 V177: cli-db-context — `_db(*, mutate: bool = False)` sole CLI connection helper; lazy-import `initialize_database` (module-level click-only §V.2); `mutate=True` → `require_current_schema=True` (§V.109); close success+error; `cli_mutation` stays per-cmd outside helper (§V.54); cmds use helper not copy open/close
 V178: shared-query-fragments — `list_companies`/`export_companies` (and import via export) share one WHERE/HAVING builder for profile/pipeline/contact-count/tag predicates; `--tag`/`--no-tag` resolve through the existing tag-id helper; EmailSummary/WorkflowSummary/TagSummary list+search (and review emails) share one SELECT list each; review window emails uncapped matching `list_emails` filters/order; export still unlimited `ORDER BY domain` + tracker-shaped dicts (§V.145)
+V179: last-day-past left-company — active outbound + auto-reply past-tense last-day (`last day was`, last-day date already past) even w/ Automatic reply / Auto-Submitted → conclude do_not_contact; ! OOO pause/year-roll on that date; named successors w/o emails → note not pause; retired/no-longer-with keep §V.161/§V.164 DNC — → .spec/check-extras.md §V179
 
 ## §T TASKS
 
@@ -293,6 +294,8 @@ T301|x|impl §V.103 + §I — import in_sync from live written row (same hash as
 T302|x|impl §V.103 — `_persisted_wording_hash` hashes stored columns as-is (no second defaulting); remaining/changed same equality as hash; test empty-theme live row import in_sync iff check in_sync|V103,V134,B144
 T303|x|impl §V.169(∆) — OOO resume: multi year-less month-day prefer return/"fully back online" not first event-week; "week of" past ! year+1; fixture Bonnie body week-of-Aug-17 + Monday Aug 24th → 2026-08-24 not 2027-08-17; campaign-test auto_reply resume_within_days (#250)|V169,B145
 T304|x|incident Bonnie (bonnie@traildsoftware.com acu-isv-leadership) ooo_pause not left 2027-08-17; cancel or task retry --scheduled-at ~2026-08-24 (#250)|V169,V170
+T305|.|impl §V.179(+) + §V.169(∆) — last-day-was past auto-reply terminal not OOO; extend `_TERMINAL_AUTO_REPLY`; fixture Gina-shape; campaign-test left_company DNC; protocol last-day-was; retired/no-longer-with regression (#251)|V179,V169,V161,V164,V127,V123,B146
+T306|.|incident Gina (gina.scozzaro@claconnect.com var-sales-coclose) last-day-was year-paused T2 2027-07-22; conclude do_not_contact + cancel pending (#251)|V179,V127,V123
 
 ## §B BUGS
 
@@ -353,3 +356,4 @@ B142|2026-08-18|OOO year-less same-day `on <Month> <D>`: named day = today → n
 B143|2026-08-21|workflow import action=updated still in_sync false; hashed projection not live row; check still out_of_sync|V103
 B144|2026-08-21|import live-row hash re-applies catalog defaults; check hashes stored columns as-is; same row two hashes|V103
 B145|2026-08-20|OOO first month-day year+1 when later return/"back online" date present (event-week + Monday August 24th)|V169
+B146|2026-08-21|past-tense last-day auto-reply missed by terminal regex → OOO year-pause|V179

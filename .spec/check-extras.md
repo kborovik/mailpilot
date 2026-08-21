@@ -1039,7 +1039,7 @@ Trigger: enrollment list disposition filter changed.
 
 ## §V161 — address-change auto-reply hard-stop
 
-address-change auto-reply hard-stop — active outbound enrollment + inbound address-change / "update your records" / hard email-redirect auto-reply → conclude do_not_contact (cancel follow-ups + disable old contact); note ! carry redirect + new email when present (campaign-review referral); agent never enrolls new address; ! OOO pause-once (noop, no terminal)
+address-change auto-reply hard-stop — active outbound enrollment + inbound address-change / "update your records" / hard email-redirect auto-reply → conclude do_not_contact (cancel follow-ups + disable old contact); note ! carry redirect + new email when present (campaign-review referral); agent never enrolls new address; ! OOO pause-once (noop, no terminal); last-day-was past → §V.179
 
 Trigger: inbound classify / conclude / campaign-test address-change path changed.
 - `rg 'address.change|update your records|do_not_contact' src/mailpilot/` -> hard-stop path present
@@ -1125,7 +1125,7 @@ Trigger: `company view` path changed.
 
 ## §V169 — OOO pause-resume
 
-active outbound + inbound OOO/temporary-absence auto-reply (detect: subject Automatic reply / Auto-Submitted / agent OOO class) → no reply incl. no §V.131 fallback ACK; ! conclude (distinct §V.161); ! bump last_touch/emails_sent; §V.123 cancel pending follow-ups; harness schedule resume @ parseable return date (context.touch numeric §V.162, reason=ooo_pause); explicit year in body wins; year-less week-range containing now → resume day-after range-end same year (! next-year on range-start ≤ now); year-less same-day month+day (`on <Month> <D>`, named day = today, no year) → resume ≥ next calendar day same year (! next-year) (closes §B.142); year-less weekday-month-day leave-start/notice (effective/begins, not until/returning/back) + this-year date months past → unparseable ! next-year; multi year-less month-day → resume @ stated return / "fully back online" (still-ahead same year), never earlier event-week month-day; "week of <Month> <D>" = event-week not return; past event-week ! year+1 (closes §B.145); unparseable → +touch_interval_days (or +3d if NULL cadence); enrollment stays active, disposition null; OOO inbound ! count as inbound-reply for §V.83 pre-flight
+active outbound + inbound OOO/temporary-absence auto-reply (detect: subject Automatic reply / Auto-Submitted / agent OOO class) → no reply incl. no §V.131 fallback ACK; ! conclude (distinct §V.161); last-day-was past → §V.179 DNC not pause; ! bump last_touch/emails_sent; §V.123 cancel pending follow-ups; harness schedule resume @ parseable return date (context.touch numeric §V.162, reason=ooo_pause); explicit year in body wins; year-less week-range containing now → resume day-after range-end same year (! next-year on range-start ≤ now); year-less same-day month+day (`on <Month> <D>`, named day = today, no year) → resume ≥ next calendar day same year (! next-year) (closes §B.142); year-less weekday-month-day leave-start/notice (effective/begins, not until/returning/back) + this-year date months past → unparseable ! next-year; multi year-less month-day → resume @ stated return / "fully back online" (still-ahead same year), never earlier event-week month-day; "week of <Month> <D>" = event-week not return; past event-week ! year+1 (closes §B.145); unparseable → +touch_interval_days (or +3d if NULL cadence); enrollment stays active, disposition null; OOO inbound ! count as inbound-reply for §V.83 pre-flight
 
 Trigger: inbound OOO / auto-reply / cadence resume path changed.
 - `rg 'ooo_pause|_maybe_ooo_pause' src/mailpilot/` -> pause+resume path
@@ -1134,6 +1134,16 @@ Trigger: inbound OOO / auto-reply / cadence resume path changed.
 - `rg 'is_mechanical_ooo|is_ooo_auto_reply' src/mailpilot/run.py src/mailpilot/database.py` -> OOO excluded from §V.83 replied-after
 - fixture: same-day `on <Month> <D>` no year → resume ≥ next day same year not next-year
 - fixture: event-week "week of August 17th" + "fully back online on Monday, August 24th" → resume 2026-08-24 not 2027-08-17
+
+## §V179 — last-day-past left-company
+
+last-day-past left-company — active outbound + inbound auto-reply past-tense last-day ("last day was", "last day with … was", last-day date already past) even when subject Automatic reply or Auto-Submitted → conclude do_not_contact (cancel follow-ups + disable contact); named successors without emails stay in the note, never a 1-year pause; ! OOO pause/year-roll on the last-day date (§V.169); distinct from address-change (§V.161) and thread-alias left-company (§V.164); retired / no longer with keep current DNC. Harness `_TERMINAL_AUTO_REPLY` owns detect — playbook last-day bullet alone does not skip OOO.
+
+Trigger: inbound OOO / terminal auto-reply / campaign-test left_company path changed.
+- `rg 'last day|_TERMINAL_AUTO_REPLY' src/mailpilot/ooo.py` -> last-day-past in terminal detect
+- `rg 'retired|no longer with' src/mailpilot/ooo.py tests/test_ooo.py` -> contrast cases still not OOO
+- fixture: "My last day with CLA was Wednesday, July 22" + Automatic reply + named successors w/o emails → not is_mechanical_ooo, not is_ooo_auto_reply, no year-pause
+- campaign-test `left_company` expect contact_disabled + no followup year-pause
 
 ## §V170 — task-retry-schedule
 
