@@ -296,7 +296,7 @@ T303|x|impl §V.169(∆) — OOO resume: multi year-less month-day prefer return
 T304|x|incident Bonnie (bonnie@traildsoftware.com acu-isv-leadership) ooo_pause not left 2027-08-17; cancel or task retry --scheduled-at ~2026-08-24 (#250)|V169,V170
 T305|x|impl §V.179(+) + §V.169(∆) — last-day-was past auto-reply terminal not OOO; extend `_TERMINAL_AUTO_REPLY`; fixture Gina-shape; campaign-test left_company DNC; protocol last-day-was; retired/no-longer-with regression (#251)|V179,V169,V161,V164,V127,V123,B146
 T306|x|incident Gina (gina.scozzaro@claconnect.com var-sales-coclose) last-day-was year-paused T2 2027-07-22; conclude do_not_contact + cancel pending (#251)|V179,V127,V123
-T307|.|impl §V.15(∆)+§V.152(∆) — record_enrollment_outcome bumps enrollment.updated_at same txn as activity; status still untouched; enrollment list --full --disposition do_not_contact --since/--until windows DNC; no disposition_updated_at col; tests + SKILL (#253)|V15,V152,V160,V127,V163,V4,I.cli
+T307|x|impl §V.15(∆)+§V.152(∆) — record_enrollment_outcome bumps enrollment.updated_at same txn as activity; status still untouched; enrollment list --full --disposition do_not_contact --since/--until windows DNC; no disposition_updated_at col; tests + SKILL (#253)|V15,V152,V160,V127,V163,V4,I.cli
 
 ## §B BUGS
 

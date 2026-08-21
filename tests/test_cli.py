@@ -13256,6 +13256,61 @@ def test_skill_documents_enrollment_disposition() -> None:
     assert "§V." not in body
 
 
+def test_enrollment_list_since_until_windows_dnc_passthrough(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.152/§V.4: --full --disposition --since/--until pass through."""
+    summary = _make_enrollment_summary(disposition="do_not_contact")
+    since = "2026-08-18T09:36:15-04:00"
+    until = "2026-08-20T09:36:15-04:00"
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=_make_workflow()),
+        patch(
+            "mailpilot.database.list_enrollments_detailed", return_value=[summary]
+        ) as mock_list,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "list",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--full",
+                "--disposition",
+                "do_not_contact",
+                "--since",
+                since,
+                "--until",
+                until,
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert mock_list.call_args.kwargs["full"] is True
+    assert mock_list.call_args.kwargs["disposition"] == "do_not_contact"
+    assert mock_list.call_args.kwargs["since"] == since
+    assert mock_list.call_args.kwargs["until"] == until
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 1
+    assert data["enrollments"][0]["disposition"] == "do_not_contact"
+
+
+def test_skill_documents_enrollment_window_dnc() -> None:
+    """§V.152: SKILL.md documents dated-window DNC without --timeline."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "--disposition do_not_contact" in body
+    assert "--since" in body
+    assert "--until" in body
+    assert "contact view --timeline" in body
+    assert "§V." not in body
+
+
 # -- enrollment update removed (§V.15) -----------------------------------------
 
 

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Recording an enrollment terminal outcome (including `do_not_contact`)
+  bumps `enrollment.updated_at` in the same transaction as the activity.
+  `enrollment list --full --disposition do_not_contact --since --until`
+  windows DNC applied in that date range without `contact view --timeline`.
+  Enrollment status stays `active` or `disabled`; there is no
+  `disposition_updated_at` column.
+
+
+
 - A past-tense last-day auto-reply ("last day was", "last day with … was")
   is left-company, not an out-of-office pause. Automatic reply and
   Auto-Submitted no longer year-roll that date. Named successors without

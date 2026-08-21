@@ -4597,8 +4597,14 @@ def record_enrollment_outcome(
 
     System-internal recorder: the outcome is purely an activity-timeline event
     (``enrollment_completed`` / ``enrollment_failed``); the ``enrollment`` row
-    status is never modified (§V.15). Both the deterministic booking conclusion
-    (§V.128) and the agent terminal route through here.
+    status is never modified (§V.15). The same transaction bumps
+    ``enrollment.updated_at`` so ``enrollment list --since``/``--until``
+    (filters ``e.updated_at``) plus ``--full`` plus ``--disposition`` can
+    window a terminal outcome without ``contact view --timeline``. There is
+    no ``disposition_updated_at`` column; ``updated_at`` is the window clock.
+
+    Both the deterministic booking conclusion (§V.128) and the agent terminal
+    route through here.
 
     When supplied, ``disposition`` is persisted into the activity ``detail``
     JSONB under the ``disposition`` key (§V.132) so the per-campaign funnel can
@@ -4630,7 +4636,15 @@ def record_enrollment_outcome(
     detail: dict[str, object] = {"reason": reason}
     if disposition is not None:
         detail["disposition"] = disposition
-    return create_activity(
+    connection.execute(
+        """\
+        UPDATE enrollment
+        SET updated_at = CURRENT_TIMESTAMP
+        WHERE id = %(id)s
+        """,
+        {"id": enrollment_id},
+    )
+    activity = create_activity(
         connection,
         contact_id=enrollment.contact_id,
         activity_type=f"enrollment_{outcome}",
@@ -4639,7 +4653,10 @@ def record_enrollment_outcome(
         company_id=contact.company_id if contact is not None else None,
         workflow_id=enrollment.workflow_id,
         enrollment_id=enrollment.id,
+        commit=False,
     )
+    connection.commit()
+    return activity
 
 
 def disable_enrollment(

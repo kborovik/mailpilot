@@ -198,13 +198,20 @@ mailpilot enrollment list --workflow-id acumatica-var-outbound \
   --disposition do_not_contact
 mailpilot enrollment list --workflow-id acumatica-var-outbound \
   --disposition contact_later --full
+mailpilot enrollment list --workflow-id acumatica-var-outbound --full \
+  --disposition do_not_contact \
+  --since 2026-08-18T09:36:15-04:00 --until 2026-08-20T09:36:15-04:00
 ```
 
 `--full` fields: `company_domain`, `company_name`, `emails_sent`, `last_touch`,
 `next_scheduled_at`, `next_touch`, `disposition`, `created_at`. Filters
 `--has-pending-task` / `--no-pending-task`, `--touch N`, and `--disposition`
 (`meeting_booked` | `do_not_contact` | `contact_later`) compose with
-workflow/contact/status scopes. `--touch 1` matches never-sent rows that
+workflow/contact/status scopes. `--since` / `--until` filter `updated_at`.
+A terminal outcome (including `do_not_contact`) bumps `updated_at`, so a
+dated `--full --disposition do_not_contact --since --until` window is
+enough to see DNC applied in that window. Do not follow with
+`contact view --timeline`. `--touch 1` matches never-sent rows that
 have `next_scheduled_at` set (`emails_sent=0`), even when `next_touch` was
 null; `--full` projects `next_touch=1` on those rows. Unknown disposition →
 `validation_error` with allowed set. Sort keys: `updated_at` (default),

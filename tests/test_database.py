@@ -6503,6 +6503,73 @@ def test_record_enrollment_outcome_omits_disposition_when_absent(
     assert "disposition" not in activity.detail
 
 
+def test_record_enrollment_outcome_bumps_updated_at(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.15: outcome write bumps enrollment.updated_at; status stays active."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    original_updated = enrollment.updated_at
+
+    record_enrollment_outcome(
+        database_connection,
+        enrollment.id,
+        "failed",
+        "left company",
+        disposition="do_not_contact",
+    )
+
+    refetched = get_enrollment(database_connection, workflow.id, contact.id)
+    assert refetched is not None
+    assert refetched.status == "active"
+    assert refetched.updated_at > original_updated
+
+
+def test_list_enrollments_detailed_windows_dnc_by_updated_at(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.152: --full --disposition --since/--until windows DNC on updated_at."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    original_updated = enrollment.updated_at
+
+    record_enrollment_outcome(
+        database_connection,
+        enrollment.id,
+        "failed",
+        "left company",
+        disposition="do_not_contact",
+    )
+    refetched = get_enrollment(database_connection, workflow.id, contact.id)
+    assert refetched is not None
+    assert refetched.updated_at > original_updated
+
+    missed = list_enrollments_detailed(
+        database_connection,
+        workflow_id=workflow.id,
+        full=True,
+        disposition="do_not_contact",
+        until=original_updated.isoformat(),
+    )
+    assert missed == []
+
+    hit = list_enrollments_detailed(
+        database_connection,
+        workflow_id=workflow.id,
+        full=True,
+        disposition="do_not_contact",
+        since=original_updated.isoformat(),
+        until=refetched.updated_at.isoformat(),
+    )
+    assert {row.id for row in hit} == {enrollment.id}
+    assert hit[0].disposition == "do_not_contact"
+    assert hit[0].status == "active"
+
+
 # -- get_latest_enrollment_outcome (§V.83) -------------------------------------
 
 
