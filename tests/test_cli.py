@@ -7200,6 +7200,20 @@ def test_workflow_search(runner: CliRunner, mock_connection: MagicMock) -> None:
     assert len(data["workflows"]) == 1
 
 
+def test_workflow_search_with_limit(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.search_workflows", return_value=[]) as mock_search,
+    ):
+        result = runner.invoke(main, ["workflow", "search", "demo", "--limit", "10"])
+
+    assert result.exit_code == 0
+    mock_search.assert_called_once_with(mock_connection, "demo", limit=10)
+
+
 # -- workflow start / stop -----------------------------------------------------
 
 

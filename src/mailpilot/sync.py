@@ -1457,8 +1457,9 @@ def send_email(  # noqa: PLR0913
         # appends account signature to wire MIME only (§V.151).
         html_body = render_email_html(body, theme)
         plain_body = strip_control_chars(body)
-        sig_html = render_signature_html(account)
-        sig_text = render_signature_text(account)
+        nested = account.account_signature()
+        sig_html = render_signature_html(nested)
+        sig_text = render_signature_text(nested)
         wire_html = html_body + sig_html if sig_html else html_body
         wire_plain = f"{plain_body}\n\n--\n{sig_text}" if sig_text else plain_body
 

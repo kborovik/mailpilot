@@ -398,13 +398,15 @@ Trigger: `src/mailpilot/sync.py` or `src/mailpilot/gmail.py` changed.
 
 ## §V79 — send/reply guards + account soft-disable lifecycle
 
-Send/reply guards: disabled contact OR disabled account blocks send + reply; cold-send cooldown 30 days per (account, contact, workflow); reply requires original `gmail_thread_id` + `contact_id` (typed errors); reply subject gets "Re: " prefix unless already prefixed, case-insensitive.
+Send/reply guards: disabled contact OR disabled account blocks send + reply; cold-send cooldown 30 days per (account, contact, workflow); cooldown typed err = `email_ops.CooldownError` (`exceptions.py` has no `CooldownError` or unused `ClassificationError`); reply requires original `gmail_thread_id` + `contact_id` (typed errors); reply subject gets "Re: " prefix unless already prefixed, case-insensitive.
 
 Account soft-disable: `account.disabled_reason TEXT NULL` (non-NULL = disabled, carries reason). `account disable <ref> --reason <text>` sets it (disabled_reason IS NULL gate blocks double-disable). `account enable <ref>` clears it (disabled_reason IS NOT NULL gate blocks enabling an active account). A disabled account is gated everywhere it would touch Gmail — sync loop skips it, `account sync` all-accounts mode skips it, `renew_watches()` skips it, send + reply refuse it. `account list` default-hides disabled; `--include-disabled` opts in. Operator-only — the agent never disables or enables an account.
 
 Trigger: `src/mailpilot/sync.py`, `src/mailpilot/database.py`, or `src/mailpilot/agent/invoke.py` changed.
 - `rg 'disabled_reason\b' src/mailpilot/schema.sql | grep account` -> account soft-disable col
 - `rg 'cold.send.*cooldown\|cooldown.*30\|30.*days' src/mailpilot/sync.py src/mailpilot/database.py` -> cooldown gate
+- `rg 'class CooldownError' src/mailpilot/email_ops.py` -> cooldown typed err present
+- `rg 'class CooldownError|class ClassificationError' src/mailpilot/exceptions.py` -> zero hits
 - `rg '"account".*"disable"\b\|"account".*"enable"\b' src/mailpilot/cli.py` -> both verbs present
 - `rg 'disabled_reason.*skip\|account.*disabled.*sync\|sync.*skip.*disabled' src/mailpilot/sync.py` -> sync loop skip gate
 - `rg 'include.disabled\b' src/mailpilot/cli.py | grep account` -> account list --include-disabled
@@ -420,11 +422,13 @@ Trigger: `src/mailpilot/routing.py` or `src/mailpilot/sync.py` changed.
 
 ## §V83 — execute_task pre-flight cancellation
 
-execute_task pre-flight cancels the task (zero LLM calls) when: workflow inactive/missing; contact disabled/missing; enrollment missing or status != active. Touch tasks (context.touch) additionally cancelled when the latest enrollment outcome is terminal OR an inbound email from the contact arrived after the prior touch — belt complementing reply-time cancellation (§V.123). inbound-after excludes OOO/auto-reply inbound (V169 detect) — pause not reply; operator retry of cancelled cadence T2 may proceed.
+execute_task pre-flight cancels the task (zero LLM calls) when: workflow inactive/missing; contact disabled/missing; enrollment missing or status != active. Touch tasks (context.touch) additionally cancelled when the latest enrollment outcome is terminal OR an inbound email from the contact arrived after the prior touch — belt complementing reply-time cancellation (§V.123). inbound-after excludes OOO/auto-reply inbound (V169 detect) — pause not reply; operator retry of cancelled cadence T2 may proceed. Inbound-after uses `list_inbound_emails_from_contact_after`; no `has_inbound_email_from_contact_after` bool wrapper; tests call the list helper.
 
 Trigger: `src/mailpilot/run.py` changed.
 - `rg 'status="cancelled"' src/mailpilot/run.py` -> pre-flight cancel sites present
 - `rg '_touch_cancel_reason' src/mailpilot/run.py` -> touch-specific guard fn present
+- `rg 'has_inbound_email_from_contact_after' src/mailpilot tests` -> zero hits
+- `rg 'list_inbound_emails_from_contact_after' src/mailpilot/run.py tests/test_database.py` -> list helper present
 
 ## §V90 — natural-key UNIQUE constraints
 
@@ -639,7 +643,7 @@ Six families, each with fixed naming + semantics:
 5. Text-match: field-named, exact only on `list`, case-fold per natural-key semantics; substring/fuzzy → `search` verb only.
 6. Lifecycle: `--include-disabled` (is_flag False) + `--since`/`--until <ISO>` closed inclusive interval over one declared column.
 
-Result-control set (not filters): `--limit <int>` (default 100 unless noun opts higher — company list|search default 500 per §V.148), `--offset <int>` (default 0), `--sort` (noun-declared Choice; absent → noun default order), `--desc` (is_flag; flips ASC→DESC). `record_count` = page length only (no total/has_more MVP). `--direction` = canonical inbound/outbound axis across email + workflow + template. Families realized as shared Click decorators (`limit_option`, `offset_option`, `sort_option`, `desc_option`, `time_window_options(col)`, `include_disabled_option`, `scope_option`, `enum_option`, `range_options`, `presence_option`) composed fixed-order in `cli.py`/`_filters.py`. New list flag = new vocabulary decorator or spec change.
+Result-control set (not filters): `--limit <int>` (default 100 unless noun opts higher — company list|search default 500 per §V.148), `--offset <int>` (default 0), `--sort` (noun-declared Choice; absent → noun default order), `--desc` (is_flag; flips ASC→DESC). `contact|email|workflow search` uses the same `--limit` result-control as list (default 100). `record_count` = page length only (no total/has_more MVP). `--direction` = canonical inbound/outbound axis across email + workflow + template. Families realized as shared Click decorators (`limit_option`, `offset_option`, `sort_option`, `desc_option`, `time_window_options(col)`, `include_disabled_option`, `scope_option`, `enum_option`, `range_options`, `presence_option`) composed fixed-order in `cli.py`/`_filters.py`. New list flag = new vocabulary decorator or spec change.
 
 Trigger: `src/mailpilot/cli.py` or `src/mailpilot/_filters.py` changed.
 - `rg 'limit_option|time_window_options|include_disabled_option|scope_option|enum_option|range_options|presence_option' src/mailpilot/` -> all 7 base decorator names present
@@ -951,12 +955,14 @@ Trigger: lead-companies seed path changed.
 
 ## §V151 — account email signature
 
-account email signature — per-account AccountSignature fields {full_name, title, website, phone} = nullable TEXT cols `signature_full_name|title|website|phone` on account; `display_name` = From only (not aliased); CLI create|update flags `--signature-full-name|--signature-title|--signature-website|--signature-phone` field-selective (omit=leave, empty str clears); website ! absolute http(s) URL else `validation_error` (no auto-prefix); list|view|create|update project nested `signature:{full_name,title,website,phone}` or null when all empty; harness `render_signature_html` + `render_signature_text` after §V.92 body render, before MIME; wire HTML = body_html + signature — table mark layout: 60px embedded lab5 logo (PNG data-URI constant) + 18px spacer + 2px four-colour vertical rule (`#0969da|#cf222e|#f9c513|#1f883d`) + 18px spacer + detail rows (name bold `#101820` 16px Helvetica; title monospace `#0969da` 11px uppercase letter-spacing; `web  ` + host link `#101820` monospace 12px, href=absolute website; `cell  ` + phone `tel:` link `#101820`; muted labels `#8A939B`; font families Helvetica/Consolas stack; `margin-top:20px` on outer table; inline styles only; empty fields omit their rows, all-empty → no block/no logo); text/plain mirrors stacked lines = body + `--` + name/title/`web  host`/`cell  phone` (scheme stripped from web display; empty fields omitted); ! persist signature HTML into `email.body` (§C plain-text body holds); every outbound path (`email send|reply`, agent send/reply tools, cadence touch send, §V.131 fallback); agent never drafts signature; body theme (§V.92 THEMES) does not recolor signature; migration + schema.sql
+account email signature — per-account AccountSignature fields {full_name, title, website, phone} = nullable TEXT cols `signature_full_name|title|website|phone` on account; `display_name` = From only (not aliased); CLI create|update flags `--signature-full-name|--signature-title|--signature-website|--signature-phone` field-selective (omit=leave, empty str clears); website ! absolute http(s) URL else `validation_error` (no auto-prefix); list|view|create|update project nested `signature:{full_name,title,website,phone}` or null when all empty; harness `render_signature_html` + `render_signature_text` take `AccountSignature | None` via `Account.account_signature()` (no `_signature_fields` reimplementation) after §V.92 body render, before MIME; wire HTML = body_html + signature — table mark layout: 60px embedded lab5 logo (PNG data-URI constant) + 18px spacer + 2px four-colour vertical rule (`#0969da|#cf222e|#f9c513|#1f883d`) + 18px spacer + detail rows (name bold `#101820` 16px Helvetica; title monospace `#0969da` 11px uppercase letter-spacing; `web  ` + host link `#101820` monospace 12px, href=absolute website; `cell  ` + phone `tel:` link `#101820`; muted labels `#8A939B`; font families Helvetica/Consolas stack; `margin-top:20px` on outer table; inline styles only; empty fields omit their rows, all-empty → no block/no logo); text/plain mirrors stacked lines = body + `--` + name/title/`web  host`/`cell  phone` (scheme stripped from web display; empty fields omitted); ! persist signature HTML into `email.body` (§C plain-text body holds); every outbound path (`email send|reply`, agent send/reply tools, cadence touch send, §V.131 fallback); agent never drafts signature; body theme (§V.92 THEMES) does not recolor signature; migration + schema.sql
 
 Trigger: `src/mailpilot/` account/signature/render paths changed.
 - `rg 'signature_full_name|render_signature_html|render_signature_text' src/mailpilot/` -> cols + renderers present
 - `rg 'AccountSignature|signature:' src/mailpilot/models.py src/mailpilot/cli.py` -> nested projection
 - `rg 'lab5|data:image/png|0969da' src/mailpilot/` -> mark layout constants
+- `rg '_signature_fields' src/mailpilot/` -> zero hits
+- `rg 'account_signature\(\)' src/mailpilot/sync.py src/mailpilot/models.py` -> callers pass nested signature
 
 ## §V152 — enrollment execution projection
 
@@ -1275,11 +1281,13 @@ Trigger: `src/mailpilot/agent/invoke.py` changed.
 
 ## §V85 — settings precedence
 
-settings precedence kwargs > process MAILPILOT_* env > cwd `.env` (MAILPILOT_* keys only, pydantic-settings dotenv) > ~/.mailpilot/config.json > defaults; missing `.env` = no-op; config file auto-created on first load
+settings precedence kwargs > process MAILPILOT_* env > cwd `.env` (MAILPILOT_* keys only, pydantic-settings dotenv) > ~/.mailpilot/config.json > field-literal defaults; missing `.env` = no-op; config file auto-created on first load. Field defaults = literals on Settings fields; no unused module-level `DEFAULT_*` constants; `JsonConfigSource` has no unused `get_field_value` stub.
 
 Trigger: `src/mailpilot/settings.py` changed.
 - `rg 'env_file=.env|settings_customise_sources' src/mailpilot/settings.py` -> dotenv + source order present
 - `rg 'config.json' src/mailpilot/settings.py` -> config-file source present
+- `rg '^DEFAULT_' src/mailpilot/settings.py` -> zero hits
+- `rg 'def get_field_value' src/mailpilot/settings.py` -> zero hits
 
 ## §V88 — entity enum schema CHECK
 
@@ -1291,9 +1299,10 @@ Trigger: `src/mailpilot/schema.sql` changed.
 
 ## §V92 — email HTML render
 
-email render = Markdown -> HTML inline styles only, no stylesheet; hard_wrap=True (soft newlines -> <br>); body container ! max-width (fluid); THEMES = {blue, green, orange, purple, red, slate}; None/unknown theme -> blue fallback
+email render = Markdown -> HTML inline styles only, no stylesheet; hard_wrap=True (soft newlines -> <br>); body container ! max-width (fluid); THEMES = {blue, green, orange, purple, red, slate}; None/unknown theme -> blue fallback. EmailRenderer ! override mistune hooks that add no inline style (`strong`, `emphasis`, `table_head`, `table_body`, `table_row`); `table` + `table_cell` keep theme styles.
 
 Trigger: `src/mailpilot/email_renderer.py` changed.
 - `rg 'hard_wrap' src/mailpilot/email_renderer.py` -> hard_wrap=True present
 - `rg 'THEMES' src/mailpilot/email_renderer.py` -> theme enum present
 - `rg 'max-width' src/mailpilot/email_renderer.py` -> zero body max-width
+- `rg 'def (strong|emphasis|table_head|table_body|table_row)\b' src/mailpilot/email_renderer.py` -> zero hits

@@ -8,7 +8,7 @@ from typing import cast
 
 import mistune
 
-from mailpilot.models import Account, AccountSignature
+from mailpilot.models import AccountSignature
 
 
 @dataclasses.dataclass(frozen=True)
@@ -70,14 +70,6 @@ class EmailRenderer(mistune.HTMLRenderer):  # type: ignore[misc]
         title_attr = f' title="{title}"' if title else ""
         return f'<a href="{url}" style="{style}"{title_attr}>{text}</a>'
 
-    def strong(self, text: str) -> str:
-        """Render bold text."""
-        return f"<strong>{text}</strong>"
-
-    def emphasis(self, text: str) -> str:
-        """Render italic text."""
-        return f"<em>{text}</em>"
-
     def codespan(self, text: str) -> str:
         """Render inline code with monospace background."""
         style = (
@@ -111,18 +103,6 @@ class EmailRenderer(mistune.HTMLRenderer):  # type: ignore[misc]
             "width:100%; border-collapse:collapse; font-size:14px; margin:0 0 16px 0"
         )
         return f'<table style="{style}">{text}</table>\n'
-
-    def table_head(self, text: str) -> str:
-        """Render table header section."""
-        return f"<thead>{text}</thead>\n"
-
-    def table_body(self, text: str) -> str:
-        """Render table body section."""
-        return f"<tbody>{text}</tbody>\n"
-
-    def table_row(self, text: str) -> str:
-        """Render table row."""
-        return f"<tr>{text}</tr>\n"
 
     def table_cell(
         self,
@@ -312,20 +292,6 @@ def _website_display(website: str) -> str:
     return text.rstrip("/")
 
 
-def _signature_fields(
-    signature: Account | AccountSignature | None,
-) -> tuple[str | None, str | None, str | None, str | None]:
-    """Extract normalized signature fields from Account or AccountSignature."""
-    if signature is None:
-        return None, None, None, None
-    if isinstance(signature, Account):
-        nested = signature.account_signature()
-        if nested is None:
-            return None, None, None, None
-        return nested.full_name, nested.title, nested.website, nested.phone
-    return signature.full_name, signature.title, signature.website, signature.phone
-
-
 def _sig_detail_rows(
     full_name: str | None,
     title: str | None,
@@ -400,8 +366,18 @@ def _sig_color_bar() -> str:
     )
 
 
+def _signature_empty(signature: AccountSignature | None) -> bool:
+    """True when there is no signature content to render."""
+    return signature is None or (
+        signature.full_name is None
+        and signature.title is None
+        and signature.website is None
+        and signature.phone is None
+    )
+
+
 def render_signature_html(
-    signature: Account | AccountSignature | None,
+    signature: AccountSignature | None,
 ) -> str:
     """Render account signature as HTML block for wire MIME (§V.151).
 
@@ -412,9 +388,15 @@ def render_signature_html(
     the empty string (no block). Logo + colour bar always accompany a
     non-empty signature. Inline styles only; body theme never recolors.
     """
-    full_name, title, website, phone = _signature_fields(signature)
-    if full_name is None and title is None and website is None and phone is None:
+    if _signature_empty(signature):
         return ""
+    assert signature is not None
+    full_name, title, website, phone = (
+        signature.full_name,
+        signature.title,
+        signature.website,
+        signature.phone,
+    )
 
     details = _sig_detail_rows(full_name, title, website, phone)
     bar = _sig_color_bar()
@@ -452,7 +434,7 @@ def render_signature_html(
 
 
 def render_signature_text(
-    signature: Account | AccountSignature | None,
+    signature: AccountSignature | None,
 ) -> str:
     """Render account signature as plain-text block for wire MIME (§V.151).
 
@@ -462,9 +444,15 @@ def render_signature_text(
     appending to the body. Empty fields are omitted; all-empty returns the
     empty string.
     """
-    full_name, title, website, phone = _signature_fields(signature)
-    if full_name is None and title is None and website is None and phone is None:
+    if _signature_empty(signature):
         return ""
+    assert signature is not None
+    full_name, title, website, phone = (
+        signature.full_name,
+        signature.title,
+        signature.website,
+        signature.phone,
+    )
     lines: list[str] = []
     if full_name is not None:
         lines.append(full_name)

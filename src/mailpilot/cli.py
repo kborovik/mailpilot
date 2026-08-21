@@ -3161,7 +3161,7 @@ def contact_enable(contact_ref: str) -> None:
 
 @contact.command("search")
 @click.argument("query")
-@click.option("--limit", default=100, help="Maximum results.")
+@limit_option
 def contact_search(query: str, limit: int) -> None:
     """Search contacts by email, name, or title.
 
@@ -3326,7 +3326,7 @@ def email() -> None:
 
 @email.command("search")
 @click.argument("query")
-@click.option("--limit", default=100, help="Maximum number of results.")
+@limit_option
 def email_search(query: str, limit: int) -> None:
     """Search emails by subject or body."""
     from mailpilot.database import search_emails
@@ -4708,7 +4708,7 @@ def workflow_update(
 
 @workflow.command("search")
 @click.argument("query")
-@click.option("--limit", default=100, help="Maximum results.")
+@limit_option
 def workflow_search(query: str, limit: int) -> None:
     """Search workflows by name or goal."""
     from mailpilot.database import search_workflows

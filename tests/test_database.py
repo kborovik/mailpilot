@@ -78,7 +78,6 @@ from mailpilot.database import (
     get_workflow,
     get_workflow_by_name,
     get_workflow_stats,
-    has_inbound_email_from_contact_after,
     import_row_in_sync,
     import_snapshot,
     link_meeting_attendee,
@@ -6546,17 +6545,17 @@ def test_get_latest_enrollment_outcome_returns_latest_terminal(
     )
 
 
-# -- has_inbound_email_from_contact_after (§V.83) ------------------------------
+# -- list_inbound_emails_from_contact_after (§V.83) ----------------------------
 
 
-def test_has_inbound_email_from_contact_after_true_for_later_inbound(
+def test_list_inbound_emails_from_contact_after_detects_later_inbound(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.83: an inbound email from the contact after the anchor is detected."""
+    """§V.83: an inbound email from the contact after the anchor is listed."""
     account = make_test_account(database_connection)
     contact = make_test_contact(database_connection)
     prior_touch_at = datetime(2024, 1, 1, tzinfo=UTC)
-    create_email(
+    later = create_email(
         database_connection,
         account_id=account.id,
         contact_id=contact.id,
@@ -6564,13 +6563,15 @@ def test_has_inbound_email_from_contact_after_true_for_later_inbound(
         gmail_message_id="msg_reply",
         received_at=datetime(2024, 1, 2, tzinfo=UTC),
     )
+    assert later is not None
 
-    assert has_inbound_email_from_contact_after(
+    rows = list_inbound_emails_from_contact_after(
         database_connection, contact.id, prior_touch_at
     )
+    assert [row.id for row in rows] == [later.id]
 
 
-def test_has_inbound_email_from_contact_after_false_when_none_later(
+def test_list_inbound_emails_from_contact_after_empty_when_none_later(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     """§V.83: earlier inbound and later outbound do not count as a reply."""
@@ -6595,9 +6596,10 @@ def test_has_inbound_email_from_contact_after_false_when_none_later(
         sent_at=datetime(2024, 1, 3, tzinfo=UTC),
     )
 
-    assert not has_inbound_email_from_contact_after(
+    rows = list_inbound_emails_from_contact_after(
         database_connection, contact.id, prior_touch_at
     )
+    assert rows == []
 
 
 def test_list_inbound_emails_from_contact_after_returns_later_rows(

@@ -10,7 +10,7 @@ Priority (highest to lowest):
 
 import json
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 import logfire
 from pydantic import PostgresDsn, computed_field
@@ -36,27 +36,6 @@ AnthropicEffort = Literal["", "low", "medium", "high", "xhigh", "max"]
 # xAI reasoning effort: closed set, no empty/none -- Grok 4.5 always reasons.
 XaiReasoningEffort = Literal["low", "medium", "high"]
 
-# Field defaults (the lowest-priority source per the module docstring). Every
-# Settings field draws its default from one of these named constants.
-DEFAULT_DATABASE_URL = "postgresql://localhost/mailpilot"
-DEFAULT_LOGFIRE_TOKEN = ""
-DEFAULT_ENVIRONMENT: TargetEnvironment = "dev"
-DEFAULT_LLM_PROVIDER: LlmProvider = "xai"
-DEFAULT_ANTHROPIC_API_KEY = ""
-DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5"
-DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
-DEFAULT_ANTHROPIC_THINKING: AnthropicThinking = "adaptive"
-DEFAULT_ANTHROPIC_EFFORT: AnthropicEffort = "high"
-DEFAULT_ANTHROPIC_MAX_TOKENS = 32768
-DEFAULT_XAI_API_KEY = ""
-DEFAULT_XAI_MODEL = "grok-4.5"
-DEFAULT_XAI_API_HOST = ""
-DEFAULT_XAI_REASONING_EFFORT: XaiReasoningEffort = "medium"
-DEFAULT_XAI_MAX_TOKENS = 32768
-DEFAULT_GOOGLE_APPLICATION_CREDENTIALS = ""
-DEFAULT_RUN_INTERVAL = 60
-DEFAULT_MAX_CONCURRENT_TASKS = 10
-
 # Fields whose values must never appear in telemetry. database_url can carry
 # user:password@host credentials, so it is treated as secret too.
 SECRET_KEYS = frozenset(
@@ -65,12 +44,17 @@ SECRET_KEYS = frozenset(
 REDACTED = "***"
 
 
-class JsonConfigSource(PydanticBaseSettingsSource):
+class _SettingsSource(Protocol):
+    """Duck-typed pydantic-settings source: callable returning field values."""
+
+    def __call__(self) -> dict[str, Any]: ...
+
+
+class JsonConfigSource:
     """Load settings from ~/.mailpilot/config.json."""
 
-    def get_field_value(self, field: Any, field_name: str) -> tuple[Any, str, bool]:
-        """Not used -- __call__ returns the full dict."""
-        return None, field_name, False
+    def __init__(self, settings_cls: type[BaseSettings]) -> None:
+        self.settings_cls = settings_cls
 
     def __call__(self) -> dict[str, Any]:
         """Read config file and return known fields."""
@@ -92,24 +76,24 @@ class Settings(BaseSettings):
         dotenv_filtering="only_existing",
     )
 
-    database_url: PostgresDsn = PostgresDsn(DEFAULT_DATABASE_URL)
-    logfire_token: str = DEFAULT_LOGFIRE_TOKEN
-    environment: TargetEnvironment = DEFAULT_ENVIRONMENT
-    llm_provider: LlmProvider = DEFAULT_LLM_PROVIDER
-    anthropic_api_key: str = DEFAULT_ANTHROPIC_API_KEY
-    anthropic_model: str = DEFAULT_ANTHROPIC_MODEL
-    anthropic_base_url: str = DEFAULT_ANTHROPIC_BASE_URL
-    anthropic_thinking: AnthropicThinking = DEFAULT_ANTHROPIC_THINKING
-    anthropic_effort: AnthropicEffort = DEFAULT_ANTHROPIC_EFFORT
-    anthropic_max_tokens: int = DEFAULT_ANTHROPIC_MAX_TOKENS
-    xai_api_key: str = DEFAULT_XAI_API_KEY
-    xai_model: str = DEFAULT_XAI_MODEL
-    xai_api_host: str = DEFAULT_XAI_API_HOST
-    xai_reasoning_effort: XaiReasoningEffort = DEFAULT_XAI_REASONING_EFFORT
-    xai_max_tokens: int = DEFAULT_XAI_MAX_TOKENS
-    google_application_credentials: str = DEFAULT_GOOGLE_APPLICATION_CREDENTIALS
-    run_interval: int = DEFAULT_RUN_INTERVAL
-    max_concurrent_tasks: int = DEFAULT_MAX_CONCURRENT_TASKS
+    database_url: PostgresDsn = PostgresDsn("postgresql://localhost/mailpilot")
+    logfire_token: str = ""
+    environment: TargetEnvironment = "dev"
+    llm_provider: LlmProvider = "xai"
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-sonnet-5"
+    anthropic_base_url: str = "https://api.anthropic.com"
+    anthropic_thinking: AnthropicThinking = "adaptive"
+    anthropic_effort: AnthropicEffort = "high"
+    anthropic_max_tokens: int = 32768
+    xai_api_key: str = ""
+    xai_model: str = "grok-4.5"
+    xai_api_host: str = ""
+    xai_reasoning_effort: XaiReasoningEffort = "medium"
+    xai_max_tokens: int = 32768
+    google_application_credentials: str = ""
+    run_interval: int = 60
+    max_concurrent_tasks: int = 10
 
     @computed_field
     @property
@@ -124,21 +108,22 @@ class Settings(BaseSettings):
         return f"mailpilot-sub-{self.environment}"
 
     @classmethod
-    def settings_customise_sources(
+    def settings_customise_sources(  # pyright: ignore[reportIncompatibleMethodOverride]
         cls,
         settings_cls: type[BaseSettings],
         init_settings: PydanticBaseSettingsSource,
         env_settings: PydanticBaseSettingsSource,
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
-    ) -> tuple[PydanticBaseSettingsSource, ...]:
+    ) -> tuple[_SettingsSource, ...]:
         """Set source priority: kwargs > process env > cwd .env > config file."""
         del file_secret_settings  # unused; secrets stay in env / config / dotenv
+        json_source: _SettingsSource = JsonConfigSource(settings_cls)
         return (
             init_settings,
             env_settings,
             dotenv_settings,
-            JsonConfigSource(settings_cls),
+            json_source,
         )
 
 
