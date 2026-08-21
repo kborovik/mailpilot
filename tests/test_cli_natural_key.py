@@ -247,7 +247,7 @@ def test_workflow_view_by_name_uses_natural_key(
 
     assert result.exit_code == 0, result.output
     by_name.assert_called_once_with(conn, "ai-engineering")
-    by_id.assert_called_once_with(conn, workflow.id)
+    by_id.assert_not_called()
 
 
 def test_workflow_view_by_uuid_uses_id(runner: CliRunner, conn: MagicMock) -> None:

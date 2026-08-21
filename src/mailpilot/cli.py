@@ -10,10 +10,10 @@ When adding new commands, keep imports inside the function body.
 from __future__ import annotations
 
 import json
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from importlib.metadata import distribution
-from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypedDict, overload
 
 import click
 
@@ -39,7 +39,13 @@ if TYPE_CHECKING:
 
     from logfire import ScrubMatch
 
-    from mailpilot.models import Account, Company, Contact, EnrollmentBatchAction
+    from mailpilot.models import (
+        Account,
+        Company,
+        Contact,
+        EnrollmentBatchAction,
+        Workflow,
+    )
 
 # Hex digit set for the UUID-shape probe in _looks_like_uuid (natural-key vs id).
 _HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
@@ -414,24 +420,6 @@ def _parse_ndjson_object(
     return parsed, None
 
 
-def _lookup_company_soft(connection: Any, company_ref: str) -> Company | None:
-    """Resolve company by domain or UUID without exiting on miss (§V.139 batch)."""
-    from mailpilot.database import get_company, get_company_by_domain
-
-    if _looks_like_uuid(company_ref):
-        return get_company(connection, company_ref)
-    return get_company_by_domain(connection, company_ref)
-
-
-def _lookup_contact_soft(connection: Any, contact_ref: str) -> Contact | None:
-    """Resolve contact by email or UUID without exiting on miss (§V.139 batch)."""
-    from mailpilot.database import get_contact, get_contact_by_email
-
-    if _looks_like_uuid(contact_ref):
-        return get_contact(connection, contact_ref)
-    return get_contact_by_email(connection, contact_ref)
-
-
 def _required_nonempty_str(
     payload: dict[str, object], key: str, line_number: int
 ) -> tuple[str | None, str, dict[str, object] | None]:
@@ -489,7 +477,7 @@ def _company_disable_stdin_row(
         # Prefer domain as ref when reason is the only missing field.
         return _batch_error(ref, "validation_error", "reason is required")
     assert reason is not None
-    company = _lookup_company_soft(connection, domain)
+    company = _resolve_company(connection, domain, missing="none")
     if company is None:
         return _batch_error(domain, "not_found", f"company not found: {domain}")
     if company.disabled_reason is None:
@@ -631,7 +619,7 @@ def _contact_create_stdin_row(  # noqa: C901, PLR0911, PLR0912
     company_id: str | None = None
     company_domain_set = isinstance(company_domain, str)
     if company_domain_set:
-        company = _lookup_company_soft(connection, str(company_domain))
+        company = _resolve_company(connection, str(company_domain), missing="none")
         if company is None:
             return _batch_error(
                 ref, "not_found", f"company not found: {company_domain}"
@@ -746,6 +734,53 @@ def _looks_like_uuid(value: str) -> bool:
     )
 
 
+@overload
+def _resolve[Row](
+    connection: Any,
+    ref: str,
+    *,
+    get_id: Callable[[Any, str], Row | None],
+    get_key: Callable[[Any, str], Row | None],
+    noun: str,
+    missing: Literal["error"] = "error",
+) -> Row: ...
+
+
+@overload
+def _resolve[Row](
+    connection: Any,
+    ref: str,
+    *,
+    get_id: Callable[[Any, str], Row | None],
+    get_key: Callable[[Any, str], Row | None],
+    noun: str,
+    missing: Literal["none"],
+) -> Row | None: ...
+
+
+def _resolve[Row](
+    connection: Any,
+    ref: str,
+    *,
+    get_id: Callable[[Any, str], Row | None],
+    get_key: Callable[[Any, str], Row | None],
+    noun: str,
+    missing: Literal["error", "none"] = "error",
+) -> Row | None:
+    """Polymorphic natural-key or UUID lookup (§V.107).
+
+    UUID-shaped refs resolve via ``get_id``; every other value via ``get_key``.
+    Hard miss (``missing="error"``) exits ``not_found``; soft miss
+    (``missing="none"``) returns ``None``. Soft vs hard differs only on miss.
+    """
+    row = get_id(connection, ref) if _looks_like_uuid(ref) else get_key(connection, ref)
+    if row is not None:
+        return row
+    if missing == "none":
+        return None
+    output_error(f"{noun} not found: {ref}", "not_found")
+
+
 def _resolve_account(connection: Any, account_ref: str | None) -> Account:
     """Resolve an account reference (email or UUID) to its full row (§V.107).
 
@@ -753,131 +788,118 @@ def _resolve_account(connection: Any, account_ref: str | None) -> Account:
     natural key (§V.90), case-insensitively via ``get_account_by_email``. A
     None ref (the flag was omitted) exits ``validation_error``; an unknown key
     exits ``not_found`` per §V.94.
-
-    Args:
-        connection: Open database connection.
-        account_ref: Value of ``--account-email`` (email | UUID | None).
-
-    Returns:
-        The resolved ``Account`` row.
     """
     from mailpilot.database import get_account, get_account_by_email
 
     if account_ref is None:
         output_error("--account-email is required", "validation_error")
-    account = (
-        get_account(connection, account_ref)
-        if _looks_like_uuid(account_ref)
-        else get_account_by_email(connection, account_ref)
+    return _resolve(
+        connection,
+        account_ref,
+        get_id=get_account,
+        get_key=get_account_by_email,
+        noun="account",
     )
-    if account is None:
-        output_error(f"account not found: {account_ref}", "not_found")
-    return account
 
 
-def _resolve_company(connection: Any, company_ref: str) -> Company:
+@overload
+def _resolve_company(
+    connection: Any, company_ref: str, *, missing: Literal["error"] = "error"
+) -> Company: ...
+
+
+@overload
+def _resolve_company(
+    connection: Any, company_ref: str, *, missing: Literal["none"]
+) -> Company | None: ...
+
+
+def _resolve_company(
+    connection: Any,
+    company_ref: str,
+    *,
+    missing: Literal["error", "none"] = "error",
+) -> Company | None:
     """Resolve a company reference (domain or UUID) to its full row (§V.107).
 
     A UUID-shaped ref resolves by id; any other value resolves by the domain
-    natural key (§V.90) via ``get_company_by_domain``. An unknown key exits
-    ``not_found`` per §V.94.
-
-    Args:
-        connection: Open database connection.
-        company_ref: A company domain or UUID.
-
-    Returns:
-        The resolved ``Company`` row.
+    natural key (§V.90) via ``get_company_by_domain``. Hard miss exits
+    ``not_found`` per §V.94; soft miss (``missing="none"``) returns ``None``.
     """
     from mailpilot.database import get_company, get_company_by_domain
 
-    company = (
-        get_company(connection, company_ref)
-        if _looks_like_uuid(company_ref)
-        else get_company_by_domain(connection, company_ref)
+    return _resolve(
+        connection,
+        company_ref,
+        get_id=get_company,
+        get_key=get_company_by_domain,
+        noun="company",
+        missing=missing,
     )
-    if company is None:
-        output_error(f"company not found: {company_ref}", "not_found")
-    return company
 
 
-def _resolve_contact(connection: Any, contact_ref: str) -> Contact:
+@overload
+def _resolve_contact(
+    connection: Any, contact_ref: str, *, missing: Literal["error"] = "error"
+) -> Contact: ...
+
+
+@overload
+def _resolve_contact(
+    connection: Any, contact_ref: str, *, missing: Literal["none"]
+) -> Contact | None: ...
+
+
+def _resolve_contact(
+    connection: Any,
+    contact_ref: str,
+    *,
+    missing: Literal["error", "none"] = "error",
+) -> Contact | None:
     """Resolve a contact reference (email or UUID) to its full row (§V.107).
 
     A UUID-shaped ref resolves by id; any other value resolves by the email
-    natural key (§V.90) via ``get_contact_by_email``. An unknown key exits
-    ``not_found`` per §V.94.
-
-    Args:
-        connection: Open database connection.
-        contact_ref: A contact email or UUID.
-
-    Returns:
-        The resolved ``Contact`` row.
+    natural key (§V.90) via ``get_contact_by_email``. Hard miss exits
+    ``not_found`` per §V.94; soft miss (``missing="none"``) returns ``None``.
     """
     from mailpilot.database import get_contact, get_contact_by_email
 
-    contact = (
-        get_contact(connection, contact_ref)
-        if _looks_like_uuid(contact_ref)
-        else get_contact_by_email(connection, contact_ref)
+    return _resolve(
+        connection,
+        contact_ref,
+        get_id=get_contact,
+        get_key=get_contact_by_email,
+        noun="contact",
+        missing=missing,
     )
-    if contact is None:
-        output_error(f"contact not found: {contact_ref}", "not_found")
-    return contact
 
 
 def _resolve_company_id(connection: Any, company_ref: str) -> str:
-    """Resolve a company reference to its id, deferring existence to the caller.
-
-    A UUID-shaped ref passes through unfetched (the caller's own ``load``/
-    ``get`` validates existence); a domain resolves via the natural key,
-    exiting ``not_found`` when unknown (§V.94, §V.107).
-    """
-    if _looks_like_uuid(company_ref):
-        return company_ref
-    from mailpilot.database import get_company_by_domain
-
-    company = get_company_by_domain(connection, company_ref)
-    if company is None:
-        output_error(f"company not found: {company_ref}", "not_found")
-    return company.id
+    """Resolve a company domain or UUID to its id; miss → ``not_found``."""
+    return _resolve_company(connection, company_ref).id
 
 
 def _resolve_contact_id(connection: Any, contact_ref: str) -> str:
-    """Resolve a contact reference to its id, deferring existence to the caller.
+    """Resolve a contact email or UUID to its id; miss → ``not_found``."""
+    return _resolve_contact(connection, contact_ref).id
 
-    A UUID-shaped ref passes through unfetched (the caller's own ``load``/
-    ``get`` validates existence); an email resolves via the natural key,
-    exiting ``not_found`` when unknown (§V.94, §V.107).
-    """
-    if _looks_like_uuid(contact_ref):
-        return contact_ref
-    from mailpilot.database import get_contact_by_email
 
-    contact = get_contact_by_email(connection, contact_ref)
-    if contact is None:
-        output_error(f"contact not found: {contact_ref}", "not_found")
-    return contact.id
+def _resolve_workflow(connection: Any, workflow_ref: str) -> Workflow:
+    """Resolve a workflow name or UUID to its full row; miss → ``not_found``."""
+    from mailpilot.database import get_workflow, get_workflow_by_name
+
+    return _resolve(
+        connection,
+        workflow_ref,
+        get_id=get_workflow,
+        get_key=get_workflow_by_name,
+        noun="workflow",
+    )
 
 
 def _resolve_workflow_id(connection: Any, workflow_ref: str) -> str:
-    """Resolve a workflow reference (name or UUID) to its id (§V.107, §V.90).
-
-    Workflow is a keyed entity addressed by its globally unique ``name``
-    (§V.103). A UUID-shaped ref passes through unfetched (the caller's own
-    ``get``/lifecycle call validates existence); any other value resolves via
-    the ``name`` natural key, case-insensitively, exiting ``not_found`` when
-    unknown (§V.94).
-    """
-    if _looks_like_uuid(workflow_ref):
-        return workflow_ref
-    from mailpilot.database import get_workflow_by_name
-
-    workflow = get_workflow_by_name(connection, workflow_ref)
-    if workflow is None:
-        output_error(f"workflow not found: {workflow_ref}", "not_found")
-    return workflow.id
+    """Resolve a workflow name or UUID to its id; miss → ``not_found``."""
+    return _resolve_workflow(connection, workflow_ref).id
 
 
 def _resolve_tag(connection: Any, tag_ref: str) -> Any:
@@ -890,17 +912,25 @@ def _resolve_tag(connection: Any, tag_ref: str) -> Any:
     """
     from mailpilot.database import get_tag, get_tag_by_name
 
-    try:
-        tag = (
-            get_tag(connection, tag_ref)
-            if _looks_like_uuid(tag_ref)
-            else get_tag_by_name(connection, tag_ref)
-        )
-    except ValueError:
-        tag = None
-    if tag is None:
-        output_error(f"tag not found: {tag_ref}", "not_found")
-    return tag
+    def _get_id(conn: Any, ref: str) -> Any:
+        try:
+            return get_tag(conn, ref)
+        except ValueError:
+            return None
+
+    def _get_key(conn: Any, ref: str) -> Any:
+        try:
+            return get_tag_by_name(conn, ref)
+        except ValueError:
+            return None
+
+    return _resolve(
+        connection,
+        tag_ref,
+        get_id=_get_id,
+        get_key=_get_key,
+        noun="tag",
+    )
 
 
 def _resolve_tag_ids(connection: Any, tag_refs: tuple[str, ...]) -> list[str]:
@@ -1097,7 +1127,7 @@ def show_queue(
 
     from tabulate import tabulate
 
-    from mailpilot.database import get_queue_report, get_workflow
+    from mailpilot.database import get_queue_report
     from mailpilot.queue import (
         project_queue_json_next_at,
         queue_table_cells,
@@ -1115,8 +1145,6 @@ def show_queue(
         resolved_workflow_id: str | None = None
         if workflow_name is not None:
             resolved_workflow_id = _resolve_workflow_id(connection, workflow_name)
-            if get_workflow(connection, resolved_workflow_id) is None:
-                output_error(f"workflow not found: {workflow_name}", "not_found")
         report = get_queue_report(
             connection,
             detail=detail,
@@ -3282,26 +3310,19 @@ def contact_view(
     bounded dossier (enrollments + emails + activities). Default path
     stays notes-only for agent prompt budget.
     """
-    from mailpilot.database import (
-        get_contact,
-        load_contact_timeline,
-        load_contact_view,
-    )
+    from mailpilot.database import load_contact_timeline, load_contact_view
 
     with _db() as connection:
-        contact_id = _resolve_contact_id(connection, contact_ref)
+        contact = _resolve_contact(connection, contact_ref)
         if timeline:
-            payload = load_contact_timeline(connection, contact_id, limit=limit)
+            payload = load_contact_timeline(connection, contact.id, limit=limit)
             if payload is None:
                 output_error(f"contact not found: {contact_ref}", "not_found")
             if include_meta:
-                row = get_contact(connection, contact_id)
-                payload["verification_meta"] = (
-                    row.verification_meta if row is not None else None
-                )
+                payload["verification_meta"] = contact.verification_meta
             output({"contact": payload})
             return
-        found = load_contact_view(connection, contact_id)
+        found = load_contact_view(connection, contact.id)
         if found is None:
             output_error(f"contact not found: {contact_ref}", "not_found")
         if not include_meta:
@@ -3309,10 +3330,7 @@ def contact_view(
             return
         # Default ContactView is agent-safe; merge meta only when operator asks.
         payload = found.model_dump(mode="json")
-        row = get_contact(connection, contact_id)
-        payload["verification_meta"] = (
-            row.verification_meta if row is not None else None
-        )
+        payload["verification_meta"] = contact.verification_meta
         output({"contact": payload})
 
 
@@ -3371,7 +3389,6 @@ def email_list(
 ) -> None:
     """List emails with optional filters (requires at least one scope filter)."""
     from mailpilot.database import (
-        get_workflow,
         list_emails,
     )
 
@@ -3405,13 +3422,11 @@ def email_list(
             if account_email is not None
             else None
         )
-        # Polymorphic name|UUID resolve (§V.107/§V.154); UUID existence still
-        # validated so unknown ids stay not_found (same envelope as task list).
-        resolved_workflow_id: str | None = None
-        if workflow_id is not None:
-            resolved_workflow_id = _resolve_workflow_id(connection, workflow_id)
-            if get_workflow(connection, resolved_workflow_id) is None:
-                output_error(f"workflow not found: {workflow_id}", "not_found")
+        resolved_workflow_id: str | None = (
+            _resolve_workflow_id(connection, workflow_id)
+            if workflow_id is not None
+            else None
+        )
         emails = list_emails(
             connection,
             limit=limit,
@@ -3458,7 +3473,7 @@ def email_view(email_id: str) -> None:
 )
 @click.option("--subject", required=True, help="Email subject.")
 @click.option("--body", required=True, help="Plain text body.")
-@click.option("--workflow-id", default=None, help="Link to a workflow.")
+@click.option("--workflow-id", default=None, help="Link to a workflow (name or ID).")
 @click.option("--cc", default=None, help="CC recipient(s), comma-separated.")
 @click.option("--bcc", default=None, help="BCC recipient(s), comma-separated.")
 def email_send(
@@ -3477,7 +3492,6 @@ def email_send(
     import logfire
 
     from mailpilot import email_ops
-    from mailpilot.database import get_workflow
     from mailpilot.gmail import GmailClient
     from mailpilot.settings import get_settings
 
@@ -3490,8 +3504,11 @@ def email_send(
     settings = get_settings()
     with _db(mutate=True) as connection:
         account = _resolve_account(connection, account_email)
-        if workflow_id is not None and get_workflow(connection, workflow_id) is None:
-            output_error(f"workflow not found: {workflow_id}", "not_found")
+        resolved_workflow_id = (
+            _resolve_workflow_id(connection, workflow_id)
+            if workflow_id is not None
+            else None
+        )
         client = GmailClient(account.email)
         try:
             sent = email_ops.send_email(
@@ -3502,7 +3519,7 @@ def email_send(
                 to=to_joined,
                 subject=subject,
                 body=body,
-                workflow_id=workflow_id,
+                workflow_id=resolved_workflow_id,
                 cc=cc,
                 bcc=bcc,
             )
@@ -3530,7 +3547,7 @@ def email_send(
     help="ID of the email being replied to.",
 )
 @click.option("--body", required=True, help="Reply body (plain text).")
-@click.option("--workflow-id", default=None, help="Link to a workflow.")
+@click.option("--workflow-id", default=None, help="Link to a workflow (name or ID).")
 @click.option("--cc", default=None, help="CC recipient(s), comma-separated.")
 @click.option("--bcc", default=None, help="BCC recipient(s), comma-separated.")
 def email_reply(
@@ -3549,7 +3566,6 @@ def email_reply(
     import logfire
 
     from mailpilot import email_ops
-    from mailpilot.database import get_workflow
     from mailpilot.gmail import GmailClient
     from mailpilot.settings import get_settings
 
@@ -3559,8 +3575,11 @@ def email_reply(
     settings = get_settings()
     with _db(mutate=True) as connection:
         account = _resolve_account(connection, account_email)
-        if workflow_id is not None and get_workflow(connection, workflow_id) is None:
-            output_error(f"workflow not found: {workflow_id}", "not_found")
+        resolved_workflow_id = (
+            _resolve_workflow_id(connection, workflow_id)
+            if workflow_id is not None
+            else None
+        )
         client = GmailClient(account.email)
         try:
             sent = email_ops.reply_email(
@@ -3570,7 +3589,7 @@ def email_reply(
                 settings=settings,
                 email_id=email_id,
                 body=body,
-                workflow_id=workflow_id,
+                workflow_id=resolved_workflow_id,
                 cc=cc,
                 bcc=bcc,
             )
@@ -3932,9 +3951,9 @@ def tag_add(  # noqa: C901, PLR0912
             results: list[dict[str, object]] = []
             for ref in owner_refs:
                 if owner_kind == "contact":
-                    owner = _lookup_contact_soft(connection, ref)
+                    owner = _resolve_contact(connection, ref, missing="none")
                 else:
-                    owner = _lookup_company_soft(connection, ref)
+                    owner = _resolve_company(connection, ref, missing="none")
                 if owner is None:
                     results.append(
                         _batch_error(
@@ -4165,9 +4184,9 @@ def tag_remove(  # noqa: C901, PLR0912
             results: list[dict[str, object]] = []
             for ref in owner_refs:
                 if owner_kind == "contact":
-                    owner = _lookup_contact_soft(connection, ref)
+                    owner = _resolve_contact(connection, ref, missing="none")
                 else:
-                    owner = _lookup_company_soft(connection, ref)
+                    owner = _resolve_company(connection, ref, missing="none")
                 if owner is None:
                     results.append(
                         _batch_error(
@@ -4678,7 +4697,7 @@ def workflow_update(
     only non-def fields -- account binding here, status via ``start`` / ``stop``.
     """
     # Def fields import-only; update restricted to non-def fields per §V.103.
-    from mailpilot.database import get_workflow, update_workflow
+    from mailpilot.database import update_workflow
     from mailpilot.operator_log import cli_mutation, operator_event
 
     if account_email is None:
@@ -4688,10 +4707,8 @@ def workflow_update(
             "validation_error",
         )
     with _db(mutate=True) as connection:
-        workflow_id = _resolve_workflow_id(connection, workflow_ref)
-        before = get_workflow(connection, workflow_id)
-        if before is None:
-            output_error(f"workflow not found: {workflow_ref}", "not_found")
+        before = _resolve_workflow(connection, workflow_ref)
+        workflow_id = before.id
         account_id = _resolve_account(connection, account_email).id
         with cli_mutation("workflow", "update", entity_id=workflow_id):
             updated = update_workflow(connection, workflow_id, account_id=account_id)
@@ -4764,14 +4781,8 @@ def workflow_list(
 @click.argument("workflow_ref")
 def workflow_view(workflow_ref: str) -> None:
     """Show a workflow by name or ID."""
-    from mailpilot.database import get_workflow
-
     with _db() as connection:
-        workflow_id = _resolve_workflow_id(connection, workflow_ref)
-        found = get_workflow(connection, workflow_id)
-        if found is None:
-            output_error(f"workflow not found: {workflow_ref}", "not_found")
-        output_entity("workflow", found)
+        output_entity("workflow", _resolve_workflow(connection, workflow_ref))
 
 
 @workflow.command("stats")
@@ -4874,7 +4885,6 @@ def workflow_review(
     from datetime import UTC, datetime
 
     from mailpilot.database import (
-        get_workflow,
         get_workflow_review,
         list_active_workflows,
     )
@@ -4898,11 +4908,7 @@ def workflow_review(
         if workflow_ref.casefold() == "all":
             workflow_ids = [w.id for w in list_active_workflows(connection)]
         else:
-            workflow_id = _resolve_workflow_id(connection, workflow_ref)
-            found = get_workflow(connection, workflow_id)
-            if found is None:
-                output_error(f"workflow not found: {workflow_ref}", "not_found")
-            workflow_ids = [workflow_id]
+            workflow_ids = [_resolve_workflow_id(connection, workflow_ref)]
         review = get_workflow_review(
             connection,
             workflow_ids,
@@ -6383,8 +6389,6 @@ def enrollment_add(
     ``enrollment_batch`` envelope. ``--tag`` matches company tags or
     contact tags (union, unique by contact).
     """
-    from mailpilot.database import get_workflow
-
     scheduled_iso = _validate_enrollment_add_args(
         contact_email,
         tag_ref,
@@ -6400,10 +6404,7 @@ def enrollment_add(
         _read_enrollment_batch_file(file_path) if file_path is not None else None
     )
     with _db(mutate=True) as connection:
-        workflow_id = _resolve_workflow_id(connection, workflow_ref)
-        workflow = get_workflow(connection, workflow_id)
-        if workflow is None:
-            output_error(f"workflow not found: {workflow_ref}", "not_found")
+        workflow = _resolve_workflow(connection, workflow_ref)
         if dry_run and tag_ref is not None:
             _enrollment_add_tag_preview(
                 connection,
@@ -6700,7 +6701,6 @@ def enrollment_list(
     latest terminal disposition (meeting_booked, do_not_contact, contact_later).
     """
     from mailpilot.database import (
-        get_workflow,
         list_enrollments_detailed,
     )
     from mailpilot.models import ENROLLMENT_FULL_FIELDS
@@ -6713,13 +6713,11 @@ def enrollment_list(
         )
 
     with _db() as connection:
-        # Polymorphic name|UUID resolve (§V.107/§V.152); UUID existence still
-        # validated so unknown ids stay not_found (same envelope as today).
-        resolved_workflow_id: str | None = None
-        if workflow_id is not None:
-            resolved_workflow_id = _resolve_workflow_id(connection, workflow_id)
-            if get_workflow(connection, resolved_workflow_id) is None:
-                output_error(f"workflow not found: {workflow_id}", "not_found")
+        resolved_workflow_id: str | None = (
+            _resolve_workflow_id(connection, workflow_id)
+            if workflow_id is not None
+            else None
+        )
         contact_id = (
             _resolve_contact(connection, contact_email).id
             if contact_email is not None
@@ -6791,18 +6789,15 @@ def task_list(
 ) -> None:
     """List tasks as summaries with optional filters."""
     from mailpilot.database import (
-        get_workflow,
         list_tasks,
     )
 
     with _db() as connection:
-        # Polymorphic name|UUID resolve (§V.107); UUID existence still
-        # validated so unknown ids stay not_found (same envelope as today).
-        resolved_workflow_id: str | None = None
-        if workflow_id is not None:
-            resolved_workflow_id = _resolve_workflow_id(connection, workflow_id)
-            if get_workflow(connection, resolved_workflow_id) is None:
-                output_error(f"workflow not found: {workflow_id}", "not_found")
+        resolved_workflow_id: str | None = (
+            _resolve_workflow_id(connection, workflow_id)
+            if workflow_id is not None
+            else None
+        )
         contact_id = (
             _resolve_contact(connection, contact_email).id
             if contact_email is not None
@@ -6841,17 +6836,14 @@ def task_stats(
 
     from mailpilot.database import (
         get_task_stats,
-        get_workflow,
     )
 
     with _db() as connection:
-        # Polymorphic name|UUID resolve (§V.107); UUID existence still
-        # validated so unknown ids stay not_found (same envelope as today).
-        resolved_workflow_id: str | None = None
-        if workflow_id is not None:
-            resolved_workflow_id = _resolve_workflow_id(connection, workflow_id)
-            if get_workflow(connection, resolved_workflow_id) is None:
-                output_error(f"workflow not found: {workflow_id}", "not_found")
+        resolved_workflow_id: str | None = (
+            _resolve_workflow_id(connection, workflow_id)
+            if workflow_id is not None
+            else None
+        )
         try:
             ZoneInfo(bucket_tz)
         except ZoneInfoNotFoundError, ValueError:
@@ -6912,7 +6904,6 @@ def task_cancel(
     from mailpilot.database import (
         cancel_task,
         cancel_tasks_matching,
-        get_workflow,
     )
 
     has_required_filter = bool(
@@ -6956,11 +6947,11 @@ def task_cancel(
             output_entity("task", cancelled)
             return
 
-        resolved_workflow_id: str | None = None
-        if workflow_id is not None:
-            resolved_workflow_id = _resolve_workflow_id(connection, workflow_id)
-            if get_workflow(connection, resolved_workflow_id) is None:
-                output_error(f"workflow not found: {workflow_id}", "not_found")
+        resolved_workflow_id: str | None = (
+            _resolve_workflow_id(connection, workflow_id)
+            if workflow_id is not None
+            else None
+        )
         contact_id = (
             _resolve_contact(connection, contact_email).id
             if contact_email is not None
@@ -7080,7 +7071,6 @@ def task_retry(
     """
     from mailpilot.database import (
         get_task,
-        get_workflow,
         manual_retry_task,
         retry_tasks_matching,
     )
@@ -7129,11 +7119,11 @@ def task_retry(
             output_entity("task", reset)
             return
 
-        resolved_workflow_id: str | None = None
-        if workflow_id is not None:
-            resolved_workflow_id = _resolve_workflow_id(connection, workflow_id)
-            if get_workflow(connection, resolved_workflow_id) is None:
-                output_error(f"workflow not found: {workflow_id}", "not_found")
+        resolved_workflow_id: str | None = (
+            _resolve_workflow_id(connection, workflow_id)
+            if workflow_id is not None
+            else None
+        )
         contact_id = (
             _resolve_contact(connection, contact_email).id
             if contact_email is not None

@@ -563,13 +563,16 @@ Trigger: `src/mailpilot/drive.py` changed.
 
 Keyed entities (account=email, company=domain, contact=email, tag=name, workflow=name §V.103) addressed by natural key. Keyless entities (email, note, task, enrollment) addressed by UUID. Polymorphic resolver: value matching UUIDv7 shape (`8-4-4-4-12` hex) → resolve by id; any other value → resolve by natural key (domain has dots, email has at-sign, workflow `name` is kebab with neither nor UUID-shape — never collide), case-insensitive. Unknown key → `not_found`. Every single-entity verb target = positional `<key>` arg, NEVER `--<entity>-id` option. Scope/owner options named for owner natural key (`--company-domain`, `--contact-email`). Account-requiring cmds take a single `--account-email` (polymorphic, resolves email|UUID). `account sync --account-email` is optional (all accounts when omitted). `account sync --since <iso>` bounds full-INBOX backfill on first sync.
 
-`--workflow-id` on list/filter/mutate surfaces resolves name or UUID via `_resolve_workflow_id` (workflow keyed by `name` §V.90/§V.103 — flag retains `-id` historically but accepts natural key). Help text: "name or ID". UUID-only `get_workflow(connection, raw_flag)` without resolve = drift. Unknown name or UUID → `not_found` (same envelope). Complying surfaces: `enrollment add` + `activity list` + `enrollment list` + `task list` + `task stats` + `email list` (#211, #213).
+One `_resolve(conn, ref, *, get_id, get_key, noun, missing="error")` covers hard (`output_error` not_found) and soft (`None` on miss) lookup; soft vs hard differs only on miss. `_resolve_*_id` = fetched row `.id` (UUID-shape still fetches; pass-through unfetched = drift). `_resolve_workflow` always loads the row (UUID existence in the resolver, not re-checked at call sites). `email send` + `email reply` `--workflow-id` name|UUID via same resolver; UUID-only `get_workflow(connection, raw_flag)` without resolve = drift. Unknown UUID-shaped id still `not_found`.
+
+`--workflow-id` on list/filter/mutate surfaces resolves name or UUID via `_resolve_workflow` / `_resolve_workflow_id` (workflow keyed by `name` §V.90/§V.103 — flag retains `-id` historically but accepts natural key). Help text: "name or ID". Unknown name or UUID → `not_found` (same envelope). Complying surfaces: `enrollment add` + `activity list` + `enrollment list` + `task list` + `task stats` + `email list` + `email send` + `email reply` (#211, #213, #258).
 
 Trigger: `src/mailpilot/cli.py` changed.
 - `rg '"--\w+-id"' src/mailpilot/cli.py` -> only `--workflow-id` (keyless) present; no `--company-id`, `--contact-id`, `--account-id` options
 - `rg '"--account-email"' src/mailpilot/cli.py | wc -l` -> single polymorphic `--account-email` on account-requiring cmds
+- `rg 'def _resolve\(' src/mailpilot/cli.py` -> one `_resolve` covers hard+soft
 - `rg 'polymorphic\|UUIDv7.*shape\|8-4-4-4-12\|_is_uuid\|uuid.*shape' src/mailpilot/cli.py` -> UUID-shape resolver present
-- `rg '_resolve_workflow_id' src/mailpilot/cli.py` -> resolver present; task list|stats + enrollment list + email list paths resolve before list/stats query
+- `rg '_resolve_workflow' src/mailpilot/cli.py` -> always-load workflow resolver; send|reply + list/filter surfaces resolve name|UUID before get
 
 ## §V108 — migration registry + schema-hash re-stamp
 

@@ -917,10 +917,14 @@ JSON → `validation_error`. `--limit` below 1 → `validation_error`.
 
 ### Send and reply by hand
 
+`--workflow-id` on `email send` and `email reply` accepts workflow name or UUID
+(same polymorphic resolve as enrollment/task list). Unknown UUID-shaped ids return `not_found`.
+
 ```
 mailpilot email send --account-email <ADDR> --to lead@example.com \
-    --subject "Hello" --body "..."
-mailpilot email reply --account-email <ADDR> --email-id <EMAIL_ID> --body "..."
+    --subject "Hello" --body "..." --workflow-id <NAME_OR_ID>
+mailpilot email reply --account-email <ADDR> --email-id <EMAIL_ID> --body "..." \
+    --workflow-id <NAME_OR_ID>
 ```
 
 ### Tag, note, and audit
