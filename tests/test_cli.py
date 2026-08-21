@@ -5102,7 +5102,7 @@ def test_contact_view_include_meta(
         result = runner.invoke(main, ["contact", "view", contact.id, "--include-meta"])
 
     assert result.exit_code == 0
-    mock_get.assert_called_with(mock_connection, contact.id)
+    mock_get.assert_called_once_with(mock_connection, contact.id)
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["contact"]["verification_meta"] == meta
@@ -6382,7 +6382,6 @@ def test_skill_documents_email_send_reply_workflow_name() -> None:
     assert "email send" in body
     assert "email reply" in body
     assert "--workflow-id <NAME_OR_ID>" in body
-    assert "always-load" in body
     assert "§V." not in body
 
 

@@ -918,7 +918,7 @@ JSON → `validation_error`. `--limit` below 1 → `validation_error`.
 ### Send and reply by hand
 
 `--workflow-id` on `email send` and `email reply` accepts workflow name or UUID
-(same always-load resolver as list). Unknown UUID-shaped ids return `not_found`.
+(same polymorphic resolve as enrollment/task list). Unknown UUID-shaped ids return `not_found`.
 
 ```
 mailpilot email send --account-email <ADDR> --to lead@example.com \

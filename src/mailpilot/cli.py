@@ -13,7 +13,7 @@ import json
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from importlib.metadata import distribution
-from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypedDict, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypedDict, overload
 
 import click
 
@@ -420,34 +420,6 @@ def _parse_ndjson_object(
     return parsed, None
 
 
-def _lookup_company_soft(connection: Any, company_ref: str) -> Company | None:
-    """Resolve company by domain or UUID without exiting on miss (§V.139 batch)."""
-    from mailpilot.database import get_company, get_company_by_domain
-
-    return _resolve(
-        connection,
-        company_ref,
-        get_id=get_company,
-        get_key=get_company_by_domain,
-        noun="company",
-        missing="none",
-    )
-
-
-def _lookup_contact_soft(connection: Any, contact_ref: str) -> Contact | None:
-    """Resolve contact by email or UUID without exiting on miss (§V.139 batch)."""
-    from mailpilot.database import get_contact, get_contact_by_email
-
-    return _resolve(
-        connection,
-        contact_ref,
-        get_id=get_contact,
-        get_key=get_contact_by_email,
-        noun="contact",
-        missing="none",
-    )
-
-
 def _required_nonempty_str(
     payload: dict[str, object], key: str, line_number: int
 ) -> tuple[str | None, str, dict[str, object] | None]:
@@ -505,7 +477,7 @@ def _company_disable_stdin_row(
         # Prefer domain as ref when reason is the only missing field.
         return _batch_error(ref, "validation_error", "reason is required")
     assert reason is not None
-    company = _lookup_company_soft(connection, domain)
+    company = _resolve_company(connection, domain, missing="none")
     if company is None:
         return _batch_error(domain, "not_found", f"company not found: {domain}")
     if company.disabled_reason is None:
@@ -647,7 +619,7 @@ def _contact_create_stdin_row(  # noqa: C901, PLR0911, PLR0912
     company_id: str | None = None
     company_domain_set = isinstance(company_domain, str)
     if company_domain_set:
-        company = _lookup_company_soft(connection, str(company_domain))
+        company = _resolve_company(connection, str(company_domain), missing="none")
         if company is None:
             return _batch_error(
                 ref, "not_found", f"company not found: {company_domain}"
@@ -762,42 +734,39 @@ def _looks_like_uuid(value: str) -> bool:
     )
 
 
-_Row = TypeVar("_Row")
-
-
 @overload
-def _resolve(  # noqa: UP047
+def _resolve[Row](
     connection: Any,
     ref: str,
     *,
-    get_id: Callable[[Any, str], _Row | None],
-    get_key: Callable[[Any, str], _Row | None],
+    get_id: Callable[[Any, str], Row | None],
+    get_key: Callable[[Any, str], Row | None],
     noun: str,
     missing: Literal["error"] = "error",
-) -> _Row: ...
+) -> Row: ...
 
 
 @overload
-def _resolve(  # noqa: UP047
+def _resolve[Row](
     connection: Any,
     ref: str,
     *,
-    get_id: Callable[[Any, str], _Row | None],
-    get_key: Callable[[Any, str], _Row | None],
+    get_id: Callable[[Any, str], Row | None],
+    get_key: Callable[[Any, str], Row | None],
     noun: str,
     missing: Literal["none"],
-) -> _Row | None: ...
+) -> Row | None: ...
 
 
-def _resolve(  # noqa: UP047
+def _resolve[Row](
     connection: Any,
     ref: str,
     *,
-    get_id: Callable[[Any, str], _Row | None],
-    get_key: Callable[[Any, str], _Row | None],
+    get_id: Callable[[Any, str], Row | None],
+    get_key: Callable[[Any, str], Row | None],
     noun: str,
     missing: Literal["error", "none"] = "error",
-) -> _Row | None:
+) -> Row | None:
     """Polymorphic natural-key or UUID lookup (§V.107).
 
     UUID-shaped refs resolve via ``get_id``; every other value via ``get_key``.
@@ -833,12 +802,29 @@ def _resolve_account(connection: Any, account_ref: str | None) -> Account:
     )
 
 
-def _resolve_company(connection: Any, company_ref: str) -> Company:
+@overload
+def _resolve_company(
+    connection: Any, company_ref: str, *, missing: Literal["error"] = "error"
+) -> Company: ...
+
+
+@overload
+def _resolve_company(
+    connection: Any, company_ref: str, *, missing: Literal["none"]
+) -> Company | None: ...
+
+
+def _resolve_company(
+    connection: Any,
+    company_ref: str,
+    *,
+    missing: Literal["error", "none"] = "error",
+) -> Company | None:
     """Resolve a company reference (domain or UUID) to its full row (§V.107).
 
     A UUID-shaped ref resolves by id; any other value resolves by the domain
-    natural key (§V.90) via ``get_company_by_domain``. An unknown key exits
-    ``not_found`` per §V.94.
+    natural key (§V.90) via ``get_company_by_domain``. Hard miss exits
+    ``not_found`` per §V.94; soft miss (``missing="none"``) returns ``None``.
     """
     from mailpilot.database import get_company, get_company_by_domain
 
@@ -848,15 +834,33 @@ def _resolve_company(connection: Any, company_ref: str) -> Company:
         get_id=get_company,
         get_key=get_company_by_domain,
         noun="company",
+        missing=missing,
     )
 
 
-def _resolve_contact(connection: Any, contact_ref: str) -> Contact:
+@overload
+def _resolve_contact(
+    connection: Any, contact_ref: str, *, missing: Literal["error"] = "error"
+) -> Contact: ...
+
+
+@overload
+def _resolve_contact(
+    connection: Any, contact_ref: str, *, missing: Literal["none"]
+) -> Contact | None: ...
+
+
+def _resolve_contact(
+    connection: Any,
+    contact_ref: str,
+    *,
+    missing: Literal["error", "none"] = "error",
+) -> Contact | None:
     """Resolve a contact reference (email or UUID) to its full row (§V.107).
 
     A UUID-shaped ref resolves by id; any other value resolves by the email
-    natural key (§V.90) via ``get_contact_by_email``. An unknown key exits
-    ``not_found`` per §V.94.
+    natural key (§V.90) via ``get_contact_by_email``. Hard miss exits
+    ``not_found`` per §V.94; soft miss (``missing="none"``) returns ``None``.
     """
     from mailpilot.database import get_contact, get_contact_by_email
 
@@ -866,33 +870,22 @@ def _resolve_contact(connection: Any, contact_ref: str) -> Contact:
         get_id=get_contact,
         get_key=get_contact_by_email,
         noun="contact",
+        missing=missing,
     )
 
 
 def _resolve_company_id(connection: Any, company_ref: str) -> str:
-    """Resolve a company reference to its id, fetching the row (§V.107).
-
-    UUID-shape still loads via ``get_company``; pass-through unfetched is
-    drift. Unknown id or domain exits ``not_found``.
-    """
+    """Resolve a company domain or UUID to its id; miss → ``not_found``."""
     return _resolve_company(connection, company_ref).id
 
 
 def _resolve_contact_id(connection: Any, contact_ref: str) -> str:
-    """Resolve a contact reference to its id, fetching the row (§V.107).
-
-    UUID-shape still loads via ``get_contact``; pass-through unfetched is
-    drift. Unknown id or email exits ``not_found``.
-    """
+    """Resolve a contact email or UUID to its id; miss → ``not_found``."""
     return _resolve_contact(connection, contact_ref).id
 
 
 def _resolve_workflow(connection: Any, workflow_ref: str) -> Workflow:
-    """Resolve a workflow reference (name or UUID) to its full row (§V.107).
-
-    Always loads. UUID existence is checked here, not re-checked at call
-    sites. Unknown name or UUID-shaped id exits ``not_found``.
-    """
+    """Resolve a workflow name or UUID to its full row; miss → ``not_found``."""
     from mailpilot.database import get_workflow, get_workflow_by_name
 
     return _resolve(
@@ -905,10 +898,7 @@ def _resolve_workflow(connection: Any, workflow_ref: str) -> Workflow:
 
 
 def _resolve_workflow_id(connection: Any, workflow_ref: str) -> str:
-    """Resolve a workflow reference (name or UUID) to its id (§V.107, §V.90).
-
-    ``.id`` of the fetched row; UUID-shape still loads.
-    """
+    """Resolve a workflow name or UUID to its id; miss → ``not_found``."""
     return _resolve_workflow(connection, workflow_ref).id
 
 
@@ -3320,26 +3310,19 @@ def contact_view(
     bounded dossier (enrollments + emails + activities). Default path
     stays notes-only for agent prompt budget.
     """
-    from mailpilot.database import (
-        get_contact,
-        load_contact_timeline,
-        load_contact_view,
-    )
+    from mailpilot.database import load_contact_timeline, load_contact_view
 
     with _db() as connection:
-        contact_id = _resolve_contact_id(connection, contact_ref)
+        contact = _resolve_contact(connection, contact_ref)
         if timeline:
-            payload = load_contact_timeline(connection, contact_id, limit=limit)
+            payload = load_contact_timeline(connection, contact.id, limit=limit)
             if payload is None:
                 output_error(f"contact not found: {contact_ref}", "not_found")
             if include_meta:
-                row = get_contact(connection, contact_id)
-                payload["verification_meta"] = (
-                    row.verification_meta if row is not None else None
-                )
+                payload["verification_meta"] = contact.verification_meta
             output({"contact": payload})
             return
-        found = load_contact_view(connection, contact_id)
+        found = load_contact_view(connection, contact.id)
         if found is None:
             output_error(f"contact not found: {contact_ref}", "not_found")
         if not include_meta:
@@ -3347,10 +3330,7 @@ def contact_view(
             return
         # Default ContactView is agent-safe; merge meta only when operator asks.
         payload = found.model_dump(mode="json")
-        row = get_contact(connection, contact_id)
-        payload["verification_meta"] = (
-            row.verification_meta if row is not None else None
-        )
+        payload["verification_meta"] = contact.verification_meta
         output({"contact": payload})
 
 
@@ -3971,9 +3951,9 @@ def tag_add(  # noqa: C901, PLR0912
             results: list[dict[str, object]] = []
             for ref in owner_refs:
                 if owner_kind == "contact":
-                    owner = _lookup_contact_soft(connection, ref)
+                    owner = _resolve_contact(connection, ref, missing="none")
                 else:
-                    owner = _lookup_company_soft(connection, ref)
+                    owner = _resolve_company(connection, ref, missing="none")
                 if owner is None:
                     results.append(
                         _batch_error(
@@ -4204,9 +4184,9 @@ def tag_remove(  # noqa: C901, PLR0912
             results: list[dict[str, object]] = []
             for ref in owner_refs:
                 if owner_kind == "contact":
-                    owner = _lookup_contact_soft(connection, ref)
+                    owner = _resolve_contact(connection, ref, missing="none")
                 else:
-                    owner = _lookup_company_soft(connection, ref)
+                    owner = _resolve_company(connection, ref, missing="none")
                 if owner is None:
                     results.append(
                         _batch_error(
