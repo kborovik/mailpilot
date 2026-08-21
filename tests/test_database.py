@@ -1063,6 +1063,22 @@ def test_search_companies_projects_contact_count(
     assert results[0].contact_count == 2
 
 
+def test_search_companies_returns_disabled(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§I / §V.177: company search returns disabled rows when they match."""
+    company = make_test_company(
+        database_connection, name="Absorbed Co", domain="absorbed.com"
+    )
+    disable_company(database_connection, company.id, reason="merged:into survivor.com")
+    listed = list_companies(database_connection)
+    assert listed == []
+    results = search_companies(database_connection, "absorbed")
+    assert len(results) == 1
+    assert results[0].id == company.id
+    assert results[0].disabled_reason == "merged:into survivor.com"
+
+
 def test_search_companies_projects_has_profile(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
@@ -10239,6 +10255,40 @@ def test_get_workflow_review_enrollments_uncapped(
     item = review.reviews[0]
     assert item.funnel.enrolled == enrolled
     assert len(item.enrollments) == enrolled
+
+
+def test_get_workflow_review_emails_uncapped(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.174 / §V.177: window emails are not capped at list_emails default 100."""
+    from mailpilot.database import get_workflow_review
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    count = 101
+    for i in range(count):
+        created = create_email(
+            database_connection,
+            account_id=account.id,
+            direction="inbound",
+            workflow_id=workflow.id,
+            gmail_message_id=f"rev_uncap_{i:03d}",
+            subject=f"msg {i}",
+            body_text=f"body {i}",
+            received_at=_REVIEW_INSIDE,
+            is_routed=True,
+            route_method="thread_match",
+        )
+        assert created is not None
+
+    review = get_workflow_review(
+        database_connection,
+        [workflow.id],
+        since=_REVIEW_SINCE,
+        until=_REVIEW_UNTIL,
+    )
+    item = review.reviews[0]
+    assert len(item.emails) == count
 
 
 def test_list_active_workflows_excludes_draft(

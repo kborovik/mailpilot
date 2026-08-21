@@ -13,7 +13,7 @@ import json
 from collections.abc import Generator
 from contextlib import contextmanager
 from importlib.metadata import distribution
-from typing import TYPE_CHECKING, Any, Literal, NoReturn
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, TypedDict
 
 import click
 
@@ -906,6 +906,29 @@ def _resolve_tag(connection: Any, tag_ref: str) -> Any:
 def _resolve_tag_ids(connection: Any, tag_refs: tuple[str, ...]) -> list[str]:
     """Resolve repeatable ``--tag`` refs to vocabulary ids (§V.116)."""
     return [_resolve_tag(connection, name).id for name in tag_refs]
+
+
+class _CompanyCohortKwargs(TypedDict):
+    """Resolved ``--tag``/``--no-tag`` ids and include-disabled."""
+
+    tag: list[str] | None
+    exclude_tags: list[str]
+    include_disabled: bool
+
+
+def _company_cohort_kwargs(
+    connection: Any,
+    tag: tuple[str, ...],
+    no_tag: tuple[str, ...],
+    include_disabled: bool,
+    status: str | None,
+) -> _CompanyCohortKwargs:
+    """Resolve ``--tag``/``--no-tag`` ids and include-disabled."""
+    return {
+        "tag": _resolve_tag_ids(connection, tag) or None,
+        "exclude_tags": _resolve_tag_ids(connection, no_tag),
+        "include_disabled": include_disabled or status == "disabled",
+    }
 
 
 # -- Main CLI ------------------------------------------------------------------
@@ -2519,10 +2542,6 @@ def company_list(
     from mailpilot.database import list_companies
 
     with _db() as connection:
-        tag_ids = _resolve_tag_ids(connection, tag)
-        exclude_tag_ids = [_resolve_tag(connection, name).id for name in no_tag]
-        # --status disabled overrides the default hide of disabled rows.
-        effective_include_disabled = include_disabled or status == "disabled"
         companies = list_companies(
             connection,
             limit=limit,
@@ -2534,11 +2553,9 @@ def company_list(
             has_profile=has_profile,
             max_contacts=max_contacts,
             min_contacts=min_contacts,
-            include_disabled=effective_include_disabled,
-            tag=tag_ids or None,
-            exclude_tags=exclude_tag_ids,
             full=full,
             status=status,
+            **_company_cohort_kwargs(connection, tag, no_tag, include_disabled, status),
         )
         output({"companies": [c.model_dump(mode="json") for c in companies]})
 
@@ -2660,19 +2677,14 @@ def company_export(
 
     del export_format  # only jsonl is accepted; Choice already enforced
     with _db() as connection:
-        tag_ids = _resolve_tag_ids(connection, tag)
-        exclude_tag_ids = [_resolve_tag(connection, name).id for name in no_tag]
-        effective_include_disabled = include_disabled or status == "disabled"
         rows = export_companies(
             connection,
             has_profile=has_profile,
             max_contacts=max_contacts,
             min_contacts=min_contacts,
-            include_disabled=effective_include_disabled,
-            tag=tag_ids or None,
-            exclude_tags=exclude_tag_ids,
             full=full,
             status=status,
+            **_company_cohort_kwargs(connection, tag, no_tag, include_disabled, status),
         )
 
     lines = [json.dumps(row, ensure_ascii=False, separators=(",", ":")) for row in rows]
@@ -2787,19 +2799,14 @@ def company_import(
         file_domains.add(domain.strip().lower())
 
     with _db() as connection:
-        tag_ids = _resolve_tag_ids(connection, tag)
-        exclude_tag_ids = [_resolve_tag(connection, name).id for name in no_tag]
-        effective_include_disabled = include_disabled or status == "disabled"
         diff = company_import_diff(
             connection,
             file_domains,
             has_profile=has_profile,
             max_contacts=max_contacts,
             min_contacts=min_contacts,
-            include_disabled=effective_include_disabled,
-            tag=tag_ids or None,
-            exclude_tags=exclude_tag_ids,
             status=status,
+            **_company_cohort_kwargs(connection, tag, no_tag, include_disabled, status),
         )
 
     record_count = int(diff.pop("record_count"))
@@ -3219,7 +3226,7 @@ def contact_list(
             else None
         )
         tag_ids = _resolve_tag_ids(connection, tag)
-        exclude_tag_ids = [_resolve_tag(connection, name).id for name in no_tag]
+        exclude_tag_ids = _resolve_tag_ids(connection, no_tag)
         contacts = list_contacts(
             connection,
             limit=limit,

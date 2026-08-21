@@ -228,6 +228,7 @@ V174: workflow-review — `workflow review <slug|all> --since --until` dated one
 V175: task-retry-filter — `task retry` dual-mode positional TASK_ID XOR `task list` filters + `--touch`; `--scheduled-at` + `--dry-run`; `--status` default failed; SKILL one-call; distinct §V.173 — → .spec/check-extras.md §V175
 V176: target-env — settings.environment ∈ {dev, prd} default dev; sole env setting; topic=`mailpilot-topic-{env}` sub=`mailpilot-sub-{env}`; logfire.configure maps internally (dev→development, prd→production); no `logfire_environment` setting; derived pubsub keys not independently settable + not persisted; load compat legacy `logfire_environment`→environment when unset; status+config get project environment + topic/sub only — → .spec/check-extras.md §V176
 V177: cli-db-context — `_db(*, mutate: bool = False)` sole CLI connection helper; lazy-import `initialize_database` (module-level click-only §V.2); `mutate=True` → `require_current_schema=True` (§V.109); close success+error; `cli_mutation` stays per-cmd outside helper (§V.54); cmds use helper not copy open/close
+V178: shared-query-fragments — `list_companies`/`export_companies` (and import via export) share one WHERE/HAVING builder for profile/pipeline/contact-count/tag predicates; `--tag`/`--no-tag` resolve through the existing tag-id helper; EmailSummary/WorkflowSummary/TagSummary list+search (and review emails) share one SELECT list each; review window emails uncapped matching `list_emails` filters/order; export still unlimited `ORDER BY domain` + tracker-shaped dicts (§V.145)
 
 ## §T TASKS
 
@@ -286,6 +287,7 @@ T295|x|impl §V.176(+) + §I.config + §I.pubsub — environment ∈ {dev, prd};
 T296|x|impl §V.176(∆) + §V.52(∆) + §I.config — drop `logfire_environment` setting/projection; map internally at logfire.configure (dev→development, prd→production); persist environment only; load compat kept; tests+SKILL|V176,V52,I.config
 T297|x|impl §V.177(+) — `_db(*, mutate=False)` lazy-import initialize_database; cmds use helper; mutate=True → require_current_schema; cli_mutation stays per-cmd; close success+error; sweep `initialize_database(` in `src/mailpilot/cli.py`; existing CLI tests (#254)|V177,V2,V54,V109
 T298|x|impl §V.140(∆) — company_update @_company_profile_options + _profile_replace_and_patch_flags + _read_replace_profile; one _parse_json_object(text, *, what); flag names+XOR unchanged; --help snapshot if Click param order shifts; create+update tests (#255)|V140,V72,V144,V111,I.cli
+T299|x|impl §V.178(+) — `_company_scope_clauses` used by list+export+search companies; CLI `_company_cohort_kwargs` tag ids+include-disabled; `--no-tag` via `_resolve_tag_ids`; EmailSummary SELECT one fragment; review calls `list_emails`; workflow+tag summary SELECTs share column list each; export unlimited ORDER BY domain + tracker dicts; existing list/export/search tests (#256)|V178,V145,V116,V7,V174
 
 ## §B BUGS
 
