@@ -61,6 +61,15 @@ _FIXTURE_SAME_DAY_ON = (
     "Automatic reply: I'll be out of the office on August 17 "
     "with very limited access to email."
 )
+# §V.169 / §B.145 — Bonnie: event-week past + return Monday still-ahead.
+_BONNIE_NOW = datetime(2026, 8, 19, 13, 1, tzinfo=UTC)
+_FIXTURE_BONNIE = (
+    "Automatic reply: I will the Acumatica Ascent event the week of "
+    "August 17th. I will be fully back online on Monday, August 24th."
+)
+_FIXTURE_WEEK_OF_ONLY = (
+    "Automatic reply: I am at the Acumatica Ascent event the week of August 17th."
+)
 
 
 def _email(**overrides: Any) -> Email:
@@ -274,6 +283,20 @@ def test_parse_same_day_on_month_day_same_year() -> None:
     assert parsed.year == 2026
 
 
+def test_parse_bonnie_event_week_plus_return_monday() -> None:
+    """§V.169 / §B.145: return Monday wins over past event-week month-day."""
+    parsed = parse_ooo_return_at(_FIXTURE_BONNIE, now=_BONNIE_NOW)
+    assert parsed is not None
+    assert parsed.date().isoformat() == "2026-08-24"
+    assert parsed.year == 2026
+    assert parsed.date().isoformat() != "2027-08-17"
+
+
+def test_parse_past_week_of_not_year_plus_one() -> None:
+    """§V.169 / §B.145: past 'week of' is not a return date and not year+1."""
+    assert parse_ooo_return_at(_FIXTURE_WEEK_OF_ONLY, now=_BONNIE_NOW) is None
+
+
 def test_resolve_unparseable_uses_interval(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
@@ -360,6 +383,25 @@ def test_resolve_same_day_on_month_day_same_year(
     assert resolved.year == 2026
     # Next calendar day is Tuesday 2026-08-18 (no weekend roll).
     assert resolved.date().isoformat() == "2026-08-18"
+    assert resolved.date().isoformat() != "2027-08-17"
+
+
+def test_resolve_bonnie_resume_same_year(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.169 / §B.145: Bonnie resume is 2026-08-24, not 2027-08-17."""
+    account = make_test_account(database_connection, email="ooo-bonnie@lab5.example")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="ooo-bonnie"
+    )
+    _activate_outbound(
+        database_connection, workflow.id, touches=3, touch_interval_days=4
+    )
+    email = _email(subject=_FIXTURE_BONNIE, body_text=_FIXTURE_BONNIE)
+    resolved = resolve_ooo_resume_at(email, workflow, now=_BONNIE_NOW)
+    assert resolved.year == 2026
+    # Monday 2026-08-24 — no weekend roll.
+    assert resolved.date().isoformat() == "2026-08-24"
     assert resolved.date().isoformat() != "2027-08-17"
 
 

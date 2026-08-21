@@ -80,15 +80,18 @@ _MONTH_DAY_RANGE = re.compile(
 )
 _LEAVE_START_CUE = re.compile(r"\b(?:effective|begins)\b", re.IGNORECASE)
 _RETURN_CUE = re.compile(
-    r"\b(?:until|returning|return(?:ing)?(?:\s+on)?|back(?:\s+on)?)\b",
+    r"\b(?:until|returning|return(?:ing)?(?:\s+on)?|"
+    r"fully\s+back(?:\s+online)?|back(?:\s+online)?(?:\s+on)?)\b",
     re.IGNORECASE,
 )
 _ON_PREFIX = re.compile(r"\bon\s+$", re.IGNORECASE)
+_WEEK_OF_PREFIX = re.compile(r"\bweek of\s+$", re.IGNORECASE)
 _WEEKDAY_PREFIX = re.compile(
     rf"(?:{'|'.join(_WEEKDAY_NAMES)})\s*,?\s*$",
     re.IGNORECASE,
 )
 _MONTHS_PAST_MIN = 2
+_RETURN_CUE_WINDOW = 80
 
 
 def auto_submitted_label(header_value: str | None) -> str | None:
@@ -148,9 +151,11 @@ def parse_ooo_return_at(text: str, *, now: datetime) -> datetime | None:
     (resume = day after range end, same year), then a month-day (explicit
     year wins; year-less same-day ``on <Month> <D>`` resumes the next
     calendar day same year; year-less leave-start months past is
-    unparseable), then a weekday after until/returning/back. Naive dates
-    take ``now``'s time of day in UTC. A parsed instant at or before
-    ``now`` is unparseable.
+    unparseable; multi year-less month-day prefers return / fully-back-
+    online over an earlier event-week; ``week of <Month> <D>`` is never
+    a return and a past event-week does not year-roll), then a weekday
+    after until/returning/back. Naive dates take ``now``'s time of day
+    in UTC. A parsed instant at or before ``now`` is unparseable.
     """
     if now.tzinfo is None:
         now = now.replace(tzinfo=UTC)
@@ -209,9 +214,26 @@ def _parse_week_range(text: str, *, now: datetime) -> datetime | None:
 
 
 def _parse_month_day(text: str, *, now: datetime) -> datetime | None:
-    match = _MONTH_DAY.search(text)
-    if match is None:
+    """Pick a month-day return; skip event-week; prefer return cues (§V.169)."""
+    candidates: list[tuple[bool, datetime]] = []
+    for match in _MONTH_DAY.finditer(text):
+        if _is_week_of_event(text, match):
+            continue
+        target = _month_day_instant(text, match, now)
+        if target is None:
+            continue
+        candidates.append((_has_return_cue_near(text, match), target))
+    if not candidates:
         return None
+    preferred = [instant for is_return, instant in candidates if is_return]
+    pool = preferred or [instant for _, instant in candidates]
+    ahead = [instant for instant in pool if instant > now]
+    return ahead[-1] if ahead else pool[-1]
+
+
+def _month_day_instant(
+    text: str, match: re.Match[str], now: datetime
+) -> datetime | None:
     month = _MONTH_LOOKUP[match.group(1).lower()]
     day_n = int(match.group(2))
     year = int(match.group(3)) if match.group(3) else now.year
@@ -230,6 +252,18 @@ def _parse_month_day(text: str, *, now: datetime) -> datetime | None:
         except ValueError:
             return None
     return target
+
+
+def _is_week_of_event(text: str, match: re.Match[str]) -> bool:
+    """True for ``week of <Month> <D>`` — event-week, never a return (§B.145)."""
+    return _WEEK_OF_PREFIX.search(text[: match.start()]) is not None
+
+
+def _has_return_cue_near(text: str, match: re.Match[str]) -> bool:
+    """True when until/returning/back/fully-back-online sits before this date."""
+    prefix = text[: match.start()]
+    window = prefix[-_RETURN_CUE_WINDOW:]
+    return _RETURN_CUE.search(window) is not None
 
 
 def _is_same_day_on_absence(
