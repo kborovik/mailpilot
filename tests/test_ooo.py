@@ -23,7 +23,7 @@ from mailpilot.database import (
     get_task,
     get_workflow,
     list_enrollments_detailed,
-    manual_retry_task,
+    retry_tasks_matching,
     update_workflow,
 )
 from mailpilot.models import Email
@@ -757,7 +757,11 @@ def test_retried_t2_not_recancelled_by_ooo_inbound(
     assert cancelled is not None
     assert cancelled.status == "cancelled"
 
-    reset = manual_retry_task(database_connection, t2.id)
+    result = retry_tasks_matching(
+        database_connection, task_id=t2.id, status="cancelled"
+    )
+    assert result.retried_count == 1
+    reset = get_task(database_connection, t2.id)
     assert reset is not None
     assert reset.status == "pending"
     assert reset.scheduled_at == t2.scheduled_at

@@ -101,7 +101,6 @@ from mailpilot.database import (
     list_workflows,
     list_workflows_full,
     load_company_view,
-    manual_retry_task,
     merge_companies,
     pause_workflow,
     record_enrollment_outcome,
@@ -7549,10 +7548,10 @@ def test_reschedule_task_for_retry_returns_none_for_unknown_id(
     assert rescheduled is None
 
 
-def test_manual_retry_task_resets_failed_row(
+def test_retry_by_task_id_resets_failed_row(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.49: failed -> pending, attempt_count=0."""
+    """§V.49/§V.180: failed -> pending, attempt_count=0 via bulk path."""
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
     contact = make_test_contact(database_connection)
@@ -7572,15 +7571,17 @@ def test_manual_retry_task_resets_failed_row(
         result={"reason": "boom"},
     )
 
-    reset = manual_retry_task(database_connection, task.id)
+    result = retry_tasks_matching(database_connection, task_id=task.id)
+    reset = get_task(database_connection, task.id)
 
+    assert result.retried_count == 1
     assert reset is not None
     assert reset.status == "pending"
     assert reset.attempt_count == 0
     assert reset.completed_at is None
 
 
-def test_manual_retry_task_resets_cancelled_row(
+def test_retry_by_task_id_resets_cancelled_row(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     account = make_test_account(database_connection)
@@ -7597,13 +7598,17 @@ def test_manual_retry_task_resets_cancelled_row(
     )
     cancel_task(database_connection, task.id)
 
-    reset = manual_retry_task(database_connection, task.id)
+    result = retry_tasks_matching(
+        database_connection, task_id=task.id, status="cancelled"
+    )
+    reset = get_task(database_connection, task.id)
 
+    assert result.retried_count == 1
     assert reset is not None
     assert reset.status == "pending"
 
 
-def test_manual_retry_task_refuses_completed_row(
+def test_retry_by_task_id_skips_completed_row(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     """§V.49: completed rows refuse retry -- tools already fired, replay
@@ -7622,10 +7627,14 @@ def test_manual_retry_task_refuses_completed_row(
     )
     complete_task(database_connection, task.id, status="completed", result={})
 
-    assert manual_retry_task(database_connection, task.id) is None
+    result = retry_tasks_matching(database_connection, task_id=task.id)
+    stored = get_task(database_connection, task.id)
+    assert result.retried_count == 0
+    assert stored is not None
+    assert stored.status == "completed"
 
 
-def test_manual_retry_task_refuses_pending_row(
+def test_retry_by_task_id_skips_pending_row(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     """§V.49: pending rows are no-op -- already queued."""
@@ -7641,10 +7650,14 @@ def test_manual_retry_task_refuses_pending_row(
         description="follow up",
         scheduled_at="2026-04-22T12:00:00Z",
     )
-    assert manual_retry_task(database_connection, task.id) is None
+    result = retry_tasks_matching(database_connection, task_id=task.id)
+    stored = get_task(database_connection, task.id)
+    assert result.retried_count == 0
+    assert stored is not None
+    assert stored.status == "pending"
 
 
-def test_manual_retry_task_keeps_future_scheduled_at(
+def test_retry_by_task_id_keeps_future_scheduled_at(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     """§V.170: omit override + stored still future -> keep stored."""
@@ -7663,14 +7676,18 @@ def test_manual_retry_task_keeps_future_scheduled_at(
     )
     cancel_task(database_connection, task.id)
 
-    reset = manual_retry_task(database_connection, task.id)
+    result = retry_tasks_matching(
+        database_connection, task_id=task.id, status="cancelled"
+    )
+    reset = get_task(database_connection, task.id)
 
+    assert result.retried_count == 1
     assert reset is not None
     assert reset.status == "pending"
     assert reset.scheduled_at == datetime(2099, 12, 31, 13, 1, 49, tzinfo=UTC)
 
 
-def test_manual_retry_task_override_scheduled_at(
+def test_retry_by_task_id_override_scheduled_at(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     """§V.170: scheduled_at override parks the row on that instant."""
@@ -7689,17 +7706,20 @@ def test_manual_retry_task_override_scheduled_at(
     )
     cancel_task(database_connection, task.id)
 
-    reset = manual_retry_task(
+    result = retry_tasks_matching(
         database_connection,
-        task.id,
+        task_id=task.id,
+        status="cancelled",
         scheduled_at="2099-08-17T17:01:49+00:00",
     )
+    reset = get_task(database_connection, task.id)
 
+    assert result.retried_count == 1
     assert reset is not None
     assert reset.scheduled_at == datetime(2099, 8, 17, 17, 1, 49, tzinfo=UTC)
 
 
-def test_manual_retry_task_past_stored_resets_to_now(
+def test_retry_by_task_id_past_stored_resets_to_now(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     """§V.170: omit override + stored past/now -> now."""
@@ -7723,15 +7743,17 @@ def test_manual_retry_task_past_stored_resets_to_now(
     )
 
     before = datetime.now(UTC)
-    reset = manual_retry_task(database_connection, task.id)
+    result = retry_tasks_matching(database_connection, task_id=task.id)
     after = datetime.now(UTC)
+    reset = get_task(database_connection, task.id)
 
+    assert result.retried_count == 1
     assert reset is not None
     assert reset.status == "pending"
     assert before <= reset.scheduled_at <= after
 
 
-def test_manual_retry_cancelled_t2_projects_next_touch(
+def test_retry_cancelled_t2_projects_next_touch(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     """§V.152 / §V.170: retry of cancelled future T2 shows next_touch=2."""
@@ -7760,8 +7782,10 @@ def test_manual_retry_cancelled_t2_projects_next_touch(
     )
     cancel_task(database_connection, task.id)
 
-    reset = manual_retry_task(database_connection, task.id)
-    assert reset is not None
+    result = retry_tasks_matching(
+        database_connection, task_id=task.id, status="cancelled"
+    )
+    assert result.retried_count == 1
 
     rows = list_enrollments_detailed(
         database_connection, workflow_id=workflow.id, full=True
@@ -7771,7 +7795,7 @@ def test_manual_retry_cancelled_t2_projects_next_touch(
     assert rows[0].next_scheduled_at == datetime(2099, 8, 17, 17, 1, 49, tzinfo=UTC)
 
 
-def test_manual_retry_failed_t1_keeps_single_enrollment(
+def test_retry_failed_t1_keeps_single_enrollment(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     """§V.170 / §T.291: retry a B141-failed T1; no second enrollment."""
@@ -7802,8 +7826,10 @@ def test_manual_retry_failed_t1_keeps_single_enrollment(
         },
     )
 
-    reset = manual_retry_task(database_connection, task.id)
+    result = retry_tasks_matching(database_connection, task_id=task.id)
+    reset = get_task(database_connection, task.id)
 
+    assert result.retried_count == 1
     assert reset is not None
     assert reset.status == "pending"
     assert reset.enrollment_id == enrollment.id

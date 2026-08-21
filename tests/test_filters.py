@@ -8,6 +8,8 @@ from click.testing import CliRunner
 from mailpilot._filters import (
     COMPANY_SORT_KEYS,
     DIRECTIONS,
+    TASK_STATUSES,
+    TASK_TRIGGERS,
     desc_option,
     enum_option,
     include_disabled_option,
@@ -17,6 +19,7 @@ from mailpilot._filters import (
     range_options,
     scope_option,
     sort_option,
+    task_scope_options,
     time_window_options,
     touch_option,
 )
@@ -192,4 +195,69 @@ def test_touch_option_repeatable_and_parses_label() -> None:
     assert parsed.exit_code == 0
     assert parsed.output.strip() == "2,3"
     bad = CliRunner().invoke(cmd, ["--touch", "nope"])
+    assert bad.exit_code != 0
+
+
+def test_task_scope_options_declares_shared_stack() -> None:
+    """§V.180: list/cancel/retry share one decorator stack."""
+
+    @click.command()
+    @task_scope_options
+    def cmd(
+        workflow_id: str | None,
+        contact_email: str | None,
+        status: str | None,
+        trigger: str | None,
+        overdue: bool,
+        touches: tuple[int, ...],
+        since: str | None,
+        until: str | None,
+    ) -> None:
+        click.echo(
+            f"{workflow_id}|{contact_email}|{status}|{trigger}|"
+            f"{overdue}|{','.join(str(n) for n in touches)}|{since}|{until}"
+        )
+
+    names = {p.name for p in cmd.params if p.name is not None}
+    assert names == {
+        "workflow_id",
+        "contact_email",
+        "status",
+        "trigger",
+        "overdue",
+        "touches",
+        "since",
+        "until",
+    }
+    assert TASK_STATUSES == ["pending", "completed", "failed", "cancelled"]
+    assert TASK_TRIGGERS == [
+        "enrollment_run",
+        "enrollment_schedule",
+        "task",
+        "email",
+        "manual",
+    ]
+    result = CliRunner().invoke(
+        cmd,
+        [
+            "--workflow-id",
+            "wf",
+            "--contact-email",
+            "a@b.c",
+            "--status",
+            "failed",
+            "--trigger",
+            "task",
+            "--overdue",
+            "--touch",
+            "2",
+            "--since",
+            "a",
+            "--until",
+            "b",
+        ],
+    )
+    assert result.exit_code == 0
+    assert result.output.strip() == "wf|a@b.c|failed|task|True|2|a|b"
+    bad = CliRunner().invoke(cmd, ["--status", "nope"])
     assert bad.exit_code != 0
