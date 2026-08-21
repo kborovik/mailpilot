@@ -398,6 +398,20 @@ def test_outbound_deferred_retired_left_company_binds_enrolled() -> None:
     assert _SPEC_CITE.search(fragment) is None
 
 
+def test_outbound_deferred_last_day_was_is_dnc_not_ooo() -> None:
+    """§V.179 / §B.146: last-day-was auto-reply is do_not_contact, not OOO.
+
+    Named successors without emails stay in the note. Distinct from pause.
+    """
+    fragment = templates_module._DEFERRED_TASK_TASK  # pyright: ignore[reportPrivateUsage]
+    assert "last day was" in fragment
+    assert "successors without emails" in fragment
+    assert "do_not_contact" in fragment
+    assert "not out-of-office" in fragment
+    assert fragment.isascii()
+    assert _SPEC_CITE.search(fragment) is None
+
+
 @pytest.mark.parametrize(
     "trigger",
     ["task", "enrollment_run", "enrollment_schedule", "manual", "email"],

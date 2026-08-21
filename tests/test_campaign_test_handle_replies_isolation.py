@@ -115,6 +115,7 @@ def test_left_company_last_day_is_hard_stop_not_ooo_pause() -> None:
     assert left["expect"]["contact_disabled"] is True
     assert left["expect"]["outcome"] == "any"
     assert left["expect"]["enrollment_updated"] is True
+    assert "resume_within_days" not in left["expect"]
     assert "@" not in left["reply_body"]
 
 

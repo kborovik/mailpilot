@@ -70,6 +70,15 @@ _FIXTURE_BONNIE = (
 _FIXTURE_WEEK_OF_ONLY = (
     "Automatic reply: I am at the Acumatica Ascent event the week of August 17th."
 )
+# §V.179 / §B.146 — Gina: past-tense last-day + named successors, no emails.
+_FIXTURE_GINA = (
+    "Automatic reply: My last day with CLA was Wednesday, July 22. "
+    "For BD Advisory please contact Bibber Smith-McCurdy, Emily Gorrell, "
+    "or Leann Johnson."
+)
+_FIXTURE_NO_LONGER_WITH = (
+    "Automatic reply: Terri is no longer with Aktion. Please update your records."
+)
 
 
 def _email(**overrides: Any) -> Email:
@@ -193,6 +202,28 @@ def test_retired_automatic_reply_is_not_ooo() -> None:
             "Automatic reply: I have retired from the company. "
             "Please update your records and contact Janice."
         ),
+    )
+    assert not is_mechanical_ooo(email)
+    assert not is_ooo_auto_reply(email)
+
+
+def test_no_longer_with_automatic_reply_is_not_ooo() -> None:
+    """§V.179 / §V.161: no-longer-with auto-reply stays DNC, not pause."""
+    email = _email(
+        subject="Automatic reply: no longer with the company",
+        body_text=_FIXTURE_NO_LONGER_WITH,
+        labels=["INBOX", AUTO_SUBMITTED_LABEL],
+    )
+    assert not is_mechanical_ooo(email)
+    assert not is_ooo_auto_reply(email)
+
+
+def test_gina_last_day_was_is_not_ooo() -> None:
+    """§V.179 / §B.146: past-tense last-day auto-reply is not OOO."""
+    email = _email(
+        subject="Automatic reply: My last day with CLA was Wednesday, July 22",
+        body_text=_FIXTURE_GINA,
+        labels=["INBOX", AUTO_SUBMITTED_LABEL],
     )
     assert not is_mechanical_ooo(email)
     assert not is_ooo_auto_reply(email)
@@ -452,6 +483,95 @@ def test_route_ooo_cancels_t2_and_schedules_resume(
     assert pending[0]["context"]["touch"] == 2
     assert pending[0]["context"]["reason"] == "ooo_pause"
     assert isinstance(pending[0]["context"]["touch"], int)
+
+
+def test_route_gina_last_day_does_not_schedule_ooo(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.179 / §V.123 / §B.146: last-day-was cancels T2, no year-pause."""
+    account, contact, workflow, enrollment, t2 = _seed_t1(
+        database_connection, suffix="gina"
+    )
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Automatic reply: My last day with CLA was Wednesday, July 22",
+        body_text=_FIXTURE_GINA,
+        gmail_thread_id="t-ooo-gina",
+        contact_id=contact.id,
+        sender=contact.email,
+        labels=["INBOX", AUTO_SUBMITTED_LABEL],
+    )
+    assert inbound is not None
+    route_email(database_connection, inbound, contact.email, make_test_settings())
+
+    cancelled = get_task(database_connection, t2.id)
+    assert cancelled is not None
+    assert cancelled.status == "cancelled"
+    pending = database_connection.execute(
+        "SELECT id, scheduled_at FROM task WHERE enrollment_id = %s "
+        "AND status = 'pending' AND context->>'reason' = 'ooo_pause'",
+        (enrollment.id,),
+    ).fetchall()
+    assert pending == []
+    assert get_latest_enrollment_outcome(database_connection, enrollment.id) is None
+    still = list_enrollments_detailed(
+        database_connection, workflow_id=workflow.id, full=True
+    )
+    assert still[0].status == "active"
+    assert still[0].disposition is None
+    assert still[0].next_scheduled_at is None
+
+
+def test_execute_task_gina_does_not_skip_agent(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.179: last-day-was is not mechanical OOO; agent still runs."""
+    account, contact, workflow, enrollment, t2 = _seed_t1(
+        database_connection, suffix="gina-exec"
+    )
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Automatic reply: My last day with CLA was Wednesday, July 22",
+        body_text=_FIXTURE_GINA,
+        gmail_thread_id="t-ooo-gina-exec",
+        contact_id=contact.id,
+        sender=contact.email,
+        labels=["INBOX", AUTO_SUBMITTED_LABEL],
+    )
+    assert inbound is not None
+    route_email(database_connection, inbound, contact.email, make_test_settings())
+    inbound_task = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="handle inbound email",
+        scheduled_at=datetime.now(UTC).isoformat(),
+        email_id=inbound.id,
+    )
+
+    with patch("mailpilot.run.invoke_workflow_agent") as mock_invoke:
+        mock_invoke.return_value = {"disposition": "do_not_contact"}
+        execute_task(database_connection, make_test_settings(), inbound_task)
+
+    mock_invoke.assert_called_once()
+    done = get_task(database_connection, inbound_task.id)
+    assert done is not None
+    assert done.status == "completed"
+    assert done.result.get("reason") != "ooo_pause"
+    pending = database_connection.execute(
+        "SELECT id FROM task WHERE enrollment_id = %s AND status = 'pending' "
+        "AND context->>'reason' = 'ooo_pause'",
+        (enrollment.id,),
+    ).fetchall()
+    assert pending == []
+    cancelled = get_task(database_connection, t2.id)
+    assert cancelled is not None
+    assert cancelled.status == "cancelled"
 
 
 def test_route_retired_automatic_reply_does_not_schedule_ooo(

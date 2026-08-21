@@ -340,12 +340,15 @@ def conclude_enrollment(
           (the "I booked" reply path, distinct from calendar detection).
         - ``do_not_contact`` -- records a failed outcome, sets a global block on
           the contact, and writes a note. Use for opt-out, wrong person, retired
-          / left-the-company auto-replies, and address-change / "update your
+          / left-the-company auto-replies (including past-tense last-day
+          auto-replies), and address-change / "update your
           records" / hard email-redirect auto-replies: stop touches to the
           enrolled address even if From uses a different local-part; put the
-          redirect, referral addresses, and the new email (when present) in the
-          note; never enroll the From alias or any new address. Out-of-office
-          auto-replies are NOT this path -- use noop.
+          redirect, referral addresses, named successors without emails, and
+          the new email (when present) in the note; never enroll the From
+          alias or any new address. Out-of-office auto-replies are NOT this
+          path -- use noop. A past last-day auto-reply is left-company, not
+          out-of-office.
         - ``contact_later`` -- records a failed outcome and schedules a
           re-enrollment first-touch task at ``reschedule_at`` (about three
           months out when omitted), then writes a note.
@@ -653,8 +656,8 @@ def noop(reason: str) -> dict[str, Any]:
     Call this tool when, after reviewing context, no action is appropriate.
     You must still call a tool every turn -- noop is the explicit "do nothing"
     signal. Typical case: out-of-office or temporary absence auto-reply
-    (pause once; leave the enrollment open; do not conclude). Address-change
-    and hard email-redirect auto-replies are not noop -- use
+    (pause once; leave the enrollment open; do not conclude). Address-change,
+    last-day-was, retired, and left-company auto-replies are not noop -- use
     conclude_enrollment with do_not_contact instead.
 
     Args:

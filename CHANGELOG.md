@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A past-tense last-day auto-reply ("last day was", "last day with … was")
+  is left-company, not an out-of-office pause. Automatic reply and
+  Auto-Submitted no longer year-roll that date. Named successors without
+  emails stay in the note.
+
 - Out-of-office bodies that name an event week and a later return date
   resume on the return date this year. A past "week of August 17th" is
   not a resume date and does not year-roll. "Fully back online on

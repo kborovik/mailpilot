@@ -31,7 +31,8 @@ _NULL_CADENCE_RESUME_DAYS = 3
 _TERMINAL_AUTO_REPLY = re.compile(
     r"retired|left the company|no longer with|no longer employed|"
     r"address has changed|email address has changed|update your records|"
-    r"new email address",
+    r"new email address|"
+    r"last day(?:\s+with\s+[^.,:;]{1,40})?\s+was",
     re.IGNORECASE,
 )
 _ABSENCE = re.compile(
@@ -109,7 +110,11 @@ def _combined_text(email: Email) -> str:
 
 
 def _is_terminal_auto_reply(text: str) -> bool:
-    """Address-change / left-company auto-replies are not OOO (§V.161, §V.164)."""
+    """Address-change / left-company auto-replies are not OOO.
+
+    Past-tense last-day auto-replies are left-company (§V.179), not an OOO
+    pause, even when the subject is Automatic reply or Auto-Submitted.
+    """
     return _TERMINAL_AUTO_REPLY.search(text) is not None
 
 
