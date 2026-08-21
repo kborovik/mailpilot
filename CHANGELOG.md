@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [v0.30.1] - 2026-08-21
+
 ### Fixed
 
 - Recording an enrollment terminal outcome (including `do_not_contact`)
