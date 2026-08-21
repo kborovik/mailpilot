@@ -961,60 +961,45 @@ def _company_cohort_kwargs(
     }
 
 
-def _tag_link_owner_kind_and_refs(
-    contact_emails: tuple[str, ...],
-    company_domains: tuple[str, ...],
-) -> tuple[Literal["contact", "company"], tuple[str, ...]]:
-    """Owner-kind XOR for ``tag add``/``tag remove``: companies or contacts."""
-    has_contacts = len(contact_emails) > 0
-    has_companies = len(company_domains) > 0
-    if has_contacts and has_companies:
-        output_error(
-            "pass --contact-email or --company-domain, not both",
-            "validation_error",
-        )
-    if not has_contacts and not has_companies:
-        output_error(
-            "at least one --contact-email or --company-domain is required",
-            "validation_error",
-        )
-    if has_contacts:
-        return "contact", contact_emails
-    return "company", company_domains
-
-
-def _tag_link_apply(
-    assign_or_remove: tuple[Callable[..., Any], Callable[..., Any]],
-    connection: Any,
-    tag_id: str,
-    owner_kind: Literal["contact", "company"],
-    owner_id: str,
-) -> Any:
-    """Call the contact or company writer from the ``assign_or_remove`` pair."""
-    contact_fn, company_fn = assign_or_remove
-    if owner_kind == "contact":
-        return contact_fn(connection, tag_id=tag_id, contact_id=owner_id)
-    return company_fn(connection, tag_id=tag_id, company_id=owner_id)
-
-
 def _tag_link_owners(
     verb: Literal["add", "remove"],
-    assign_or_remove: tuple[Callable[..., Any], Callable[..., Any]],
     tag_name: str,
     contact_emails: tuple[str, ...],
     company_domains: tuple[str, ...],
 ) -> None:
     """Link or unlink a tag on one or more owners of a single kind (§V.141).
 
-    Owner-kind XOR, single vs multi envelope, soft lookup, and ok-skip live
-    here. ``verb`` plus ``assign_or_remove`` (contact fn, company fn) are the
-    only differences between ``tag add`` and ``tag remove``.
+    Owner-kind XOR: companies or contacts, not both, at least one.
+    N=1 emits ``tag_assignment``; N>1 emits ``results``.
     """
+    from mailpilot.database import (
+        assign_tag_to_company,
+        assign_tag_to_contact,
+        remove_tag_from_company,
+        remove_tag_from_contact,
+    )
     from mailpilot.operator_log import cli_mutation, operator_event
 
-    owner_kind, owner_refs = _tag_link_owner_kind_and_refs(
-        contact_emails, company_domains
-    )
+    has_contacts = len(contact_emails) > 0
+    has_companies = len(company_domains) > 0
+    if has_contacts == has_companies:
+        output_error(
+            "pass --contact-email or --company-domain, not both"
+            if has_contacts
+            else "at least one --contact-email or --company-domain is required",
+            "validation_error",
+        )
+    writer: Callable[..., Any]
+    if has_contacts:
+        owner_kind: Literal["contact", "company"] = "contact"
+        owner_refs = contact_emails
+        writer = assign_tag_to_contact if verb == "add" else remove_tag_from_contact
+        owner_kw = "contact_id"
+    else:
+        owner_kind = "company"
+        owner_refs = company_domains
+        writer = assign_tag_to_company if verb == "add" else remove_tag_from_company
+        owner_kw = "company_id"
     already_code, already_phrase = (
         ("already_exists", "already on") if verb == "add" else ("not_found", "not on")
     )
@@ -1034,9 +1019,7 @@ def _tag_link_owners(
                 owner_type=owner_kind,
                 owner_id=owner_id,
             ):
-                linked = _tag_link_apply(
-                    assign_or_remove, connection, tag_row.id, owner_kind, owner_id
-                )
+                linked = writer(connection, tag_id=tag_row.id, **{owner_kw: owner_id})
                 if linked is None:
                     output_error(
                         f"tag '{tag_row.name}' {already_phrase} "
@@ -1075,9 +1058,7 @@ def _tag_link_owners(
                         )
                     )
                     continue
-                linked = _tag_link_apply(
-                    assign_or_remove, connection, tag_row.id, owner_kind, owner.id
-                )
+                linked = writer(connection, tag_id=tag_row.id, **{owner_kw: owner.id})
                 if linked is not None:
                     operator_event(
                         f"tag.{verb}",
@@ -4012,18 +3993,7 @@ def tag_add(
     when the tag is undefined -- never creates the tag as a side effect
     (define vocabulary with ``tag create``).
     """
-    from mailpilot.database import (
-        assign_tag_to_company,
-        assign_tag_to_contact,
-    )
-
-    _tag_link_owners(
-        "add",
-        (assign_tag_to_contact, assign_tag_to_company),
-        tag_name,
-        contact_emails,
-        company_domains,
-    )
+    _tag_link_owners("add", tag_name, contact_emails, company_domains)
 
 
 @tag.command("set")
@@ -4158,18 +4128,7 @@ def tag_remove(
     batch envelope (already-unlinked rows are ok skips). Removes only the
     link; the tag vocabulary entry and the owners both survive.
     """
-    from mailpilot.database import (
-        remove_tag_from_company,
-        remove_tag_from_contact,
-    )
-
-    _tag_link_owners(
-        "remove",
-        (remove_tag_from_contact, remove_tag_from_company),
-        tag_name,
-        contact_emails,
-        company_domains,
-    )
+    _tag_link_owners("remove", tag_name, contact_emails, company_domains)
 
 
 @tag.command("list")

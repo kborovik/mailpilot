@@ -6933,8 +6933,7 @@ def _assign_tag(
 
     INSERT and ``tag_added`` commit together when ``commit`` is true.
     Returns ``None`` if the link already exists (ON CONFLICT DO NOTHING) --
-    no activity in that case. ``commit=False`` lets ``set_*_tags`` compose
-    several links in one transaction.
+    no activity in that case.
     """
     activity_contact_id, activity_company_id = _tag_owner_activity_ids(
         connection, owner_col, owner_id
@@ -7140,10 +7139,7 @@ def _set_owner_tags(
     owner_id: str,
     tag_ids: Sequence[str],
 ) -> list[str]:
-    """Replace an owner's full tag set via ``_assign_tag``/``_remove_tag``.
-
-    One transaction: ``commit=False`` on each helper, then a single commit.
-    """
+    """Replace an owner's full tag set."""
     # Existence via the same lookup the writers use, so a missing owner
     # raises before any link mutation (empty ``tag_ids`` still validates).
     _tag_owner_activity_ids(connection, owner_col, owner_id)
