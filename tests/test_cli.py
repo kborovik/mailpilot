@@ -3716,7 +3716,7 @@ def test_company_update_profile_non_object_json(
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["error"] == "validation_error"
-    assert "JSON object" in data["message"]
+    assert "profile must be a JSON object" in data["message"]
     mock_update.assert_not_called()
 
 
@@ -3743,6 +3743,32 @@ def test_company_update_profile_flag_rejects_path(
     mock_update.assert_not_called()
 
 
+_COMPANY_PROFILE_FLAGS = (
+    "--profile-json",
+    "--profile-file",
+    "--profile",
+    "--summary",
+    "--product",
+    "--source",
+    "--timezone",
+    "--target-customers",
+)
+
+
+def _profile_flag_order(command: Any) -> list[str]:
+    """Click option tokens for the shared company profile write flags."""
+    import click
+
+    names: list[str] = []
+    for param in command.params:
+        if not isinstance(param, click.Option):
+            continue
+        for opt in param.opts:
+            if opt in _COMPANY_PROFILE_FLAGS:
+                names.append(opt)
+    return names
+
+
 def test_company_update_help_documents_profile_paths(runner: CliRunner) -> None:
     """§V.140/§V.111: --help documents profile write flags without SPEC cites."""
     result = runner.invoke(main, ["company", "update", "--help"])
@@ -3755,6 +3781,15 @@ def test_company_update_help_documents_profile_paths(runner: CliRunner) -> None:
     assert "--timezone" in result.output
     assert "--target-customers" in result.output
     assert "§V." not in result.output
+
+
+def test_company_update_help_profile_flag_order() -> None:
+    """§V.140: create and update share profile flag names and Click order."""
+    from mailpilot.cli import company_create, company_update
+
+    expected = list(_COMPANY_PROFILE_FLAGS)
+    assert _profile_flag_order(company_update) == expected
+    assert _profile_flag_order(company_create) == expected
 
 
 def test_skill_documents_company_profile_write() -> None:
@@ -4043,7 +4078,7 @@ def test_contact_create_meta_json_must_be_object(
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["error"] == "validation_error"
-    assert "object" in data["message"]
+    assert "meta must be a JSON object" in data["message"]
 
 
 def test_contact_create_company_not_found(
