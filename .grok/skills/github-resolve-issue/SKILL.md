@@ -4,12 +4,13 @@ description: >
   Orchestrate resolving open GitHub issues on an issue-linked branch:
   checkout via gh issue develop, fold with /sdd:spec github issue N
   (auto-approve APPLY), isolated /sdd:build --all, isolated /review
-  --branch for simplifications, make check, push, open a PR, then
-  wait for merge approval. --all analyzes dependencies first and
-  walks issues in that order, one at a time. Never merges without
-  an explicit operator choice. Use when the user wants to
-  auto-resolve GitHub issues, drain the issue backlog, run the SDD
-  issue loop, or runs /github-resolve-issue.
+  --branch for simplifications, make check, push, open one GitHub
+  PR per issue, then wait for merge approval. --all analyzes
+  dependencies first and walks issues in that order, one at a
+  time. Never merges without an explicit operator choice. Use
+  when the user wants to auto-resolve GitHub issues, drain the
+  issue backlog, run the SDD issue loop, or runs
+  /github-resolve-issue.
 argument-hint: "[N | --all] [--no-wait]"
 allowed-tools: ask_user_question, read_file, run_terminal_command, spawn_subagent, monitor, todo_write
 ---
@@ -30,7 +31,8 @@ lives in the bundled `/review` skill — same rule.
 2. Read `skills/spec/SKILL.md`, `skills/build/SKILL.md`,
    `skills/github/SKILL.md`, `skills/_fragments/ACCEPTANCE-GATE.md`.
 3. On every BRANCH / PR / MERGE op, follow the github skill
-   (emit `engaged sdd:github — <op>`).
+   (emit `engaged sdd:github — <op>`). Never github LINEAR —
+   this loop always BRANCH + PR. One `gh pr create` per issue.
 
 **Bundled review skill (load from disk, do not copy):**
 `$GROK_HOME/bundled/skills/review/SKILL.md`
@@ -273,6 +275,7 @@ Stop on push failure.
 
 ### 8. PR
 
+After a successful push, open one GitHub PR for this issue.
 Follow github skill **PR**. Load ACCEPTANCE-GATE first.
 
 - BLOCK → open the PR **without** a close trailer; say why.
