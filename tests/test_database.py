@@ -9956,6 +9956,73 @@ def test_check_workflow_wording_account_id_filters_rows(
     assert report.orphaned == 0
 
 
+def test_empty_theme_live_row_import_in_sync_matches_check(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.103/§B.144: empty stored theme → import in_sync iff check in_sync."""
+    account = make_test_account(database_connection)
+    flow = create_workflow(
+        database_connection,
+        name="empty-theme-flow",
+        template="outbound-general",
+        account_id=account.id,
+        theme="blue",
+    )
+    assert flow is not None
+    updated = update_workflow(
+        database_connection,
+        flow.id,
+        theme="",
+        goal="Book demos",
+        instructions="Be concise.",
+    )
+    assert updated is not None
+    assert updated.theme == ""
+
+    # Catalog omits theme: catalog_def_fields defaults it to blue. Live row
+    # stores empty. Import hash and check hash must agree on that row.
+    entry = {
+        "name": "empty-theme-flow",
+        "template": "outbound-general",
+        "goal": "Book demos",
+        "instructions": "Be concise.",
+    }
+    persisted = {
+        "template": updated.template,
+        "theme": updated.theme,
+        "goal": updated.goal,
+        "instructions": updated.instructions,
+        "touches": updated.touches,
+        "touch_interval_days": updated.touch_interval_days,
+    }
+    import_synced = import_row_in_sync(entry, persisted)
+    report = check_workflow_wording(database_connection, {"empty-theme-flow": entry})
+    check_row = report.workflows[0]
+    assert import_synced is (check_row.state == "in_sync")
+    assert import_synced is False
+    assert check_row.state == "out_of_sync"
+    leftover = workflow_import_sync_report(entry, persisted)
+    assert leftover["catalog_hash"] != leftover["row_hash"]
+    assert leftover["remaining"] == {"theme": "blue"}
+
+    matching = {**persisted, "theme": "blue"}
+    matched = workflow_import_sync_report(entry, matching)
+    assert matched["in_sync"] is True
+    assert matched["remaining"] == {}
+
+    # remaining uses the same field equality as the hash: omitted catalog
+    # goal defaults to ""; None stored goal hashes as "" so it is not a
+    # remaining key. Empty stored theme still differs from catalog blue.
+    omitted_goal_entry = {
+        "name": "empty-theme-flow",
+        "template": "outbound-general",
+        "instructions": "Be concise.",
+    }
+    mixed = workflow_import_sync_report(omitted_goal_entry, {**persisted, "goal": None})
+    assert mixed["in_sync"] is False
+    assert mixed["remaining"] == {"theme": "blue"}
+
+
 def test_import_row_in_sync_detects_wording_mismatch() -> None:
     """§V.103: in_sync is a post-apply wording-hash match, not a bare True."""
     entry = _catalog_entry("demo", goal="New goal", instructions="Body")

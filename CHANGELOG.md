@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lists the remaining def-field delta, not only the fields just written.
   A successful import of a drifted TOML leaves `workflow check --file`
   in sync without a second import. Incomplete cadence (`touches` without
-  `touch_interval_days`) persists as single-touch.
+  `touch_interval_days`) persists as single-touch. Stored columns hash
+  as-is (an empty `theme` is not re-defaulted to `blue`).
 
 ## [v0.30.0] - 2026-08-20
 

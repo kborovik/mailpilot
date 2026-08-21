@@ -290,7 +290,7 @@ T298|x|impl §V.140(∆) — company_update @_company_profile_options + _profile
 T299|x|impl §V.178(+) — `_company_scope_clauses` used by list+export+search companies; CLI `_company_cohort_kwargs` tag ids+include-disabled; `--no-tag` via `_resolve_tag_ids`; EmailSummary SELECT one fragment; review calls `list_emails`; workflow+tag summary SELECTs share column list each; export unlimited ORDER BY domain + tracker dicts; existing list/export/search tests (#256)|V178,V145,V116,V7,V174
 T300|x|impl §V.79(∆)+§V.83(∆)+§V.85(∆)+§V.92(∆)+§V.115(∆)+§V.151(∆) — drop unused ClassificationError+CooldownError in exceptions.py; drop has_inbound bool wrapper (tests call list helper); drop pass-through renderer strong/emphasis/table_*; signature render AccountSignature via account_signature(); Settings field-literal defaults drop DEFAULT_* + get_field_value stub; contact|email|workflow search @limit_option; contact disable unchanged (#257)|V79,V83,V85,V92,V115,V151
 T301|x|impl §V.103 + §I — import in_sync from live written row (same hash as check); envelope catalog_hash+row_hash; remaining-delta changed when false; drifted TOML apply → in_sync true + check --file same in_sync; SKILL one-call drops check/import/check (#271)|V103,V134,V4,B143,I.cli
-T302|.|impl §V.103 — `_persisted_wording_hash` hashes stored columns as-is (no second defaulting); remaining/changed same equality as hash; test empty-theme live row import in_sync iff check in_sync|V103,V134,B144
+T302|x|impl §V.103 — `_persisted_wording_hash` hashes stored columns as-is (no second defaulting); remaining/changed same equality as hash; test empty-theme live row import in_sync iff check in_sync|V103,V134,B144
 
 ## §B BUGS
 

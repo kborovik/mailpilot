@@ -3552,24 +3552,40 @@ def catalog_def_fields(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _stored_def_fields(persisted: dict[str, Any]) -> dict[str, Any]:
+    """Live-row def fields as stored; no catalog defaulting (§V.103/§B.144).
+
+    Empty ``theme`` stays empty (not ``blue``). Catalog defaults live only
+    in ``catalog_def_fields``. Cadence non-ints collapse to ``None`` so the
+    hash matches ``_compute_workflow_wording_hash``.
+    """
+    touches_raw = persisted.get("touches")
+    interval_raw = persisted.get("touch_interval_days")
+    return {
+        "template": str(persisted.get("template") or ""),
+        "theme": str(persisted.get("theme") or ""),
+        "goal": str(persisted.get("goal") or ""),
+        "instructions": str(persisted.get("instructions") or ""),
+        "touches": touches_raw if isinstance(touches_raw, int) else None,
+        "touch_interval_days": interval_raw if isinstance(interval_raw, int) else None,
+    }
+
+
 def _catalog_wording_hash(entry: dict[str, Any]) -> str:
     """Hash a parsed catalog def the way an import would persist it (§V.134)."""
     return _persisted_wording_hash(catalog_def_fields(entry))
 
 
 def _persisted_wording_hash(persisted: dict[str, Any]) -> str:
-    """Hash live (or projected) def fields with the same function as check."""
+    """Hash stored def fields as-is; no second catalog default (§V.103/§B.144)."""
+    stored = _stored_def_fields(persisted)
     return _compute_workflow_wording_hash(
-        template=str(persisted.get("template") or ""),
-        theme=str(persisted.get("theme") or "blue"),
-        goal=str(persisted.get("goal") or ""),
-        instructions=str(persisted.get("instructions") or ""),
-        touches=persisted.get("touches")
-        if isinstance(persisted.get("touches"), int)
-        else None,
-        touch_interval_days=persisted.get("touch_interval_days")
-        if isinstance(persisted.get("touch_interval_days"), int)
-        else None,
+        template=stored["template"],
+        theme=stored["theme"],
+        goal=stored["goal"],
+        instructions=stored["instructions"],
+        touches=stored["touches"],
+        touch_interval_days=stored["touch_interval_days"],
     )
 
 
@@ -3579,16 +3595,18 @@ def workflow_import_sync_report(
     """Post-apply import sync vs the live written row (§V.103/§B.143).
 
     ``in_sync`` is catalog SHA-256 vs persisted SHA-256 (same hash as
-    ``check_workflow_wording``). ``remaining`` maps catalog def fields that
-    still differ from ``persisted`` -- empty when in sync.
+    ``check_workflow_wording``). ``remaining`` maps catalog def fields whose
+    hashed projection still differs from stored columns -- empty when in
+    sync. Equality matches the hash, not raw ``persisted.get``.
     """
     catalog = catalog_def_fields(entry)
+    stored = _stored_def_fields(persisted)
     catalog_hash = _catalog_wording_hash(entry)
     row_hash = _persisted_wording_hash(persisted)
     remaining: dict[str, object] = {}
     if catalog_hash != row_hash:
         for key, catalog_value in catalog.items():
-            if catalog_value != persisted.get(key):
+            if catalog_value != stored[key]:
                 remaining[key] = catalog_value
     return {
         "in_sync": catalog_hash == row_hash,
