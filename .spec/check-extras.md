@@ -130,13 +130,14 @@ Trigger: `src/mailpilot/database.py` or `src/mailpilot/cli.py` changed.
 
 ## §V15 — enrollment lifecycle + outcome model
 
-`enrollment.status` in {active, disabled} (no `paused`). `disabled` = operator halt, requires non-empty `disabled_reason` (CHECK) + `enrollment_disabled` activity, reversible via `enrollment enable <id>` (status disabled→active, clears `disabled_reason`, `status <> 'disabled'` gate blocks enabling a live enrollment, emits `enrollment_enabled` activity). `enrollment disable`/`enable` are the sole halt/resume surface (NO `enrollment update` status verb). Outcomes live on activity timeline via `record_enrollment_outcome` (accepts only completed|failed), enrollment row untouched.
+`enrollment.status` in {active, disabled} (no `paused`). `disabled` = operator halt, requires non-empty `disabled_reason` (CHECK) + `enrollment_disabled` activity, reversible via `enrollment enable <id>` (status disabled→active, clears `disabled_reason`, `status <> 'disabled'` gate blocks enabling a live enrollment, emits `enrollment_enabled` activity). `enrollment disable`/`enable` are the sole halt/resume surface (NO `enrollment update` status verb). Outcomes live on activity timeline via `record_enrollment_outcome` (accepts only completed|failed); enrollment status untouched. `record_enrollment_outcome` bumps `enrollment.updated_at` in the same txn as the activity so `enrollment list --since`/`--until` (filters `e.updated_at`) + `--full` + `--disposition` windows a terminal outcome (incl. do_not_contact) without `contact view --timeline`. no `disposition_updated_at` col — `updated_at` is the window clock.
 
 Trigger: `src/mailpilot/database.py` or `src/mailpilot/models.py` changed.
 - `rg 'status.*CHECK\b' src/mailpilot/schema.sql | grep enrollment` -> status CHECK in schema
 - `rg 'enrollment_disabled\b' src/mailpilot/database.py` -> enrollment_disabled activity on disable
 - `rg 'enrollment_enabled\b' src/mailpilot/database.py` -> enrollment_enabled activity on enable
-- `rg 'record_enrollment_outcome\b' src/mailpilot/database.py` -> outcome fn present (activity-only)
+- `rg 'record_enrollment_outcome\b' src/mailpilot/database.py` -> outcome fn present
+- `rg 'updated_at = CURRENT_TIMESTAMP' src/mailpilot/database.py` -> outcome path bumps enrollment.updated_at
 - `rg "status.*<>.*'disabled'\|!=.*'disabled'" src/mailpilot/database.py` -> enabling guard
 
 ## §V18 — schema drift definition
@@ -970,7 +971,7 @@ Trigger: `src/mailpilot/` account/signature/render paths changed.
 
 ## §V152 — enrollment execution projection
 
-enrollment execution projection — default list lean; `--full` denser {company_domain, company_name, emails_sent, last_touch, next_scheduled_at, next_touch, disposition, created_at}; filters `--has-pending-task` / `--touch N` / `--disposition` (§V.160); `--touch 1` matches pending first-touch when `emails_sent=0` AND `next_scheduled_at` IS NOT NULL even when `context.touch` absent / `next_touch` null (`enrollment_schedule` §V.32); `--full` projects `next_touch=1` on that row; `--touch N` N>=2 unchanged (pending context.touch=N or no-pending last-sent=N); sort next_scheduled_at; envelope `enrollments`; entity refs name|UUID (§V.107). `enrollment list --workflow-id` polymorphic name|UUID via `_resolve_workflow_id` (§V.107); help "name or ID"; unknown → `not_found` (#207).
+enrollment execution projection — default list lean; `--full` denser {company_domain, company_name, emails_sent, last_touch, next_scheduled_at, next_touch, disposition, created_at}; filters `--has-pending-task` / `--touch N` / `--disposition` (§V.160) / `--since`/`--until` on `e.updated_at`; `--touch 1` matches pending first-touch when `emails_sent=0` AND `next_scheduled_at` IS NOT NULL even when `context.touch` absent / `next_touch` null (`enrollment_schedule` §V.32); `--full` projects `next_touch=1` on that row; `--touch N` N>=2 unchanged (pending context.touch=N or no-pending last-sent=N); sort next_scheduled_at; envelope `enrollments`; entity refs name|UUID (§V.107). `enrollment list --workflow-id` polymorphic name|UUID via `_resolve_workflow_id` (§V.107); help "name or ID"; unknown → `not_found` (#207). dated-window DNC = `--full --disposition do_not_contact --since --until` — sufficient without `--timeline` (`updated_at` clock §V.15).
 
 Trigger: enrollment list/view projection changed.
 - `rg 'next_scheduled_at|emails_sent|last_touch|--full' src/mailpilot/cli.py src/mailpilot/database.py` -> denser projection fields
@@ -1057,7 +1058,7 @@ Trigger: stats / enrollment --full/--touch / cadence task write / enrollment_sch
 
 ## §V163 — bounce enrollment hard-stop
 
-bounce enrollment hard-stop — outbound bounce (§V.80) → every active outbound enrollment for that contact: record_enrollment_outcome failed do_not_contact + cancel follow-ups; skip already-terminal; enrollment row untouched (§V.15); contact disable stays §V.80; ! defer to execute-time §V.83
+bounce enrollment hard-stop — outbound bounce (§V.80) → every active outbound enrollment for that contact: record_enrollment_outcome failed do_not_contact + cancel follow-ups; skip already-terminal; enrollment status untouched; updated_at bumped (§V.15); contact disable stays §V.80; ! defer to execute-time §V.83
 
 Trigger: bounce handler changed.
 - `rg 'bounced:|record_enrollment_outcome|do_not_contact' src/mailpilot/` -> bounce concludes enrollments
