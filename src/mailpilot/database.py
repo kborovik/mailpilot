@@ -19,7 +19,7 @@ from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import logfire
 import psycopg
@@ -1353,66 +1353,35 @@ def _normalize_tag_ids(tag: str | Sequence[str] | None) -> list[str]:
     return [item for item in tag if item]
 
 
-def _include_tags_conditions(
+def _tag_assignment_conditions(
     tags: Sequence[str] | None,
     owner_column: str,
     params: dict[str, object],
+    *,
+    negate: bool = False,
 ) -> list[Composed]:
-    """Build one ``EXISTS`` predicate per required tag (§V.116).
+    """Build one ``EXISTS`` (or ``NOT EXISTS``) predicate per tag (§V.116/§V.178).
 
-    ``--tag`` is repeatable and AND-composes: the row must carry every
-    named tag. Each tag becomes its own intersected ``EXISTS`` over
-    ``tag_assignment`` on ``owner_column``.
+    ``--tag`` AND-composes: the row must carry every named tag. ``--no-tag``
+    AND-composes the negation: the row must carry none. Each tag is its own
+    intersected subquery over ``tag_assignment`` on ``owner_column``.
+    ``negate=True`` is ``--no-tag`` (``NOT EXISTS``, ``exclude_tag_id_*``
+    placeholders); default is ``--tag``.
     """
     conditions: list[Composed] = []
     if not tags:
         return conditions
+    prefix = "exclude_tag_id" if negate else "include_tag_id"
+    exists = SQL("NOT EXISTS") if negate else SQL("EXISTS")
     for index, tag_id in enumerate(tags):
-        param_name = f"include_tag_id_{index}"
+        param_name = f"{prefix}_{index}"
         conditions.append(
             SQL(
-                "EXISTS (SELECT 1 FROM tag_assignment ta "
+                "{} (SELECT 1 FROM tag_assignment ta "
                 "WHERE ta.{} = c.id AND ta.tag_id = {})"
-            ).format(Identifier(owner_column), Placeholder(param_name))
+            ).format(exists, Identifier(owner_column), Placeholder(param_name))
         )
         params[param_name] = tag_id
-    return conditions
-
-
-def _exclude_tags_conditions(
-    exclude_tags: Sequence[str] | None,
-    owner_column: str,
-    params: dict[str, object],
-) -> list[Composed]:
-    """Build one ``NOT EXISTS`` predicate per excluded tag (§V.116).
-
-    ``--no-tag`` is repeatable, so the discover set can exclude several
-    memoization classes at once (``no-contacts-found`` and
-    ``contacts-exhausted``, §V.96). Each tag becomes its own intersected
-    ``NOT EXISTS`` over ``tag_assignment`` on ``owner_column``
-    (``company_id`` or ``contact_id``); the caller appends the predicates and
-    this fn mutates ``params`` with a uniquely-named placeholder per tag.
-
-    Args:
-        exclude_tags: Resolved tag ids to exclude (empty/None -> no predicate).
-        owner_column: ``tag_assignment`` owner FK column to join on.
-        params: Query parameter map, mutated in place with one entry per tag.
-
-    Returns:
-        One ``NOT EXISTS`` predicate per excluded tag.
-    """
-    conditions: list[Composed] = []
-    if not exclude_tags:
-        return conditions
-    for index, exclude_tag_id in enumerate(exclude_tags):
-        param_name = f"exclude_tag_id_{index}"
-        conditions.append(
-            SQL(
-                "NOT EXISTS (SELECT 1 FROM tag_assignment ta "
-                "WHERE ta.{} = c.id AND ta.tag_id = {})"
-            ).format(Identifier(owner_column), Placeholder(param_name))
-        )
-        params[param_name] = exclude_tag_id
     return conditions
 
 
@@ -1520,9 +1489,11 @@ def _company_scope_clauses(
         having.append(SQL("COUNT(ct.id) >= %(min_contacts)s"))
         params["min_contacts"] = min_contacts
     conditions.extend(
-        _include_tags_conditions(_normalize_tag_ids(tag), "company_id", params)
+        _tag_assignment_conditions(_normalize_tag_ids(tag), "company_id", params)
     )
-    conditions.extend(_exclude_tags_conditions(exclude_tags, "company_id", params))
+    conditions.extend(
+        _tag_assignment_conditions(exclude_tags, "company_id", params, negate=True)
+    )
     return conditions, having
 
 
@@ -2497,9 +2468,11 @@ def list_contacts(
         conditions.append(SQL("LOWER(c.title) = LOWER(%(title)s)"))
         params["title"] = title
     conditions.extend(
-        _include_tags_conditions(_normalize_tag_ids(tag), "contact_id", params)
+        _tag_assignment_conditions(_normalize_tag_ids(tag), "contact_id", params)
     )
-    conditions.extend(_exclude_tags_conditions(exclude_tags, "contact_id", params))
+    conditions.extend(
+        _tag_assignment_conditions(exclude_tags, "contact_id", params, negate=True)
+    )
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     query = SQL(
         "SELECT c.id, c.email, c.first_name, c.last_name, c.title, "
@@ -6921,27 +6894,53 @@ def enable_tag(
     return Tag.model_validate(row)
 
 
-def assign_tag_to_contact(
+def _tag_owner_activity_ids(
     connection: psycopg.Connection[dict[str, Any]],
-    tag_id: str,
-    contact_id: str,
-) -> TagAssignment | None:
-    """Link a vocabulary tag to a contact and emit ``tag_added`` (§V.91/§V.116).
+    owner_col: Literal["contact_id", "company_id"],
+    owner_id: str,
+) -> tuple[str | None, str | None]:
+    """Return ``(activity_contact_id, activity_company_id)`` for a tag owner.
 
-    The assignment INSERT and the ``tag_added`` activity commit in one
-    transaction (§V.91). Returns ``None`` if the link already exists (ON
-    CONFLICT DO NOTHING) -- no activity is written in that case. The activity
-    carries the contact's company so it surfaces on the company timeline too
-    (§V.17 multi-target).
-
-    Raises:
-        ValueError: If the contact does not exist.
+    Contact owners carry the parent company so the activity is multi-target
+    (§V.17). Company owners write company-only activity.
     """
-    contact_row = connection.execute(
-        "SELECT company_id FROM contact WHERE id = %s", (contact_id,)
-    ).fetchone()
-    if contact_row is None:
-        raise ValueError(f"contact not found: {contact_id}")
+    if owner_col == "contact_id":
+        owner_row = connection.execute(
+            "SELECT company_id FROM contact WHERE id = %s", (owner_id,)
+        ).fetchone()
+        if owner_row is None:
+            raise ValueError(f"contact not found: {owner_id}")
+        return owner_id, owner_row["company_id"]
+    if (
+        connection.execute(
+            "SELECT 1 FROM company WHERE id = %s", (owner_id,)
+        ).fetchone()
+        is None
+    ):
+        raise ValueError(f"company not found: {owner_id}")
+    return None, owner_id
+
+
+def _assign_tag(
+    connection: psycopg.Connection[dict[str, Any]],
+    owner_col: Literal["contact_id", "company_id"],
+    tag_id: str,
+    owner_id: str,
+    *,
+    commit: bool = True,
+) -> TagAssignment | None:
+    """Link a vocabulary tag to a contact or company and emit ``tag_added``.
+
+    INSERT and ``tag_added`` commit together when ``commit`` is true.
+    Returns ``None`` if the link already exists (ON CONFLICT DO NOTHING) --
+    no activity in that case. ``commit=False`` lets ``set_*_tags`` compose
+    several links in one transaction.
+    """
+    activity_contact_id, activity_company_id = _tag_owner_activity_ids(
+        connection, owner_col, owner_id
+    )
+    insert_contact_id = owner_id if owner_col == "contact_id" else None
+    insert_company_id = owner_id if owner_col == "company_id" else None
     tag_row = connection.execute(
         "SELECT name FROM tag WHERE id = %s", (tag_id,)
     ).fetchone()
@@ -6950,14 +6949,20 @@ def assign_tag_to_contact(
     assignment_row = connection.execute(
         """\
         INSERT INTO tag_assignment (id, tag_id, contact_id, company_id)
-        VALUES (%(id)s, %(tag_id)s, %(contact_id)s, NULL)
+        VALUES (%(id)s, %(tag_id)s, %(contact_id)s, %(company_id)s)
         ON CONFLICT DO NOTHING
         RETURNING *
         """,
-        {"id": _new_id(), "tag_id": tag_id, "contact_id": contact_id},
+        {
+            "id": _new_id(),
+            "tag_id": tag_id,
+            "contact_id": insert_contact_id,
+            "company_id": insert_company_id,
+        },
     ).fetchone()
     if assignment_row is None:
-        connection.commit()
+        if commit:
+            connection.commit()
         return None
     connection.execute(
         """\
@@ -6971,14 +6976,92 @@ def assign_tag_to_contact(
         """,
         {
             "id": _new_id(),
-            "contact_id": contact_id,
-            "company_id": contact_row["company_id"],
+            "contact_id": activity_contact_id,
+            "company_id": activity_company_id,
             "summary": f"Tagged as {tag_row['name']}",
             "detail": Json({"tag": tag_row["name"]}),
         },
     )
-    connection.commit()
+    if commit:
+        connection.commit()
     return TagAssignment.model_validate(assignment_row)
+
+
+def _remove_tag(
+    connection: psycopg.Connection[dict[str, Any]],
+    owner_col: Literal["contact_id", "company_id"],
+    tag_id: str,
+    owner_id: str,
+    *,
+    commit: bool = True,
+) -> TagAssignment | None:
+    """Unlink a vocabulary tag from a contact or company and emit ``tag_removed``.
+
+    Deletes the link and appends ``tag_removed`` in one transaction when
+    ``commit`` is true, retiring neither the tag nor the owner. Returns
+    ``None`` when no such link exists.
+    """
+    activity_contact_id, activity_company_id = _tag_owner_activity_ids(
+        connection, owner_col, owner_id
+    )
+    deleted_row = connection.execute(
+        SQL(
+            "DELETE FROM tag_assignment "
+            "WHERE tag_id = %(tag_id)s AND {} = %(owner_id)s "
+            "RETURNING *"
+        ).format(Identifier(owner_col)),
+        {"tag_id": tag_id, "owner_id": owner_id},
+    ).fetchone()
+    if deleted_row is None:
+        if commit:
+            connection.commit()
+        return None
+    tag_row = connection.execute(
+        "SELECT name FROM tag WHERE id = %s", (tag_id,)
+    ).fetchone()
+    tag_name = tag_row["name"] if tag_row is not None else tag_id
+    connection.execute(
+        """\
+        INSERT INTO activity (
+            id, contact_id, company_id, type, summary, detail
+        )
+        VALUES (
+            %(id)s, %(contact_id)s, %(company_id)s,
+            'tag_removed', %(summary)s, %(detail)s
+        )
+        """,
+        {
+            "id": _new_id(),
+            "contact_id": activity_contact_id,
+            "company_id": activity_company_id,
+            "summary": f"Untagged {tag_name}",
+            "detail": Json({"tag": tag_name}),
+        },
+    )
+    if commit:
+        connection.commit()
+    return TagAssignment.model_validate(deleted_row)
+
+
+def assign_tag_to_contact(
+    connection: psycopg.Connection[dict[str, Any]],
+    tag_id: str,
+    contact_id: str,
+    *,
+    commit: bool = True,
+) -> TagAssignment | None:
+    """Link a vocabulary tag to a contact and emit ``tag_added`` (§V.91/§V.116).
+
+    The assignment INSERT and the ``tag_added`` activity commit in one
+    transaction (§V.91) unless ``commit=False``. Returns ``None`` if the link
+    already exists (ON CONFLICT DO NOTHING) -- no activity is written in that
+    case. The activity carries the contact's company so it surfaces on the
+    company timeline too (§V.17 multi-target).
+
+    Raises:
+        ValueError: If the contact does not exist.
+    """
+    return _assign_tag(connection, "contact_id", tag_id, contact_id, commit=commit)
 
 
 def assign_tag_to_company(
@@ -6996,57 +7079,15 @@ def assign_tag_to_company(
     Raises:
         ValueError: If the company does not exist.
     """
-    if (
-        connection.execute(
-            "SELECT 1 FROM company WHERE id = %s", (company_id,)
-        ).fetchone()
-        is None
-    ):
-        raise ValueError(f"company not found: {company_id}")
-    tag_row = connection.execute(
-        "SELECT name FROM tag WHERE id = %s", (tag_id,)
-    ).fetchone()
-    if tag_row is None:
-        raise ValueError(f"tag not found: {tag_id}")
-    assignment_row = connection.execute(
-        """\
-        INSERT INTO tag_assignment (id, tag_id, contact_id, company_id)
-        VALUES (%(id)s, %(tag_id)s, NULL, %(company_id)s)
-        ON CONFLICT DO NOTHING
-        RETURNING *
-        """,
-        {"id": _new_id(), "tag_id": tag_id, "company_id": company_id},
-    ).fetchone()
-    if assignment_row is None:
-        if commit:
-            connection.commit()
-        return None
-    connection.execute(
-        """\
-        INSERT INTO activity (
-            id, contact_id, company_id, type, summary, detail
-        )
-        VALUES (
-            %(id)s, NULL, %(company_id)s,
-            'tag_added', %(summary)s, %(detail)s
-        )
-        """,
-        {
-            "id": _new_id(),
-            "company_id": company_id,
-            "summary": f"Tagged as {tag_row['name']}",
-            "detail": Json({"tag": tag_row["name"]}),
-        },
-    )
-    if commit:
-        connection.commit()
-    return TagAssignment.model_validate(assignment_row)
+    return _assign_tag(connection, "company_id", tag_id, company_id, commit=commit)
 
 
 def remove_tag_from_contact(
     connection: psycopg.Connection[dict[str, Any]],
     tag_id: str,
     contact_id: str,
+    *,
+    commit: bool = True,
 ) -> TagAssignment | None:
     """Unlink a vocabulary tag from a contact and emit ``tag_removed`` (§V.116).
 
@@ -7058,52 +7099,15 @@ def remove_tag_from_contact(
     Raises:
         ValueError: If the contact does not exist.
     """
-    contact_row = connection.execute(
-        "SELECT company_id FROM contact WHERE id = %s", (contact_id,)
-    ).fetchone()
-    if contact_row is None:
-        raise ValueError(f"contact not found: {contact_id}")
-    deleted_row = connection.execute(
-        """\
-        DELETE FROM tag_assignment
-        WHERE tag_id = %(tag_id)s AND contact_id = %(contact_id)s
-        RETURNING *
-        """,
-        {"tag_id": tag_id, "contact_id": contact_id},
-    ).fetchone()
-    if deleted_row is None:
-        connection.commit()
-        return None
-    tag_row = connection.execute(
-        "SELECT name FROM tag WHERE id = %s", (tag_id,)
-    ).fetchone()
-    tag_name = tag_row["name"] if tag_row is not None else tag_id
-    connection.execute(
-        """\
-        INSERT INTO activity (
-            id, contact_id, company_id, type, summary, detail
-        )
-        VALUES (
-            %(id)s, %(contact_id)s, %(company_id)s,
-            'tag_removed', %(summary)s, %(detail)s
-        )
-        """,
-        {
-            "id": _new_id(),
-            "contact_id": contact_id,
-            "company_id": contact_row["company_id"],
-            "summary": f"Untagged {tag_name}",
-            "detail": Json({"tag": tag_name}),
-        },
-    )
-    connection.commit()
-    return TagAssignment.model_validate(deleted_row)
+    return _remove_tag(connection, "contact_id", tag_id, contact_id, commit=commit)
 
 
 def remove_tag_from_company(
     connection: psycopg.Connection[dict[str, Any]],
     tag_id: str,
     company_id: str,
+    *,
+    commit: bool = True,
 ) -> TagAssignment | None:
     """Unlink a vocabulary tag from a company and emit ``tag_removed`` (§V.116).
 
@@ -7113,47 +7117,7 @@ def remove_tag_from_company(
     Raises:
         ValueError: If the company does not exist.
     """
-    if (
-        connection.execute(
-            "SELECT 1 FROM company WHERE id = %s", (company_id,)
-        ).fetchone()
-        is None
-    ):
-        raise ValueError(f"company not found: {company_id}")
-    deleted_row = connection.execute(
-        """\
-        DELETE FROM tag_assignment
-        WHERE tag_id = %(tag_id)s AND company_id = %(company_id)s
-        RETURNING *
-        """,
-        {"tag_id": tag_id, "company_id": company_id},
-    ).fetchone()
-    if deleted_row is None:
-        connection.commit()
-        return None
-    tag_row = connection.execute(
-        "SELECT name FROM tag WHERE id = %s", (tag_id,)
-    ).fetchone()
-    tag_name = tag_row["name"] if tag_row is not None else tag_id
-    connection.execute(
-        """\
-        INSERT INTO activity (
-            id, contact_id, company_id, type, summary, detail
-        )
-        VALUES (
-            %(id)s, NULL, %(company_id)s,
-            'tag_removed', %(summary)s, %(detail)s
-        )
-        """,
-        {
-            "id": _new_id(),
-            "company_id": company_id,
-            "summary": f"Untagged {tag_name}",
-            "detail": Json({"tag": tag_name}),
-        },
-    )
-    connection.commit()
-    return TagAssignment.model_validate(deleted_row)
+    return _remove_tag(connection, "company_id", tag_id, company_id, commit=commit)
 
 
 def _tag_names_by_id(
@@ -7168,6 +7132,56 @@ def _tag_names_by_id(
         (list(tag_ids),),
     ).fetchall()
     return {str(row["id"]): str(row["name"]) for row in rows}
+
+
+def _set_owner_tags(
+    connection: psycopg.Connection[dict[str, Any]],
+    owner_col: Literal["contact_id", "company_id"],
+    owner_id: str,
+    tag_ids: Sequence[str],
+) -> list[str]:
+    """Replace an owner's full tag set via ``_assign_tag``/``_remove_tag``.
+
+    One transaction: ``commit=False`` on each helper, then a single commit.
+    """
+    # Existence via the same lookup the writers use, so a missing owner
+    # raises before any link mutation (empty ``tag_ids`` still validates).
+    _tag_owner_activity_ids(connection, owner_col, owner_id)
+    desired_ids = list(dict.fromkeys(tag_ids))
+    name_by_id = _tag_names_by_id(connection, desired_ids)
+    missing = [tid for tid in desired_ids if tid not in name_by_id]
+    if missing:
+        raise ValueError(f"tag not found: {missing[0]}")
+    current_rows = connection.execute(
+        SQL("SELECT tag_id FROM tag_assignment WHERE {} = %s").format(
+            Identifier(owner_col)
+        ),
+        (owner_id,),
+    ).fetchall()
+    current_ids = {str(row["tag_id"]) for row in current_rows}
+    desired_set = set(desired_ids)
+    to_add = [tid for tid in desired_ids if tid not in current_ids]
+    to_remove = sorted(current_ids - desired_set)
+    for tag_id in to_remove:
+        _remove_tag(connection, owner_col, tag_id, owner_id, commit=False)
+    for tag_id in to_add:
+        _assign_tag(connection, owner_col, tag_id, owner_id, commit=False)
+    connection.commit()
+    if owner_col == "contact_id":
+        assigned = list_tags(
+            connection,
+            contact_id=owner_id,
+            limit=1_000_000,
+            include_disabled=True,
+        )
+    else:
+        assigned = list_tags(
+            connection,
+            company_id=owner_id,
+            limit=1_000_000,
+            include_disabled=True,
+        )
+    return [t.name for t in assigned]
 
 
 def set_company_tags(
@@ -7186,93 +7200,7 @@ def set_company_tags(
     Raises:
         ValueError: If the company does not exist, or a ``tag_id`` is unknown.
     """
-    if (
-        connection.execute(
-            "SELECT 1 FROM company WHERE id = %s", (company_id,)
-        ).fetchone()
-        is None
-    ):
-        raise ValueError(f"company not found: {company_id}")
-    # Preserve first-seen order while dropping duplicates.
-    desired_ids = list(dict.fromkeys(tag_ids))
-    name_by_id = _tag_names_by_id(connection, desired_ids)
-    missing = [tid for tid in desired_ids if tid not in name_by_id]
-    if missing:
-        raise ValueError(f"tag not found: {missing[0]}")
-    current_rows = connection.execute(
-        "SELECT tag_id FROM tag_assignment WHERE company_id = %s",
-        (company_id,),
-    ).fetchall()
-    current_ids = {str(row["tag_id"]) for row in current_rows}
-    desired_set = set(desired_ids)
-    to_add = [tid for tid in desired_ids if tid not in current_ids]
-    to_remove = sorted(current_ids - desired_set)
-    if to_remove:
-        remove_names = _tag_names_by_id(connection, to_remove)
-        for tag_id in to_remove:
-            connection.execute(
-                """\
-                DELETE FROM tag_assignment
-                WHERE tag_id = %(tag_id)s AND company_id = %(company_id)s
-                """,
-                {"tag_id": tag_id, "company_id": company_id},
-            )
-            tag_name = remove_names.get(tag_id, tag_id)
-            connection.execute(
-                """\
-                INSERT INTO activity (
-                    id, contact_id, company_id, type, summary, detail
-                )
-                VALUES (
-                    %(id)s, NULL, %(company_id)s,
-                    'tag_removed', %(summary)s, %(detail)s
-                )
-                """,
-                {
-                    "id": _new_id(),
-                    "company_id": company_id,
-                    "summary": f"Untagged {tag_name}",
-                    "detail": Json({"tag": tag_name}),
-                },
-            )
-    for tag_id in to_add:
-        tag_name = name_by_id[tag_id]
-        connection.execute(
-            """\
-            INSERT INTO tag_assignment (id, tag_id, contact_id, company_id)
-            VALUES (%(id)s, %(tag_id)s, NULL, %(company_id)s)
-            ON CONFLICT DO NOTHING
-            """,
-            {"id": _new_id(), "tag_id": tag_id, "company_id": company_id},
-        )
-        connection.execute(
-            """\
-            INSERT INTO activity (
-                id, contact_id, company_id, type, summary, detail
-            )
-            VALUES (
-                %(id)s, NULL, %(company_id)s,
-                'tag_added', %(summary)s, %(detail)s
-            )
-            """,
-            {
-                "id": _new_id(),
-                "company_id": company_id,
-                "summary": f"Tagged as {tag_name}",
-                "detail": Json({"tag": tag_name}),
-            },
-        )
-    connection.commit()
-    final_names = [
-        t.name
-        for t in list_tags(
-            connection,
-            company_id=company_id,
-            limit=1_000_000,
-            include_disabled=True,
-        )
-    ]
-    return final_names
+    return _set_owner_tags(connection, "company_id", company_id, tag_ids)
 
 
 def set_contact_tags(
@@ -7288,92 +7216,7 @@ def set_contact_tags(
     Raises:
         ValueError: If the contact does not exist, or a ``tag_id`` is unknown.
     """
-    contact_row = connection.execute(
-        "SELECT company_id FROM contact WHERE id = %s", (contact_id,)
-    ).fetchone()
-    if contact_row is None:
-        raise ValueError(f"contact not found: {contact_id}")
-    parent_company_id = contact_row["company_id"]
-    desired_ids = list(dict.fromkeys(tag_ids))
-    name_by_id = _tag_names_by_id(connection, desired_ids)
-    missing = [tid for tid in desired_ids if tid not in name_by_id]
-    if missing:
-        raise ValueError(f"tag not found: {missing[0]}")
-    current_rows = connection.execute(
-        "SELECT tag_id FROM tag_assignment WHERE contact_id = %s",
-        (contact_id,),
-    ).fetchall()
-    current_ids = {str(row["tag_id"]) for row in current_rows}
-    desired_set = set(desired_ids)
-    to_add = [tid for tid in desired_ids if tid not in current_ids]
-    to_remove = sorted(current_ids - desired_set)
-    if to_remove:
-        remove_names = _tag_names_by_id(connection, to_remove)
-        for tag_id in to_remove:
-            connection.execute(
-                """\
-                DELETE FROM tag_assignment
-                WHERE tag_id = %(tag_id)s AND contact_id = %(contact_id)s
-                """,
-                {"tag_id": tag_id, "contact_id": contact_id},
-            )
-            tag_name = remove_names.get(tag_id, tag_id)
-            connection.execute(
-                """\
-                INSERT INTO activity (
-                    id, contact_id, company_id, type, summary, detail
-                )
-                VALUES (
-                    %(id)s, %(contact_id)s, %(company_id)s,
-                    'tag_removed', %(summary)s, %(detail)s
-                )
-                """,
-                {
-                    "id": _new_id(),
-                    "contact_id": contact_id,
-                    "company_id": parent_company_id,
-                    "summary": f"Untagged {tag_name}",
-                    "detail": Json({"tag": tag_name}),
-                },
-            )
-    for tag_id in to_add:
-        tag_name = name_by_id[tag_id]
-        connection.execute(
-            """\
-            INSERT INTO tag_assignment (id, tag_id, contact_id, company_id)
-            VALUES (%(id)s, %(tag_id)s, %(contact_id)s, NULL)
-            ON CONFLICT DO NOTHING
-            """,
-            {"id": _new_id(), "tag_id": tag_id, "contact_id": contact_id},
-        )
-        connection.execute(
-            """\
-            INSERT INTO activity (
-                id, contact_id, company_id, type, summary, detail
-            )
-            VALUES (
-                %(id)s, %(contact_id)s, %(company_id)s,
-                'tag_added', %(summary)s, %(detail)s
-            )
-            """,
-            {
-                "id": _new_id(),
-                "contact_id": contact_id,
-                "company_id": parent_company_id,
-                "summary": f"Tagged as {tag_name}",
-                "detail": Json({"tag": tag_name}),
-            },
-        )
-    connection.commit()
-    return [
-        t.name
-        for t in list_tags(
-            connection,
-            contact_id=contact_id,
-            limit=1_000_000,
-            include_disabled=True,
-        )
-    ]
+    return _set_owner_tags(connection, "contact_id", contact_id, tag_ids)
 
 
 # -- Note ----------------------------------------------------------------------

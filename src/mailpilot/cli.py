@@ -961,6 +961,135 @@ def _company_cohort_kwargs(
     }
 
 
+def _tag_link_owner_kind_and_refs(
+    contact_emails: tuple[str, ...],
+    company_domains: tuple[str, ...],
+) -> tuple[Literal["contact", "company"], tuple[str, ...]]:
+    """Owner-kind XOR for ``tag add``/``tag remove``: companies or contacts."""
+    has_contacts = len(contact_emails) > 0
+    has_companies = len(company_domains) > 0
+    if has_contacts and has_companies:
+        output_error(
+            "pass --contact-email or --company-domain, not both",
+            "validation_error",
+        )
+    if not has_contacts and not has_companies:
+        output_error(
+            "at least one --contact-email or --company-domain is required",
+            "validation_error",
+        )
+    if has_contacts:
+        return "contact", contact_emails
+    return "company", company_domains
+
+
+def _tag_link_apply(
+    assign_or_remove: tuple[Callable[..., Any], Callable[..., Any]],
+    connection: Any,
+    tag_id: str,
+    owner_kind: Literal["contact", "company"],
+    owner_id: str,
+) -> Any:
+    """Call the contact or company writer from the ``assign_or_remove`` pair."""
+    contact_fn, company_fn = assign_or_remove
+    if owner_kind == "contact":
+        return contact_fn(connection, tag_id=tag_id, contact_id=owner_id)
+    return company_fn(connection, tag_id=tag_id, company_id=owner_id)
+
+
+def _tag_link_owners(
+    verb: Literal["add", "remove"],
+    assign_or_remove: tuple[Callable[..., Any], Callable[..., Any]],
+    tag_name: str,
+    contact_emails: tuple[str, ...],
+    company_domains: tuple[str, ...],
+) -> None:
+    """Link or unlink a tag on one or more owners of a single kind (§V.141).
+
+    Owner-kind XOR, single vs multi envelope, soft lookup, and ok-skip live
+    here. ``verb`` plus ``assign_or_remove`` (contact fn, company fn) are the
+    only differences between ``tag add`` and ``tag remove``.
+    """
+    from mailpilot.operator_log import cli_mutation, operator_event
+
+    owner_kind, owner_refs = _tag_link_owner_kind_and_refs(
+        contact_emails, company_domains
+    )
+    already_code, already_phrase = (
+        ("already_exists", "already on") if verb == "add" else ("not_found", "not on")
+    )
+
+    with _db(mutate=True) as connection:
+        tag_row = _resolve_tag(connection, tag_name)
+        if len(owner_refs) == 1:
+            ref = owner_refs[0]
+            if owner_kind == "contact":
+                owner_id = _resolve_contact(connection, ref).id
+            else:
+                owner_id = _resolve_company(connection, ref).id
+            with cli_mutation(
+                "tag",
+                verb,
+                name=tag_row.name,
+                owner_type=owner_kind,
+                owner_id=owner_id,
+            ):
+                linked = _tag_link_apply(
+                    assign_or_remove, connection, tag_row.id, owner_kind, owner_id
+                )
+                if linked is None:
+                    output_error(
+                        f"tag '{tag_row.name}' {already_phrase} "
+                        f"{owner_kind} {owner_id}",
+                        already_code,
+                    )
+                operator_event(
+                    f"tag.{verb}",
+                    name=tag_row.name,
+                    owner_type=owner_kind,
+                    owner_id=owner_id,
+                    changed=["tag_id"],
+                )
+                output_entity("tag_assignment", linked)
+            return
+
+        with cli_mutation(
+            "tag",
+            verb,
+            name=tag_row.name,
+            owner_type=owner_kind,
+            owner_count=len(owner_refs),
+        ):
+            results: list[dict[str, object]] = []
+            for ref in owner_refs:
+                if owner_kind == "contact":
+                    owner = _resolve_contact(connection, ref, missing="none")
+                else:
+                    owner = _resolve_company(connection, ref, missing="none")
+                if owner is None:
+                    results.append(
+                        _batch_error(
+                            ref,
+                            "not_found",
+                            f"{owner_kind} not found: {ref}",
+                        )
+                    )
+                    continue
+                linked = _tag_link_apply(
+                    assign_or_remove, connection, tag_row.id, owner_kind, owner.id
+                )
+                if linked is not None:
+                    operator_event(
+                        f"tag.{verb}",
+                        name=tag_row.name,
+                        owner_type=owner_kind,
+                        owner_id=owner.id,
+                        changed=["tag_id"],
+                    )
+                results.append(_batch_ok(ref))
+            _emit_batch_results(results)
+
+
 # -- Main CLI ------------------------------------------------------------------
 
 
@@ -3869,7 +3998,7 @@ def tag_enable(name: str) -> None:
     multiple=True,
     help="Owner company (domain or ID); repeatable. XOR with --contact-email.",
 )
-def tag_add(  # noqa: C901, PLR0912
+def tag_add(
     tag_name: str,
     contact_emails: tuple[str, ...],
     company_domains: tuple[str, ...],
@@ -3887,101 +4016,14 @@ def tag_add(  # noqa: C901, PLR0912
         assign_tag_to_company,
         assign_tag_to_contact,
     )
-    from mailpilot.operator_log import cli_mutation, operator_event
 
-    has_contacts = len(contact_emails) > 0
-    has_companies = len(company_domains) > 0
-    if has_contacts and has_companies:
-        output_error(
-            "pass --contact-email or --company-domain, not both",
-            "validation_error",
-        )
-    if not has_contacts and not has_companies:
-        output_error(
-            "at least one --contact-email or --company-domain is required",
-            "validation_error",
-        )
-    owner_kind = "contact" if has_contacts else "company"
-    owner_refs = contact_emails if has_contacts else company_domains
-    with _db(mutate=True) as connection:
-        tag_row = _resolve_tag(connection, tag_name)
-        if len(owner_refs) == 1:
-            ref = owner_refs[0]
-            if owner_kind == "contact":
-                owner_id = _resolve_contact(connection, ref).id
-            else:
-                owner_id = _resolve_company(connection, ref).id
-            with cli_mutation(
-                "tag",
-                "add",
-                name=tag_row.name,
-                owner_type=owner_kind,
-                owner_id=owner_id,
-            ):
-                if owner_kind == "contact":
-                    created = assign_tag_to_contact(
-                        connection, tag_id=tag_row.id, contact_id=owner_id
-                    )
-                else:
-                    created = assign_tag_to_company(
-                        connection, tag_id=tag_row.id, company_id=owner_id
-                    )
-                if created is None:
-                    output_error(
-                        f"tag '{tag_row.name}' already on {owner_kind} {owner_id}",
-                        "already_exists",
-                    )
-                operator_event(
-                    "tag.add",
-                    name=tag_row.name,
-                    owner_type=owner_kind,
-                    owner_id=owner_id,
-                    changed=["tag_id"],
-                )
-                output_entity("tag_assignment", created)
-            return
-
-        with cli_mutation(
-            "tag",
-            "add",
-            name=tag_row.name,
-            owner_type=owner_kind,
-            owner_count=len(owner_refs),
-        ):
-            results: list[dict[str, object]] = []
-            for ref in owner_refs:
-                if owner_kind == "contact":
-                    owner = _resolve_contact(connection, ref, missing="none")
-                else:
-                    owner = _resolve_company(connection, ref, missing="none")
-                if owner is None:
-                    results.append(
-                        _batch_error(
-                            ref,
-                            "not_found",
-                            f"{owner_kind} not found: {ref}",
-                        )
-                    )
-                    continue
-                if owner_kind == "contact":
-                    created = assign_tag_to_contact(
-                        connection, tag_id=tag_row.id, contact_id=owner.id
-                    )
-                else:
-                    created = assign_tag_to_company(
-                        connection, tag_id=tag_row.id, company_id=owner.id
-                    )
-                if created is not None:
-                    operator_event(
-                        "tag.add",
-                        name=tag_row.name,
-                        owner_type=owner_kind,
-                        owner_id=owner.id,
-                        changed=["tag_id"],
-                    )
-                # Already-linked multi row is status ok skip (§V.141).
-                results.append(_batch_ok(ref))
-            _emit_batch_results(results)
+    _tag_link_owners(
+        "add",
+        (assign_tag_to_contact, assign_tag_to_company),
+        tag_name,
+        contact_emails,
+        company_domains,
+    )
 
 
 @tag.command("set")
@@ -4103,7 +4145,7 @@ def tag_set(
     multiple=True,
     help="Owner company (domain or ID); repeatable. XOR with --contact-email.",
 )
-def tag_remove(  # noqa: C901, PLR0912
+def tag_remove(
     tag_name: str,
     contact_emails: tuple[str, ...],
     company_domains: tuple[str, ...],
@@ -4120,101 +4162,14 @@ def tag_remove(  # noqa: C901, PLR0912
         remove_tag_from_company,
         remove_tag_from_contact,
     )
-    from mailpilot.operator_log import cli_mutation, operator_event
 
-    has_contacts = len(contact_emails) > 0
-    has_companies = len(company_domains) > 0
-    if has_contacts and has_companies:
-        output_error(
-            "pass --contact-email or --company-domain, not both",
-            "validation_error",
-        )
-    if not has_contacts and not has_companies:
-        output_error(
-            "at least one --contact-email or --company-domain is required",
-            "validation_error",
-        )
-    owner_kind = "contact" if has_contacts else "company"
-    owner_refs = contact_emails if has_contacts else company_domains
-    with _db(mutate=True) as connection:
-        tag_row = _resolve_tag(connection, tag_name)
-        if len(owner_refs) == 1:
-            ref = owner_refs[0]
-            if owner_kind == "contact":
-                owner_id = _resolve_contact(connection, ref).id
-            else:
-                owner_id = _resolve_company(connection, ref).id
-            with cli_mutation(
-                "tag",
-                "remove",
-                name=tag_row.name,
-                owner_type=owner_kind,
-                owner_id=owner_id,
-            ):
-                if owner_kind == "contact":
-                    removed = remove_tag_from_contact(
-                        connection, tag_id=tag_row.id, contact_id=owner_id
-                    )
-                else:
-                    removed = remove_tag_from_company(
-                        connection, tag_id=tag_row.id, company_id=owner_id
-                    )
-                if removed is None:
-                    output_error(
-                        f"tag '{tag_row.name}' not on {owner_kind} {owner_id}",
-                        "not_found",
-                    )
-                operator_event(
-                    "tag.remove",
-                    name=tag_row.name,
-                    owner_type=owner_kind,
-                    owner_id=owner_id,
-                    changed=["tag_id"],
-                )
-                output_entity("tag_assignment", removed)
-            return
-
-        with cli_mutation(
-            "tag",
-            "remove",
-            name=tag_row.name,
-            owner_type=owner_kind,
-            owner_count=len(owner_refs),
-        ):
-            results: list[dict[str, object]] = []
-            for ref in owner_refs:
-                if owner_kind == "contact":
-                    owner = _resolve_contact(connection, ref, missing="none")
-                else:
-                    owner = _resolve_company(connection, ref, missing="none")
-                if owner is None:
-                    results.append(
-                        _batch_error(
-                            ref,
-                            "not_found",
-                            f"{owner_kind} not found: {ref}",
-                        )
-                    )
-                    continue
-                if owner_kind == "contact":
-                    removed = remove_tag_from_contact(
-                        connection, tag_id=tag_row.id, contact_id=owner.id
-                    )
-                else:
-                    removed = remove_tag_from_company(
-                        connection, tag_id=tag_row.id, company_id=owner.id
-                    )
-                if removed is not None:
-                    operator_event(
-                        "tag.remove",
-                        name=tag_row.name,
-                        owner_type=owner_kind,
-                        owner_id=owner.id,
-                        changed=["tag_id"],
-                    )
-                # Already-unlinked multi row is status ok skip (§V.141).
-                results.append(_batch_ok(ref))
-            _emit_batch_results(results)
+    _tag_link_owners(
+        "remove",
+        (remove_tag_from_contact, remove_tag_from_company),
+        tag_name,
+        contact_emails,
+        company_domains,
+    )
 
 
 @tag.command("list")

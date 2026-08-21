@@ -298,7 +298,7 @@ T305|x|impl §V.179(+) + §V.169(∆) — last-day-was past auto-reply terminal 
 T306|x|incident Gina (gina.scozzaro@claconnect.com var-sales-coclose) last-day-was year-paused T2 2027-07-22; conclude do_not_contact + cancel pending (#251)|V179,V127,V123
 T307|x|impl §V.15(∆)+§V.152(∆) — record_enrollment_outcome bumps enrollment.updated_at same txn as activity; status still untouched; enrollment list --full --disposition do_not_contact --since/--until windows DNC; no disposition_updated_at col; tests + SKILL (#253)|V15,V152,V160,V127,V163,V4,I.cli
 T308|x|impl §V.107(∆) — one `_resolve(conn, ref, *, get_id, get_key, noun, missing="error")` hard+soft; `_resolve_*_id` = fetched `.id` incl. UUID existence; `_resolve_workflow` always loads; email send|reply `--workflow-id` name|UUID; unknown UUID-shape still `not_found`; existing natural-key tests + send/reply name coverage (#258)|V107,V90,V4,I.cli
-T309|.|impl §V.141(∆)+§V.178(∆) — one `_tag_link_owners` for tag add+remove; DB `_assign_tag`/`_remove_tag` `commit: bool`; `set_company_tags`/`set_contact_tags` loop those one txn; include/exclude tag filters one helper `negate`; existing tag add/remove/set tests (#259)|V141,V178,V116,V139,V4,I.cli
+T309|x|impl §V.141(∆)+§V.178(∆) — one `_tag_link_owners` for tag add+remove; DB `_assign_tag`/`_remove_tag` `commit: bool`; `set_company_tags`/`set_contact_tags` loop those one txn; include/exclude tag filters one helper `negate`; existing tag add/remove/set tests (#259)|V141,V178,V116,V139,V4,I.cli
 
 ## §B BUGS
 
