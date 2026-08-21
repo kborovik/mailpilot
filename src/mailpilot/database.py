@@ -5902,7 +5902,7 @@ def _task_filter_clauses(
     until: str | None = None,
     touches: Sequence[int] | None = None,
 ) -> list[Composable]:
-    """Build shared ``task list`` / ``task cancel`` / ``task retry`` / ``task stats`` clauses.
+    """Shared WHERE clauses for task list, cancel, retry, and stats.
 
     Touch match uses ``_sql_resolve_touch`` (parse §V.162 + first-touch
     fallback). Never filters on ``description``.
