@@ -14304,11 +14304,13 @@ def test_task_retry_resets_failed_row(
 
     failed = _make_task(status="failed")
     reset = _make_task(status="pending", attempt_count=0)
-    join = TaskRetryResult(retried_count=1, ids=[failed.id], dry_run=False)
+    join = TaskRetryResult(
+        retried_count=1, ids=[failed.id], dry_run=False, reset_task=reset
+    )
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_task", side_effect=[failed, reset]),
+        patch("mailpilot.database.get_task", return_value=failed) as mock_get,
         patch(
             "mailpilot.database.retry_tasks_matching", return_value=join
         ) as mock_retry,
@@ -14316,6 +14318,7 @@ def test_task_retry_resets_failed_row(
         result = runner.invoke(main, ["task", "retry", failed.id])
 
     assert result.exit_code == 0, result.output
+    mock_get.assert_called_once_with(mock_connection, failed.id)
     mock_retry.assert_called_once()
     kwargs = mock_retry.call_args.kwargs
     assert kwargs["task_id"] == failed.id
@@ -14399,12 +14402,14 @@ def test_task_retry_passes_scheduled_at(
 
     failed = _make_task(status="failed")
     reset = _make_task(status="pending", attempt_count=0)
-    join = TaskRetryResult(retried_count=1, ids=[failed.id], dry_run=False)
+    join = TaskRetryResult(
+        retried_count=1, ids=[failed.id], dry_run=False, reset_task=reset
+    )
     when = "2099-08-17T13:01:49-04:00"
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
-        patch("mailpilot.database.get_task", side_effect=[failed, reset]),
+        patch("mailpilot.database.get_task", return_value=failed),
         patch(
             "mailpilot.database.retry_tasks_matching", return_value=join
         ) as mock_retry,
@@ -14423,6 +14428,54 @@ def test_task_retry_passes_scheduled_at(
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["record_count"] == 1
+
+
+def test_task_retry_id_mode_uses_update_snapshot_not_later_select(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """Id-mode envelope is the UPDATE snapshot, not a post-commit get_task."""
+    from mailpilot.models import TaskRetryResult
+
+    failed = _make_task(status="failed")
+    snapshot = _make_task(status="pending", attempt_count=0)
+    later = _make_task(status="completed")
+    join = TaskRetryResult(
+        retried_count=1, ids=[failed.id], dry_run=False, reset_task=snapshot
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_task", side_effect=[failed, later]),
+        patch("mailpilot.database.retry_tasks_matching", return_value=join),
+    ):
+        result = runner.invoke(main, ["task", "retry", failed.id])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["task"]["status"] == "pending"
+    assert data["task"]["attempt_count"] == 0
+
+
+def test_task_retry_id_mode_missing_snapshot_is_internal_error(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """retried_count==1 with no RETURNING row is internal_error, not not_found."""
+    from mailpilot.models import TaskRetryResult
+
+    failed = _make_task(status="failed")
+    join = TaskRetryResult(retried_count=1, ids=[failed.id], dry_run=False)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_task", return_value=failed),
+        patch("mailpilot.database.retry_tasks_matching", return_value=join),
+    ):
+        result = runner.invoke(main, ["task", "retry", failed.id])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "internal_error"
+    assert data["ok"] is False
 
 
 def test_task_retry_past_scheduled_at_validation_error(
@@ -14527,6 +14580,7 @@ def test_task_retry_filter_mode_envelope(
         {"domain": "b.com", "count": 1},
     ]
     assert data["task_retry"]["dry_run"] is False
+    assert "reset_task" not in data["task_retry"]
     assert "task" not in data
 
 

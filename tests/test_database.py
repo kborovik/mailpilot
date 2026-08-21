@@ -5751,6 +5751,7 @@ def test_retry_tasks_matching_one_txn_and_companies(
     assert set(result.ids) == {failed_a.id, failed_b.id}
     assert result.scheduled_at == when
     assert result.dry_run is False
+    assert result.reset_task is None
     assert [c.model_dump() for c in result.companies] == [
         {"domain": "retry-a.example", "count": 1},
         {"domain": "retry-b.example", "count": 1},
@@ -7572,13 +7573,53 @@ def test_retry_by_task_id_resets_failed_row(
     )
 
     result = retry_tasks_matching(database_connection, task_id=task.id)
-    reset = get_task(database_connection, task.id)
+    reset = result.reset_task
 
     assert result.retried_count == 1
     assert reset is not None
     assert reset.status == "pending"
     assert reset.attempt_count == 0
     assert reset.completed_at is None
+    assert "reset_task" not in result.model_dump(mode="json")
+
+
+def test_retry_by_task_id_returns_update_snapshot_not_later_select(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Id-mode retry entity is RETURNING *, not a post-commit SELECT."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    task = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="follow up",
+        scheduled_at="2026-04-22T12:00:00Z",
+    )
+    complete_task(
+        database_connection,
+        task.id,
+        status="failed",
+        result={"reason": "boom"},
+    )
+
+    result = retry_tasks_matching(database_connection, task_id=task.id)
+    snapshot = result.reset_task
+    assert snapshot is not None
+    assert snapshot.status == "pending"
+    assert snapshot.attempt_count == 0
+    assert snapshot.completed_at is None
+
+    complete_task(database_connection, task.id, status="completed", result={})
+    later = get_task(database_connection, task.id)
+    assert later is not None
+    assert later.status == "completed"
+    assert snapshot.status == "pending"
+    assert snapshot.attempt_count == 0
+    assert snapshot.completed_at is None
 
 
 def test_retry_by_task_id_resets_cancelled_row(

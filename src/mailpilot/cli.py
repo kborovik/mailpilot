@@ -80,7 +80,7 @@ _ROUTE_METHODS = [
     "skipped_no_inbound_workflows",
 ]
 
-# workflow.status / enrollment.status / task.status CHECK sets, mirrored from
+# workflow.status / enrollment.status CHECK sets, mirrored from
 # schema.sql so the Choice options reject out-of-set values at parse time.
 _WORKFLOW_STATUSES = ["draft", "active", "paused"]
 _WORKFLOW_TEMPLATES = ["outbound-general", "inbound-general", "inbound-google-drive"]
@@ -7004,9 +7004,12 @@ def task_retry(
                     f"task not retryable in status {existing.status!r}: {task_id}",
                     "invalid_state",
                 )
-            reset = get_task(connection, task_id)
+            reset = result.reset_task
             if reset is None:
-                output_error(f"task not found: {task_id}", "not_found")
+                output_error(
+                    f"task retry did not return updated row: {task_id}",
+                    "internal_error",
+                )
             output_entity("task", reset)
             return
 

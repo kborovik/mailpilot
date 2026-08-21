@@ -5902,7 +5902,7 @@ def _task_filter_clauses(
     until: str | None = None,
     touches: Sequence[int] | None = None,
 ) -> list[Composable]:
-    """Build shared ``task list`` / ``task cancel`` / ``task retry`` clauses.
+    """Build shared ``task list`` / ``task cancel`` / ``task retry`` / ``task stats`` clauses.
 
     Touch match uses ``_sql_resolve_touch`` (parse §V.162 + first-touch
     fallback). Never filters on ``description``.
@@ -6115,6 +6115,7 @@ def retry_tasks_matching(
 
     Returns:
         Join envelope: retried ids, override scheduled_at, companies.
+        Id-mode writes set ``reset_task`` from ``RETURNING *``.
     """
     params: dict[str, object] = {}
     conditions = _task_filter_clauses(
@@ -6155,13 +6156,16 @@ def retry_tasks_matching(
                     END,
                     completed_at = NULL
                 {}
-                RETURNING id
+                RETURNING *
                 """
             ).format(where),
             params,
         ).fetchall()
 
     ids = sorted(str(row["id"]) for row in rows)
+    reset_task: Task | None = None
+    if task_id is not None and not dry_run and len(rows) == 1:
+        reset_task = Task.model_validate(rows[0])
     companies: list[TaskRetryCompany] = []
     if ids:
         company_rows = connection.execute(
@@ -6188,6 +6192,7 @@ def retry_tasks_matching(
         scheduled_at=scheduled_at,
         companies=companies,
         dry_run=dry_run,
+        reset_task=reset_task,
     )
 
 
