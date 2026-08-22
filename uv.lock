@@ -716,7 +716,7 @@ wheels = [
 
 [[package]]
 name = "mailpilot-crm"
-version = "0.30.1"
+version = "0.31.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
