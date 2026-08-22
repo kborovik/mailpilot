@@ -290,7 +290,7 @@ T311|x|impl §V.181 — `app_config` singleton; two-phase load; no config.json; 
 T312|x|impl §V.177(∆)+§V.181(∆) — `_db(mutate=True)` success commits before close; `config set` round-trip on new connection; CliRunner test|V177,V181,B148,I.config
 T313|x|impl §V.102 — drop `search_tool` from mailpilot-prompt-audit SKILL.md allowed-tools (orchestrator never invokes)|V102,B149
 T314|x|impl §V.182(+) + §V.45(∆) + §V.136(∆) + §C/§I — tools take RunContext[AgentDeps]; AgentDeps not from invoke; Tool(fn) from tools.py; drop `_wrap_*`; invoke top-level TEMPLATES; drop lazy `__init__` trampoline; drop `build_protocol` trigger; Drive+AgentDeps tool-loop only; JSON names+return dicts unchanged; existing invoke+template tests (#261)|V182,V45,V136,V39,V44,V81
-T315|.|impl §V.183(+) + §V.38(∆) + §V.39(∆) + §V.47(∆) — one-query enrollment email history (full body_text, prompt cap 500); read_email search-outside only; `_email_tool_result`; `_drive_call`; `build_model` public + require_active_provider_key once; existing invoke/tools/model tests (#262)|V183,V38,V39,V47,V82,V87,V29
+T315|x|impl §V.183(+) + §V.38(∆) + §V.39(∆) + §V.47(∆) — one-query enrollment email history (full body_text, prompt cap 500); read_email search-outside only; `_email_tool_result`; `_drive_call`; `build_model` public + require_active_provider_key once; existing invoke/tools/model tests (#262)|V183,V38,V39,V47,V82,V87,V29
 
 ## §B BUGS
 

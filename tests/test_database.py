@@ -90,6 +90,7 @@ from mailpilot.database import (
     list_company_inspect_contacts,
     list_contacts,
     list_emails,
+    list_enrollment_emails,
     list_enrollments,
     list_enrollments_detailed,
     list_inbound_emails_from_contact_after,
@@ -2892,6 +2893,52 @@ def test_list_emails_summary_includes_snippet(
     assert results[long_email.id].snippet == "x" * 500
     assert "OUT-OF-RANGE" not in results[long_email.id].snippet
     assert not hasattr(results[short.id], "body_text")
+
+
+def test_list_enrollment_emails_returns_full_body_scoped(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.183 / §V.82: one query returns full Email body_text, enrollment-scoped."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection, email="lead@acme.com")
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    other_workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="other-wf"
+    )
+    long_body = ("x" * 500) + "KEEP-FULL-TAIL"
+    owned = create_email(
+        database_connection,
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        direction="outbound",
+        gmail_message_id="msg_enroll_hist",
+        subject="Enrollment outreach",
+        body_text=long_body,
+        status="sent",
+    )
+    create_email(
+        database_connection,
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=other_workflow.id,
+        direction="outbound",
+        gmail_message_id="msg_other_wf_hist",
+        subject="Other workflow",
+        body_text="must not appear",
+        status="sent",
+    )
+    assert owned is not None
+
+    rows = list_enrollment_emails(
+        database_connection,
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+    )
+    assert [row.id for row in rows] == [owned.id]
+    assert rows[0].body_text == long_body
+    assert "KEEP-FULL-TAIL" in rows[0].body_text
 
 
 def test_list_emails_snippet_classifies_ooo_left_company_referral(

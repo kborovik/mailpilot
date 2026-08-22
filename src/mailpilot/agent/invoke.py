@@ -35,8 +35,8 @@ from pydantic_ai.models import Model
 
 from mailpilot import cadence, database, email_ops
 from mailpilot.agent.model import (
-    _build_model,  # pyright: ignore[reportPrivateUsage]
     active_model_name,
+    build_model,
 )
 from mailpilot.agent.templates import (
     _TOUCH_COMPOSE,  # pyright: ignore[reportPrivateUsage]
@@ -704,29 +704,22 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915, C901
                     f"contact={contact.id}"
                 )
 
-            # Load email history scoped to this workflow + contact. The
-            # agent prompt needs ``body_text`` (not in EmailSummary), so
-            # hydrate each summary via ``get_email``.
-            email_summaries = database.list_emails(
+            # Load email history scoped to this workflow + contact in one
+            # query of full Email rows (body_text included). The prompt
+            # cap lives in ``_format_email_history`` (§V.183).
+            email_history = database.list_enrollment_emails(
                 connection,
                 contact_id=contact.id,
                 account_id=account.id,
                 workflow_id=workflow.id,
             )
-            email_history = [
-                full
-                for full in (
-                    database.get_email(connection, s.id) for s in email_summaries
-                )
-                if full is not None
-            ]
 
             # Resolve the model once; both the compose-only and the tool-loop
             # path use it. §V.47: provider-aware factory.
             if model_override is not None:
                 model = model_override
             else:
-                model = _build_model(settings, role="workflow")
+                model = build_model(settings, role="workflow")
 
             gmail_client = GmailClient(account.email)
 

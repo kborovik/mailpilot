@@ -1553,6 +1553,42 @@ def test_read_drive_markdown_transport_fault_returns_drive_unavailable(
     assert result["error"] == "drive_unavailable"
 
 
+def test_send_and_reply_share_email_tool_result() -> None:
+    """§V.39: send_email and reply_email share _email_tool_result."""
+    import inspect
+
+    from mailpilot.agent import tools as tools_module
+
+    assert hasattr(tools_module, "_email_tool_result")
+    for fn in (tools_module.send_email, tools_module.reply_email):
+        src = inspect.getsource(fn)
+        assert "_email_tool_result" in src
+        assert "except email_ops.EmailOpsError" not in src
+
+
+def test_drive_faults_mapped_only_in_drive_call() -> None:
+    """§V.38: one _drive_call maps HttpError 404 and timeout/OSError."""
+    import inspect
+
+    from mailpilot.agent import tools as tools_module
+
+    assert hasattr(tools_module, "_drive_call")
+    helper_src = inspect.getsource(
+        tools_module._drive_call  # pyright: ignore[reportPrivateUsage]
+    )
+    assert "except HttpError" in helper_src
+    assert "TimeoutError" in helper_src
+    assert "OSError" in helper_src
+    for fn in (
+        tools_module.list_drive_markdown,
+        tools_module.search_drive_markdown,
+        tools_module.read_drive_markdown,
+    ):
+        src = inspect.getsource(fn)
+        assert "_drive_call" in src
+        assert "except HttpError" not in src
+
+
 # -- §V.71 amend (§T.145): runtime fact-check abolished -----------------------
 
 

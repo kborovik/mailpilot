@@ -5297,6 +5297,45 @@ def list_emails(
     return [EmailSummary.model_validate(row) for row in rows]
 
 
+def list_enrollment_emails(
+    connection: psycopg.Connection[dict[str, Any]],
+    *,
+    account_id: str,
+    contact_id: str,
+    workflow_id: str,
+) -> list[Email]:
+    """Load enrollment-scoped email history as full Email rows (§V.183).
+
+    One query returning ``body_text``. Distinct from ``list_emails``
+    (EmailSummary, snippet only). Scope is (account_id, contact_id,
+    workflow_id) per §V.82.
+
+    Args:
+        connection: Open database connection.
+        account_id: Sending account.
+        contact_id: Enrolled contact.
+        workflow_id: Enrollment workflow.
+
+    Returns:
+        Full Email rows, newest first by ``COALESCE(sent_at, received_at)``.
+    """
+    rows = connection.execute(
+        """\
+        SELECT * FROM email
+        WHERE account_id = %(account_id)s
+          AND contact_id = %(contact_id)s
+          AND workflow_id = %(workflow_id)s
+        ORDER BY COALESCE(sent_at, received_at) DESC
+        """,
+        {
+            "account_id": account_id,
+            "contact_id": contact_id,
+            "workflow_id": workflow_id,
+        },
+    ).fetchall()
+    return [Email.model_validate(row) for row in rows]
+
+
 def search_emails(
     connection: psycopg.Connection[dict[str, Any]],
     query: str,

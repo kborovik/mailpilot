@@ -32,9 +32,7 @@ def active_model_name(settings: Settings) -> str:
     return settings.xai_model
 
 
-def _build_model(  # pyright: ignore[reportUnusedFunction]
-    settings: Settings, *, role: ModelRole
-) -> Model:
+def build_model(settings: Settings, *, role: ModelRole) -> Model:
     """Build the active-provider model for ``role``.
 
     Args:
@@ -73,7 +71,6 @@ def _build_anthropic_model(settings: Settings, *, role: ModelRole) -> AnthropicM
     so default-active thinking cannot exhaust the provider-default budget
     before reply text (§B.115). The classifier never receives these knobs.
     """
-    require_active_provider_key(settings)
     model_settings = AnthropicModelSettings(
         anthropic_cache_tool_definitions=True,
         anthropic_cache_instructions=True,
@@ -107,7 +104,6 @@ def _build_xai_model(settings: Settings, *, role: ModelRole) -> XaiModel:
     (effort has no empty/none; Grok 4.5 always reasons). Classifier role omits
     both.
     """
-    require_active_provider_key(settings)
     provider_kwargs: dict[str, object] = {
         "api_key": settings.xai_api_key,
         "timeout": _PROVIDER_TIMEOUT_SECONDS,

@@ -18,8 +18,8 @@ from mailpilot.agent.classify import (
 )
 from mailpilot.agent.model import (
     _build_anthropic_model,  # pyright: ignore[reportPrivateUsage]
-    _build_model,  # pyright: ignore[reportPrivateUsage]
     _build_xai_model,  # pyright: ignore[reportPrivateUsage]
+    build_model,
 )
 from mailpilot.models import Workflow
 
@@ -324,7 +324,7 @@ def test_classifier_dispatches_default_xai() -> None:
     from pydantic_ai.models.xai import XaiModel
 
     settings = make_test_settings(xai_api_key="xai-test")
-    model = _build_model(settings, role="classifier")
+    model = build_model(settings, role="classifier")
     assert isinstance(model, XaiModel)
 
 
