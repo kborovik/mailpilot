@@ -31,14 +31,15 @@ from mailpilot.agent.invoke import (
     _advisory_lock_keys_for_task,  # pyright: ignore[reportPrivateUsage]
     _build_agent,  # pyright: ignore[reportPrivateUsage]
     _build_user_prompt,  # pyright: ignore[reportPrivateUsage]
+    _format_email_history,  # pyright: ignore[reportPrivateUsage]
     _is_new_thread_touch,  # pyright: ignore[reportPrivateUsage]
     _validate_touch_subject,  # pyright: ignore[reportPrivateUsage]
     invoke_workflow_agent,
 )
 from mailpilot.agent.model import (
     _build_anthropic_model,  # pyright: ignore[reportPrivateUsage]
-    _build_model,  # pyright: ignore[reportPrivateUsage]
     _build_xai_model,  # pyright: ignore[reportPrivateUsage]
+    build_model,
 )
 from mailpilot.agent.tools import (
     conclude_enrollment,
@@ -427,6 +428,80 @@ def test_email_history_loaded(
 
     all_text = str(captured_messages)
     assert "Previous outreach" in all_text
+
+
+def test_format_email_history_caps_already_loaded_body_at_500() -> None:
+    """§V.183: prompt uses already-loaded body_text with a hard 500-char cap."""
+    from datetime import UTC, datetime
+
+    from mailpilot.models import Email
+
+    body = ("x" * 500) + "OUT-OF-RANGE tail"
+    msg = Email(
+        id="0190a000-0000-7000-8000-000000000001",
+        account_id="0190a000-0000-7000-8000-000000000002",
+        direction="outbound",
+        subject="Long body",
+        body_text=body,
+        created_at=datetime.now(UTC),
+    )
+    rendered = _format_email_history([msg])
+    assert "x" * 500 in rendered
+    assert "OUT-OF-RANGE" not in rendered
+    assert "..." in rendered
+
+
+def test_invoke_loads_email_history_without_n_plus_one(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.183: invoke loads enrollment history in one query, not N get_email."""
+    account, contact, workflow = _setup(database_connection)
+    settings = make_test_settings(
+        anthropic_api_key="sk-test", anthropic_model="test-model"
+    )
+    from mailpilot.database import create_email
+
+    for i in range(3):
+        create_email(
+            database_connection,
+            gmail_message_id=f"msg-nplus-{i}",
+            gmail_thread_id="thread-nplus",
+            account_id=account.id,
+            contact_id=contact.id,
+            workflow_id=workflow.id,
+            direction="outbound",
+            subject=f"Touch {i + 1}",
+            body_text=f"Body {i + 1} " + ("y" * 500),
+            status="sent",
+        )
+
+    captured_messages: list[ModelMessage] = []
+    from mailpilot import database as database_mod
+
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+        patch(
+            "mailpilot.database.list_emails", wraps=database_mod.list_emails
+        ) as mock_list_summaries,
+        patch(
+            "mailpilot.database.get_email", wraps=database_mod.get_email
+        ) as mock_get_email,
+    ):
+        invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            model_override=_capturing_model(captured_messages),
+        )
+
+    mock_list_summaries.assert_not_called()
+    mock_get_email.assert_not_called()
+    all_text = str(captured_messages)
+    assert "Touch 1" in all_text
+    assert "Touch 3" in all_text
+    assert "Body 1" in all_text
 
 
 def test_email_history_scoped_to_workflow(
@@ -2279,8 +2354,8 @@ def test_build_anthropic_model_max_tokens_preserves_reasoning_and_cache() -> Non
     assert model.settings.get("anthropic_cache_instructions") is True
 
 
-def test_build_anthropic_model_requires_api_key() -> None:
-    """Missing api_key raises a clear error rather than reaching the API."""
+def test_build_model_requires_anthropic_api_key() -> None:
+    """§V.47: missing api_key fails at public build_model, not the inner factory."""
     settings = make_test_settings(
         llm_provider="anthropic",
         anthropic_api_key="",
@@ -2289,7 +2364,7 @@ def test_build_anthropic_model_requires_api_key() -> None:
     with pytest.raises(
         ValueError, match="mailpilot config set anthropic_api_key"
     ) as exc_info:
-        _build_anthropic_model(settings, role="workflow")
+        build_model(settings, role="workflow")
     assert "MAILPILOT_ANTHROPIC_API_KEY" not in str(exc_info.value)
 
 
@@ -2352,7 +2427,7 @@ def test_build_model_dispatches_to_xai_by_default() -> None:
 
     settings = make_test_settings(xai_api_key="xai-test")
     assert settings.llm_provider == "xai"
-    model = _build_model(settings, role="workflow")
+    model = build_model(settings, role="workflow")
     assert isinstance(model, XaiModel)
 
 
@@ -2361,8 +2436,20 @@ def test_build_model_dispatches_to_anthropic_when_selected() -> None:
     from pydantic_ai.models.anthropic import AnthropicModel
 
     settings = make_test_settings(llm_provider="anthropic", anthropic_api_key="sk-test")
-    model = _build_model(settings, role="workflow")
+    model = build_model(settings, role="workflow")
     assert isinstance(model, AnthropicModel)
+
+
+def test_build_model_requires_active_provider_key_once() -> None:
+    """§V.47: require_active_provider_key runs once at public build_model."""
+    settings = make_test_settings(xai_api_key="xai-test")
+    with patch("mailpilot.agent.model.require_active_provider_key") as mock_require:
+        build_model(settings, role="workflow")
+    mock_require.assert_called_once_with(settings)
+    inner_src = inspect.getsource(_build_anthropic_model) + inspect.getsource(
+        _build_xai_model
+    )
+    assert "require_active_provider_key" not in inner_src
 
 
 def test_build_xai_model_workflow_settings() -> None:
@@ -2402,13 +2489,13 @@ def test_build_xai_model_classifier_omits_workflow_settings() -> None:
     assert model.settings is None or model.settings.get("xai_reasoning_effort") is None
 
 
-def test_build_xai_model_requires_api_key() -> None:
-    """Missing xai_api_key fails closed when provider is xai."""
+def test_build_model_requires_xai_api_key() -> None:
+    """§V.47: missing xai_api_key fails at public build_model, not the inner factory."""
     settings = make_test_settings(llm_provider="xai", xai_api_key="")
     with pytest.raises(
         ValueError, match="mailpilot config set xai_api_key"
     ) as exc_info:
-        _build_xai_model(settings, role="workflow")
+        build_model(settings, role="workflow")
     assert "MAILPILOT_XAI_API_KEY" not in str(exc_info.value)
 
 

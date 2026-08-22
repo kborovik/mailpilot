@@ -196,11 +196,13 @@ Trigger: `src/mailpilot/agent/templates.py` changed.
 
 ## §V38 — Drive tools sequential=True
 
-All Drive-KB agent tools (`list_drive_markdown`, `read_drive_markdown`, `search_drive_markdown`) registered with `sequential=True` in the Pydantic-AI tool set; serializes parallel dispatch. Rationale: shared `httplib2.Http` transport is thread-unsafe; max concurrent transport = 1. Transport faults (`HttpError`, `TimeoutError`, `OSError`) → structured `drive_unavailable` error dict, NEVER bare raise to agent (§V.39).
+All Drive-KB agent tools (`list_drive_markdown`, `read_drive_markdown`, `search_drive_markdown`) registered with `sequential=True` in the Pydantic-AI tool set; serializes parallel dispatch. Rationale: shared `httplib2.Http` transport is thread-unsafe; max concurrent transport = 1. One `_drive_call` wraps the three tools' HttpError 404 → `not_found` and other HttpError / TimeoutError / OSError → `drive_unavailable` mapping. Tools do not copy the try/except. NEVER bare raise to agent (§V.39).
 
 Trigger: `src/mailpilot/agent/tools.py` changed.
 - `rg 'sequential.*True\|True.*sequential' src/mailpilot/agent/tools.py | grep drive` -> sequential=True on Drive tools
+- `rg 'def _drive_call' src/mailpilot/agent/tools.py` -> one mapping helper
 - `rg 'drive_unavailable\b' src/mailpilot/agent/tools.py` -> error dict key present
+- `rg 'except HttpError' src/mailpilot/agent/tools.py` -> only inside `_drive_call`
 - `rg 'HttpError\b\|TimeoutError\b\|OSError\b' src/mailpilot/agent/tools.py | grep drive` -> all three fault classes caught
 
 ## §V41 — KB grounding rules live in workflow instructions
@@ -261,7 +263,7 @@ Registered tool docstring scope = functions named in `TEMPLATES[*].tools` (send_
 
 ## §V47 — provider-aware model config: dispatch + caching + model settings
 
-`llm_provider` in {`anthropic`, `xai`} (default `xai`) selects factory branch for **both** classifier + workflow agent via `_build_model(settings, *, role)`. Active-provider API key required @ each `mailpilot run` tick before drain (and still @ model build). Missing/empty key → skip drain that tick; process stays up; zero due tasks claimed or marked `failed` (closes §B.141). Model-build remains fail-closed (no provider fallthrough) if preflight skipped. Inactive-provider keys may be empty. Error names `mailpilot config set xai_api_key` (provider=xai) or `mailpilot config set anthropic_api_key` (provider=anthropic). Keys live on `app_config`; `MAILPILOT_*` API-key env vars are not sources. Dep: `pydantic-ai-slim[anthropic,xai]`.
+`llm_provider` in {`anthropic`, `xai`} (default `xai`) selects factory branch for **both** classifier + workflow agent via public `build_model(settings, *, role)`. `require_active_provider_key` runs once at `build_model`; inner `_build_anthropic_model` / `_build_xai_model` do not re-call. Active-provider API key required @ each `mailpilot run` tick before drain (and still @ model build). Missing/empty key → skip drain that tick; process stays up; zero due tasks claimed or marked `failed` (closes §B.141). Model-build remains fail-closed (no provider fallthrough) if preflight skipped. Inactive-provider keys may be empty. Error names `mailpilot config set xai_api_key` (provider=xai) or `mailpilot config set anthropic_api_key` (provider=anthropic). Keys live on `app_config`; `MAILPILOT_*` API-key env vars are not sources. Dep: `pydantic-ai-slim[anthropic,xai]`.
 
 **Anthropic branch** (`llm_provider=anthropic`): Caching (both call sites — classifier + workflow agent): `anthropic_cache_instructions=True` + `anthropic_cache_tool_definitions=True`. Telemetry attribute names: `agent.invoke` rollup span carries bare `cache_read_input_tokens` + `cache_creation_input_tokens` (from `usage.cache_read_tokens`/`cache_write_tokens`); per-call `chat` span carries OTel `gen_ai.usage.cache_read.input_tokens` + `gen_ai.usage.details.cache_creation_input_tokens` — verify caching against these exact names. `gen_ai.usage.cache_read_input_tokens` exists on neither span (null = false caching-off diagnosis, §B.113). Model settings (workflow agent only — classifier excluded): `_build_anthropic_model` reads `anthropic_thinking`, `anthropic_effort`, `anthropic_max_tokens` into `AnthropicModelSettings`. `anthropic_max_tokens` ALWAYS passed as `max_tokens=<int>` (not empty-gated). `anthropic_thinking` and `anthropic_effort` added ONLY when non-empty. Defaults: `anthropic_model=claude-sonnet-5`, `anthropic_thinking=adaptive`, `anthropic_effort=high`, `anthropic_max_tokens=32768`. `xhigh` effort requires Opus 4.7+.
 
@@ -270,7 +272,8 @@ Registered tool docstring scope = functions named in `TEMPLATES[*].tools` (send_
 **Effort enums** (settings load / `config set`, not first agent turn): `anthropic_effort` in {unset, `low`, `medium`, `high`, `xhigh`, `max`}; `xai_reasoning_effort` in {`low`, `medium`, `high`} (no `none` — Grok 4.5 always reasons). Invalid value rejected at settings layer.
 
 Trigger: `src/mailpilot/agent/invoke.py`, `src/mailpilot/agent/classify.py`, `src/mailpilot/agent/model.py`, `src/mailpilot/run.py`, or `src/mailpilot/settings.py` changed.
-- `rg 'llm_provider|_build_model\b' src/mailpilot/agent/` -> provider dispatch present
+- `rg 'llm_provider|def build_model\b' src/mailpilot/agent/` -> provider dispatch present
+- `rg 'require_active_provider_key' src/mailpilot/agent/model.py` -> one call site (`build_model`)
 - Anthropic path (when selected): `rg 'anthropic_cache_instructions.*True\|anthropic_cache_tool_definitions.*True' src/mailpilot/agent/` -> caching flags on both Anthropic call sites
 - Anthropic path: `rg 'max_tokens.*anthropic_max_tokens\|anthropic_max_tokens.*max_tokens' src/mailpilot/agent/` -> `max_tokens` always set (not in an `if` guard)
 - xAI path: `rg 'XaiModel|XaiProvider|xai_reasoning_effort|xai_max_tokens' src/mailpilot/agent/` -> xAI factory + settings wiring
@@ -1407,3 +1410,13 @@ Trigger: `src/mailpilot/schema.sql` or `src/mailpilot/settings.py` or `src/mailp
 - `rg 'google_application_credentials' src/mailpilot/schema.sql src/mailpilot/settings.py` -> JSONB col + load
 - `rg 'invalid_key' src/mailpilot/cli.py` -> config set rejects database_url + derived pubsub
 - `rg "id=.singleton." src/mailpilot/` -> singleton id
+
+## §V183 — email-history pre-feed
+
+invoke_workflow_agent loads enrollment-scoped email history (account_id, contact_id, workflow_id per §V.82) in one query returning full Email rows including `body_text`. Not `list_emails` (EmailSummary, no body) then N `get_email`. `_format_email_history` caps already-loaded `body_text` at 500 (same length as §V.7 snippet). Trigger email excluded from history per §V.29. `read_email` remains on roster for `search_emails` hits outside this enrollment; cross-account still None per §V.87. Distinct from §V.135 (contact/company records; those read tools dropped).
+
+Trigger: `src/mailpilot/agent/invoke.py` or `src/mailpilot/database.py` email list path changed.
+- `rg 'list_emails' src/mailpilot/agent/invoke.py` -> zero N+1 hydrate via `get_email` per summary
+- `rg 'get_email\(connection, s.id\)' src/mailpilot/agent/invoke.py` -> zero hits
+- `rg 'body_text\[:500\]' src/mailpilot/agent/invoke.py` -> cap on already-loaded body
+- `rg 'read_email' src/mailpilot/agent/templates.py` -> still bound

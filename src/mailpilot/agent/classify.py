@@ -15,8 +15,8 @@ from pydantic import BaseModel
 from pydantic_ai import Agent
 
 from mailpilot.agent.model import (
-    _build_model,  # pyright: ignore[reportPrivateUsage]
     active_model_name,
+    build_model,
 )
 
 if TYPE_CHECKING:
@@ -98,7 +98,7 @@ def classify_email(
             span.set_attribute("result", "no_candidates")
             return None
 
-        model = _build_model(settings, role="classifier")
+        model = build_model(settings, role="classifier")
         prompt = _format_prompt(subject, body, sender, active_workflows)
         result = _AGENT.run_sync(prompt, model=model)
         usage = result.usage

@@ -22,7 +22,7 @@ Tools (see §I agent tools):
 from __future__ import annotations
 
 import contextvars
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -35,7 +35,7 @@ from mailpilot import database, email_ops
 from mailpilot.cadence import parse_touch_number
 from mailpilot.drive import DriveClient
 from mailpilot.gmail import GmailClient
-from mailpilot.models import Account
+from mailpilot.models import Account, Email
 from mailpilot.settings import Settings
 
 
@@ -115,6 +115,25 @@ def reply_was_emitted() -> bool:
     return flag is not None and flag.emitted
 
 
+def _email_tool_result(op: Callable[[], Email]) -> dict[str, Any]:
+    """Run a send/reply op: error dict on policy fail, else ids + mark emitted.
+
+    §V.39: send_email and reply_email share this shape.
+    """
+    try:
+        email = op()
+    except email_ops.EmailOpsError as exc:
+        return {"error": exc.code, "message": str(exc)}
+    # §V.131: the message reached Gmail -- mark the per-task reply-emitted flag
+    # so the run-loop terminal branch never sends a duplicate fallback reply.
+    _mark_reply_emitted()
+    return {
+        "id": email.id,
+        "gmail_message_id": email.gmail_message_id,
+        "gmail_thread_id": email.gmail_thread_id,
+    }
+
+
 def send_email(  # noqa: PLR0913
     ctx: RunContext[AgentDeps],
     to: str,
@@ -130,9 +149,9 @@ def send_email(  # noqa: PLR0913
     continue a multi-touch outbound thread; omit it for a first reach-out.
     """
     deps = ctx.deps
-    try:
-        # thread_id forwards outbound thread-continuation per §V.78.
-        email = email_ops.send_email(
+    # thread_id forwards outbound thread-continuation per §V.78.
+    return _email_tool_result(
+        lambda: email_ops.send_email(
             deps.connection,
             deps.account,
             deps.gmail_client,
@@ -145,17 +164,7 @@ def send_email(  # noqa: PLR0913
             cc=cc,
             bcc=bcc,
         )
-    except email_ops.EmailOpsError as exc:
-        return {"error": exc.code, "message": str(exc)}
-
-    # §V.131: the message reached Gmail -- mark the per-task reply-emitted flag
-    # so the run-loop terminal branch never sends a duplicate fallback reply.
-    _mark_reply_emitted()
-    return {
-        "id": email.id,
-        "gmail_message_id": email.gmail_message_id,
-        "gmail_thread_id": email.gmail_thread_id,
-    }
+    )
 
 
 def reply_email(
@@ -167,8 +176,8 @@ def reply_email(
 ) -> dict[str, Any]:
     """Reply to an existing email in-thread."""
     deps = ctx.deps
-    try:
-        email = email_ops.reply_email(
+    return _email_tool_result(
+        lambda: email_ops.reply_email(
             deps.connection,
             deps.account,
             deps.gmail_client,
@@ -179,17 +188,7 @@ def reply_email(
             cc=cc,
             bcc=bcc,
         )
-    except email_ops.EmailOpsError as exc:
-        return {"error": exc.code, "message": str(exc)}
-
-    # §V.131: the reply reached Gmail -- mark the per-task reply-emitted flag so
-    # the run-loop terminal branch never sends a duplicate fallback reply.
-    _mark_reply_emitted()
-    return {
-        "id": email.id,
-        "gmail_message_id": email.gmail_message_id,
-        "gmail_thread_id": email.gmail_thread_id,
-    }
+    )
 
 
 def _reject_past_timestamp(value: str, *, field: str) -> dict[str, str] | None:
@@ -432,11 +431,31 @@ def read_email(
     ctx: RunContext[AgentDeps],
     email_id: str,
 ) -> dict[str, Any] | None:
-    """Read full email content (including body text) by ID."""
+    """Read full email content (including body text) by ID.
+
+    Use this for search_emails hits that are not already in the prompt
+    history for this enrollment.
+    """
     email = database.get_email(ctx.deps.connection, email_id)
     if email is None or email.account_id != ctx.deps.account.id:
         return None
     return email.model_dump()
+
+
+def _drive_call[T](
+    op: Callable[[], T], *, not_found_message: str
+) -> T | dict[str, str]:
+    """Map Drive transport faults to a structured tool-return dict (§V.38)."""
+    from googleapiclient.errors import HttpError
+
+    try:
+        return op()
+    except HttpError as exc:
+        if exc.resp.status == 404:
+            return {"error": "not_found", "message": not_found_message}
+        return {"error": "drive_unavailable", "message": str(exc)}
+    except (TimeoutError, OSError) as exc:
+        return {"error": "drive_unavailable", "message": str(exc)}
 
 
 def list_drive_markdown(
@@ -444,28 +463,10 @@ def list_drive_markdown(
     folder_id: str,
 ) -> list[dict[str, str]] | dict[str, str]:
     """List Markdown files in a Drive folder for KB grounding."""
-    from googleapiclient.errors import HttpError
-
-    try:
-        return ctx.deps.drive_client.list_markdown(folder_id)
-    except HttpError as exc:
-        if exc.resp.status == 404:
-            return {
-                "error": "not_found",
-                "message": f"drive folder not found: {folder_id}",
-            }
-        return {
-            "error": "drive_unavailable",
-            "message": str(exc),
-        }
-    except (TimeoutError, OSError) as exc:
-        # Per §V.38 + §B.34: surface transport stalls / socket faults as a
-        # structured tool return so a sibling parallel call carries the
-        # agent run instead of bubbling to a terminal task failure.
-        return {
-            "error": "drive_unavailable",
-            "message": str(exc),
-        }
+    return _drive_call(
+        lambda: ctx.deps.drive_client.list_markdown(folder_id),
+        not_found_message=f"drive folder not found: {folder_id}",
+    )
 
 
 def search_drive_markdown(
@@ -474,26 +475,10 @@ def search_drive_markdown(
     query: str,
 ) -> list[dict[str, str]] | dict[str, str]:
     """Full-text search Markdown files in a Drive folder."""
-    from googleapiclient.errors import HttpError
-
-    try:
-        return ctx.deps.drive_client.search_markdown(folder_id, query)
-    except HttpError as exc:
-        if exc.resp.status == 404:
-            return {
-                "error": "not_found",
-                "message": f"drive folder not found: {folder_id}",
-            }
-        return {
-            "error": "drive_unavailable",
-            "message": str(exc),
-        }
-    except (TimeoutError, OSError) as exc:
-        # Per §V.38 + §B.34: see list_drive_markdown rationale.
-        return {
-            "error": "drive_unavailable",
-            "message": str(exc),
-        }
+    return _drive_call(
+        lambda: ctx.deps.drive_client.search_markdown(folder_id, query),
+        not_found_message=f"drive folder not found: {folder_id}",
+    )
 
 
 def read_drive_markdown(
@@ -501,30 +486,10 @@ def read_drive_markdown(
     file_id: str,
 ) -> dict[str, str]:
     """Read a Markdown file from Drive."""
-    from googleapiclient.errors import HttpError
-
-    try:
-        result = ctx.deps.drive_client.read_markdown(file_id)
-    except HttpError as exc:
-        if exc.resp.status == 404:
-            return {
-                "error": "not_found",
-                "message": f"drive file not found: {file_id}",
-            }
-        return {
-            "error": "drive_unavailable",
-            "message": str(exc),
-        }
-    except (TimeoutError, OSError) as exc:
-        # Per §V.38 + §B.34: a hung sibling read in a parallel fan-out used
-        # to escape this catch and burn the §V.49 retry budget; the broadened
-        # arm folds transport-level faults into the same drive_unavailable
-        # tool-return so the surviving call carries the agent run.
-        return {
-            "error": "drive_unavailable",
-            "message": str(exc),
-        }
-    return result
+    return _drive_call(
+        lambda: ctx.deps.drive_client.read_markdown(file_id),
+        not_found_message=f"drive file not found: {file_id}",
+    )
 
 
 def noop(ctx: RunContext[AgentDeps], reason: str) -> dict[str, Any]:

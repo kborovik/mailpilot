@@ -208,7 +208,7 @@ def require_active_provider_key(settings: Settings) -> None:
     """Raise if the selected LLM provider's API key is missing or empty.
 
     §V.47 / §I.config: each ``mailpilot run`` tick calls this before drain
-    so a missing key never claims due tasks. ``_build_model`` calls it so
+    so a missing key never claims due tasks. ``build_model`` calls it so
     model construction stays fail-closed if preflight is skipped. The error
     names ``mailpilot config set``.
 
