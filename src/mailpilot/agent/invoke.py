@@ -704,9 +704,7 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915, C901
                     f"contact={contact.id}"
                 )
 
-            # Load email history scoped to this workflow + contact in one
-            # query of full Email rows (body_text included). The prompt
-            # cap lives in ``_format_email_history`` (§V.183).
+            # Full Email rows so ``_format_email_history`` can cap already-loaded body.
             email_history = database.list_enrollment_emails(
                 connection,
                 contact_id=contact.id,
