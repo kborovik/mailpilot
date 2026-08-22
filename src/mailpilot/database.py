@@ -125,9 +125,7 @@ def _sql_resolve_touch(context_col: SQL) -> Composed:
 def _sql_outbound_sent_count(e: SQL) -> Composed:
     """COUNT of sent outbound emails for enrollment-shaped alias ``e`` (§V.184).
 
-    ``e`` is a caller-owned fragment such as ``e`` -- never user input. Shared
-    by the stats funnel+touch grain, enrollment ``--full`` ``emails_sent`` /
-    ``last_touch``, and ``count_outbound_sent``.
+    ``e`` is a caller-owned alias -- never user input.
     """
     return SQL(
         "(SELECT COUNT(*)::int FROM email "
@@ -2923,9 +2921,6 @@ def get_workflow_stats(
     ``list_enrollments_with_outcomes``). Pre-§V.132 failed rows lack a
     disposition key, so they fall out of both failure splits (legacy gap).
 
-    Takes an already-loaded ``Workflow`` -- no inner ``get_workflow``. Callers
-    (report / status / review) fetch once then call this (§V.184).
-
     Args:
         connection: Open database connection.
         workflow: Loaded workflow row (CLI resolves the entity ref first).
@@ -3107,9 +3102,8 @@ def get_workflow_status_health(
 ) -> WorkflowStatusHealth | None:
     """Ops-health composite for one workflow (§V.157).
 
-    Reuses funnel active count, wording via ``check_workflow_wording``
-    (empty catalog -> ``orphaned``, never hardcoded ``unknown``), and
-    task overdue / failed-24h counts. No LLM.
+    Wording comes from ``check_workflow_wording``. This path passes an empty
+    catalog, so live rows classify as ``orphaned``. No LLM.
     """
     workflow = get_workflow(connection, workflow_id)
     if workflow is None:

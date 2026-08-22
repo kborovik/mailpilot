@@ -10370,13 +10370,7 @@ def test_get_workflow_status_health(
     assert health.run_loop in {"ok", "stale", "stopped"}
     assert health.enrollments_never_sent == 1
     assert health.funnel_active == 1
-    assert health.wording != "unknown"
-    assert health.wording in {
-        "in_sync",
-        "out_of_sync",
-        "not_imported",
-        "orphaned",
-    }
+    assert health.wording == "orphaned"
 
 
 _REVIEW_SINCE = "2026-08-17T11:43:13-04:00"
