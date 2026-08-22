@@ -760,7 +760,7 @@ class WorkflowStatusHealth(BaseModel):
     """Ops-health composite for ``workflow status`` (§V.157), not funnel."""
 
     workflow: WorkflowReportMeta
-    wording: str  # in_sync | out_of_sync | not_imported | orphaned | unknown
+    wording: str  # in_sync | out_of_sync | not_imported | orphaned
     run_loop: str  # ok | stale | stopped
     overdue_tasks: int
     failed_tasks_24h: int

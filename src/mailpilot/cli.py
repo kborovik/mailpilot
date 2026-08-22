@@ -4764,10 +4764,8 @@ def workflow_stats(workflow_ref: str) -> None:
     from mailpilot.database import get_workflow_stats
 
     with _db() as connection:
-        workflow_id = _resolve_workflow_id(connection, workflow_ref)
-        stats = get_workflow_stats(connection, workflow_id)
-        if stats is None:
-            output_error(f"workflow not found: {workflow_ref}", "not_found")
+        workflow = _resolve_workflow(connection, workflow_ref)
+        stats = get_workflow_stats(connection, workflow)
         output({"workflow_stats": stats.model_dump(mode="json")})
 
 
