@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import ast
+import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -674,3 +678,34 @@ def test_reply_email_emits_email_sent_activity(
     )
     assert len(activities) == 1
     assert activities[0].summary == "Re: Pricing"
+
+
+def test_email_ops_does_not_import_sync_at_module_level() -> None:
+    """email_ops must lazy-import sync.send_email so agent/__init__ can
+    re-export invoke without agent -> email_ops -> sync -> routing -> agent."""
+    from mailpilot import email_ops
+
+    source = Path(email_ops.__file__).read_text()
+    tree = ast.parse(source)
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and node.module == "mailpilot.sync":
+            pytest.fail("email_ops must not import mailpilot.sync at module level")
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "from mailpilot.sync import start_sync_loop",
+        "import mailpilot.routing",
+    ],
+)
+def test_sync_and_routing_import_in_fresh_interpreter(statement: str) -> None:
+    """Collection-order cycle: agent tests can hide a sync/routing import
+    failure because they load mailpilot.agent first."""
+    result = subprocess.run(
+        [sys.executable, "-c", statement],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr

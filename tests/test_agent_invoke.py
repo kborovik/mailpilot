@@ -33,16 +33,18 @@ from mailpilot.agent.invoke import (
     _build_user_prompt,  # pyright: ignore[reportPrivateUsage]
     _is_new_thread_touch,  # pyright: ignore[reportPrivateUsage]
     _validate_touch_subject,  # pyright: ignore[reportPrivateUsage]
-    _wrap_conclude_enrollment,  # pyright: ignore[reportPrivateUsage]
-    _wrap_create_task,  # pyright: ignore[reportPrivateUsage]
-    _wrap_disable_contact,  # pyright: ignore[reportPrivateUsage]
-    _wrap_send_email,  # pyright: ignore[reportPrivateUsage]
     invoke_workflow_agent,
 )
 from mailpilot.agent.model import (
     _build_anthropic_model,  # pyright: ignore[reportPrivateUsage]
     _build_model,  # pyright: ignore[reportPrivateUsage]
     _build_xai_model,  # pyright: ignore[reportPrivateUsage]
+)
+from mailpilot.agent.tools import (
+    conclude_enrollment,
+    create_task,
+    disable_contact,
+    send_email,
 )
 from mailpilot.database import (
     activate_workflow,
@@ -155,7 +157,7 @@ def test_agent_calls_noop_passes_enforcement(
     )
     with (
         patch("mailpilot.agent.invoke.GmailClient"),
-        patch("mailpilot.agent.invoke.DriveClient"),
+        patch("mailpilot.agent.invoke.DriveClient") as mock_drive,
     ):
         invoke_workflow_agent(
             database_connection,
@@ -164,6 +166,7 @@ def test_agent_calls_noop_passes_enforcement(
             contact,
             model_override=FunctionModel(_model_that_calls_noop),
         )
+    mock_drive.assert_called_once()
     # No exception means enforcement passed.
 
 
@@ -1480,7 +1483,8 @@ def test_outbound_enrollment_run_composes_and_sends_touch(
     )
     with (
         patch("mailpilot.agent.invoke.GmailClient") as mock_cls,
-        patch("mailpilot.agent.invoke.DriveClient"),
+        patch("mailpilot.agent.invoke.DriveClient") as mock_drive,
+        patch("mailpilot.agent.invoke.AgentDeps") as mock_deps,
     ):
         mock_client = MagicMock()
         mock_client.send_message.return_value = {
@@ -1503,6 +1507,8 @@ def test_outbound_enrollment_run_composes_and_sends_touch(
     assert result["tool_calls"] == 0
     assert result["touch_number"] == 1
     assert result["sent_email_id"]
+    mock_drive.assert_not_called()
+    mock_deps.assert_not_called()
     mock_client.send_message.assert_called_once()
     call_kwargs = mock_client.send_message.call_args.kwargs
     assert call_kwargs["to"] == contact.email
@@ -1978,37 +1984,91 @@ def test_agent_instructions_carry_current_date(
     assert date.today().isoformat() in instructions
 
 
-# -- Tests: wrapper signatures -------------------------------------------------
+# -- Tests: tool signatures + registration (§V.182) ---------------------------
 
 
-def test_wrappers_do_not_take_contact_id_from_llm() -> None:
+def test_tools_do_not_take_contact_id_from_llm() -> None:
     """contact_id must come from AgentDeps, not from LLM-provided arguments.
 
     Regression for the 2026-04-26 smoke test defect where the agent passed
     the contact's email as contact_id and the tool returned not_found.
     """
-    for wrapper in (
-        _wrap_conclude_enrollment,
-        _wrap_disable_contact,
-        _wrap_create_task,
+    for tool in (
+        conclude_enrollment,
+        disable_contact,
+        create_task,
     ):
-        params = inspect.signature(wrapper).parameters
+        params = inspect.signature(tool).parameters
         assert "contact_id" not in params, (
-            f"{wrapper.__name__} must read contact_id from ctx.deps, "
+            f"{tool.__name__} must read contact_id from ctx.deps, "
             f"not accept it as a parameter; got params: {list(params)}"
         )
 
 
-def test_wrap_send_email_exposes_optional_thread_id() -> None:
+def test_send_email_exposes_optional_thread_id() -> None:
     """The agent-visible send_email tool carries an optional thread_id (§V.78).
 
     Lets the model continue a multi-touch outbound thread by passing the
     gmail_thread_id captured on touch 1; the parameter is optional so a
     first reach-out omits it.
     """
-    param = inspect.signature(_wrap_send_email).parameters.get("thread_id")
-    assert param is not None, "_wrap_send_email must accept thread_id"
+    param = inspect.signature(send_email).parameters.get("thread_id")
+    assert param is not None, "send_email must accept thread_id"
     assert param.default is None, "thread_id must default to None (optional)"
+
+
+def test_tools_take_run_context() -> None:
+    """§V.182: registered tools take RunContext[AgentDeps] as the first param."""
+    from mailpilot.agent import tools as tools_module
+    from mailpilot.agent.templates import TEMPLATES
+
+    for template in TEMPLATES.values():
+        for tool in template.tools:
+            source_fn = getattr(tools_module, tool.name)
+            params = list(inspect.signature(source_fn).parameters.values())
+            assert params, f"{tool.name} has no parameters"
+            assert params[0].name == "ctx", tool.name
+            assert "RunContext" in str(params[0].annotation), (
+                f"{tool.name} first param must be RunContext[AgentDeps]; "
+                f"got {params[0].annotation!r}"
+            )
+
+
+def test_no_wrap_functions_and_agent_deps_lives_with_tools() -> None:
+    """§V.182: no _wrap_* unpackers; AgentDeps is defined in tools.py;
+    templates import tools, not invoke."""
+    import mailpilot.agent.invoke as invoke_module
+    import mailpilot.agent.templates as templates_module
+    from mailpilot.agent import tools as tools_module
+
+    wrap_names = [name for name in dir(invoke_module) if name.startswith("_wrap_")]
+    assert wrap_names == []
+    assert inspect.getmodule(tools_module.AgentDeps) is tools_module
+    assert templates_module.AgentDeps is tools_module.AgentDeps
+    template_src = inspect.getsource(templates_module)
+    assert "mailpilot.agent.invoke" not in template_src
+    assert "mailpilot.agent.tools" in template_src
+
+
+def test_invoke_imports_templates_at_module_top() -> None:
+    """§V.182: invoke imports TEMPLATES at module top, not inside _build_agent."""
+    import mailpilot.agent.invoke as invoke_module
+
+    assert "TEMPLATES" in invoke_module.__dict__
+
+
+def test_agent_init_is_not_lazy_trampoline() -> None:
+    """§V.182: agent/__init__ re-exports invoke_workflow_agent without a lazy
+    inner import."""
+    import inspect as inspect_mod
+
+    import mailpilot.agent as agent_package
+    from mailpilot.agent.invoke import invoke_workflow_agent as invoke_fn
+
+    assert agent_package.invoke_workflow_agent is invoke_fn
+    source = inspect_mod.getsource(agent_package)
+    assert "from mailpilot.agent.invoke import invoke_workflow_agent" in source
+    assert "as _invoke" not in source
 
 
 # -- Tests: tool error surfacing -----------------------------------------------

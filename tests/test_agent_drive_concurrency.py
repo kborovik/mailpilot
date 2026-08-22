@@ -36,10 +36,7 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from mailpilot.agent.invoke import (
-    AgentDeps,
-    _wrap_read_drive_markdown,  # pyright: ignore[reportPrivateUsage]
-)
+from mailpilot.agent.tools import AgentDeps, read_drive_markdown
 from mailpilot.drive import DriveClient
 from mailpilot.models import Account
 
@@ -192,7 +189,7 @@ def _run_two_parallel_reads(*, sequential: bool) -> _RaceDetectingService:
     """
     service = _RaceDetectingService()
     tool = Tool(
-        _wrap_read_drive_markdown,
+        read_drive_markdown,
         name="read_drive_markdown",
         sequential=sequential,
     )

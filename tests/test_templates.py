@@ -8,6 +8,7 @@ KB grounding rule leak, abstract naming).
 
 from __future__ import annotations
 
+import inspect
 from typing import get_args
 
 import pytest
@@ -412,23 +413,16 @@ def test_outbound_deferred_last_day_was_is_dnc_not_ooo() -> None:
     assert _SPEC_CITE.search(fragment) is None
 
 
-@pytest.mark.parametrize(
-    "trigger",
-    ["task", "enrollment_run", "enrollment_schedule", "manual", "email"],
-)
 @pytest.mark.parametrize("template", list(TEMPLATES.values()), ids=lambda t: t.name)
 def test_build_protocol_branch_is_direction_only(
-    template: WorkflowTemplate, trigger: str
+    template: WorkflowTemplate,
 ) -> None:
     """§V.31 + §V.136: ``build_protocol`` is direction-only after the
     initial-send fragment was retired -- the outbound first reach-out is now a
     compose-only touch run (§V.136), so no trigger selects an initial-send
-    branch. For every trigger an outbound template composes the terminal-outcome
-    instruction and an inbound template the inbound-reply instruction (§B.124:
-    the old TASK branch used to order a ``conclude_enrollment`` inbound workflows
-    forbid; the old INITIAL branch mislabeled an inbound reply as first
-    reach-out)."""
-    protocol = template.build_protocol(trigger)
+    branch. An outbound template composes the terminal-outcome instruction and
+    an inbound template the inbound-reply instruction (§B.124)."""
+    protocol = template.build_protocol()
     if template.direction == "inbound":
         assert _INBOUND_INSTRUCTION in protocol
         assert _CONCLUDE_INSTRUCTION not in protocol
@@ -437,23 +431,21 @@ def test_build_protocol_branch_is_direction_only(
         assert _INBOUND_INSTRUCTION not in protocol
     # The retired initial-send fragment never appears in a composed protocol.
     assert "Send the initial email and stop" not in protocol
+    assert "trigger" not in inspect.signature(template.build_protocol).parameters
 
 
-@pytest.mark.parametrize(
-    "trigger", ["task", "enrollment_run", "enrollment_schedule", "manual"]
-)
 @pytest.mark.parametrize("template", list(TEMPLATES.values()), ids=lambda t: t.name)
 def test_build_protocol_preserves_v33_fragment_order(
-    template: WorkflowTemplate, trigger: str
+    template: WorkflowTemplate,
 ) -> None:
     """§V.45: canonical order _BASE -> deferred -> [overlay]? -> _DECLINE ->
-    _NO_FABRICATION preserved across triggers."""
-    protocol = template.build_protocol(trigger)
+    _NO_FABRICATION."""
+    protocol = template.build_protocol()
     base_idx = protocol.find("Keep your final summary brief")
     decline_idx = protocol.find("polite decline")
     nofab_idx = protocol.find("Never fabricate")
     assert 0 <= base_idx < decline_idx < nofab_idx, (
-        f"template {template.name!r} trigger={trigger!r}: §V.45 order broken "
+        f"template {template.name!r}: §V.45 order broken "
         f"(base={base_idx}, decline={decline_idx}, nofab={nofab_idx})"
     )
 
@@ -475,24 +467,20 @@ def test_must_send_fragment_present_in_every_template() -> None:
     assert "send_email" in must_send
     assert "noop" in must_send
     for template in TEMPLATES.values():
-        for trigger in _ALL_TRIGGERS:
-            assert must_send in template.build_protocol(trigger), (
-                f"template {template.name!r} trigger={trigger!r}: _MUST_SEND "
-                f"fragment missing from composed protocol"
-            )
+        assert must_send in template.build_protocol(), (
+            f"template {template.name!r}: _MUST_SEND fragment missing "
+            f"from composed protocol"
+        )
 
 
-@pytest.mark.parametrize(
-    "trigger", ["task", "enrollment_run", "enrollment_schedule", "manual", "email"]
-)
 @pytest.mark.parametrize("template", list(TEMPLATES.values()), ids=lambda t: t.name)
 def test_must_send_ordered_after_trigger_branch_before_decline(
-    template: WorkflowTemplate, trigger: str
+    template: WorkflowTemplate,
 ) -> None:
     """§V.45: canonical fragment order _BASE -> trigger branch -> _MUST_SEND ->
     _DECLINE -> _NO_FABRICATION. _MUST_SEND sits after the deferred-task branch
     and before _DECLINE in the composed protocol."""
-    protocol = template.build_protocol(trigger)
+    protocol = template.build_protocol()
     must_send = templates_module._MUST_SEND  # pyright: ignore[reportPrivateUsage]
     # §V.136: the deferred branch is direction-only -- inbound-reply for inbound,
     # terminal-outcome for outbound (the initial-send fragment was retired).
@@ -507,18 +495,18 @@ def test_must_send_ordered_after_trigger_branch_before_decline(
     decline_idx = protocol.find("polite decline")
     nofab_idx = protocol.find("Never fabricate")
     assert 0 <= base_idx < deferred_idx < must_send_idx < decline_idx < nofab_idx, (
-        f"template {template.name!r} trigger={trigger!r}: §V.45 order broken "
+        f"template {template.name!r}: §V.45 order broken "
         f"(base={base_idx}, deferred={deferred_idx}, must_send={must_send_idx}, "
         f"decline={decline_idx}, nofab={nofab_idx})"
     )
 
 
-def test_protocol_property_returns_task_branch() -> None:
-    """``WorkflowTemplate.protocol`` property mirrors ``build_protocol('task')``
+def test_protocol_property_returns_composed_protocol() -> None:
+    """``WorkflowTemplate.protocol`` property mirrors ``build_protocol()``
     so ``mailpilot template view`` and existing CLI consumers stay on the
-    terminal-outcome composition by default."""
+    direction-only composition."""
     for template in TEMPLATES.values():
-        assert template.protocol == template.build_protocol("task")
+        assert template.protocol == template.build_protocol()
 
 
 def test_outbound_general_direction() -> None:
@@ -598,7 +586,6 @@ def test_fragment_does_not_collapse_to_single_tool_example(
 
 
 _SPEC_CITE = re.compile(r"§[VTB]\.[0-9]+")
-_ALL_TRIGGERS = ("task", "enrollment_run", "enrollment_schedule", "manual", "email")
 
 
 def test_composed_protocol_carries_no_spec_citation() -> None:
@@ -607,16 +594,15 @@ def test_composed_protocol_carries_no_spec_citation() -> None:
     leaking into the system prompt. The governing invariant is cited in an
     adjacent code comment instead -- e.g. the §V.42 pipe-table mandate keeps its
     "rejected by the outbound format lint" motivation but drops the numbering.
-    Sweep every template across every trigger branch."""
+    Sweep every template."""
     for template in TEMPLATES.values():
-        for trigger in _ALL_TRIGGERS:
-            protocol = template.build_protocol(trigger)
-            match = _SPEC_CITE.search(protocol)
-            assert match is None, (
-                f"template {template.name!r} trigger={trigger!r}: composed "
-                f"protocol embeds SPEC cite {match.group()!r} -- §V.45 forbids "
-                f"§-numbering in agent-visible text (cite it in a comment)"
-            )
+        protocol = template.build_protocol()
+        match = _SPEC_CITE.search(protocol)
+        assert match is None, (
+            f"template {template.name!r}: composed protocol embeds SPEC cite "
+            f"{match.group()!r} -- §V.45 forbids §-numbering in agent-visible "
+            f"text (cite it in a comment)"
+        )
 
 
 def test_registered_tool_descriptions_carry_no_spec_citation() -> None:
@@ -681,8 +667,7 @@ def test_fallback_acknowledgement_is_fixed_content_free_ascii() -> None:
     assert "our team" not in lowered
     assert re.search(r"\bi\b", lowered)
     for template in TEMPLATES.values():
-        for trigger in _ALL_TRIGGERS:
-            assert body not in template.build_protocol(trigger)
+        assert body not in template.build_protocol()
 
 
 # -- §V.136: compose-only touch protocol fragment ------------------------------
@@ -706,8 +691,7 @@ def test_touch_compose_fragment_hygiene() -> None:
     assert mentioned == set()
     # Not part of any tool-loop protocol composition.
     for template in TEMPLATES.values():
-        for trigger in _ALL_TRIGGERS:
-            assert fragment not in template.build_protocol(trigger)
+        assert fragment not in template.build_protocol()
 
 
 # -- _build_agent integration --------------------------------------------------
@@ -747,25 +731,22 @@ def test_build_agent_binds_template_tools(template_name: str) -> None:
         f"template {template.name!r}: expected {expected}, got {bound_names}"
     )
 
-    # Protocol prefix + workflow instructions concatenated. _build_agent
-    # defaults to ``trigger="manual"`` per §V.31 -> initial-mode protocol.
+    # Protocol prefix + workflow instructions concatenated.
     instructions_list = agent._instructions  # pyright: ignore[reportPrivateUsage]
     assert isinstance(instructions_list, list)
     str_parts = [item for item in instructions_list if isinstance(item, str)]
     instructions = "".join(str_parts)
-    assert instructions.startswith(template.build_protocol("manual"))
+    assert instructions.startswith(template.build_protocol())
     assert instructions.endswith("WORKFLOW-SPECIFIC-INSTRUCTIONS")
 
 
 @pytest.mark.parametrize("template_name", list(TEMPLATES.keys()))
-def test_build_agent_trigger_routes_protocol_branch(template_name: str) -> None:
+def test_build_agent_composes_direction_only_protocol(template_name: str) -> None:
     """§V.31 + §V.136: ``_build_agent`` composes the direction-only deferred
     branch.
 
     An inbound template uses the inbound-reply branch (reply once, then stop);
-    an outbound template uses the terminal-outcome branch, for every trigger.
-    The initial-send-only branch was retired -- the outbound first reach-out is
-    a compose-only touch run (§V.136), not a tool-loop protocol.
+    an outbound template uses the terminal-outcome branch.
     """
     from datetime import UTC, datetime
 
@@ -789,18 +770,15 @@ def test_build_agent_trigger_routes_protocol_branch(template_name: str) -> None:
         updated_at=now,
     )
 
-    def _instructions(trigger: str) -> str:
-        agent = _build_agent(workflow, trigger=trigger)
-        parts = agent._instructions  # pyright: ignore[reportPrivateUsage]
-        assert isinstance(parts, list)
-        return "".join(item for item in parts if isinstance(item, str))
-
-    for trigger in ("task", "enrollment_run", "enrollment_schedule", "manual", "email"):
-        instructions = _instructions(trigger)
-        if template.direction == "inbound":
-            assert _INBOUND_INSTRUCTION in instructions
-            assert _CONCLUDE_INSTRUCTION not in instructions
-        else:
-            assert _CONCLUDE_INSTRUCTION in instructions
-            assert _INBOUND_INSTRUCTION not in instructions
-        assert "Send the initial email and stop" not in instructions
+    agent = _build_agent(workflow)
+    parts = agent._instructions  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(parts, list)
+    instructions = "".join(item for item in parts if isinstance(item, str))
+    if template.direction == "inbound":
+        assert _INBOUND_INSTRUCTION in instructions
+        assert _CONCLUDE_INSTRUCTION not in instructions
+    else:
+        assert _CONCLUDE_INSTRUCTION in instructions
+        assert _INBOUND_INSTRUCTION not in instructions
+    assert "Send the initial email and stop" not in instructions
+    assert "trigger" not in inspect.signature(_build_agent).parameters

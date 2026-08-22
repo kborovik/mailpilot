@@ -9,6 +9,8 @@ from unittest.mock import MagicMock
 import psycopg
 import pytest
 from logfire.testing import CaptureLogfire
+from pydantic_ai import RunContext
+from pydantic_ai.usage import RunUsage
 
 from conftest import (
     make_test_account,
@@ -18,6 +20,7 @@ from conftest import (
     make_test_workflow,
 )
 from mailpilot.agent.tools import (
+    AgentDeps,
     _mark_reply_emitted,  # pyright: ignore[reportPrivateUsage]
     cancel_task,
     conclude_enrollment,
@@ -78,6 +81,43 @@ def _make_gmail_client(
     return client
 
 
+def _ctx(
+    connection: Any = None,
+    *,
+    account: Account | None = None,
+    account_id: str | None = None,
+    gmail_client: Any = None,
+    drive_client: Any = None,
+    settings: Any = None,
+    workflow_id: str = "wf-1",
+    contact_id: str = "contact-1",
+    enrollment_id: str = "enroll-1",
+) -> RunContext[AgentDeps]:
+    """Build a synthetic RunContext[AgentDeps] for direct tool calls."""
+    now = datetime.now(UTC)
+    return RunContext(
+        deps=AgentDeps(
+            connection=connection or MagicMock(),
+            account=account
+            or Account(
+                id=account_id or "acct-1",
+                email="agent@example.com",
+                display_name="Agent",
+                created_at=now,
+                updated_at=now,
+            ),
+            gmail_client=gmail_client or MagicMock(),
+            drive_client=drive_client or MagicMock(),
+            settings=settings or MagicMock(),
+            workflow_id=workflow_id,
+            contact_id=contact_id,
+            enrollment_id=enrollment_id,
+        ),
+        model=MagicMock(),
+        usage=RunUsage(),
+    )
+
+
 # -- reply-emitted flag (§V.131) ----------------------------------------------
 
 
@@ -112,11 +152,13 @@ def test_send_email_success_marks_reply_emitted(
 
     with reply_emitted_scope():
         result = send_email(
-            connection=database_connection,
-            account=account,
-            gmail_client=gmail_client,
-            settings=make_test_settings(),
-            workflow_id=workflow.id,
+            _ctx(
+                database_connection,
+                account=account,
+                gmail_client=gmail_client,
+                settings=make_test_settings(),
+                workflow_id=workflow.id,
+            ),
             to="recipient@example.com",
             subject="Hello",
             body="Hi there",
@@ -149,11 +191,13 @@ def test_reply_email_success_marks_reply_emitted(
 
     with reply_emitted_scope():
         result = reply_email(
-            connection=database_connection,
-            account=account,
-            gmail_client=gmail_client,
-            settings=make_test_settings(),
-            workflow_id=workflow.id,
+            _ctx(
+                database_connection,
+                account=account,
+                gmail_client=gmail_client,
+                settings=make_test_settings(),
+                workflow_id=workflow.id,
+            ),
             email_id=inbound.id,
             body="Here is the pricing info.",
         )
@@ -174,11 +218,13 @@ def test_send_email_success(
     gmail_client = _make_gmail_client(account)
 
     result = send_email(
-        connection=database_connection,
-        account=account,
-        gmail_client=gmail_client,
-        settings=make_test_settings(),
-        workflow_id=workflow.id,
+        _ctx(
+            database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=make_test_settings(),
+            workflow_id=workflow.id,
+        ),
         to="recipient@example.com",
         subject="Hello",
         body="Hi there",
@@ -212,11 +258,13 @@ def test_send_email_forwards_thread_id_to_email_ops(
 
     with patch("mailpilot.email_ops.send_email", return_value=returned) as ops_send:
         result = send_email(
-            connection=database_connection,
-            account=account,
-            gmail_client=gmail_client,
-            settings=make_test_settings(),
-            workflow_id=workflow.id,
+            _ctx(
+                database_connection,
+                account=account,
+                gmail_client=gmail_client,
+                settings=make_test_settings(),
+                workflow_id=workflow.id,
+            ),
             to="prospect@example.com",
             subject="Following up",
             body="Third touch",
@@ -240,11 +288,13 @@ def test_send_email_blocked_by_contact_status(
     gmail_client = _make_gmail_client(account)
 
     result = send_email(
-        connection=database_connection,
-        account=account,
-        gmail_client=gmail_client,
-        settings=make_test_settings(),
-        workflow_id=workflow.id,
+        _ctx(
+            database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=make_test_settings(),
+            workflow_id=workflow.id,
+        ),
         to="bounced@example.com",
         subject="Hello",
         body="Hi",
@@ -280,11 +330,13 @@ def test_send_email_blocked_by_cooldown(
     gmail_client = _make_gmail_client(account)
 
     result = send_email(
-        connection=database_connection,
-        account=account,
-        gmail_client=gmail_client,
-        settings=make_test_settings(),
-        workflow_id=workflow.id,
+        _ctx(
+            database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=make_test_settings(),
+            workflow_id=workflow.id,
+        ),
         to="recent@example.com",
         subject="Follow up",
         body="Hi again",
@@ -321,11 +373,13 @@ def test_reply_email_resolves_thread_and_recipient(
     gmail_client = _make_gmail_client(account)
 
     result = reply_email(
-        connection=database_connection,
-        account=account,
-        gmail_client=gmail_client,
-        settings=make_test_settings(),
-        workflow_id=workflow.id,
+        _ctx(
+            database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=make_test_settings(),
+            workflow_id=workflow.id,
+        ),
         email_id=inbound.id,
         body="Here is the pricing info.",
     )
@@ -352,11 +406,13 @@ def test_reply_email_not_found(
     gmail_client = _make_gmail_client(account)
 
     result = reply_email(
-        connection=database_connection,
-        account=account,
-        gmail_client=gmail_client,
-        settings=make_test_settings(),
-        workflow_id=workflow.id,
+        _ctx(
+            database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=make_test_settings(),
+            workflow_id=workflow.id,
+        ),
         email_id="nonexistent-email-id",
         body="Hello",
     )
@@ -392,11 +448,13 @@ def test_reply_email_blocked_contact(
     gmail_client = _make_gmail_client(account)
 
     result = reply_email(
-        connection=database_connection,
-        account=account,
-        gmail_client=gmail_client,
-        settings=make_test_settings(),
-        workflow_id=workflow.id,
+        _ctx(
+            database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=make_test_settings(),
+            workflow_id=workflow.id,
+        ),
         email_id=inbound.id,
         body="Reply text",
     )
@@ -427,11 +485,13 @@ def test_send_email_pure_prose_passes(
     )
 
     result = send_email(
-        connection=database_connection,
-        account=account,
-        gmail_client=gmail_client,
-        settings=make_test_settings(),
-        workflow_id=workflow.id,
+        _ctx(
+            database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=make_test_settings(),
+            workflow_id=workflow.id,
+        ),
         to="recipient@example.com",
         subject="Hello",
         body=body,
@@ -459,11 +519,13 @@ def test_send_email_space_aligned_spec_rows_pass(
     )
 
     result = send_email(
-        connection=database_connection,
-        account=account,
-        gmail_client=gmail_client,
-        settings=make_test_settings(),
-        workflow_id=workflow.id,
+        _ctx(
+            database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=make_test_settings(),
+            workflow_id=workflow.id,
+        ),
         to="recipient@example.com",
         subject="Specs",
         body=body,
@@ -501,11 +563,13 @@ def test_reply_email_decline_body_passes(
     )
 
     result = reply_email(
-        connection=database_connection,
-        account=account,
-        gmail_client=gmail_client,
-        settings=make_test_settings(),
-        workflow_id=workflow.id,
+        _ctx(
+            database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=make_test_settings(),
+            workflow_id=workflow.id,
+        ),
         email_id=inbound.id,
         body=body,
     )
@@ -527,10 +591,12 @@ def test_create_task_success(
 
     scheduled_at = (datetime.now(UTC) + timedelta(days=3)).isoformat()
     result = create_task(
-        connection=database_connection,
-        enrollment_id=enrollment.id,
-        workflow_id=workflow.id,
-        contact_id=contact.id,
+        _ctx(
+            database_connection,
+            workflow_id=workflow.id,
+            contact_id=contact.id,
+            enrollment_id=enrollment.id,
+        ),
         description="Follow up in 3 days",
         scheduled_at=scheduled_at,
     )
@@ -558,10 +624,12 @@ def test_create_task_with_context_and_email(
     assert email is not None
 
     result = create_task(
-        connection=database_connection,
-        enrollment_id=enrollment.id,
-        workflow_id=workflow.id,
-        contact_id=contact.id,
+        _ctx(
+            database_connection,
+            workflow_id=workflow.id,
+            contact_id=contact.id,
+            enrollment_id=enrollment.id,
+        ),
         description="Reply to question",
         scheduled_at=(datetime.now(UTC) + timedelta(days=3)).isoformat(),
         context={"topic": "pricing"},
@@ -584,10 +652,12 @@ def test_create_task_normalizes_t_label_touch_to_int(
     enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
 
     result = create_task(
-        connection=database_connection,
-        enrollment_id=enrollment.id,
-        workflow_id=workflow.id,
-        contact_id=contact.id,
+        _ctx(
+            database_connection,
+            workflow_id=workflow.id,
+            contact_id=contact.id,
+            enrollment_id=enrollment.id,
+        ),
         description="Resume after OOO",
         scheduled_at=(datetime.now(UTC) + timedelta(days=5)).isoformat(),
         context={"touch": "T2", "reason": "ooo_pause", "return_date": "2026-08-17"},
@@ -617,10 +687,12 @@ def test_create_task_rejects_past_scheduled_at(
 
     past = (datetime.now(UTC) - timedelta(days=1)).isoformat()
     result = create_task(
-        connection=database_connection,
-        enrollment_id=enrollment.id,
-        workflow_id=workflow.id,
-        contact_id=contact.id,
+        _ctx(
+            database_connection,
+            workflow_id=workflow.id,
+            contact_id=contact.id,
+            enrollment_id=enrollment.id,
+        ),
         description="Soft follow-up next month",
         scheduled_at=past,
     )
@@ -641,10 +713,12 @@ def test_create_task_future_scheduled_at_persists(
 
     future = (datetime.now(UTC) + timedelta(days=30)).isoformat()
     result = create_task(
-        connection=database_connection,
-        enrollment_id=enrollment.id,
-        workflow_id=workflow.id,
-        contact_id=contact.id,
+        _ctx(
+            database_connection,
+            workflow_id=workflow.id,
+            contact_id=contact.id,
+            enrollment_id=enrollment.id,
+        ),
         description="Soft follow-up next month",
         scheduled_at=future,
     )
@@ -674,7 +748,7 @@ def test_cancel_task_success(
         scheduled_at="2026-04-22T10:00:00Z",
     )
 
-    result = cancel_task(connection=database_connection, task_id=task.id)
+    result = cancel_task(_ctx(database_connection), task_id=task.id)
 
     assert result["id"] == task.id
     assert result["status"] == "cancelled"
@@ -683,7 +757,7 @@ def test_cancel_task_success(
 def test_cancel_task_not_found(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    result = cancel_task(connection=database_connection, task_id="nonexistent")
+    result = cancel_task(_ctx(database_connection), task_id="nonexistent")
     assert result["error"] == "not_found"
 
 
@@ -702,8 +776,7 @@ def test_conclude_enrollment_meeting_booked_records_completed(
     enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
 
     result = conclude_enrollment(
-        connection=database_connection,
-        enrollment_id=enrollment.id,
+        _ctx(database_connection, enrollment_id=enrollment.id),
         disposition="meeting_booked",
         note="booked a Google Meet",
     )
@@ -735,8 +808,7 @@ def test_conclude_enrollment_do_not_contact_disables_contact(
     enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
 
     result = conclude_enrollment(
-        connection=database_connection,
-        enrollment_id=enrollment.id,
+        _ctx(database_connection, enrollment_id=enrollment.id),
         disposition="do_not_contact",
         note="asked to be removed",
     )
@@ -772,8 +844,7 @@ def test_conclude_enrollment_address_change_note_records_new_email(
     new_email = "prospect.redirect@example.com"
     note = f"address-change: email redirected to {new_email}; update your records"
     result = conclude_enrollment(
-        connection=database_connection,
-        enrollment_id=enrollment.id,
+        _ctx(database_connection, enrollment_id=enrollment.id),
         disposition="do_not_contact",
         note=note,
     )
@@ -811,8 +882,7 @@ def test_conclude_enrollment_contact_later_schedules_default_reschedule(
     enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
 
     result = conclude_enrollment(
-        connection=database_connection,
-        enrollment_id=enrollment.id,
+        _ctx(database_connection, enrollment_id=enrollment.id),
         disposition="contact_later",
         note="circle back in Q3",
     )
@@ -844,8 +914,7 @@ def test_conclude_enrollment_contact_later_honors_explicit_reschedule(
 
     when = (datetime.now(UTC) + timedelta(days=30)).isoformat()
     result = conclude_enrollment(
-        connection=database_connection,
-        enrollment_id=enrollment.id,
+        _ctx(database_connection, enrollment_id=enrollment.id),
         disposition="contact_later",
         note="next month",
         reschedule_at=when,
@@ -875,8 +944,7 @@ def test_conclude_enrollment_contact_later_rejects_past_reschedule(
 
     past = (datetime.now(UTC) - timedelta(days=1)).isoformat()
     result = conclude_enrollment(
-        connection=database_connection,
-        enrollment_id=enrollment.id,
+        _ctx(database_connection, enrollment_id=enrollment.id),
         disposition="contact_later",
         note="circle back",
         reschedule_at=past,
@@ -923,8 +991,7 @@ def test_conclude_enrollment_cancels_future_followups_preserves_first_touch(
     )
 
     conclude_enrollment(
-        connection=database_connection,
-        enrollment_id=enrollment.id,
+        _ctx(database_connection, enrollment_id=enrollment.id),
         disposition="meeting_booked",
         note="booked",
     )
@@ -942,8 +1009,7 @@ def test_conclude_enrollment_rejects_invalid_disposition(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     result = conclude_enrollment(
-        connection=database_connection,
-        enrollment_id="nonexistent",
+        _ctx(database_connection, enrollment_id="nonexistent"),
         disposition="ghosted",
         note="x",
     )
@@ -954,8 +1020,7 @@ def test_conclude_enrollment_missing_enrollment(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     result = conclude_enrollment(
-        connection=database_connection,
-        enrollment_id="01900000-0000-7000-8000-0000000000ff",
+        _ctx(database_connection, enrollment_id="01900000-0000-7000-8000-0000000000ff"),
         disposition="meeting_booked",
         note="x",
     )
@@ -983,8 +1048,7 @@ def test_conclude_enrollment_forwards_disposition_to_outcome_detail(
     enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
 
     conclude_enrollment(
-        connection=database_connection,
-        enrollment_id=enrollment.id,
+        _ctx(database_connection, enrollment_id=enrollment.id),
         disposition=disposition,
         note="concluding",
     )
@@ -1006,8 +1070,7 @@ def test_disable_contact_success(
     contact = make_test_contact(database_connection)
 
     result = disable_contact(
-        connection=database_connection,
-        contact_id=contact.id,
+        _ctx(database_connection, contact_id=contact.id),
         reason="unsubscribed: replied do not contact",
     )
 
@@ -1021,8 +1084,7 @@ def test_disable_contact_not_found(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     result = disable_contact(
-        connection=database_connection,
-        contact_id="nonexistent",
+        _ctx(database_connection, contact_id="nonexistent"),
         reason="bounced: hard bounce",
     )
 
@@ -1039,8 +1101,7 @@ def test_disable_contact_active_round_trip(
     assert fetched.disabled_reason is None
 
     disable_contact(
-        connection=database_connection,
-        contact_id=contact.id,
+        _ctx(database_connection, contact_id=contact.id),
         reason="bounced: hard bounce",
     )
 
@@ -1060,7 +1121,7 @@ def test_list_enrollments_success(
     workflow = make_test_workflow(database_connection, account_id=account.id)
     create_enrollment(database_connection, workflow.id, contact.id)
 
-    result = list_enrollments(connection=database_connection, workflow_id=workflow.id)
+    result = list_enrollments(_ctx(database_connection, workflow_id=workflow.id))
 
     assert len(result) == 1
     assert result[0]["contact_id"] == contact.id
@@ -1073,7 +1134,7 @@ def test_list_enrollments_empty(
     account = make_test_account(database_connection)
     workflow = make_test_workflow(database_connection, account_id=account.id)
 
-    result = list_enrollments(connection=database_connection, workflow_id=workflow.id)
+    result = list_enrollments(_ctx(database_connection, workflow_id=workflow.id))
 
     assert result == []
 
@@ -1112,7 +1173,7 @@ def test_list_enrollments_includes_latest_outcome(
         reason="hard bounce",
     )
 
-    rows = list_enrollments(connection=database_connection, workflow_id=workflow.id)
+    rows = list_enrollments(_ctx(database_connection, workflow_id=workflow.id))
     by_contact = {row["contact_id"]: row for row in rows}
 
     completed_row = by_contact[completed_contact.id]
@@ -1155,7 +1216,7 @@ def test_list_enrollments_uses_most_recent_outcome(
         reason="recovered after re-engagement",
     )
 
-    rows = list_enrollments(connection=database_connection, workflow_id=workflow.id)
+    rows = list_enrollments(_ctx(database_connection, workflow_id=workflow.id))
     assert len(rows) == 1
     assert rows[0]["latest_outcome"] == "completed"
     assert rows[0]["latest_outcome_reason"] == "recovered after re-engagement"
@@ -1184,7 +1245,8 @@ def test_search_emails_filters_by_account(
     )
 
     result = search_emails(
-        connection=database_connection, account_id=a1.id, query="pricing"
+        _ctx(database_connection, account_id=a1.id),
+        query="pricing",
     )
 
     assert len(result) == 1
@@ -1212,8 +1274,7 @@ def test_read_email_found(
     assert email is not None
 
     result = read_email(
-        connection=database_connection,
-        account_id=account.id,
+        _ctx(database_connection, account_id=account.id),
         email_id=email.id,
     )
 
@@ -1228,8 +1289,7 @@ def test_read_email_not_found(
     account = make_test_account(database_connection)
 
     result = read_email(
-        connection=database_connection,
-        account_id=account.id,
+        _ctx(database_connection, account_id=account.id),
         email_id="0190a000-0000-7000-8000-000000000000",
     )
     assert result is None
@@ -1254,8 +1314,7 @@ def test_read_email_cross_account_returns_none(
     assert email_b is not None
 
     result = read_email(
-        connection=database_connection,
-        account_id=account_a.id,
+        _ctx(database_connection, account_id=account_a.id),
         email_id=email_b.id,
     )
     assert result is None
@@ -1280,7 +1339,7 @@ def test_list_drive_markdown_returns_files_on_success() -> None:
         {"file_id": "f1", "name": "guide.md"},
     ]
 
-    result = list_drive_markdown(drive_client=drive_client, folder_id="FOLDER")
+    result = list_drive_markdown(_ctx(drive_client=drive_client), folder_id="FOLDER")
 
     assert result == [{"file_id": "f1", "name": "guide.md"}]
     drive_client.list_markdown.assert_called_once_with("FOLDER")
@@ -1290,7 +1349,7 @@ def test_list_drive_markdown_empty_folder_returns_empty_list() -> None:
     drive_client = MagicMock()
     drive_client.list_markdown.return_value = []
 
-    result = list_drive_markdown(drive_client=drive_client, folder_id="EMPTY")
+    result = list_drive_markdown(_ctx(drive_client=drive_client), folder_id="EMPTY")
 
     assert result == []
 
@@ -1299,7 +1358,7 @@ def test_list_drive_markdown_not_found_returns_error_dict() -> None:
     drive_client = MagicMock()
     drive_client.list_markdown.side_effect = _http_error(404)
 
-    result = list_drive_markdown(drive_client=drive_client, folder_id="MISSING")
+    result = list_drive_markdown(_ctx(drive_client=drive_client), folder_id="MISSING")
 
     assert isinstance(result, dict)
     assert result["error"] == "not_found"
@@ -1310,7 +1369,7 @@ def test_list_drive_markdown_other_http_error_returns_drive_unavailable() -> Non
     drive_client = MagicMock()
     drive_client.list_markdown.side_effect = _http_error(500, "Server Error")
 
-    result = list_drive_markdown(drive_client=drive_client, folder_id="FOLDER")
+    result = list_drive_markdown(_ctx(drive_client=drive_client), folder_id="FOLDER")
 
     assert isinstance(result, dict)
     assert result["error"] == "drive_unavailable"
@@ -1324,7 +1383,7 @@ def test_read_drive_markdown_returns_content_on_success() -> None:
         "web_view_link": "https://x/y",
     }
 
-    result = read_drive_markdown(drive_client=drive_client, file_id="FID")
+    result = read_drive_markdown(_ctx(drive_client=drive_client), file_id="FID")
 
     assert result == {
         "name": "guide.md",
@@ -1338,7 +1397,7 @@ def test_read_drive_markdown_not_found_returns_error_dict() -> None:
     drive_client = MagicMock()
     drive_client.read_markdown.side_effect = _http_error(404)
 
-    result = read_drive_markdown(drive_client=drive_client, file_id="MISSING")
+    result = read_drive_markdown(_ctx(drive_client=drive_client), file_id="MISSING")
 
     assert result["error"] == "not_found"
     assert "MISSING" in result["message"]
@@ -1348,7 +1407,7 @@ def test_read_drive_markdown_other_http_error_returns_drive_unavailable() -> Non
     drive_client = MagicMock()
     drive_client.read_markdown.side_effect = _http_error(503)
 
-    result = read_drive_markdown(drive_client=drive_client, file_id="FID")
+    result = read_drive_markdown(_ctx(drive_client=drive_client), file_id="FID")
 
     assert result["error"] == "drive_unavailable"
 
@@ -1364,7 +1423,7 @@ def test_search_drive_markdown_returns_files_on_success() -> None:
     ]
 
     result = search_drive_markdown(
-        drive_client=drive_client,
+        _ctx(drive_client=drive_client),
         folder_id="FOLDER",
         query="shipping policy",
     )
@@ -1381,7 +1440,7 @@ def test_search_drive_markdown_no_match_returns_empty_list() -> None:
     drive_client.search_markdown.return_value = []
 
     result = search_drive_markdown(
-        drive_client=drive_client,
+        _ctx(drive_client=drive_client),
         folder_id="FOLDER",
         query="no such topic",
     )
@@ -1394,7 +1453,7 @@ def test_search_drive_markdown_not_found_returns_error_dict() -> None:
     drive_client.search_markdown.side_effect = _http_error(404)
 
     result = search_drive_markdown(
-        drive_client=drive_client,
+        _ctx(drive_client=drive_client),
         folder_id="MISSING",
         query="anything",
     )
@@ -1409,7 +1468,7 @@ def test_search_drive_markdown_other_http_error_returns_drive_unavailable() -> N
     drive_client.search_markdown.side_effect = _http_error(500, "Server Error")
 
     result = search_drive_markdown(
-        drive_client=drive_client,
+        _ctx(drive_client=drive_client),
         folder_id="FOLDER",
         query="anything",
     )
@@ -1442,7 +1501,7 @@ def test_list_drive_markdown_transport_fault_returns_drive_unavailable(
     drive_client = MagicMock()
     drive_client.list_markdown.side_effect = exc
 
-    result = list_drive_markdown(drive_client=drive_client, folder_id="FOLDER")
+    result = list_drive_markdown(_ctx(drive_client=drive_client), folder_id="FOLDER")
 
     assert isinstance(result, dict)
     assert result["error"] == "drive_unavailable"
@@ -1464,7 +1523,7 @@ def test_search_drive_markdown_transport_fault_returns_drive_unavailable(
     drive_client.search_markdown.side_effect = exc
 
     result = search_drive_markdown(
-        drive_client=drive_client,
+        _ctx(drive_client=drive_client),
         folder_id="FOLDER",
         query="anything",
     )
@@ -1488,7 +1547,7 @@ def test_read_drive_markdown_transport_fault_returns_drive_unavailable(
     drive_client = MagicMock()
     drive_client.read_markdown.side_effect = exc
 
-    result = read_drive_markdown(drive_client=drive_client, file_id="FID")
+    result = read_drive_markdown(_ctx(drive_client=drive_client), file_id="FID")
 
     assert isinstance(result, dict)
     assert result["error"] == "drive_unavailable"
@@ -1511,7 +1570,7 @@ def test_runtime_fact_check_abolished() -> None:
     import inspect
 
     from mailpilot.agent import tools as tools_module
-    from mailpilot.agent.invoke import AgentDeps
+    from mailpilot.agent.tools import AgentDeps
 
     assert not hasattr(tools_module, "_fact_check_body")
     for fn in (
@@ -1554,11 +1613,13 @@ def test_reply_email_numeric_tokens_send_without_fact_check(
     gmail_client = _make_gmail_client(account)
 
     result = reply_email(
-        connection=database_connection,
-        account=account,
-        gmail_client=gmail_client,
-        settings=make_test_settings(),
-        workflow_id=workflow.id,
+        _ctx(
+            database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=make_test_settings(),
+            workflow_id=workflow.id,
+        ),
         email_id=inbound.id,
         body="The WS36-600-2 runs 110 GPM continuous and 165 GPM peak.",
     )
@@ -1571,7 +1632,7 @@ def test_reply_email_numeric_tokens_send_without_fact_check(
 
 
 def test_noop() -> None:
-    result = noop(reason="no action needed")
+    result = noop(_ctx(), reason="no action needed")
     assert result["acknowledged"] is True
     assert result["reason"] == "no action needed"
 
@@ -1591,8 +1652,7 @@ def test_no_custom_agent_tool_spans(
     """
     # Exercise a representative tool that previously emitted a custom span.
     read_email(
-        connection=database_connection,
-        account_id="01900000-0000-7000-8000-000000000000",
+        _ctx(database_connection, account_id="01900000-0000-7000-8000-000000000000"),
         email_id="01900000-0000-7000-8000-000000000001",
     )
 
@@ -1619,11 +1679,13 @@ def test_no_custom_auto_activate_span(
     gmail_client = _make_gmail_client(account)
 
     send_email(
-        connection=database_connection,
-        account=account,
-        gmail_client=gmail_client,
-        settings=make_test_settings(),
-        workflow_id=workflow.id,
+        _ctx(
+            database_connection,
+            account=account,
+            gmail_client=gmail_client,
+            settings=make_test_settings(),
+            workflow_id=workflow.id,
+        ),
         to="activate@example.com",
         subject="Hello",
         body="Hi",
