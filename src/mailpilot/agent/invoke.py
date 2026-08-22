@@ -24,22 +24,25 @@ zero tool calls raises ``AgentDidNotUseToolsError``.
 from __future__ import annotations
 
 import zlib
-from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
 
 import logfire
 import psycopg
-from pydantic_ai import Agent, ModelRetry, RunContext
+from pydantic_ai import Agent, ModelRetry
 from pydantic_ai.messages import ModelRequest, ToolReturnPart
 from pydantic_ai.models import Model
 
 from mailpilot import cadence, database, email_ops
-from mailpilot.agent import tools as agent_tools
 from mailpilot.agent.model import (
     _build_model,  # pyright: ignore[reportPrivateUsage]
     active_model_name,
 )
+from mailpilot.agent.templates import (
+    _TOUCH_COMPOSE,  # pyright: ignore[reportPrivateUsage]
+    TEMPLATES,
+)
+from mailpilot.agent.tools import AgentDeps
 from mailpilot.drive import DriveClient
 from mailpilot.exceptions import (
     AgentCompletedWithoutReplyError,
@@ -67,20 +70,6 @@ _TOUCH_VALIDATION_RETRIES = 2
 
 # §V.136 / §B.127: ModelRetry message when a new-thread touch omits subject.
 _SUBJECT_REQUIRED_RETRY = "subject required for new thread"
-
-
-@dataclass
-class AgentDeps:
-    """Dependencies injected into every agent tool via RunContext."""
-
-    connection: psycopg.Connection[dict[str, Any]]
-    account: Account
-    gmail_client: GmailClient
-    drive_client: DriveClient
-    settings: Settings
-    workflow_id: str
-    contact_id: str
-    enrollment_id: str
 
 
 # -- Advisory lock -------------------------------------------------------------
@@ -165,251 +154,24 @@ def _release_advisory_lock(
     )
 
 
-# -- Tool wrappers -------------------------------------------------------------
-# Thin functions that unpack AgentDeps from RunContext and delegate to the
-# standalone tool functions in agent/tools.py.
-
-
-def _wrap_send_email(  # noqa: PLR0913  # pyright: ignore[reportUnusedFunction]
-    ctx: RunContext[AgentDeps],
-    to: str,
-    subject: str,
-    body: str,
-    thread_id: str | None = None,
-    cc: str | None = None,
-    bcc: str | None = None,
-) -> dict[str, Any]:
-    """Send a new outbound email. For replies, use reply_email instead.
-
-    Pass thread_id (the gmail_thread_id returned by an earlier touch) to
-    continue a multi-touch outbound thread; omit it for a first reach-out.
-    """
-    # thread_id forwards outbound thread-continuation per §V.78.
-    return agent_tools.send_email(
-        connection=ctx.deps.connection,
-        account=ctx.deps.account,
-        gmail_client=ctx.deps.gmail_client,
-        settings=ctx.deps.settings,
-        workflow_id=ctx.deps.workflow_id,
-        to=to,
-        subject=subject,
-        body=body,
-        thread_id=thread_id,
-        cc=cc,
-        bcc=bcc,
-    )
-
-
-def _wrap_reply_email(  # pyright: ignore[reportUnusedFunction]
-    ctx: RunContext[AgentDeps],
-    email_id: str,
-    body: str,
-    cc: str | None = None,
-    bcc: str | None = None,
-) -> dict[str, Any]:
-    """Reply to an existing email in-thread."""
-    return agent_tools.reply_email(
-        connection=ctx.deps.connection,
-        account=ctx.deps.account,
-        gmail_client=ctx.deps.gmail_client,
-        settings=ctx.deps.settings,
-        workflow_id=ctx.deps.workflow_id,
-        email_id=email_id,
-        body=body,
-        cc=cc,
-        bcc=bcc,
-    )
-
-
-def _wrap_create_task(  # pyright: ignore[reportUnusedFunction]
-    ctx: RunContext[AgentDeps],
-    description: str,
-    scheduled_at: str,
-    context: dict[str, Any] | None = None,
-    email_id: str | None = None,
-) -> dict[str, str]:
-    """Schedule deferred work for the current contact."""
-    return agent_tools.create_task(
-        connection=ctx.deps.connection,
-        enrollment_id=ctx.deps.enrollment_id,
-        workflow_id=ctx.deps.workflow_id,
-        contact_id=ctx.deps.contact_id,
-        description=description,
-        scheduled_at=scheduled_at,
-        context=context,
-        email_id=email_id,
-    )
-
-
-def _wrap_cancel_task(  # pyright: ignore[reportUnusedFunction]
-    ctx: RunContext[AgentDeps],
-    task_id: str,
-) -> dict[str, str]:
-    """Cancel a pending task."""
-    return agent_tools.cancel_task(
-        connection=ctx.deps.connection,
-        task_id=task_id,
-    )
-
-
-def _wrap_conclude_enrollment(  # pyright: ignore[reportUnusedFunction]
-    ctx: RunContext[AgentDeps],
-    disposition: str,
-    note: str,
-    reschedule_at: str | None = None,
-) -> dict[str, Any]:
-    """Conclude the current enrollment with one terminal disposition.
-
-    `disposition` is one of meeting_booked, do_not_contact, contact_later.
-    The system records the outcome, cancels pending follow-ups, and -- per
-    disposition -- disables the contact or schedules a re-enrollment, then
-    writes a note. This is a terminal action that satisfies the send
-    obligation, like noop.
-
-    Use do_not_contact for opt-out, wrong person, retired / left-the-company
-    auto-replies (including past-tense last-day auto-replies), and
-    address-change / "update your records" / hard
-    email-redirect auto-replies: stop touches to the enrolled address even
-    if From uses a different local-part; put the redirect, referral
-    addresses, named successors without emails, and the new email (when
-    present) in `note`; never enroll the From alias or any new address.
-    Out-of-office auto-replies are not this path -- call noop instead. A
-    past last-day auto-reply is left-company, not out-of-office.
-    """
-    return agent_tools.conclude_enrollment(
-        connection=ctx.deps.connection,
-        enrollment_id=ctx.deps.enrollment_id,
-        disposition=disposition,
-        note=note,
-        reschedule_at=reschedule_at,
-    )
-
-
-def _wrap_disable_contact(  # pyright: ignore[reportUnusedFunction]
-    ctx: RunContext[AgentDeps],
-    reason: str,
-) -> dict[str, str]:
-    """Set a global block on the current contact.
-
-    `reason` is stored verbatim in `contact.disabled_reason`. Convention:
-    prefix with `"bounced: "` or `"unsubscribed: "` so the operator can
-    grep the source class. Once set, `send_email` and `reply_email`
-    refuse this contact across every workflow.
-    """
-    return agent_tools.disable_contact(
-        connection=ctx.deps.connection,
-        contact_id=ctx.deps.contact_id,
-        reason=reason,
-    )
-
-
-def _wrap_list_enrollments(  # pyright: ignore[reportUnusedFunction]
-    ctx: RunContext[AgentDeps],
-) -> list[dict[str, Any]]:
-    """List enrollments in the current workflow with their outcome status."""
-    return agent_tools.list_enrollments(
-        connection=ctx.deps.connection,
-        workflow_id=ctx.deps.workflow_id,
-    )
-
-
-def _wrap_search_emails(  # pyright: ignore[reportUnusedFunction]
-    ctx: RunContext[AgentDeps],
-    query: str,
-) -> list[dict[str, Any]]:
-    """Search email history for the current account."""
-    return agent_tools.search_emails(
-        connection=ctx.deps.connection,
-        account_id=ctx.deps.account.id,
-        query=query,
-    )
-
-
-def _wrap_read_email(  # pyright: ignore[reportUnusedFunction]
-    ctx: RunContext[AgentDeps],
-    email_id: str,
-) -> dict[str, Any] | None:
-    """Read full email content (including body text) by ID."""
-    return agent_tools.read_email(
-        connection=ctx.deps.connection,
-        account_id=ctx.deps.account.id,
-        email_id=email_id,
-    )
-
-
-def _wrap_list_drive_markdown(  # pyright: ignore[reportUnusedFunction]
-    ctx: RunContext[AgentDeps],
-    folder_id: str,
-) -> list[dict[str, str]] | dict[str, str]:
-    """List Markdown files in a Drive folder for KB grounding."""
-    return agent_tools.list_drive_markdown(
-        drive_client=ctx.deps.drive_client,
-        folder_id=folder_id,
-    )
-
-
-def _wrap_read_drive_markdown(  # pyright: ignore[reportUnusedFunction]
-    ctx: RunContext[AgentDeps],
-    file_id: str,
-) -> dict[str, str]:
-    """Read a Markdown file from Drive."""
-    return agent_tools.read_drive_markdown(
-        drive_client=ctx.deps.drive_client,
-        file_id=file_id,
-    )
-
-
-def _wrap_search_drive_markdown(  # pyright: ignore[reportUnusedFunction]
-    ctx: RunContext[AgentDeps],
-    folder_id: str,
-    query: str,
-) -> list[dict[str, str]] | dict[str, str]:
-    """Full-text search Markdown files in a Drive folder."""
-    return agent_tools.search_drive_markdown(
-        drive_client=ctx.deps.drive_client,
-        folder_id=folder_id,
-        query=query,
-    )
-
-
-def _wrap_noop(  # pyright: ignore[reportUnusedFunction]
-    ctx: RunContext[AgentDeps],
-    reason: str,
-) -> dict[str, Any]:
-    """Explicitly decline to act.
-
-    Call this tool when, after reviewing context, no action is appropriate.
-    You must still call a tool every turn -- noop is the explicit "do nothing"
-    signal. Typical case: out-of-office or temporary absence auto-reply
-    (pause once; leave enrollment open; do not conclude). Address-change,
-    last-day-was, retired, and left-company auto-replies are not noop -- use
-    conclude_enrollment with do_not_contact instead.
-    """
-    return agent_tools.noop(reason=reason)
-
-
 # -- Agent construction --------------------------------------------------------
 
 
-def _build_agent(workflow: Workflow, trigger: str = "manual") -> Agent[AgentDeps, str]:
+def _build_agent(workflow: Workflow) -> Agent[AgentDeps, str]:
     """Build a Pydantic AI agent for a workflow.
 
     The workflow's template (§V.44, §V.45) owns both the bound tool set and
     the system-prompt protocol. Workflow-specific instructions are appended
-    to the template protocol. The deferred-task fragment branches on direction
-    and ``trigger`` per §V.31: an inbound template uses the inbound-reply
-    instruction for every trigger (reply once, then stop; the system records
-    the outcome); an outbound template uses the terminal-outcome instruction on
-    ``trigger='task'`` and the initial-send-only instruction otherwise (which
-    prevents a premature ``conclude_enrollment`` terminal on first reach-out).
+    to the template protocol. The deferred-task fragment is direction-only
+    (§V.31): inbound templates use the inbound-reply instruction; outbound
+    templates use the terminal-outcome instruction. The outbound first
+    reach-out is a compose-only touch run (§V.136), not a tool-loop branch.
     """
-    from mailpilot.agent.templates import TEMPLATES
-
     template = TEMPLATES[workflow.template]
     agent = Agent(
         name="mailpilot.workflow",
         deps_type=AgentDeps,
-        instructions=template.build_protocol(trigger) + workflow.instructions,
+        instructions=template.build_protocol() + workflow.instructions,
         tools=list(template.tools),
     )
 
@@ -478,10 +240,6 @@ def _build_touch_agent(
     format lint retired (§V.42 / §B.128). The date-grounding instruction
     (§V.129) and the model-visible protocol carry no SPEC cite (§V.45).
     """
-    from mailpilot.agent.templates import (
-        _TOUCH_COMPOSE,  # pyright: ignore[reportPrivateUsage]
-    )
-
     agent: Agent[None, TouchMessage] = Agent(
         name="mailpilot.workflow",
         output_type=TouchMessage,
@@ -934,7 +692,7 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915, C901
                 )
 
             # Resolve enrollment id from the (workflow_id, contact_id) UNIQUE
-            # pair so tool wrappers can pass it through to ``create_task`` /
+            # pair so AgentDeps can pass it through to ``create_task`` /
             # ``conclude_enrollment`` without asking the LLM for it.
             # The enrollment row is guaranteed present at this point: outbound
             # invocations create the enrollment in ``enrollment add``; inbound
@@ -971,17 +729,6 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915, C901
                 model = _build_model(settings, role="workflow")
 
             gmail_client = GmailClient(account.email)
-            drive_client = DriveClient(account.email)
-            deps = AgentDeps(
-                connection=connection,
-                account=account,
-                gmail_client=gmail_client,
-                drive_client=drive_client,
-                settings=settings,
-                workflow_id=workflow.id,
-                contact_id=contact.id,
-                enrollment_id=enrollment.id,
-            )
 
             # §V.135: mechanically pre-feed the CRM records the system already
             # holds keys for. load_contact_view / load_company_view are the same
@@ -1040,8 +787,18 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0915, C901
                     touch_number=touch_number,
                 )
 
-            # Tool-loop path: build the template agent and run it.
-            agent = _build_agent(workflow, trigger=trigger)
+            drive_client = DriveClient(account.email)
+            deps = AgentDeps(
+                connection=connection,
+                account=account,
+                gmail_client=gmail_client,
+                drive_client=drive_client,
+                settings=settings,
+                workflow_id=workflow.id,
+                contact_id=contact.id,
+                enrollment_id=enrollment.id,
+            )
+            agent = _build_agent(workflow)
             result = agent.run_sync(prompt, model=model, deps=deps)
 
             # Scan tool returns for {"error": ...} payloads -- the agent may have

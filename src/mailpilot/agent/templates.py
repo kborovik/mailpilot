@@ -20,21 +20,21 @@ from typing import get_args
 
 from pydantic_ai import Tool
 
-from mailpilot.agent.invoke import (
+from mailpilot.agent.tools import (
     AgentDeps,
-    _wrap_cancel_task,  # pyright: ignore[reportPrivateUsage]
-    _wrap_conclude_enrollment,  # pyright: ignore[reportPrivateUsage]
-    _wrap_create_task,  # pyright: ignore[reportPrivateUsage]
-    _wrap_disable_contact,  # pyright: ignore[reportPrivateUsage]
-    _wrap_list_drive_markdown,  # pyright: ignore[reportPrivateUsage]
-    _wrap_list_enrollments,  # pyright: ignore[reportPrivateUsage]
-    _wrap_noop,  # pyright: ignore[reportPrivateUsage]
-    _wrap_read_drive_markdown,  # pyright: ignore[reportPrivateUsage]
-    _wrap_read_email,  # pyright: ignore[reportPrivateUsage]
-    _wrap_reply_email,  # pyright: ignore[reportPrivateUsage]
-    _wrap_search_drive_markdown,  # pyright: ignore[reportPrivateUsage]
-    _wrap_search_emails,  # pyright: ignore[reportPrivateUsage]
-    _wrap_send_email,  # pyright: ignore[reportPrivateUsage]
+    cancel_task,
+    conclude_enrollment,
+    create_task,
+    disable_contact,
+    list_drive_markdown,
+    list_enrollments,
+    noop,
+    read_drive_markdown,
+    read_email,
+    reply_email,
+    search_drive_markdown,
+    search_emails,
+    send_email,
 )
 from mailpilot.models import WorkflowTemplateName, WorkflowType
 
@@ -48,11 +48,9 @@ class WorkflowTemplate:
     _DEFERRED_TASK_INBOUND (reply once, then stop; the system records the
     outcome -- inbound binds neither ``conclude_enrollment`` nor
     ``create_task``); an outbound template uses _DEFERRED_TASK_TASK
-    (terminal-outcome instruction). The outbound first reach-out is no longer a
-    tool-loop trigger -- it is a compose-only touch run (§V.136,
-    _TOUCH_COMPOSE), so the initial-send-only fragment was retired and
-    ``trigger`` no longer selects the branch. Canonical fragment order per
-    §V.45: _BASE -> _DEFERRED_TASK_<branch> -> _MUST_SEND -> _DECLINE ->
+    (terminal-outcome instruction). Compose-only first reach-out has no Drive
+    tools; the branch is direction-only (§V.136). Canonical fragment order
+    per §V.45: _BASE -> _DEFERRED_TASK_<branch> -> _MUST_SEND -> _DECLINE ->
     _NO_FABRICATION. Per §V.41 there is no workflow-specific overlay fragment;
     KB-grounding discipline lives in workflow.instructions.
     """
@@ -64,18 +62,15 @@ class WorkflowTemplate:
     protocol_post: str
     tools: tuple[Tool[AgentDeps], ...]
 
-    def build_protocol(self, trigger: str = "task") -> str:
+    def build_protocol(self) -> str:
         """Compose the tool-loop protocol per direction (§V.31, §V.45).
 
         Inbound templates use the inbound-reply branch (reply once, then stop;
         the system records the outcome); outbound templates use the
         terminal-outcome branch (conclude the enrollment when the goal is met).
-        The branch is direction-only: the outbound first reach-out moved to the
-        compose-only touch path (§V.136), so ``trigger`` no longer selects a
-        fragment. It is retained on the signature for call-site compatibility
-        (``template view`` + tests still pass it).
+        The branch is direction-only; compose-only first reach-out has no Drive
+        tools (§V.136).
         """
-        del trigger  # branch is direction-only after §V.136 retired _INITIAL
         deferred = (
             _DEFERRED_TASK_INBOUND
             if self.direction == "inbound"
@@ -262,16 +257,16 @@ _NO_FABRICATION = (
 
 
 _CORE: tuple[Tool[AgentDeps], ...] = (
-    Tool(_wrap_send_email, name="send_email"),
-    Tool(_wrap_reply_email, name="reply_email"),
-    Tool(_wrap_create_task, name="create_task"),
-    Tool(_wrap_cancel_task, name="cancel_task"),
-    Tool(_wrap_conclude_enrollment, name="conclude_enrollment"),
-    Tool(_wrap_disable_contact, name="disable_contact"),
-    Tool(_wrap_list_enrollments, name="list_enrollments"),
-    Tool(_wrap_search_emails, name="search_emails"),
-    Tool(_wrap_read_email, name="read_email"),
-    Tool(_wrap_noop, name="noop"),
+    Tool(send_email, name="send_email"),
+    Tool(reply_email, name="reply_email"),
+    Tool(create_task, name="create_task"),
+    Tool(cancel_task, name="cancel_task"),
+    Tool(conclude_enrollment, name="conclude_enrollment"),
+    Tool(disable_contact, name="disable_contact"),
+    Tool(list_enrollments, name="list_enrollments"),
+    Tool(search_emails, name="search_emails"),
+    Tool(read_email, name="read_email"),
+    Tool(noop, name="noop"),
 )
 
 # Inbound templates bind neither conclude_enrollment nor create_task (§V.31,
@@ -297,9 +292,9 @@ _INBOUND_CORE: tuple[Tool[AgentDeps], ...] = tuple(
 # tests/test_agent_drive_concurrency.py enumerates these registrations so a
 # future drop of the kwarg trips the suite.
 _DRIVE: tuple[Tool[AgentDeps], ...] = (
-    Tool(_wrap_list_drive_markdown, name="list_drive_markdown", sequential=True),
-    Tool(_wrap_read_drive_markdown, name="read_drive_markdown", sequential=True),
-    Tool(_wrap_search_drive_markdown, name="search_drive_markdown", sequential=True),
+    Tool(list_drive_markdown, name="list_drive_markdown", sequential=True),
+    Tool(read_drive_markdown, name="read_drive_markdown", sequential=True),
+    Tool(search_drive_markdown, name="search_drive_markdown", sequential=True),
 )
 
 

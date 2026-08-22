@@ -22,7 +22,6 @@ from mailpilot import database
 from mailpilot.gmail import GmailClient
 from mailpilot.models import Account, Contact, Email
 from mailpilot.settings import Settings
-from mailpilot.sync import send_email as sync_send_email
 
 _COOLDOWN_DAYS = 30
 
@@ -150,6 +149,8 @@ def send_email(  # noqa: PLR0913
                     f"cooldown is {_COOLDOWN_DAYS} days"
                 )
 
+    from mailpilot.sync import send_email as sync_send_email
+
     email = sync_send_email(
         connection=connection,
         account=account,
@@ -216,6 +217,8 @@ def reply_email(  # noqa: PLR0913
     subject = original.subject
     if not subject.lower().startswith("re: "):
         subject = f"Re: {subject}"
+
+    from mailpilot.sync import send_email as sync_send_email
 
     email = sync_send_email(
         connection=connection,

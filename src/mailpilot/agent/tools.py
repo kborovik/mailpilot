@@ -1,12 +1,7 @@
 """Agent tools for workflow execution.
 
-Each function is a Pydantic AI tool the agent can call. Tools are defined
-as standalone functions (not methods) so they can be unit-tested without
-spinning up a full agent.
-
-Dependency injection: each tool receives explicit dependency parameters
-(``connection``, ``account``, ``workflow_id``, etc.) that issue #12 will
-wire from ``RunContext[AgentDeps]``.
+Each function is a Pydantic AI tool. Tools take ``RunContext[AgentDeps]``
+so templates register ``Tool(fn)`` from this module.
 
 Tools (see §I agent tools):
     - ``send_email`` -- send via Gmail API with contact status + cooldown guards
@@ -20,6 +15,8 @@ Tools (see §I agent tools):
     - ``read_email`` -- full email content lookup
     - ``list_drive_markdown`` -- list Markdown files in a Drive folder
     - ``read_drive_markdown`` -- read a Markdown file from Drive
+    - ``search_drive_markdown`` -- full-text search Markdown files in a Drive folder
+    - ``noop`` -- explicit no-op escape
 """
 
 from __future__ import annotations
@@ -27,16 +24,34 @@ from __future__ import annotations
 import contextvars
 from collections.abc import Generator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import psycopg
+from pydantic_ai import RunContext
 
 from mailpilot import database, email_ops
 from mailpilot.cadence import parse_touch_number
 from mailpilot.drive import DriveClient
+from mailpilot.gmail import GmailClient
 from mailpilot.models import Account
 from mailpilot.settings import Settings
+
+
+@dataclass
+class AgentDeps:
+    """Dependencies injected into every agent tool via RunContext."""
+
+    connection: psycopg.Connection[dict[str, Any]]
+    account: Account
+    gmail_client: GmailClient
+    drive_client: DriveClient
+    settings: Settings
+    workflow_id: str
+    contact_id: str
+    enrollment_id: str
+
 
 # §V.131: per-task reply-emitted flag. ``run.execute_task`` enters
 # ``reply_emitted_scope`` so a successful ``reply_email`` / ``send_email`` this
@@ -101,11 +116,7 @@ def reply_was_emitted() -> bool:
 
 
 def send_email(  # noqa: PLR0913
-    connection: psycopg.Connection[dict[str, Any]],
-    account: Account,
-    gmail_client: object,
-    settings: Settings,
-    workflow_id: str,
+    ctx: RunContext[AgentDeps],
     to: str,
     subject: str,
     body: str,
@@ -113,26 +124,23 @@ def send_email(  # noqa: PLR0913
     cc: str | None = None,
     bcc: str | None = None,
 ) -> dict[str, Any]:
-    """Agent tool: send a new outbound email via Gmail.
+    """Send a new outbound email. For replies, use reply_email instead.
 
-    Thin wrapper over :func:`mailpilot.email_ops.send_email`. Converts
-    typed policy exceptions into the LLM-facing error dict shape.
-
-    Pass ``thread_id`` to continue a multi-touch outbound thread: supply
-    the ``gmail_thread_id`` returned by the first touch so later touches
-    thread natively.
+    Pass thread_id (the gmail_thread_id returned by an earlier touch) to
+    continue a multi-touch outbound thread; omit it for a first reach-out.
     """
+    deps = ctx.deps
     try:
         # thread_id forwards outbound thread-continuation per §V.78.
         email = email_ops.send_email(
-            connection,
-            account,
-            gmail_client,  # type: ignore[arg-type]
-            settings,
+            deps.connection,
+            deps.account,
+            deps.gmail_client,
+            deps.settings,
             to=to,
             subject=subject,
             body=body,
-            workflow_id=workflow_id,
+            workflow_id=deps.workflow_id,
             thread_id=thread_id,
             cc=cc,
             bcc=bcc,
@@ -150,30 +158,24 @@ def send_email(  # noqa: PLR0913
     }
 
 
-def reply_email(  # noqa: PLR0913
-    connection: psycopg.Connection[dict[str, Any]],
-    account: Account,
-    gmail_client: object,
-    settings: Settings,
-    workflow_id: str,
+def reply_email(
+    ctx: RunContext[AgentDeps],
     email_id: str,
     body: str,
     cc: str | None = None,
     bcc: str | None = None,
 ) -> dict[str, Any]:
-    """Agent tool: reply in-thread. Wraps :func:`email_ops.reply_email`.
-
-    Converts typed policy exceptions into the LLM-facing error dict.
-    """
+    """Reply to an existing email in-thread."""
+    deps = ctx.deps
     try:
         email = email_ops.reply_email(
-            connection,
-            account,
-            gmail_client,  # type: ignore[arg-type]
-            settings,
+            deps.connection,
+            deps.account,
+            deps.gmail_client,
+            deps.settings,
             email_id=email_id,
             body=body,
-            workflow_id=workflow_id,
+            workflow_id=deps.workflow_id,
             cc=cc,
             bcc=bcc,
         )
@@ -235,31 +237,14 @@ def _normalize_touch_context(
     return {**context, "touch": parsed}
 
 
-def create_task(  # noqa: PLR0913
-    connection: psycopg.Connection[dict[str, Any]],
-    enrollment_id: str,
-    workflow_id: str,
-    contact_id: str,
+def create_task(
+    ctx: RunContext[AgentDeps],
     description: str,
     scheduled_at: str,
     context: dict[str, Any] | None = None,
     email_id: str | None = None,
 ) -> dict[str, str]:
-    """Schedule deferred work for later execution.
-
-    Args:
-        connection: Open database connection.
-        enrollment_id: Current enrollment FK (NOT NULL).
-        workflow_id: Current workflow FK (denormalised from enrollment).
-        contact_id: Contact this task targets (denormalised from enrollment).
-        description: What the agent should do when the task runs.
-        scheduled_at: When to execute (ISO 8601 timestamp, strictly future).
-        context: Arbitrary JSON context for the agent on re-invocation.
-        email_id: Optional triggering email for focused context.
-
-    Returns:
-        Dict with created task ID, or an error dict when scheduled_at is past.
-    """
+    """Schedule deferred work for the current contact."""
     # Reject a past-dated schedule at the agent boundary so no already-due task
     # row is ever persisted (§V.129). The guard sits here, not in
     # database.create_task, so the system-computed enrollment_schedule
@@ -267,11 +252,12 @@ def create_task(  # noqa: PLR0913
     timestamp_error = _reject_past_timestamp(scheduled_at, field="scheduled_at")
     if timestamp_error is not None:
         return timestamp_error
+    deps = ctx.deps
     task = database.create_task(
-        connection,
-        enrollment_id=enrollment_id,
-        workflow_id=workflow_id,
-        contact_id=contact_id,
+        deps.connection,
+        enrollment_id=deps.enrollment_id,
+        workflow_id=deps.workflow_id,
+        contact_id=deps.contact_id,
         description=description,
         scheduled_at=scheduled_at,
         context=_normalize_touch_context(context),
@@ -281,22 +267,11 @@ def create_task(  # noqa: PLR0913
 
 
 def cancel_task(
-    connection: psycopg.Connection[dict[str, Any]],
+    ctx: RunContext[AgentDeps],
     task_id: str,
 ) -> dict[str, str]:
-    """Cancel a pending task.
-
-    Use when a previously scheduled follow-up is no longer needed (e.g.,
-    the contact replied before the follow-up was due).
-
-    Args:
-        connection: Open database connection.
-        task_id: Task ID to cancel.
-
-    Returns:
-        Dict with cancelled task ID and status, or error if not found/not pending.
-    """
-    task = database.cancel_task(connection, task_id)
+    """Cancel a pending task."""
+    task = database.cancel_task(ctx.deps.connection, task_id)
     if task is None:
         return {
             "error": "not_found",
@@ -322,52 +297,31 @@ _RESCHEDULE_DEFAULT_DAYS = 90
 
 
 def conclude_enrollment(
-    connection: psycopg.Connection[dict[str, Any]],
-    enrollment_id: str,
+    ctx: RunContext[AgentDeps],
     disposition: str,
     note: str,
     reschedule_at: str | None = None,
 ) -> dict[str, Any]:
     """Conclude the current enrollment with one terminal disposition.
 
-    The agent picks one ``disposition`` and writes a ``note``; the system runs
-    the deterministic side effects so a cheap model faces one decision, not
-    several tool calls. Every disposition records an enrollment outcome on the
-    timeline and cancels the enrollment's pending future follow-up tasks (the
-    operator first-touch preserved), then:
+    `disposition` is one of meeting_booked, do_not_contact, contact_later.
+    The system records the outcome, cancels pending follow-ups, and -- per
+    disposition -- disables the contact or schedules a re-enrollment, then
+    writes a note. This is a terminal action that satisfies the send
+    obligation, like noop.
 
-        - ``meeting_booked`` -- records a completed outcome and writes a note
-          (the "I booked" reply path, distinct from calendar detection).
-        - ``do_not_contact`` -- records a failed outcome, sets a global block on
-          the contact, and writes a note. Use for opt-out, wrong person, retired
-          / left-the-company auto-replies (including past-tense last-day
-          auto-replies), and address-change / "update your
-          records" / hard email-redirect auto-replies: stop touches to the
-          enrolled address even if From uses a different local-part; put the
-          redirect, referral addresses, named successors without emails, and
-          the new email (when present) in the note; never enroll the From
-          alias or any new address. Out-of-office auto-replies are NOT this
-          path -- use noop. A past last-day auto-reply is left-company, not
-          out-of-office.
-        - ``contact_later`` -- records a failed outcome and schedules a
-          re-enrollment first-touch task at ``reschedule_at`` (about three
-          months out when omitted), then writes a note.
-
-    Args:
-        connection: Open database connection.
-        enrollment_id: Current enrollment ID (from deps, not the LLM).
-        disposition: One of meeting_booked, do_not_contact, contact_later.
-        note: The agent's explanation, written to the outcome activity and a
-            contact note. For address-change, include the redirect and new
-            email when the inbound message states one.
-        reschedule_at: ISO 8601 timestamp for the contact_later re-enrollment
-            touch; defaults to about three months out when omitted.
-
-    Returns:
-        Dict echoing the disposition and recorded outcome (plus the resolved
-        reschedule_at for contact_later), or an error dict on a bad disposition
-        or a missing enrollment.
+    Use do_not_contact for opt-out, wrong person, retired / left-the-company
+    auto-replies (including past-tense last-day auto-replies), and
+    address-change / "update your records" / hard
+    email-redirect auto-replies: stop touches to the enrolled address even
+    if From uses a different local-part; put the redirect, referral
+    addresses, named successors without emails, and the new email (when
+    present) in `note`; never enroll the From alias or any new address.
+    Out-of-office auto-replies are not this path -- call noop instead. A
+    past last-day auto-reply is left-company, not out-of-office.
     """
+    connection = ctx.deps.connection
+    enrollment_id = ctx.deps.enrollment_id
     if disposition not in _CONCLUDE_DISPOSITIONS:
         return {
             "error": "invalid_disposition",
@@ -436,116 +390,64 @@ def conclude_enrollment(
 
 
 def disable_contact(
-    connection: psycopg.Connection[dict[str, Any]],
-    contact_id: str,
+    ctx: RunContext[AgentDeps],
     reason: str,
 ) -> dict[str, str]:
-    """Set a global block on a contact.
+    """Set a global block on the current contact.
 
-    Hard block across all workflows. ``send_email`` and ``reply_email``
-    refuse contacts whose ``disabled_reason`` is non-null. The reason
-    string is stored verbatim; convention is ``"bounced: <detail>"`` or
-    ``"unsubscribed: <detail>"``.
-
-    Args:
-        connection: Open database connection.
-        contact_id: Contact ID.
-        reason: Explanation written to ``contact.disabled_reason``.
-
-    Returns:
-        Dict with updated contact ID and disabled_reason, or error if not found.
+    `reason` is stored verbatim in `contact.disabled_reason`. Convention:
+    prefix with `"bounced: "` or `"unsubscribed: "` so the operator can
+    grep the source class. Once set, `send_email` and `reply_email`
+    refuse this contact across every workflow.
     """
-    updated = database.disable_contact(connection, contact_id, reason=reason)
+    contact_id = ctx.deps.contact_id
+    updated = database.disable_contact(ctx.deps.connection, contact_id, reason=reason)
     if updated is None:
         return {"error": "not_found", "message": f"contact not found: {contact_id}"}
     return {"id": updated.id, "disabled_reason": updated.disabled_reason or ""}
 
 
 def list_enrollments(
-    connection: psycopg.Connection[dict[str, Any]],
-    workflow_id: str,
+    ctx: RunContext[AgentDeps],
 ) -> list[dict[str, Any]]:
-    """List enrollments in a workflow with their latest outcome.
-
-    Lets the agent coordinate across contacts (e.g., skip person B if
-    person A at the same company already achieved the goal). Each
-    row includes ``latest_outcome`` (``completed`` / ``failed`` / ``None``),
-    ``latest_outcome_reason``, and ``latest_outcome_at`` -- pulled from the
-    activity timeline since outcomes are timeline-only.
-
-    Args:
-        connection: Open database connection.
-        workflow_id: Workflow ID.
-
-    Returns:
-        List of enrollment records with operational status and the latest
-        outcome activity, if any.
-    """
-    enrollments = database.list_enrollments_with_outcomes(connection, workflow_id)
+    """List enrollments in the current workflow with their outcome status."""
+    enrollments = database.list_enrollments_with_outcomes(
+        ctx.deps.connection, ctx.deps.workflow_id
+    )
     return [e.model_dump(mode="json") for e in enrollments]
 
 
 def search_emails(
-    connection: psycopg.Connection[dict[str, Any]],
-    account_id: str,
+    ctx: RunContext[AgentDeps],
     query: str,
 ) -> list[dict[str, Any]]:
-    """Search email history for the current account.
-
-    Args:
-        connection: Open database connection.
-        account_id: Account to scope search to.
-        query: Search term matched against subject and body.
-
-    Returns:
-        List of matching email summaries.
-    """
-    emails = database.search_emails(connection, query, account_id=account_id)
+    """Search email history for the current account."""
+    emails = database.search_emails(
+        ctx.deps.connection, query, account_id=ctx.deps.account.id
+    )
     return [e.model_dump() for e in emails]
 
 
 def read_email(
-    connection: psycopg.Connection[dict[str, Any]],
-    account_id: str,
+    ctx: RunContext[AgentDeps],
     email_id: str,
 ) -> dict[str, Any] | None:
-    """Read a specific email by ID to view its full content, including body text.
-
-    Args:
-        connection: Open database connection.
-        account_id: Account the agent is scoped to. Emails belonging to other
-            accounts are not visible (returns None) -- prevents cross-tenant
-            data leaks via prompt injection in inbound message bodies.
-        email_id: The ID of the email to read.
-
-    Returns:
-        Full email details including body text, or None if not found or the
-        email belongs to a different account.
-    """
-    email = database.get_email(connection, email_id)
-    if email is None or email.account_id != account_id:
+    """Read full email content (including body text) by ID."""
+    email = database.get_email(ctx.deps.connection, email_id)
+    if email is None or email.account_id != ctx.deps.account.id:
         return None
     return email.model_dump()
 
 
 def list_drive_markdown(
-    drive_client: DriveClient,
+    ctx: RunContext[AgentDeps],
     folder_id: str,
 ) -> list[dict[str, str]] | dict[str, str]:
-    """List Markdown files in a Drive folder for KB grounding.
-
-    Args:
-        drive_client: Drive client scoped to the current account.
-        folder_id: Drive folder ID supplied via the workflow instructions.
-
-    Returns:
-        List of ``{"file_id": ..., "name": ...}`` on success, or an error
-        dict ``{"error": ..., "message": ...}`` on Drive failure.
-    """
+    """List Markdown files in a Drive folder for KB grounding."""
     from googleapiclient.errors import HttpError
 
     try:
-        return drive_client.list_markdown(folder_id)
+        return ctx.deps.drive_client.list_markdown(folder_id)
     except HttpError as exc:
         if exc.resp.status == 404:
             return {
@@ -567,31 +469,15 @@ def list_drive_markdown(
 
 
 def search_drive_markdown(
-    drive_client: DriveClient,
+    ctx: RunContext[AgentDeps],
     folder_id: str,
     query: str,
 ) -> list[dict[str, str]] | dict[str, str]:
-    """Full-text search Markdown files in the workflow's KB Drive folder.
-
-    Prefer this over ``list_drive_markdown`` when the folder may contain
-    many documents -- it lets you target the most relevant file without
-    enumerating every KB entry.
-
-    Args:
-        drive_client: Drive client scoped to the current account.
-        folder_id: Drive folder ID supplied via the workflow instructions.
-        query: Free-text search query. Drive matches against file content
-            and metadata. Results returned in Drive's native relevance order.
-
-    Returns:
-        List of ``{"file_id": ..., "name": ...}`` on success (empty list
-        when nothing matches), or an error dict ``{"error": ...,
-        "message": ...}`` on Drive failure.
-    """
+    """Full-text search Markdown files in a Drive folder."""
     from googleapiclient.errors import HttpError
 
     try:
-        return drive_client.search_markdown(folder_id, query)
+        return ctx.deps.drive_client.search_markdown(folder_id, query)
     except HttpError as exc:
         if exc.resp.status == 404:
             return {
@@ -611,23 +497,14 @@ def search_drive_markdown(
 
 
 def read_drive_markdown(
-    drive_client: DriveClient,
+    ctx: RunContext[AgentDeps],
     file_id: str,
 ) -> dict[str, str]:
-    """Read a Markdown file from Drive.
-
-    Args:
-        drive_client: Drive client scoped to the current account.
-        file_id: Drive file ID, typically returned by ``list_drive_markdown``.
-
-    Returns:
-        ``{"name": ..., "content": ..., "web_view_link": ...}`` on success,
-        or ``{"error": ..., "message": ...}`` on Drive failure.
-    """
+    """Read a Markdown file from Drive."""
     from googleapiclient.errors import HttpError
 
     try:
-        result = drive_client.read_markdown(file_id)
+        result = ctx.deps.drive_client.read_markdown(file_id)
     except HttpError as exc:
         if exc.resp.status == 404:
             return {
@@ -650,20 +527,15 @@ def read_drive_markdown(
     return result
 
 
-def noop(reason: str) -> dict[str, Any]:
+def noop(ctx: RunContext[AgentDeps], reason: str) -> dict[str, Any]:
     """Explicitly decline to act.
 
     Call this tool when, after reviewing context, no action is appropriate.
     You must still call a tool every turn -- noop is the explicit "do nothing"
     signal. Typical case: out-of-office or temporary absence auto-reply
-    (pause once; leave the enrollment open; do not conclude). Address-change,
+    (pause once; leave enrollment open; do not conclude). Address-change,
     last-day-was, retired, and left-company auto-replies are not noop -- use
     conclude_enrollment with do_not_contact instead.
-
-    Args:
-        reason: Why no action is needed.
-
-    Returns:
-        Acknowledgement dict.
     """
+    del ctx
     return {"acknowledged": True, "reason": reason}
