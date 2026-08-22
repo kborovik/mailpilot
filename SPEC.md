@@ -105,15 +105,15 @@ V33: enrollment self-loop rejected — contact.email == workflow account email, 
 V34: every Drive call carries Shared-Drive flags — corpora="allDrives", supportsAllDrives=True, includeItemsFromAllDrives=True
 V35: Drive KB isolation = per-account DWD; markdown + trashed=false; UTF-8 replace — → .spec/check-extras.md §V35
 V37: auth = service account + domain-wide delegation; JSON `google_application_credentials` → `from_service_account_info` + with_subject; null → ADC iam.Signer; no file-path; no OAuth — → .spec/check-extras.md §V37
-V38: Drive tools sequential=True; transport faults → structured drive_unavailable dict, never bare raise — → .spec/check-extras.md §V38
-V39: agent tool failure -> error dict {error, message}, never exception to agent; agent re-drafts via tool-error path
+V38: Drive tools sequential=True; one `_drive_call` covers HttpError 404 + TimeoutError/OSError → structured not_found|drive_unavailable dict, never bare raise — → .spec/check-extras.md §V38
+V39: agent tool failure -> error dict {error, message}, never exception to agent; agent re-drafts via tool-error path; send_email + reply_email share `_email_tool_result` ({id, gmail_message_id, gmail_thread_id} or error dict + `_mark_reply_emitted`)
 V40: protocol fragment naming tools ! name >= 2 distinct tools, never exactly 1
 V41: KB grounding rules live in the workflow def `instructions` field (§V.103), never a code-defined template protocol fragment — → .spec/check-extras.md §V41
 V42: agent-facing text bans Markdown/pipe tables (lists only); drop `_check_spec_table` — → .spec/check-extras.md §V42
 V44: agent shape owned by code-defined template registry; workflow.template + type immutable post-create, type derived from template — → .spec/check-extras.md §V44
 V45: protocol compose order tool-loop; compose-only touch §V.136; deferred §V.31 direction-only (`build_protocol()` no trigger); zero SPEC cites agent-facing — → .spec/check-extras.md §V45
 V46: template name = <direction>-<data-system>; prefix == direction field
-V47: provider-aware model config — llm_provider dispatches `_build_model`; Anthropic cache/thinking/effort; xAI reasoning_effort; enums validated; missing key skip-drain that tick (process stays up); error names `config set` not `MAILPILOT_*_API_KEY` — → .spec/check-extras.md §V47
+V47: provider-aware model config — llm_provider dispatches `build_model` (public); `require_active_provider_key` once at `build_model` (not inner anthropic/xai builders); Anthropic cache/thinking/effort; xAI reasoning_effort; enums validated; missing key skip-drain that tick (process stays up); error names `config set` not `MAILPILOT_*_API_KEY` — → .spec/check-extras.md §V47
 V48: provider transport timeout = 240s terminal (Anthropic HTTP + xAI `XaiProvider`); mid-turn tool side-effects → retry unsafe — → .spec/check-extras.md §V48
 V49: bounded auto-retry — 4 attempts, execute_task per-task classification, manual retry = failed/cancelled only; schedule → §V.170 — retry matrix → .spec/check-extras.md §V49
 V51: every logfire.exception site reachable from `mailpilot run` ! paired operator_event("error", source=..., message=...); contract test sweeps run-reachable modules; → .spec/check-extras.md §V51
@@ -233,6 +233,7 @@ V179: last-day-past left-company — active outbound + auto-reply past-tense las
 V180: task-filter-stack-share — `task list|cancel|retry` share `@task_scope_options`; one `_task_filter_mode` XOR; cancel vs retry required-filter + status stay distinct (§V.173, §V.175) — → .spec/check-extras.md §V180
 V181: app-config-db — `app_config` id='singleton'; typed cols every Settings field except `database_url` + derived pubsub; `config get|set` on row; JSONB creds or ADC — → .spec/check-extras.md §V181
 V182: agent-tool-registration — `tools.py` fns take `RunContext[AgentDeps]` (or one unpack decorator); `AgentDeps` not imported from invoke (lives w/ tools or cycle-free module); `Tool(fn)` registered from tools.py; no `_wrap_*`; templates import tools not invoke; invoke top-level `TEMPLATES`; no lazy `__init__` trampoline; JSON names + return dicts unchanged
+V183: email-history-prefeed — invoke_workflow_agent loads enrollment-scoped history one query (full Email `body_text`, not `list_emails` + N `get_email`); `_format_email_history` caps already-loaded body 500; `read_email` stays for `search_emails` hits outside this enrollment (§V.87); trigger body still excluded per §V.29 — → .spec/check-extras.md §V183
 
 ## §T TASKS
 
@@ -289,6 +290,7 @@ T311|x|impl §V.181 — `app_config` singleton; two-phase load; no config.json; 
 T312|x|impl §V.177(∆)+§V.181(∆) — `_db(mutate=True)` success commits before close; `config set` round-trip on new connection; CliRunner test|V177,V181,B148,I.config
 T313|x|impl §V.102 — drop `search_tool` from mailpilot-prompt-audit SKILL.md allowed-tools (orchestrator never invokes)|V102,B149
 T314|x|impl §V.182(+) + §V.45(∆) + §V.136(∆) + §C/§I — tools take RunContext[AgentDeps]; AgentDeps not from invoke; Tool(fn) from tools.py; drop `_wrap_*`; invoke top-level TEMPLATES; drop lazy `__init__` trampoline; drop `build_protocol` trigger; Drive+AgentDeps tool-loop only; JSON names+return dicts unchanged; existing invoke+template tests (#261)|V182,V45,V136,V39,V44,V81
+T315|.|impl §V.183(+) + §V.38(∆) + §V.39(∆) + §V.47(∆) — one-query enrollment email history (full body_text, prompt cap 500); read_email search-outside only; `_email_tool_result`; `_drive_call`; `build_model` public + require_active_provider_key once; existing invoke/tools/model tests (#262)|V183,V38,V39,V47,V82,V87,V29
 
 ## §B BUGS
 
