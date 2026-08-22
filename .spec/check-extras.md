@@ -825,6 +825,8 @@ Touch-level + execution slices (additive; still enrollment grain where applicabl
 
 Disposition persistence: `record_enrollment_outcome` writes `detail.disposition` in {meeting_booked, do_not_contact, contact_later} from `conclude_enrollment.disposition` (§V.127) + booking-conclusion `meeting_booked` (§V.128). JSONB key, no migration. Pre-change failed rows lack disposition (legacy gap; forward campaigns are exact).
 
+Takes already-loaded `Workflow` (no inner `get_workflow`); callers share stack §V.184.
+
 Trigger: `src/mailpilot/database.py` or `src/mailpilot/cli.py` changed.
 - `rg 'workflow_stats\b' src/mailpilot/database.py` -> aggregate fn present
 - `rg 'meeting_booked\|contact_later\|do_not_contact' src/mailpilot/database.py | grep stats` -> disposition stages
@@ -991,7 +993,7 @@ Trigger: enrollment list/view projection changed.
 
 ## §V153 — workflow report composite
 
-workflow report — pure-SQL composite `workflow report <ref>`: meta + funnel (§V.132) + task aggregate (§V.133) + enrollment matrix (§V.152); filters `--stuck` (§V.155) / `--touch` / `--status`; envelope `{workflow_report}`; no LLM, no CRM write
+workflow report — pure-SQL composite `workflow report <ref>`: meta + funnel (§V.132) + task aggregate (§V.133) + enrollment matrix (§V.152); filters `--stuck` (§V.155) / `--touch` / `--status`; envelope `{workflow_report}`; no LLM, no CRM write; fetch workflow once then call stats (§V.184)
 
 Trigger: workflow report path changed.
 - `rg 'workflow_report|def .*workflow_report' src/mailpilot/` -> composite report surface
@@ -1019,7 +1021,7 @@ Trigger: CLI format output path changed.
 
 ## §V157 — workflow status ops-health
 
-workflow status ops-health — `workflow status <ref>`: meta + wording (§V.134) + run_loop heartbeat + overdue_tasks + failed_tasks_24h + enrollments_never_sent + optional funnel_active; envelope `{workflow_status}`; not funnel (funnel stays stats/report); no LLM
+workflow status ops-health — `workflow status <ref>`: meta + wording via `check_workflow_wording` (§V.134; never hardcoded `"unknown"`) + run_loop heartbeat + overdue_tasks + failed_tasks_24h + enrollments_never_sent + optional funnel_active; envelope `{workflow_status}`; not funnel (funnel stays stats/report); no LLM; fetch workflow once then call stats (§V.184)
 
 Trigger: workflow status path changed.
 - `rg 'workflow_status|overdue_tasks|enrollments_never_sent' src/mailpilot/` -> ops-health envelope
@@ -1193,7 +1195,7 @@ Trigger: `task cancel` / `task list` path changed.
 
 ## §V174 — workflow-review
 
-`workflow review <slug|all> --since ISO --until ISO` dated one-envelope collect (both ISO ! else `validation_error`). slug = one name|UUID (§V.107); `all` = every active. Payload ! funnel (§V.132) + task counts {failed,overdue,pending} + window emails w/ snippet (§V.7) + window activities incl. inbound email_received w/ snippet + failed tasks w/ contact_email + result.reason (§V.172) + enrollments ! cap below live enrolled count. Envelope `{"workflow_review":{...},"ok":true}`; record_count = review count. No LLM. No CRM write.
+`workflow review <slug|all> --since ISO --until ISO` dated one-envelope collect (both ISO ! else `validation_error`). slug = one name|UUID (§V.107); `all` = every active (`list_active_workflows` SQL `WHERE status = 'active'`, not Python filter of `list_workflows_full`). Payload ! funnel (§V.132) + task counts {failed,overdue,pending} + window emails w/ snippet (§V.7, via `list_emails`; `_review_window_emails` absent) + window activities incl. inbound email_received w/ snippet + failed tasks w/ contact_email + result.reason (§V.172) + enrollments ! cap below live enrolled count. Envelope `{"workflow_review":{...},"ok":true}`; record_count = review count. No LLM. No CRM write. Fetch workflow once then call stats (§V.184).
 
 Trigger: `workflow review` path changed.
 - `rg 'get_workflow_review|workflow_review' src/mailpilot/` -> collect surface present
@@ -1420,3 +1422,17 @@ Trigger: `src/mailpilot/agent/invoke.py` or `src/mailpilot/database.py` email li
 - `rg 'get_email\(connection, s.id\)' src/mailpilot/agent/invoke.py` -> zero hits
 - `rg 'body_text\[:500\]' src/mailpilot/agent/invoke.py` -> cap on already-loaded body
 - `rg 'read_email' src/mailpilot/agent/templates.py` -> still bound
+
+## §V184 — campaign query stack
+
+campaign-query-stack — `get_workflow_stats` takes already-loaded `Workflow` (no inner `get_workflow`); `get_workflow_report` / `get_workflow_status_health` / `_review_one_workflow` fetch workflow once then call stats; one `_sql_outbound_sent_count(e)` Composed fragment reused by stats funnel+touch, enrollment `--full` `emails_sent`, `count_outbound_sent`; `--full` `emails_sent AS last_touch` keeps JSON key (same count, two aliases); `_review_window_emails` absent — review window emails via `list_emails` (§V.178); `list_active_workflows` `WHERE status = 'active'` not Python filter of `list_workflows_full`; status `wording` via `check_workflow_wording` never hardcoded `"unknown"`; CLI verbs {stats,report,status,review} + envelope keys {workflow_stats,workflow_report,workflow_status,workflow_review} unchanged. Distinct from §V.178 (company/email/workflow/tag SELECT share).
+
+Trigger: `src/mailpilot/database.py` campaign stack changed.
+- `rg 'def get_workflow_stats' -A 12 src/mailpilot/database.py` -> takes Workflow not workflow_id fetch
+- `rg 'def _sql_outbound_sent_count' src/mailpilot/database.py` -> fragment present
+- `rg 'AS last_touch' src/mailpilot/database.py` -> alias keeps JSON key
+- `rg 'def _review_window_emails' src/mailpilot/` -> zero hits
+- `rg 'def list_active_workflows' -A 20 src/mailpilot/database.py` -> SQL WHERE status active
+- `rg 'wording=.unknown.|wording="unknown"' src/mailpilot/` -> zero hits
+- `rg 'check_workflow_wording' src/mailpilot/database.py` -> status health wires check
+- `rg '"workflow_stats"|"workflow_report"|"workflow_status"|"workflow_review"' src/mailpilot/cli.py` -> envelope keys stay
