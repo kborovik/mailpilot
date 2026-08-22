@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any, NoReturn
 from unittest.mock import MagicMock, patch
 
+import psycopg
 import pytest
 from click.testing import CliRunner
 
@@ -227,21 +228,25 @@ def test_record_count_single_entity_envelope(
     assert data["record_count"] == 1
 
 
-def test_config_get_projects_environment_and_derived(runner: CliRunner) -> None:
+def test_config_get_projects_environment_and_derived(
+    runner: CliRunner,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
     """§V.176: config get projects environment + resolved topic/sub only."""
-    with patch(
-        "mailpilot.settings.get_settings",
-        return_value=make_test_settings(environment="prd"),
-    ):
-        result = runner.invoke(main, ["config", "get"])
+    from mailpilot.settings import set_setting
 
-    assert result.exit_code == 0
+    set_setting(database_connection, "environment", "prd")
+    database_connection.commit()
+    result = runner.invoke(main, ["config", "get"])
+
+    assert result.exit_code == 0, result.output
     data = json.loads(result.output)
     config = data["config"]
     assert config["environment"] == "prd"
     assert "logfire_environment" not in config
     assert config["google_pubsub_topic"] == "mailpilot-topic-prd"
     assert config["google_pubsub_subscription"] == "mailpilot-sub-prd"
+    assert config["google_application_credentials"] is None
 
 
 @pytest.mark.parametrize(
@@ -257,22 +262,67 @@ def test_config_set_derived_key_invalid(runner: CliRunner, key: str) -> None:
     assert data["error"] == "invalid_key"
 
 
-def test_config_get_derived_key(runner: CliRunner) -> None:
-    """§V.176: config get of a derived pubsub key returns the resolved value."""
-    with patch(
-        "mailpilot.settings.get_settings",
-        return_value=make_test_settings(environment="dev"),
-    ):
-        result = runner.invoke(main, ["config", "get", "google_pubsub_topic"])
+def test_config_set_database_url_invalid(runner: CliRunner) -> None:
+    """§V.181: config set database_url returns invalid_key."""
+    result = runner.invoke(
+        main, ["config", "set", "database_url", "postgresql://other/db"]
+    )
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "invalid_key"
 
-    assert result.exit_code == 0
+
+def test_config_set_invalid_credentials_json(runner: CliRunner) -> None:
+    """§V.181: invalid JSON for google_application_credentials → validation_error."""
+    result = runner.invoke(
+        main, ["config", "set", "google_application_credentials", "not-json"]
+    )
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "validation_error"
+
+
+def test_config_set_persists_on_new_connection(
+    runner: CliRunner,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.181 / §V.177 / §B.148: config set is visible on a new connection."""
+    del database_connection
+    set_result = runner.invoke(main, ["config", "set", "environment", "prd"])
+    assert set_result.exit_code == 0, set_result.output
+    set_data = json.loads(set_result.output)
+    assert set_data["ok"] is True
+    assert set_data["key"] == "environment"
+    assert set_data["value"] == "prd"
+
+    get_result = runner.invoke(main, ["config", "get", "environment"])
+    assert get_result.exit_code == 0, get_result.output
+    get_data = json.loads(get_result.output)
+    assert get_data["value"] == "prd"
+
+
+def test_config_get_derived_key(
+    runner: CliRunner,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.176: config get of a derived pubsub key returns the resolved value."""
+    del database_connection
+    result = runner.invoke(main, ["config", "get", "google_pubsub_topic"])
+
+    assert result.exit_code == 0, result.output
     data = json.loads(result.output)
     assert data["key"] == "google_pubsub_topic"
     assert data["value"] == "mailpilot-topic-dev"
 
 
-def test_config_get_logfire_environment_invalid_key(runner: CliRunner) -> None:
+def test_config_get_logfire_environment_invalid_key(
+    runner: CliRunner,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
     """§V.176 / §V.52: logfire_environment is not a config get key."""
+    del database_connection
     result = runner.invoke(main, ["config", "get", "logfire_environment"])
     assert result.exit_code == 1
     data = json.loads(result.output)
@@ -280,13 +330,16 @@ def test_config_get_logfire_environment_invalid_key(runner: CliRunner) -> None:
     assert data["error"] == "invalid_key"
 
 
-def test_record_count_multi_key_payload_is_one(runner: CliRunner) -> None:
+def test_record_count_multi_key_payload_is_one(
+    runner: CliRunner,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
     """Multi-key payload (config get KEY) counts as one record, never a list
     value's len (§V.4)."""
-    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
-        result = runner.invoke(main, ["config", "get", "run_interval"])
+    del database_connection
+    result = runner.invoke(main, ["config", "get", "run_interval"])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     data = json.loads(result.output)
     assert data["record_count"] == 1
 

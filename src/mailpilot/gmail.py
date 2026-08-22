@@ -2,16 +2,18 @@
 
 Authentication: service account credentials resolved in this order --
 
-1. ``google_application_credentials`` setting (path to JSON key file)
-2. ``GOOGLE_APPLICATION_CREDENTIALS`` env var (path to JSON key file)
-3. Application Default Credentials (ADC) -- e.g. the GCE instance
-   service account, discovered via the metadata server. DWD impersonation
-   is then performed by signing JWT assertions remotely via the IAM
-   Credentials API (no local private key required).
+1. JSONB ``google_application_credentials`` on ``app_config``
+   (``from_service_account_info`` + ``with_subject``)
+2. Application Default Credentials (ADC) when that column is null --
+   e.g. GCE metadata, Workload Identity, Cloud Run. DWD impersonation
+   signs JWT assertions via the IAM Credentials API.
 
-Per-account impersonation via ``with_subject(email)`` for file-based
-credentials, or via ``service_account.Credentials(subject=email)`` over
-an ``iam.Signer`` for ADC-based credentials.
+``GOOGLE_APPLICATION_CREDENTIALS`` is not a mailpilot settings source
+(ADC may still consult it internally). No file-path setting.
+
+Per-account impersonation via ``with_subject(email)`` for JSON creds,
+or via ``service_account.Credentials(subject=email)`` over an
+``iam.Signer`` for ADC-based credentials.
 
 Required IAM in ADC mode: the active service account must hold
 ``roles/iam.serviceAccountTokenCreator`` on itself so it can sign JWTs
@@ -122,32 +124,30 @@ def _retry_on_transient(func: Any) -> Any:
     return wrapper
 
 
-def _credential_file_path() -> str:
-    """Return configured service account JSON path, or "" if none set.
+def _google_sa_info(settings: Any | None = None) -> dict[str, Any] | None:
+    """Return the JSONB service-account document, or None for ADC.
 
-    Reads ``google_application_credentials`` from settings first, then
-    falls back to the ``GOOGLE_APPLICATION_CREDENTIALS`` env var. An
-    empty return value signals to fall through to Application Default
-    Credentials (ADC).
+    ``GOOGLE_APPLICATION_CREDENTIALS`` is not read here; ADC may still
+    consult it inside ``google.auth.default``.
     """
-    import os
+    if settings is None:
+        from mailpilot.settings import get_settings
 
-    from mailpilot.settings import get_settings
+        settings = get_settings()
+    info = settings.google_application_credentials
+    if not info:
+        return None
+    return info
 
-    path = get_settings().google_application_credentials
-    if not path:
-        path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
-    return path
 
-
-def has_google_credentials() -> bool:
+def has_google_credentials(settings: Any | None = None) -> bool:
     """True if any Google credential source is reachable.
 
-    Checks the configured key-file path first, then probes ADC. Used by
-    the sync loop to gate Pub/Sub subscriber startup and watch renewal
-    so dev runs without GCP skip those branches.
+    Checks the JSONB service-account document first, then probes ADC.
+    Used by the sync loop to gate Pub/Sub subscriber startup and watch
+    renewal so dev runs without GCP skip those branches.
     """
-    if _credential_file_path():
+    if _google_sa_info(settings):
         return True
     from google.auth import default
     from google.auth.exceptions import DefaultCredentialsError
@@ -175,17 +175,20 @@ def _adc_service_account_email(source_credentials: Any) -> str:
     return sa_email
 
 
-def build_delegated_credentials(scopes: list[str], subject: str) -> Any:
+def build_delegated_credentials(
+    scopes: list[str], subject: str, settings: Any | None = None
+) -> Any:
     """Build a service-account credential impersonating ``subject``.
 
-    Uses a local key file when one is configured; otherwise falls back
-    to ADC plus the IAM Credentials API for remote JWT signing. Both
+    Uses the JSONB service-account document when present; otherwise falls
+    back to ADC plus the IAM Credentials API for remote JWT signing. Both
     paths return a credential that performs domain-wide delegation for
     ``subject`` over ``scopes``.
 
     Args:
         scopes: OAuth scopes the returned credential is good for.
         subject: User email address to impersonate via DWD.
+        settings: Optional settings snapshot; loaded if omitted.
 
     Returns:
         A google-auth credential ready for the googleapiclient
@@ -193,13 +196,13 @@ def build_delegated_credentials(scopes: list[str], subject: str) -> Any:
     """
     from google.oauth2.service_account import Credentials
 
-    path = _credential_file_path()
-    if path:
-        file_credentials = Credentials.from_service_account_file(  # type: ignore[no-untyped-call]
-            path,
+    info = _google_sa_info(settings)
+    if info:
+        json_credentials = Credentials.from_service_account_info(  # type: ignore[no-untyped-call]
+            info,
             scopes=scopes,
         )
-        return file_credentials.with_subject(subject)
+        return json_credentials.with_subject(subject)
 
     from google.auth import default, iam
     from google.auth.transport.requests import Request
@@ -218,23 +221,24 @@ def build_delegated_credentials(scopes: list[str], subject: str) -> Any:
     )
 
 
-def build_default_credentials(scopes: list[str]) -> Any:
+def build_default_credentials(scopes: list[str], settings: Any | None = None) -> Any:
     """Build credentials for non-impersonated calls (e.g. Pub/Sub).
 
-    Uses the configured service account JSON file when present;
-    otherwise falls back to Application Default Credentials. Pinning to
-    one source avoids the gcloud-user-login trap where an expired user
-    token can send Pub/Sub into a 600-second gRPC retry loop.
+    Uses the JSONB service-account document when present; otherwise falls
+    back to Application Default Credentials. Pinning to one source avoids
+    the gcloud-user-login trap where an expired user token can send
+    Pub/Sub into a 600-second gRPC retry loop.
 
     Args:
         scopes: OAuth scopes the returned credential is good for.
+        settings: Optional settings snapshot; loaded if omitted.
     """
-    path = _credential_file_path()
-    if path:
+    info = _google_sa_info(settings)
+    if info:
         from google.oauth2.service_account import Credentials
 
-        return Credentials.from_service_account_file(  # type: ignore[no-untyped-call]
-            path,
+        return Credentials.from_service_account_info(  # type: ignore[no-untyped-call]
+            info,
             scopes=scopes,
         )
 
@@ -244,24 +248,21 @@ def build_default_credentials(scopes: list[str]) -> Any:
     return credentials
 
 
-def resolve_project_id() -> str:
+def resolve_project_id(settings: Any | None = None) -> str:
     """Resolve the active GCP project ID.
 
-    Reads ``project_id`` from the configured key file when present;
-    otherwise asks ADC for the project bound to the active credentials.
+    Reads ``project_id`` from the JSONB service-account document when
+    present; otherwise asks ADC for the project bound to the active
+    credentials.
 
     Raises:
         SystemExit: If neither source yields a project ID.
     """
-    import json
-
-    path = _credential_file_path()
-    if path:
-        with open(path) as f:
-            data: dict[str, Any] = json.load(f)
-        project_id = data.get("project_id")
+    info = _google_sa_info(settings)
+    if info:
+        project_id = info.get("project_id")
         if not project_id:
-            raise SystemExit(f"No project_id found in {path}")
+            raise SystemExit("No project_id found in google_application_credentials")
         return project_id
 
     from google.auth import default
@@ -271,8 +272,9 @@ def resolve_project_id() -> str:
         raise SystemExit(
             "Could not resolve GCP project_id from Application Default "
             "Credentials -- set 'mailpilot config set "
-            "google_application_credentials /path/to/key.json' or run on "
-            "an instance whose metadata server reports a project."
+            "google_application_credentials' to a service-account JSON "
+            "object or run on an instance whose metadata server reports "
+            "a project."
         )
     return project_id
 

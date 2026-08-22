@@ -6,8 +6,6 @@ SHELL := /bin/bash
 .SHELLFLAGS := -euo pipefail -c
 MAKEFLAGS += --no-builtin-rules --no-builtin-variables
 export PATH := $(abspath .venv)/bin:/opt/homebrew/opt/postgresql@18/bin:$(PATH)
-DATA_DIR := $(HOME)/.mailpilot
-DOCUMENTS_DIR := $(HOME)/Documents/MailPilot
 
 default: .venv help
 
@@ -30,12 +28,6 @@ py-lint:
 	$(call header,Running Ruff lint)
 	uv run ruff check --fix
 
-db-backup: ## Back up tags, companies and contacts to ~/Documents/MailPilot/ (timestamped JSON snapshot)
-	$(eval TS := $(shell date +%Y%m%d-%H%M%S))
-	$(call header,Backing up the database snapshot to $(DOCUMENTS_DIR))
-	mkdir -p $(DOCUMENTS_DIR)
-	mailpilot db export --file $(DOCUMENTS_DIR)/snap-$(TS).json > /dev/null
-
 kill-run: ## Force-kill runaway mailpilot run processes (SIGTERM then SIGKILL)
 	$(call header,Force-killing mailpilot run processes)
 	pids=$$(pgrep -f 'mailpilot run' 2>/dev/null || true)
@@ -53,12 +45,26 @@ kill-run: ## Force-kill runaway mailpilot run processes (SIGTERM then SIGKILL)
 		echo "No mailpilot run processes found"
 	fi
 
-clean: kill-run db-backup ## Kill runaway run processes, back up data, re-create database
+clean: kill-run ## Kill runaway run processes, re-create database, restore missing config from pass
 	$(call header,Re-creating database)
 	dropdb --if-exists mailpilot
 	createdb mailpilot
 	dropdb --if-exists mailpilot_test
 	createdb mailpilot_test
+	$(call header,Restoring missing config from pass mailpilot/)
+	store="$${PASSWORD_STORE_DIR:-$$HOME/.password-store}/mailpilot"
+	if [[ ! -d "$$store" ]]; then
+		echo "pass mailpilot/ not found at $$store"
+	else
+		shopt -s nullglob
+		for gpg in "$$store"/*.gpg; do
+			key=$$(basename "$$gpg" .gpg)
+			if mailpilot config get "$$key" 2>/dev/null | python3 -c 'import json,sys; v=json.load(sys.stdin)["value"]; raise SystemExit(0 if v in (None, "", {}) else 1)'; then
+				echo "Setting $$key from pass mailpilot/$$key"
+				mailpilot config set "$$key" "$$(pass show "mailpilot/$$key")" > /dev/null
+			fi
+		done
+	fi
 	mailpilot status
 
 py-update:
@@ -81,12 +87,6 @@ uv.lock: pyproject.toml
 	.venv/
 	.env
 	EOF
-
-config-backup:
-	gpg -er E4AFCA7FBB19FC029D519A524AEBB5178D5E96C1 -o config.json.gpg ~/.mailpilot/config.json
-
-env-backup:
-	gpg --yes -er E4AFCA7FBB19FC029D519A524AEBB5178D5E96C1 -o .env.gpg .env
 
 ###############################################################################
 # Release

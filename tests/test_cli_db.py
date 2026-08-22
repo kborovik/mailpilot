@@ -89,3 +89,45 @@ def test_db_closes_connection_on_error() -> None:
     ):
         raise RuntimeError("boom")
     connection.close.assert_called_once_with()
+
+
+def test_db_mutate_true_commits_before_close() -> None:
+    """§V.177: mutate success commits before close."""
+    connection = MagicMock()
+    with (
+        patch("mailpilot.cli._database_url", return_value="postgresql://test"),
+        patch("mailpilot.database.initialize_database", return_value=connection),
+        _db(mutate=True),
+    ):
+        pass
+    connection.commit.assert_called_once_with()
+    connection.close.assert_called_once_with()
+    names = [item[0] for item in connection.method_calls]
+    assert names.index("commit") < names.index("close")
+
+
+def test_db_mutate_true_skips_commit_on_error() -> None:
+    """§V.177: exception / output_error skip commit so the txn rolls back."""
+    connection = MagicMock()
+    with (
+        patch("mailpilot.cli._database_url", return_value="postgresql://test"),
+        patch("mailpilot.database.initialize_database", return_value=connection),
+        pytest.raises(SystemExit),
+        _db(mutate=True),
+    ):
+        raise SystemExit(1)
+    connection.commit.assert_not_called()
+    connection.close.assert_called_once_with()
+
+
+def test_db_mutate_false_does_not_commit() -> None:
+    """§V.177: read-path `_db()` does not commit."""
+    connection = MagicMock()
+    with (
+        patch("mailpilot.cli._database_url", return_value="postgresql://test"),
+        patch("mailpilot.database.initialize_database", return_value=connection),
+        _db(),
+    ):
+        pass
+    connection.commit.assert_not_called()
+    connection.close.assert_called_once_with()

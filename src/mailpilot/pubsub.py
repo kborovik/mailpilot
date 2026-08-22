@@ -43,10 +43,9 @@ def _resolve_project_id(settings: Settings) -> str:
     Raises:
         SystemExit: If no project ID can be resolved from either source.
     """
-    del settings  # resolution is global, not per-Settings instance
     from mailpilot.gmail import resolve_project_id
 
-    return resolve_project_id()
+    return resolve_project_id(settings)
 
 
 def _load_credentials(settings: Settings) -> Any:
@@ -56,11 +55,9 @@ def _load_credentials(settings: Settings) -> Any:
     this module shares the configured-file-then-ADC fallback used by
     every other Google client in the codebase.
     """
-    del settings  # resolution is global; settings argument retained for symmetry
-
     from mailpilot.gmail import build_default_credentials
 
-    return build_default_credentials(_PUBSUB_SCOPES)
+    return build_default_credentials(_PUBSUB_SCOPES, settings)
 
 
 def _topic_path(project_id: str, settings: Settings) -> str:

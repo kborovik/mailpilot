@@ -60,22 +60,25 @@ MailPilot provisions the schema on first connection:
 createdb mailpilot
 ```
 
-Point MailPilot at the database:
+Point MailPilot at the database (optional; default is
+`postgresql://localhost/mailpilot`). The URL is bootstrap-only -- env
+`MAILPILOT_DATABASE_URL` or a cwd `.env` -- not `config set`:
 
 ```bash
-mailpilot config set database_url postgresql://localhost/mailpilot
+export MAILPILOT_DATABASE_URL=postgresql://localhost/mailpilot
 ```
 
-Set the Google service account credentials:
+Set the Google service account JSON (or omit for Application Default
+Credentials):
 
 ```bash
-mailpilot config set google_application_credentials /path/to/service-account.json
+mailpilot config set google_application_credentials "$(cat /path/to/service-account.json)"
 ```
 
-Set the Anthropic API key:
+Set the xAI API key (default provider):
 
 ```bash
-mailpilot config set anthropic_api_key sk-ant-...
+mailpilot config set xai_api_key xai-...
 ```
 
 Create the Gmail account MailPilot operates:

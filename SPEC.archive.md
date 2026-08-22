@@ -136,6 +136,24 @@ T242|x|impl §V.132(∆) + §I — workflow stats touch slices + awaiting_first_
 T243|x|impl §V.153(+) + §I — workflow report funnel+tasks+enrollment matrix + --stuck/--touch/--status; tests + SKILL (#202)|V153,V152,V132,V133,V155,V107,V4,I.cli
 T244|x|impl §V.154(+) + §I — activity list --workflow-id + required scope (contact|company|workflow); email list scope gate; tests + SKILL (#203)|V154,V17,V107,V115,V4,I.cli
 T245|x|impl §V.155(+) + §I — task list --overdue + enrollment/report --stuck heuristics; docs SLA; tests + SKILL (#204)|V155,V153,V152,V115,V4,I.cli
+T246|x|impl §V.156(+) + §V.3(∆) + §I — --format table|csv|ndjson on report/list; default JSON; tests + SKILL (#205)|V156,V3,V4,V153,V152,I.cli
+T247|x|impl §V.157(+) + §I — workflow status ops-health composite; tests + SKILL (#206)|V157,V134,V11,V132,V107,V4,I.cli
+T248|x|impl §V.136 first-touch subject require — compose-only output validator ModelRetry on empty/None/whitespace subject for new-thread touch; follow-up may leave subject empty; unit tests empty/None/whitespace reject + non-empty accept + follow-up None ok|V136,B127
+T249|x|drop `_check_spec_table` + call sites (send_email, reply_email, compose `_lint_touch_output`); drop format-rejection path + tests|V42,B128
+T250|x|drop `_SPEC_TABLE`; ban agent-facing Markdown/pipe-table language; structure as lists; rewrite template/check-extras tests|V42,V45,B128
+T251|x|impl §V.107(∆)+§V.152(∆) — enrollment list --workflow-id name|UUID via _resolve_workflow_id; help "name or ID"; UUID still not_found when missing; tests name+uuid+unknown; SKILL/help; no enroll/disable change (#207)|V107,V152,V90,V4,I.cli
+T252|x|impl §V.158(+) + §I — contact search full-name + multi-token AND; SKILL/help; tests full-name, multi-token, single-token regression, disabled hit (#208)|V158,V90,V4,I.cli
+T253|x|impl §V.159(+) + §I — contact view --timeline dossier; bounds; tests fixture send+inbound+enrollment fail; bare view omits timeline keys (#209)|V159,V8,V4,I.cli
+T254|x|impl §V.160(+) + §V.152(∆) + §I — enrollment list --disposition; validation_error allowed set; SKILL/help; tests match/empty/invalid (#210)|V160,V152,V127,V115,V4,I.cli
+T255|x|impl §V.107(∆) — task list|stats --workflow-id name|UUID via _resolve_workflow_id; help "name or ID"; UUID still works; not_found when missing; tests name+uuid+unknown; SKILL/help (#211)|V107,V133,V90,V4,I.cli
+T256|x|impl §V.107 — email list --workflow-id name|UUID via _resolve_workflow_id; help "name or ID"; UUID still works; not_found when missing; tests name+uuid+unknown; SKILL/help (#213)|V107,V154,V90,V4,I.cli
+T257|x|impl §V.161(+) — address-change auto-reply hard-stop: protocol/tool guidance + campaign-test scenario + fixture/test; note records new email when present; distinct from OOO auto_reply scenario (#212)|V161,V127,V123,B131
+T258|x|swap mailpilot-campaign-test default workflow → `/Users/kb/github/lab5-campaigns/campaigns/var-sales-coclose/workflows/var-sales-coclose.toml` — `_common.DEFAULT_WORKFLOW_FILE` + `.grok` SKILL.md defaults; `--workflow-file` override kept|V122
+T259|x|impl §V.162(+) — SQL touch parse (stats + enrollment --full/--touch) + resolve_touch_number accept 2 and "T2"; new OOO-resume writes numeric; regression pending context.touch="T2"; workflow stats|report|status + enrollment --full JSON (#214)|V162,V132,V152,V136,V157,V153
+T260|x|impl §V.163(+) — bounce handler conclude do_not_contact + cancel follow-ups on every active outbound enrollment; test bounced T1 → no pending T2 (#215)|V163,V80,V123,V127,B133
+T261|x|impl §V.164(+) — thread-bound inbound binds enrolled contact when From local-part differs; ! auto-enroll alias; left-company/retired auto-reply concludes original + cancels T2; fixture T1 a@domain reply afull@domain (#216)|V164,V161,V27,V123,B134
+T262|x|`scripts/changelog` check/promote/notes + root CHANGELOG.md; `make release` empty-Unreleased hard-fail + promote; commit CHANGELOG w/ pyproject; offline tests|V62,I.pkg
+T263|x|`release.yml` GH notes from CHANGELOG version section via `scripts/changelog notes`; not sole `--generate-notes`; keep PyPI OIDC|V62,I.pkg,T262
 ## §B BUGS
 
 id|date|cause|fix

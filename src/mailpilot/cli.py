@@ -99,10 +99,10 @@ _COMPANY_PIPELINE_STATUSES = [
 
 
 def _database_url() -> str:
-    """Resolve the database URL from settings at call time (not import time)."""
-    from mailpilot.settings import get_settings
+    """Bootstrap-only database URL (env / .env / default). Not ``app_config``."""
+    from mailpilot.settings import bootstrap_database_url
 
-    return str(get_settings().database_url)
+    return bootstrap_database_url()
 
 
 @contextmanager
@@ -110,7 +110,9 @@ def _db(*, mutate: bool = False) -> Generator[Any]:
     """Yield a CLI database connection.
 
     Lazy-imports ``initialize_database`` so ``--help`` stays click-only.
-    ``mutate=True`` is the write-path schema gate.
+    ``mutate=True`` is the write-path schema gate. Successful mutate
+    blocks commit before close; exceptions and ``output_error`` skip
+    commit so the transaction rolls back.
     """
     from mailpilot.database import initialize_database
 
@@ -120,6 +122,8 @@ def _db(*, mutate: bool = False) -> Generator[Any]:
     )
     try:
         yield connection
+        if mutate:
+            connection.commit()
     finally:
         connection.close()
 
@@ -1176,10 +1180,19 @@ def _version() -> str:
 @click.pass_context
 def main(ctx: click.Context, debug: bool) -> None:
     """MailPilot -- CRM for cold email outreach via Gmail."""
+    import sys
+
     ctx.ensure_object(dict)
     ctx.obj["debug"] = debug
-    if ctx.invoked_subcommand is not None:
-        configure_logging(debug=debug)
+    if ctx.invoked_subcommand is None:
+        return
+    # ``db init|migrate|check`` bootstrap the URL only; --help/--version
+    # skip settings load entirely (§V.1).
+    if ctx.invoked_subcommand == "db":
+        return
+    if "--help" in sys.argv or "--version" in sys.argv:
+        return
+    configure_logging(debug=debug)
 
 
 # -- Status command ------------------------------------------------------------
@@ -1297,14 +1310,10 @@ def show_queue(
 @main.command()
 def run() -> None:
     """Start the sync loop (Pub/Sub + task runner, foreground)."""
-    from mailpilot.settings import get_settings, require_active_provider_key
+    from mailpilot.settings import get_settings
     from mailpilot.sync import start_sync_loop
 
     settings = get_settings()
-    try:
-        require_active_provider_key(settings)
-    except ValueError as exc:
-        output_error(str(exc), "validation_error")
     with _db(mutate=True) as connection:
         start_sync_loop(connection, settings)
 
@@ -1496,9 +1505,10 @@ def config() -> None:
 @click.argument("key", required=False)
 def config_get(key: str | None) -> None:
     """Show config (all or single key)."""
-    from mailpilot.settings import get_settings
+    from mailpilot.settings import load_settings
 
-    settings = get_settings()
+    with _db() as connection:
+        settings = load_settings(connection=connection, database_url=_database_url())
     data = settings.model_dump(mode="json")
 
     if key:
@@ -1513,26 +1523,58 @@ def config_get(key: str | None) -> None:
 @click.argument("key")
 @click.argument("value")
 def config_set(key: str, value: str) -> None:
-    """Set a config value."""
-    from mailpilot.settings import Settings, set_setting
+    """Set a config value on the ``app_config`` row."""
+    from pydantic import ValidationError
 
-    if key not in Settings.model_fields:
+    from mailpilot.settings import (
+        APP_CONFIG_KEYS,
+        DERIVED_KEYS,
+        Settings,
+        set_setting,
+    )
+
+    if (
+        key == "database_url"
+        or key in DERIVED_KEYS
+        or key not in Settings.model_fields
+        or key not in APP_CONFIG_KEYS
+    ):
         output_error(f"unknown config key: {key}", "invalid_key")
 
     field_info = Settings.model_fields[key]
     annotation = field_info.annotation
 
-    if annotation is int or annotation == (int | None):
-        parsed_value: object = int(value)
-    elif annotation == list[str]:
-        parsed_value = json.loads(value) if value.startswith("[") else [value]
-    elif annotation == list[int]:
-        parsed_value = json.loads(value) if value.startswith("[") else [int(value)]
+    if key == "google_application_credentials":
+        if value.strip().lower() == "null":
+            parsed_value: object = None
+        else:
+            try:
+                parsed: object = json.loads(value)
+            except json.JSONDecodeError as exc:
+                output_error(f"invalid JSON: {exc}", "validation_error")
+            if parsed is not None and not isinstance(parsed, dict):
+                output_error(
+                    "google_application_credentials must be a JSON object",
+                    "validation_error",
+                )
+            parsed_value = parsed
+    elif annotation is int or annotation == (int | None):
+        try:
+            parsed_value = int(value)
+        except ValueError:
+            output_error(f"invalid integer: {value}", "validation_error")
     else:
         parsed_value = value
 
-    set_setting(key, parsed_value)
-    output({"key": key, "value": parsed_value})
+    with _db(mutate=True) as connection:
+        try:
+            updated = set_setting(connection, key, parsed_value)
+        except KeyError:
+            output_error(f"unknown config key: {key}", "invalid_key")
+        except ValidationError as exc:
+            output_error(str(exc), "validation_error")
+    dumped = updated.model_dump(mode="json")
+    output({"key": key, "value": dumped.get(key, parsed_value)})
 
 
 # -- Account commands ----------------------------------------------------------

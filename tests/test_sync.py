@@ -203,7 +203,7 @@ def test_start_sync_loop_calls_pubsub_when_configured(
 ):
     """When Google credentials are reachable, Pub/Sub setup is attempted."""
     settings = make_test_settings(
-        google_application_credentials="/tmp/creds.json",
+        google_application_credentials={"type": "service_account", "project_id": "p"},
     )
 
     with (
@@ -232,7 +232,7 @@ def test_start_sync_loop_skips_pubsub_when_no_credentials(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
     """When no Google credentials are reachable, Pub/Sub setup is skipped."""
-    settings = make_test_settings(google_application_credentials="")
+    settings = make_test_settings(google_application_credentials=None)
 
     with (
         patch("mailpilot.sync.threading.Event") as mock_event_cls,
@@ -265,7 +265,9 @@ def test_start_sync_loop_wires_wakeup_event_to_pubsub_and_listener(
     real-time delivery via Pub/Sub and instant task execution via PG
     LISTEN/NOTIFY would degenerate to plain run_interval polling.
     """
-    settings = make_test_settings(google_application_credentials="/tmp/creds.json")
+    settings = make_test_settings(
+        google_application_credentials={"type": "service_account", "project_id": "p"}
+    )
 
     with (
         patch("mailpilot.sync.threading.Event") as mock_event_cls,

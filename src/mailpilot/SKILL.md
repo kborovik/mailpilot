@@ -79,7 +79,8 @@ text (not JSON) and exit `0`. Top-level `--help` is this document.
 
 ## Settings
 
-Persistent config lives in `~/.mailpilot/config.json`. Read and write with:
+Persistent config lives in the `app_config` database singleton (not a JSON
+file). Read and write with:
 
 ```
 mailpilot config get [KEY]
@@ -90,19 +91,20 @@ mailpilot config set KEY VALUE
 it returns `{"key": ..., "value": ..., "ok": true}` or an `invalid_key`
 error envelope.
 
-Every key may also be overridden via an environment variable of the form
-`MAILPILOT_<UPPERCASE_KEY>` (for example, `MAILPILOT_DATABASE_URL`,
-`MAILPILOT_ANTHROPIC_API_KEY`, `MAILPILOT_RUN_INTERVAL`). A cwd `.env` file
-with the same `MAILPILOT_*` keys is auto-read at load (folder-local override).
-Priority is constructor kwargs (tests only), then process `MAILPILOT_*` env
-vars, then cwd `.env`, then the config file, then field defaults. Missing
-`.env` is a no-op. Non-`MAILPILOT_*` keys in `.env` are ignored.
+`database_url` is bootstrap-only: kwargs, then env `MAILPILOT_DATABASE_URL`,
+then cwd `.env` (`MAILPILOT_DATABASE_URL=` only), then
+`postgresql://localhost/mailpilot`. It is not an `app_config` column.
+`config set database_url` returns `invalid_key`. Other `MAILPILOT_*` env
+vars and `~/.mailpilot/config.json` are not sources. Missing `.env` is a
+no-op.
 
-Keys:
+Keys (row, unless noted):
 
-- `database_url` -- PostgreSQL DSN. Default `postgresql://localhost/mailpilot`.
-- `anthropic_api_key` -- required for agent invocations.
-- `anthropic_model` -- e.g. `claude-sonnet-4-6`.
+- `database_url` -- PostgreSQL DSN. Bootstrap only. Default
+  `postgresql://localhost/mailpilot`.
+- `llm_provider` -- `xai` (default) or `anthropic`.
+- `anthropic_api_key` -- required when `llm_provider=anthropic`.
+- `anthropic_model` -- e.g. `claude-sonnet-5`.
 - `anthropic_base_url` -- Anthropic-compatible API endpoint. Default
   `https://api.anthropic.com`; point it at e.g. `https://api.novita.ai/anthropic`
   to route the same call to another vendor.
@@ -111,23 +113,31 @@ Keys:
 - `anthropic_effort` -- workflow-agent reasoning effort. Default `high`; one of
   `low`, `medium`, `high`, `xhigh`, `max`, or empty to send no effort key.
   `xhigh` needs Opus 4.7 or newer. Classifier never reads this key.
-- `anthropic_max_tokens` -- workflow-agent output-token budget. Default `16384`;
+- `anthropic_max_tokens` -- workflow-agent output-token budget. Default `32768`;
   always sent so default-active thinking cannot exhaust the provider-default
   budget before any reply text. Classifier never reads this key.
-- `google_application_credentials` -- path to service-account JSON. Optional
-  when running on a platform that exposes Application Default Credentials (GCE
-  attached service account, GKE Workload Identity, Cloud Run identity); leave
-  unset to use ADC. Set explicitly otherwise. Domain-wide delegation works in
-  both modes; ADC mode signs JWTs via the IAM Credentials API and requires the
-  active service account to hold `roles/iam.serviceAccountTokenCreator` on
-  itself.
-- `environment` -- target env. `dev` or `prd`. Default `dev`. Operator knob
-  via `MAILPILOT_ENVIRONMENT`, config.json, or `config set environment`.
+- `xai_api_key` -- required when `llm_provider=xai` (the default).
+- `xai_model` -- default `grok-4.5`.
+- `xai_api_host` -- optional hostname for a gateway/proxy.
+- `xai_reasoning_effort` -- `low`, `medium` (default), or `high`.
+- `xai_max_tokens` -- workflow-agent output-token budget. Default `32768`.
+- `google_application_credentials` -- JSON service-account document (not a
+  file path). `config set` VALUE is JSON text; `null` clears to Application
+  Default Credentials (GCE, Workload Identity, Cloud Run). Invalid JSON
+  returns `validation_error`. Domain-wide delegation works in both modes;
+  ADC mode signs JWTs via the IAM Credentials API and requires the active
+  service account to hold `roles/iam.serviceAccountTokenCreator` on itself.
+- `environment` -- target env. `dev` or `prd`. Default `dev`. Set with
+  `config set environment`.
 - `logfire_token` -- optional. Enables cloud telemetry.
 - `run_interval` -- fallback poll interval for the sync loop, in seconds.
   Default `60`.
 - `max_concurrent_tasks` -- bound on the worker pool that drains the task
   queue. Default `10`.
+
+A missing active-provider API key skips that `run` tick (process stays up;
+zero due tasks claimed). The error names `mailpilot config set xai_api_key`
+or `mailpilot config set anthropic_api_key`.
 
 `config get` and `mailpilot status` also project derived Pub/Sub names
 (not settable; `config set` returns `invalid_key`):
@@ -137,12 +147,13 @@ Keys:
 
 Logfire's deployment environment is mapped internally at configure
 (`dev` → `development`, `prd` → `production`). It is not a setting
-and is not projected by `config get` or `mailpilot status`.
+and is not projected by `config get` or `mailpilot status`. Changing
+`environment` or `logfire_token` while `mailpilot run` is up reconfigures
+Logfire and restarts the Pub/Sub subscriber on the next tick.
 
 `MAILPILOT_GOOGLE_PUBSUB_TOPIC`, `MAILPILOT_GOOGLE_PUBSUB_SUBSCRIPTION`,
 and `MAILPILOT_LOGFIRE_ENVIRONMENT` are not sources. Persist `environment`
-only. A config file with `logfire_environment` and no `environment` still
-loads (`production` maps to `prd`, anything else to `dev`).
+only.
 
 ## Recipes
 

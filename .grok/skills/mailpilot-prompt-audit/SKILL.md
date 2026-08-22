@@ -20,7 +20,7 @@ description: >-
   read-only: no Gmail traffic, no `mailpilot run`, no database mutation.
   Use when the user runs /mailpilot-prompt-audit.
 argument-hint: "[--status active|all] [--days N] [--environment development|production]"
-allowed-tools: run_terminal_command, spawn_subagent, search_tool, use_tool
+allowed-tools: run_terminal_command, spawn_subagent, use_tool
 ---
 
 # mailpilot-prompt-audit

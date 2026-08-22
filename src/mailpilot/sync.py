@@ -80,7 +80,7 @@ from mailpilot.models import Account, Contact, Email, Meeting
 from mailpilot.ooo import auto_submitted_label
 from mailpilot.operator_log import operator_event
 from mailpilot.routing import find_thread_enrolled_contact, route_email
-from mailpilot.settings import Settings
+from mailpilot.settings import Settings, cache_settings, require_active_provider_key
 
 _HEARTBEAT_INTERVAL = 30  # seconds
 _RECENCY_WINDOW = timedelta(days=7)
@@ -195,7 +195,11 @@ def start_sync_loop(  # noqa: PLR0915
     # Start Pub/Sub subscriber (real-time Gmail notifications).
     sync_queue: queue.Queue[str] = queue.Queue()
     subscriber_future = None
-    if has_google_credentials():
+    from mailpilot.database import upsert_app_config_from_settings
+
+    upsert_app_config_from_settings(connection, settings)
+    cache_settings(settings)
+    if has_google_credentials(settings):
         subscriber_future = _start_pubsub_logging_errors(
             connection, settings, sync_queue, wakeup_event
         )
@@ -220,6 +224,7 @@ def start_sync_loop(  # noqa: PLR0915
     # emails, the next tick MUST do a full sweep so the routing pipeline picks
     # up any siblings Gmail's Pub/Sub batching delivered just behind the wave.
     force_full_sweep_next = False
+    previous_telemetry = (settings.environment, settings.logfire_token)
     try:
         while not shutdown_event.is_set():
             event_set = wakeup_event.wait(timeout=settings.run_interval)
@@ -231,6 +236,22 @@ def start_sync_loop(  # noqa: PLR0915
             wakeup_event.clear()
             update_sync_heartbeat(connection)
             logfire.debug("sync.loop.heartbeat", pid=pid)
+
+            settings = _hydrate_tick_settings(connection, settings)
+            telemetry = (settings.environment, settings.logfire_token)
+            if telemetry != previous_telemetry:
+                from mailpilot.cli import configure_logging
+
+                configure_logging()
+                if subscriber_future is not None:
+                    subscriber_future.cancel()
+                    subscriber_future = None
+                    logfire.info("sync.pubsub.subscriber.restart")
+                if has_google_credentials(settings):
+                    subscriber_future = _start_pubsub_logging_errors(
+                        connection, settings, sync_queue, wakeup_event
+                    )
+                previous_telemetry = telemetry
 
             # Time-gate the safety-net sweep. Event-burst wakes (Pub/Sub
             # notifications already drained by ``_drain_sync_queue``) skip
@@ -343,6 +364,20 @@ def _next_iteration_count() -> int:
     return next(_iteration_counter)
 
 
+def _hydrate_tick_settings(
+    connection: psycopg.Connection[dict[str, Any]],
+    settings: Settings,
+) -> Settings:
+    """Re-SELECT ``app_config`` each tick; keep process-lifetime ``database_url``."""
+    from mailpilot.database import get_or_insert_app_config
+    from mailpilot.settings import settings_from_app_config_row
+
+    row = get_or_insert_app_config(connection)
+    return cache_settings(
+        settings_from_app_config_row(row, database_url=str(settings.database_url))
+    )
+
+
 def _run_periodic_iteration(  # noqa: PLR0913
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
@@ -403,7 +438,13 @@ def _run_periodic_iteration(  # noqa: PLR0913
 
         # Bridge routed emails to tasks and dispatch the queue.
         new_tasks = create_tasks_for_routed_emails(connection)
-        _drain_pending_tasks(connection, settings, pool, in_flight)
+        try:
+            require_active_provider_key(settings)
+        except ValueError as exc:
+            operator_event("error", source="run.provider_key", message=str(exc))
+            logfire.error("run.provider_key.missing", message=str(exc))
+        else:
+            _drain_pending_tasks(connection, settings, pool, in_flight)
 
     if new_tasks:
         operator_event(
@@ -749,7 +790,7 @@ def _renew_watches_logging_errors(
     settings: Settings,
 ) -> None:
     """Renew Gmail watches, catching and logging errors."""
-    if not has_google_credentials():
+    if not has_google_credentials(settings):
         return
     try:
         from mailpilot.pubsub import renew_watches

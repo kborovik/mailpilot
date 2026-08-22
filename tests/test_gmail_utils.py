@@ -214,55 +214,29 @@ def test_parse_sender_three_part_name():
 
 # -- credentials resolution ---------------------------------------------------
 
+_FAKE_SA = {
+    "type": "service_account",
+    "project_id": "test-proj",
+    "client_email": "sa@test-proj.iam.gserviceaccount.com",
+}
 
-def test_credential_file_path_from_settings(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
-    settings = Settings(google_application_credentials="/tmp/service-account.json")
+
+def test_google_sa_info_from_settings(monkeypatch: pytest.MonkeyPatch):
+    settings = Settings(google_application_credentials=_FAKE_SA)
     with patch("mailpilot.settings.get_settings", return_value=settings):
-        assert (
-            gmail._credential_file_path()  # pyright: ignore[reportPrivateUsage]
-            == "/tmp/service-account.json"
-        )
+        assert gmail._google_sa_info() == _FAKE_SA  # pyright: ignore[reportPrivateUsage]
 
 
-def test_credential_file_path_falls_back_to_env(
+def test_google_sa_info_none_when_unset(monkeypatch: pytest.MonkeyPatch):
+    settings = Settings(google_application_credentials=None)
+    with patch("mailpilot.settings.get_settings", return_value=settings):
+        assert gmail._google_sa_info() is None  # pyright: ignore[reportPrivateUsage]
+
+
+def test_has_google_credentials_true_when_json_configured(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/env/key.json")
-    settings = Settings(google_application_credentials="")
-    with patch("mailpilot.settings.get_settings", return_value=settings):
-        assert (
-            gmail._credential_file_path()  # pyright: ignore[reportPrivateUsage]
-            == "/env/key.json"
-        )
-
-
-def test_credential_file_path_settings_wins_over_env(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/env/key.json")
-    settings = Settings(google_application_credentials="/cfg/key.json")
-    with patch("mailpilot.settings.get_settings", return_value=settings):
-        assert (
-            gmail._credential_file_path()  # pyright: ignore[reportPrivateUsage]
-            == "/cfg/key.json"
-        )
-
-
-def test_credential_file_path_returns_empty_when_unset(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
-    settings = Settings(google_application_credentials="")
-    with patch("mailpilot.settings.get_settings", return_value=settings):
-        assert gmail._credential_file_path() == ""  # pyright: ignore[reportPrivateUsage]
-
-
-def test_has_google_credentials_true_when_file_configured(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/env/key.json")
-    settings = Settings(google_application_credentials="")
+    settings = Settings(google_application_credentials=_FAKE_SA)
     with patch("mailpilot.settings.get_settings", return_value=settings):
         assert gmail.has_google_credentials() is True
 
@@ -270,8 +244,7 @@ def test_has_google_credentials_true_when_file_configured(
 def test_has_google_credentials_true_when_adc_available(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
-    settings = Settings(google_application_credentials="")
+    settings = Settings(google_application_credentials=None)
     with (
         patch("mailpilot.settings.get_settings", return_value=settings),
         patch("google.auth.default", return_value=(object(), "proj")),
@@ -284,8 +257,7 @@ def test_has_google_credentials_false_when_no_source(
 ):
     from google.auth.exceptions import DefaultCredentialsError
 
-    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
-    settings = Settings(google_application_credentials="")
+    settings = Settings(google_application_credentials=None)
     with (
         patch("mailpilot.settings.get_settings", return_value=settings),
         patch("google.auth.default", side_effect=DefaultCredentialsError()),
@@ -293,34 +265,32 @@ def test_has_google_credentials_false_when_no_source(
         assert gmail.has_google_credentials() is False
 
 
-def test_build_delegated_credentials_uses_file_when_configured(
+def test_build_delegated_credentials_uses_json_when_configured(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """File path → from_service_account_file + with_subject (no ADC)."""
-    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
-    settings = Settings(google_application_credentials="/tmp/key.json")
+    """JSONB document → from_service_account_info + with_subject (no ADC)."""
+    settings = Settings(google_application_credentials=_FAKE_SA)
 
-    file_creds = type("C", (), {"with_subject": lambda self, s: ("sub", s)})()
+    json_creds = type("C", (), {"with_subject": lambda self, s: ("sub", s)})()
 
     with (
         patch("mailpilot.settings.get_settings", return_value=settings),
         patch(
-            "google.oauth2.service_account.Credentials.from_service_account_file",
-            return_value=file_creds,
-        ) as mock_from_file,
+            "google.oauth2.service_account.Credentials.from_service_account_info",
+            return_value=json_creds,
+        ) as mock_from_info,
     ):
         result = gmail.build_delegated_credentials(["scope1"], "user@example.com")
 
-    mock_from_file.assert_called_once_with("/tmp/key.json", scopes=["scope1"])
+    mock_from_info.assert_called_once_with(_FAKE_SA, scopes=["scope1"])
     assert result == ("sub", "user@example.com")
 
 
 def test_build_delegated_credentials_falls_back_to_adc(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """No file → ADC + iam.Signer + service_account.Credentials(subject=...)."""
-    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
-    settings = Settings(google_application_credentials="")
+    """Null JSONB → ADC + iam.Signer + service_account.Credentials(subject=...)."""
+    settings = Settings(google_application_credentials=None)
 
     source_creds = type(
         "Source",

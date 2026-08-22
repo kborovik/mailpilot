@@ -1,14 +1,21 @@
-"""Tests for settings loading and persistence."""
+"""Tests for two-phase settings load and ``app_config`` persistence."""
 
-import json
 from pathlib import Path
 from typing import Any
 
+import psycopg
 import pytest
 from logfire.testing import CaptureLogfire
 from pydantic import ValidationError
 
-from mailpilot.settings import Settings, load_settings, save_settings, set_setting
+from mailpilot.settings import (
+    APP_CONFIG_KEYS,
+    Settings,
+    bootstrap_database_url,
+    load_settings,
+    require_active_provider_key,
+    set_setting,
+)
 
 
 def test_default_settings():
@@ -22,6 +29,7 @@ def test_default_settings():
     assert settings.xai_max_tokens == 32768
     assert settings.xai_api_host == ""
     assert settings.environment == "dev"
+    assert settings.google_application_credentials is None
     assert "logfire_environment" not in Settings.model_fields
     assert "logfire_environment" not in Settings.model_computed_fields
     assert not hasattr(settings, "logfire_environment")
@@ -43,12 +51,13 @@ def test_anthropic_reasoning_disables_per_knob():
     assert settings.anthropic_effort == ""
 
 
-def test_set_setting_round_trips_reasoning_keys(tmp_path: Path):
+def test_set_setting_round_trips_reasoning_keys(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
     """§V.47: config set/get persists the reasoning controls."""
-    config_path = tmp_path / "config.json"
-    set_setting("anthropic_thinking", "adaptive", config_path=config_path)
-    set_setting("anthropic_effort", "high", config_path=config_path)
-    reloaded = load_settings(config_path=config_path)
+    set_setting(database_connection, "anthropic_thinking", "adaptive")
+    set_setting(database_connection, "anthropic_effort", "high")
+    reloaded = load_settings(connection=database_connection)
     assert reloaded.anthropic_thinking == "adaptive"
     assert reloaded.anthropic_effort == "high"
 
@@ -59,11 +68,12 @@ def test_anthropic_max_tokens_default():
     assert settings.anthropic_max_tokens == 32768
 
 
-def test_set_setting_round_trips_max_tokens(tmp_path: Path):
+def test_set_setting_round_trips_max_tokens(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
     """§V.47: config set/get persists the output-token budget override."""
-    config_path = tmp_path / "config.json"
-    set_setting("anthropic_max_tokens", 32768, config_path=config_path)
-    reloaded = load_settings(config_path=config_path)
+    set_setting(database_connection, "anthropic_max_tokens", 32768)
+    reloaded = load_settings(connection=database_connection)
     assert reloaded.anthropic_max_tokens == 32768
 
 
@@ -93,27 +103,25 @@ def test_llm_provider_rejects_invalid_value():
         Settings(llm_provider="openai")  # pyright: ignore[reportArgumentType]
 
 
-def test_xai_api_key_env_uses_mailpilot_prefix(
+def test_xai_api_key_env_is_not_a_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """§V.47: bare XAI_API_KEY is not a mailpilot source; MAILPILOT_XAI_API_KEY is."""
+    """§V.85: bare XAI_API_KEY and MAILPILOT_XAI_API_KEY are not sources."""
     monkeypatch.setenv("XAI_API_KEY", "bare-should-not-win")
-    monkeypatch.delenv("MAILPILOT_XAI_API_KEY", raising=False)
-    settings = Settings()
-    assert settings.xai_api_key == ""
     monkeypatch.setenv("MAILPILOT_XAI_API_KEY", "mailpilot-key")
     settings = Settings()
-    assert settings.xai_api_key == "mailpilot-key"
+    assert settings.xai_api_key == ""
 
 
-def test_set_setting_round_trips_xai_keys(tmp_path: Path):
+def test_set_setting_round_trips_xai_keys(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
     """§V.47: config set/get persists xAI knobs."""
-    config_path = tmp_path / "config.json"
-    set_setting("llm_provider", "xai", config_path=config_path)
-    set_setting("xai_model", "grok-4.5", config_path=config_path)
-    set_setting("xai_reasoning_effort", "high", config_path=config_path)
-    set_setting("xai_max_tokens", 16384, config_path=config_path)
-    reloaded = load_settings(config_path=config_path)
+    set_setting(database_connection, "llm_provider", "xai")
+    set_setting(database_connection, "xai_model", "grok-4.5")
+    set_setting(database_connection, "xai_reasoning_effort", "high")
+    set_setting(database_connection, "xai_max_tokens", 16384)
+    reloaded = load_settings(connection=database_connection)
     assert reloaded.llm_provider == "xai"
     assert reloaded.xai_model == "grok-4.5"
     assert reloaded.xai_reasoning_effort == "high"
@@ -121,36 +129,46 @@ def test_set_setting_round_trips_xai_keys(tmp_path: Path):
 
 
 def test_set_setting_redacts_xai_api_key(
-    capfire: CaptureLogfire, tmp_path: Path
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     """§V.86: xai_api_key is secret; config.set redacts old/new."""
-    config_path = tmp_path / "config.json"
     secret = "xai-super-secret-do-not-leak"
-    set_setting("xai_api_key", secret, config_path=config_path)
+    set_setting(database_connection, "xai_api_key", secret)
     for span in capfire.exporter.exported_spans_as_dict():
         for attr_value in span.get("attributes", {}).values():
             assert secret not in str(attr_value)
 
 
-def test_anthropic_base_url_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    """MAILPILOT_ANTHROPIC_BASE_URL overrides the None default per §V.85."""
+def test_set_setting_redacts_google_credentials(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.86: google_application_credentials is secret."""
+    secret = {"type": "service_account", "private_key": "leak-me-not"}
+    set_setting(database_connection, "google_application_credentials", secret)
+    for span in capfire.exporter.exported_spans_as_dict():
+        for attr_value in span.get("attributes", {}).values():
+            assert "leak-me-not" not in str(attr_value)
+
+
+def test_anthropic_base_url_env_is_not_a_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """§V.85: MAILPILOT_ANTHROPIC_BASE_URL is not a mailpilot source."""
     monkeypatch.setenv(
         "MAILPILOT_ANTHROPIC_BASE_URL", "https://api.novita.ai/anthropic"
     )
     settings = Settings()
-    assert settings.anthropic_base_url == "https://api.novita.ai/anthropic"
+    assert settings.anthropic_base_url == "https://api.anthropic.com"
 
 
-def test_run_interval_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("mailpilot.settings.CONFIG_PATH", tmp_path / "config.json")
+def test_run_interval_default() -> None:
     settings = Settings()
     assert settings.run_interval == 60
 
 
-def test_max_concurrent_tasks_default_meets_burst_formula(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr("mailpilot.settings.CONFIG_PATH", tmp_path / "config.json")
+def test_max_concurrent_tasks_default_meets_burst_formula() -> None:
     settings = Settings()
     assert settings.max_concurrent_tasks >= 10
 
@@ -161,142 +179,142 @@ def test_settings_from_kwargs():
     assert settings.anthropic_api_key == "sk-test"
 
 
-def test_settings_env_override(monkeypatch: pytest.MonkeyPatch):
+def test_settings_env_does_not_override_app_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """§V.85: MAILPILOT_ENVIRONMENT is not a source."""
     monkeypatch.setenv("MAILPILOT_ENVIRONMENT", "prd")
     settings = Settings()
-    assert settings.environment == "prd"
-
-
-def test_settings_kwargs_override_env(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("MAILPILOT_ENVIRONMENT", "prd")
-    settings = Settings(environment="dev")
     assert settings.environment == "dev"
 
 
-def test_dotenv_overrides_config_json(
+def test_bootstrap_url_kwargs_beat_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MAILPILOT_DATABASE_URL", "postgresql://env/db")
+    assert (
+        bootstrap_database_url(database_url="postgresql://kw/db")
+        == "postgresql://kw/db"
+    )
+
+
+def test_bootstrap_url_env_beats_dotenv(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """cwd ``.env`` beats ``~/.mailpilot/config.json`` per §V.85."""
-    config_path = tmp_path / "config.json"
-    config_path.write_text(json.dumps({"environment": "dev"}))
-    monkeypatch.setattr("mailpilot.settings.CONFIG_PATH", config_path)
-
     workdir = tmp_path / "workdir"
     workdir.mkdir()
-    (workdir / ".env").write_text("MAILPILOT_ENVIRONMENT=prd\n")
+    (workdir / ".env").write_text("MAILPILOT_DATABASE_URL=postgresql://dotenv/db\n")
     monkeypatch.chdir(workdir)
+    monkeypatch.setenv("MAILPILOT_DATABASE_URL", "postgresql://env/db")
+    assert bootstrap_database_url() == "postgresql://env/db"
 
-    settings = Settings()
-    assert settings.environment == "prd"
 
-
-def test_process_env_beats_dotenv(
+def test_bootstrap_url_dotenv_beats_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Process ``MAILPILOT_*`` env beats cwd ``.env`` per §V.85."""
     workdir = tmp_path / "workdir"
     workdir.mkdir()
-    (workdir / ".env").write_text("MAILPILOT_ENVIRONMENT=dev\n")
+    (workdir / ".env").write_text(
+        "MAILPILOT_DATABASE_URL=postgresql://dotenv/db\nMAILPILOT_ENVIRONMENT=prd\n"
+    )
     monkeypatch.chdir(workdir)
-    monkeypatch.setenv("MAILPILOT_ENVIRONMENT", "prd")
-
-    settings = Settings()
-    assert settings.environment == "prd"
+    monkeypatch.delenv("MAILPILOT_DATABASE_URL", raising=False)
+    assert bootstrap_database_url() == "postgresql://dotenv/db"
 
 
-def test_kwargs_beat_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Constructor kwargs beat cwd ``.env`` per §V.85."""
-    workdir = tmp_path / "workdir"
-    workdir.mkdir()
-    (workdir / ".env").write_text("MAILPILOT_ENVIRONMENT=prd\n")
-    monkeypatch.chdir(workdir)
-
-    settings = Settings(environment="dev")
-    assert settings.environment == "dev"
+def test_bootstrap_url_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MAILPILOT_DATABASE_URL", raising=False)
+    monkeypatch.chdir("/tmp")
+    assert bootstrap_database_url() == "postgresql://localhost/mailpilot"
 
 
-def test_missing_dotenv_is_noop(
+def test_dotenv_does_not_set_app_fields(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Missing cwd ``.env`` is a no-op; field defaults still apply per §V.85."""
+    """cwd ``.env`` MAILPILOT_* other than DATABASE_URL do not hydrate Settings."""
     workdir = tmp_path / "workdir"
     workdir.mkdir()
+    (workdir / ".env").write_text(
+        "MAILPILOT_ENVIRONMENT=prd\nMAILPILOT_RUN_INTERVAL=42\n"
+    )
     monkeypatch.chdir(workdir)
-
     settings = Settings()
     assert settings.environment == "dev"
     assert settings.run_interval == 60
 
 
-def test_dotenv_ignores_non_mailpilot_keys(
+def test_missing_dotenv_is_noop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Non-``MAILPILOT_*`` keys in ``.env`` are ignored (no crash, no field bleed)."""
     workdir = tmp_path / "workdir"
     workdir.mkdir()
-    (workdir / ".env").write_text(
-        "PROD_DB_HOST=db.example.com\nMAILPILOT_RUN_INTERVAL=42\n"
-    )
     monkeypatch.chdir(workdir)
-
+    monkeypatch.delenv("MAILPILOT_DATABASE_URL", raising=False)
     settings = Settings()
-    assert settings.run_interval == 42
-    assert not hasattr(settings, "prod_db_host")
+    assert settings.environment == "dev"
+    assert settings.run_interval == 60
 
 
-def test_save_and_load_settings(tmp_path: Path):
-    config_path = tmp_path / "config.json"
-    original = Settings(environment="prd", anthropic_api_key="sk-123")
-    save_settings(original, config_path=config_path)
+def test_load_settings_inserts_missing_row(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.181: missing singleton @ load inserts column defaults."""
+    database_connection.execute("DELETE FROM app_config")
+    database_connection.commit()
+    settings = load_settings(connection=database_connection)
+    assert settings.environment == "dev"
+    assert settings.llm_provider == "xai"
+    row = database_connection.execute(
+        "SELECT id, environment FROM app_config WHERE id = 'singleton'"
+    ).fetchone()
+    assert row is not None
+    assert row["environment"] == "dev"
 
-    loaded = load_settings(config_path=config_path)
+
+def test_load_settings_hydrates_from_row(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    set_setting(database_connection, "environment", "prd")
+    set_setting(database_connection, "anthropic_api_key", "sk-123")
+    loaded = load_settings(connection=database_connection)
     assert loaded.environment == "prd"
     assert loaded.anthropic_api_key == "sk-123"
+    assert loaded.google_pubsub_topic == "mailpilot-topic-prd"
 
 
-def test_load_settings_creates_default_file(tmp_path: Path):
-    config_path = tmp_path / "subdir" / "config.json"
-    settings = load_settings(config_path=config_path)
-    assert config_path.exists()
-    assert settings.environment == "dev"
-    data = json.loads(config_path.read_text())
-    assert "database_url" in data
-    assert data["environment"] == "dev"
-    assert "logfire_environment" not in data
-    assert "google_pubsub_topic" not in data
-    assert "google_pubsub_subscription" not in data
+def test_load_settings_kwargs_override_row(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.85: kwargs (tests) beat the app_config row."""
+    set_setting(database_connection, "environment", "prd")
+    loaded = load_settings(connection=database_connection, environment="dev")
+    assert loaded.environment == "dev"
 
 
-def test_load_settings_ignores_unknown_keys(tmp_path: Path):
-    config_path = tmp_path / "config.json"
-    config_path.write_text(json.dumps({"unknown_key": "value", "environment": "prd"}))
-    settings = load_settings(config_path=config_path)
-    assert settings.environment == "prd"
-    assert not hasattr(settings, "unknown_key")
-
-
-def test_set_setting_persists_value(tmp_path: Path):
-    config_path = tmp_path / "config.json"
-    updated = set_setting("anthropic_api_key", "sk-new", config_path=config_path)
-    assert updated.anthropic_api_key == "sk-new"
-    reloaded = load_settings(config_path=config_path)
-    assert reloaded.anthropic_api_key == "sk-new"
-
-
-def test_set_setting_rejects_unknown_key(tmp_path: Path):
-    config_path = tmp_path / "config.json"
+def test_set_setting_rejects_unknown_key(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
     with pytest.raises(KeyError):
-        set_setting("not_a_real_field", "x", config_path=config_path)
+        set_setting(database_connection, "not_a_real_field", "x")
 
 
-def test_set_setting_preserves_other_fields(tmp_path: Path):
-    config_path = tmp_path / "config.json"
-    save_settings(
-        Settings(anthropic_api_key="sk-keep", environment="prd"),
-        config_path=config_path,
-    )
-    set_setting("anthropic_model", "claude-opus-4-7", config_path=config_path)
-    reloaded = load_settings(config_path=config_path)
+def test_set_setting_rejects_database_url(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.181: config set database_url is invalid_key."""
+    with pytest.raises(KeyError):
+        set_setting(
+            database_connection,
+            "database_url",
+            "postgresql://other/db",
+        )
+
+
+def test_set_setting_preserves_other_fields(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    set_setting(database_connection, "anthropic_api_key", "sk-keep")
+    set_setting(database_connection, "environment", "prd")
+    set_setting(database_connection, "anthropic_model", "claude-opus-4-7")
+    reloaded = load_settings(connection=database_connection)
     assert reloaded.anthropic_api_key == "sk-keep"
     assert reloaded.environment == "prd"
     assert reloaded.anthropic_model == "claude-opus-4-7"
@@ -311,12 +329,12 @@ def _config_set_logs(capfire: CaptureLogfire) -> list[dict[str, Any]]:
 
 
 def test_set_setting_emits_telemetry_with_value_for_non_secret(
-    capfire: CaptureLogfire, tmp_path: Path
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
 ):
     """config.set logs old/new values for non-secret keys."""
-    config_path = tmp_path / "config.json"
     new_model = "claude-opus-4-7"
-    set_setting("anthropic_model", new_model, config_path=config_path)
+    set_setting(database_connection, "anthropic_model", new_model)
 
     logs = _config_set_logs(capfire)
     assert len(logs) == 1
@@ -328,41 +346,25 @@ def test_set_setting_emits_telemetry_with_value_for_non_secret(
 
 
 def test_set_setting_does_not_leak_secret_values(
-    capfire: CaptureLogfire, tmp_path: Path
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
 ):
     """Setting a secret key must redact both old and new values."""
-    config_path = tmp_path / "config.json"
     secret = "sk-super-secret-do-not-leak"
-    set_setting("anthropic_api_key", secret, config_path=config_path)
+    set_setting(database_connection, "anthropic_api_key", secret)
 
     for span in capfire.exporter.exported_spans_as_dict():
         for attr_value in span.get("attributes", {}).values():
             assert secret not in str(attr_value)
 
 
-def test_set_setting_redacts_database_url(capfire: CaptureLogfire, tmp_path: Path):
-    """database_url can carry credentials so it must be redacted."""
-    config_path = tmp_path / "config.json"
-    url_with_creds = "postgresql://user:hunter2@db.example.com/mailpilot"
-    set_setting("database_url", url_with_creds, config_path=config_path)
-
-    logs = _config_set_logs(capfire)
-    assert len(logs) == 1
-    attrs = logs[0]["attributes"]
-    assert attrs["old"] == "***"
-    assert attrs["new"] == "***"
-    for span in capfire.exporter.exported_spans_as_dict():
-        for attr_value in span.get("attributes", {}).values():
-            assert "hunter2" not in str(attr_value)
-
-
 def test_set_setting_changed_false_when_value_unchanged(
-    capfire: CaptureLogfire, tmp_path: Path
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    config_path = tmp_path / "config.json"
-    set_setting("anthropic_model", "claude-opus-4-7", config_path=config_path)
+    set_setting(database_connection, "anthropic_model", "claude-opus-4-7")
     capfire.exporter.clear()
-    set_setting("anthropic_model", "claude-opus-4-7", config_path=config_path)
+    set_setting(database_connection, "anthropic_model", "claude-opus-4-7")
 
     logs = _config_set_logs(capfire)
     assert len(logs) == 1
@@ -393,63 +395,59 @@ def test_derived_env_vars_are_not_sources(monkeypatch: pytest.MonkeyPatch) -> No
     assert settings.google_pubsub_subscription == "mailpilot-sub-dev"
 
 
-def test_save_settings_omits_derived_keys(tmp_path: Path) -> None:
-    """§V.176: persist environment only; omit derived keys."""
-    config_path = tmp_path / "config.json"
-    save_settings(Settings(environment="prd"), config_path=config_path)
-    data = json.loads(config_path.read_text())
-    assert data["environment"] == "prd"
-    assert "logfire_environment" not in data
-    assert "google_pubsub_topic" not in data
-    assert "google_pubsub_subscription" not in data
-
-
-def test_load_compat_logfire_production_maps_to_prd(tmp_path: Path) -> None:
-    """§V.176: environment unset + logfire_environment=production -> prd."""
-    config_path = tmp_path / "config.json"
-    config_path.write_text(json.dumps({"logfire_environment": "production"}))
-    settings = load_settings(config_path=config_path)
-    assert settings.environment == "prd"
-    assert settings.google_pubsub_topic == "mailpilot-topic-prd"
-
-
-def test_load_compat_logfire_development_maps_to_dev(tmp_path: Path) -> None:
-    """§V.176: environment unset + logfire_environment=development -> dev."""
-    config_path = tmp_path / "config.json"
-    config_path.write_text(json.dumps({"logfire_environment": "development"}))
-    settings = load_settings(config_path=config_path)
-    assert settings.environment == "dev"
-
-
-def test_environment_in_file_wins_over_legacy_logfire(tmp_path: Path) -> None:
-    """§V.176: persisted environment wins when both keys are present."""
-    config_path = tmp_path / "config.json"
-    config_path.write_text(
-        json.dumps({"environment": "dev", "logfire_environment": "production"})
-    )
-    settings = load_settings(config_path=config_path)
-    assert settings.environment == "dev"
-
-
-def test_set_setting_rejects_derived_keys(tmp_path: Path) -> None:
+def test_set_setting_rejects_derived_keys(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
     """§V.176: config set of derived keys is invalid_key (KeyError)."""
-    config_path = tmp_path / "config.json"
     for key in (
         "logfire_environment",
         "google_pubsub_topic",
         "google_pubsub_subscription",
     ):
         with pytest.raises(KeyError):
-            set_setting(key, "x", config_path=config_path)
+            set_setting(database_connection, key, "x")
 
 
-def test_set_setting_environment_round_trip(tmp_path: Path) -> None:
+def test_set_setting_environment_round_trip(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
     """§V.176: config set environment persists and derives names."""
-    config_path = tmp_path / "config.json"
-    updated = set_setting("environment", "prd", config_path=config_path)
+    updated = set_setting(database_connection, "environment", "prd")
     assert updated.environment == "prd"
-    reloaded = load_settings(config_path=config_path)
+    reloaded = load_settings(connection=database_connection)
     assert reloaded.environment == "prd"
-    data = json.loads(config_path.read_text())
-    assert data["environment"] == "prd"
-    assert "logfire_environment" not in data
+    row = database_connection.execute(
+        "SELECT environment FROM app_config WHERE id = 'singleton'"
+    ).fetchone()
+    assert row is not None
+    assert row["environment"] == "prd"
+
+
+def test_app_config_keys_match_settings_minus_url_and_derived() -> None:
+    persistable = set(Settings.model_fields) - {"database_url"}
+    assert set(APP_CONFIG_KEYS) == persistable
+
+
+def test_no_config_json_symbols() -> None:
+    """§V.85: settings module has no config.json path."""
+    import inspect
+
+    import mailpilot.settings as settings_mod
+
+    source = inspect.getsource(settings_mod)
+    assert "config.json" not in source
+    assert "CONFIG_PATH" not in source
+
+
+def test_require_active_provider_key_names_config_set() -> None:
+    """§V.47: missing key names ``mailpilot config set``, not MAILPILOT_*."""
+    with pytest.raises(ValueError, match="mailpilot config set xai_api_key") as exc:
+        require_active_provider_key(Settings(llm_provider="xai", xai_api_key=""))
+    assert "MAILPILOT_XAI_API_KEY" not in str(exc.value)
+    with pytest.raises(
+        ValueError, match="mailpilot config set anthropic_api_key"
+    ) as exc_a:
+        require_active_provider_key(
+            Settings(llm_provider="anthropic", anthropic_api_key="")
+        )
+    assert "MAILPILOT_ANTHROPIC_API_KEY" not in str(exc_a.value)

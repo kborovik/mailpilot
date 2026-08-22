@@ -15,7 +15,7 @@ Checks:
 (i) per-noun verb roster is a superset of `@<noun>.command("<verb>")` set in `cli.py` — fail mode: skill names a retired verb (e.g. `enrollment remove` post-T92).
 (ii) per-verb `--<flag>` tokens in recipes are a subset of `@click.option("--<flag>")` set for that handler in `cli.py`.
 (iii) settings key list in `## Settings` == `Settings.model_fields` keys in `settings.py` — `src/mailpilot/SKILL.md` only.
-(iv) env-var-prefix description in `## Settings` == `SettingsConfigDict(env_prefix=...)` value in `settings.py` (`MAILPILOT_*`) — `src/mailpilot/SKILL.md` only.
+(iv) `MAILPILOT_DATABASE_URL` is the only env settings source named in `## Settings`; other `MAILPILOT_*` keys are described as not sources — `src/mailpilot/SKILL.md` only.
 
 ## I.nouns / I.verbs set-diff
 
@@ -261,7 +261,7 @@ Registered tool docstring scope = functions named in `TEMPLATES[*].tools` (send_
 
 ## §V47 — provider-aware model config: dispatch + caching + model settings
 
-`llm_provider` in {`anthropic`, `xai`} (default `xai`) selects factory branch for **both** classifier + workflow agent via `_build_model(settings, *, role)`. Active-provider API key required @ `mailpilot run` start before drain (and still @ model build). Missing/empty key → abort; zero due tasks claimed or marked `failed` (closes §B.141). Model-build remains fail-closed (no provider fallthrough) if preflight skipped. Inactive-provider keys may be empty. Error names env `MAILPILOT_XAI_API_KEY` (provider=xai) or `MAILPILOT_ANTHROPIC_API_KEY` (provider=anthropic); ! prescribe `mailpilot config set` as only fix — keys also load cwd `.env` / process env per §V.85. Dep: `pydantic-ai-slim[anthropic,xai]`.
+`llm_provider` in {`anthropic`, `xai`} (default `xai`) selects factory branch for **both** classifier + workflow agent via `_build_model(settings, *, role)`. Active-provider API key required @ each `mailpilot run` tick before drain (and still @ model build). Missing/empty key → skip drain that tick; process stays up; zero due tasks claimed or marked `failed` (closes §B.141). Model-build remains fail-closed (no provider fallthrough) if preflight skipped. Inactive-provider keys may be empty. Error names `mailpilot config set xai_api_key` (provider=xai) or `mailpilot config set anthropic_api_key` (provider=anthropic). Keys live on `app_config`; `MAILPILOT_*` API-key env vars are not sources. Dep: `pydantic-ai-slim[anthropic,xai]`.
 
 **Anthropic branch** (`llm_provider=anthropic`): Caching (both call sites — classifier + workflow agent): `anthropic_cache_instructions=True` + `anthropic_cache_tool_definitions=True`. Telemetry attribute names: `agent.invoke` rollup span carries bare `cache_read_input_tokens` + `cache_creation_input_tokens` (from `usage.cache_read_tokens`/`cache_write_tokens`); per-call `chat` span carries OTel `gen_ai.usage.cache_read.input_tokens` + `gen_ai.usage.details.cache_creation_input_tokens` — verify caching against these exact names. `gen_ai.usage.cache_read_input_tokens` exists on neither span (null = false caching-off diagnosis, §B.113). Model settings (workflow agent only — classifier excluded): `_build_anthropic_model` reads `anthropic_thinking`, `anthropic_effort`, `anthropic_max_tokens` into `AnthropicModelSettings`. `anthropic_max_tokens` ALWAYS passed as `max_tokens=<int>` (not empty-gated). `anthropic_thinking` and `anthropic_effort` added ONLY when non-empty. Defaults: `anthropic_model=claude-sonnet-5`, `anthropic_thinking=adaptive`, `anthropic_effort=high`, `anthropic_max_tokens=32768`. `xhigh` effort requires Opus 4.7+.
 
@@ -276,8 +276,9 @@ Trigger: `src/mailpilot/agent/invoke.py`, `src/mailpilot/agent/classify.py`, `sr
 - xAI path: `rg 'XaiModel|XaiProvider|xai_reasoning_effort|xai_max_tokens' src/mailpilot/agent/` -> xAI factory + settings wiring
 - `rg 'max_tokens\b' src/mailpilot/agent/classify.py` -> zero hits (classifier excluded from max_tokens)
 - settings: `rg 'AnthropicEffort|XaiReasoningEffort|llm_provider' src/mailpilot/settings.py` -> closed enums + provider field
-- `rg 'MAILPILOT_XAI_API_KEY|MAILPILOT_ANTHROPIC_API_KEY' src/mailpilot/` -> missing-key error names env
-- fixture: missing key + due T1 batch → zero tasks written `failed`
+- `rg 'mailpilot config set xai_api_key|mailpilot config set anthropic_api_key' src/mailpilot/` -> missing-key error names config set
+- `rg 'MAILPILOT_XAI_API_KEY|MAILPILOT_ANTHROPIC_API_KEY' src/mailpilot/` -> zero error-name hits (env vars are not sources)
+- fixture: missing key + due T1 batch → skip drain, zero tasks written `failed`
 
 ## §V49 — bounded auto-retry parameters
 
@@ -682,14 +683,13 @@ Mechanical checks (over the conventions file Batch-gate §):
 - `rg -n 'stale-count <= 24' .claude/skills/lead-companies/references/lead-pipeline-conventions.md` -> at least one hit (`First 24` dropped at/below its cap).
 - `rg -n 'stale-count <= 24' .claude/skills/lead-companies/SKILL.md .claude/skills/lead-contacts/SKILL.md` -> zero hits (rule not duplicated into a SKILL body, §V.100).
 
-## §V119 — destructive DB op backup-first
+## §V119 — make clean is a deliberate wipe
 
-Every destructive DB op (`make clean`, any `dropdb`) runs `mailpilot db export --file ~/Documents/MailPilot/snap-<ts>.json` first (single JSON snapshot = tag vocabulary + company + contact, §V.121). CLI writes the file + exits 0 before any `dropdb`. Failed export aborts the drop (fail-closed, no `|| true` swallow). Restore = `mailpilot db import --file <snap>`. Company + contact = paid live data (discovery credits §V.96/§V.113), never wiped without a durable backup. Backup dir `~/Documents/MailPilot/` is iCloud-synced (portable across macOS instances), outside the dropped DB.
+`make clean` drops and recreates the databases. It does not auto-run `mailpilot db export`. Operator snapshot remains `mailpilot db export --file <path>` (§V.121); restore = `mailpilot db import --file <snap>`. Makefile has no `db-backup`, `config-backup`, or `env-backup` targets (`app_config` is the settings store; secrets restore from `pass mailpilot/` after reset).
 
-Trigger: `Makefile` changed.
-- `rg 'db-backup\b' makefile` -> db-backup target present
-- `rg 'db.*export.*snap\|snap.*db.*export' makefile` -> export-to-snap in db-backup target
-- `rg 'clean.*db-backup\|db-backup.*clean\|clean.*:.*db-backup' makefile` -> make clean depends on db-backup
+Trigger: `makefile` changed.
+- `rg '^(db-backup|config-backup|env-backup)\s*:' makefile` -> zero hits
+- `rg 'clean:.*db-backup' makefile` -> zero hits
 
 ## §V120 — send-obligation guard
 
@@ -1091,7 +1091,7 @@ Trigger: campaign-test or reply-test scripts/skills changed.
 
 ## §V176 — target-env derived pubsub + logfire
 
-settings.environment ∈ {dev, prd} default dev. Sole env setting. Operator knob: `MAILPILOT_ENVIRONMENT` / config.json `environment` / `config set environment`. Pair map (internal, not a setting): dev=development, prd=production — used only at `logfire.configure(environment=...)`. Derived pubsub: `google_pubsub_topic` = `mailpilot-topic-{environment}`; `google_pubsub_subscription` = `mailpilot-sub-{environment}`. No `logfire_environment` field / Settings key / config get key / status config key. Derived pubsub keys not independently settable (`config set` → `invalid_key`; `MAILPILOT_GOOGLE_PUBSUB_TOPIC` / `MAILPILOT_GOOGLE_PUBSUB_SUBSCRIPTION` / `MAILPILOT_LOGFIRE_ENVIRONMENT` not sources). Persist `environment` only (`save_settings` omits derived keys and never writes `logfire_environment`). Load compat: `environment` unset → map legacy config key `logfire_environment` `production`→`prd` else `dev`; never expose as a setting. `config get` + status `config` block project `environment` + resolved topic/sub only.
+settings.environment ∈ {dev, prd} default dev. Sole env setting. Operator knob: `config set environment` on `app_config`. Pair map (internal, not a setting): dev=development, prd=production — used only at `logfire.configure(environment=...)`. Derived pubsub: `google_pubsub_topic` = `mailpilot-topic-{environment}`; `google_pubsub_subscription` = `mailpilot-sub-{environment}`. No `logfire_environment` field / Settings key / config get key / status config key. Derived pubsub keys not independently settable (`config set` → `invalid_key`; `MAILPILOT_GOOGLE_PUBSUB_TOPIC` / `MAILPILOT_GOOGLE_PUBSUB_SUBSCRIPTION` / `MAILPILOT_LOGFIRE_ENVIRONMENT` not sources). Persist `environment` only on `app_config`. No `logfire_environment` load-compat. `config get` + status `config` block project `environment` + resolved topic/sub only. `environment` / `logfire_token` change @ run tick → reconfigure Logfire + restart subscriber.
 
 Trigger: `src/mailpilot/settings.py` changed.
 - `rg 'environment' src/mailpilot/settings.py` -> field present (Literal dev|prd)
@@ -1304,12 +1304,12 @@ Trigger: `src/mailpilot/agent/invoke.py` changed.
 
 ## §V85 — settings precedence
 
-settings precedence kwargs > process MAILPILOT_* env > cwd `.env` (MAILPILOT_* keys only, pydantic-settings dotenv) > ~/.mailpilot/config.json > field-literal defaults; missing `.env` = no-op; config file auto-created on first load. Field defaults = literals on Settings fields; no unused module-level `DEFAULT_*` constants; `JsonConfigSource` has no unused `get_field_value` stub.
+`database_url` kwargs > env `MAILPILOT_DATABASE_URL` > cwd `.env` (`MAILPILOT_DATABASE_URL` only) > default `postgresql://localhost/mailpilot`. Other keys kwargs (tests) > `app_config` row > field-literal defaults. No `config.json`. No non-url `MAILPILOT_*`. Missing `.env` = no-op. Field defaults = literals on Settings fields; no unused module-level `DEFAULT_*` constants.
 
 Trigger: `src/mailpilot/settings.py` changed.
-- `rg 'env_file=.env|settings_customise_sources' src/mailpilot/settings.py` -> dotenv + source order present
-- `rg 'config.json' src/mailpilot/settings.py` -> config-file source present
-- `rg '^DEFAULT_' src/mailpilot/settings.py` -> zero hits
+- `rg 'bootstrap_database_url|MAILPILOT_DATABASE_URL' src/mailpilot/settings.py` -> URL bootstrap present
+- `rg 'config.json' src/mailpilot/settings.py` -> zero hits
+- `rg 'app_config' src/mailpilot/settings.py` -> row hydrate present
 - `rg 'def get_field_value' src/mailpilot/settings.py` -> zero hits
 
 ## §V88 — entity enum schema CHECK
@@ -1329,3 +1329,81 @@ Trigger: `src/mailpilot/email_renderer.py` changed.
 - `rg 'THEMES' src/mailpilot/email_renderer.py` -> theme enum present
 - `rg 'max-width' src/mailpilot/email_renderer.py` -> zero body max-width
 - `rg 'def (strong|emphasis|table_head|table_body|table_row)\b' src/mailpilot/email_renderer.py` -> zero hits
+
+## §V1 — two-phase settings load
+
+two-phase settings load — bootstrap `database_url` (kwargs > env `MAILPILOT_DATABASE_URL` > `.env` > default `postgresql://localhost/mailpilot`); DB connect + schema gate; hydrate `Settings` from `app_config`; network/Logfire after; `--help`/`--version` skip load; `db init|migrate|check` bootstrap only; `mailpilot run` re-SELECT `app_config` each tick; `database_url` process-lifetime
+
+Trigger: `src/mailpilot/settings.py` or `src/mailpilot/run.py` or `src/mailpilot/cli.py` changed.
+- `rg 'bootstrap_database_url|MAILPILOT_DATABASE_URL' src/mailpilot/settings.py` -> URL bootstrap present
+- `rg 'app_config' src/mailpilot/settings.py src/mailpilot/run.py` -> hydrate + tick re-SELECT
+- `rg 'skip load|--help|--version' src/mailpilot/cli.py src/mailpilot/settings.py` -> help/version skip load
+- `rg 'initialize_database' src/mailpilot/cli.py` -> db init|migrate|check bootstrap path
+
+## §V37 — service-account DWD auth
+
+auth = service account + domain-wide delegation; JSON `google_application_credentials` on `app_config` -> `from_service_account_info` + with_subject(email); null column -> ADC iam.Signer credentials w/ subject=email; no file-path setting; no OAuth user login
+
+Trigger: Google client construction (`gmail.py` / `drive.py` / `calendar.py` / settings creds) changed.
+- `rg 'from_service_account_info|with_subject' src/mailpilot/` -> JSON creds + subject impersonation
+- `rg 'iam.Signer|service_account.Credentials' src/mailpilot/` -> ADC signer path
+- `rg 'GOOGLE_APPLICATION_CREDENTIALS' src/mailpilot/settings.py` -> not a mailpilot settings source
+
+## §V52 — logfire environment map
+
+logfire.configure maps settings.environment internally (dev→development, prd→production per §V.176) -> spans carry deployment_environment; cloud queries filter by env; no `logfire_environment` setting
+
+Trigger: `src/mailpilot/settings.py` or logfire.configure call site changed.
+- `rg 'logfire.configure' src/mailpilot/` -> configure present
+- `rg 'deployment_environment|environment=' src/mailpilot/` -> env map passed
+- `rg 'def logfire_environment' src/mailpilot/settings.py` -> zero Settings property
+
+## §V86 — secret settings redaction
+
+secret settings (`anthropic_api_key`, `xai_api_key`, `logfire_token`, `database_url`, `google_application_credentials`) redacted as '***' in telemetry; config.set event logs key + changed flag
+
+Trigger: `src/mailpilot/settings.py` or `src/mailpilot/cli.py` config path changed.
+- `rg '\*\*\*' src/mailpilot/settings.py src/mailpilot/cli.py` -> secret redaction present
+- `rg 'config.set|config_set' src/mailpilot/` -> set event logs key + changed
+
+## §V177 — CLI db helper
+
+cli-db-context — `_db(*, mutate: bool = False)` sole CLI connection helper; lazy-import `initialize_database` (module-level click-only §V.2); `mutate=True` → `require_current_schema=True` (§V.109); mutate success → `connection.commit()` before close; exception/`output_error` skip commit (rollback); close success+error; `cli_mutation` stays per-cmd outside helper (§V.54); cmds use helper not copy open/close
+
+Trigger: `src/mailpilot/cli.py` changed.
+- `rg 'def _db\(' src/mailpilot/cli.py` -> sole helper present
+- `rg 'initialize_database' src/mailpilot/cli.py` -> lazy-import inside helper
+- `rg 'connection.commit' src/mailpilot/cli.py` -> mutate success commit
+- `rg 'cli_mutation' src/mailpilot/cli.py` -> span stays per-cmd outside helper
+
+## §V178 — shared query fragments
+
+shared-query-fragments — `list_companies`/`export_companies` (and import via export) share one WHERE/HAVING builder for profile/pipeline/contact-count/tag predicates; `--tag`/`--no-tag` resolve through the existing tag-id helper; include/exclude tag filters one helper `negate` flag; EmailSummary/WorkflowSummary/TagSummary list+search (and review emails) share one SELECT list each; review window emails uncapped matching `list_emails` filters/order; export still unlimited `ORDER BY domain` + tracker-shaped dicts (§V.145)
+
+Trigger: `src/mailpilot/database.py` or company/email/workflow/tag list SQL changed.
+- `rg 'def _company_scope_clauses' src/mailpilot/database.py` -> shared WHERE/HAVING builder
+- `rg 'negate' src/mailpilot/database.py` -> include/exclude tag helper flag
+- `rg 'list_emails' src/mailpilot/cli.py` -> review reuses list_emails
+- `rg 'ORDER BY domain' src/mailpilot/database.py` -> export unlimited domain order
+
+## §V180 — task filter stack share
+
+task-filter-stack-share — `task list|cancel|retry` share `@task_scope_options` in `_filters.py` (`--workflow-id`,`--contact-email`,`--status`,`--trigger`,`--overdue`,`@touch_option`,`@time_window_options("scheduled_at")`); one `_task_filter_mode(task_id, *, required, allowed_status)` encodes TASK_ID XOR filters; one `_resolve_task_scope` loads workflow+contact; id retry uses `retry_tasks_matching(task_id=...)` then `get_task`; drop `manual_retry_task` when tests use bulk path; `get_task_stats` uses `_task_filter_clauses`; cancel vs retry required-filter + status stay distinct (§V.173, §V.175)
+
+Trigger: `src/mailpilot/cli.py` or `src/mailpilot/_filters.py` or task DB filter path changed.
+- `rg 'def task_scope_options|task_scope_options' src/mailpilot/` -> shared option decorator
+- `rg 'def _task_filter_mode' src/mailpilot/cli.py` -> XOR helper present
+- `rg 'def _resolve_task_scope' src/mailpilot/cli.py` -> scope loader present
+- `rg 'retry_tasks_matching' src/mailpilot/` -> id + bulk retry path
+- `rg 'def manual_retry_task' src/mailpilot/` -> zero hits when tests use bulk
+- `rg '_task_filter_clauses' src/mailpilot/database.py` -> stats shares clauses
+
+## §V181 — app_config singleton
+
+app-config-db — table `app_config` id='singleton'; typed cols every Settings field except `database_url` + derived pubsub keys; schema CHECKs own enums; col defaults = field-literal defaults; `google_application_credentials` JSONB document (null → ADC); missing row @ load insert defaults; `config get|set` read/write the row; `config set` persist visible on new connection; `config set` of `database_url` or derived pubsub keys or unknown → `invalid_key`; invalid JSON for credentials → `validation_error`
+
+Trigger: `src/mailpilot/schema.sql` or `src/mailpilot/settings.py` or `src/mailpilot/cli.py` config path changed.
+- `rg 'CREATE TABLE app_config' src/mailpilot/schema.sql` -> singleton table present
+- `rg 'google_application_credentials' src/mailpilot/schema.sql src/mailpilot/settings.py` -> JSONB col + load
+- `rg 'invalid_key' src/mailpilot/cli.py` -> config set rejects database_url + derived pubsub
+- `rg "id=.singleton." src/mailpilot/` -> singleton id

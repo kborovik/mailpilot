@@ -20,7 +20,7 @@ def test_setup_pubsub_creates_topic_and_subscription() -> None:
     from mailpilot.pubsub import setup_pubsub
 
     settings = make_test_settings(
-        google_application_credentials="/tmp/creds.json",
+        google_application_credentials={"type": "service_account", "project_id": "p"},
     )
     with (
         patch("mailpilot.pubsub._resolve_project_id", return_value="my-project"),
@@ -58,7 +58,7 @@ def test_setup_pubsub_passes_service_account_credentials() -> None:
     from mailpilot.pubsub import setup_pubsub
 
     settings = make_test_settings(
-        google_application_credentials="/tmp/creds.json",
+        google_application_credentials={"type": "service_account", "project_id": "p"},
     )
     sentinel = MagicMock(name="service_account_credentials")
     with (
@@ -79,7 +79,7 @@ def test_start_subscriber_passes_service_account_credentials() -> None:
     from mailpilot.pubsub import start_subscriber
 
     settings = make_test_settings(
-        google_application_credentials="/tmp/creds.json",
+        google_application_credentials={"type": "service_account", "project_id": "p"},
     )
     sentinel = MagicMock(name="service_account_credentials")
     with (
@@ -98,7 +98,7 @@ def test_setup_pubsub_idempotent_when_already_exists() -> None:
     from mailpilot.pubsub import setup_pubsub
 
     settings = make_test_settings(
-        google_application_credentials="/tmp/creds.json",
+        google_application_credentials={"type": "service_account", "project_id": "p"},
     )
     with (
         patch("mailpilot.pubsub._resolve_project_id", return_value="my-project"),
@@ -118,7 +118,7 @@ def test_setup_pubsub_sets_iam_policy() -> None:
     from mailpilot.pubsub import setup_pubsub
 
     settings = make_test_settings(
-        google_application_credentials="/tmp/creds.json",
+        google_application_credentials={"type": "service_account", "project_id": "p"},
     )
     with (
         patch("mailpilot.pubsub._resolve_project_id", return_value="my-project"),
@@ -141,7 +141,7 @@ def test_start_subscriber_returns_future() -> None:
     from mailpilot.pubsub import start_subscriber
 
     settings = make_test_settings(
-        google_application_credentials="/tmp/creds.json",
+        google_application_credentials={"type": "service_account", "project_id": "p"},
     )
     callback = MagicMock()
     with (
@@ -379,7 +379,7 @@ def test_renew_watches_renews_expiring(
     from mailpilot.pubsub import renew_watches
 
     settings = make_test_settings(
-        google_application_credentials="/tmp/creds.json",
+        google_application_credentials={"type": "service_account", "project_id": "p"},
     )
     # Account with watch expiring in 12 hours (within 24h threshold)
     account = make_test_account(database_connection, email="expiring@example.com")
@@ -416,7 +416,7 @@ def test_renew_watches_emits_error_on_renewal_failure(
     from mailpilot.pubsub import renew_watches
 
     settings = make_test_settings(
-        google_application_credentials="/tmp/creds.json",
+        google_application_credentials={"type": "service_account", "project_id": "p"},
     )
     account = make_test_account(database_connection, email="renew-fail@example.com")
     soon = datetime.now(UTC) + timedelta(hours=12)
@@ -444,7 +444,7 @@ def test_renew_watches_skips_fresh_watches(
     from mailpilot.pubsub import renew_watches
 
     settings = make_test_settings(
-        google_application_credentials="/tmp/creds.json",
+        google_application_credentials={"type": "service_account", "project_id": "p"},
     )
     # Account with watch expiring in 3 days (outside 24h threshold)
     account = make_test_account(database_connection, email="fresh@example.com")
@@ -467,7 +467,7 @@ def test_renew_watches_renews_null_expiration(
     from mailpilot.pubsub import renew_watches
 
     settings = make_test_settings(
-        google_application_credentials="/tmp/creds.json",
+        google_application_credentials={"type": "service_account", "project_id": "p"},
     )
     # Account with no watch set (watch_expiration is NULL)
     make_test_account(database_connection, email="new@example.com")

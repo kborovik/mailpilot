@@ -24,6 +24,7 @@ from mailpilot.database import (
     create_workflow,
     get_tag_by_name,
     initialize_database,
+    migrate_database,
 )
 from mailpilot.models import (
     Account,
@@ -36,7 +37,7 @@ from mailpilot.models import (
     TagAssignment,
     Workflow,
 )
-from mailpilot.settings import Settings
+from mailpilot.settings import Settings, clear_settings_cache
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 TEST_DATABASE_URL = os.environ.get(
@@ -46,27 +47,28 @@ TEST_DATABASE_URL = os.environ.get(
 
 def make_test_settings(**overrides: Any) -> Settings:
     """Create a Settings instance with test defaults."""
-    return Settings(
-        database_url=TEST_DATABASE_URL,  # pyright: ignore[reportArgumentType]
-        **overrides,
-    )
+    defaults: dict[str, Any] = {
+        "database_url": TEST_DATABASE_URL,
+        "xai_api_key": "test-key",
+    }
+    defaults.update(overrides)
+    return Settings(**defaults)  # pyright: ignore[reportArgumentType]
 
 
 @pytest.fixture(autouse=True)
-def _isolate_config_file(  # pyright: ignore[reportUnusedFunction]
-    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Point ``CONFIG_PATH`` at a nonexistent temp file.
+def _isolate_settings(  # pyright: ignore[reportUnusedFunction]
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[None]:
+    """Pin bootstrap URL to the test DB and clear the settings cache.
 
-    ``Settings`` reads ``~/.mailpilot/config.json`` through ``JsonConfigSource``.
-    Without isolation the operator's real config (for example a Novita
-    ``anthropic_base_url``) leaks into every test that constructs ``Settings``
-    or calls ``make_test_settings``, overriding the field defaults under test.
-    A nonexistent path makes ``JsonConfigSource`` return an empty dict, so tests
-    see field defaults unless they override explicitly.
+    ``MAILPILOT_DATABASE_URL`` is the only remaining env source (§V.85).
+    Clearing the cache keeps ``get_settings`` from leaking a prior test's
+    ``app_config`` snapshot.
     """
-    config_path = tmp_path_factory.mktemp("mailpilot_config") / "config.json"
-    monkeypatch.setattr("mailpilot.settings.CONFIG_PATH", config_path)
+    monkeypatch.setenv("MAILPILOT_DATABASE_URL", TEST_DATABASE_URL)
+    clear_settings_cache()
+    yield
+    clear_settings_cache()
 
 
 @pytest.fixture(autouse=True)
@@ -82,9 +84,21 @@ def _disable_logfire_export(monkeypatch: pytest.MonkeyPatch) -> None:  # pyright
 
 @pytest.fixture(scope="session", autouse=True)
 def _apply_schema() -> None:  # pyright: ignore[reportUnusedFunction]
-    """Apply schema once per test session using a dedicated connection."""
+    """Apply schema once per test session and forward-migrate.
+
+    ``initialize_database`` provisions only an empty DB; a populated test
+    database picks up new ``migrations/NNN_*.sql`` via ``migrate_database``.
+    """
     conn = initialize_database(TEST_DATABASE_URL)
     conn.close()
+    migrate_conn = cast(
+        psycopg.Connection[dict[str, Any]],
+        psycopg.connect(TEST_DATABASE_URL, row_factory=dict_row, autocommit=False),  # type: ignore[arg-type]
+    )
+    try:
+        migrate_database(migrate_conn)
+    finally:
+        migrate_conn.close()
 
 
 @pytest.fixture
@@ -97,8 +111,9 @@ def database_connection() -> Iterator[psycopg.Connection[dict[str, Any]]]:
     conn.execute(
         "TRUNCATE TABLE meeting_attendee, meeting, note, tag_assignment, tag, "
         "activity, sync_status, task, email, enrollment, workflow, contact, "
-        "company, account CASCADE"
+        "company, account, app_config CASCADE"
     )
+    conn.execute("INSERT INTO app_config (id) VALUES ('singleton')")
     conn.commit()
     yield conn
     conn.close()

@@ -1,8 +1,10 @@
-"""§V.47 / §B.141: abort ``mailpilot run`` before drain when the key is missing."""
+"""§V.47 / §B.141: skip drain when the active-provider key is missing."""
 
 from __future__ import annotations
 
-import json
+import concurrent.futures
+import queue
+import threading
 from typing import Any
 from unittest.mock import patch
 
@@ -45,21 +47,24 @@ def _seed_due_t1_batch(
     return task_ids
 
 
-def test_require_active_provider_key_xai_names_env() -> None:
-    """Missing xAI key names MAILPILOT_XAI_API_KEY and does not prescribe config set."""
+def test_require_active_provider_key_xai_names_config_set() -> None:
+    """Missing xAI key names ``mailpilot config set xai_api_key``."""
     settings = make_test_settings(llm_provider="xai", xai_api_key="")
-    with pytest.raises(ValueError, match="MAILPILOT_XAI_API_KEY") as exc_info:
+    with pytest.raises(
+        ValueError, match="mailpilot config set xai_api_key"
+    ) as exc_info:
         require_active_provider_key(settings)
-    message = str(exc_info.value)
-    assert "mailpilot config set" not in message
+    assert "MAILPILOT_XAI_API_KEY" not in str(exc_info.value)
 
 
-def test_require_active_provider_key_anthropic_names_env() -> None:
-    """Missing Anthropic key names MAILPILOT_ANTHROPIC_API_KEY."""
+def test_require_active_provider_key_anthropic_names_config_set() -> None:
+    """Missing Anthropic key names ``mailpilot config set anthropic_api_key``."""
     settings = make_test_settings(llm_provider="anthropic", anthropic_api_key="")
-    with pytest.raises(ValueError, match="MAILPILOT_ANTHROPIC_API_KEY") as exc_info:
+    with pytest.raises(
+        ValueError, match="mailpilot config set anthropic_api_key"
+    ) as exc_info:
         require_active_provider_key(settings)
-    assert "mailpilot config set" not in str(exc_info.value)
+    assert "MAILPILOT_ANTHROPIC_API_KEY" not in str(exc_info.value)
 
 
 def test_require_active_provider_key_accepts_present_key() -> None:
@@ -70,29 +75,62 @@ def test_require_active_provider_key_accepts_present_key() -> None:
     )
 
 
-def test_run_aborts_before_drain_when_xai_key_empty(
+def test_run_starts_loop_when_xai_key_empty(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.47 / §B.141: missing key + due T1 batch → abort, zero tasks failed."""
+    """§V.47: missing key does not abort ``run``; the loop starts and stays up."""
     task_ids = _seed_due_t1_batch(database_connection, count=3)
     settings = make_test_settings(llm_provider="xai", xai_api_key="")
     runner = CliRunner()
 
     with (
         patch("mailpilot.settings.get_settings", return_value=settings),
-        patch("mailpilot.database.initialize_database") as mock_init,
+        patch("mailpilot.database.initialize_database"),
         patch("mailpilot.sync.start_sync_loop") as mock_loop,
     ):
         result = runner.invoke(main, ["run"])
 
-    assert result.exit_code == 1, result.output
-    data = json.loads(result.output)
-    assert data["ok"] is False
-    assert "MAILPILOT_XAI_API_KEY" in data["message"]
-    assert "mailpilot config set" not in data["message"]
-    mock_init.assert_not_called()
-    mock_loop.assert_not_called()
+    assert result.exit_code == 0, result.output
+    mock_loop.assert_called_once()
 
+    for task_id in task_ids:
+        task = get_task(database_connection, task_id)
+        assert task is not None
+        assert task.status == "pending"
+    assert list_tasks(database_connection, status="failed") == []
+
+
+def test_iteration_skips_drain_when_key_empty(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.47: missing key + due T1 → skip drain, zero tasks claimed or failed."""
+    from mailpilot.sync import (
+        _run_periodic_iteration,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    task_ids = _seed_due_t1_batch(database_connection, count=3)
+    settings = make_test_settings(llm_provider="xai", xai_api_key="")
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        with (
+            patch("mailpilot.sync._drain_sync_queue"),
+            patch("mailpilot.sync._sync_all_accounts"),
+            patch("mailpilot.sync._drain_pending_tasks") as mock_drain,
+        ):
+            _run_periodic_iteration(
+                database_connection,
+                settings,
+                queue.Queue(),
+                "timer",
+                do_full_sweep=False,
+                pool=pool,
+                in_flight={},
+                wakeup_event=threading.Event(),
+            )
+    finally:
+        pool.shutdown(wait=True)
+
+    mock_drain.assert_not_called()
     for task_id in task_ids:
         task = get_task(database_connection, task_id)
         assert task is not None

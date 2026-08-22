@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- `config set` commits the `app_config` write before the connection
+  closes. A successful envelope is visible to a later `config get` and
+  to `mailpilot run`. CLI write commands share that commit on
+  `_db(mutate=True)` success; errors still roll back.
+
+### Changed
+
+- Persistent settings live in the `app_config` database singleton, not
+  `~/.mailpilot/config.json`. `config get` / `config set` read and write
+  that row.
+- `database_url` is bootstrap-only (`MAILPILOT_DATABASE_URL`, cwd `.env`,
+  or `postgresql://localhost/mailpilot`). `config set database_url`
+  returns `invalid_key`. Other `MAILPILOT_*` env vars are not sources.
+- `google_application_credentials` is a JSON service-account document.
+  `null` uses Application Default Credentials. A file path is no longer
+  accepted.
+- A missing active-provider API key skips that `mailpilot run` tick
+  (process stays up; zero due tasks claimed). The error names
+  `mailpilot config set xai_api_key` or
+  `mailpilot config set anthropic_api_key`.
+- `make clean` drops and recreates the databases, then restores empty
+  `app_config` keys from `pass mailpilot/`. The `db-backup`,
+  `config-backup`, and `env-backup` targets are gone.
+
 ## [v0.30.1] - 2026-08-21
 
 ### Fixed
