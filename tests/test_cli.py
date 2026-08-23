@@ -16347,7 +16347,7 @@ def test_workflow_status_envelope(
 
     health = WorkflowStatusHealth(
         workflow=WorkflowReportMeta(name="Demo", status="active"),
-        wording="unknown",
+        wording="orphaned",
         run_loop="stopped",
         overdue_tasks=0,
         failed_tasks_24h=0,

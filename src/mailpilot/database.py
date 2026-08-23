@@ -122,6 +122,20 @@ def _sql_resolve_touch(context_col: SQL) -> Composed:
     ).format(parsed=_sql_parse_touch(context_col), col=context_col)
 
 
+def _sql_outbound_sent_count(e: SQL) -> Composed:
+    """COUNT of sent outbound emails for enrollment-shaped alias ``e`` (§V.184).
+
+    ``e`` is a caller-owned alias -- never user input.
+    """
+    return SQL(
+        "(SELECT COUNT(*)::int FROM email "
+        "WHERE email.workflow_id = {e}.workflow_id "
+        "AND email.contact_id = {e}.contact_id "
+        "AND email.direction = 'outbound' "
+        "AND email.status = 'sent')"
+    ).format(e=e)
+
+
 _INLINE_NOTES_CAP = 10
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
@@ -2880,9 +2894,9 @@ def list_workflows_full(
 
 def get_workflow_stats(
     connection: psycopg.Connection[dict[str, Any]],
-    workflow_id: str,
-) -> WorkflowStats | None:
-    """Compute the per-campaign funnel for one workflow (§V.132).
+    workflow: Workflow,
+) -> WorkflowStats:
+    """Compute the per-campaign funnel for one already-loaded workflow (§V.132).
 
     A single deterministic SQL aggregate over the workflow's enrollments -- no
     LLM. The enrollment row (one per contact) is the grain, so each stage is
@@ -2909,85 +2923,80 @@ def get_workflow_stats(
 
     Args:
         connection: Open database connection.
-        workflow_id: Workflow ID (entity ref per §V.107).
+        workflow: Loaded workflow row (CLI resolves the entity ref first).
 
     Returns:
-        ``WorkflowStats`` for the workflow, or ``None`` when no workflow
-        matches the id (the CLI maps None -> ``not_found``).
+        ``WorkflowStats`` for the workflow.
     """
-    workflow = get_workflow(connection, workflow_id)
-    if workflow is None:
-        return None
+    sent_count = _sql_outbound_sent_count(SQL("e"))
     row = connection.execute(
-        """\
-        WITH per_enrollment AS (
-            SELECT
-                e.status,
-                EXISTS (
-                    SELECT 1 FROM email
-                    WHERE email.workflow_id = e.workflow_id
-                      AND email.contact_id = e.contact_id
-                      AND email.direction = 'outbound'
-                      AND email.status = 'sent'
-                ) AS has_sent,
-                EXISTS (
-                    SELECT 1 FROM email
-                    WHERE email.workflow_id = e.workflow_id
-                      AND email.contact_id = e.contact_id
-                      AND email.direction = 'outbound'
-                      AND email.status = 'bounced'
-                ) AS has_bounced,
-                EXISTS (
-                    SELECT 1 FROM email
-                    WHERE email.workflow_id = e.workflow_id
-                      AND email.contact_id = e.contact_id
-                      AND email.direction = 'inbound'
-                      AND email.is_routed = TRUE
-                ) AS has_replied,
-                outcome.latest_outcome,
-                outcome.disposition
-            FROM enrollment e
-            LEFT JOIN LATERAL (
+        SQL(
+            """\
+            WITH per_enrollment AS (
                 SELECT
-                    CASE a.type
-                        WHEN 'enrollment_completed' THEN 'completed'
-                        WHEN 'enrollment_failed' THEN 'failed'
-                    END AS latest_outcome,
-                    a.detail->>'disposition' AS disposition
-                FROM activity a
-                WHERE a.contact_id = e.contact_id
-                  AND a.workflow_id = e.workflow_id
-                  AND a.type IN ('enrollment_completed', 'enrollment_failed')
-                ORDER BY a.created_at DESC
-                LIMIT 1
-            ) outcome ON TRUE
-            WHERE e.workflow_id = %(workflow_id)s
-        )
-        SELECT
-            COUNT(*) AS enrolled,
-            COUNT(*) FILTER (WHERE has_sent) AS sent,
-            COUNT(*) FILTER (WHERE has_bounced) AS bounced,
-            COUNT(*) FILTER (WHERE has_replied) AS replied,
-            COUNT(*) FILTER (WHERE latest_outcome = 'completed')
-                AS meeting_booked,
-            COUNT(*) FILTER (
-                WHERE latest_outcome = 'failed' AND disposition = 'contact_later'
-            ) AS contact_later,
-            COUNT(*) FILTER (
-                WHERE latest_outcome = 'failed' AND disposition = 'do_not_contact'
-            ) AS do_not_contact,
-            COUNT(*) FILTER (
-                WHERE status = 'active' AND latest_outcome IS NULL
-            ) AS active,
-            COUNT(*) FILTER (
-                WHERE status = 'active'
-                  AND latest_outcome IS NULL
-                  AND NOT has_sent
-            ) AS awaiting_first_touch,
-            COUNT(*) FILTER (WHERE status = 'disabled') AS disabled
-        FROM per_enrollment
-        """,
-        {"workflow_id": workflow_id},
+                    e.status,
+                    {sent_count} > 0 AS has_sent,
+                    EXISTS (
+                        SELECT 1 FROM email
+                        WHERE email.workflow_id = e.workflow_id
+                          AND email.contact_id = e.contact_id
+                          AND email.direction = 'outbound'
+                          AND email.status = 'bounced'
+                    ) AS has_bounced,
+                    EXISTS (
+                        SELECT 1 FROM email
+                        WHERE email.workflow_id = e.workflow_id
+                          AND email.contact_id = e.contact_id
+                          AND email.direction = 'inbound'
+                          AND email.is_routed = TRUE
+                    ) AS has_replied,
+                    outcome.latest_outcome,
+                    outcome.disposition
+                FROM enrollment e
+                LEFT JOIN LATERAL (
+                    SELECT
+                        CASE a.type
+                            WHEN 'enrollment_completed' THEN 'completed'
+                            WHEN 'enrollment_failed' THEN 'failed'
+                        END AS latest_outcome,
+                        a.detail->>'disposition' AS disposition
+                    FROM activity a
+                    WHERE a.contact_id = e.contact_id
+                      AND a.workflow_id = e.workflow_id
+                      AND a.type IN ('enrollment_completed', 'enrollment_failed')
+                    ORDER BY a.created_at DESC
+                    LIMIT 1
+                ) outcome ON TRUE
+                WHERE e.workflow_id = %(workflow_id)s
+            )
+            SELECT
+                COUNT(*) AS enrolled,
+                COUNT(*) FILTER (WHERE has_sent) AS sent,
+                COUNT(*) FILTER (WHERE has_bounced) AS bounced,
+                COUNT(*) FILTER (WHERE has_replied) AS replied,
+                COUNT(*) FILTER (WHERE latest_outcome = 'completed')
+                    AS meeting_booked,
+                COUNT(*) FILTER (
+                    WHERE latest_outcome = 'failed'
+                      AND disposition = 'contact_later'
+                ) AS contact_later,
+                COUNT(*) FILTER (
+                    WHERE latest_outcome = 'failed'
+                      AND disposition = 'do_not_contact'
+                ) AS do_not_contact,
+                COUNT(*) FILTER (
+                    WHERE status = 'active' AND latest_outcome IS NULL
+                ) AS active,
+                COUNT(*) FILTER (
+                    WHERE status = 'active'
+                      AND latest_outcome IS NULL
+                      AND NOT has_sent
+                ) AS awaiting_first_touch,
+                COUNT(*) FILTER (WHERE status = 'disabled') AS disabled
+            FROM per_enrollment
+            """
+        ).format(sent_count=sent_count),
+        {"workflow_id": workflow.id},
     ).fetchone()
     assert row is not None  # aggregate over a present workflow always returns 1 row
 
@@ -3005,13 +3014,7 @@ def get_workflow_stats(
                     (
                         SELECT COUNT(*)::int FROM enrollment e
                         WHERE e.workflow_id = %(workflow_id)s
-                          AND (
-                              SELECT COUNT(*)::int FROM email
-                              WHERE email.workflow_id = e.workflow_id
-                                AND email.contact_id = e.contact_id
-                                AND email.direction = 'outbound'
-                                AND email.status = 'sent'
-                          ) >= tn.touch
+                          AND {sent_count} >= tn.touch
                     ) AS sent,
                     (
                         SELECT COUNT(*)::int FROM task t
@@ -3022,8 +3025,11 @@ def get_workflow_stats(
                 FROM touch_nums tn
                 ORDER BY tn.touch
                 """
-            ).format(touch=_sql_resolve_touch(SQL("t.context"))),
-            {"workflow_id": workflow_id, "touches": configured_touches},
+            ).format(
+                touch=_sql_resolve_touch(SQL("t.context")),
+                sent_count=sent_count,
+            ),
+            {"workflow_id": workflow.id, "touches": configured_touches},
         ).fetchall()
         for tr in touch_rows:
             touches[tr["touch_key"]] = TouchStageCounts(
@@ -3065,8 +3071,7 @@ def get_workflow_report(
     workflow = get_workflow(connection, workflow_id)
     if workflow is None:
         return None
-    funnel = get_workflow_stats(connection, workflow_id)
-    assert funnel is not None
+    funnel = get_workflow_stats(connection, workflow)
     tasks = get_task_stats(connection, workflow_id=workflow_id)
     enrollments = list_enrollments_detailed(
         connection,
@@ -3097,14 +3102,13 @@ def get_workflow_status_health(
 ) -> WorkflowStatusHealth | None:
     """Ops-health composite for one workflow (§V.157).
 
-    Reuses funnel active count, wording state when catalog is empty
-    (unknown), and task overdue / failed-24h counts. No LLM.
+    Wording comes from ``check_workflow_wording``. This path passes an empty
+    catalog, so live rows classify as ``orphaned``. No LLM.
     """
     workflow = get_workflow(connection, workflow_id)
     if workflow is None:
         return None
-    funnel = get_workflow_stats(connection, workflow_id)
-    assert funnel is not None
+    funnel = get_workflow_stats(connection, workflow)
 
     overdue_row = connection.execute(
         """\
@@ -3135,6 +3139,18 @@ def get_workflow_status_health(
         age = sync.get("heartbeat_age_seconds")
         run_loop = "stale" if isinstance(age, int) and age > 120 else "ok"
 
+    wording_report = check_workflow_wording(
+        connection, {}, account_id=workflow.account_id
+    )
+    wording = next(
+        (
+            entry.state
+            for entry in wording_report.workflows
+            if entry.name == workflow.name
+        ),
+        "orphaned",
+    )
+
     return WorkflowStatusHealth(
         workflow=WorkflowReportMeta(
             name=workflow.name,
@@ -3142,7 +3158,7 @@ def get_workflow_status_health(
             touch_interval_days=workflow.touch_interval_days,
             status=workflow.status,
         ),
-        wording="unknown",
+        wording=wording,
         run_loop=run_loop,
         overdue_tasks=overdue_row["n"],
         failed_tasks_24h=failed_row["n"],
@@ -3155,7 +3171,14 @@ def list_active_workflows(
     connection: psycopg.Connection[dict[str, Any]],
 ) -> list[Workflow]:
     """Return every active workflow, name-sorted, with no list cap (§V.174)."""
-    return [w for w in list_workflows_full(connection) if w.status == "active"]
+    query = SQL(
+        "SELECT workflow.*, account.email AS account_email "
+        "FROM workflow JOIN account ON account.id = workflow.account_id "
+        "WHERE workflow.status = 'active' "
+        "ORDER BY workflow.name"
+    )
+    rows = connection.execute(query).fetchall()
+    return [Workflow.model_validate(row) for row in rows]
 
 
 def _review_task_counts(
@@ -3242,8 +3265,7 @@ def _review_one_workflow(
     until: str,
 ) -> WorkflowReviewItem:
     """Build one dated campaign collect for a resolved workflow."""
-    funnel = get_workflow_stats(connection, workflow.id)
-    assert funnel is not None
+    funnel = get_workflow_stats(connection, workflow)
     enrollments = list_enrollments_detailed(
         connection,
         workflow_id=workflow.id,
@@ -4850,6 +4872,7 @@ def list_enrollments_detailed(  # noqa: C901, PLR0912
     params: dict[str, object] = {
         "first_send_sla_hours": first_send_sla_hours,
     }
+    sent_count = _sql_outbound_sent_count(SQL("e"))
     if limit is not None:
         params["limit"] = limit
     where_parts: list[Composed | SQL] = []
@@ -4882,12 +4905,7 @@ def list_enrollments_detailed(  # noqa: C901, PLR0912
                 "e.status = 'active' "
                 "AND outcome.disposition IS NULL "
                 "AND nt.scheduled_at IS NULL "
-                "AND NOT EXISTS ("
-                "SELECT 1 FROM email em "
-                "WHERE em.workflow_id = e.workflow_id "
-                "AND em.contact_id = e.contact_id "
-                "AND em.direction = 'outbound' AND em.status = 'sent'"
-                ") "
+                "AND {sent_count} = 0 "
                 "AND e.created_at < NOW() "
                 "- make_interval(hours => %(first_send_sla_hours)s)"
                 ") "
@@ -4910,7 +4928,7 @@ def list_enrollments_detailed(  # noqa: C901, PLR0912
                 "AND t.status = 'failed' AND t.attempt_count >= 3"
                 ")"
                 ")"
-            )
+            ).format(sent_count=sent_count)
         )
     if has_pending_task is True:
         where_parts.append(
@@ -4948,27 +4966,17 @@ def list_enrollments_detailed(  # noqa: C901, PLR0912
                 "WHERE t.enrollment_id = e.id AND t.status = 'pending' "
                 "AND t.context->>'touch' IS NULL"
                 ") "
-                "AND ("
-                "SELECT COUNT(*)::int FROM email em "
-                "WHERE em.workflow_id = e.workflow_id "
-                "AND em.contact_id = e.contact_id "
-                "AND em.direction = 'outbound' AND em.status = 'sent'"
-                ") = 0"
+                "AND {sent_count} = 0"
                 ") "
                 "OR ("
                 "NOT EXISTS ("
                 "SELECT 1 FROM task t "
                 "WHERE t.enrollment_id = e.id AND t.status = 'pending'"
                 ") "
-                "AND ("
-                "SELECT COUNT(*)::int FROM email em "
-                "WHERE em.workflow_id = e.workflow_id "
-                "AND em.contact_id = e.contact_id "
-                "AND em.direction = 'outbound' AND em.status = 'sent'"
-                ") = %(touch)s"
+                "AND {sent_count} = %(touch)s"
                 ")"
                 ")"
-            ).format(touch=parsed_pending)
+            ).format(touch=parsed_pending, sent_count=sent_count)
         )
     where_clause = (
         SQL("WHERE ") + SQL(" AND ").join(where_parts) if where_parts else SQL("")
@@ -4992,31 +5000,20 @@ def list_enrollments_detailed(  # noqa: C901, PLR0912
             "AS contact_name, "
             "co.domain AS company_domain, "
             "co.name AS company_name, "
-            "("
-            "SELECT COUNT(*)::int FROM email em "
-            "WHERE em.workflow_id = e.workflow_id "
-            "AND em.contact_id = e.contact_id "
-            "AND em.direction = 'outbound' AND em.status = 'sent'"
-            ") AS emails_sent, "
-            "("
-            "SELECT COUNT(*)::int FROM email em "
-            "WHERE em.workflow_id = e.workflow_id "
-            "AND em.contact_id = e.contact_id "
-            "AND em.direction = 'outbound' AND em.status = 'sent'"
-            ") AS last_touch, "
+            "{sent_count} AS emails_sent, "
+            "{sent_count} AS last_touch, "
             "nt.scheduled_at AS next_scheduled_at, "
             "COALESCE("
             "{next_touch}, "
             "CASE WHEN nt.scheduled_at IS NOT NULL "
-            "AND nt.context->>'touch' IS NULL AND ("
-            "SELECT COUNT(*)::int FROM email em "
-            "WHERE em.workflow_id = e.workflow_id "
-            "AND em.contact_id = e.contact_id "
-            "AND em.direction = 'outbound' AND em.status = 'sent'"
-            ") = 0 THEN 1 END"
+            "AND nt.context->>'touch' IS NULL AND "
+            "{sent_count} = 0 THEN 1 END"
             ") AS next_touch, "
             "outcome.disposition AS disposition "
-        ).format(next_touch=_sql_parse_touch(SQL("nt.context")))
+        ).format(
+            next_touch=_sql_parse_touch(SQL("nt.context")),
+            sent_count=sent_count,
+        )
         from_joins = (
             SQL(
                 "FROM enrollment e "
@@ -5770,12 +5767,11 @@ def count_outbound_sent(
     first-reach after a send (§V.32).
     """
     row = connection.execute(
-        """\
-        SELECT COUNT(*)::int AS n FROM email
-        WHERE workflow_id = %(workflow_id)s
-          AND contact_id = %(contact_id)s
-          AND direction = 'outbound' AND status = 'sent'
-        """,
+        SQL(
+            "SELECT {count} AS n "
+            "FROM (VALUES (%(workflow_id)s, %(contact_id)s)) "
+            "AS e(workflow_id, contact_id)"
+        ).format(count=_sql_outbound_sent_count(SQL("e"))),
         {"workflow_id": workflow_id, "contact_id": contact_id},
     ).fetchone()
     if row is None:

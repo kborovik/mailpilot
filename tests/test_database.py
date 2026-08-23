@@ -6754,14 +6754,22 @@ def test_list_inbound_emails_from_contact_after_returns_later_rows(
 # -- get_workflow_stats (§V.132) -----------------------------------------------
 
 
-def test_get_workflow_stats_returns_none_for_unknown_workflow(
-    database_connection: psycopg.Connection[dict[str, Any]],
-) -> None:
-    """§V.107: an unknown workflow ref resolves to None (CLI maps -> not_found)."""
-    assert (
-        get_workflow_stats(database_connection, "01234567-0000-7000-0000-0000000000ff")
-        is None
-    )
+def test_get_workflow_stats_takes_loaded_workflow() -> None:
+    """§V.184: stats takes already-loaded Workflow, no inner workflow_id fetch."""
+    import inspect
+
+    params = inspect.signature(get_workflow_stats).parameters
+    assert "workflow" in params
+    assert "workflow_id" not in params
+
+
+def test_campaign_query_stack_shares_outbound_sent_fragment() -> None:
+    """§V.184: one outbound-sent COUNT fragment; review uses list_emails."""
+    import mailpilot.database as db
+
+    fragment = getattr(db, "_sql_outbound_sent_count", None)
+    assert callable(fragment)
+    assert not hasattr(db, "_review_window_emails")
 
 
 def test_get_workflow_stats_counts_all_funnel_stages(
@@ -6863,8 +6871,7 @@ def test_get_workflow_stats_counts_all_funnel_stages(
         disposition="do_not_contact",
     )
 
-    stats = get_workflow_stats(database_connection, workflow.id)
-    assert stats is not None
+    stats = get_workflow_stats(database_connection, workflow)
     assert stats.workflow_id == workflow.id
     assert stats.workflow_name == workflow.name
     assert stats.enrolled == 7
@@ -6901,7 +6908,7 @@ def test_get_workflow_stats_multi_touch_not_double_counted(
             workflow_id=workflow.id,
         )
 
-    stats = get_workflow_stats(database_connection, workflow.id)
+    stats = get_workflow_stats(database_connection, workflow)
     assert stats is not None
     assert stats.enrolled == 1
     assert stats.sent == 1
@@ -6920,6 +6927,9 @@ def test_get_workflow_stats_touch_slices_and_awaiting(
         {"id": workflow.id},
     )
     database_connection.commit()
+    loaded = get_workflow(database_connection, workflow.id)
+    assert loaded is not None
+    workflow = loaded
 
     awaiting = make_test_contact(database_connection, email="await@testcorp.com")
     make_test_enrollment(database_connection, workflow.id, awaiting.id)
@@ -6948,7 +6958,7 @@ def test_get_workflow_stats_touch_slices_and_awaiting(
     e_off = make_test_enrollment(database_connection, workflow.id, disabled_c.id)
     disable_enrollment(database_connection, e_off.id, "paused")
 
-    stats = get_workflow_stats(database_connection, workflow.id)
+    stats = get_workflow_stats(database_connection, workflow)
     assert stats is not None
     assert stats.awaiting_first_touch == 1
     assert stats.disabled == 1
@@ -6972,6 +6982,9 @@ def test_get_workflow_stats_pending_first_touch_fallback(
         {"id": workflow.id},
     )
     database_connection.commit()
+    loaded = get_workflow(database_connection, workflow.id)
+    assert loaded is not None
+    workflow = loaded
 
     first = make_test_contact(database_connection, email="t1pend@testcorp.com")
     e_first = make_test_enrollment(database_connection, workflow.id, first.id)
@@ -7005,7 +7018,7 @@ def test_get_workflow_stats_pending_first_touch_fallback(
         context={"touch": 2},
     )
 
-    stats = get_workflow_stats(database_connection, workflow.id)
+    stats = get_workflow_stats(database_connection, workflow)
     assert stats is not None
     assert stats.touches["1"].pending == 1
     assert stats.touches["2"].pending == 1
@@ -7053,6 +7066,9 @@ def test_list_enrollments_detailed_full_execution_fields(
     assert row.company_name == "Acme Co"
     assert row.emails_sent == 1
     assert row.last_touch == 1
+    assert row.emails_sent == count_outbound_sent(
+        database_connection, workflow.id, contact.id
+    )
     assert row.next_touch == 2
     assert row.next_scheduled_at is not None
     assert row.created_at is not None
@@ -7148,6 +7164,9 @@ def test_workflow_readers_accept_t_label_touch_context(
         {"id": workflow.id},
     )
     database_connection.commit()
+    loaded = get_workflow(database_connection, workflow.id)
+    assert loaded is not None
+    workflow = loaded
 
     labeled = make_test_contact(database_connection, email="t2label@testcorp.com")
     e_labeled = make_test_enrollment(database_connection, workflow.id, labeled.id)
@@ -7185,7 +7204,7 @@ def test_workflow_readers_accept_t_label_touch_context(
         context={"touch": "oops"},
     )
 
-    stats = get_workflow_stats(database_connection, workflow.id)
+    stats = get_workflow_stats(database_connection, workflow)
     assert stats is not None
     assert stats.touches["2"].pending == 2
 
@@ -10351,6 +10370,7 @@ def test_get_workflow_status_health(
     assert health.run_loop in {"ok", "stale", "stopped"}
     assert health.enrollments_never_sent == 1
     assert health.funnel_active == 1
+    assert health.wording == "orphaned"
 
 
 _REVIEW_SINCE = "2026-08-17T11:43:13-04:00"
