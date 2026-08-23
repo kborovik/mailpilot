@@ -35,6 +35,7 @@ import psycopg
 from mailpilot.agent.classify import classify_email
 from mailpilot.database import (
     cancel_enrollment_followup_tasks,
+    conclude_enrollment,
     create_activity,
     create_enrollment,
     disable_contact,
@@ -42,11 +43,9 @@ from mailpilot.database import (
     get_contact,
     get_emails_by_gmail_thread_id,
     get_enrollment,
-    get_latest_enrollment_outcome,
     get_workflow,
     list_active_outbound_enrollments_for_contact,
     list_workflows,
-    record_enrollment_outcome,
     update_email,
 )
 from mailpilot.models import Contact, Email
@@ -256,23 +255,20 @@ def _conclude_outbound_enrollments_for_bounce(
 ) -> None:
     """Conclude every active outbound enrollment for a bounced contact (§V.163).
 
-    Records ``failed`` / ``do_not_contact`` on the timeline and cancels
-    pending follow-ups. Already-terminal enrollments are skipped. The
-    enrollment row stays ``active`` (§V.15). Contact disable stays in
+    Calls the §V.186 helper with ``do_not_contact`` and
+    ``skip_if_terminal`` true so already-terminal enrollments are skipped.
+    The enrollment row stays ``active`` (§V.15). Contact disable stays in
     ``_handle_bounce`` (§V.80).
     """
     enrollments = list_active_outbound_enrollments_for_contact(connection, contact_id)
     for enrollment in enrollments:
-        if get_latest_enrollment_outcome(connection, enrollment.id) is not None:
-            continue
-        record_enrollment_outcome(
+        conclude_enrollment(
             connection,
             enrollment.id,
-            outcome="failed",
-            reason=reason,
             disposition="do_not_contact",
+            reason=reason,
+            skip_if_terminal=True,
         )
-        cancel_enrollment_followup_tasks(connection, enrollment.id)
 
 
 # -- Three-step routing pipeline -----------------------------------------------

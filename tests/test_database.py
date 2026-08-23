@@ -29,6 +29,7 @@ from mailpilot.database import (
     check_workflow_wording,
     company_import_diff,
     complete_task,
+    conclude_enrollment,
     count_outbound_sent,
     create_account,
     create_activity,
@@ -6572,6 +6573,109 @@ def test_record_enrollment_outcome_bumps_updated_at(
     assert refetched is not None
     assert refetched.status == "active"
     assert refetched.updated_at > original_updated
+
+
+def test_conclude_enrollment_skip_if_terminal_skips_existing_outcome(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.186 / §V.163: skip_if_terminal true leaves an existing outcome."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    record_enrollment_outcome(
+        database_connection,
+        enrollment.id,
+        "completed",
+        "meeting booked",
+        disposition="meeting_booked",
+    )
+
+    result = conclude_enrollment(
+        database_connection,
+        enrollment.id,
+        disposition="do_not_contact",
+        reason="bounced: test",
+        skip_if_terminal=True,
+    )
+
+    assert result is None
+    assert get_latest_enrollment_outcome(database_connection, enrollment.id) == (
+        "completed"
+    )
+    count_row = database_connection.execute(
+        "SELECT COUNT(*) AS n FROM activity "
+        "WHERE enrollment_id = %s AND type IN "
+        "('enrollment_completed', 'enrollment_failed')",
+        (enrollment.id,),
+    ).fetchone()
+    assert count_row is not None
+    assert count_row["n"] == 1
+
+
+def test_conclude_enrollment_skip_if_terminal_false_concludes_again(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.186 / §V.128: skip_if_terminal false still concludes a terminal row."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    record_enrollment_outcome(
+        database_connection,
+        enrollment.id,
+        "failed",
+        "sequence exhausted",
+        disposition="contact_later",
+    )
+
+    result = conclude_enrollment(
+        database_connection,
+        enrollment.id,
+        disposition="meeting_booked",
+        reason="meeting booked",
+        note="Meeting booked (Intro call); concluding enrollment.",
+        skip_if_terminal=False,
+    )
+
+    assert result == {"disposition": "meeting_booked", "outcome": "completed"}
+    assert get_latest_enrollment_outcome(database_connection, enrollment.id) == (
+        "completed"
+    )
+    count_row = database_connection.execute(
+        "SELECT COUNT(*) AS n FROM activity "
+        "WHERE enrollment_id = %s AND type IN "
+        "('enrollment_completed', 'enrollment_failed')",
+        (enrollment.id,),
+    ).fetchone()
+    assert count_row is not None
+    assert count_row["n"] == 2
+
+
+def test_conclude_enrollment_omitted_reschedule_creates_no_task(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.186 / §V.136: omitted reschedule_at writes no re-enrollment task."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+
+    result = conclude_enrollment(
+        database_connection,
+        enrollment.id,
+        disposition="contact_later",
+        reason="sequence exhausted: no reply after 3 touches",
+        note="sequence exhausted: no reply after 3 touches",
+    )
+
+    assert result == {"disposition": "contact_later", "outcome": "failed"}
+    assert list_tasks(database_connection, contact_id=contact.id) == []
+    notes = list_notes(database_connection, contact_id=contact.id)
+    assert any("sequence exhausted" in n.body_preview for n in notes)
+    blocked = get_contact(database_connection, contact.id)
+    assert blocked is not None
+    assert blocked.disabled_reason is None
 
 
 def test_list_enrollments_detailed_windows_dnc_by_updated_at(
