@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import psycopg
+import pytest
 from logfire.testing import CaptureLogfire
 from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
@@ -31,7 +34,9 @@ from mailpilot.database import (
     update_workflow,
 )
 from mailpilot.routing import (
+    RoutingContext,
     _is_bounce,  # pyright: ignore[reportPrivateUsage]
+    mark_routed,
     route_email,
 )
 
@@ -1724,3 +1729,189 @@ def test_route_email_thread_alias_same_from_unchanged(
 
     assert routed.contact_id == enrolled.id
     assert get_enrollment(database_connection, workflow.id, enrolled.id) is not None
+
+
+# -- Skip marks + RFC parent cache (§V.187) ------------------------------------
+
+
+def test_mark_routed_persists_skip_method(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Shared mark_routed writes is_routed + route_method for skip marks."""
+    account = make_test_account(database_connection, email="mark-routed@example.com")
+    email = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="old",
+        gmail_thread_id="t-mark-routed",
+    )
+    assert email is not None
+
+    marked = mark_routed(database_connection, email, "skipped_outside_window")
+
+    assert marked.is_routed is True
+    assert marked.route_method == "skipped_outside_window"
+    persisted = get_email(database_connection, email.id)
+    assert persisted is not None
+    assert persisted.is_routed is True
+    assert persisted.route_method == "skipped_outside_window"
+
+
+def test_route_email_skip_outside_window(
+    capfire: CaptureLogfire,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Recency skip is owned by route_email, not a sync-layer span."""
+    account = make_test_account(database_connection, email="skip-old@example.com")
+    old = datetime.now(UTC) - timedelta(days=30)
+    email = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="stale",
+        gmail_thread_id="t-skip-old",
+        received_at=old,
+    )
+    assert email is not None
+
+    routed = route_email(
+        database_connection,
+        email,
+        "alice@example.com",
+        make_test_settings(),
+        routing=RoutingContext(recency_cutoff=datetime.now(UTC) - timedelta(days=7)),
+    )
+
+    assert routed.is_routed is True
+    assert routed.route_method == "skipped_outside_window"
+    spans = _routing_spans(capfire)
+    assert len(spans) == 1
+    assert spans[0]["attributes"]["route_method"] == "skipped_outside_window"
+
+
+def test_route_email_skip_no_workflows(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Zero active workflows of any type → skipped_no_workflows via route_email."""
+    account = make_test_account(database_connection, email="skip-nowf@example.com")
+    email = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="fresh",
+        gmail_thread_id="t-skip-nowf",
+        received_at=datetime.now(UTC),
+    )
+    assert email is not None
+
+    routed = route_email(
+        database_connection,
+        email,
+        "alice@example.com",
+        make_test_settings(),
+        routing=RoutingContext(has_active_workflows=False),
+    )
+
+    assert routed.is_routed is True
+    assert routed.route_method == "skipped_no_workflows"
+
+
+def test_route_email_skip_predates_workflows(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """received_at before earliest active workflow → skipped_predates_workflows."""
+    account = make_test_account(database_connection, email="skip-pre@example.com")
+    created = datetime.now(UTC)
+    email = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="before-wf",
+        gmail_thread_id="t-skip-pre",
+        received_at=created - timedelta(hours=1),
+    )
+    assert email is not None
+
+    routed = route_email(
+        database_connection,
+        email,
+        "alice@example.com",
+        make_test_settings(),
+        routing=RoutingContext(
+            has_active_workflows=True,
+            earliest_workflow_at=created,
+        ),
+    )
+
+    assert routed.is_routed is True
+    assert routed.route_method == "skipped_predates_workflows"
+
+
+def test_route_email_rfc_parent_lookup_once_per_headers(
+    database_connection: psycopg.Connection[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_try_rfc_message_id_match and thread-contact bind share one RFC lookup."""
+    import mailpilot.routing as routing_module
+
+    account = make_test_account(database_connection, email="rfc-once@example.com")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="inbound"
+    )
+    _activate_workflow(database_connection, workflow.id)
+    enrolled = make_test_contact(database_connection, email="a@rfc-once.example.com")
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="Touch 1",
+        gmail_thread_id="t-rfc-once-out",
+        contact_id=enrolled.id,
+        workflow_id=workflow.id,
+        status="sent",
+        is_routed=True,
+        rfc2822_message_id="<t1-rfc-once@mail>",
+    )
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Re: Touch 1",
+        gmail_thread_id="t-rfc-once-in",
+        contact_id=enrolled.id,
+        in_reply_to="<t1-rfc-once@mail>",
+        sender="a@rfc-once.example.com",
+    )
+    assert inbound is not None
+
+    calls: list[object] = []
+    real = routing_module.find_email_by_rfc2822_message_id
+
+    def spy(
+        connection: psycopg.Connection[dict[str, Any]],
+        account_id: str,
+        message_ids: list[str],
+    ) -> object:
+        calls.append(tuple(message_ids))
+        return real(connection, account_id, message_ids)
+
+    monkeypatch.setattr(routing_module, "find_email_by_rfc2822_message_id", spy)
+
+    routed = route_email(
+        database_connection,
+        inbound,
+        "a@rfc-once.example.com",
+        make_test_settings(),
+    )
+
+    assert routed.route_method == "rfc_message_id_match"
+    assert len(calls) == 1
+
+
+def test_skip_mark_strings_owned_in_routing() -> None:
+    """§V.187 check-extras: skip marks live in routing.py, not sync spans."""
+    text = Path("src/mailpilot/routing.py").read_text()
+    assert "skipped_outside_window" in text
+    assert "skipped_no_workflows" in text
+    assert "skipped_predates_workflows" in text

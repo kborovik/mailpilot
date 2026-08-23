@@ -12,9 +12,13 @@ Pipeline that assigns inbound emails to the correct workflow:
 3. **LLM classification** -- single-turn call against active inbound workflows
 4. **Unrouted** -- classifier ran on real candidates and rejected all of them
 5. **Skipped, no inbound workflows** -- account has zero active inbound
-   workflows; classifier never runs (distinct from the sync-layer
-   ``skipped_no_workflows`` short-circuit, which fires when the account has
-   zero active workflows of any type)
+   workflows; classifier never runs (distinct from
+   ``skipped_no_workflows``, which fires when the account has zero
+   active workflows of any type)
+
+Eligibility skips (``skipped_outside_window``, ``skipped_no_workflows``,
+``skipped_predates_workflows``) are marked here via ``mark_routed`` when
+``sync_account`` passes a ``RoutingContext`` (§V.187).
 
 Cases 4 and 5 both store with is_routed=True, workflow_id=NULL but emit
 distinct ``route_method`` values so operators can tell intentional structural
@@ -27,6 +31,8 @@ on successful routing.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 import logfire
@@ -62,11 +68,53 @@ _VIA_BY_ROUTE_METHOD: dict[str, str] = {
 _BOUNCE_SENDERS = frozenset({"mailer-daemon", "postmaster"})
 
 
+@dataclass
+class RoutingContext:
+    """Per-account routing inputs computed once in ``sync_account`` (§V.187).
+
+    Recency cutoff, workflow presence, and the earliest inbound workflow
+    timestamp are account-level. Thread-contact and RFC-parent maps are
+    filled on first resolve and reused for the rest of the sync.
+    """
+
+    recency_cutoff: datetime | None = None
+    has_active_workflows: bool = True
+    earliest_workflow_at: datetime | None = None
+    thread_contacts: dict[tuple[str | None, str | None], Contact | None] = field(
+        default_factory=dict
+    )
+    rfc_parents: dict[tuple[str, ...], Email | None] = field(default_factory=dict)
+
+
+def mark_routed(
+    connection: psycopg.Connection[dict[str, Any]],
+    email: Email,
+    method: str | None,
+    **fields: object,
+) -> Email:
+    """Persist a routing outcome: ``is_routed=True`` + ``route_method``.
+
+    Skip marks and pipeline decisions share this write so
+    ``_store_inbound_message`` never opens a ``routing.route_email`` span
+    of its own (§V.187).
+    """
+    updated = update_email(
+        connection,
+        email.id,
+        is_routed=True,
+        route_method=method,
+        **fields,
+    )
+    return updated if updated is not None else email
+
+
 def route_email(
     connection: psycopg.Connection[dict[str, Any]],
     email: Email,
     sender_email: str,
     settings: Settings,
+    *,
+    routing: RoutingContext | None = None,
 ) -> Email:
     """Route an inbound email through the §V.27 pipeline.
 
@@ -75,16 +123,20 @@ def route_email(
     Creates an ``enrollment`` entry when routing to a workflow.
 
     Idempotent: emails with ``is_routed=True`` are returned unchanged.
+    Eligibility skips (recency / no-workflows / predates) are marked here
+    via ``mark_routed`` when ``routing`` carries those values (§V.187).
 
     Args:
         connection: Open database connection.
         email: Newly stored inbound email to route.
         sender_email: Sender email address (parsed from From header).
         settings: Application settings (for LLM classification).
+        routing: Optional per-account inputs + caches from ``sync_account``.
 
     Returns:
         Updated email with routing decision applied.
     """
+    ctx = routing if routing is not None else RoutingContext()
     with logfire.span(
         "routing.route_email",
         email_id=email.id,
@@ -95,83 +147,116 @@ def route_email(
                 span.set_attribute("result", "skipped_already_routed")
                 return email
 
-            if _is_bounce(sender_email, email.labels):
-                span.set_attribute("result", "bounce")
-                return _handle_bounce(connection, email)
+            skip_method = _eligibility_skip(email, ctx)
+            if skip_method is not None:
+                span.set_attribute("result", skip_method)
+                span.set_attribute("route_method", skip_method)
+                return mark_routed(connection, email, skip_method)
 
-            # Prefer Message-ID when In-Reply-To/References are present: Gmail
-            # may merge distinct same-subject threads, so thread_id can point at
-            # the wrong workflow for multi-enrollment / multi-scenario sends.
-            workflow_id = _try_rfc_message_id_match(connection, email)
-            route_method: str
-            if workflow_id is not None:
-                route_method = "rfc_message_id_match"
-            else:
-                workflow_id = _try_thread_match(connection, email)
-                if workflow_id is not None:
-                    route_method = "thread_match"
-                else:
-                    workflow_id, route_method = _try_classify(
-                        connection, email, sender_email, settings
-                    )
-            span.set_attribute("result", route_method)
-            span.set_attribute("route_method", route_method)
-            if workflow_id is not None:
-                span.set_attribute("workflow_id", workflow_id)
-
-            # "unrouted" is a span-only label: classifier ran on real candidates
-            # but rejected them. §I / §V.20 persisted enum admits only the 7
-            # decision values + NULL (routing pipeline ran, no enum bucket
-            # matched). is_routed=TRUE carries the "pipeline completed" signal.
-            persisted_route_method = (
-                route_method if route_method != "unrouted" else None
-            )
-            # §V.164: inbound on an existing outbound thread binds the
-            # enrolled contact even when From: local-part differs. Rebind
-            # in the same UPDATE as the routing decision so _ensure_enrollment
-            # never sees the alias From.
-            bound = find_thread_enrolled_contact(
-                connection,
-                email.account_id,
-                gmail_thread_id=email.gmail_thread_id,
-                in_reply_to=email.in_reply_to,
-                references_header=email.references_header,
-            )
-            contact_update: dict[str, object] = {}
-            if bound is not None and email.contact_id != bound.id:
-                contact_update["contact_id"] = bound.id
-            updated = update_email(
-                connection,
-                email.id,
-                workflow_id=workflow_id,
-                is_routed=True,
-                route_method=persisted_route_method,
-                **contact_update,
-            )
-            result = updated if updated is not None else email
-
-            if workflow_id is not None:
-                operator_event(
-                    "route.match",
-                    email_id=result.id,
-                    workflow_id=workflow_id,
-                    via=_VIA_BY_ROUTE_METHOD[route_method],
-                )
-                if result.contact_id is not None:
-                    _ensure_enrollment(connection, workflow_id, result.contact_id)
-                    _cancel_pending_followups(
-                        connection, workflow_id, result.contact_id, result.id
-                    )
-                    _maybe_ooo_pause(connection, result, workflow_id)
-            else:
-                operator_event("route.no_match", email_id=result.id)
-
-            return result
+            return _route_pipeline(connection, email, sender_email, settings, ctx, span)
         except Exception as exc:
             span.set_attribute("result", "failure")
             logfire.exception("routing.route_email failed", email_id=email.id)
             operator_event("error", source="routing.route_email", message=str(exc))
             raise
+
+
+def _route_pipeline(  # noqa: PLR0913
+    connection: psycopg.Connection[dict[str, Any]],
+    email: Email,
+    sender_email: str,
+    settings: Settings,
+    ctx: RoutingContext,
+    span: Any,
+) -> Email:
+    """Bounce detection + RFC/thread/classify pipeline after eligibility."""
+    if _is_bounce(sender_email, email.labels):
+        span.set_attribute("result", "bounce")
+        return _handle_bounce(connection, email)
+
+    # Prefer Message-ID when In-Reply-To/References are present: Gmail
+    # may merge distinct same-subject threads, so thread_id can point at
+    # the wrong workflow for multi-enrollment / multi-scenario sends.
+    workflow_id = _try_rfc_message_id_match(connection, email, ctx)
+    route_method: str
+    if workflow_id is not None:
+        route_method = "rfc_message_id_match"
+    else:
+        workflow_id = _try_thread_match(connection, email)
+        if workflow_id is not None:
+            route_method = "thread_match"
+        else:
+            workflow_id, route_method = _try_classify(
+                connection, email, sender_email, settings
+            )
+    span.set_attribute("result", route_method)
+    span.set_attribute("route_method", route_method)
+    if workflow_id is not None:
+        span.set_attribute("workflow_id", workflow_id)
+
+    # "unrouted" is a span-only label: classifier ran on real candidates
+    # but rejected them. §I / §V.20 persisted enum admits only the 7
+    # decision values + NULL (routing pipeline ran, no enum bucket
+    # matched). is_routed=TRUE carries the "pipeline completed" signal.
+    persisted_route_method = route_method if route_method != "unrouted" else None
+    # §V.164: inbound on an existing outbound thread binds the
+    # enrolled contact even when From: local-part differs. Rebind
+    # in the same UPDATE as the routing decision so _ensure_enrollment
+    # never sees the alias From.
+    bound = resolve_thread_contact(
+        connection,
+        email.account_id,
+        gmail_thread_id=email.gmail_thread_id,
+        in_reply_to=email.in_reply_to,
+        references_header=email.references_header,
+        routing=ctx,
+    )
+    contact_update: dict[str, object] = {}
+    if bound is not None and email.contact_id != bound.id:
+        contact_update["contact_id"] = bound.id
+    result = mark_routed(
+        connection,
+        email,
+        persisted_route_method,
+        workflow_id=workflow_id,
+        **contact_update,
+    )
+
+    if workflow_id is not None:
+        operator_event(
+            "route.match",
+            email_id=result.id,
+            workflow_id=workflow_id,
+            via=_VIA_BY_ROUTE_METHOD[route_method],
+        )
+        if result.contact_id is not None:
+            _ensure_enrollment(connection, workflow_id, result.contact_id)
+            _cancel_pending_followups(
+                connection, workflow_id, result.contact_id, result.id
+            )
+            _maybe_ooo_pause(connection, result, workflow_id)
+    else:
+        operator_event("route.no_match", email_id=result.id)
+
+    return result
+
+
+def _eligibility_skip(email: Email, routing: RoutingContext) -> str | None:
+    """Return a skipped_* method when sync_account eligibility gates fail.
+
+    Recency first, then no-workflows, then predates-workflow -- same order
+    as the former sync-layer short-circuits (§V.76, §V.187).
+    """
+    cutoff = routing.recency_cutoff
+    received_at = email.received_at
+    if cutoff is not None and (received_at is None or received_at < cutoff):
+        return "skipped_outside_window"
+    if not routing.has_active_workflows:
+        return "skipped_no_workflows"
+    earliest = routing.earliest_workflow_at
+    if earliest is not None and received_at is not None and received_at < earliest:
+        return "skipped_predates_workflows"
+    return None
 
 
 # -- Bounce detection ----------------------------------------------------------
@@ -300,13 +385,44 @@ def _try_thread_match(
     return matches[0].workflow_id
 
 
-def find_thread_enrolled_contact(
+def resolve_thread_contact(  # noqa: PLR0913
+    connection: psycopg.Connection[dict[str, Any]],
+    account_id: str,
+    *,
+    gmail_thread_id: str | None,
+    in_reply_to: str | None,
+    references_header: str | None,
+    routing: RoutingContext,
+) -> Contact | None:
+    """Resolve the thread-enrolled contact once per (thread, In-Reply-To).
+
+    Account-scoped cache on ``routing.thread_contacts`` so
+    ``_thread_bound_sender_emails``, ``_store_inbound_message``, and
+    ``route_email`` share one walk (§V.187).
+    """
+    key = (gmail_thread_id, in_reply_to)
+    if key in routing.thread_contacts:
+        return routing.thread_contacts[key]
+    contact = find_thread_enrolled_contact(
+        connection,
+        account_id,
+        gmail_thread_id=gmail_thread_id,
+        in_reply_to=in_reply_to,
+        references_header=references_header,
+        routing=routing,
+    )
+    routing.thread_contacts[key] = contact
+    return contact
+
+
+def find_thread_enrolled_contact(  # noqa: PLR0913
     connection: psycopg.Connection[dict[str, Any]],
     account_id: str,
     *,
     gmail_thread_id: str | None = None,
     in_reply_to: str | None = None,
     references_header: str | None = None,
+    routing: RoutingContext | None = None,
 ) -> Contact | None:
     """Return the enrolled contact on an existing outbound thread (§V.164).
 
@@ -315,12 +431,14 @@ def find_thread_enrolled_contact(
     From-based resolution. Account-scoped so a shared thread id on another
     mailbox cannot leak a contact bind.
     """
-    referenced_ids = _unique_message_ids(in_reply_to, references_header)
-    rfc_parent: Email | None = None
-    if referenced_ids:
-        rfc_parent = find_email_by_rfc2822_message_id(
-            connection, account_id, referenced_ids
-        )
+    rfc_parents = routing.rfc_parents if routing is not None else None
+    rfc_parent = _rfc_parent_for(
+        connection,
+        account_id,
+        in_reply_to,
+        references_header,
+        rfc_parents=rfc_parents,
+    )
 
     outbound: Email | None = None
     if (
@@ -355,6 +473,7 @@ def find_thread_enrolled_contact(
 def _try_rfc_message_id_match(
     connection: psycopg.Connection[dict[str, Any]],
     email: Email,
+    routing: RoutingContext,
 ) -> str | None:
     """Step 1: match via RFC 2822 In-Reply-To / References headers.
 
@@ -367,17 +486,38 @@ def _try_rfc_message_id_match(
     Returns the matching email's ``workflow_id`` or ``None``. Scope is
     intentionally restricted to the inbound email's own ``account_id`` so
     cross-account collisions on a shared Message-ID cannot leak workflow
-    assignments.
+    assignments. Shares ``routing.rfc_parents`` with thread-contact
+    resolve so the same headers are not queried twice (§V.187).
     """
-    referenced_ids = _collect_referenced_message_ids(email)
-    if not referenced_ids:
-        return None
-    parent = find_email_by_rfc2822_message_id(
-        connection, email.account_id, referenced_ids
+    parent = _rfc_parent_for(
+        connection,
+        email.account_id,
+        email.in_reply_to,
+        email.references_header,
+        rfc_parents=routing.rfc_parents,
     )
     if parent is None or parent.workflow_id is None:
         return None
     return parent.workflow_id
+
+
+def _rfc_parent_for(
+    connection: psycopg.Connection[dict[str, Any]],
+    account_id: str,
+    *raw_headers: str | None,
+    rfc_parents: dict[tuple[str, ...], Email | None] | None = None,
+) -> Email | None:
+    """Look up the RFC parent email, caching by referenced message-id tuple."""
+    referenced_ids = _unique_message_ids(*raw_headers)
+    if not referenced_ids:
+        return None
+    key = tuple(referenced_ids)
+    if rfc_parents is not None and key in rfc_parents:
+        return rfc_parents[key]
+    parent = find_email_by_rfc2822_message_id(connection, account_id, referenced_ids)
+    if rfc_parents is not None:
+        rfc_parents[key] = parent
+    return parent
 
 
 def _unique_message_ids(*raw_headers: str | None) -> list[str]:
@@ -395,18 +535,6 @@ def _unique_message_ids(*raw_headers: str | None) -> list[str]:
         seen.add(token)
         unique.append(token)
     return unique
-
-
-def _collect_referenced_message_ids(email: Email) -> list[str]:
-    """Return message-ids cited by an inbound email's threading headers.
-
-    Combines the parent ``In-Reply-To`` value with every entry in the
-    whitespace-separated ``References`` chain. Duplicates are dropped
-    while preserving the order that the original headers used (parent
-    first, then ancestors). Returns an empty list when neither header
-    is populated.
-    """
-    return _unique_message_ids(email.in_reply_to, email.references_header)
 
 
 def _try_classify(

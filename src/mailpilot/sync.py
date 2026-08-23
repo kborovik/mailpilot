@@ -61,7 +61,6 @@ from mailpilot.database import (
     list_workflows,
     update_account,
     update_contact,
-    update_email,
     update_sync_heartbeat,
     upsert_meeting,
     upsert_sync_status,
@@ -77,7 +76,7 @@ from mailpilot.gmail import (
 from mailpilot.models import Account, Contact, Email, Meeting
 from mailpilot.ooo import auto_submitted_label
 from mailpilot.operator_log import operator_event
-from mailpilot.routing import find_thread_enrolled_contact, route_email
+from mailpilot.routing import RoutingContext, resolve_thread_contact, route_email
 from mailpilot.settings import Settings, cache_settings, require_active_provider_key
 
 _HEARTBEAT_INTERVAL = 30  # seconds
@@ -838,9 +837,9 @@ def sync_account(
        a watch-anchored ``gmail_history_id`` (§V.75, §B.90).
     2. For each new message: fetch, extract text, auto-resolve the
        sender to a contact, and store an ``inbound`` email row.
-    3. Apply the 7-day recency gate: messages older than the window land
-       with ``is_routed=True`` / ``workflow_id=NULL``; fresher messages
-       are handed to ``route_email`` for thread matching.
+    3. Compute recency cutoff, workflow presence, and earliest inbound
+       workflow once; pass them to ``route_email``, which skip-marks
+       via ``mark_routed`` or runs thread matching (§V.187).
     4. Update ``gmail_history_id`` and ``last_synced_at`` on the account.
 
     Args:
@@ -883,12 +882,6 @@ def sync_account(
                     new_ids.append(message_id)
             fresh_messages = gmail_client.get_messages_batch(new_ids)
             span.set_attribute("duplicate_skipped_count", duplicate_skipped_count)
-            # Resolve every distinct sender in one pair of round-trips,
-            # regardless of message count. Scales with unique senders, not
-            # with mailbox size.
-            contacts_by_email = _resolve_contacts_for_messages(
-                connection, account.id, fresh_messages
-            )
             active_workflows = list_workflows(
                 connection, account_id=account.id, status="active"
             )
@@ -902,6 +895,18 @@ def sync_account(
                 w.created_at for w in active_workflows if w.type == "inbound"
             ]
             earliest_workflow_at = min(inbound_created) if inbound_created else None
+            routing = RoutingContext(
+                recency_cutoff=datetime.now(UTC) - _RECENCY_WINDOW,
+                has_active_workflows=has_active_workflows,
+                earliest_workflow_at=earliest_workflow_at,
+            )
+            # Resolve every distinct sender in one pair of round-trips,
+            # regardless of message count. Scales with unique senders, not
+            # with mailbox size. Thread-contact cache is shared with store
+            # + route_email (§V.187).
+            contacts_by_email = _resolve_contacts_for_messages(
+                connection, account.id, fresh_messages, routing
+            )
             stored = 0
             for message in fresh_messages:
                 if (
@@ -913,6 +918,7 @@ def sync_account(
                         settings,
                         has_active_workflows=has_active_workflows,
                         earliest_workflow_at=earliest_workflow_at,
+                        routing=routing,
                     )
                     is None
                 ):
@@ -951,6 +957,7 @@ def _resolve_contacts_for_messages(
     connection: psycopg.Connection[dict[str, Any]],
     account_id: str,
     messages: list[dict[str, Any]],
+    routing: RoutingContext,
 ) -> dict[str, Contact]:
     """Resolve every distinct sender in ``messages`` to a contact row.
 
@@ -968,7 +975,9 @@ def _resolve_contacts_for_messages(
     best_names = _aggregate_sender_names(messages)
     if not best_names:
         return {}
-    thread_bound_senders = _thread_bound_sender_emails(connection, account_id, messages)
+    thread_bound_senders = _thread_bound_sender_emails(
+        connection, account_id, messages, routing
+    )
     senders = [
         email for email in best_names if email.lower() not in thread_bound_senders
     ]
@@ -990,6 +999,7 @@ def _thread_bound_sender_emails(
     connection: psycopg.Connection[dict[str, Any]],
     account_id: str,
     messages: list[dict[str, Any]],
+    routing: RoutingContext,
 ) -> set[str]:
     """Lowercased From addresses that belong on an existing outbound thread."""
     bound: set[str] = set()
@@ -998,12 +1008,13 @@ def _thread_bound_sender_emails(
         sender_email, _, _ = parse_sender(headers.get("from", ""))
         if not sender_email:
             continue
-        contact = find_thread_enrolled_contact(
+        contact = resolve_thread_contact(
             connection,
             account_id,
             gmail_thread_id=message.get("threadId"),
             in_reply_to=headers.get("in-reply-to"),
             references_header=headers.get("references"),
+            routing=routing,
         )
         if contact is not None:
             bound.add(sender_email.lower())
@@ -1154,20 +1165,31 @@ def _store_inbound_message(  # noqa: PLR0913
     *,
     has_active_workflows: bool,
     earliest_workflow_at: datetime | None = None,
+    routing: RoutingContext | None = None,
 ) -> Email | None:
     """Persist a Gmail message as an inbound email and route when fresh.
 
     Returns None when a concurrent sync_account call for the same account
     already stored the row (ON CONFLICT DO NOTHING in create_email).
+    Skip marks go through ``route_email`` / ``mark_routed`` (§V.187).
     """
+    if routing is None:
+        routing = RoutingContext(
+            recency_cutoff=datetime.now(UTC) - _RECENCY_WINDOW,
+            has_active_workflows=has_active_workflows,
+            earliest_workflow_at=earliest_workflow_at,
+        )
+    elif routing.recency_cutoff is None:
+        routing.recency_cutoff = datetime.now(UTC) - _RECENCY_WINDOW
     headers = get_message_headers(message)
     sender_email, first_name, last_name = parse_sender(headers.get("from", ""))
-    thread_contact = find_thread_enrolled_contact(
+    thread_contact = resolve_thread_contact(
         connection,
         account.id,
         gmail_thread_id=message.get("threadId"),
         in_reply_to=headers.get("in-reply-to"),
         references_header=headers.get("references"),
+        routing=routing,
     )
     sender_key = sender_email.lower() if sender_email else ""
     contact = thread_contact or contacts_by_email.get(sender_key)
@@ -1182,8 +1204,9 @@ def _store_inbound_message(  # noqa: PLR0913
             last_name=last_name,
         )
     received_at = _received_at_from_message(message)
+    cutoff = routing.recency_cutoff
     within_window = (
-        received_at is not None and datetime.now(UTC) - received_at <= _RECENCY_WINDOW
+        received_at is not None and cutoff is not None and received_at >= cutoff
     )
     inbound_recipients = _extract_recipients(headers)
     labels = list(message.get("labelIds", []))
@@ -1199,7 +1222,7 @@ def _store_inbound_message(  # noqa: PLR0913
         gmail_message_id=message.get("id"),
         gmail_thread_id=message.get("threadId"),
         contact_id=contact.id,
-        is_routed=not within_window,
+        is_routed=False,
         received_at=received_at,
         labels=labels,
         rfc2822_message_id=headers.get("message-id"),
@@ -1223,64 +1246,13 @@ def _store_inbound_message(  # noqa: PLR0913
         1,
         attributes={"within_recency_window": within_window},
     )
-    # Skip LLM classification for emails older than the earliest active
-    # inbound workflow -- they can never produce tasks and classifying
-    # them wastes tokens (#65).
-    predates_workflows = (
-        earliest_workflow_at is not None
-        and received_at is not None
-        and received_at < earliest_workflow_at
+    return route_email(
+        connection,
+        email,
+        sender_email=sender_email,
+        settings=settings,
+        routing=routing,
     )
-    if not within_window:
-        with logfire.span(
-            "routing.route_email",
-            email_id=email.id,
-            account_id=email.account_id,
-            route_method="skipped_outside_window",
-        ):
-            updated = update_email(
-                connection,
-                email.id,
-                is_routed=True,
-                route_method="skipped_outside_window",
-            )
-            if updated is not None:
-                email = updated
-        return email
-    if not has_active_workflows:
-        with logfire.span(
-            "routing.route_email",
-            email_id=email.id,
-            account_id=email.account_id,
-            route_method="skipped_no_workflows",
-        ):
-            updated = update_email(
-                connection,
-                email.id,
-                is_routed=True,
-                route_method="skipped_no_workflows",
-            )
-            if updated is not None:
-                email = updated
-        return email
-    if predates_workflows:
-        with logfire.span(
-            "routing.route_email",
-            email_id=email.id,
-            account_id=email.account_id,
-            route_method="skipped_predates_workflows",
-        ):
-            updated = update_email(
-                connection,
-                email.id,
-                is_routed=True,
-                route_method="skipped_predates_workflows",
-            )
-            if updated is not None:
-                email = updated
-        return email
-    email = route_email(connection, email, sender_email=sender_email, settings=settings)
-    return email
 
 
 def _received_at_from_message(message: dict[str, Any]) -> datetime | None:
