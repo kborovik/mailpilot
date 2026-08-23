@@ -415,6 +415,7 @@ def list_enrollments(
         workflow_id=ctx.deps.workflow_id,
         full=True,
         limit=None,
+        sort="created_at",
     )
     rows: list[dict[str, Any]] = []
     for enrollment in enrollments:

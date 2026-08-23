@@ -249,8 +249,8 @@ def _enrollment_where(  # noqa: C901
 ) -> Composed | SQL:
     """Shared WHERE for ``list_enrollments_detailed`` (§V.185).
 
-    Mutates ``params`` with filter placeholders. ``--touch`` stays
-    ``_sql_parse_touch`` (not ``_sql_resolve_touch``).
+    Mutates ``params`` with filter placeholders. ``--touch`` parses
+    ``context.touch``.
     """
     where_parts: list[Composed | SQL] = []
     if workflow_id is not None:
@@ -2624,7 +2624,7 @@ def create_contacts_bulk(
 
 def list_contacts(
     connection: psycopg.Connection[dict[str, Any]],
-    limit: int = 100,
+    limit: int | None = 100,
     company_id: str | None = None,
     company_ids: Sequence[str] | None = None,
     since: str | None = None,
@@ -2645,7 +2645,7 @@ def list_contacts(
 
     Args:
         connection: Open database connection.
-        limit: Maximum results.
+        limit: Maximum results. ``None`` omits LIMIT (preview expand).
         company_id: Filter by company ID.
         company_ids: Filter by a batch of company IDs (``company_id = ANY``).
             Takes precedence over ``company_id`` when both are set.
@@ -2678,7 +2678,9 @@ def list_contacts(
         List of contact summaries ordered by email.
     """
     conditions: list[Composed | SQL] = []
-    params: dict[str, object] = {"limit": limit}
+    params: dict[str, object] = {}
+    if limit is not None:
+        params["limit"] = limit
     if company_ids:
         conditions.append(SQL("c.company_id = ANY(%(company_ids)s)"))
         params["company_ids"] = list(company_ids)
@@ -2714,14 +2716,15 @@ def list_contacts(
         _tag_assignment_conditions(exclude_tags, "contact_id", params, negate=True)
     )
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
+    limit_sql = SQL(" LIMIT %(limit)s") if limit is not None else SQL("")
     query = SQL(
         "SELECT c.id, c.email, c.first_name, c.last_name, c.title, "
         "c.company_id, co.domain AS company_domain, "
         "c.email_confidence, c.disabled_reason, c.created_at, "
         "{tags} "
         "FROM contact c LEFT JOIN company co ON c.company_id = co.id "
-        "{where} ORDER BY c.email LIMIT %(limit)s"
-    ).format(tags=SQL(_CONTACT_TAGS_SQL), where=where)
+        "{where} ORDER BY c.email{limit}"
+    ).format(tags=SQL(_CONTACT_TAGS_SQL), where=where, limit=limit_sql)
     rows = connection.execute(query, params).fetchall()
     return [ContactSummary.model_validate(row) for row in rows]
 
@@ -4285,9 +4288,7 @@ def _preview_from_contacts(  # noqa: C901
 ) -> tuple[list[EnrollmentPreviewContact], EnrollmentPreviewExcluded]:
     """Exclude ineligible seats and hydrate tags/peers (§V.185 / §V.150).
 
-    Covers exclude + tag + peer hydrate for tag-cohort and file-cohort
-    previews. Already-enrolled is a ``contact_id`` SELECT, not a hydrated
-    ``list_enrollments`` round-trip.
+    Enrolled set is ``contact_id`` only.
     """
     packed = (
         excluded.model_copy() if excluded is not None else EnrollmentPreviewExcluded()
@@ -4421,8 +4422,7 @@ def preview_enrollment_tag_cohort(
     (§V.114). Drops already-enrolled contacts for the workflow, self-loop
     contacts (§V.33), and disabled contacts. Optional ``min_contacts`` filters
     companies before expand (company-tag) or the contact's company
-    ``contact_count`` (contact-tag). Company expand uses ``company_id = ANY``
-    rather than a per-company ``list_contacts`` loop (§V.185).
+    ``contact_count`` (contact-tag). Company expand uses ``company_id = ANY``.
 
     Args:
         connection: Open database connection.
@@ -4462,7 +4462,7 @@ def preview_enrollment_tag_cohort(
             connection,
             company_ids=enabled_ids,
             include_disabled=True,
-            limit=100_000,
+            limit=None,
         )
     company_ids = {company.id for company in companies}
     extra_ids = {
@@ -4963,8 +4963,7 @@ def list_enrollments_detailed(
 
     When ``full=True`` (§V.152), also projects company, touch progress,
     next pending task, disposition, ``created_at``, and the latest
-    completed/failed outcome (folded from the dropped
-    ``list_enrollments_with_outcomes`` path).
+    completed/failed outcome for the agent envelope (§V.185).
 
     Args:
         connection: Open database connection.
@@ -5020,11 +5019,12 @@ def list_enrollments_detailed(
         # §V.160 disposition filter needs outcome lateral even on lean rows.
         if disposition is not None:
             select_from = select_from + _enrollment_outcome_lateral()
-    order_col = (
-        SQL("nt.scheduled_at")
-        if full and sort == "next_scheduled_at"
-        else SQL("e.updated_at")
-    )
+    if full and sort == "next_scheduled_at":
+        order_col = SQL("nt.scheduled_at")
+    elif sort == "created_at":
+        order_col = SQL("e.created_at")
+    else:
+        order_col = SQL("e.updated_at")
     order_dir = SQL("DESC") if desc else SQL("ASC")
     limit_sql = SQL(" LIMIT %(limit)s") if limit is not None else SQL("")
     query = (

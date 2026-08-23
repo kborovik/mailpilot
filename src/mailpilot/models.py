@@ -450,9 +450,7 @@ class EnrollmentSummary(BaseModel):
     Lean fields are always populated. Execution fields (company, touch progress,
     next send, disposition, created_at) are populated only when the caller
     requests ``full=True`` per §V.152; lean dumps exclude them so agent payloads
-    stay small. Latest completed/failed outcome columns fold in on
-    ``full=True`` for the agent ``list_enrollments`` envelope (§V.185) and
-    are excluded from CLI/report serialization.
+    stay small. Latest-outcome columns stay off CLI/report dumps (§V.185).
     """
 
     id: str
@@ -472,9 +470,7 @@ class EnrollmentSummary(BaseModel):
     next_touch: int | None = None
     disposition: str | None = None
     created_at: datetime | None = None
-    # Folded from dropped EnrollmentWithOutcome; agent list_enrollments
-    # exposes these keys. Field(exclude=True) keeps CLI/report dumps on
-    # the §V.152 lean/full field set (§V.185).
+    # Agent list_enrollments keys; exclude keeps CLI/report on §V.152 field set.
     latest_outcome: EnrollmentOutcome | None = Field(default=None, exclude=True)
     latest_outcome_reason: str | None = Field(default=None, exclude=True)
     latest_outcome_at: datetime | None = Field(default=None, exclude=True)
