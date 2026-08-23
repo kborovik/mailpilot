@@ -17,8 +17,7 @@ Pipeline that assigns inbound emails to the correct workflow:
    active workflows of any type)
 
 Eligibility skips (``skipped_outside_window``, ``skipped_no_workflows``,
-``skipped_predates_workflows``) are marked here via ``mark_routed`` when
-``sync_account`` passes a ``RoutingContext`` (§V.187).
+``skipped_predates_workflows``) are marked here via ``mark_routed``.
 
 Cases 4 and 5 both store with is_routed=True, workflow_id=NULL but emit
 distinct ``route_method`` values so operators can tell intentional structural
@@ -70,7 +69,7 @@ _BOUNCE_SENDERS = frozenset({"mailer-daemon", "postmaster"})
 
 @dataclass
 class RoutingContext:
-    """Per-account routing inputs computed once in ``sync_account`` (§V.187).
+    """Per-account routing inputs computed once in ``sync_account``.
 
     Recency cutoff, workflow presence, and the earliest inbound workflow
     timestamp are account-level. Thread-contact and RFC-parent maps are
@@ -80,7 +79,7 @@ class RoutingContext:
     recency_cutoff: datetime | None = None
     has_active_workflows: bool = True
     earliest_workflow_at: datetime | None = None
-    thread_contacts: dict[tuple[str | None, str | None], Contact | None] = field(
+    thread_contacts: dict[tuple[str | None, tuple[str, ...]], Contact | None] = field(
         default_factory=dict
     )
     rfc_parents: dict[tuple[str, ...], Email | None] = field(default_factory=dict)
@@ -92,12 +91,7 @@ def mark_routed(
     method: str | None,
     **fields: object,
 ) -> Email:
-    """Persist a routing outcome: ``is_routed=True`` + ``route_method``.
-
-    Skip marks and pipeline decisions share this write so
-    ``_store_inbound_message`` never opens a ``routing.route_email`` span
-    of its own (§V.187).
-    """
+    """Persist a routing outcome: ``is_routed=True`` + ``route_method``."""
     updated = update_email(
         connection,
         email.id,
@@ -124,7 +118,7 @@ def route_email(
 
     Idempotent: emails with ``is_routed=True`` are returned unchanged.
     Eligibility skips (recency / no-workflows / predates) are marked here
-    via ``mark_routed`` when ``routing`` carries those values (§V.187).
+    via ``mark_routed``.
 
     Args:
         connection: Open database connection.
@@ -203,7 +197,7 @@ def _route_pipeline(  # noqa: PLR0913
     # enrolled contact even when From: local-part differs. Rebind
     # in the same UPDATE as the routing decision so _ensure_enrollment
     # never sees the alias From.
-    bound = resolve_thread_contact(
+    bound = find_thread_enrolled_contact(
         connection,
         email.account_id,
         gmail_thread_id=email.gmail_thread_id,
@@ -244,8 +238,7 @@ def _route_pipeline(  # noqa: PLR0913
 def _eligibility_skip(email: Email, routing: RoutingContext) -> str | None:
     """Return a skipped_* method when sync_account eligibility gates fail.
 
-    Recency first, then no-workflows, then predates-workflow -- same order
-    as the former sync-layer short-circuits (§V.76, §V.187).
+    Recency first, then no-workflows, then predates-workflow.
     """
     cutoff = routing.recency_cutoff
     received_at = email.received_at
@@ -385,36 +378,6 @@ def _try_thread_match(
     return matches[0].workflow_id
 
 
-def resolve_thread_contact(  # noqa: PLR0913
-    connection: psycopg.Connection[dict[str, Any]],
-    account_id: str,
-    *,
-    gmail_thread_id: str | None,
-    in_reply_to: str | None,
-    references_header: str | None,
-    routing: RoutingContext,
-) -> Contact | None:
-    """Resolve the thread-enrolled contact once per (thread, In-Reply-To).
-
-    Account-scoped cache on ``routing.thread_contacts`` so
-    ``_thread_bound_sender_emails``, ``_store_inbound_message``, and
-    ``route_email`` share one walk (§V.187).
-    """
-    key = (gmail_thread_id, in_reply_to)
-    if key in routing.thread_contacts:
-        return routing.thread_contacts[key]
-    contact = find_thread_enrolled_contact(
-        connection,
-        account_id,
-        gmail_thread_id=gmail_thread_id,
-        in_reply_to=in_reply_to,
-        references_header=references_header,
-        routing=routing,
-    )
-    routing.thread_contacts[key] = contact
-    return contact
-
-
 def find_thread_enrolled_contact(  # noqa: PLR0913
     connection: psycopg.Connection[dict[str, Any]],
     account_id: str,
@@ -429,9 +392,35 @@ def find_thread_enrolled_contact(  # noqa: PLR0913
     RFC Message-ID first (same order as §V.27), then Gmail thread. Only an
     outbound parent with ``contact_id`` counts -- inbound-only threads keep
     From-based resolution. Account-scoped so a shared thread id on another
-    mailbox cannot leak a contact bind.
+    mailbox cannot leak a contact bind. Cache key is thread plus the
+    referenced Message-ID tuple so Gmail same-subject merge (different
+    References, shared thread id) cannot bind the wrong contact.
     """
-    rfc_parents = routing.rfc_parents if routing is not None else None
+    key = (gmail_thread_id, tuple(_unique_message_ids(in_reply_to, references_header)))
+    if routing is not None and key in routing.thread_contacts:
+        return routing.thread_contacts[key]
+    contact = _walk_thread_enrolled_contact(
+        connection,
+        account_id,
+        gmail_thread_id=gmail_thread_id,
+        in_reply_to=in_reply_to,
+        references_header=references_header,
+        rfc_parents=routing.rfc_parents if routing is not None else None,
+    )
+    if routing is not None:
+        routing.thread_contacts[key] = contact
+    return contact
+
+
+def _walk_thread_enrolled_contact(  # noqa: PLR0913
+    connection: psycopg.Connection[dict[str, Any]],
+    account_id: str,
+    *,
+    gmail_thread_id: str | None,
+    in_reply_to: str | None,
+    references_header: str | None,
+    rfc_parents: dict[tuple[str, ...], Email | None] | None,
+) -> Contact | None:
     rfc_parent = _rfc_parent_for(
         connection,
         account_id,
@@ -486,8 +475,7 @@ def _try_rfc_message_id_match(
     Returns the matching email's ``workflow_id`` or ``None``. Scope is
     intentionally restricted to the inbound email's own ``account_id`` so
     cross-account collisions on a shared Message-ID cannot leak workflow
-    assignments. Shares ``routing.rfc_parents`` with thread-contact
-    resolve so the same headers are not queried twice (§V.187).
+    assignments.
     """
     parent = _rfc_parent_for(
         connection,

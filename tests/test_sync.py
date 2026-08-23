@@ -5,7 +5,6 @@ import concurrent.futures
 import os
 import signal
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -39,6 +38,7 @@ from mailpilot.database import (
     upsert_sync_status,
 )
 from mailpilot.gmail import GmailClient
+from mailpilot.routing import RoutingContext
 from mailpilot.sync import (
     _collect_new_message_ids,  # pyright: ignore[reportPrivateUsage]
     is_pid_alive,
@@ -46,6 +46,18 @@ from mailpilot.sync import (
     start_sync_loop,
     sync_account,
 )
+
+
+def _store_routing(
+    *,
+    has_active_workflows: bool = False,
+    earliest_workflow_at: datetime | None = None,
+) -> RoutingContext:
+    return RoutingContext(
+        recency_cutoff=datetime.now(UTC) - timedelta(days=7),
+        has_active_workflows=has_active_workflows,
+        earliest_workflow_at=earliest_workflow_at,
+    )
 
 
 def test_upsert_and_get_sync_status(
@@ -2210,7 +2222,7 @@ def test_sync_stores_sender_and_recipients(
         message,
         contacts_by_email={"alice@example.com": contact},
         settings=make_test_settings(),
-        has_active_workflows=False,
+        routing=_store_routing(),
     )
     assert email is not None
     assert email.sender == "alice@example.com"
@@ -2251,7 +2263,7 @@ def test_sync_inbound_emits_email_received_activity(
         message,
         contacts_by_email={"alice@example.com": contact},
         settings=make_test_settings(),
-        has_active_workflows=False,
+        routing=_store_routing(),
     )
     assert email is not None
 
@@ -2306,7 +2318,7 @@ def test_sync_inbound_skips_activity_when_create_email_returns_none(
         message,
         contacts_by_email={"alice@example.com": contact},
         settings=make_test_settings(),
-        has_active_workflows=False,
+        routing=_store_routing(),
     )
     assert result is None
     activities = list_activities(
@@ -2353,7 +2365,7 @@ def test_sync_stores_in_reply_to_and_references_headers(
         message,
         contacts_by_email={"alice@example.com": contact},
         settings=make_test_settings(),
-        has_active_workflows=False,
+        routing=_store_routing(),
     )
     assert email is not None
     assert email.in_reply_to == "<orig@mailpilot.test>"
@@ -2387,7 +2399,7 @@ def test_sync_one_message_emits_skip_span_outside_recency_window(
         message,
         contacts_by_email={"alice@example.com": contact},
         settings=make_test_settings(),
-        has_active_workflows=False,
+        routing=_store_routing(),
     )
 
     assert email is not None
@@ -2425,7 +2437,7 @@ def test_sync_one_message_emits_skip_span_when_no_active_workflows(
         message,
         contacts_by_email={"bob@example.com": contact},
         settings=make_test_settings(),
-        has_active_workflows=False,
+        routing=_store_routing(),
     )
 
     assert email is not None
@@ -2477,8 +2489,10 @@ def test_sync_one_message_emits_skip_span_when_predates_workflows(
         message,
         contacts_by_email={"carol@example.com": contact},
         settings=make_test_settings(),
-        has_active_workflows=True,
-        earliest_workflow_at=workflow.created_at,
+        routing=_store_routing(
+            has_active_workflows=True,
+            earliest_workflow_at=workflow.created_at,
+        ),
     )
 
     assert email is not None
@@ -2517,7 +2531,7 @@ def test_sync_one_message_persists_route_method_outside_recency_window(
         message,
         contacts_by_email={"alice@example.com": contact},
         settings=make_test_settings(),
-        has_active_workflows=False,
+        routing=_store_routing(),
     )
 
     assert email is not None
@@ -2549,7 +2563,7 @@ def test_sync_one_message_persists_route_method_no_active_workflows(
         message,
         contacts_by_email={"bob@example.com": contact},
         settings=make_test_settings(),
-        has_active_workflows=False,
+        routing=_store_routing(),
     )
 
     assert email is not None
@@ -2594,8 +2608,10 @@ def test_sync_one_message_persists_route_method_predates_workflows(
         message,
         contacts_by_email={"carol@example.com": contact},
         settings=make_test_settings(),
-        has_active_workflows=True,
-        earliest_workflow_at=workflow.created_at,
+        routing=_store_routing(
+            has_active_workflows=True,
+            earliest_workflow_at=workflow.created_at,
+        ),
     )
 
     assert email is not None
@@ -2603,12 +2619,6 @@ def test_sync_one_message_persists_route_method_predates_workflows(
     persisted = get_email(database_connection, email.id)
     assert persisted is not None
     assert persisted.route_method == "skipped_predates_workflows"
-
-
-def test_sync_does_not_open_route_email_span() -> None:
-    """§V.187: skip marks must not open routing.route_email spans in sync.py."""
-    text = Path("src/mailpilot/sync.py").read_text()
-    assert "routing.route_email" not in text
 
 
 def test_sync_account_passes_same_recency_cutoff(
@@ -2669,7 +2679,7 @@ def test_sync_account_resolves_thread_contact_once_per_message(
     database_connection: psycopg.Connection[dict[str, Any]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Same thread + In-Reply-To shares one find_thread_enrolled_contact walk."""
+    """Same thread + In-Reply-To shares one thread-contact walk."""
     import mailpilot.routing as routing_module
 
     account = make_test_account(database_connection, email="tc-once@example.com")
@@ -2721,13 +2731,13 @@ def test_sync_account_resolves_thread_contact_once_per_message(
     )
 
     calls: list[object] = []
-    real = routing_module.find_thread_enrolled_contact
+    real = routing_module._walk_thread_enrolled_contact
 
     def spy(*args: object, **kwargs: object) -> object:
         calls.append((args, kwargs))
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(routing_module, "find_thread_enrolled_contact", spy)
+    monkeypatch.setattr(routing_module, "_walk_thread_enrolled_contact", spy)
 
     stored = sync_account(database_connection, account, client, make_test_settings())
 

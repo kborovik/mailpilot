@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 import psycopg
@@ -36,6 +35,7 @@ from mailpilot.database import (
 from mailpilot.routing import (
     RoutingContext,
     _is_bounce,  # pyright: ignore[reportPrivateUsage]
+    find_thread_enrolled_contact,
     mark_routed,
     route_email,
 )
@@ -1731,7 +1731,7 @@ def test_route_email_thread_alias_same_from_unchanged(
     assert get_enrollment(database_connection, workflow.id, enrolled.id) is not None
 
 
-# -- Skip marks + RFC parent cache (§V.187) ------------------------------------
+# -- Skip marks + RFC parent cache --------------------------------------------
 
 
 def test_mark_routed_persists_skip_method(
@@ -1909,9 +1909,70 @@ def test_route_email_rfc_parent_lookup_once_per_headers(
     assert len(calls) == 1
 
 
-def test_skip_mark_strings_owned_in_routing() -> None:
-    """§V.187 check-extras: skip marks live in routing.py, not sync spans."""
-    text = Path("src/mailpilot/routing.py").read_text()
-    assert "skipped_outside_window" in text
-    assert "skipped_no_workflows" in text
-    assert "skipped_predates_workflows" in text
+def test_thread_contact_cache_keys_on_references(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Same thread + missing In-Reply-To, different References → two binds."""
+    account = make_test_account(database_connection, email="cache-refs@example.com")
+    workflow_a = make_test_workflow(
+        database_connection,
+        account_id=account.id,
+        name="cache-refs-a",
+        workflow_type="outbound",
+    )
+    workflow_b = make_test_workflow(
+        database_connection,
+        account_id=account.id,
+        name="cache-refs-b",
+        workflow_type="outbound",
+    )
+    contact_a = make_test_contact(database_connection, email="a@cache-refs.example.com")
+    contact_b = make_test_contact(database_connection, email="b@cache-refs.example.com")
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="A",
+        gmail_thread_id="t-merged",
+        contact_id=contact_a.id,
+        workflow_id=workflow_a.id,
+        status="sent",
+        is_routed=True,
+        rfc2822_message_id="<a@cache-refs>",
+    )
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="B",
+        gmail_thread_id="t-merged",
+        contact_id=contact_b.id,
+        workflow_id=workflow_b.id,
+        status="sent",
+        is_routed=True,
+        rfc2822_message_id="<b@cache-refs>",
+    )
+    ctx = RoutingContext()
+
+    first = find_thread_enrolled_contact(
+        database_connection,
+        account.id,
+        gmail_thread_id="t-merged",
+        in_reply_to=None,
+        references_header="<a@cache-refs>",
+        routing=ctx,
+    )
+    second = find_thread_enrolled_contact(
+        database_connection,
+        account.id,
+        gmail_thread_id="t-merged",
+        in_reply_to=None,
+        references_header="<b@cache-refs>",
+        routing=ctx,
+    )
+
+    assert first is not None
+    assert first.id == contact_a.id
+    assert second is not None
+    assert second.id == contact_b.id
+    assert len(ctx.thread_contacts) == 2

@@ -76,7 +76,7 @@ from mailpilot.gmail import (
 from mailpilot.models import Account, Contact, Email, Meeting
 from mailpilot.ooo import auto_submitted_label
 from mailpilot.operator_log import operator_event
-from mailpilot.routing import RoutingContext, resolve_thread_contact, route_email
+from mailpilot.routing import RoutingContext, find_thread_enrolled_contact, route_email
 from mailpilot.settings import Settings, cache_settings, require_active_provider_key
 
 _HEARTBEAT_INTERVAL = 30  # seconds
@@ -839,7 +839,7 @@ def sync_account(
        sender to a contact, and store an ``inbound`` email row.
     3. Compute recency cutoff, workflow presence, and earliest inbound
        workflow once; pass them to ``route_email``, which skip-marks
-       via ``mark_routed`` or runs thread matching (§V.187).
+       via ``mark_routed`` or runs thread matching.
     4. Update ``gmail_history_id`` and ``last_synced_at`` on the account.
 
     Args:
@@ -902,8 +902,7 @@ def sync_account(
             )
             # Resolve every distinct sender in one pair of round-trips,
             # regardless of message count. Scales with unique senders, not
-            # with mailbox size. Thread-contact cache is shared with store
-            # + route_email (§V.187).
+            # with mailbox size.
             contacts_by_email = _resolve_contacts_for_messages(
                 connection, account.id, fresh_messages, routing
             )
@@ -916,8 +915,6 @@ def sync_account(
                         message,
                         contacts_by_email,
                         settings,
-                        has_active_workflows=has_active_workflows,
-                        earliest_workflow_at=earliest_workflow_at,
                         routing=routing,
                     )
                     is None
@@ -1008,7 +1005,7 @@ def _thread_bound_sender_emails(
         sender_email, _, _ = parse_sender(headers.get("from", ""))
         if not sender_email:
             continue
-        contact = resolve_thread_contact(
+        contact = find_thread_enrolled_contact(
             connection,
             account_id,
             gmail_thread_id=message.get("threadId"),
@@ -1163,27 +1160,16 @@ def _store_inbound_message(  # noqa: PLR0913
     contacts_by_email: dict[str, Contact],
     settings: Settings,
     *,
-    has_active_workflows: bool,
-    earliest_workflow_at: datetime | None = None,
-    routing: RoutingContext | None = None,
+    routing: RoutingContext,
 ) -> Email | None:
-    """Persist a Gmail message as an inbound email and route when fresh.
+    """Persist a Gmail message as an inbound email and route.
 
     Returns None when a concurrent sync_account call for the same account
     already stored the row (ON CONFLICT DO NOTHING in create_email).
-    Skip marks go through ``route_email`` / ``mark_routed`` (§V.187).
     """
-    if routing is None:
-        routing = RoutingContext(
-            recency_cutoff=datetime.now(UTC) - _RECENCY_WINDOW,
-            has_active_workflows=has_active_workflows,
-            earliest_workflow_at=earliest_workflow_at,
-        )
-    elif routing.recency_cutoff is None:
-        routing.recency_cutoff = datetime.now(UTC) - _RECENCY_WINDOW
     headers = get_message_headers(message)
     sender_email, first_name, last_name = parse_sender(headers.get("from", ""))
-    thread_contact = resolve_thread_contact(
+    thread_contact = find_thread_enrolled_contact(
         connection,
         account.id,
         gmail_thread_id=message.get("threadId"),
