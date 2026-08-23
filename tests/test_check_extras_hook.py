@@ -383,7 +383,10 @@ def test_live_emit_rg_well_formed() -> None:
     v4_cli = [
         row
         for row in parsed
-        if row[0] == "V4" and "cli.py" in row[3] and isinstance(row[2], int) and row[2] > 0
+        if row[0] == "V4"
+        and "cli.py" in row[3]
+        and isinstance(row[2], int)
+        and row[2] > 0
     ]
     assert v4_cli, result.stdout.splitlines()[:5]
     v100 = [row for row in parsed if row[0] == "V100" and isinstance(row[2], int)]
