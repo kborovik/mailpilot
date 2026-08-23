@@ -46,7 +46,6 @@ from mailpilot.models import (
     EnrollmentPreviewContact,
     EnrollmentPreviewExcluded,
     EnrollmentSummary,
-    EnrollmentWithOutcome,
     Meeting,
     MeetingAttendee,
     MeetingSummary,
@@ -134,6 +133,226 @@ def _sql_outbound_sent_count(e: SQL) -> Composed:
         "AND email.direction = 'outbound' "
         "AND email.status = 'sent')"
     ).format(e=e)
+
+
+def _enrollment_parent_select(
+    src: SQL,
+    extra: Composed | SQL | None = None,
+) -> Composed:
+    """SELECT ``src.*`` plus parent denorm JOINs (§V.185 / §V.5).
+
+    ``src`` is a caller-owned table, CTE, or alias -- never user input.
+    Optional ``extra`` injects additional selected columns after ``src.*``.
+    """
+    extra_sql = SQL(", {}").format(extra) if extra is not None else SQL("")
+    return SQL(
+        "SELECT {src}.*{extra}, "
+        "workflow.name AS workflow_name, "
+        "contact.email AS contact_email, "
+        "TRIM(COALESCE(contact.first_name, '') || ' ' "
+        "|| COALESCE(contact.last_name, '')) AS contact_name "
+        "FROM {src} "
+        "JOIN workflow ON workflow.id = {src}.workflow_id "
+        "JOIN contact ON contact.id = {src}.contact_id"
+    ).format(src=src, extra=extra_sql)
+
+
+def _enrollment_outcome_lateral() -> SQL:
+    """Latest completed/failed activity per enrollment alias ``e`` (§V.185)."""
+    return SQL(
+        "LEFT JOIN LATERAL ("
+        "SELECT "
+        "CASE a.type "
+        "WHEN 'enrollment_completed' THEN 'completed' "
+        "WHEN 'enrollment_failed' THEN 'failed' "
+        "END AS latest_outcome, "
+        "COALESCE(a.detail->>'reason', a.summary) AS latest_outcome_reason, "
+        "a.created_at AS latest_outcome_at, "
+        "a.detail->>'disposition' AS disposition "
+        "FROM activity a "
+        "WHERE a.contact_id = e.contact_id "
+        "AND a.workflow_id = e.workflow_id "
+        "AND a.type IN ('enrollment_completed', 'enrollment_failed') "
+        "ORDER BY a.created_at DESC LIMIT 1"
+        ") outcome ON TRUE "
+    )
+
+
+def _enrollment_lean_select() -> SQL:
+    """Lean enrollment list SELECT + FROM/JOIN (§V.185 / §V.152)."""
+    return SQL(
+        "SELECT e.id, e.workflow_id, w.name AS workflow_name, "
+        "e.contact_id, e.status, e.updated_at, "
+        "c.email AS contact_email, "
+        "TRIM(COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '')) "
+        "AS contact_name "
+        "FROM enrollment e "
+        "JOIN workflow w ON w.id = e.workflow_id "
+        "JOIN contact c ON c.id = e.contact_id "
+    )
+
+
+def _enrollment_full_select(sent_count: Composed) -> Composed:
+    """Full enrollment list SELECT + FROM/JOIN + outcome LATERAL (§V.185)."""
+    return (
+        SQL(
+            "SELECT e.id, e.workflow_id, w.name AS workflow_name, "
+            "e.contact_id, e.status, e.updated_at, e.created_at, "
+            "c.email AS contact_email, "
+            "TRIM(COALESCE(c.first_name, '') || ' ' "
+            "|| COALESCE(c.last_name, '')) AS contact_name, "
+            "co.domain AS company_domain, "
+            "co.name AS company_name, "
+            "{sent_count} AS emails_sent, "
+            "{sent_count} AS last_touch, "
+            "nt.scheduled_at AS next_scheduled_at, "
+            "COALESCE("
+            "{next_touch}, "
+            "CASE WHEN nt.scheduled_at IS NOT NULL "
+            "AND nt.context->>'touch' IS NULL AND "
+            "{sent_count} = 0 THEN 1 END"
+            ") AS next_touch, "
+            "outcome.disposition AS disposition, "
+            "outcome.latest_outcome AS latest_outcome, "
+            "outcome.latest_outcome_reason AS latest_outcome_reason, "
+            "outcome.latest_outcome_at AS latest_outcome_at "
+            "FROM enrollment e "
+            "JOIN workflow w ON w.id = e.workflow_id "
+            "JOIN contact c ON c.id = e.contact_id "
+            "LEFT JOIN company co ON co.id = c.company_id "
+            "LEFT JOIN LATERAL ("
+            "SELECT t.scheduled_at, t.context FROM task t "
+            "WHERE t.enrollment_id = e.id AND t.status = 'pending' "
+            "ORDER BY t.scheduled_at ASC NULLS LAST LIMIT 1"
+            ") nt ON TRUE "
+        ).format(
+            next_touch=_sql_parse_touch(SQL("nt.context")),
+            sent_count=sent_count,
+        )
+        + _enrollment_outcome_lateral()
+    )
+
+
+def _enrollment_where(  # noqa: C901
+    params: dict[str, object],
+    *,
+    workflow_id: str | None = None,
+    contact_id: str | None = None,
+    status: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    disposition: str | None = None,
+    stuck: bool = False,
+    has_pending_task: bool | None = None,
+    touch: int | None = None,
+    sent_count: Composed,
+) -> Composed | SQL:
+    """Shared WHERE for ``list_enrollments_detailed`` (§V.185).
+
+    Mutates ``params`` with filter placeholders. ``--touch`` stays
+    ``_sql_parse_touch`` (not ``_sql_resolve_touch``).
+    """
+    where_parts: list[Composed | SQL] = []
+    if workflow_id is not None:
+        where_parts.append(SQL("e.workflow_id = %(workflow_id)s"))
+        params["workflow_id"] = workflow_id
+    if contact_id is not None:
+        where_parts.append(SQL("e.contact_id = %(contact_id)s"))
+        params["contact_id"] = contact_id
+    if status is not None:
+        where_parts.append(SQL("e.status = %(status)s"))
+        params["status"] = status
+    if since is not None:
+        where_parts.append(SQL("e.updated_at >= %(since)s"))
+        params["since"] = since
+    if until is not None:
+        where_parts.append(SQL("e.updated_at <= %(until)s"))
+        params["until"] = until
+    if disposition is not None:
+        params["disposition"] = disposition
+        where_parts.append(SQL("outcome.disposition = %(disposition)s"))
+    if stuck:
+        where_parts.append(
+            SQL(
+                "("
+                "("
+                "e.status = 'active' "
+                "AND outcome.disposition IS NULL "
+                "AND nt.scheduled_at IS NULL "
+                "AND {sent_count} = 0 "
+                "AND e.created_at < NOW() "
+                "- make_interval(hours => %(first_send_sla_hours)s)"
+                ") "
+                "OR "
+                "("
+                "EXISTS ("
+                "SELECT 1 FROM email em "
+                "WHERE em.workflow_id = e.workflow_id "
+                "AND em.contact_id = e.contact_id "
+                "AND em.direction = 'outbound' AND em.status = 'bounced'"
+                ") "
+                "AND outcome.disposition IS NULL"
+                ") "
+                "OR "
+                "EXISTS ("
+                "SELECT 1 FROM task t "
+                "WHERE t.enrollment_id = e.id "
+                "AND t.status = 'failed' AND t.attempt_count >= 3"
+                ")"
+                ")"
+            ).format(sent_count=sent_count)
+        )
+    if has_pending_task is True:
+        where_parts.append(
+            SQL(
+                "EXISTS ("
+                "SELECT 1 FROM task t "
+                "WHERE t.enrollment_id = e.id AND t.status = 'pending'"
+                ")"
+            )
+        )
+    elif has_pending_task is False:
+        where_parts.append(
+            SQL(
+                "NOT EXISTS ("
+                "SELECT 1 FROM task t "
+                "WHERE t.enrollment_id = e.id AND t.status = 'pending'"
+                ")"
+            )
+        )
+    if touch is not None:
+        params["touch"] = touch
+        parsed_pending = _sql_parse_touch(SQL("t.context"))
+        where_parts.append(
+            SQL(
+                "("
+                "EXISTS ("
+                "SELECT 1 FROM task t "
+                "WHERE t.enrollment_id = e.id AND t.status = 'pending' "
+                "AND {touch} = %(touch)s"
+                ") "
+                "OR ("
+                "%(touch)s = 1 "
+                "AND EXISTS ("
+                "SELECT 1 FROM task t "
+                "WHERE t.enrollment_id = e.id AND t.status = 'pending' "
+                "AND t.context->>'touch' IS NULL"
+                ") "
+                "AND {sent_count} = 0"
+                ") "
+                "OR ("
+                "NOT EXISTS ("
+                "SELECT 1 FROM task t "
+                "WHERE t.enrollment_id = e.id AND t.status = 'pending'"
+                ") "
+                "AND {sent_count} = %(touch)s"
+                ")"
+                ")"
+            ).format(touch=parsed_pending, sent_count=sent_count)
+        )
+    if not where_parts:
+        return SQL("")
+    return SQL("WHERE ") + SQL(" AND ").join(where_parts)
 
 
 _INLINE_NOTES_CAP = 10
@@ -2407,6 +2626,7 @@ def list_contacts(
     connection: psycopg.Connection[dict[str, Any]],
     limit: int = 100,
     company_id: str | None = None,
+    company_ids: Sequence[str] | None = None,
     since: str | None = None,
     until: str | None = None,
     include_disabled: bool = False,
@@ -2427,6 +2647,8 @@ def list_contacts(
         connection: Open database connection.
         limit: Maximum results.
         company_id: Filter by company ID.
+        company_ids: Filter by a batch of company IDs (``company_id = ANY``).
+            Takes precedence over ``company_id`` when both are set.
         since: ISO datetime inclusive lower bound on ``created_at``.
         until: ISO datetime inclusive upper bound on ``created_at``.
         include_disabled: When False (default), only contacts with
@@ -2457,7 +2679,10 @@ def list_contacts(
     """
     conditions: list[Composed | SQL] = []
     params: dict[str, object] = {"limit": limit}
-    if company_id is not None:
+    if company_ids:
+        conditions.append(SQL("c.company_id = ANY(%(company_ids)s)"))
+        params["company_ids"] = list(company_ids)
+    elif company_id is not None:
         conditions.append(SQL("c.company_id = %(company_id)s"))
         params["company_id"] = company_id
     if since is not None:
@@ -2917,9 +3142,10 @@ def get_workflow_stats(
     - ``active``: ``status='active'`` enrollments with no terminal outcome.
 
     Outcomes are timeline-only (§V.15): the latest ``enrollment_completed`` /
-    ``enrollment_failed`` activity per enrollment wins (cf
-    ``list_enrollments_with_outcomes``). Pre-§V.132 failed rows lack a
-    disposition key, so they fall out of both failure splits (legacy gap).
+    ``enrollment_failed`` activity per enrollment wins (same LATERAL as
+    ``list_enrollments_detailed(full=True)`` §V.185). Pre-§V.132 failed rows
+    lack a disposition key, so they fall out of both failure splits (legacy
+    gap).
 
     Args:
         connection: Open database connection.
@@ -3905,26 +4131,14 @@ def create_enrollment(
         Created enrollment, or None if it already existed.
     """
     row = connection.execute(
-        """\
-        WITH inserted AS (
-            INSERT INTO enrollment (id, workflow_id, contact_id)
-            VALUES (%(id)s, %(workflow_id)s, %(contact_id)s)
-            ON CONFLICT (workflow_id, contact_id) DO NOTHING
-            RETURNING *
-        )
-        SELECT
-            inserted.*,
-            workflow.name AS workflow_name,
-            contact.email AS contact_email,
-            TRIM(
-                COALESCE(contact.first_name, '')
-                || ' '
-                || COALESCE(contact.last_name, '')
-            ) AS contact_name
-        FROM inserted
-        JOIN workflow ON workflow.id = inserted.workflow_id
-        JOIN contact ON contact.id = inserted.contact_id
-        """,
+        SQL(
+            "WITH inserted AS ("
+            "INSERT INTO enrollment (id, workflow_id, contact_id) "
+            "VALUES (%(id)s, %(workflow_id)s, %(contact_id)s) "
+            "ON CONFLICT (workflow_id, contact_id) DO NOTHING "
+            "RETURNING *"
+            ") {}"
+        ).format(_enrollment_parent_select(SQL("inserted"))),
         {"id": _new_id(), "workflow_id": workflow_id, "contact_id": contact_id},
     ).fetchone()
     if commit:
@@ -3954,22 +4168,11 @@ def get_enrollment(
         Enrollment if found, None otherwise.
     """
     row = connection.execute(
-        """\
-        SELECT
-            enrollment.*,
-            workflow.name AS workflow_name,
-            contact.email AS contact_email,
-            TRIM(
-                COALESCE(contact.first_name, '')
-                || ' '
-                || COALESCE(contact.last_name, '')
-            ) AS contact_name
-        FROM enrollment
-        JOIN workflow ON workflow.id = enrollment.workflow_id
-        JOIN contact ON contact.id = enrollment.contact_id
-        WHERE enrollment.workflow_id = %(workflow_id)s
-          AND enrollment.contact_id = %(contact_id)s
-        """,
+        _enrollment_parent_select(SQL("enrollment"))
+        + SQL(
+            " WHERE enrollment.workflow_id = %(workflow_id)s "
+            "AND enrollment.contact_id = %(contact_id)s"
+        ),
         {"workflow_id": workflow_id, "contact_id": contact_id},
     ).fetchone()
     if row is None:
@@ -3991,21 +4194,8 @@ def get_enrollment_by_id(
         Enrollment if found, None otherwise.
     """
     row = connection.execute(
-        """\
-        SELECT
-            enrollment.*,
-            workflow.name AS workflow_name,
-            contact.email AS contact_email,
-            TRIM(
-                COALESCE(contact.first_name, '')
-                || ' '
-                || COALESCE(contact.last_name, '')
-            ) AS contact_name
-        FROM enrollment
-        JOIN workflow ON workflow.id = enrollment.workflow_id
-        JOIN contact ON contact.id = enrollment.contact_id
-        WHERE enrollment.id = %(id)s
-        """,
+        _enrollment_parent_select(SQL("enrollment"))
+        + SQL(" WHERE enrollment.id = %(id)s"),
         {"id": enrollment_id},
     ).fetchone()
     if row is None:
@@ -4033,16 +4223,8 @@ def list_enrollments(
     if status is not None:
         status_filter = SQL("AND enrollment.status = %(status)s")
         params["status"] = status
-    query = SQL(
-        "SELECT enrollment.*, "
-        "workflow.name AS workflow_name, "
-        "contact.email AS contact_email, "
-        "TRIM(COALESCE(contact.first_name, '') || ' ' "
-        "|| COALESCE(contact.last_name, '')) AS contact_name "
-        "FROM enrollment "
-        "JOIN workflow ON workflow.id = enrollment.workflow_id "
-        "JOIN contact ON contact.id = enrollment.contact_id "
-        "WHERE enrollment.workflow_id = %(workflow_id)s {} "
+    query = _enrollment_parent_select(SQL("enrollment")) + SQL(
+        " WHERE enrollment.workflow_id = %(workflow_id)s {} "
         "ORDER BY enrollment.created_at"
     ).format(status_filter)
     rows = connection.execute(query, params).fetchall()
@@ -4052,13 +4234,14 @@ def list_enrollments(
 def _preview_companies_by_id(
     connection: psycopg.Connection[dict[str, Any]],
     company_ids: set[str],
-) -> dict[str, tuple[str | None, int]]:
-    """Map company id -> (disabled_reason, contact_count) for preview (§V.150)."""
+) -> dict[str, tuple[str | None, int, str | None]]:
+    """Map company id -> (disabled_reason, contact_count, domain) (§V.150)."""
     if not company_ids:
         return {}
     rows = connection.execute(
         """\
-        SELECT c.id, c.disabled_reason, COUNT(ct.id)::int AS contact_count
+        SELECT c.id, c.domain, c.disabled_reason,
+               COUNT(ct.id)::int AS contact_count
         FROM company c
         LEFT JOIN contact ct ON ct.company_id = c.id
         WHERE c.id = ANY(%(ids)s)
@@ -4067,9 +4250,113 @@ def _preview_companies_by_id(
         {"ids": list(company_ids)},
     ).fetchall()
     return {
-        str(row["id"]): (row["disabled_reason"], int(row["contact_count"]))
+        str(row["id"]): (
+            row["disabled_reason"],
+            int(row["contact_count"]),
+            row["domain"],
+        )
         for row in rows
     }
+
+
+def _enrolled_contact_ids(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+) -> set[str]:
+    """Contact ids already enrolled in a workflow (ids only, §V.185)."""
+    rows = connection.execute(
+        """\
+        SELECT contact_id FROM enrollment
+        WHERE workflow_id = %(workflow_id)s
+        """,
+        {"workflow_id": workflow_id},
+    ).fetchall()
+    return {str(row["contact_id"]) for row in rows}
+
+
+def _preview_from_contacts(  # noqa: C901
+    connection: psycopg.Connection[dict[str, Any]],
+    contacts: Sequence[Contact | ContactSummary],
+    *,
+    workflow_id: str,
+    account_email: str | None = None,
+    drop_already_enrolled: bool = True,
+    excluded: EnrollmentPreviewExcluded | None = None,
+) -> tuple[list[EnrollmentPreviewContact], EnrollmentPreviewExcluded]:
+    """Exclude ineligible seats and hydrate tags/peers (§V.185 / §V.150).
+
+    Covers exclude + tag + peer hydrate for tag-cohort and file-cohort
+    previews. Already-enrolled is a ``contact_id`` SELECT, not a hydrated
+    ``list_enrollments`` round-trip.
+    """
+    packed = (
+        excluded.model_copy() if excluded is not None else EnrollmentPreviewExcluded()
+    )
+    enrolled_ids = (
+        _enrolled_contact_ids(connection, workflow_id)
+        if drop_already_enrolled
+        else set()
+    )
+    account_email_lower = account_email.lower() if account_email is not None else None
+    company_ids = {c.company_id for c in contacts if c.company_id is not None}
+    company_meta = _preview_companies_by_id(connection, company_ids)
+    seen: set[str] = set()
+    kept: list[Contact | ContactSummary] = []
+    disabled_company_ids: set[str] = set()
+    for contact in contacts:
+        if contact.id in seen:
+            continue
+        seen.add(contact.id)
+        if contact.company_id is not None:
+            meta = company_meta.get(contact.company_id)
+            if meta is not None and meta[0] is not None:
+                disabled_company_ids.add(contact.company_id)
+                continue
+        if contact.disabled_reason is not None:
+            packed.disabled_contacts += 1
+            continue
+        if (
+            account_email_lower is not None
+            and contact.email.lower() == account_email_lower
+        ):
+            packed.self_loop += 1
+            continue
+        if drop_already_enrolled and contact.id in enrolled_ids:
+            packed.already_enrolled += 1
+            continue
+        kept.append(contact)
+    packed.disabled_companies += len(disabled_company_ids)
+    candidate_ids = [contact.id for contact in kept]
+    company_owner_ids = [
+        contact.company_id for contact in kept if contact.company_id is not None
+    ]
+    company_tags = _preview_owner_tag_names(connection, company_owner_ids, "company_id")
+    contact_tags = _preview_owner_tag_names(connection, candidate_ids, "contact_id")
+    peers = _preview_peer_workflows(connection, candidate_ids, workflow_id)
+    preview_contacts: list[EnrollmentPreviewContact] = []
+    for contact in kept:
+        domain = contact.company_domain if isinstance(contact, ContactSummary) else None
+        if domain is None and contact.company_id is not None:
+            meta = company_meta.get(contact.company_id)
+            if meta is not None:
+                domain = meta[2]
+        preview_contacts.append(
+            EnrollmentPreviewContact(
+                email=contact.email,
+                title=contact.title,
+                company_domain=domain,
+                company_tags=(
+                    company_tags.get(contact.company_id, [])
+                    if contact.company_id is not None
+                    else []
+                ),
+                contact_tags=contact_tags.get(contact.id, []),
+                email_confidence=contact.email_confidence,
+                peer_workflows=peers.get(contact.id, []),
+            )
+        )
+    preview_contacts.sort(key=lambda c: (c.company_domain or "", c.email))
+    return preview_contacts, packed
 
 
 def _preview_owner_tag_names(
@@ -4118,7 +4405,7 @@ def _preview_peer_workflows(
     return {str(row["contact_id"]): list(row["names"] or []) for row in rows}
 
 
-def preview_enrollment_tag_cohort(  # noqa: C901
+def preview_enrollment_tag_cohort(
     connection: psycopg.Connection[dict[str, Any]],
     workflow: Workflow,
     tag: Tag,
@@ -4134,7 +4421,8 @@ def preview_enrollment_tag_cohort(  # noqa: C901
     (§V.114). Drops already-enrolled contacts for the workflow, self-loop
     contacts (§V.33), and disabled contacts. Optional ``min_contacts`` filters
     companies before expand (company-tag) or the contact's company
-    ``contact_count`` (contact-tag).
+    ``contact_count`` (contact-tag). Company expand uses ``company_id = ANY``
+    rather than a per-company ``list_contacts`` loop (§V.185).
 
     Args:
         connection: Open database connection.
@@ -4162,59 +4450,37 @@ def preview_enrollment_tag_cohort(  # noqa: C901
         include_disabled=True,
         limit=100_000,
     )
-    enrolled_ids = {e.contact_id for e in list_enrollments(connection, workflow.id)}
-    account_email_lower = account_email.lower() if account_email is not None else None
-    disabled_company_ids: set[str] = set()
-    seen_contact_ids: set[str] = set()
-    excluded = EnrollmentPreviewExcluded()
-    raw: list[ContactSummary] = []
-
-    def consider(contact: ContactSummary, *, company_disabled: bool) -> None:
-        if contact.id in seen_contact_ids:
-            return
-        seen_contact_ids.add(contact.id)
-        if company_disabled:
-            return
-        if contact.disabled_reason is not None:
-            excluded.disabled_contacts += 1
-            return
-        if (
-            account_email_lower is not None
-            and contact.email.lower() == account_email_lower
-        ):
-            excluded.self_loop += 1
-            return
-        if contact.id in enrolled_ids:
-            excluded.already_enrolled += 1
-            return
-        raw.append(contact)
-
-    company_ids = {company.id for company in companies}
-    for company in companies:
-        if company.disabled_reason is not None:
-            disabled_company_ids.add(company.id)
-            continue
-        for contact in list_contacts(
+    disabled_company_ids = {
+        company.id for company in companies if company.disabled_reason is not None
+    }
+    enabled_ids = [
+        company.id for company in companies if company.disabled_reason is None
+    ]
+    expanded: list[ContactSummary] = []
+    if enabled_ids:
+        expanded = list_contacts(
             connection,
-            company_id=company.id,
+            company_ids=enabled_ids,
             include_disabled=True,
             limit=100_000,
-        ):
-            consider(contact, company_disabled=False)
-
+        )
+    company_ids = {company.id for company in companies}
     extra_ids = {
         contact.company_id
         for contact in tagged_contacts
         if contact.company_id is not None and contact.company_id not in company_ids
     }
     extra_companies = _preview_companies_by_id(connection, extra_ids)
-    company_meta: dict[str, tuple[str | None, int]] = {
-        company.id: (company.disabled_reason, company.contact_count)
+    company_meta: dict[str, tuple[str | None, int, str | None]] = {
+        company.id: (company.disabled_reason, company.contact_count, company.domain)
         for company in companies
     }
     company_meta.update(extra_companies)
-
+    raw: list[ContactSummary] = list(expanded)
+    seen_ids = {contact.id for contact in expanded}
     for contact in tagged_contacts:
+        if contact.id in seen_ids:
+            continue
         meta = (
             company_meta.get(contact.company_id)
             if contact.company_id is not None
@@ -4222,37 +4488,22 @@ def preview_enrollment_tag_cohort(  # noqa: C901
         )
         if contact.company_id is not None and meta is not None and meta[0] is not None:
             disabled_company_ids.add(contact.company_id)
-            consider(contact, company_disabled=True)
             continue
         contact_count = 0 if meta is None else meta[1]
         if min_contacts is not None and contact_count < min_contacts:
             continue
-        consider(contact, company_disabled=False)
-
-    excluded.disabled_companies = len(disabled_company_ids)
-
-    candidate_ids = [contact.id for contact in raw]
-    company_owner_ids = [
-        contact.company_id for contact in raw if contact.company_id is not None
-    ]
-    company_tags = _preview_owner_tag_names(connection, company_owner_ids, "company_id")
-    contact_tags = _preview_owner_tag_names(connection, candidate_ids, "contact_id")
-    peers = _preview_peer_workflows(connection, candidate_ids, workflow.id)
-    contacts = [
-        EnrollmentPreviewContact(
-            email=contact.email,
-            title=contact.title,
-            company_domain=contact.company_domain,
-            company_tags=company_tags.get(contact.company_id, [])
-            if contact.company_id is not None
-            else [],
-            contact_tags=contact_tags.get(contact.id, []),
-            email_confidence=contact.email_confidence,
-            peer_workflows=peers.get(contact.id, []),
-        )
-        for contact in raw
-    ]
-    contacts.sort(key=lambda c: (c.company_domain or "", c.email))
+        raw.append(contact)
+        seen_ids.add(contact.id)
+    contacts, excluded = _preview_from_contacts(
+        connection,
+        raw,
+        workflow_id=workflow.id,
+        account_email=account_email,
+        drop_already_enrolled=True,
+        excluded=EnrollmentPreviewExcluded(
+            disabled_companies=len(disabled_company_ids),
+        ),
+    )
     return EnrollmentPreview(
         workflow=workflow.name,
         tag=tag.name,
@@ -4293,66 +4544,15 @@ def preview_enrollment_file_cohort(
     unique: list[str] = list(dict.fromkeys(email.lower() for email in emails))
     found = get_contacts_by_emails(connection, unique)
     missing = [email for email in unique if email not in found]
-    enrolled_ids = {e.contact_id for e in list_enrollments(connection, workflow.id)}
-    account_email_lower = account_email.lower() if account_email is not None else None
-    excluded = EnrollmentPreviewExcluded(not_found=len(missing))
-    disabled_company_ids: set[str] = set()
-    raw: list[Contact] = []
-    for email in unique:
-        contact = found.get(email)
-        if contact is None:
-            continue
-        company = (
-            get_company(connection, contact.company_id)
-            if contact.company_id is not None
-            else None
-        )
-        if company is not None and company.disabled_reason is not None:
-            disabled_company_ids.add(company.id)
-            continue
-        if contact.disabled_reason is not None:
-            excluded.disabled_contacts += 1
-            continue
-        if (
-            account_email_lower is not None
-            and contact.email.lower() == account_email_lower
-        ):
-            excluded.self_loop += 1
-            continue
-        if drop_already_enrolled and contact.id in enrolled_ids:
-            excluded.already_enrolled += 1
-            continue
-        raw.append(contact)
-    excluded.disabled_companies = len(disabled_company_ids)
-    candidate_ids = [contact.id for contact in raw]
-    company_owner_ids = [
-        contact.company_id for contact in raw if contact.company_id is not None
-    ]
-    company_tags = _preview_owner_tag_names(connection, company_owner_ids, "company_id")
-    contact_tags = _preview_owner_tag_names(connection, candidate_ids, "contact_id")
-    peers = _preview_peer_workflows(connection, candidate_ids, workflow.id)
-    company_domains: dict[str, str | None] = {}
-    for contact in raw:
-        if contact.company_id is None:
-            company_domains[contact.id] = None
-            continue
-        company = get_company(connection, contact.company_id)
-        company_domains[contact.id] = company.domain if company is not None else None
-    contacts = [
-        EnrollmentPreviewContact(
-            email=contact.email,
-            title=contact.title,
-            company_domain=company_domains.get(contact.id),
-            company_tags=company_tags.get(contact.company_id, [])
-            if contact.company_id is not None
-            else [],
-            contact_tags=contact_tags.get(contact.id, []),
-            email_confidence=contact.email_confidence,
-            peer_workflows=peers.get(contact.id, []),
-        )
-        for contact in raw
-    ]
-    contacts.sort(key=lambda c: (c.company_domain or "", c.email))
+    raw = [found[email] for email in unique if email in found]
+    contacts, excluded = _preview_from_contacts(
+        connection,
+        raw,
+        workflow_id=workflow.id,
+        account_email=account_email,
+        drop_already_enrolled=drop_already_enrolled,
+        excluded=EnrollmentPreviewExcluded(not_found=len(missing)),
+    )
     preview = EnrollmentPreview(
         workflow=workflow.name,
         tag=None,
@@ -4443,59 +4643,6 @@ def _company_atomic_groups(
     return groups
 
 
-def list_enrollments_with_outcomes(
-    connection: psycopg.Connection[dict[str, Any]],
-    workflow_id: str,
-) -> list[EnrollmentWithOutcome]:
-    """List enrollments in a workflow with their latest outcome activity.
-
-    Outcomes (`completed` / `failed`) are timeline-only and do not change
-    `enrollment.status` (§V.15). This helper LEFT JOINs the most recent
-    `enrollment_completed` / `enrollment_failed` activity per row so the
-    agent can answer "has this goal already been satisfied for any
-    contact in this workflow?" in a single query.
-
-    Args:
-        connection: Open database connection.
-        workflow_id: Workflow FK.
-
-    Returns:
-        List of `EnrollmentWithOutcome`, ordered by enrollment `created_at`.
-    """
-    rows = connection.execute(
-        """\
-        SELECT
-            e.id,
-            e.workflow_id,
-            e.contact_id,
-            e.status,
-            e.reason,
-            e.created_at,
-            e.updated_at,
-            CASE a.type
-                WHEN 'enrollment_completed' THEN 'completed'
-                WHEN 'enrollment_failed' THEN 'failed'
-            END AS latest_outcome,
-            COALESCE(a.detail->>'reason', a.summary) AS latest_outcome_reason,
-            a.created_at AS latest_outcome_at
-        FROM enrollment e
-        LEFT JOIN LATERAL (
-            SELECT type, summary, detail, created_at
-            FROM activity
-            WHERE activity.contact_id = e.contact_id
-              AND activity.workflow_id = e.workflow_id
-              AND activity.type IN ('enrollment_completed', 'enrollment_failed')
-            ORDER BY created_at DESC
-            LIMIT 1
-        ) a ON TRUE
-        WHERE e.workflow_id = %(workflow_id)s
-        ORDER BY e.created_at
-        """,
-        {"workflow_id": workflow_id},
-    ).fetchall()
-    return [EnrollmentWithOutcome.model_validate(row) for row in rows]
-
-
 def get_latest_enrollment_outcome(
     connection: psycopg.Connection[dict[str, Any]],
     enrollment_id: str,
@@ -4559,24 +4706,13 @@ def list_active_outbound_enrollments_for_contact(
         ``created_at`` (denormalised parent identifiers joined per §V.5).
     """
     rows = connection.execute(
-        """\
-        SELECT
-            enrollment.*,
-            workflow.name AS workflow_name,
-            contact.email AS contact_email,
-            TRIM(
-                COALESCE(contact.first_name, '')
-                || ' '
-                || COALESCE(contact.last_name, '')
-            ) AS contact_name
-        FROM enrollment
-        JOIN workflow ON workflow.id = enrollment.workflow_id
-        JOIN contact ON contact.id = enrollment.contact_id
-        WHERE enrollment.contact_id = %(contact_id)s
-          AND enrollment.status = 'active'
-          AND workflow.type = 'outbound'
-        ORDER BY enrollment.created_at
-        """,
+        _enrollment_parent_select(SQL("enrollment"))
+        + SQL(
+            " WHERE enrollment.contact_id = %(contact_id)s "
+            "AND enrollment.status = 'active' "
+            "AND workflow.type = 'outbound' "
+            "ORDER BY enrollment.created_at"
+        ),
         {"contact_id": contact_id},
     ).fetchall()
     return [Enrollment.model_validate(row) for row in rows]
@@ -4682,29 +4818,21 @@ def disable_enrollment(
         Updated ``Enrollment`` (status='disabled'), or ``None`` if not found.
     """
     row = connection.execute(
-        """\
-        WITH updated AS (
-            UPDATE enrollment
-            SET status = 'disabled',
-                disabled_reason = %(reason)s,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = %(id)s
-            RETURNING *
-        )
-        SELECT
-            updated.*,
-            workflow.name AS workflow_name,
-            contact.email AS contact_email,
-            contact.company_id AS contact_company_id,
-            TRIM(
-                COALESCE(contact.first_name, '')
-                || ' '
-                || COALESCE(contact.last_name, '')
-            ) AS contact_name
-        FROM updated
-        JOIN workflow ON workflow.id = updated.workflow_id
-        JOIN contact ON contact.id = updated.contact_id
-        """,
+        SQL(
+            "WITH updated AS ("
+            "UPDATE enrollment "
+            "SET status = 'disabled', "
+            "disabled_reason = %(reason)s, "
+            "updated_at = CURRENT_TIMESTAMP "
+            "WHERE id = %(id)s "
+            "RETURNING *"
+            ") {}"
+        ).format(
+            _enrollment_parent_select(
+                SQL("updated"),
+                extra=SQL("contact.company_id AS contact_company_id"),
+            )
+        ),
         {"id": enrollment_id, "reason": reason},
     ).fetchone()
     if row is None:
@@ -4761,30 +4889,22 @@ def enable_enrollment(
         enrollment with that id exists -- i.e. missing or already active.
     """
     row = connection.execute(
-        """\
-        WITH updated AS (
-            UPDATE enrollment
-            SET status = 'active',
-                disabled_reason = NULL,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = %(id)s
-              AND status = 'disabled'
-            RETURNING *
-        )
-        SELECT
-            updated.*,
-            workflow.name AS workflow_name,
-            contact.email AS contact_email,
-            contact.company_id AS contact_company_id,
-            TRIM(
-                COALESCE(contact.first_name, '')
-                || ' '
-                || COALESCE(contact.last_name, '')
-            ) AS contact_name
-        FROM updated
-        JOIN workflow ON workflow.id = updated.workflow_id
-        JOIN contact ON contact.id = updated.contact_id
-        """,
+        SQL(
+            "WITH updated AS ("
+            "UPDATE enrollment "
+            "SET status = 'active', "
+            "disabled_reason = NULL, "
+            "updated_at = CURRENT_TIMESTAMP "
+            "WHERE id = %(id)s "
+            "AND status = 'disabled' "
+            "RETURNING *"
+            ") {}"
+        ).format(
+            _enrollment_parent_select(
+                SQL("updated"),
+                extra=SQL("contact.company_id AS contact_company_id"),
+            )
+        ),
         {"id": enrollment_id},
     ).fetchone()
     if row is None:
@@ -4816,7 +4936,7 @@ def enable_enrollment(
     return Enrollment.model_validate(row)
 
 
-def list_enrollments_detailed(  # noqa: C901, PLR0912
+def list_enrollments_detailed(
     connection: psycopg.Connection[dict[str, Any]],
     workflow_id: str | None = None,
     contact_id: str | None = None,
@@ -4836,13 +4956,15 @@ def list_enrollments_detailed(  # noqa: C901, PLR0912
 ) -> list[EnrollmentSummary]:
     """List enrollments with denormalised contact info as summaries.
 
-    JOINs the contact table to include email and name. Separate from
-    ``list_enrollments`` to avoid breaking agent tools which expect
-    ``list[Enrollment]``. Both ``workflow_id`` and ``contact_id`` are
-    optional independent filters; either or both can be supplied.
+    Splits ``_enrollment_where`` + lean SELECT + full SELECT (§V.185).
+    Separate from ``list_enrollments`` which returns ``list[Enrollment]``.
+    Both ``workflow_id`` and ``contact_id`` are optional independent
+    filters; either or both can be supplied.
 
     When ``full=True`` (§V.152), also projects company, touch progress,
-    next pending task, disposition, and ``created_at``.
+    next pending task, disposition, ``created_at``, and the latest
+    completed/failed outcome (folded from the dropped
+    ``list_enrollments_with_outcomes`` path).
 
     Args:
         connection: Open database connection.
@@ -4875,175 +4997,29 @@ def list_enrollments_detailed(  # noqa: C901, PLR0912
     sent_count = _sql_outbound_sent_count(SQL("e"))
     if limit is not None:
         params["limit"] = limit
-    where_parts: list[Composed | SQL] = []
-    if workflow_id is not None:
-        where_parts.append(SQL("e.workflow_id = %(workflow_id)s"))
-        params["workflow_id"] = workflow_id
-    if contact_id is not None:
-        where_parts.append(SQL("e.contact_id = %(contact_id)s"))
-        params["contact_id"] = contact_id
-    if status is not None:
-        where_parts.append(SQL("e.status = %(status)s"))
-        params["status"] = status
-    if since is not None:
-        where_parts.append(SQL("e.updated_at >= %(since)s"))
-        params["since"] = since
-    if until is not None:
-        where_parts.append(SQL("e.updated_at <= %(until)s"))
-        params["until"] = until
-    if disposition is not None:
-        params["disposition"] = disposition
-        where_parts.append(SQL("outcome.disposition = %(disposition)s"))
     if stuck:
         # Force full joins for stuck heuristics that need next task / bounce.
         full = True
-        where_parts.append(
-            SQL(
-                "("
-                # active, no terminal outcome, no pending, never-sent past SLA
-                "("
-                "e.status = 'active' "
-                "AND outcome.disposition IS NULL "
-                "AND nt.scheduled_at IS NULL "
-                "AND {sent_count} = 0 "
-                "AND e.created_at < NOW() "
-                "- make_interval(hours => %(first_send_sla_hours)s)"
-                ") "
-                "OR "
-                # bounced without disposition
-                "("
-                "EXISTS ("
-                "SELECT 1 FROM email em "
-                "WHERE em.workflow_id = e.workflow_id "
-                "AND em.contact_id = e.contact_id "
-                "AND em.direction = 'outbound' AND em.status = 'bounced'"
-                ") "
-                "AND outcome.disposition IS NULL"
-                ") "
-                "OR "
-                # high attempt_count failed task
-                "EXISTS ("
-                "SELECT 1 FROM task t "
-                "WHERE t.enrollment_id = e.id "
-                "AND t.status = 'failed' AND t.attempt_count >= 3"
-                ")"
-                ")"
-            ).format(sent_count=sent_count)
-        )
-    if has_pending_task is True:
-        where_parts.append(
-            SQL(
-                "EXISTS ("
-                "SELECT 1 FROM task t "
-                "WHERE t.enrollment_id = e.id AND t.status = 'pending'"
-                ")"
-            )
-        )
-    elif has_pending_task is False:
-        where_parts.append(
-            SQL(
-                "NOT EXISTS ("
-                "SELECT 1 FROM task t "
-                "WHERE t.enrollment_id = e.id AND t.status = 'pending'"
-                ")"
-            )
-        )
-    if touch is not None:
-        params["touch"] = touch
-        parsed_pending = _sql_parse_touch(SQL("t.context"))
-        where_parts.append(
-            SQL(
-                "("
-                "EXISTS ("
-                "SELECT 1 FROM task t "
-                "WHERE t.enrollment_id = e.id AND t.status = 'pending' "
-                "AND {touch} = %(touch)s"
-                ") "
-                "OR ("
-                "%(touch)s = 1 "
-                "AND EXISTS ("
-                "SELECT 1 FROM task t "
-                "WHERE t.enrollment_id = e.id AND t.status = 'pending' "
-                "AND t.context->>'touch' IS NULL"
-                ") "
-                "AND {sent_count} = 0"
-                ") "
-                "OR ("
-                "NOT EXISTS ("
-                "SELECT 1 FROM task t "
-                "WHERE t.enrollment_id = e.id AND t.status = 'pending'"
-                ") "
-                "AND {sent_count} = %(touch)s"
-                ")"
-                ")"
-            ).format(touch=parsed_pending, sent_count=sent_count)
-        )
-    where_clause = (
-        SQL("WHERE ") + SQL(" AND ").join(where_parts) if where_parts else SQL("")
-    )
-    outcome_lateral = SQL(
-        "LEFT JOIN LATERAL ("
-        "SELECT a.detail->>'disposition' AS disposition "
-        "FROM activity a "
-        "WHERE a.contact_id = e.contact_id "
-        "AND a.workflow_id = e.workflow_id "
-        "AND a.type IN ('enrollment_completed', 'enrollment_failed') "
-        "ORDER BY a.created_at DESC LIMIT 1"
-        ") outcome ON TRUE "
+    where_clause = _enrollment_where(
+        params,
+        workflow_id=workflow_id,
+        contact_id=contact_id,
+        status=status,
+        since=since,
+        until=until,
+        disposition=disposition,
+        stuck=stuck,
+        has_pending_task=has_pending_task,
+        touch=touch,
+        sent_count=sent_count,
     )
     if full:
-        select_cols = SQL(
-            "SELECT e.id, e.workflow_id, w.name AS workflow_name, "
-            "e.contact_id, e.status, e.updated_at, e.created_at, "
-            "c.email AS contact_email, "
-            "TRIM(COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '')) "
-            "AS contact_name, "
-            "co.domain AS company_domain, "
-            "co.name AS company_name, "
-            "{sent_count} AS emails_sent, "
-            "{sent_count} AS last_touch, "
-            "nt.scheduled_at AS next_scheduled_at, "
-            "COALESCE("
-            "{next_touch}, "
-            "CASE WHEN nt.scheduled_at IS NOT NULL "
-            "AND nt.context->>'touch' IS NULL AND "
-            "{sent_count} = 0 THEN 1 END"
-            ") AS next_touch, "
-            "outcome.disposition AS disposition "
-        ).format(
-            next_touch=_sql_parse_touch(SQL("nt.context")),
-            sent_count=sent_count,
-        )
-        from_joins = (
-            SQL(
-                "FROM enrollment e "
-                "JOIN workflow w ON w.id = e.workflow_id "
-                "JOIN contact c ON c.id = e.contact_id "
-                "LEFT JOIN company co ON co.id = c.company_id "
-                "LEFT JOIN LATERAL ("
-                "SELECT t.scheduled_at, t.context FROM task t "
-                "WHERE t.enrollment_id = e.id AND t.status = 'pending' "
-                "ORDER BY t.scheduled_at ASC NULLS LAST LIMIT 1"
-                ") nt ON TRUE "
-            )
-            + outcome_lateral
-        )
+        select_from = _enrollment_full_select(sent_count)
     else:
-        select_cols = SQL(
-            "SELECT e.id, e.workflow_id, w.name AS workflow_name, "
-            "e.contact_id, e.status, e.updated_at, "
-            "c.email AS contact_email, "
-            "TRIM(COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '')) "
-            "AS contact_name "
-        )
-        from_joins = SQL(
-            "FROM enrollment e "
-            "JOIN workflow w ON w.id = e.workflow_id "
-            "JOIN contact c ON c.id = e.contact_id "
-        )
+        select_from = _enrollment_lean_select()
         # §V.160 disposition filter needs outcome lateral even on lean rows.
         if disposition is not None:
-            from_joins = from_joins + outcome_lateral
+            select_from = select_from + _enrollment_outcome_lateral()
     order_col = (
         SQL("nt.scheduled_at")
         if full and sort == "next_scheduled_at"
@@ -5052,8 +5028,7 @@ def list_enrollments_detailed(  # noqa: C901, PLR0912
     order_dir = SQL("DESC") if desc else SQL("ASC")
     limit_sql = SQL(" LIMIT %(limit)s") if limit is not None else SQL("")
     query = (
-        select_cols
-        + from_joins
+        select_from
         + where_clause
         + SQL(" ORDER BY ")
         + order_col

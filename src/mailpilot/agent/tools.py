@@ -410,10 +410,24 @@ def list_enrollments(
     ctx: RunContext[AgentDeps],
 ) -> list[dict[str, Any]]:
     """List enrollments in the current workflow with their outcome status."""
-    enrollments = database.list_enrollments_with_outcomes(
-        ctx.deps.connection, ctx.deps.workflow_id
+    enrollments = database.list_enrollments_detailed(
+        ctx.deps.connection,
+        workflow_id=ctx.deps.workflow_id,
+        full=True,
+        limit=None,
     )
-    return [e.model_dump(mode="json") for e in enrollments]
+    rows: list[dict[str, Any]] = []
+    for enrollment in enrollments:
+        dumped = enrollment.model_dump(mode="json")
+        dumped["latest_outcome"] = enrollment.latest_outcome
+        dumped["latest_outcome_reason"] = enrollment.latest_outcome_reason
+        dumped["latest_outcome_at"] = (
+            enrollment.latest_outcome_at.isoformat()
+            if enrollment.latest_outcome_at is not None
+            else None
+        )
+        rows.append(dumped)
+    return rows
 
 
 def search_emails(

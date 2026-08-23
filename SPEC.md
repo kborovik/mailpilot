@@ -295,7 +295,7 @@ T314|x|impl §V.182(+) + §V.45(∆) + §V.136(∆) + §C/§I — tools take Run
 T315|x|impl §V.183(+) + §V.38(∆) + §V.39(∆) + §V.47(∆) — one-query enrollment email history (full body_text, prompt cap 500); read_email search-outside only; `_email_tool_result`; `_drive_call`; `build_model` public + require_active_provider_key once; existing invoke/tools/model tests (#262)|V183,V38,V39,V47,V82,V87,V29
 T316|x|impl §V.184(+) + §V.132(∆)+§V.153(∆)+§V.157(∆)+§V.174(∆) + §I — campaign query stack share; stats takes loaded Workflow; `_sql_outbound_sent_count`; drop `_review_window_emails`; list_active_workflows WHERE active; wording via check_workflow_wording never unknown; envelopes unchanged; existing tests (#263)|V184,V132,V153,V157,V174,V178,V133,V152,V134,I.cli
 T317|x|impl emit-rg mode on `.spec/scripts/check-extras.sh`; parse backticked rg under each `## §Vn`; run; emit section/line/hit_count/files; no-arg extras-hook path unchanged; tests (#282)|-
-T318|.|impl §V.185(+) + §V.152(∆)+§V.150(∆) — merge enrollment list APIs; parent SELECT fragment; detailed WHERE+lean/full; fold outcome into full drop EnrollmentWithOutcome; preview contact_id + ANY not N+1; agent latest_outcome keys stay; --touch stays parse; existing list/preview/report/agent-tool tests (#264)|V185,V152,V150,V171,V178,V184,V5,V15,I.cli
+T318|x|impl §V.185(+) + §V.152(∆)+§V.150(∆) — merge enrollment list APIs; parent SELECT fragment; detailed WHERE+lean/full; fold outcome into full drop EnrollmentWithOutcome; preview contact_id + ANY not N+1; agent latest_outcome keys stay; --touch stays parse; existing list/preview/report/agent-tool tests (#264)|V185,V152,V150,V171,V178,V184,V5,V15,I.cli
 
 ## §B BUGS
 
