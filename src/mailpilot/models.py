@@ -408,6 +408,7 @@ class WorkflowTemplateRecord(BaseModel):
 
 
 EnrollmentStatus = Literal["active", "disabled"]
+EnrollmentOutcome = Literal["completed", "failed"]
 
 
 class Enrollment(BaseModel):
@@ -449,7 +450,7 @@ class EnrollmentSummary(BaseModel):
     Lean fields are always populated. Execution fields (company, touch progress,
     next send, disposition, created_at) are populated only when the caller
     requests ``full=True`` per §V.152; lean dumps exclude them so agent payloads
-    stay small.
+    stay small. Latest-outcome columns stay off CLI/report dumps (§V.185).
     """
 
     id: str
@@ -469,6 +470,10 @@ class EnrollmentSummary(BaseModel):
     next_touch: int | None = None
     disposition: str | None = None
     created_at: datetime | None = None
+    # Agent list_enrollments keys; exclude keeps CLI/report on §V.152 field set.
+    latest_outcome: EnrollmentOutcome | None = Field(default=None, exclude=True)
+    latest_outcome_reason: str | None = Field(default=None, exclude=True)
+    latest_outcome_at: datetime | None = Field(default=None, exclude=True)
 
 
 # Fields present only on ``--full`` enrollment list/view projections (§V.152).
@@ -484,30 +489,6 @@ ENROLLMENT_FULL_FIELDS: frozenset[str] = frozenset(
         "created_at",
     }
 )
-
-
-EnrollmentOutcome = Literal["completed", "failed"]
-
-
-class EnrollmentWithOutcome(BaseModel):
-    """Enrollment plus the latest outcome activity, if any.
-
-    Outcomes (`completed` / `failed`) are timeline-only per §V.15 -- they do
-    not live on the enrollment row. This composite carries the most recent
-    `enrollment_completed` / `enrollment_failed` activity so the agent can
-    coordinate across contacts in a single read.
-    """
-
-    id: str
-    workflow_id: str
-    contact_id: str
-    status: EnrollmentStatus
-    reason: str
-    created_at: datetime
-    updated_at: datetime
-    latest_outcome: EnrollmentOutcome | None = None
-    latest_outcome_reason: str | None = None
-    latest_outcome_at: datetime | None = None
 
 
 class EnrollmentPreviewContact(BaseModel):
