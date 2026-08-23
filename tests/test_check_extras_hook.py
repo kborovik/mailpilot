@@ -391,6 +391,8 @@ def test_live_emit_rg_well_formed() -> None:
     assert v4_cli, result.stdout.splitlines()[:5]
     v100 = [row for row in parsed if row[0] == "V100" and isinstance(row[2], int)]
     assert v100
-    assert any(row[2] > 0 and row[3] for row in v100)
+    assert any(
+        hits > 0 and files for _, _, hits, files in v100 if isinstance(hits, int)
+    )
     v102 = [row for row in parsed if row[0] == "V102"]
     assert len(v102) == 3
