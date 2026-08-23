@@ -151,7 +151,7 @@ def emit(rid: str, verdict: str, evidence: str) -> None:
 
 
 def parse_rg_recipes(text: str) -> list[tuple[str, int, str]]:
-    """Backticked commands starting with `rg ` under each `## §Vn` header."""
+    """Headers are `## §V4` not `## §V.4`. Skip ticks that do not tokenize as rg argv."""
     section: str | None = None
     recipes: list[tuple[str, int, str]] = []
     for lineno, line in enumerate(text.splitlines(), start=1):
@@ -164,10 +164,8 @@ def parse_rg_recipes(text: str) -> list[tuple[str, int, str]]:
             continue
         if section is None:
             continue
-        for tick in TICK.findall(line):
-            cmd = tick.strip()
-            if cmd.startswith("rg "):
-                recipes.append((section, lineno, cmd))
+        for cmd in _rg_cmds_on_line(line):
+            recipes.append((section, lineno, cmd))
     return recipes
 
 
@@ -178,6 +176,85 @@ def _tokens(cmd: str) -> list[str] | None:
         return None
 
 
+def _first_rg_segment(tokens: list[str]) -> list[str]:
+    for sep in ("|", ";", "||", "&&"):
+        if sep in tokens:
+            return tokens[: tokens.index(sep)]
+    return tokens
+
+
+def _pattern_token(tokens: list[str]) -> str | None:
+    i = 1
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in {"|", ";", "||", "&&"}:
+            return None
+        if tok == "--":
+            return tokens[i + 1] if i + 1 < len(tokens) else None
+        if tok.startswith("-"):
+            key = tok.split("=", 1)[0]
+            if key in {"-e", "--regexp"}:
+                if "=" in tok:
+                    return tok.split("=", 1)[1]
+                return tokens[i + 1] if i + 1 < len(tokens) else None
+            if key in FLAG_WITH_ARG and "=" not in tok:
+                i += 2
+                continue
+            i += 1
+            continue
+        return tok
+    return None
+
+
+def _is_pathish(tok: str) -> bool:
+    if tok.startswith("2>") or tok.startswith(">"):
+        return True
+    return any(c in tok for c in "/*.")
+
+
+def _is_rg_argv(cmd: str) -> bool:
+    tokens = _tokens(cmd)
+    if not tokens or tokens[0] != "rg":
+        return False
+    pattern = _pattern_token(_first_rg_segment(tokens))
+    if pattern is None:
+        return False
+    if f"'{pattern}'" not in cmd and f'"{pattern}"' not in cmd:
+        return False
+    for tok in _rg_path_operands_from_tokens(_first_rg_segment(tokens)):
+        if not _is_pathish(tok):
+            return False
+    return True
+
+
+def _rg_cmds_on_line(line: str) -> list[str]:
+    cmds: list[str] = []
+    i = 0
+    while True:
+        start = line.find("`rg ", i)
+        if start < 0:
+            break
+        body = start + 1
+        found: str | None = None
+        close_at = -1
+        j = body
+        while True:
+            end = line.find("`", j)
+            if end < 0:
+                break
+            candidate = line[body:end].strip()
+            if _is_rg_argv(candidate):
+                found = candidate
+                close_at = end
+            j = end + 1
+        if found is None:
+            i = start + 1
+            continue
+        cmds.append(found)
+        i = close_at + 1
+    return cmds
+
+
 def _has_unquoted_pipe(cmd: str) -> bool:
     tokens = _tokens(cmd)
     if tokens is None:
@@ -185,12 +262,21 @@ def _has_unquoted_pipe(cmd: str) -> bool:
     return "|" in tokens
 
 
-def _rg_path_operands(cmd: str) -> list[str]:
+def _needs_shell(cmd: str) -> bool:
+    if _has_unquoted_pipe(cmd):
+        return True
     tokens = _tokens(cmd)
-    if not tokens:
-        return []
-    if "|" in tokens:
-        tokens = tokens[: tokens.index("|")]
+    if tokens is None:
+        return True
+    for tok in tokens:
+        if tok in {";", "||", "&&"} or tok.startswith("2>") or tok.startswith(">"):
+            return True
+        if ";" in tok:
+            return True
+    return any(any(c in p for c in "*?[]") for p in _rg_path_operands(cmd))
+
+
+def _rg_path_operands_from_tokens(tokens: list[str]) -> list[str]:
     if not tokens or tokens[0] != "rg":
         return []
     i = 1
@@ -198,6 +284,8 @@ def _rg_path_operands(cmd: str) -> list[str]:
     paths: list[str] = []
     while i < len(tokens):
         tok = tokens[i]
+        if tok in {"|", ";", "||", "&&"}:
+            break
         if tok == "--":
             paths.extend(tokens[i + 1 :])
             break
@@ -217,11 +305,25 @@ def _rg_path_operands(cmd: str) -> list[str]:
     return paths
 
 
+def _rg_path_operands(cmd: str) -> list[str]:
+    tokens = _tokens(cmd)
+    if not tokens:
+        return []
+    return _rg_path_operands_from_tokens(_first_rg_segment(tokens))
+
+
 def _files_from_stdout(stdout: str, cwd: Path) -> list[str]:
     found: list[str] = []
     seen: set[str] = set()
     for raw in stdout.splitlines():
-        if not raw or ":" not in raw:
+        if not raw:
+            continue
+        whole = Path(raw) if Path(raw).is_absolute() else cwd / raw
+        if raw not in seen and whole.is_file():
+            seen.add(raw)
+            found.append(raw)
+            continue
+        if ":" not in raw:
             continue
         prefix = raw.split(":", 1)[0]
         if not prefix or prefix in seen:
@@ -243,8 +345,9 @@ def extract_files(cmd: str, stdout: str, cwd: Path, hit_count: int) -> list[str]
     return sorted(files)
 
 
-def run_rg(cmd: str, cwd: Path) -> tuple[int, list[str]]:
-    argv = None if _has_unquoted_pipe(cmd) else _tokens(cmd)
+def run_rg(cmd: str, cwd: Path) -> tuple[int | str, list[str]]:
+    use_shell = _needs_shell(cmd)
+    argv = None if use_shell else _tokens(cmd)
     try:
         if argv is None:
             result = subprocess.run(
@@ -265,8 +368,12 @@ def run_rg(cmd: str, cwd: Path) -> tuple[int, list[str]]:
                 timeout=30,
                 check=False,
             )
+    except subprocess.TimeoutExpired:
+        return "err", ["timeout"]
     except (OSError, subprocess.SubprocessError):
-        return 0, []
+        return "err", ["exec"]
+    if result.returncode not in (0, 1):
+        return "err", [f"exit={result.returncode}"]
     lines = [ln for ln in result.stdout.splitlines() if ln]
     hit_count = len(lines)
     return hit_count, extract_files(cmd, result.stdout, cwd, hit_count)

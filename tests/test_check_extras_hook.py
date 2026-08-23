@@ -219,7 +219,7 @@ def test_unparseable_spec_is_drift(tmp_path: Path) -> None:
 
 # --- emit-rg -----------------------------------------------------------------
 
-EXTRAS_FIXTURE = """\
+EXTRAS_FIXTURE = r"""
 ## Recipe grep-runner
 
 - `rg 'alpha' src/a.py`
@@ -237,7 +237,23 @@ EXTRAS_FIXTURE = """\
 ## §V5 — more
 
 - `rg 'beta' src/a.py` -> present
-"""
+
+## §V73 — nested ticks
+
+- `rg -n '```js' src/pkg/` — enumerate blocks.
+
+## §V99 — nested pattern tick
+
+- Backticked dir refs: `rg -n '`\.grok/skills/[^`]+/`' src/pkg/` -> dirs.
+
+## §V100 — glob
+
+- `rg -c 'alpha' src/pkg/*.py` -> counts
+
+## §V102 — files-without-match
+
+- `rg --files-without-match 'allowed-tools' src/pkg/*.py` -> missing (`rg -L` is follow)
+""".lstrip("\n")
 
 
 def run_emit_rg(
@@ -257,12 +273,13 @@ def run_emit_rg(
     )
 
 
-def emit_rows(stdout: str) -> list[tuple[str, int, int, str]]:
-    parsed: list[tuple[str, int, int, str]] = []
+def emit_rows(stdout: str) -> list[tuple[str, int, int | str, str]]:
+    parsed: list[tuple[str, int, int | str, str]] = []
     for line in stdout.splitlines():
         assert not line.startswith("id|"), line
         section, line_no, hit_count, files = line.split("|", 3)
-        parsed.append((section, int(line_no), int(hit_count), files))
+        hits: int | str = int(hit_count) if hit_count.isdigit() else hit_count
+        parsed.append((section, int(line_no), hits, files))
     return parsed
 
 
@@ -272,6 +289,10 @@ def _write_emit_fixture(tmp_path: Path) -> Path:
     src = tmp_path / "src"
     src.mkdir()
     (src / "a.py").write_text("alpha\nalpha\nbeta\n")
+    pkg = src / "pkg"
+    pkg.mkdir()
+    (pkg / "a.py").write_text("alpha\nalpha\nbeta\n")
+    (pkg / "b.py").write_text("alpha\n")
     return extras
 
 
@@ -287,6 +308,10 @@ def test_emit_rg_parses_backticked_rg_under_v_headers(tmp_path: Path) -> None:
         ("V4", 8),
         ("V4", 9),
         ("V5", 17),
+        ("V73", 21),
+        ("V99", 25),
+        ("V100", 29),
+        ("V102", 33),
     ]
 
 
@@ -301,6 +326,14 @@ def test_emit_rg_emits_section_line_hit_count_files(tmp_path: Path) -> None:
     assert by_line[8] == ("V4", 8, 0, "")
     assert by_line[9] == ("V4", 9, 2, "src/a.py")
     assert by_line[17] == ("V5", 17, 1, "src/a.py")
+    assert by_line[29][0] == "V100"
+    assert by_line[29][2] != "err"
+    assert int(by_line[29][2]) > 0
+    assert "src/pkg/a.py" in by_line[29][3]
+    assert by_line[33][0] == "V102"
+    assert by_line[33][2] != "err"
+    assert int(by_line[33][2]) >= 1
+    assert "src/pkg" in by_line[33][3]
 
 
 def test_emit_rg_zero_hits_are_not_a_verdict(tmp_path: Path) -> None:
@@ -316,7 +349,7 @@ def test_emit_rg_zero_hits_are_not_a_verdict(tmp_path: Path) -> None:
         assert hit_count not in {"MATCH", "MISSING", "EXTRA", "DRIFT"}
         assert hit_count not in {"HOLD", "VIOLATE", "FAIL"}
     zero = [row for row in emit_rows(result.stdout) if row[2] == 0]
-    assert zero == [("V4", 8, 0, "")]
+    assert ("V4", 8, 0, "") in zero
 
 
 def test_emit_rg_no_arg_path_unchanged(tmp_path: Path) -> None:
@@ -350,6 +383,11 @@ def test_live_emit_rg_well_formed() -> None:
     v4_cli = [
         row
         for row in parsed
-        if row[0] == "V4" and "cli.py" in row[3] and row[2] > 0
+        if row[0] == "V4" and "cli.py" in row[3] and isinstance(row[2], int) and row[2] > 0
     ]
     assert v4_cli, result.stdout.splitlines()[:5]
+    v100 = [row for row in parsed if row[0] == "V100" and isinstance(row[2], int)]
+    assert v100
+    assert any(row[2] > 0 and row[3] for row in v100)
+    v102 = [row for row in parsed if row[0] == "V102"]
+    assert len(v102) == 3
