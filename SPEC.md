@@ -174,19 +174,19 @@ V119: `make clean` = deliberate wipe (dropdb + createdb); no auto `db export`; n
 V120: tool-loop send-obligation — reply_email|send_email|noop|conclude_enrollment; compose-only touch exempt via harness (§V.136); manual exempt — → .spec/check-extras.md §V120
 V121: db snapshot export/import natural-key; company.aliases[]; drift|pending dead-stop; round-trip field-identical — → .spec/check-extras.md §V121
 V122: campaign-test Touch 1 keyed by rfc2822_message_id; single prospect inbound@lab5.ca; no per-sequence aliases — → .spec/check-extras.md §V122
-V123: inbound reply cancels pending follow-ups (excl enrollment_schedule); 5 call sites incl cadence exhaustion + bounce — → .spec/check-extras.md §V123
+V123: inbound reply cancels pending follow-ups (excl enrollment_schedule); conclude-path cancel via helper §V.186; 5 call sites incl cadence exhaustion + bounce — → .spec/check-extras.md §V123
 V124: workflow.goal = observable enrollment success; conclude_enrollment gate + classify semantic key; record_enrollment_outcome system-internal — → .spec/check-extras.md §V124
 V125: meeting + meeting_attendee schema; status gates nothing; ingest owns row creation — → .spec/check-extras.md §V125
 V126: CalendarClient mirrors Gmail/Drive; poll from run-interval + account sync; upsert google_event_id; read-only; errors isolated — → .spec/check-extras.md §V126
-V127: conclude_enrollment = sole agent terminal; disposition enum; system side-effects; record_enrollment_outcome not agent tool — → .spec/check-extras.md §V127
-V128: calendar booking concludes active outbound enrollments + cancels follow-ups, no agent turn — → .spec/check-extras.md §V128
+V127: conclude_enrollment = sole agent terminal; disposition enum; system side-effects; record_enrollment_outcome not agent tool; system sites via helper §V.186 — → .spec/check-extras.md §V127
+V128: calendar booking concludes active outbound enrollments + cancels follow-ups, no agent turn; via helper §V.186 skip_if_terminal default false — → .spec/check-extras.md §V128
 V129: agent timestamps grounded (current-date inject) + future-checked at create_task + conclude_enrollment.reschedule_at — → .spec/check-extras.md §V129
 V131: terminal inbound agent failure → one `_FALLBACK_ACKNOWLEDGEMENT` first-person singular (`I`) not we/our team; outbound first-touch silent; auto-reply/OOO inbound silent; fallback-send fail → task failed — → .spec/check-extras.md §V131
 V132: workflow stats funnel single-SQL enrollment grain; 8 stages + touch slices + awaiting_first_touch + disabled; no LLM; takes loaded Workflow §V.184 — → .spec/check-extras.md §V132
 V133: task stats aggregate single-SQL; filters --workflow-id + --trigger; per-status counts + scheduled day buckets — → .spec/check-extras.md §V133
 V134: workflow check SHA-256; --file always path-scope (file|dir recurse); --account-email+--file ? full envelope; states {in_sync,out_of_sync,not_imported,orphaned}; report-only — → .spec/check-extras.md §V134
 V135: mechanical context pre-feed — invoke_workflow_agent pre-loads ContactView/CompanyView via shared loaders (§V.8); read_contact/read_company absent from every roster — → .spec/check-extras.md §V135
-V136: system-owned touch cadence — def touches+interval; compose-only agent; first-touch subject ! non-empty; harness send+schedule; final → contact_later; Drive + AgentDeps tool-loop only — → .spec/check-extras.md §V136
+V136: system-owned touch cadence — def touches+interval; compose-only agent; first-touch subject ! non-empty; harness send+schedule; final → contact_later via helper §V.186 (no re-enroll); Drive + AgentDeps tool-loop only — → .spec/check-extras.md §V136
 V137: connect-fail operator UX — OperationalError → SystemExit hint; expected fail → logfire.error + operator_event, zero console Traceback — → .spec/check-extras.md §V137
 V138: company cohort pipeline status — `company list --status` Enum ∈ {ready, needs_contacts, needs_profile, disabled}; AND-composes w/ list filters; no `company audit` verb — → .spec/check-extras.md §V138
 V139: stdin NDJSON batch mutation — selected Mutate verbs accept `--stdin`; results envelope + partial-success exit policy; MVP `company disable --stdin` + `contact create --stdin` — → .spec/check-extras.md §V139
@@ -213,7 +213,7 @@ V159: contact view --timeline — opt-in bounded dossier (notes+enrollments+emai
 V160: enrollment list --disposition — filter terminal disposition ∈ {do_not_contact, contact_later, meeting_booked}; composes w/ existing filters; unknown → validation_error + allowed set — → .spec/check-extras.md §V160
 V161: address-change auto-reply hard-stop — active outbound + address-change/redirect auto-reply → conclude do_not_contact; ! OOO pause/resume; last-day-was past → §V.179 — → .spec/check-extras.md §V161
 V162: touch-context-parse — context.touch N or T<n> or "n" → int; SQL never raw ::int; unparseable → NULL; first-touch writer emits 1 — → .spec/check-extras.md §V162
-V163: bounce enrollment hard-stop — outbound bounce → every active outbound enrollment do_not_contact + cancel follow-ups — → .spec/check-extras.md §V163
+V163: bounce enrollment hard-stop — outbound bounce → every active outbound enrollment do_not_contact + cancel follow-ups; via helper §V.186 skip_if_terminal — → .spec/check-extras.md §V163
 V164: thread-alias inbound bind — inbound on existing outbound thread binds enrolled contact when From local-part differs; ! auto-enroll alias — → .spec/check-extras.md §V164
 V165: live-e2e-dev-only — campaign-test + reply-test ! read settings.environment before any CRM/Gmail mutate; != dev → preflight fail + skill bail; pytest unit tests exempt — → .spec/check-extras.md §V165
 V166: show-queue — `mailpilot show queue` human report hub; default ASCII table; `--format json` opt-in; `--detail` task grain; next_at table+JSON ISO in `--tz` (default host local); every workflow status; pending tasks only; no LLM; no write — → .spec/check-extras.md §V166
@@ -236,6 +236,7 @@ V182: agent-tool-registration — `tools.py` fns take `RunContext[AgentDeps]` (o
 V183: email-history-prefeed — invoke_workflow_agent loads enrollment-scoped history one query (full Email `body_text`, not `list_emails` + N `get_email`); `_format_email_history` caps already-loaded body 500; `read_email` stays for `search_emails` hits outside this enrollment (§V.87); trigger body still excluded per §V.29 — → .spec/check-extras.md §V183
 V184: campaign-query-stack — stats/report/status/review share SQL; `get_workflow_stats` takes loaded Workflow (no inner fetch); report/status/review call stats once; one `_sql_outbound_sent_count(e)` fragment; `--full` `emails_sent AS last_touch` keeps JSON key; `_review_window_emails` absent (review calls `list_emails` §V.178); `list_active_workflows` `WHERE status = 'active'`; status `wording` via `check_workflow_wording` never hardcoded `"unknown"`; CLI verbs + envelope keys unchanged — → .spec/check-extras.md §V184
 V185: enrollment-list-stack — one `_enrollment_parent_select()` for row+list loaders; detailed splits `_enrollment_where` + lean/full SELECT; outcome LATERAL on `list_enrollments_detailed(full=True)`; drop `list_enrollments_with_outcomes` + `EnrollmentWithOutcome`; preview `contact_id` SELECT not hydrated `Enrollment` list; one `_preview_from_contacts`; tag preview `company_id = ANY(...)`; `--touch` stays `_sql_parse_touch`; agent `list_enrollments` still latest_outcome*; CLI lean/full + envelopes unchanged (§V.152); distinct §V.178/§V.184 — → .spec/check-extras.md §V185
+V186: conclude-enrollment-helper — one internal helper (enrollment_id, disposition, reason, reschedule_at?, note?, skip_if_terminal); agent tool validates then calls; bounce/booking/cadence pass system reasons; skip_if_terminal true → skip already-terminal (bounce); false → conclude already-terminal (booking default); meeting_booked writes note; cadence contact_later no re-enrollment task; record_enrollment_outcome stays system-internal — → .spec/check-extras.md §V186
 
 ## §T TASKS
 
@@ -296,6 +297,7 @@ T315|x|impl §V.183(+) + §V.38(∆) + §V.39(∆) + §V.47(∆) — one-query e
 T316|x|impl §V.184(+) + §V.132(∆)+§V.153(∆)+§V.157(∆)+§V.174(∆) + §I — campaign query stack share; stats takes loaded Workflow; `_sql_outbound_sent_count`; drop `_review_window_emails`; list_active_workflows WHERE active; wording via check_workflow_wording never unknown; envelopes unchanged; existing tests (#263)|V184,V132,V153,V157,V174,V178,V133,V152,V134,I.cli
 T317|x|impl emit-rg mode on `.spec/scripts/check-extras.sh`; parse backticked rg under each `## §Vn`; run; emit section/line/hit_count/files; no-arg extras-hook path unchanged; tests (#282)|-
 T318|x|impl §V.185(+) + §V.152(∆)+§V.150(∆) — merge enrollment list APIs; parent SELECT fragment; detailed WHERE+lean/full; fold outcome into full drop EnrollmentWithOutcome; preview contact_id + ANY not N+1; agent latest_outcome keys stay; --touch stays parse; existing list/preview/report/agent-tool tests (#264)|V185,V152,V150,V171,V178,V184,V5,V15,I.cli
+T319|.|impl §V.186(+) + §V.127(∆)+§V.128(∆)+§V.136(∆)+§V.163(∆) — one conclude helper; agent validates then calls; bounce skip_if_terminal; booking concludes terminal unless flag; cadence no re-enroll; existing conclude/bounce/booking/cadence tests (#265)|V186,V127,V128,V136,V163,V123,V15,V80
 
 ## §B BUGS
 
