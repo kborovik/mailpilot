@@ -32,16 +32,13 @@ Verdicts: MATCH (equal) / MISSING (spec − code) / EXTRA (code − spec) / DRIF
 Trigger: SPEC.md or src/mailpilot/cli.py changed.
 Distinct from SKILL.md Drift Check (skill-body vs cli.py).
 
-## Recipe grep-runner — mechanization candidate (not implemented)
+## Recipe grep-runner — emit-rg
 
-Observed 2026-07-02 (T212 build probe + §V.123/§V.128 amends): recipe `rg` lines
-hand-run repeatedly to validate check-extras bodies against code — same shape,
-different file lists. Candidate mode: script parses every backticked `rg` line
-under each `## §V.<n>` header, executes it, emits per-section {line, hit_count,
-files}; prose expectations (`-> present in N files`, `-> zero hits`) stay
+`.spec/scripts/check-extras.sh emit-rg` parses every backticked `rg` command
+under each `## §Vn` header, runs it, and emits `section|line|hit_count|files`
+(no header). Prose expectations (`-> present`, `-> zero hits`) stay
 operator-judged — the runner collapses the execute step, not the verdict.
-Overlaps /sdd:check's interactive recipe runs; implement only if hand-running
-recurs. Promotion path: seed a §T row.
+No-arg extras-hook path stays I.nouns / I.verbs set-diff.
 
 ## Flipped-§T pytest verify
 
