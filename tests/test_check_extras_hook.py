@@ -215,3 +215,184 @@ def test_unparseable_spec_is_drift(tmp_path: Path) -> None:
     assert parsed["I.verbs"][0] == "DRIFT"
     assert "unparseable" in parsed["I.nouns"][1]
     assert "unparseable" in parsed["I.verbs"][1]
+
+
+# --- emit-rg -----------------------------------------------------------------
+
+EXTRAS_FIXTURE = r"""
+## Recipe grep-runner
+
+- `rg 'alpha' src/a.py`
+
+## §V4 — hits
+
+- `rg 'alpha' src/a.py` -> present
+- `rg 'missing' src/a.py` -> zero hits
+- `rg 'alpha' src/a.py | grep alpha` -> present
+
+## Other header
+
+- `rg 'alpha' src/a.py`
+
+## §V5 — more
+
+- `rg 'beta' src/a.py` -> present
+
+## §V73 — nested ticks
+
+- `rg -n '```js' src/pkg/` — enumerate blocks.
+
+## §V99 — nested pattern tick
+
+- Backticked dir refs: `rg -n '`\.grok/skills/[^`]+/`' src/pkg/` -> dirs.
+
+## §V100 — glob
+
+- `rg -c 'alpha' src/pkg/*.py` -> counts
+
+## §V102 — files-without-match
+
+- `rg --files-without-match 'allowed-tools' src/pkg/*.py` -> missing (`rg -L` is follow)
+""".lstrip("\n")
+
+
+def run_emit_rg(
+    extras: Path | None = None,
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    env = dict(os.environ)
+    if extras is not None:
+        env["CHECK_EXTRAS_PATH"] = str(extras)
+    return subprocess.run(
+        [str(HOOK), "emit-rg"],
+        cwd=cwd or REPO,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def emit_rows(stdout: str) -> list[tuple[str, int, int | str, str]]:
+    parsed: list[tuple[str, int, int | str, str]] = []
+    for line in stdout.splitlines():
+        assert not line.startswith("id|"), line
+        section, line_no, hit_count, files = line.split("|", 3)
+        hits: int | str = int(hit_count) if hit_count.isdigit() else hit_count
+        parsed.append((section, int(line_no), hits, files))
+    return parsed
+
+
+def _write_emit_fixture(tmp_path: Path) -> Path:
+    extras = tmp_path / "check-extras.md"
+    extras.write_text(EXTRAS_FIXTURE)
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.py").write_text("alpha\nalpha\nbeta\n")
+    pkg = src / "pkg"
+    pkg.mkdir()
+    (pkg / "a.py").write_text("alpha\nalpha\nbeta\n")
+    (pkg / "b.py").write_text("alpha\n")
+    return extras
+
+
+def test_emit_rg_parses_backticked_rg_under_v_headers(tmp_path: Path) -> None:
+    """Parse: only backticked rg under ## §Vn; skip other headers."""
+    extras = _write_emit_fixture(tmp_path)
+    result = run_emit_rg(extras, cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    parsed = emit_rows(result.stdout)
+    sections_and_lines = [(section, line) for section, line, _, _ in parsed]
+    assert sections_and_lines == [
+        ("V4", 7),
+        ("V4", 8),
+        ("V4", 9),
+        ("V5", 17),
+        ("V73", 21),
+        ("V99", 25),
+        ("V100", 29),
+        ("V102", 33),
+    ]
+
+
+def test_emit_rg_emits_section_line_hit_count_files(tmp_path: Path) -> None:
+    """Execute + emit: section|line|hit_count|files for each recipe."""
+    extras = _write_emit_fixture(tmp_path)
+    result = run_emit_rg(extras, cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    parsed = emit_rows(result.stdout)
+    by_line = {line: row for row in parsed for line in [row[1]]}
+    assert by_line[7] == ("V4", 7, 2, "src/a.py")
+    assert by_line[8] == ("V4", 8, 0, "")
+    assert by_line[9] == ("V4", 9, 2, "src/a.py")
+    assert by_line[17] == ("V5", 17, 1, "src/a.py")
+    assert by_line[29][0] == "V100"
+    assert by_line[29][2] != "err"
+    assert int(by_line[29][2]) > 0
+    assert "src/pkg/a.py" in by_line[29][3]
+    assert by_line[33][0] == "V102"
+    assert by_line[33][2] != "err"
+    assert int(by_line[33][2]) >= 1
+    assert "src/pkg" in by_line[33][3]
+
+
+def test_emit_rg_zero_hits_are_not_a_verdict(tmp_path: Path) -> None:
+    """Prose expectations stay operator-judged: zero hits emit count 0, not FAIL."""
+    extras = _write_emit_fixture(tmp_path)
+    result = run_emit_rg(extras, cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    for line in result.stdout.splitlines():
+        section, line_no, hit_count, _files = line.split("|", 3)
+        assert section.startswith("V")
+        assert line_no.isdigit()
+        assert hit_count.isdigit()
+        assert hit_count not in {"MATCH", "MISSING", "EXTRA", "DRIFT"}
+        assert hit_count not in {"HOLD", "VIOLATE", "FAIL"}
+    zero = [row for row in emit_rows(result.stdout) if row[2] == 0]
+    assert ("V4", 8, 0, "") in zero
+
+
+def test_emit_rg_no_arg_path_unchanged(tmp_path: Path) -> None:
+    """No-arg extras-hook path stays I.nouns / I.verbs set-diff."""
+    spec_path, cli_path = _write(tmp_path, SPEC_MATCH, CLI_MATCH)
+    result = run(spec_path, cli_path)
+    parsed = rows(result.stdout)
+    assert result.returncode == 0, result.stdout
+    assert list(parsed) == ["I.nouns", "I.verbs"]
+    assert parsed["I.nouns"][0] == "MATCH"
+    assert parsed["I.verbs"][0] == "MATCH"
+
+
+def test_emit_rg_missing_extras_file(tmp_path: Path) -> None:
+    """Missing check-extras.md is a hook error, not a silent empty MATCH."""
+    missing = tmp_path / "absent.md"
+    result = run_emit_rg(missing, cwd=tmp_path)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "check-extras.md" in result.stderr
+
+
+def test_live_emit_rg_well_formed() -> None:
+    """Live .spec/check-extras.md rows are section|line|hit_count|files."""
+    result = run_emit_rg()
+    assert result.returncode == 0, result.stderr
+    parsed = emit_rows(result.stdout)
+    assert parsed
+    sections = {section for section, _, _, _ in parsed}
+    assert "V4" in sections
+    v4_cli = [
+        row
+        for row in parsed
+        if row[0] == "V4"
+        and "cli.py" in row[3]
+        and isinstance(row[2], int)
+        and row[2] > 0
+    ]
+    assert v4_cli, result.stdout.splitlines()[:5]
+    v100 = [row for row in parsed if row[0] == "V100" and isinstance(row[2], int)]
+    assert v100
+    assert any(
+        hits > 0 and files for _, _, hits, files in v100 if isinstance(hits, int)
+    )
+    v102 = [row for row in parsed if row[0] == "V102"]
+    assert len(v102) == 3
