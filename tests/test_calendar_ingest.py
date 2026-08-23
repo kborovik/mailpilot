@@ -14,7 +14,7 @@ from conftest import (
     make_test_workflow,
 )
 from mailpilot.calendar import CalendarEvent
-from mailpilot.database import create_task, get_task
+from mailpilot.database import create_task, get_task, record_enrollment_outcome
 from mailpilot.sync import (
     _poll_account_calendar,  # pyright: ignore[reportPrivateUsage]
     ingest_calendar_event,
@@ -225,6 +225,37 @@ def test_booking_concludes_every_outbound_enrollment_the_attendee_holds(
     ingest_calendar_event(database_connection, _event("prospect@acme.com"))
 
     assert _completed_count(database_connection, contact.id) == 2
+
+
+def test_booking_concludes_already_terminal_enrollment(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.128 / §V.186: skip_if_terminal default false still concludes terminal."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, workflow_type="outbound"
+    )
+    contact = make_test_contact(database_connection, email="prospect@acme.com")
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    record_enrollment_outcome(
+        database_connection,
+        enrollment.id,
+        "failed",
+        "sequence exhausted",
+        disposition="contact_later",
+    )
+
+    ingest_calendar_event(database_connection, _event("prospect@acme.com"))
+
+    assert _completed_count(database_connection, contact.id) == 1
+    count_row = database_connection.execute(
+        "SELECT COUNT(*) AS n FROM activity "
+        "WHERE enrollment_id = %s AND type IN "
+        "('enrollment_completed', 'enrollment_failed')",
+        (enrollment.id,),
+    ).fetchone()
+    assert count_row is not None
+    assert count_row["n"] == 2
 
 
 def test_inbound_enrollment_not_concluded_by_booking(

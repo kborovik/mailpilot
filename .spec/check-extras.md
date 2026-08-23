@@ -723,10 +723,11 @@ Trigger: `.grok/skills/mailpilot-campaign-test/**` changed.
 
 ## §V123 — reply-cancels-followups
 
-Inbound reply routing to an enrollment bulk-cancels that enrollment's pending future follow-up tasks: `UPDATE task SET status='cancelled' WHERE enrollment_id=%(id)s AND status='pending' AND scheduled_at > now() AND COALESCE(context->>'trigger','') <> 'enrollment_schedule'`. First-touch exclusion: rows whose trigger = `enrollment_schedule` (§V.32) are excluded. `cancel_enrollment_followup_tasks(connection, enrollment_id)` fires from 5 sites: (1) `routing.route_email` on successful inbound match (including pre-existing enrollment, not only first-insert branch), (2) calendar booking ingestion (§V.126/§V.128), (3) `conclude_enrollment` (§V.127), (4) cadence sequence exhaustion — `advance_touch_cadence` final-touch conclude (§V.136), (5) bounce handler `_handle_bounce` (§V.163).
+Inbound reply routing to an enrollment bulk-cancels that enrollment's pending future follow-up tasks: `UPDATE task SET status='cancelled' WHERE enrollment_id=%(id)s AND status='pending' AND scheduled_at > now() AND COALESCE(context->>'trigger','') <> 'enrollment_schedule'`. First-touch exclusion: rows whose trigger = `enrollment_schedule` (§V.32) are excluded. `cancel_enrollment_followup_tasks` still fires from 5 conceptual sites: inbound `routing.route_email` calls it directly; calendar booking (§V.128), agent `conclude_enrollment` (§V.127), cadence sequence exhaustion (§V.136), and bounce (§V.163) cancel inside the §V.186 helper.
 
 Trigger: `src/mailpilot/routing.py`, `src/mailpilot/sync.py`, `src/mailpilot/agent/tools.py`, `src/mailpilot/cadence.py`, or `src/mailpilot/database.py` changed.
-- `rg 'cancel_enrollment_followup_tasks' src/mailpilot/routing.py src/mailpilot/sync.py src/mailpilot/agent/tools.py src/mailpilot/cadence.py` -> present in 4 files
+- `rg 'cancel_enrollment_followup_tasks' src/mailpilot/routing.py` -> inbound direct cancel
+- `rg 'cancel_enrollment_followup_tasks' src/mailpilot/database.py` -> helper cancel
 - `rg 'enrollment_schedule.*exclude\b\|exclude.*enrollment_schedule\b' src/mailpilot/database.py` -> first-touch exclusion in the query
 - `rg 'scheduled_at.*>.*now\(\)\|now\(\).*<.*scheduled_at' src/mailpilot/database.py` -> only future tasks cancelled
 
@@ -765,22 +766,22 @@ Trigger: `src/mailpilot/calendar.py` or `src/mailpilot/sync.py` changed.
 
 ## §V127 — conclude_enrollment agent terminal
 
-`conclude_enrollment(disposition, note, reschedule_at)` = sole agent-facing terminal tool. Disposition in {meeting_booked, do_not_contact, contact_later}. System side-effects per disposition: `meeting_booked` → `record_enrollment_outcome` + `cancel_enrollment_followup_tasks` + booking note; `do_not_contact` → conclude + cancel + `disable_contact`; `contact_later` → conclude + cancel + scheduled re-enrollment task at `reschedule_at` (agent-supplied, default >=3 months out). Counts as valid send-obligation terminal (§V.120) — `_sent_reply` walker accepts it like noop. `record_enrollment_outcome` is NOT in the agent tool set — it is system-internal (§V.15, §V.124). System-internal conclusion sites call `record_enrollment_outcome` directly: calendar booking (§V.128), cadence sequence exhaustion — after the final cadence touch the harness records `contact_later` ("sequence exhausted"), no re-enrollment task, no agent turn (§V.136) — and bounce handler `_handle_bounce` records `do_not_contact` for every active outbound enrollment on the bounced contact (§V.163).
+`conclude_enrollment(disposition, note, reschedule_at)` = sole agent-facing terminal tool. Disposition in {meeting_booked, do_not_contact, contact_later}. Agent tool validates LLM input (disposition enum + future `reschedule_at` per §V.129) then calls the §V.186 helper. System side-effects per disposition stay: `meeting_booked` → outcome + cancel + booking note; `do_not_contact` → conclude + cancel + `disable_contact`; `contact_later` → conclude + cancel + scheduled re-enrollment task at `reschedule_at` (agent-supplied, default >=3 months out). Counts as valid send-obligation terminal (§V.120) — `_sent_reply` walker accepts it like noop. `record_enrollment_outcome` is NOT in the agent tool set — it is system-internal (§V.15, §V.124). System-internal conclusion sites (calendar booking §V.128, cadence exhaustion §V.136, bounce §V.163) call the same helper, not `record_enrollment_outcome` directly.
 
 Trigger: `src/mailpilot/agent/tools.py` or `src/mailpilot/agent/invoke.py` changed.
 - `rg 'conclude_enrollment\b' src/mailpilot/agent/tools.py` -> tool present
 - `rg 'meeting_booked\|do_not_contact\|contact_later' src/mailpilot/agent/tools.py` -> all 3 dispositions
-- `rg 'record_enrollment_outcome' src/mailpilot/agent/tools.py` -> zero hits (system-internal, not agent tool)
+- `rg 'record_enrollment_outcome' src/mailpilot/agent/tools.py` -> zero hits (helper, not agent tool)
 - `rg 'conclude_enrollment.*_sent_reply\|_sent_reply.*conclude_enrollment' src/mailpilot/agent/invoke.py` -> conclude_enrollment in send-obligation walker
 
 ## §V128 — calendar booking concludes enrollments, no agent turn
 
-For each attendee contact (§V.125) holding an active outbound enrollment: system concludes via `record_enrollment_outcome` (§V.15) + cancels pending future follow-ups via `cancel_enrollment_followup_tasks` + writes a system booking note. Fan-out fires for EVERY active outbound enrollment the attendee holds — a booked meeting outranks any cold sequence regardless of stated goal (§V.124). `cancel_enrollment_followup_tasks` fires from five sites: inbound reply routing (§V.123), calendar booking ingestion (§V.126), `conclude_enrollment` (§V.127), cadence sequence exhaustion (§V.136), bounce handler (§V.163); first-touch exclusion (§V.32) holds at every site.
+For each attendee contact (§V.125) holding an active outbound enrollment: system concludes via the §V.186 helper (`meeting_booked`, system reason, note written, `skip_if_terminal` default false) so already-terminal enrollments still conclude unless the flag says otherwise. Fan-out fires for EVERY active outbound enrollment the attendee holds — a booked meeting outranks any cold sequence regardless of stated goal (§V.124). Helper cancel preserves first-touch exclusion (§V.32). Distinct from bounce (`skip_if_terminal` true, §V.163).
 
 Trigger: `src/mailpilot/calendar.py` or `src/mailpilot/sync.py` changed.
-- `rg 'record_enrollment_outcome\b' src/mailpilot/calendar.py src/mailpilot/sync.py` -> conclusion call present
-- `rg 'cancel_enrollment_followup_tasks\b' src/mailpilot/calendar.py src/mailpilot/sync.py` -> follow-up cancel call present
-- `rg 'booking.*note\|system.*note\b' src/mailpilot/calendar.py src/mailpilot/sync.py` -> system booking note written
+- `rg 'skip_if_terminal' src/mailpilot/sync.py` -> booking passes flag (default false)
+- `rg 'meeting_booked' src/mailpilot/sync.py` -> booking disposition
+- `rg 'record_enrollment_outcome\b' src/mailpilot/sync.py` -> zero hits (helper, not pasted)
 - `rg 'active.*outbound\b.*enrollment\|outbound.*active\b.*enrollment' src/mailpilot/calendar.py src/mailpilot/sync.py` -> only active outbound enrollments concluded
 
 ## §V129 — agent-supplied timestamp grounding + future guard
@@ -866,7 +867,7 @@ Trigger: `src/mailpilot/agent/invoke.py` or `src/mailpilot/agent/templates.py` c
 
 ## §V136 — system-owned touch cadence
 
-Workflow def fields `touches` + `touch_interval_days` (nullable pair, §V.103; NULL = single-touch, no auto follow-up). Cadence engine (`cadence.py`) owns schedule math (weekend -> Monday roll) + touch scheduled_at — system-computed only, §V.129 exempt path. Successful touch-N send -> harness creates touch-N+1 task w/ context {touch: N+1, prior_email_id}. Final touch -> system-internal conclude contact_later "sequence exhausted" (§V.127 record path, §V.128 shape, no agent turn). Touch runs (context.touch present | trigger enrollment_schedule | enrollment_run) = compose-only agent: output_type TouchMessage {subject: str|None, body: str}, zero tools; output validator (bounded ModelRetry, same agent retry budget): first-touch subject require — new-thread touch (touch 1 / no prior outbound to reply on) → after strip `subject` ! non-empty; None/"" /whitespace-only → ModelRetry (message: subject required for new thread); follow-up that continues existing thread may leave subject empty (harness reply_email keeps thread subject) (closes §B.127); body format lint retired (§V.42 / §B.128); harness sends via email_ops + schedules the next touch — 1 LLM call per touch, send structural (§V.120). Outbound task|email triggers keep the tool loop; inbound unchanged (§V.44 registry owns both shapes). prior_email_id from task context; absent -> enrollment's latest outbound email. NULL-cadence belt: touch >= 2 vs NULL cadence -> reschedule +1h + operator warn (§V.25 shape); touch 1 vs NULL -> send + schedule nothing. create_task stays bound for reply-branch soft follow-ups. Cadence + after-touch prose live in def fields, never TOML instructions.
+Workflow def fields `touches` + `touch_interval_days` (nullable pair, §V.103; NULL = single-touch, no auto follow-up). Cadence engine (`cadence.py`) owns schedule math (weekend -> Monday roll) + touch scheduled_at — system-computed only, §V.129 exempt path. Successful touch-N send -> harness creates touch-N+1 task w/ context {touch: N+1, prior_email_id}. Final touch -> §V.186 helper `contact_later` "sequence exhausted" (no re-enrollment task, no agent turn). Touch runs (context.touch present | trigger enrollment_schedule | enrollment_run) = compose-only agent: output_type TouchMessage {subject: str|None, body: str}, zero tools; output validator (bounded ModelRetry, same agent retry budget): first-touch subject require — new-thread touch (touch 1 / no prior outbound to reply on) → after strip `subject` ! non-empty; None/"" /whitespace-only → ModelRetry (message: subject required for new thread); follow-up that continues existing thread may leave subject empty (harness reply_email keeps thread subject) (closes §B.127); body format lint retired (§V.42 / §B.128); harness sends via email_ops + schedules the next touch — 1 LLM call per touch, send structural (§V.120). Outbound task|email triggers keep the tool loop; inbound unchanged (§V.44 registry owns both shapes). prior_email_id from task context; absent -> enrollment's latest outbound email. NULL-cadence belt: touch >= 2 vs NULL cadence -> reschedule +1h + operator warn (§V.25 shape); touch 1 vs NULL -> send + schedule nothing. create_task stays bound for reply-branch soft follow-ups. Cadence + after-touch prose live in def fields, never TOML instructions.
 
 Trigger: `src/mailpilot/cadence.py`, `src/mailpilot/agent/invoke.py`, or `src/mailpilot/email_ops.py` changed.
 - `rg 'touch_interval_days' src/mailpilot/cadence.py` -> cadence engine owns the pair
@@ -1067,11 +1068,12 @@ Trigger: stats / enrollment --full/--touch / cadence task write / enrollment_sch
 
 ## §V163 — bounce enrollment hard-stop
 
-bounce enrollment hard-stop — outbound bounce (§V.80) → every active outbound enrollment for that contact: record_enrollment_outcome failed do_not_contact + cancel follow-ups; skip already-terminal; enrollment status untouched; updated_at bumped (§V.15); contact disable stays §V.80; ! defer to execute-time §V.83
+bounce enrollment hard-stop — outbound bounce (§V.80) → every active outbound enrollment for that contact via §V.186 helper (`do_not_contact`, system reason, `skip_if_terminal` true); skip already-terminal; enrollment status untouched; updated_at bumped (§V.15); contact disable stays §V.80; ! defer to execute-time §V.83
 
 Trigger: bounce handler changed.
-- `rg 'bounced:|record_enrollment_outcome|do_not_contact' src/mailpilot/` -> bounce concludes enrollments
-- `rg 'cancel.*follow|cancel_pending' src/mailpilot/` -> follow-ups cancelled at bounce time
+- `rg 'skip_if_terminal' src/mailpilot/routing.py` -> bounce passes true
+- `rg 'do_not_contact' src/mailpilot/routing.py` -> bounce disposition
+- `rg 'record_enrollment_outcome' src/mailpilot/routing.py` -> zero hits (helper, not pasted)
 
 ## §V164 — thread-alias inbound bind
 
@@ -1446,3 +1448,12 @@ Trigger: `src/mailpilot/database.py` enrollment list/preview path changed.
 - `rg 'latest_outcome' src/mailpilot/agent/tools.py src/mailpilot/models.py` -> agent envelope keys stay
 - `rg 'def _preview_from_contacts' src/mailpilot/database.py` -> shared preview helper
 - `rg 'company_id = ANY' src/mailpilot/database.py` -> tag preview batched
+
+## §V186 — conclude enrollment helper
+
+conclude-enrollment-helper — one internal helper takes `enrollment_id`, `disposition`, `reason`, plus `reschedule_at`, `note`, `skip_if_terminal`. Always records outcome + cancels follow-ups (§V.123 first-touch exclusion). Optional disable / note / reschedule: `do_not_contact` disables contact (agent); bounce contact disable stays §V.80; `note` set → `create_note`; `reschedule_at` set → re-enrollment task (agent `contact_later`); omitted `reschedule_at` → no task (cadence). `skip_if_terminal` true → skip when latest outcome exists (bounce); false → still conclude (booking default; agent default). `meeting_booked` writes a note. Cadence `contact_later` "sequence exhausted" does not create a re-enrollment task. Agent tool validates LLM input then calls; bounce/booking/cadence pass system reasons. `record_enrollment_outcome` stays system-internal, not an agent tool (§V.127/§V.15). Distinct from inbound-reply cancel (§V.123 direct).
+
+Trigger: conclude helper or agent/bounce/booking/cadence conclude path changed.
+- `rg 'skip_if_terminal' src/mailpilot/` -> flag present
+- `rg 'record_enrollment_outcome' src/mailpilot/agent/tools.py src/mailpilot/cadence.py src/mailpilot/routing.py src/mailpilot/sync.py` -> zero hits (helper, not pasted)
+- `rg 'def conclude_enrollment' src/mailpilot/` -> helper + agent tool

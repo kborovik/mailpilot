@@ -158,16 +158,11 @@ def advance_touch_cadence(  # noqa: PLR0913
         )
         return
 
-    # Final touch sent: system-internal conclusion mirroring the calendar-booking
-    # shape (§V.128) -- record + cancel + note -- but with a failed/contact_later
-    # outcome. No re-enrollment task (§V.127).
     reason = f"sequence exhausted: no reply after {workflow.touches} touches"
-    database.record_enrollment_outcome(
+    database.conclude_enrollment(
         connection,
         enrollment.id,
-        outcome="failed",
-        reason=reason,
         disposition="contact_later",
+        reason=reason,
+        note=reason,
     )
-    database.cancel_enrollment_followup_tasks(connection, enrollment.id)
-    database.create_note(connection, body=reason, contact_id=enrollment.contact_id)

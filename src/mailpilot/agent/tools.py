@@ -279,19 +279,11 @@ def cancel_task(
     return {"id": task.id, "status": task.status}
 
 
-# §V.127: the agent's single terminal tool. The model picks ONE disposition and
-# writes a note; the system runs the deterministic side effects. Only
-# ``meeting_booked`` records the enrollment goal as reached (``completed``);
-# ``do_not_contact`` and ``contact_later`` did not reach the goal this cycle
-# (``failed``), the latter scheduling a fresh re-enrollment touch (§V.32).
+# §V.127: the agent's single terminal tool. The model picks ONE disposition.
 _CONCLUDE_DISPOSITIONS = ("meeting_booked", "do_not_contact", "contact_later")
-_CONCLUDE_OUTCOME: dict[str, str] = {
-    "meeting_booked": "completed",
-    "do_not_contact": "failed",
-    "contact_later": "failed",
-}
 # Default deferral when ``contact_later`` omits ``reschedule_at`` -- about three
-# months out (§V.127). The scheduled task self-fires when the date arrives.
+# months out (§V.127). Resolved here so the helper treats omitted
+# ``reschedule_at`` as no re-enrollment task (cadence).
 _RESCHEDULE_DEFAULT_DAYS = 90
 
 
@@ -346,45 +338,25 @@ def conclude_enrollment(
         if timestamp_error is not None:
             return timestamp_error
 
-    contact_id = enrollment.contact_id
-    outcome = _CONCLUDE_OUTCOME[disposition]
     note_body = note or f"Enrollment concluded: {disposition}"
-
-    database.record_enrollment_outcome(
-        connection,
-        enrollment_id,
-        outcome=outcome,
-        reason=note_body,
-        disposition=disposition,
-    )
-    database.cancel_enrollment_followup_tasks(connection, enrollment_id)
-
-    result: dict[str, Any] = {"disposition": disposition, "outcome": outcome}
-
-    if disposition == "do_not_contact":
-        database.disable_contact(
-            connection, contact_id, reason=f"do_not_contact: {note_body}"
-        )
-    elif disposition == "contact_later":
+    scheduled_at: str | None = None
+    if disposition == "contact_later":
         scheduled_at = (
             reschedule_at
             or (
                 datetime.now(UTC) + timedelta(days=_RESCHEDULE_DEFAULT_DAYS)
             ).isoformat()
         )
-        database.create_task(
-            connection,
-            enrollment_id=enrollment_id,
-            workflow_id=enrollment.workflow_id,
-            contact_id=contact_id,
-            description="scheduled re-enrollment first reach-out",
-            scheduled_at=scheduled_at,
-            context={"trigger": "enrollment_schedule", "touch": 1},
-            email_id=None,
-        )
-        result["reschedule_at"] = scheduled_at
 
-    database.create_note(connection, body=note_body, contact_id=contact_id)
+    result = database.conclude_enrollment(
+        connection,
+        enrollment_id,
+        disposition=disposition,
+        reason=note_body,
+        reschedule_at=scheduled_at,
+        note=note_body,
+    )
+    assert result is not None
     return result
 
 

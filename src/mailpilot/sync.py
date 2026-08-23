@@ -40,11 +40,10 @@ from psycopg.rows import dict_row
 
 from mailpilot.calendar import CalendarClient, CalendarEvent
 from mailpilot.database import (
-    cancel_enrollment_followup_tasks,
+    conclude_enrollment,
     create_activity,
     create_contacts_bulk,
     create_email,
-    create_note,
     create_or_get_contact_by_email,
     create_tasks_for_routed_emails,
     delete_sync_status,
@@ -60,7 +59,6 @@ from mailpilot.database import (
     list_active_outbound_enrollments_for_contact,
     list_pending_tasks,
     list_workflows,
-    record_enrollment_outcome,
     update_account,
     update_contact,
     update_email,
@@ -641,27 +639,25 @@ def _conclude_outbound_enrollments_for_booking(
 ) -> None:
     """Conclude every active outbound enrollment for a booked attendee (§V.128).
 
-    A booked meeting outranks any cold sequence, so for each active outbound
-    enrollment the contact holds the system: records a ``completed`` outcome
-    (§V.15), cancels the enrollment's pending future follow-up tasks (§V.123,
-    first-touch preserved per §V.32), and writes a system booking note. All
-    deterministic -- no agent turn (§V.128).
+    A booked meeting outranks any cold sequence. For each active outbound
+    enrollment the contact holds, the §V.186 helper records ``meeting_booked``
+    with a system note. ``skip_if_terminal`` is false so already-terminal
+    enrollments still conclude. All deterministic -- no agent turn.
     """
     enrollments = list_active_outbound_enrollments_for_contact(connection, contact.id)
     for enrollment in enrollments:
-        record_enrollment_outcome(
-            connection,
-            enrollment.id,
-            outcome="completed",
-            reason="meeting booked",
-            disposition="meeting_booked",
-        )
-        cancel_enrollment_followup_tasks(connection, enrollment.id)
         note_body = (
             f"Meeting booked ({meeting.summary or 'untitled'}); "
             f"concluding enrollment in workflow {enrollment.workflow_name}."
         )
-        create_note(connection, body=note_body, contact_id=contact.id)
+        conclude_enrollment(
+            connection,
+            enrollment.id,
+            disposition="meeting_booked",
+            reason="meeting booked",
+            note=note_body,
+            skip_if_terminal=False,
+        )
 
 
 def _drain_pending_tasks(
