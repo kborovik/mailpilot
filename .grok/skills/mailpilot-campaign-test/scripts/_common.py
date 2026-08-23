@@ -5,7 +5,7 @@ shell out to the ``mailpilot`` CLI and parse its JSON envelopes, load the
 scenario catalog, and name the scaffolding the multi-step test depends on.
 
 The skill tests the **full multi-step flow** of the real outbound workflow agent
-(default ``var-sales-coclose.toml`` under lab5-campaigns; ``--workflow-file``
+(default ``var-sales-coclose.toml`` under lab5.ca; ``--workflow-file``
 overrides): the agent sends a cold Touch 1, the test replies to that email with
 content crafted to drive each branch of the workflow's "Handling replies"
 section, the agent handles the reply, and the test verifies the branch the agent
@@ -66,9 +66,9 @@ NEUTRAL_COMPANY_DOMAIN = "campaign-test.invalid"
 NEUTRAL_COMPANY_NAME = "MailPilot Campaign Test"
 
 # The outbound workflow whose agent this skill exercises. Default = VAR sales
-# co-close campaign under lab5-campaigns; ``--workflow-file`` overrides it.
+# co-close campaign under lab5.ca; ``--workflow-file`` overrides it.
 DEFAULT_WORKFLOW_FILE = (
-    "/Users/kb/github/lab5-campaigns/campaigns/var-sales-coclose/"
+    "/Users/kb/github/lab5.ca/campaigns/var-sales-coclose/"
     "workflows/var-sales-coclose.toml"
 )
 

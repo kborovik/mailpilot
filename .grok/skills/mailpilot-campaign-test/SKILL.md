@@ -22,7 +22,7 @@ orchestrator.
 stamped AUTO_SUBMITTED before handle; date tokens are filled at inject).
 
 **Default workflow file:**
-`/Users/kb/github/lab5-campaigns/campaigns/var-sales-coclose/workflows/var-sales-coclose.toml`
+`/Users/kb/github/lab5.ca/campaigns/var-sales-coclose/workflows/var-sales-coclose.toml`
 
 Every command runs from the **repo root** via `uv run python` / `uv run mailpilot`.
 
@@ -184,7 +184,7 @@ field mismatches.
 ```bash
 uv run python .grok/skills/mailpilot-campaign-test/scripts/preflight.py \
   --run-id $RUN_ID \
-  --workflow-file /Users/kb/github/lab5-campaigns/campaigns/var-sales-coclose/workflows/var-sales-coclose.toml
+  --workflow-file /Users/kb/github/lab5.ca/campaigns/var-sales-coclose/workflows/var-sales-coclose.toml
 ```
 
 Stop if `verdict != "ok"`. WARNING lines are non-blocking.
