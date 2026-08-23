@@ -6678,6 +6678,28 @@ def test_conclude_enrollment_omitted_reschedule_creates_no_task(
     assert blocked.disabled_reason is None
 
 
+def test_conclude_enrollment_reschedule_at_requires_contact_later(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.186: reschedule_at on a non-contact_later disposition raises."""
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+
+    with pytest.raises(ValueError, match="reschedule_at requires contact_later"):
+        conclude_enrollment(
+            database_connection,
+            enrollment.id,
+            disposition="meeting_booked",
+            reason="meeting booked",
+            reschedule_at="2099-01-01T00:00:00+00:00",
+        )
+
+    assert get_latest_enrollment_outcome(database_connection, enrollment.id) is None
+    assert list_tasks(database_connection, contact_id=contact.id) == []
+
+
 def test_list_enrollments_detailed_windows_dnc_by_updated_at(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:

@@ -4735,8 +4735,6 @@ def record_enrollment_outcome(
     window a terminal outcome without ``contact view --timeline``. There is
     no ``disposition_updated_at`` column; ``updated_at`` is the window clock.
 
-    The conclude helper (§V.186) routes through here.
-
     When supplied, ``disposition`` is persisted into the activity ``detail``
     JSONB under the ``disposition`` key (§V.132) so the per-campaign funnel can
     split ``failed`` outcomes into ``do_not_contact`` versus ``contact_later``
@@ -4816,8 +4814,9 @@ def conclude_enrollment(
     excluded, §V.123). Optional side effects: ``do_not_contact`` disables
     the contact when not already blocked (bounce disable stays §V.80);
     ``note`` writes a contact note; ``meeting_booked`` always writes a note;
-    ``reschedule_at`` schedules a re-enrollment first-touch. Omitted
-    ``reschedule_at`` means no task (cadence exhaustion).
+    ``reschedule_at`` on ``contact_later`` schedules a re-enrollment
+    first-touch. Omitted ``reschedule_at`` means no task (cadence
+    exhaustion). ``reschedule_at`` on any other disposition raises.
     ``skip_if_terminal`` true skips when a latest outcome already exists
     (bounce); false still concludes (booking default).
 
@@ -4826,7 +4825,8 @@ def conclude_enrollment(
         enrollment_id: Enrollment to conclude.
         disposition: One of meeting_booked, do_not_contact, contact_later.
         reason: Timeline outcome reason (system or agent note).
-        reschedule_at: When set, schedule a re-enrollment first-touch.
+        reschedule_at: When set with ``contact_later``, schedule a
+            re-enrollment first-touch.
         note: When set, write a contact note. ``meeting_booked`` writes
             ``reason`` when ``note`` is omitted.
         skip_if_terminal: When true, no-op if a latest outcome exists.
@@ -4836,13 +4836,16 @@ def conclude_enrollment(
         re-enrollment was scheduled, or ``None`` when skipped.
 
     Raises:
-        ValueError: Unknown disposition, or enrollment not found.
+        ValueError: Unknown disposition, enrollment not found, or
+            ``reschedule_at`` set on a non-``contact_later`` disposition.
     """
     if disposition not in _CONCLUDE_DISPOSITIONS:
         raise ValueError(
             f"disposition must be one of {tuple(sorted(_CONCLUDE_DISPOSITIONS))}, "
             f"got: {disposition}"
         )
+    if reschedule_at is not None and disposition != "contact_later":
+        raise ValueError(f"reschedule_at requires contact_later, got: {disposition}")
     if (
         skip_if_terminal
         and get_latest_enrollment_outcome(connection, enrollment_id) is not None
@@ -4879,7 +4882,7 @@ def conclude_enrollment(
         create_note(connection, body=note_body, contact_id=enrollment.contact_id)
 
     result: dict[str, Any] = {"disposition": disposition, "outcome": outcome}
-    if reschedule_at is not None:
+    if disposition == "contact_later" and reschedule_at is not None:
         create_task(
             connection,
             enrollment_id=enrollment.id,

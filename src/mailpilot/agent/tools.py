@@ -279,8 +279,7 @@ def cancel_task(
     return {"id": task.id, "status": task.status}
 
 
-# §V.127: the agent's single terminal tool. The model picks ONE disposition and
-# writes a note; the tool validates LLM input then calls the §V.186 helper.
+# §V.127: the agent's single terminal tool. The model picks ONE disposition.
 _CONCLUDE_DISPOSITIONS = ("meeting_booked", "do_not_contact", "contact_later")
 # Default deferral when ``contact_later`` omits ``reschedule_at`` -- about three
 # months out (§V.127). Resolved here so the helper treats omitted
@@ -357,11 +356,7 @@ def conclude_enrollment(
         reschedule_at=scheduled_at,
         note=note_body,
     )
-    if result is None:
-        return {
-            "error": "not_found",
-            "message": f"enrollment not found: {enrollment_id}",
-        }
+    assert result is not None
     return result
 
 

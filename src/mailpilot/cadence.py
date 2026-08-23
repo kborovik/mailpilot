@@ -158,8 +158,6 @@ def advance_touch_cadence(  # noqa: PLR0913
         )
         return
 
-    # Final touch sent: system-internal conclusion via the §V.186 helper.
-    # contact_later + note; omitted reschedule_at means no re-enrollment task.
     reason = f"sequence exhausted: no reply after {workflow.touches} touches"
     database.conclude_enrollment(
         connection,
