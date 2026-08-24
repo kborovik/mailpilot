@@ -72,7 +72,7 @@ Agent-operated CRM. Gmail = comms layer. Claude Code = strategist; internal Pyda
 ## §V INVARIANTS
 
 V1: two-phase settings load — bootstrap `database_url`; DB connect + schema gate; hydrate `Settings` from `app_config`; `--help`/`--version` skip; `db init|migrate|check` bootstrap only; `mailpilot run` re-SELECT each tick — → .spec/check-extras.md §V1
-V2: cli.py module-level imports = click only; heavy deps lazy-import inside cmd fns
+V2: cli package (main + per-noun) module-level imports = click only; heavy deps lazy-import inside cmd fns
 V3: stdout = strict JSON default; opt-in `--format` non-JSON §V.156; `show` group table-default §V.166; lifecycle+errors+Logfire console → stderr — → .spec/check-extras.md §V3
 V4: every cmd output ! match §I.cli envelope; ok:true carries top-level int record_count; error -> {"error","message","ok":false} + exit 1 — → .spec/check-extras.md §V4
 V5: list/view rows carry parent denorm joined at fetch — → .spec/check-extras.md §V5
@@ -240,6 +240,7 @@ V186: conclude-enrollment-helper — one internal helper (enrollment_id, disposi
 V187: route-email-skip-and-thread-cache — skip marks go through `route_email` or shared `mark_routed(email, method)`; recency/no-workflows/predates computed once in `sync_account` passed in; thread contact once per message (account-scoped cache keyed thread + In-Reply-To); RFC parent lookup not twice same headers; route_method enum unchanged; recency gate before LLM; bind-versus-From alias stays §V.164 — → .spec/check-extras.md §V187
 V188: mechanical-ooo-no-agent-task — mechanical OOO (`is_mechanical_ooo`) after route → schedule resume once in routing (`_maybe_ooo_pause`); no inbound agent task (`handle inbound email`); later sync ! re-enqueue that inbound; language-only OOO (`is_ooo_auto_reply` minus mechanical) still agent; `_maybe_ooo_resume_after_invoke` kept for agent `noop`; campaign-test mechanical signal before route — → .spec/check-extras.md §V188
 V189: google-client-stack — creds helpers in `google_auth.py` (file path, ADC, DWD, default creds, project id); Drive/Calendar/Pub/Sub import there never gmail; one `build_delegated_service(api, version, scopes, email, *, http=None)` + tiny client base; Gmail/Drive/Calendar use factory not copy `build_*_service`/`__init__`/`from_service`; Drive `_list_markdown_files(folder_id, extra_predicates=())` (shared `files.list`; parent `'id' in parents`); GmailClient drop `modify_message`/`create_label_if_not_exists`/`stop_watch`; no `user_id` param; `userId="me"` hardcoded; Pub/Sub calls `resolve_project_id()` directly; one Google transient status set (no 529) shared w/ agent retry classifier; Anthropic 529 Anthropic-only; `get_messages_batch` per-item retry not whole-call decorator; raise `GmailBatchFetchError` not partial success (§V.75)
+V190: cli-database-packages — `src/mailpilot/cli/` package: `cli/main.py` holds group, output, `_db` (§V.177), resolvers (§V.107); per-noun modules hold commands; each module lazy-imports heavy deps (§V.2); `src/mailpilot/database/` package: schema init/migrate/status then per-entity modules; `from mailpilot.database import X` thin re-export (callers + tests same import same PR); entrypoint `mailpilot.cli:main` unchanged
 
 ## §T TASKS
 
@@ -305,6 +306,7 @@ T320|x|impl §V.187(+) + §V.22(∆)+§V.27(∆)+§V.76(∆)+§V.164(∆) — sk
 T321|x|impl §V.188(+) + §V.169(∆) — mechanical OOO after route: no inbound agent task; resume once in routing; later sync ! re-enqueue; language-only OOO still agent; agent noop still `_maybe_ooo_resume_after_invoke`; tests mechanical vs language-only (#267)|V188,V169,V123,V83
 T322|x|impl §V.188 — campaign-test mechanical signal before route; leftover execute_task ! second resume; isolation before `_wait_for_routing`; auto_reply next_scheduled_at within 21d|V188,V169,B150
 T323|x|impl §V.189(+) + §V.37(∆)+§V.75(∆)+§V.49(∆)+§V.126(∆)+§I — google_auth.py creds; one build_delegated_service + client base; Drive _list_markdown_files; drop dead Gmail methods + user_id; Pub/Sub resolve_project_id; shared Google transient set (no 529); get_messages_batch per-item retry; retarget creds patches; existing Gmail/Drive/Calendar/Pub/Sub/batch-fetch tests (#268)|V189,V37,V75,V49,V126,V35,I.module,I.pubsub
+T324|.|impl §V.190(+) + §V.2(∆) — split `cli.py` → `cli/` (`main.py` group+output+`_db`+resolvers; per-noun cmds); `database.py` → `database/` (schema/status + per-entity); thin `from mailpilot.database import X`; lazy-import per module; existing tests pass same PR or listed follow-on; extras-hook + SKILL-drift greps retarget `cli/` `database/`; entrypoint `mailpilot.cli:main` (#269)|V190,V2,V177,V107,I.cli,I.entrypoint
 
 ## §B BUGS
 
