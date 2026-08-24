@@ -302,7 +302,7 @@ T318|x|impl §V.185(+) + §V.152(∆)+§V.150(∆) — merge enrollment list API
 T319|x|impl §V.186(+) + §V.127(∆)+§V.128(∆)+§V.136(∆)+§V.163(∆) — one conclude helper; agent validates then calls; bounce skip_if_terminal; booking concludes terminal unless flag; cadence no re-enroll; existing conclude/bounce/booking/cadence tests (#265)|V186,V127,V128,V136,V163,V123,V15,V80
 T320|x|impl §V.187(+) + §V.22(∆)+§V.27(∆)+§V.76(∆)+§V.164(∆) — skip marks via route_email or mark_routed; recency/no-workflows/predates once in sync_account; thread contact once (cache thread+In-Reply-To); RFC parent not twice; route_method enum same; existing sync+routing tests (#266)|V187,V22,V27,V76,V164,V20
 T321|x|impl §V.188(+) + §V.169(∆) — mechanical OOO after route: no inbound agent task; resume once in routing; later sync ! re-enqueue; language-only OOO still agent; agent noop still `_maybe_ooo_resume_after_invoke`; tests mechanical vs language-only (#267)|V188,V169,V123,V83
-T322|.|impl §V.188 — campaign-test mechanical signal before route; leftover execute_task ! second resume; isolation before `_wait_for_routing`; auto_reply next_scheduled_at within 21d|V188,V169,B150
+T322|x|impl §V.188 — campaign-test mechanical signal before route; leftover execute_task ! second resume; isolation before `_wait_for_routing`; auto_reply next_scheduled_at within 21d|V188,V169,B150
 
 ## §B BUGS
 

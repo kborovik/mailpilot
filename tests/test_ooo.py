@@ -760,6 +760,15 @@ def test_execute_task_ooo_skips_agent_and_does_not_burn_touch(
     assert row.next_touch == 2
     assert row.disposition is None
     assert get_latest_enrollment_outcome(database_connection, enrollment.id) is None
+    resumes = database_connection.execute(
+        "SELECT id FROM task WHERE enrollment_id = %s AND status = 'pending' "
+        "AND context->>'reason' = 'ooo_pause'",
+        (enrollment.id,),
+    ).fetchall()
+    assert len(resumes) == 1
+    assert row.next_scheduled_at is not None
+    delta_days = (row.next_scheduled_at - datetime.now(UTC)).total_seconds() / 86400
+    assert -0.5 < delta_days < 21
 
 
 def test_execute_task_ooo_fail_path_no_ack_no_burned_touch(

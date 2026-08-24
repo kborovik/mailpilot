@@ -10,11 +10,16 @@ auto-reply to genuine mail):
      workflow by RFC 2822 Message-ID (``In-Reply-To`` cites the Touch 1
      Message-ID); classification never runs because the ephemeral workflows are
      outbound. Polls until every reply has routed or the timeout elapses.
+     Mechanical inject already sent ``Automatic reply`` subject, so
+     ``_maybe_ooo_pause`` fires here (§V.188 / §B.150).
   2. ``create_tasks_for_routed_emails`` bridges each routed reply into a "handle
-     inbound email" task (the same call the loop makes).
+     inbound email" task (the same call the loop makes). Mechanical OOO is a
+     completed processed marker instead, so later sync does not re-enqueue.
   3. For each scenario in turn, ``execute_task`` invokes the live agent on its
      reply -- the agent reads the inbound message and takes one branch (reply,
-     conclude, disable, or noop).
+     conclude, disable, or noop). Mechanical OOO records the processed marker
+     and does not invoke. Leftover handle-inbound tasks complete without a
+     second resume.
 
 Because all scenarios share one prospect contact, an opt-out / wrong-person
 branch disables that contact globally, which would make a later scenario's task
@@ -41,7 +46,6 @@ from _common import (
     PROSPECT_EMAIL,
     SENDER_EMAIL,
     clear_contact_notes,
-    load_scenarios,
     mp,
     read_json,
     repo_root,
@@ -128,32 +132,32 @@ def _wait_for_routing(
     return routed
 
 
-def _stamp_mechanical(connection: object, email_id: str) -> None:
-    """Mark an injected reply as a Gmail auto-reply before execute_task.
+def _completed_inbound_task(workflow_id: str, email_id: str | None) -> dict | None:
+    """Return the completed task for a routed inbound, or None.
 
-    Campaign-test injects via ``email reply`` (subject ``Re:``, no
-    Auto-Submitted). Real OOO / left-company auto-replies arrive with
-    ``Automatic reply`` + ``AUTO_SUBMITTED``. Stamp both so the harness
-    path in ``execute_task`` sees the same signal as production.
+    Mechanical OOO inserts a completed processed marker instead of
+    ``handle inbound email`` (§V.188). Handle records that marker so
+    verify still sees ``task_status=completed``.
     """
-    from psycopg.types.json import Json
-
-    from mailpilot.database import get_email
-    from mailpilot.ooo import AUTO_SUBMITTED_LABEL
-
-    email = get_email(connection, email_id)
-    if email is None:
-        return
-    labels = list(email.labels or [])
-    if AUTO_SUBMITTED_LABEL not in labels:
-        labels.append(AUTO_SUBMITTED_LABEL)
-    subject = email.subject or ""
-    if not subject.lower().startswith("automatic reply"):
-        subject = f"Automatic reply: {subject}"
-    connection.execute(
-        "UPDATE email SET labels = %(labels)s, subject = %(subject)s WHERE id = %(id)s",
-        {"labels": Json(labels), "subject": subject, "id": email_id},
+    if not email_id:
+        return None
+    listing = mp(
+        [
+            "task",
+            "list",
+            "--workflow-id",
+            workflow_id,
+            "--status",
+            "completed",
+            "--limit",
+            "50",
+        ],
+        check=False,
     )
+    for task in listing.get("tasks", []):
+        if task.get("email_id") == email_id:
+            return task
+    return None
 
 
 def _handle_scenario(
@@ -189,18 +193,27 @@ def _handle_scenario(
     task = next((t for t in tasks if t.email_id == reply_email_id), None)
     if task is None and tasks:
         task = tasks[0]
+    _ensure_enabled()
+    # Shared prospect: prior branch may have written a conclude_enrollment note.
+    clear_contact_notes(PROSPECT_EMAIL)
     if task is None:
+        marker = _completed_inbound_task(workflow_id, reply_email_id)
+        if marker is not None:
+            record["task_id"] = marker["id"]
+            record["handled_status"] = "handled"
+            record["task_status"] = marker.get("status")
+            reason = _contact_disabled_reason()
+            record["contact_disabled_after"] = reason is not None
+            record["disabled_reason_after"] = reason
+            if reason is not None:
+                mp(["contact", "enable", PROSPECT_EMAIL], check=False)
+            return record
         record["handled_status"] = "no_task" if record["routed"] else "unrouted"
         return record
 
     record["task_id"] = task.id
-    _ensure_enabled()
-    # Shared prospect: prior branch may have written a conclude_enrollment note.
-    clear_contact_notes(PROSPECT_EMAIL)
     worker_conn = psycopg.connect(database_url, row_factory=dict_row)
     try:
-        if entry.get("mechanical") and reply_email_id:
-            _stamp_mechanical(worker_conn, reply_email_id)
         execute_task(worker_conn, settings, task)
         worker_conn.commit()
         record["handled_status"] = "handled"
@@ -273,10 +286,9 @@ def main() -> int:
         tasks_by_workflow.setdefault(task.workflow_id, []).append(task)
 
     # 3. Handle one scenario at a time, re-enabling the contact between each.
-    mechanical_keys = {s["key"] for s in load_scenarios() if s.get("mechanical")}
     handled = [
         _handle_scenario(
-            {**entries_by_key[key], "mechanical": key in mechanical_keys},
+            entries_by_key[key],
             routed,
             tasks_by_workflow,
             settings,

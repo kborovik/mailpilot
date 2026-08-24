@@ -18,8 +18,8 @@ prospect. Deterministic work lives in `scripts/`; this skill is the Grok
 orchestrator.
 
 **Scripts / references:** `scripts/` and `references/`
-(`reply-scenarios.json` is the branch catalog; `mechanical` scenarios are
-stamped AUTO_SUBMITTED before handle; date tokens are filled at inject).
+(`reply-scenarios.json` is the branch catalog; `mechanical` scenarios send
+Automatic-reply subject at inject, before route; date tokens are filled at inject).
 
 **Default workflow file:**
 `/Users/kb/github/lab5.ca/campaigns/var-sales-coclose/workflows/var-sales-coclose.toml`

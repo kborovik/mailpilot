@@ -183,12 +183,14 @@ def reply_email(  # noqa: PLR0913
     workflow_id: str | None = None,
     cc: str | None = None,
     bcc: str | None = None,
+    subject: str | None = None,
 ) -> Email:
     """Reply to an existing email in-thread.
 
     Auto-derives recipient (contact.email), subject ("Re: " prefixed
     unless already prefixed), thread_id, and In-Reply-To from the
-    original. No cooldown -- replies are always allowed.
+    original. Pass ``subject`` to override (campaign-test mechanical
+    Automatic-reply). No cooldown -- replies are always allowed.
 
     Raises:
         AccountDisabledError: sending account is soft-disabled (§V.79).
@@ -214,9 +216,10 @@ def reply_email(  # noqa: PLR0913
     if contact.disabled_reason is not None:
         raise ContactDisabledError(f"contact is disabled: {contact.disabled_reason}")
 
-    subject = original.subject
-    if not subject.lower().startswith("re: "):
-        subject = f"Re: {subject}"
+    if subject is None or not subject.strip():
+        subject = original.subject
+        if not subject.lower().startswith("re: "):
+            subject = f"Re: {subject}"
 
     from mailpilot.sync import send_email as sync_send_email
 

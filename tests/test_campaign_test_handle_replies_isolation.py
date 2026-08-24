@@ -50,8 +50,29 @@ def test_handle_scenario_clears_prospect_notes_before_agent() -> None:
     clear_at = body.index("clear_contact_notes(PROSPECT_EMAIL)")
     execute_at = body.index("execute_task(")
     assert enable_at < clear_at < execute_at
-    stamp_at = body.index("_stamp_mechanical(")
-    assert clear_at < stamp_at < execute_at
+    assert "_stamp_mechanical" not in body
+
+
+def test_mechanical_inject_precedes_wait_for_routing() -> None:
+    """§V.188 / §B.150: Automatic-reply subject is sent at inject, before route."""
+    handle = _load("handle_replies")
+    inject = _load("inject_replies")
+    handle_src = inspect.getsource(handle)
+    assert "_stamp_mechanical" not in handle_src
+    main_src = inspect.getsource(handle.main)
+    wait_at = main_src.index("_wait_for_routing")
+    assert "--subject" not in main_src[wait_at:]
+    inject_src = inspect.getsource(inject)
+    send_src = inspect.getsource(inject._send_reply)
+    mech_src = inspect.getsource(inject._mechanical_subject)
+    assert "Automatic reply" in mech_src
+    assert "--subject" in send_src
+    subject_at = send_src.index("--subject")
+    wait_name = "_wait_for_routing"
+    assert wait_name not in send_src
+    assert "mechanical" in send_src
+    assert subject_at > 0
+    assert inject_src.index("def _send_reply") < inject_src.index("def main")
 
 
 def test_question_scenario_reply_is_answerable_without_product_kb() -> None:
