@@ -1,23 +1,8 @@
 """Gmail API client using service account with domain-wide delegation.
 
-Authentication: service account credentials resolved in this order --
-
-1. JSONB ``google_application_credentials`` on ``app_config``
-   (``from_service_account_info`` + ``with_subject``)
-2. Application Default Credentials (ADC) when that column is null --
-   e.g. GCE metadata, Workload Identity, Cloud Run. DWD impersonation
-   signs JWT assertions via the IAM Credentials API.
-
-``GOOGLE_APPLICATION_CREDENTIALS`` is not a mailpilot settings source
-(ADC may still consult it internally). No file-path setting.
-
-Per-account impersonation via ``with_subject(email)`` for JSON creds,
-or via ``service_account.Credentials(subject=email)`` over an
-``iam.Signer`` for ADC-based credentials.
-
-Required IAM in ADC mode: the active service account must hold
-``roles/iam.serviceAccountTokenCreator`` on itself so it can sign JWTs
-on its own behalf. The IAM Credentials API must be enabled.
+Credentials and the delegated-service factory live in
+:mod:`mailpilot.google_auth`. This module owns Gmail-specific retry,
+``GmailClient``, and MIME text extraction.
 
 Scope: ``https://www.googleapis.com/auth/gmail.modify``
 """
@@ -30,11 +15,12 @@ from email.mime.base import MIMEBase
 from email.utils import parseaddr
 from functools import wraps
 from importlib.metadata import version
-from typing import Any
+from typing import Any, ClassVar
 
 import logfire
 
 from mailpilot.exceptions import GmailBatchFetchError
+from mailpilot.google_auth import GOOGLE_TRANSIENT_STATUSES, GoogleClient
 
 # Translation table that drops every C0 control byte except \t (0x09) and \n
 # (0x0A). Strict JSON parsers (RFC 8259) reject bare C0 controls in strings;
@@ -58,7 +44,6 @@ GmailService = Any
 
 _GMAIL_SCOPE = ["https://www.googleapis.com/auth/gmail.modify"]
 
-_TRANSIENT_STATUS_CODES = frozenset({429, 500, 502, 503, 504, 529})
 _MAX_RETRIES = 5
 _MAX_BACKOFF = 30.0
 
@@ -93,7 +78,7 @@ def _retry_on_transient(func: Any) -> Any:
                     span.set_attribute("attempts", attempt + 1)
                     return result
                 except HttpError as exc:
-                    if exc.resp.status not in _TRANSIENT_STATUS_CODES:
+                    if exc.resp.status not in GOOGLE_TRANSIENT_STATUSES:
                         span.set_attribute("status", exc.resp.status)
                         span.set_attribute("attempts", attempt + 1)
                         raise
@@ -124,180 +109,10 @@ def _retry_on_transient(func: Any) -> Any:
     return wrapper
 
 
-def _google_sa_info(settings: Any | None = None) -> dict[str, Any] | None:
-    """Return the JSONB service-account document, or None for ADC.
-
-    ``GOOGLE_APPLICATION_CREDENTIALS`` is not read here; ADC may still
-    consult it inside ``google.auth.default``.
-    """
-    if settings is None:
-        from mailpilot.settings import get_settings
-
-        settings = get_settings()
-    info = settings.google_application_credentials
-    if not info:
-        return None
-    return info
-
-
-def has_google_credentials(settings: Any | None = None) -> bool:
-    """True if any Google credential source is reachable.
-
-    Checks the JSONB service-account document first, then probes ADC.
-    Used by the sync loop to gate Pub/Sub subscriber startup and watch
-    renewal so dev runs without GCP skip those branches.
-    """
-    if _google_sa_info(settings):
-        return True
-    from google.auth import default
-    from google.auth.exceptions import DefaultCredentialsError
-
-    try:
-        default()
-    except DefaultCredentialsError:
-        return False
-    return True
-
-
-def _adc_service_account_email(source_credentials: Any) -> str:
-    """Resolve the service account email backing ADC credentials.
-
-    On a fresh ``compute_engine.Credentials`` instance the
-    ``service_account_email`` attribute is the placeholder ``"default"``
-    until the credentials are refreshed against the metadata server.
-    """
-    from google.auth.transport.requests import Request
-
-    sa_email = getattr(source_credentials, "service_account_email", "") or ""
-    if not sa_email or sa_email == "default":
-        source_credentials.refresh(Request())
-        sa_email = source_credentials.service_account_email
-    return sa_email
-
-
-def build_delegated_credentials(
-    scopes: list[str], subject: str, settings: Any | None = None
-) -> Any:
-    """Build a service-account credential impersonating ``subject``.
-
-    Uses the JSONB service-account document when present; otherwise falls
-    back to ADC plus the IAM Credentials API for remote JWT signing. Both
-    paths return a credential that performs domain-wide delegation for
-    ``subject`` over ``scopes``.
-
-    Args:
-        scopes: OAuth scopes the returned credential is good for.
-        subject: User email address to impersonate via DWD.
-        settings: Optional settings snapshot; loaded if omitted.
-
-    Returns:
-        A google-auth credential ready for the googleapiclient
-        ``build(..., credentials=...)`` call.
-    """
-    from google.oauth2.service_account import Credentials
-
-    info = _google_sa_info(settings)
-    if info:
-        json_credentials = Credentials.from_service_account_info(  # type: ignore[no-untyped-call]
-            info,
-            scopes=scopes,
-        )
-        return json_credentials.with_subject(subject)
-
-    from google.auth import default, iam
-    from google.auth.transport.requests import Request
-
-    source_credentials, _ = default(
-        scopes=["https://www.googleapis.com/auth/cloud-platform"]
-    )
-    sa_email = _adc_service_account_email(source_credentials)
-    signer = iam.Signer(Request(), source_credentials, sa_email)
-    return Credentials(  # type: ignore[no-untyped-call]
-        signer=signer,
-        service_account_email=sa_email,
-        token_uri="https://oauth2.googleapis.com/token",
-        scopes=scopes,
-        subject=subject,
-    )
-
-
-def build_default_credentials(scopes: list[str], settings: Any | None = None) -> Any:
-    """Build credentials for non-impersonated calls (e.g. Pub/Sub).
-
-    Uses the JSONB service-account document when present; otherwise falls
-    back to Application Default Credentials. Pinning to one source avoids
-    the gcloud-user-login trap where an expired user token can send
-    Pub/Sub into a 600-second gRPC retry loop.
-
-    Args:
-        scopes: OAuth scopes the returned credential is good for.
-        settings: Optional settings snapshot; loaded if omitted.
-    """
-    info = _google_sa_info(settings)
-    if info:
-        from google.oauth2.service_account import Credentials
-
-        return Credentials.from_service_account_info(  # type: ignore[no-untyped-call]
-            info,
-            scopes=scopes,
-        )
-
-    from google.auth import default
-
-    credentials, _ = default(scopes=scopes)
-    return credentials
-
-
-def resolve_project_id(settings: Any | None = None) -> str:
-    """Resolve the active GCP project ID.
-
-    Reads ``project_id`` from the JSONB service-account document when
-    present; otherwise asks ADC for the project bound to the active
-    credentials.
-
-    Raises:
-        SystemExit: If neither source yields a project ID.
-    """
-    info = _google_sa_info(settings)
-    if info:
-        project_id = info.get("project_id")
-        if not project_id:
-            raise SystemExit("No project_id found in google_application_credentials")
-        return project_id
-
-    from google.auth import default
-
-    _, project_id = default()
-    if not project_id:
-        raise SystemExit(
-            "Could not resolve GCP project_id from Application Default "
-            "Credentials -- set 'mailpilot config set "
-            "google_application_credentials' to a service-account JSON "
-            "object or run on an instance whose metadata server reports "
-            "a project."
-        )
-    return project_id
-
-
-def build_gmail_service(email: str) -> GmailService:
-    """Build a Gmail API service instance with delegated credentials.
-
-    Args:
-        email: Gmail address to impersonate via domain-wide delegation.
-
-    Returns:
-        Gmail API service resource.
-    """
-    from googleapiclient.discovery import build
-
-    delegated = build_delegated_credentials(_GMAIL_SCOPE, email)
-    return build("gmail", "v1", credentials=delegated)
-
-
 # -- GmailClient --------------------------------------------------------------
 
 
-class GmailClient:
+class GmailClient(GoogleClient):
     """Thin wrapper around Gmail API service for per-account operations.
 
     Holds the service instance so callers don't pass it to every function.
@@ -310,38 +125,17 @@ class GmailClient:
         client.send_message(to="x@y.com", subject="Hi", body="Hello")
     """
 
-    def __init__(self, email: str) -> None:
-        self.email = email
-        self._service: GmailService = build_gmail_service(email)
+    _api = "gmail"
+    _version = "v1"
+    _scopes: ClassVar[list[str]] = _GMAIL_SCOPE
 
-    @classmethod
-    def from_service(cls, email: str, service: GmailService) -> GmailClient:
-        """Create a client with a pre-built service (for testing).
-
-        Args:
-            email: Gmail address.
-            service: Pre-built Gmail API service resource.
-
-        Returns:
-            GmailClient using the provided service.
-        """
-        client = cls.__new__(cls)
-        client.email = email
-        client._service = service
-        return client
-
-    def get_profile(self, user_id: str = "me") -> dict[str, Any]:
+    def get_profile(self) -> dict[str, Any]:
         """Fetch Gmail user profile.
-
-        Args:
-            user_id: Gmail user ID (default "me" for delegated user).
 
         Returns:
             Profile dict with emailAddress, messagesTotal, etc.
         """
-        result: dict[str, Any] = (
-            self._service.users().getProfile(userId=user_id).execute()
-        )
+        result: dict[str, Any] = self._service.users().getProfile(userId="me").execute()
         return result
 
     @_retry_on_transient
@@ -350,7 +144,6 @@ class GmailClient:
         query: str = "",
         max_results: int = 100,
         label_ids: list[str] | None = None,
-        user_id: str = "me",
     ) -> list[dict[str, Any]]:
         """List messages matching a Gmail search query.
 
@@ -358,13 +151,12 @@ class GmailClient:
             query: Gmail search query (e.g. "is:unread in:inbox").
             max_results: Maximum number of messages to return.
             label_ids: Filter by label IDs (e.g., ["INBOX"]). AND logic.
-            user_id: Gmail user ID.
 
         Returns:
             List of message stubs with id and threadId.
         """
         kwargs: dict[str, Any] = {
-            "userId": user_id,
+            "userId": "me",
             "q": query,
             "maxResults": max_results,
         }
@@ -380,14 +172,12 @@ class GmailClient:
     def get_message(
         self,
         message_id: str,
-        user_id: str = "me",
         format_: str = "full",
     ) -> dict[str, Any] | None:
         """Fetch a single message by ID.
 
         Args:
             message_id: Gmail message ID.
-            user_id: Gmail user ID.
             format_: Message format (full, metadata, minimal, raw).
 
         Returns:
@@ -399,7 +189,7 @@ class GmailClient:
             result: dict[str, Any] = (
                 self._service.users()
                 .messages()
-                .get(userId=user_id, id=message_id, format=format_)
+                .get(userId="me", id=message_id, format=format_)
                 .execute()
             )
             return result
@@ -425,7 +215,6 @@ class GmailClient:
         bcc: str | None = None,
         in_reply_to: str | None = None,
         references: str | None = None,
-        user_id: str = "me",
     ) -> dict[str, Any]:
         """Send an email message via Gmail API.
 
@@ -444,7 +233,6 @@ class GmailClient:
                 messages in the thread (RFC 5322 section 3.6.4). Falls back
                 to ``in_reply_to`` when omitted, which is correct for replies
                 to a single prior message.
-            user_id: Gmail user ID.
 
         Returns:
             Sent message dict with id, threadId, labelIds.
@@ -470,43 +258,7 @@ class GmailClient:
             send_body["threadId"] = thread_id
 
         result: dict[str, Any] = (
-            self._service.users()
-            .messages()
-            .send(userId=user_id, body=send_body)
-            .execute()
-        )
-        return result
-
-    @_retry_on_transient
-    def modify_message(
-        self,
-        message_id: str,
-        add_labels: list[str] | None = None,
-        remove_labels: list[str] | None = None,
-        user_id: str = "me",
-    ) -> dict[str, Any]:
-        """Modify labels on a message.
-
-        Args:
-            message_id: Gmail message ID.
-            add_labels: Label IDs to add.
-            remove_labels: Label IDs to remove.
-            user_id: Gmail user ID.
-
-        Returns:
-            Modified message dict.
-        """
-        body: dict[str, list[str]] = {}
-        if add_labels:
-            body["addLabelIds"] = add_labels
-        if remove_labels:
-            body["removeLabelIds"] = remove_labels
-
-        result: dict[str, Any] = (
-            self._service.users()
-            .messages()
-            .modify(userId=user_id, id=message_id, body=body)
-            .execute()
+            self._service.users().messages().send(userId="me", body=send_body).execute()
         )
         return result
 
@@ -514,7 +266,6 @@ class GmailClient:
     def get_history(
         self,
         start_history_id: str,
-        user_id: str = "me",
         history_types: list[str] | None = None,
         label_id: str | None = None,
     ) -> list[dict[str, Any]]:
@@ -524,7 +275,6 @@ class GmailClient:
 
         Args:
             start_history_id: History ID to start from.
-            user_id: Gmail user ID.
             history_types: Filter by history type (e.g., ["messageAdded"]).
             label_id: Filter by label (e.g., "INBOX").
 
@@ -532,7 +282,7 @@ class GmailClient:
             List of history records.
         """
         kwargs: dict[str, Any] = {
-            "userId": user_id,
+            "userId": "me",
             "startHistoryId": start_history_id,
         }
         if history_types is not None:
@@ -555,13 +305,11 @@ class GmailClient:
     def watch(
         self,
         topic_name: str,
-        user_id: str = "me",
     ) -> dict[str, Any]:
         """Set up Gmail push notifications via Pub/Sub.
 
         Args:
             topic_name: Full Pub/Sub topic name (projects/{project}/topics/{topic}).
-            user_id: Gmail user ID.
 
         Returns:
             Watch response with historyId and expiration.
@@ -571,18 +319,9 @@ class GmailClient:
             "labelIds": ["INBOX"],
         }
         result: dict[str, Any] = (
-            self._service.users().watch(userId=user_id, body=body).execute()
+            self._service.users().watch(userId="me", body=body).execute()
         )
         return result
-
-    @_retry_on_transient
-    def stop_watch(self, user_id: str = "me") -> None:
-        """Stop Gmail push notifications for this account.
-
-        Args:
-            user_id: Gmail user ID (default "me" for delegated user).
-        """
-        self._service.users().stop(userId=user_id).execute()
 
     _BATCH_SIZE = 25
     """Maximum messages per ``new_batch_http_request()`` call.
@@ -596,7 +335,6 @@ class GmailClient:
     def _fetch_batch_once(
         self,
         message_ids: list[str],
-        user_id: str,
         format_: str,
     ) -> tuple[list[dict[str, Any]], list[str]]:
         """Run one batched fetch pass over ``message_ids``.
@@ -629,7 +367,7 @@ class GmailClient:
                         message_id=request_id,
                     )
                     return
-                if status in _TRANSIENT_STATUS_CODES:
+                if status in GOOGLE_TRANSIENT_STATUSES:
                     transient_failed.append(request_id)
                     return
                 logfire.warn(
@@ -651,14 +389,14 @@ class GmailClient:
                 count=len(chunk),
                 batch_index=batch_index,
                 total_batches=total_batches,
-                user_id=user_id,
+                user_id=self.email,
             ) as span:
                 batch = self._service.new_batch_http_request()
                 for msg_id in chunk:
                     request = (
                         self._service.users()
                         .messages()
-                        .get(userId=user_id, id=msg_id, format=format_)
+                        .get(userId="me", id=msg_id, format=format_)
                     )
                     batch.add(request, callback=_callback, request_id=msg_id)
                 batch.execute()
@@ -666,11 +404,9 @@ class GmailClient:
 
         return fetched, transient_failed
 
-    @_retry_on_transient
     def get_messages_batch(
         self,
         message_ids: list[str],
-        user_id: str = "me",
         format_: str = "full",
     ) -> list[dict[str, Any]]:
         """Fetch multiple messages in batched HTTP requests.
@@ -682,11 +418,11 @@ class GmailClient:
         with bounded backoff; if it survives the retry budget the call raises
         ``GmailBatchFetchError`` rather than returning a partial list, so a
         caller never advances its sync checkpoint past unfetched mail
-        (`§V.75`, `§B.105`).
+        (`§V.75`, `§B.105`). Whole-call retry is not applied; only per-item
+        retry runs (`§V.189`).
 
         Args:
             message_ids: Gmail message IDs to fetch.
-            user_id: Gmail user ID.
             format_: Message format (full, metadata, minimal, raw).
 
         Returns:
@@ -702,9 +438,7 @@ class GmailClient:
         pending: list[str] = list(message_ids)
 
         for attempt in range(_MAX_RETRIES):
-            fetched, transient_failed = self._fetch_batch_once(
-                pending, user_id, format_
-            )
+            fetched, transient_failed = self._fetch_batch_once(pending, format_)
             results.extend(fetched)
             if not transient_failed:
                 return results
@@ -729,55 +463,6 @@ class GmailClient:
             f"{len(pending)} message(s) unfetched after {_MAX_RETRIES} "
             "attempts (Gmail rate limit)"
         )
-
-    def create_label_if_not_exists(
-        self,
-        label_name: str,
-        user_id: str = "me",
-    ) -> str:
-        """Create a Gmail label or return existing label ID.
-
-        Args:
-            label_name: Label name to create.
-            user_id: Gmail user ID.
-
-        Returns:
-            Label ID.
-        """
-        from googleapiclient.errors import HttpError
-
-        # Check existing labels.
-        response = self._service.users().labels().list(userId=user_id).execute()
-        for label in response.get("labels", []):
-            if label.get("name") == label_name:
-                label_id: str = label["id"]
-                return label_id
-
-        # Create new label.
-        try:
-            result = (
-                self._service.users()
-                .labels()
-                .create(
-                    userId=user_id,
-                    body={
-                        "name": label_name,
-                        "labelListVisibility": "labelShow",
-                        "messageListVisibility": "show",
-                    },
-                )
-                .execute()
-            )
-            created_id: str = result["id"]
-            logfire.info("gmail label created", name=label_name, id=created_id)
-            return created_id
-        except HttpError as exc:
-            logfire.warn(
-                "gmail label creation failed",
-                name=label_name,
-                error=str(exc),
-            )
-            raise
 
 
 # -- Standalone utilities (no service needed) ----------------------------------

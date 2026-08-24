@@ -69,10 +69,10 @@ from mailpilot.gmail import (
     GmailClient,
     extract_text_from_message,
     get_message_headers,
-    has_google_credentials,
     parse_sender,
     strip_control_chars,
 )
+from mailpilot.google_auth import has_google_credentials
 from mailpilot.models import Account, Contact, Email, Meeting
 from mailpilot.ooo import auto_submitted_label
 from mailpilot.operator_log import operator_event

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from mailpilot.drive import DriveClient, build_drive_service
+from mailpilot.drive import DriveClient
 
 
 def _make_service(
@@ -59,7 +59,7 @@ def test_list_markdown_query_filters_to_markdown_in_folder_excluding_trash() -> 
     call_kwargs = service.files.return_value.list.call_args.kwargs
     query = call_kwargs["q"]
     assert "mimeType='text/markdown'" in query
-    assert "parents in 'FOLDER42'" in query
+    assert "'FOLDER42' in parents" in query
     assert "trashed = false" in query
     assert call_kwargs["fields"] == "files(id, name)"
     assert call_kwargs["corpora"] == "allDrives"
@@ -264,11 +264,11 @@ def test_read_markdown_decodes_utf8_with_replacement_on_invalid_bytes() -> None:
     assert "there" in result["content"]
 
 
-def test_build_drive_service_caps_socket_timeout_at_60_seconds() -> None:
+def test_drive_client_caps_socket_timeout_at_60_seconds() -> None:
     """§V.49: Drive socket-timeout cap bounds stall window so the retry
     classifier sees ``socket.timeout`` quickly."""
     with (
-        patch("mailpilot.gmail.build_delegated_credentials") as mock_creds,
+        patch("mailpilot.google_auth.build_delegated_credentials") as mock_creds,
         patch("googleapiclient.discovery.build") as mock_build,
         patch("httplib2.Http") as mock_http,
         patch("google_auth_httplib2.AuthorizedHttp") as mock_authed,
@@ -277,7 +277,7 @@ def test_build_drive_service_caps_socket_timeout_at_60_seconds() -> None:
         mock_http.return_value = MagicMock()
         mock_authed.return_value = MagicMock()
 
-        build_drive_service("user@example.com")
+        DriveClient("user@example.com")
 
     mock_http.assert_called_once_with(timeout=60)
     mock_authed.assert_called_once_with(
@@ -287,3 +287,23 @@ def test_build_drive_service_caps_socket_timeout_at_60_seconds() -> None:
     build_args = mock_build.call_args.args
     assert build_args == ("drive", "v3")
     assert build_kwargs == {"http": mock_authed.return_value}
+
+
+def test_list_markdown_files_joins_extra_predicates() -> None:
+    """§V.189: list and search share ``_list_markdown_files``; extra
+    predicates AND-join after ``'{id}' in parents``."""
+    service = _make_service()
+    client = DriveClient.from_service("user@example.com", service)
+
+    client._list_markdown_files(  # pyright: ignore[reportPrivateUsage]
+        "FOLDER", extra_predicates=("fullText contains 'shipping'",)
+    )
+
+    query = service.files.return_value.list.call_args.kwargs["q"]
+    assert "mimeType='text/markdown'" in query
+    assert "'FOLDER' in parents" in query
+    assert "fullText contains 'shipping'" in query
+    assert "trashed = false" in query
+    assert query.index("'FOLDER' in parents") < query.index(
+        "fullText contains 'shipping'"
+    )

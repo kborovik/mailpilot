@@ -304,7 +304,7 @@ T319|x|impl §V.186(+) + §V.127(∆)+§V.128(∆)+§V.136(∆)+§V.163(∆) —
 T320|x|impl §V.187(+) + §V.22(∆)+§V.27(∆)+§V.76(∆)+§V.164(∆) — skip marks via route_email or mark_routed; recency/no-workflows/predates once in sync_account; thread contact once (cache thread+In-Reply-To); RFC parent not twice; route_method enum same; existing sync+routing tests (#266)|V187,V22,V27,V76,V164,V20
 T321|x|impl §V.188(+) + §V.169(∆) — mechanical OOO after route: no inbound agent task; resume once in routing; later sync ! re-enqueue; language-only OOO still agent; agent noop still `_maybe_ooo_resume_after_invoke`; tests mechanical vs language-only (#267)|V188,V169,V123,V83
 T322|x|impl §V.188 — campaign-test mechanical signal before route; leftover execute_task ! second resume; isolation before `_wait_for_routing`; auto_reply next_scheduled_at within 21d|V188,V169,B150
-T323|.|impl §V.189(+) + §V.37(∆)+§V.75(∆)+§V.49(∆)+§V.126(∆)+§I — google_auth.py creds; one build_delegated_service + client base; Drive _list_markdown_files; drop dead Gmail methods + user_id; Pub/Sub resolve_project_id; shared Google transient set (no 529); get_messages_batch per-item retry; retarget creds patches; existing Gmail/Drive/Calendar/Pub/Sub/batch-fetch tests (#268)|V189,V37,V75,V49,V126,V35,I.module,I.pubsub
+T323|x|impl §V.189(+) + §V.37(∆)+§V.75(∆)+§V.49(∆)+§V.126(∆)+§I — google_auth.py creds; one build_delegated_service + client base; Drive _list_markdown_files; drop dead Gmail methods + user_id; Pub/Sub resolve_project_id; shared Google transient set (no 529); get_messages_batch per-item retry; retarget creds patches; existing Gmail/Drive/Calendar/Pub/Sub/batch-fetch tests (#268)|V189,V37,V75,V49,V126,V35,I.module,I.pubsub
 
 ## §B BUGS
 

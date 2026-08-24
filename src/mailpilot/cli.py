@@ -1890,7 +1890,8 @@ def account_sync(account_email: str | None, since: str | None) -> None:
     import logfire
 
     from mailpilot.database import get_account, list_accounts
-    from mailpilot.gmail import GmailClient, has_google_credentials
+    from mailpilot.gmail import GmailClient
+    from mailpilot.google_auth import has_google_credentials
     from mailpilot.settings import get_settings
     from mailpilot.sync import (
         _poll_account_calendar,  # pyright: ignore[reportPrivateUsage]

@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import socket
 
+from mailpilot.google_auth import GOOGLE_TRANSIENT_STATUSES
+
 MAX_ATTEMPTS = 4
 """Total attempts (1 initial + 3 retries) before a transient failure
 is escalated to terminal ``failed``."""
@@ -28,11 +30,6 @@ Index 0 is the delay before the *first* retry (after the initial
 attempt failed); index 1 before the second; index 2 before the third.
 After the third retry, ``MAX_ATTEMPTS`` is exhausted and the row goes
 terminal.
-"""
-
-_GOOGLE_TRANSIENT_STATUSES = frozenset({429, 500, 502, 503, 504})
-"""HTTP status codes treated as transient on Google API ``HttpError``
-(Drive, Gmail). 429 = quota / rate-limit; 5xx = upstream blip.
 """
 
 _ANTHROPIC_TRANSIENT_STATUSES = frozenset({502, 503, 529})
@@ -89,8 +86,9 @@ def is_transient(exc: BaseException) -> bool:
         exc: Exception raised by ``invoke_workflow_agent``.
 
     Returns:
-        ``True`` for the §V.49 allow-list (Google 429/5xx, Anthropic
-        502/503/529, Drive socket timeouts). ``False`` otherwise --
+        ``True`` for the §V.49 allow-list (Google statuses from the shared
+        set, Anthropic 502/503/529, Drive socket timeouts). ``False``
+        otherwise --
         including for the §V.48 exclusion (Anthropic LLM read-timeouts)
         and any unrecognised exception class.
     """
@@ -99,7 +97,7 @@ def is_transient(exc: BaseException) -> bool:
 
     google_status = _google_status(exc)
     if google_status is not None:
-        return google_status in _GOOGLE_TRANSIENT_STATUSES
+        return google_status in GOOGLE_TRANSIENT_STATUSES
 
     anthropic_status = _anthropic_status(exc)
     if anthropic_status is not None:

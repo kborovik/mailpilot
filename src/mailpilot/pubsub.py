@@ -15,6 +15,7 @@ from typing import Any
 import logfire
 from google.cloud.pubsub_v1 import PublisherClient, SubscriberClient
 
+from mailpilot.google_auth import build_default_credentials, resolve_project_id
 from mailpilot.operator_log import operator_event
 from mailpilot.settings import Settings
 
@@ -26,37 +27,13 @@ _WATCH_RENEWAL_THRESHOLD = timedelta(hours=24)
 _PUBSUB_SCOPES = ["https://www.googleapis.com/auth/pubsub"]
 
 
-def _resolve_project_id(settings: Settings) -> str:
-    """Resolve the GCP project ID for Pub/Sub.
-
-    Delegates to :func:`mailpilot.gmail.resolve_project_id`, which reads
-    from the configured key file when one is set and otherwise queries
-    Application Default Credentials (e.g. the GCE metadata server).
-
-    Args:
-        settings: Application settings (kept for call-site symmetry; the
-            actual lookup is process-wide).
-
-    Returns:
-        Project ID string.
-
-    Raises:
-        SystemExit: If no project ID can be resolved from either source.
-    """
-    from mailpilot.gmail import resolve_project_id
-
-    return resolve_project_id(settings)
-
-
 def _load_credentials(settings: Settings) -> Any:
     """Load credentials scoped for Pub/Sub.
 
-    Delegates to :func:`mailpilot.gmail.build_default_credentials` so
-    this module shares the configured-file-then-ADC fallback used by
-    every other Google client in the codebase.
+    Delegates to :func:`mailpilot.google_auth.build_default_credentials` so
+    this module shares the JSON-then-ADC fallback used by every other
+    Google client in the codebase.
     """
-    from mailpilot.gmail import build_default_credentials
-
     return build_default_credentials(_PUBSUB_SCOPES, settings)
 
 
@@ -81,7 +58,7 @@ def setup_pubsub(settings: Settings) -> None:
     from google.api_core.exceptions import AlreadyExists
     from google.iam.v1 import policy_pb2
 
-    project_id = _resolve_project_id(settings)
+    project_id = resolve_project_id(settings)
     topic = _topic_path(project_id, settings)
     subscription = _subscription_path(project_id, settings)
     credentials = _load_credentials(settings)
@@ -144,7 +121,7 @@ def start_subscriber(
     Returns:
         StreamingPullFuture that blocks until cancelled.
     """
-    project_id = _resolve_project_id(settings)
+    project_id = resolve_project_id(settings)
     subscription = _subscription_path(project_id, settings)
 
     subscriber = SubscriberClient(credentials=_load_credentials(settings))
@@ -227,7 +204,7 @@ def renew_watches(
     from mailpilot.database import get_account, list_accounts, update_account
     from mailpilot.gmail import GmailClient
 
-    project_id = _resolve_project_id(settings)
+    project_id = resolve_project_id(settings)
     topic = _topic_path(project_id, settings)
     threshold = datetime.now(UTC) + _WATCH_RENEWAL_THRESHOLD
 

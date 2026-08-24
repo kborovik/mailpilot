@@ -1,7 +1,7 @@
 """Google Drive API client for reading Markdown KB files.
 
 Authentication: same service account + domain-wide delegation as
-:mod:`mailpilot.gmail`. Per-account impersonation via ``with_subject``.
+:mod:`mailpilot.google_auth`. Per-account impersonation via ``with_subject``.
 
 Scope: ``https://www.googleapis.com/auth/drive.readonly`` (read-only).
 
@@ -12,7 +12,9 @@ operator-curated Markdown documents.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
+
+from mailpilot.google_auth import GoogleClient
 
 DriveService = Any
 """Type alias for the Drive API service resource (untyped by Google)."""
@@ -32,35 +34,6 @@ _DRIVE_HTTP_TIMEOUT_SECONDS = 60
 surfaces as ``socket.timeout`` quickly. The bounded auto-retry
 classifier (``mailpilot.agent.retry.is_transient``) treats those as
 transient per `§V.49`."""
-
-
-def build_drive_service(email: str) -> DriveService:
-    """Build a Drive API service instance with delegated credentials.
-
-    The transport is wrapped with ``httplib2.Http(timeout=...)`` so a
-    hung TCP read on Drive surfaces as ``socket.timeout`` within the
-    bound. Per `§V.49`, those timeouts feed the bounded auto-retry
-    classifier; the bound also caps how long a single Drive call can
-    stall the agent's read window.
-
-    Args:
-        email: Gmail address to impersonate via domain-wide delegation.
-
-    Returns:
-        Drive API service resource.
-    """
-    import httplib2
-    from google_auth_httplib2 import AuthorizedHttp
-    from googleapiclient.discovery import build
-
-    from mailpilot.gmail import build_delegated_credentials
-
-    delegated = build_delegated_credentials(_DRIVE_SCOPE, email)
-    authed_http = AuthorizedHttp(
-        delegated,
-        http=httplib2.Http(timeout=_DRIVE_HTTP_TIMEOUT_SECONDS),
-    )
-    return build("drive", "v3", http=authed_http)
 
 
 def _build_search_tokens(query: str) -> list[str]:
@@ -97,7 +70,7 @@ def _build_search_tokens(query: str) -> list[str]:
     return tokens[:_SEARCH_TOKEN_CAP]
 
 
-class DriveClient:
+class DriveClient(GoogleClient):
     """Thin wrapper around the Drive v3 service for KB reads.
 
     Holds the impersonated service for one account. Construction triggers
@@ -111,32 +84,41 @@ class DriveClient:
         hits = client.search_markdown(folder_id, "shipping policy")
     """
 
+    _api = "drive"
+    _version = "v3"
+    _scopes: ClassVar[list[str]] = _DRIVE_SCOPE
+
     def __init__(self, email: str) -> None:
-        self.email = email
-        self._service: DriveService = build_drive_service(email)
+        import httplib2
 
-    @classmethod
-    def from_service(cls, email: str, service: DriveService) -> DriveClient:
-        """Create a client with a pre-built service (for testing)."""
-        client = cls.__new__(cls)
-        client.email = email
-        client._service = service
-        return client
+        super().__init__(email, http=httplib2.Http(timeout=_DRIVE_HTTP_TIMEOUT_SECONDS))
 
-    def list_markdown(self, folder_id: str) -> list[dict[str, str]]:
-        """List Markdown files in a Drive folder.
+    def _list_markdown_files(
+        self, folder_id: str, extra_predicates: tuple[str, ...] = ()
+    ) -> list[dict[str, str]]:
+        """List Markdown files in a Drive folder, optionally extra-filtered.
+
+        Shared ``files.list`` for :meth:`list_markdown` and
+        :meth:`search_markdown`. Parent filter is ``'{id}' in parents``
+        (`§V.189`). Every call carries Shared-Drive flags (`§V.34`).
 
         Args:
             folder_id: Drive folder ID.
+            extra_predicates: Additional Drive query clauses AND-joined
+                after the parent filter (e.g. a parenthesized OR-group of
+                ``fullText contains`` predicates).
 
         Returns:
-            List of ``{"file_id": ..., "name": ...}``.
+            List of ``{"file_id": ..., "name": ...}``, de-duplicated by
+            ``file_id`` in Drive's native order.
         """
-        query = (
-            f"mimeType='{_MARKDOWN_MIME_TYPE}' "
-            f"and parents in '{folder_id}' "
-            f"and trashed = false"
-        )
+        predicates = [
+            f"mimeType='{_MARKDOWN_MIME_TYPE}'",
+            f"'{folder_id}' in parents",
+            *extra_predicates,
+            "trashed = false",
+        ]
+        query = " and ".join(predicates)
         response: dict[str, Any] = (
             self._service.files()
             .list(
@@ -149,9 +131,25 @@ class DriveClient:
             .execute()
         )
         files: list[dict[str, str]] = []
+        seen_file_ids: set[str] = set()
         for entry in response.get("files", []):
-            files.append({"file_id": entry["id"], "name": entry["name"]})
+            file_id = entry["id"]
+            if file_id in seen_file_ids:
+                continue
+            seen_file_ids.add(file_id)
+            files.append({"file_id": file_id, "name": entry["name"]})
         return files
+
+    def list_markdown(self, folder_id: str) -> list[dict[str, str]]:
+        """List Markdown files in a Drive folder.
+
+        Args:
+            folder_id: Drive folder ID.
+
+        Returns:
+            List of ``{"file_id": ..., "name": ...}``.
+        """
+        return self._list_markdown_files(folder_id)
 
     def search_markdown(self, folder_id: str, query: str) -> list[dict[str, str]]:
         """Full-text search Markdown files in a Drive folder.
@@ -179,32 +177,9 @@ class DriveClient:
         if not tokens:
             return []
         predicates = " or ".join(f"fullText contains '{token}'" for token in tokens)
-        drive_query = (
-            f"mimeType='{_MARKDOWN_MIME_TYPE}' "
-            f"and '{folder_id}' in parents "
-            f"and ({predicates}) "
-            f"and trashed = false"
+        return self._list_markdown_files(
+            folder_id, extra_predicates=(f"({predicates})",)
         )
-        response: dict[str, Any] = (
-            self._service.files()
-            .list(
-                q=drive_query,
-                fields="files(id, name)",
-                corpora="allDrives",
-                supportsAllDrives=True,
-                includeItemsFromAllDrives=True,
-            )
-            .execute()
-        )
-        files: list[dict[str, str]] = []
-        seen_file_ids: set[str] = set()
-        for entry in response.get("files", []):
-            file_id = entry["id"]
-            if file_id in seen_file_ids:
-                continue
-            seen_file_ids.add(file_id)
-            files.append({"file_id": file_id, "name": entry["name"]})
-        return files
 
     def read_markdown(self, file_id: str) -> dict[str, str]:
         """Read the content of a Markdown file from Drive.
