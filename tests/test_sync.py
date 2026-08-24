@@ -38,7 +38,9 @@ from mailpilot.database import (
     upsert_sync_status,
 )
 from mailpilot.gmail import GmailClient
+from mailpilot.models import Account, Contact, Email
 from mailpilot.routing import RoutingContext
+from mailpilot.settings import Settings
 from mailpilot.sync import (
     _collect_new_message_ids,  # pyright: ignore[reportPrivateUsage]
     is_pid_alive,
@@ -2627,7 +2629,6 @@ def test_sync_account_passes_same_recency_cutoff(
 ) -> None:
     """Recency cutoff is computed once in sync_account and passed to every store."""
     import mailpilot.sync as sync_module
-    from mailpilot.routing import RoutingContext
 
     account = make_test_account(database_connection, email="cutoff-once@example.com")
     client, service = _make_mock_client(account.email)
@@ -2652,17 +2653,27 @@ def test_sync_account_passes_same_recency_cutoff(
 
     cutoffs: list[datetime | None] = []
     contexts: list[RoutingContext] = []
-    real = sync_module._store_inbound_message
+    real = sync_module._store_inbound_message  # pyright: ignore[reportPrivateUsage]
 
     def spy(
-        *args: object,
-        **kwargs: object,
-    ) -> object:
-        routing = kwargs.get("routing")
-        assert isinstance(routing, RoutingContext)
+        connection: psycopg.Connection[dict[str, Any]],
+        account: Account,
+        message: dict[str, Any],
+        contacts_by_email: dict[str, Contact],
+        settings: Settings,
+        *,
+        routing: RoutingContext,
+    ) -> Email | None:
         contexts.append(routing)
         cutoffs.append(routing.recency_cutoff)
-        return real(*args, **kwargs)
+        return real(
+            connection,
+            account,
+            message,
+            contacts_by_email,
+            settings,
+            routing=routing,
+        )
 
     monkeypatch.setattr(sync_module, "_store_inbound_message", spy)
 
@@ -2731,11 +2742,26 @@ def test_sync_account_resolves_thread_contact_once_per_message(
     )
 
     calls: list[object] = []
-    real = routing_module._walk_thread_enrolled_contact
+    real = routing_module._walk_thread_enrolled_contact  # pyright: ignore[reportPrivateUsage]
 
-    def spy(*args: object, **kwargs: object) -> object:
-        calls.append((args, kwargs))
-        return real(*args, **kwargs)
+    def spy(
+        connection: psycopg.Connection[dict[str, Any]],
+        account_id: str,
+        *,
+        gmail_thread_id: str | None,
+        in_reply_to: str | None,
+        references_header: str | None,
+        rfc_parents: dict[tuple[str, ...], Email | None] | None,
+    ) -> Contact | None:
+        calls.append((account_id, gmail_thread_id, in_reply_to, references_header))
+        return real(
+            connection,
+            account_id,
+            gmail_thread_id=gmail_thread_id,
+            in_reply_to=in_reply_to,
+            references_header=references_header,
+            rfc_parents=rfc_parents,
+        )
 
     monkeypatch.setattr(routing_module, "_walk_thread_enrolled_contact", spy)
 
