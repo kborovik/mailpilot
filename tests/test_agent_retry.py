@@ -9,7 +9,12 @@ import pytest
 from anthropic import APIStatusError, APITimeoutError
 from googleapiclient.errors import HttpError
 
-from mailpilot.agent.retry import BACKOFF_SECONDS, MAX_ATTEMPTS, is_transient
+from mailpilot.agent.retry import (
+    BACKOFF_SECONDS,
+    GOOGLE_TRANSIENT_STATUSES,
+    MAX_ATTEMPTS,
+    is_transient,
+)
 
 
 def _http_error(status: int) -> HttpError:
@@ -40,9 +45,17 @@ def test_google_http_error_transient_statuses(status: int) -> None:
     assert is_transient(_http_error(status)) is True
 
 
-@pytest.mark.parametrize("status", [400, 401, 403, 404, 422])
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 422, 529])
 def test_google_http_error_non_transient_statuses(status: int) -> None:
+    """529 is Anthropic-only; Google HttpError 529 is not retried (§V.189)."""
     assert is_transient(_http_error(status)) is False
+
+
+def test_google_transient_set_is_shared_and_excludes_529() -> None:
+    from mailpilot import google_auth
+
+    assert GOOGLE_TRANSIENT_STATUSES is google_auth.GOOGLE_TRANSIENT_STATUSES
+    assert 529 not in GOOGLE_TRANSIENT_STATUSES
 
 
 @pytest.mark.parametrize("status", [502, 503, 529])

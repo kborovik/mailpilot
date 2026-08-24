@@ -993,7 +993,7 @@ def test_account_sync_all_accounts(
         patch("mailpilot.database.list_accounts", return_value=[acc_a, acc_b]),
         patch("mailpilot.database.get_account", side_effect=[acc_a, acc_b]),
         patch("mailpilot.gmail.GmailClient") as mock_client_cls,
-        patch("mailpilot.gmail.has_google_credentials", return_value=False),
+        patch("mailpilot.google_auth.has_google_credentials", return_value=False),
         patch("mailpilot.sync.sync_account", side_effect=[3, 5]) as mock_sync,
     ):
         result = runner.invoke(main, ["account", "sync"])
@@ -1019,7 +1019,7 @@ def test_account_sync_single_account(
         patch("mailpilot.database.get_account", return_value=account) as mock_get,
         patch("mailpilot.database.list_accounts") as mock_list,
         patch("mailpilot.gmail.GmailClient"),
-        patch("mailpilot.gmail.has_google_credentials", return_value=False),
+        patch("mailpilot.google_auth.has_google_credentials", return_value=False),
         patch("mailpilot.sync.sync_account", return_value=2),
     ):
         result = runner.invoke(main, ["account", "sync", "--account-email", account.id])
@@ -1071,7 +1071,7 @@ def test_account_sync_error_isolated_per_account(
         patch("mailpilot.database.list_accounts", return_value=[acc_a, acc_b]),
         patch("mailpilot.database.get_account", side_effect=[acc_a, acc_b]),
         patch("mailpilot.gmail.GmailClient"),
-        patch("mailpilot.gmail.has_google_credentials", return_value=False),
+        patch("mailpilot.google_auth.has_google_credentials", return_value=False),
         patch("logfire.exception"),
         patch(
             "mailpilot.sync.sync_account",
@@ -1104,7 +1104,7 @@ def test_account_sync_polls_calendar_per_account(
         patch("mailpilot.database.list_accounts", return_value=[acc_a, acc_b]),
         patch("mailpilot.database.get_account", side_effect=[acc_a, acc_b]),
         patch("mailpilot.gmail.GmailClient"),
-        patch("mailpilot.gmail.has_google_credentials", return_value=True),
+        patch("mailpilot.google_auth.has_google_credentials", return_value=True),
         patch("mailpilot.sync.sync_account", side_effect=[3, 5]),
         patch("mailpilot.sync._poll_account_calendar", return_value=None) as mock_poll,
     ):
@@ -1129,7 +1129,7 @@ def test_account_sync_skips_calendar_without_credentials(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_account", return_value=account),
         patch("mailpilot.gmail.GmailClient"),
-        patch("mailpilot.gmail.has_google_credentials", return_value=False),
+        patch("mailpilot.google_auth.has_google_credentials", return_value=False),
         patch("mailpilot.sync.sync_account", return_value=2),
         patch("mailpilot.sync._poll_account_calendar") as mock_poll,
     ):
@@ -1150,7 +1150,7 @@ def test_account_sync_calendar_error_isolated_from_gmail_success(
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
         patch("mailpilot.database.get_account", return_value=account),
         patch("mailpilot.gmail.GmailClient"),
-        patch("mailpilot.gmail.has_google_credentials", return_value=True),
+        patch("mailpilot.google_auth.has_google_credentials", return_value=True),
         patch("mailpilot.sync.sync_account", return_value=7),
         patch("mailpilot.sync._poll_account_calendar", return_value="calendar 500"),
     ):

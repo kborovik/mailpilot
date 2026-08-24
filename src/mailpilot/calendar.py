@@ -1,7 +1,7 @@
 """Google Calendar API client for reading upcoming events (§V.126).
 
 Authentication: same service account + domain-wide delegation as
-:mod:`mailpilot.gmail`. Per-account impersonation via ``with_subject``.
+:mod:`mailpilot.google_auth`. Per-account impersonation via ``with_subject``.
 
 Scope: ``https://www.googleapis.com/auth/calendar.events.readonly``
 (read-only). This is the first scope added beyond Gmail ``gmail.modify``
@@ -16,7 +16,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, ClassVar
+
+from mailpilot.google_auth import GoogleClient
 
 CalendarService = Any
 """Type alias for the Calendar API service resource (untyped by Google)."""
@@ -47,27 +49,6 @@ class CalendarEvent:
     scheduled_at: datetime | None
     ends_at: datetime | None
     attendee_emails: tuple[str, ...]
-
-
-def build_calendar_service(email: str) -> CalendarService:
-    """Build a Calendar API service instance with delegated credentials.
-
-    Mirrors :func:`mailpilot.gmail.build_gmail_service` and
-    :func:`mailpilot.drive.build_drive_service`: domain-wide delegation
-    impersonates ``email`` over the read-only Calendar scope (§V.37).
-
-    Args:
-        email: Gmail address to impersonate via domain-wide delegation.
-
-    Returns:
-        Calendar API service resource.
-    """
-    from googleapiclient.discovery import build
-
-    from mailpilot.gmail import build_delegated_credentials
-
-    delegated = build_delegated_credentials(_CALENDAR_SCOPE, email)
-    return build("calendar", "v3", credentials=delegated)
 
 
 def _extract_meet_url(raw: dict[str, Any]) -> str | None:
@@ -128,7 +109,7 @@ def _normalize_event(raw: dict[str, Any]) -> CalendarEvent | None:
     )
 
 
-class CalendarClient:
+class CalendarClient(GoogleClient):
     """Thin wrapper around the Calendar v3 service for event reads (§V.126).
 
     Holds the impersonated service for one account, mirroring
@@ -142,17 +123,9 @@ class CalendarClient:
         events = client.list_upcoming_events()
     """
 
-    def __init__(self, email: str) -> None:
-        self.email = email
-        self._service: CalendarService = build_calendar_service(email)
-
-    @classmethod
-    def from_service(cls, email: str, service: CalendarService) -> CalendarClient:
-        """Create a client with a pre-built service (for testing)."""
-        client = cls.__new__(cls)
-        client.email = email
-        client._service = service
-        return client
+    _api = "calendar"
+    _version = "v3"
+    _scopes: ClassVar[list[str]] = _CALENDAR_SCOPE
 
     def list_upcoming_events(
         self, max_results: int = _CALENDAR_MAX_RESULTS

@@ -23,7 +23,7 @@ def test_setup_pubsub_creates_topic_and_subscription() -> None:
         google_application_credentials={"type": "service_account", "project_id": "p"},
     )
     with (
-        patch("mailpilot.pubsub._resolve_project_id", return_value="my-project"),
+        patch("mailpilot.pubsub.resolve_project_id", return_value="my-project"),
         patch("mailpilot.pubsub._load_credentials", return_value=MagicMock()),
         patch("mailpilot.pubsub.PublisherClient") as mock_pub_cls,
         patch("mailpilot.pubsub.SubscriberClient") as mock_sub_cls,
@@ -62,7 +62,7 @@ def test_setup_pubsub_passes_service_account_credentials() -> None:
     )
     sentinel = MagicMock(name="service_account_credentials")
     with (
-        patch("mailpilot.pubsub._resolve_project_id", return_value="my-project"),
+        patch("mailpilot.pubsub.resolve_project_id", return_value="my-project"),
         patch("mailpilot.pubsub._load_credentials", return_value=sentinel) as mock_load,
         patch("mailpilot.pubsub.PublisherClient") as mock_pub_cls,
         patch("mailpilot.pubsub.SubscriberClient") as mock_sub_cls,
@@ -83,7 +83,7 @@ def test_start_subscriber_passes_service_account_credentials() -> None:
     )
     sentinel = MagicMock(name="service_account_credentials")
     with (
-        patch("mailpilot.pubsub._resolve_project_id", return_value="my-project"),
+        patch("mailpilot.pubsub.resolve_project_id", return_value="my-project"),
         patch("mailpilot.pubsub._load_credentials", return_value=sentinel),
         patch("mailpilot.pubsub.SubscriberClient") as mock_sub_cls,
     ):
@@ -101,7 +101,7 @@ def test_setup_pubsub_idempotent_when_already_exists() -> None:
         google_application_credentials={"type": "service_account", "project_id": "p"},
     )
     with (
-        patch("mailpilot.pubsub._resolve_project_id", return_value="my-project"),
+        patch("mailpilot.pubsub.resolve_project_id", return_value="my-project"),
         patch("mailpilot.pubsub._load_credentials", return_value=MagicMock()),
         patch("mailpilot.pubsub.PublisherClient") as mock_pub_cls,
         patch("mailpilot.pubsub.SubscriberClient") as mock_sub_cls,
@@ -121,7 +121,7 @@ def test_setup_pubsub_sets_iam_policy() -> None:
         google_application_credentials={"type": "service_account", "project_id": "p"},
     )
     with (
-        patch("mailpilot.pubsub._resolve_project_id", return_value="my-project"),
+        patch("mailpilot.pubsub.resolve_project_id", return_value="my-project"),
         patch("mailpilot.pubsub._load_credentials", return_value=MagicMock()),
         patch("mailpilot.pubsub.PublisherClient") as mock_pub_cls,
         patch("mailpilot.pubsub.SubscriberClient"),
@@ -145,7 +145,7 @@ def test_start_subscriber_returns_future() -> None:
     )
     callback = MagicMock()
     with (
-        patch("mailpilot.pubsub._resolve_project_id", return_value="my-project"),
+        patch("mailpilot.pubsub.resolve_project_id", return_value="my-project"),
         patch("mailpilot.pubsub._load_credentials", return_value=MagicMock()),
         patch("mailpilot.pubsub.SubscriberClient") as mock_sub_cls,
     ):
@@ -390,7 +390,7 @@ def test_renew_watches_renews_expiring(
         int((datetime.now(UTC) + timedelta(days=7)).timestamp() * 1000)
     )
     with (
-        patch("mailpilot.pubsub._resolve_project_id", return_value="my-project"),
+        patch("mailpilot.pubsub.resolve_project_id", return_value="my-project"),
         patch("mailpilot.gmail.GmailClient") as mock_gmail_cls,
     ):
         mock_client = mock_gmail_cls.return_value
@@ -423,7 +423,7 @@ def test_renew_watches_emits_error_on_renewal_failure(
     update_account(database_connection, account.id, watch_expiration=soon)
 
     with (
-        patch("mailpilot.pubsub._resolve_project_id", return_value="my-project"),
+        patch("mailpilot.pubsub.resolve_project_id", return_value="my-project"),
         patch("mailpilot.gmail.GmailClient") as mock_gmail_cls,
     ):
         mock_client = mock_gmail_cls.return_value
@@ -452,7 +452,7 @@ def test_renew_watches_skips_fresh_watches(
     update_account(database_connection, account.id, watch_expiration=far_future)
 
     with (
-        patch("mailpilot.pubsub._resolve_project_id", return_value="my-project"),
+        patch("mailpilot.pubsub.resolve_project_id", return_value="my-project"),
         patch("mailpilot.gmail.GmailClient") as mock_gmail_cls,
     ):
         count = renew_watches(database_connection, settings)
@@ -476,7 +476,7 @@ def test_renew_watches_renews_null_expiration(
         int((datetime.now(UTC) + timedelta(days=7)).timestamp() * 1000)
     )
     with (
-        patch("mailpilot.pubsub._resolve_project_id", return_value="my-project"),
+        patch("mailpilot.pubsub.resolve_project_id", return_value="my-project"),
         patch("mailpilot.gmail.GmailClient") as mock_gmail_cls,
     ):
         mock_client = mock_gmail_cls.return_value

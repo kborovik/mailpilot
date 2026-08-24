@@ -6,13 +6,11 @@ from unittest.mock import patch
 import pytest
 from logfire.testing import CaptureLogfire
 
-from mailpilot import gmail
 from mailpilot.gmail import (
     extract_text_from_message,
     get_message_headers,
     parse_sender,
 )
-from mailpilot.settings import Settings
 
 
 def _b64(text: str) -> str:
@@ -212,119 +210,6 @@ def test_parse_sender_three_part_name():
     assert last == "Jane Watson"
 
 
-# -- credentials resolution ---------------------------------------------------
-
-_FAKE_SA = {
-    "type": "service_account",
-    "project_id": "test-proj",
-    "client_email": "sa@test-proj.iam.gserviceaccount.com",
-}
-
-
-def test_google_sa_info_from_settings(monkeypatch: pytest.MonkeyPatch):
-    settings = Settings(google_application_credentials=_FAKE_SA)
-    with patch("mailpilot.settings.get_settings", return_value=settings):
-        assert gmail._google_sa_info() == _FAKE_SA  # pyright: ignore[reportPrivateUsage]
-
-
-def test_google_sa_info_none_when_unset(monkeypatch: pytest.MonkeyPatch):
-    settings = Settings(google_application_credentials=None)
-    with patch("mailpilot.settings.get_settings", return_value=settings):
-        assert gmail._google_sa_info() is None  # pyright: ignore[reportPrivateUsage]
-
-
-def test_has_google_credentials_true_when_json_configured(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    settings = Settings(google_application_credentials=_FAKE_SA)
-    with patch("mailpilot.settings.get_settings", return_value=settings):
-        assert gmail.has_google_credentials() is True
-
-
-def test_has_google_credentials_true_when_adc_available(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    settings = Settings(google_application_credentials=None)
-    with (
-        patch("mailpilot.settings.get_settings", return_value=settings),
-        patch("google.auth.default", return_value=(object(), "proj")),
-    ):
-        assert gmail.has_google_credentials() is True
-
-
-def test_has_google_credentials_false_when_no_source(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    from google.auth.exceptions import DefaultCredentialsError
-
-    settings = Settings(google_application_credentials=None)
-    with (
-        patch("mailpilot.settings.get_settings", return_value=settings),
-        patch("google.auth.default", side_effect=DefaultCredentialsError()),
-    ):
-        assert gmail.has_google_credentials() is False
-
-
-def test_build_delegated_credentials_uses_json_when_configured(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    """JSONB document → from_service_account_info + with_subject (no ADC)."""
-    settings = Settings(google_application_credentials=_FAKE_SA)
-
-    json_creds = type("C", (), {"with_subject": lambda self, s: ("sub", s)})()
-
-    with (
-        patch("mailpilot.settings.get_settings", return_value=settings),
-        patch(
-            "google.oauth2.service_account.Credentials.from_service_account_info",
-            return_value=json_creds,
-        ) as mock_from_info,
-    ):
-        result = gmail.build_delegated_credentials(["scope1"], "user@example.com")
-
-    mock_from_info.assert_called_once_with(_FAKE_SA, scopes=["scope1"])
-    assert result == ("sub", "user@example.com")
-
-
-def test_build_delegated_credentials_falls_back_to_adc(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    """Null JSONB → ADC + iam.Signer + service_account.Credentials(subject=...)."""
-    settings = Settings(google_application_credentials=None)
-
-    source_creds = type(
-        "Source",
-        (),
-        {"service_account_email": "sa@proj.iam.gserviceaccount.com"},
-    )()
-    sentinel_signer = object()
-    sentinel_credentials = object()
-
-    with (
-        patch("mailpilot.settings.get_settings", return_value=settings),
-        patch(
-            "google.auth.default", return_value=(source_creds, "proj")
-        ) as mock_default,
-        patch("google.auth.iam.Signer", return_value=sentinel_signer) as mock_signer,
-        patch(
-            "google.oauth2.service_account.Credentials",
-            return_value=sentinel_credentials,
-        ) as mock_credentials_cls,
-    ):
-        result = gmail.build_delegated_credentials(["scope1"], "user@example.com")
-
-    mock_default.assert_called_once_with(
-        scopes=["https://www.googleapis.com/auth/cloud-platform"]
-    )
-    mock_signer.assert_called_once()
-    mock_credentials_cls.assert_called_once()
-    kwargs = mock_credentials_cls.call_args.kwargs
-    assert kwargs["service_account_email"] == "sa@proj.iam.gserviceaccount.com"
-    assert kwargs["subject"] == "user@example.com"
-    assert kwargs["scopes"] == ["scope1"]
-    assert result is sentinel_credentials
-
-
 # -- get_messages_batch --------------------------------------------------------
 
 
@@ -495,7 +380,7 @@ def test_get_messages_batch_chunks_large_lists():
 
 def test_get_messages_batch_retries_transient_429_then_succeeds():
     """A per-message 429 is retried, never dropped (§V.75, §B.105)."""
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import MagicMock
 
     from googleapiclient.errors import HttpError
 
@@ -544,7 +429,7 @@ def test_get_messages_batch_retries_transient_429_then_succeeds():
 
 def test_get_messages_batch_raises_when_transient_persists():
     """Exhausted transient retries raise so the caller holds its checkpoint (§V.75, §B.105)."""
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import MagicMock
 
     from googleapiclient.errors import HttpError
 
@@ -579,23 +464,6 @@ def test_get_messages_batch_raises_when_transient_persists():
         client.get_messages_batch(["m1"])
 
 
-# -- stop_watch ----------------------------------------------------------------
-
-
-def test_stop_watch_calls_users_stop():
-    from unittest.mock import MagicMock
-
-    from mailpilot.gmail import GmailClient
-
-    service = MagicMock()
-    client = GmailClient.from_service("test@example.com", service)
-
-    client.stop_watch()
-
-    service.users().stop.assert_called_once_with(userId="me")
-    service.users().stop().execute.assert_called_once()
-
-
 # -- get_profile span regression -----------------------------------------------
 
 
@@ -622,3 +490,28 @@ def test_get_profile_does_not_emit_span_on_success(capfire: CaptureLogfire) -> N
 
     span_names = [s["name"] for s in capfire.exporter.exported_spans_as_dict()]
     assert "gmail.get_profile" not in span_names
+    service.users.return_value.getProfile.assert_called_once_with(userId="me")
+
+
+def test_dead_gmail_methods_removed() -> None:
+    from mailpilot.gmail import GmailClient
+
+    for name in ("modify_message", "create_label_if_not_exists", "stop_watch"):
+        assert not hasattr(GmailClient, name)
+
+
+def test_gmail_methods_have_no_user_id_param() -> None:
+    import inspect
+
+    from mailpilot.gmail import GmailClient
+
+    for name, method in inspect.getmembers(GmailClient, predicate=inspect.isfunction):
+        if name.startswith("_"):
+            continue
+        assert "user_id" not in inspect.signature(method).parameters, name
+
+
+def test_get_messages_batch_is_not_whole_call_retry_decorated() -> None:
+    from mailpilot.gmail import GmailClient
+
+    assert getattr(GmailClient.get_messages_batch, "__wrapped__", None) is None

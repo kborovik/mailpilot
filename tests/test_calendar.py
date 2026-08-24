@@ -8,7 +8,6 @@ from unittest.mock import MagicMock, patch
 from mailpilot.calendar import (
     _CALENDAR_SCOPE,  # pyright: ignore[reportPrivateUsage]
     CalendarClient,
-    build_calendar_service,
 )
 
 
@@ -149,15 +148,15 @@ def test_list_upcoming_events_query_scopes_primary_calendar_expanded() -> None:
     assert call_kwargs.get("timeMin")
 
 
-def test_build_calendar_service_uses_readonly_scope() -> None:
+def test_calendar_client_uses_readonly_scope() -> None:
     """§C: Calendar client impersonates over the read-only events scope."""
     with (
-        patch("mailpilot.gmail.build_delegated_credentials") as mock_creds,
+        patch("mailpilot.google_auth.build_delegated_credentials") as mock_creds,
         patch("googleapiclient.discovery.build") as mock_build,
     ):
         mock_creds.return_value = MagicMock()
 
-        build_calendar_service("rep@lab5.ca")
+        CalendarClient("rep@lab5.ca")
 
     assert _CALENDAR_SCOPE == [
         "https://www.googleapis.com/auth/calendar.events.readonly"
