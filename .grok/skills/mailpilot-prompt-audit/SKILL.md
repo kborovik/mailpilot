@@ -12,24 +12,25 @@ description: >-
   distribution, latency, sample reasoning), then an isolated subagent reviews the
   system prompt plus workflow instructions against the telemetry and writes a
   prioritized list of concrete edits -- each flagged as a workflow TOML change or
-  a code change plus PR. Use this whenever the user wants to analyze, audit, or
-  review prompt composition, the system prompt, the agent shape, or workflow
-  instructions from Logfire data and get improvement suggestions -- even when
-  they only say "audit the prompts", "analyze prompt composition", "review the
-  system prompt", or "suggest workflow-instruction improvements". This is
-  read-only: no Gmail traffic, no `mailpilot run`, no database mutation.
-  Use when the user runs /mailpilot-prompt-audit.
+  a code change plus PR -- then files one GitHub issue per edit. Use this
+  whenever the user wants to analyze, audit, or review prompt composition, the
+  system prompt, the agent shape, or workflow instructions from Logfire data and
+  get improvement suggestions -- even when they only say "audit the prompts",
+  "analyze prompt composition", "review the system prompt", or "suggest
+  workflow-instruction improvements". No Gmail traffic, no `mailpilot run`, no
+  database mutation. Use when the user runs /mailpilot-prompt-audit.
 argument-hint: "[--status active|all] [--days N] [--environment development|production]"
-allowed-tools: run_terminal_command, spawn_subagent, use_tool
+allowed-tools: read_file, run_terminal_command, spawn_subagent, use_tool
 ---
 
 # mailpilot-prompt-audit
 
 Audit the **prompt / LLM-agent composition** of the running system, per system,
 and recommend improvements to the **system prompt** and **workflow
-instructions**. Read-only: it composes the prompts the system already runs,
-joins them with Logfire telemetry, and critiques the wording. It never sends
-Gmail, never starts `mailpilot run`, and never mutates the database (§V.119).
+instructions**. It composes the prompts the system already runs, joins them with
+Logfire telemetry, critiques the wording, and files **one GitHub issue per
+suggested edit**. It never sends Gmail, never starts `mailpilot run`, and never
+mutates the database (§V.119). It never edits the prompts itself.
 
 Two LLM systems are composed and graded:
 
@@ -41,9 +42,9 @@ Two LLM systems are composed and graded:
   workflow.instructions` (§V.44-45): code-defined protocol fragments from
   `agent/templates.py` followed by the workflow's own TOML `instructions`.
 
-Deterministic work (compose, join, report) is done by the Python scripts in
-`scripts/`; they import `mailpilot` and read live workflow rows, emitting compact
-JSON, so the orchestrator spends no tokens on data plumbing. The bulky inputs --
+Deterministic work (compose, join, prepare issues, report) is done by the Python
+scripts in `scripts/`; they import `mailpilot` and read live workflow rows,
+emitting compact JSON, so the orchestrator spends no tokens on data plumbing. The bulky inputs --
 full prompt text, telemetry rows -- stay inside the scripts and sub-agents. Run
 every command from the repo root with `uv run python`.
 
@@ -66,15 +67,20 @@ every command from the repo root with `uv run python`.
   instructions against the rubric (`references/audit-rubric.md`) and the
   telemetry, and writes a prioritized list of concrete edits -- each flagged as
   a workflow TOML change or a code change plus PR (§V.44).
+- **File issues.** One GitHub issue per edit. `code:` targets go to this repo
+  via sdd:github ISSUE. `toml:` targets go to `kborovik/lab5.ca` (workflow
+  wording lives in `campaigns/<workflow>/workflows/<workflow>.toml`).
 - **Report.** Writes `report.md`: a systems-overview table, a composition-sizing
-  table, the classifier section, and the folded-in analysis.
+  table, the classifier section, the folded-in analysis, and the issues filed.
 
 ## Safety -- read before running
 
-- **Read-only.** No Gmail send, no sync loop, no database write. The skill opens
-  one database connection to read workflow rows; `initialize_database`
-  provisions only an empty DB and never mutates a populated one as a side effect
-  (§V.110).
+- **No Gmail, no sync, no database write.** The skill opens one database
+  connection to read workflow rows; `initialize_database` provisions only an
+  empty DB and never mutates a populated one as a side effect (§V.110).
+- **GitHub issues are the only write.** One issue per suggested edit. The skill
+  never edits prompt files, never opens a PR, and never starts work on the
+  issues.
 - The composed `composition.json` and `analysis_input.json` carry the full
   prompt text. They live under `reports/prompt-audit/<run_id>/` (git-ignored) and are read
   only by the scripts and the analysis sub-agent, never echoed to the
@@ -98,9 +104,10 @@ every command from the repo root with `uv run python`.
 
 | Phase | Model | Why |
 |---|---|---|
-| Compose, Join, Report | Orchestrator, directly | Deterministic scripts; trivial commands that emit compact JSON. |
+| Compose, Join, Prepare issues, Report | Orchestrator, directly | Deterministic scripts; trivial commands that emit compact JSON. |
 | Telemetry pull | isolated subagent | Runs two aggregate SQL queries through the Logfire MCP and shapes the result JSON. Mechanical; keeps the raw rows out of the orchestrator. |
 | Prompt analysis | isolated subagent | Judgment-heavy critique of the system prompt and workflow instructions against the telemetry; isolated so the full prompt text never enters the orchestrator's window. |
+| File GitHub issues | Orchestrator, directly | One `gh issue create` per edit. Mailpilot code edits fire sdd:github ISSUE (cwd). Workflow TOML edits use `--repo` from `issues_input.json`. |
 
 Spawn each sub-agent with `spawn_subagent` (`subagent_type: general-purpose`; do not pass `model`). Pass it the
 literal `RUN_ID` and the exact commands; require it to return only the small
@@ -110,8 +117,8 @@ summary described.
 
 The orchestrator runs the deterministic steps directly. Step 2 (telemetry) is an
 isolated subagent that queries Logfire MCP. Step 4 (analysis) is an isolated
-subagent. The heavy reading -- full prompt text, telemetry rows -- stays inside
-the scripts and sub-agents.
+subagent. Step 5 files GitHub issues. The heavy reading -- full prompt text,
+telemetry rows -- stays inside the scripts and sub-agents.
 
 ### 0. Mint a run id (orchestrator)
 ```bash
@@ -284,17 +291,19 @@ Spawn one subagent. Give it `RUN_ID` and this contract:
 > exact text of a code fragment you want to change,
 > read `src/mailpilot/agent/templates.py` or `src/mailpilot/agent/classify.py`;
 > for workflow instruction text, the composed prompt is already in the JSON
-> (source of truth is `workflows/*.toml`).
+> (source of truth is `campaigns/<workflow>/workflows/<workflow>.toml` in
+> `kborovik/lab5.ca`).
 >
 > Score each system against the rubric dimensions, using the telemetry as
 > evidence, and produce a prioritized list of concrete edits. Each edit names a
 > `target` (`code:templates.py:<fragment>`, `code:classify.py`,
-> `toml:<workflow> goal`, or `toml:<workflow> instructions`), quotes the
-> `current` text, gives the `proposed` replacement, cites the motivating
-> `evidence` (the metric and value, or the contradicting lines), and states
-> `confidence` and `priority`. Flag every code target as a change plus PR
-> (§V.44), not a workflow update. The first edit is the single highest-impact
-> change.
+> `toml:<workflow> goal`, or `toml:<workflow> instructions`), a one-line
+> `summary` (GitHub issue title material), quotes the `current` text, gives the
+> `proposed` replacement, cites the motivating `evidence` (the metric and value,
+> or the contradicting lines), and states `confidence` and `priority`. Flag
+> every code target as a change plus PR (§V.44), not a workflow update. The
+> first edit is the single highest-impact change. Do not file GitHub issues --
+> the orchestrator does that in the next step.
 >
 > Write `reports/prompt-audit/<RUN_ID>/analysis.json` as
 > `{"systems": [{"name": ..., "dimension_scores": {...}, "strengths": [...],
@@ -306,18 +315,57 @@ Spawn one subagent. Give it `RUN_ID` and this contract:
 
 Substitute the literal run id for `<RUN_ID>`.
 
-### 5. Report (orchestrator, directly)
+### 5. File GitHub issues (orchestrator)
+
+```bash
+uv run python .grok/skills/mailpilot-prompt-audit/scripts/prepare_issues.py --run-id $RUN_ID
+```
+
+Writes `issues_input.json` (one row per edit: `target`, `repo`, `title`,
+`body_path`, `class`) and a steno body file per edit. Prints the count per
+destination. `repo` is null for Mailpilot code edits (this repo) and
+`kborovik/lab5.ca` for workflow TOML edits. Zero edits (or no `analysis.json`)
+→ write `issues.json` as `{"issues": []}` and go to step 6.
+
+Load plugin skills from disk; do not copy their recipes:
+
+1. Plugin root = first match of `$GROK_HOME/installed-plugins/*/skills/spec/SKILL.md`
+   (`GROK_HOME` defaults to `~/.grok`).
+2. Read `skills/github/SKILL.md` and `skills/steno/SKILL.md`.
+
+For each edit in `issues_input.json` (already highest-impact first):
+
+- **Dedup.** `gh issue list --state open --search "Prompt audit (<target>)" --json number,title,url` plus `--repo <repo>` when `repo` is set. A title that contains `(<target>)` → record `skipped_open` with the existing url; do not create.
+- **Mailpilot (`repo` null).** Hand title, `--body-file <body_path>`, and class `enhancement` to github ISSUE. Emit `engaged sdd:github — ISSUE`. Then `gh issue create --title "<title>" --body-file <body_path> --label enhancement` against cwd (no `--repo`). Missing `enhancement` label → github owns `gh label create`.
+- **lab5.ca (`repo` set).** Same title, body file, and class, but `gh issue create --repo <repo> --title "<title>" --body-file <body_path> --label enhancement`. The github skill is cwd-parametric (no `--repo`), so this destination cannot go through github ISSUE.
+- Capture the printed url. One edit failing `gh` → record `failed`, continue with the rest.
+
+Write `issues.json`:
+
+```json
+{"issues": [{"target": "...", "repo": "kborovik/mailpilot", "title": "...", "number": 1, "url": "...", "status": "created"}]}
+```
+
+`repo` for cwd creates = `gh repo view --json nameWithOwner` once. `status` is
+`created` | `skipped_open` | `failed`. Zero edits → `{"issues": []}`. `gh` auth
+failure → write `issues.json` with every pending edit as `failed`, continue to
+step 6.
+
+Do not edit prompt files. Do not open a PR. Do not start work on the issues.
+
+### 6. Report (orchestrator, directly)
 ```bash
 uv run python .grok/skills/mailpilot-prompt-audit/scripts/generate_report.py --run-id $RUN_ID
 ```
 Reads `reports/prompt-audit/$RUN_ID/report.md` and presents its summary to the user. The
-report folds in `analysis.md` automatically.
+report folds in `analysis.md` and `issues.json` automatically.
 
 ## Artifacts
 
 Everything for a run is under `reports/prompt-audit/$RUN_ID/` (git-ignored):
 `composition.json`, `logfire_metrics.json`, `analysis_input.json`,
-`analysis.json`, `analysis.md`, and `report.md`.
+`analysis.json`, `analysis.md`, `issues_input.json`, `issue_bodies/`,
+`issues.json`, and `report.md`.
 
 ## OUTPUT -- "Next" block
 
@@ -326,10 +374,10 @@ End with a short "Next" block of atomic follow-up commands. Example:
 ```
 ## Next
 
-1. open reports/prompt-audit/<run_id>/report.md -- read the systems table and the suggested edits
-2. open reports/prompt-audit/<run_id>/analysis.md -- read the per-system critique and evidence
-3. edit workflows/<file>.toml -- apply the highest-impact instruction edit, then re-run /mailpilot-campaign-test or /mailpilot-reply-test to validate
-4. /mailpilot-prompt-audit --status all -- widen the audit to paused/draft workflows
+1. open reports/prompt-audit/<run_id>/report.md -- read the systems table, suggested edits, and issues filed
+2. /github-resolve-issue <N> -- start work on a Mailpilot code issue in this repo
+3. open <lab5.ca issue url> -- apply the workflow wording in campaigns/<workflow>/workflows/<workflow>.toml
+4. /mailpilot-campaign-test -- validate after a live workflow wording change
 ```
 
 ## Why this skill exists
@@ -342,4 +390,4 @@ two -- the authored prompt text on one side, the empirical telemetry on the
 other -- so a wording problem (a redundant rule, an unstable prefix that breaks
 caching, a vague goal that misroutes, an instruction that fights the send
 contract) is caught with evidence and a concrete edit, separate from any live
-email test.
+email test. Each edit becomes a GitHub issue in the repo that owns the wording.

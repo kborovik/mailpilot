@@ -5,11 +5,11 @@ open a read-only database connection, load settings, read/write the compact
 JSON envelopes the orchestrator passes between phases, and estimate token
 counts from character length.
 
-This skill is read-only. It never sends Gmail, never starts ``mailpilot run``,
-and never mutates the database -- it only reads workflow rows and composes the
-prompt text the agent and classifier already run. Run every script via
-``uv run python`` so the project venv (and the importable ``mailpilot``
-package) is on PATH.
+These scripts never send Gmail, never start ``mailpilot run``, and never
+mutate the database -- they only read workflow rows and compose the prompt
+text the agent and classifier already run. GitHub issue create is owned by
+the orchestrator, not these scripts. Run every script via ``uv run python``
+so the project venv (and the importable ``mailpilot`` package) is on PATH.
 """
 
 from __future__ import annotations
