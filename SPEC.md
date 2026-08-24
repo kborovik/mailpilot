@@ -238,7 +238,7 @@ V184: campaign-query-stack — stats/report/status/review share SQL; `get_workfl
 V185: enrollment-list-stack — one `_enrollment_parent_select()` for row+list loaders; detailed splits `_enrollment_where` + lean/full SELECT; outcome LATERAL on `list_enrollments_detailed(full=True)`; drop `list_enrollments_with_outcomes` + `EnrollmentWithOutcome`; preview `contact_id` SELECT not hydrated `Enrollment` list; one `_preview_from_contacts`; tag preview `company_id = ANY(...)`; `--touch` stays `_sql_parse_touch`; agent `list_enrollments` still latest_outcome*; CLI lean/full + envelopes unchanged (§V.152); distinct §V.178/§V.184 — → .spec/check-extras.md §V185
 V186: conclude-enrollment-helper — one internal helper (enrollment_id, disposition, reason, reschedule_at?, note?, skip_if_terminal); agent tool validates then calls; bounce/booking/cadence pass system reasons; skip_if_terminal true → skip already-terminal (bounce); false → conclude already-terminal (booking default); meeting_booked writes note; cadence contact_later no re-enrollment task; record_enrollment_outcome stays system-internal — → .spec/check-extras.md §V186
 V187: route-email-skip-and-thread-cache — skip marks go through `route_email` or shared `mark_routed(email, method)`; recency/no-workflows/predates computed once in `sync_account` passed in; thread contact once per message (account-scoped cache keyed thread + In-Reply-To); RFC parent lookup not twice same headers; route_method enum unchanged; recency gate before LLM; bind-versus-From alias stays §V.164 — → .spec/check-extras.md §V187
-V188: mechanical-ooo-no-agent-task — mechanical OOO (`is_mechanical_ooo`) after route → schedule resume once in routing (`_maybe_ooo_pause`); no inbound agent task (`handle inbound email`); later sync ! re-enqueue that inbound; language-only OOO (`is_ooo_auto_reply` minus mechanical) still agent; `_maybe_ooo_resume_after_invoke` kept for agent `noop` — → .spec/check-extras.md §V188
+V188: mechanical-ooo-no-agent-task — mechanical OOO (`is_mechanical_ooo`) after route → schedule resume once in routing (`_maybe_ooo_pause`); no inbound agent task (`handle inbound email`); later sync ! re-enqueue that inbound; language-only OOO (`is_ooo_auto_reply` minus mechanical) still agent; `_maybe_ooo_resume_after_invoke` kept for agent `noop`; campaign-test mechanical signal before route — → .spec/check-extras.md §V188
 
 ## §T TASKS
 
@@ -302,6 +302,7 @@ T318|x|impl §V.185(+) + §V.152(∆)+§V.150(∆) — merge enrollment list API
 T319|x|impl §V.186(+) + §V.127(∆)+§V.128(∆)+§V.136(∆)+§V.163(∆) — one conclude helper; agent validates then calls; bounce skip_if_terminal; booking concludes terminal unless flag; cadence no re-enroll; existing conclude/bounce/booking/cadence tests (#265)|V186,V127,V128,V136,V163,V123,V15,V80
 T320|x|impl §V.187(+) + §V.22(∆)+§V.27(∆)+§V.76(∆)+§V.164(∆) — skip marks via route_email or mark_routed; recency/no-workflows/predates once in sync_account; thread contact once (cache thread+In-Reply-To); RFC parent not twice; route_method enum same; existing sync+routing tests (#266)|V187,V22,V27,V76,V164,V20
 T321|x|impl §V.188(+) + §V.169(∆) — mechanical OOO after route: no inbound agent task; resume once in routing; later sync ! re-enqueue; language-only OOO still agent; agent noop still `_maybe_ooo_resume_after_invoke`; tests mechanical vs language-only (#267)|V188,V169,V123,V83
+T322|.|impl §V.188 — campaign-test mechanical signal before route; leftover execute_task ! second resume; isolation before `_wait_for_routing`; auto_reply next_scheduled_at within 21d|V188,V169,B150
 
 ## §B BUGS
 
@@ -366,3 +367,4 @@ B146|2026-08-21|past-tense last-day auto-reply missed by terminal regex → OOO 
 B147|2026-08-21|record_enrollment_outcome activity-only; enrollment.updated_at stays created_at; list --since misses window DNC|V15
 B148|2026-08-22|config set UPDATE then close without commit; autocommit=False rollback; ok envelope lies|V177,V181
 B149|2026-08-22|mailpilot-prompt-audit allowed-tools grants `search_tool`; orchestrator never invokes; zero-body-use grant|V102
+B150|2026-08-24|campaign-test stamps mechanical AUTO_SUBMITTED after route → `_maybe_ooo_pause` skipped, next_scheduled_at null|V188
