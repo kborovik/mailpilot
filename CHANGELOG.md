@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `email reply --subject` overrides the default `Re: original`
+  subject. Omit it and the reply still prefixes the original.
+
+### Changed
+
+- Mechanical out-of-office inbound does not create a
+  `handle inbound email` agent task. Resume is scheduled once during
+  routing. Language-only OOO still runs the agent. Agent `noop` still
+  resumes after invoke.
+- `workflow status` wording comes from `check_workflow_wording`. An
+  empty catalog classifies live rows as `orphaned`. The field is never
+  hardcoded `unknown`. CLI verbs and envelope keys stay.
+
 ## [v0.31.0] - 2026-08-22
 
 ### Fixed
