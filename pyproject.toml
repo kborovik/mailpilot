@@ -104,11 +104,17 @@ convention = "google"
 known-first-party = ["mailpilot"]
 
 [tool.ruff.lint.per-file-ignores]
-"src/mailpilot/cli.py" = [
+"src/mailpilot/cli/**/*.py" = [
     "PLR0913", # Click commands have many parameters by design
 ]
-"src/mailpilot/database.py" = [
+"src/mailpilot/cli/__init__.py" = [
+    "F401", # thin re-export barrel
+]
+"src/mailpilot/database/**/*.py" = [
     "PLR0913", # Create functions map to table columns
+]
+"src/mailpilot/database/__init__.py" = [
+    "F401", # thin re-export barrel
 ]
 "src/mailpilot/gmail.py" = [
     "PLR0913", # Gmail API functions have many parameters

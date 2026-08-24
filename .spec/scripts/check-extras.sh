@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """I.nouns / I.verbs set-diff hook for /sdd:check extras-hook.
 
-No-arg: parse SPEC.md §I list-shape vs cli.py registrations. Emit stdout
+No-arg: parse SPEC.md §I list-shape vs cli/ registrations. Emit stdout
 rows `id|verdict|evidence` (no header). Verdicts: MATCH / MISSING / EXTRA
 / DRIFT. Paths: SPEC_PATH / CLI_PATH env, else cwd SPEC.md +
-src/mailpilot/cli.py. Exit 0 iff every row is MATCH.
+src/mailpilot/cli (package dir, or a single file fixture). Exit 0 iff
+every row is MATCH.
 
 `emit-rg`: parse every backticked `rg` command under each `## §Vn` in
 `.spec/check-extras.md` (CHECK_EXTRAS_PATH or cwd default), run it, emit
@@ -370,7 +371,7 @@ def run_rg(cmd: str, cwd: Path) -> tuple[int | str, list[str]]:
             )
     except subprocess.TimeoutExpired:
         return "err", ["timeout"]
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         return "err", ["exec"]
     if result.returncode not in (0, 1):
         return "err", [f"exit={result.returncode}"]
@@ -379,25 +380,38 @@ def run_rg(cmd: str, cwd: Path) -> tuple[int | str, list[str]]:
     return hit_count, extract_files(cmd, result.stdout, cwd, hit_count)
 
 
+def _read_cli(path: Path) -> str | None:
+    """Read a CLI file fixture or concatenate a cli/ package directory."""
+    if path.is_file():
+        return path.read_text(encoding="utf-8")
+    if path.is_dir():
+        parts = [
+            child.read_text(encoding="utf-8")
+            for child in sorted(path.rglob("*.py"))
+            if child.is_file()
+        ]
+        return "\n".join(parts) if parts else None
+    return None
+
+
 def extras_hook() -> int:
     spec_path = Path(os.environ.get("SPEC_PATH") or _cwd_default("SPEC.md"))
-    cli_path = Path(
-        os.environ.get("CLI_PATH") or _cwd_default("src/mailpilot/cli.py")
-    )
+    cli_path = Path(os.environ.get("CLI_PATH") or _cwd_default("src/mailpilot/cli"))
 
     if not spec_path.is_file():
         emit("I.nouns", "DRIFT", "SPEC.md missing")
         emit("I.verbs", "DRIFT", "SPEC.md missing")
         return 1
-    if not cli_path.is_file():
-        emit("I.nouns", "DRIFT", "cli.py missing")
-        emit("I.verbs", "DRIFT", "cli.py missing")
+    cli_text = _read_cli(cli_path)
+    if cli_text is None:
+        emit("I.nouns", "DRIFT", "cli missing")
+        emit("I.verbs", "DRIFT", "cli missing")
         return 1
 
     section = _section_i(spec_path.read_text(encoding="utf-8"))
     spec_nouns = parse_spec_nouns(section)
     spec_verbs = parse_spec_verbs(section)
-    code_nouns, code_verbs = parse_cli(cli_path.read_text(encoding="utf-8"))
+    code_nouns, code_verbs = parse_cli(cli_text)
 
     rows = [
         ("I.nouns", *classify(spec_nouns, code_nouns, "nouns")),
@@ -413,8 +427,7 @@ def extras_hook() -> int:
 
 def emit_rg() -> int:
     extras_path = Path(
-        os.environ.get("CHECK_EXTRAS_PATH")
-        or _cwd_default(".spec/check-extras.md")
+        os.environ.get("CHECK_EXTRAS_PATH") or _cwd_default(".spec/check-extras.md")
     )
     if not extras_path.is_file():
         print(f"check-extras.md missing: {extras_path}", file=sys.stderr)

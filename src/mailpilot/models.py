@@ -1060,7 +1060,7 @@ class ContactView(BaseModel):
     pre-feed (``Contact record:`` section, §V.135) so the operator and the
     agent see byte-identical context. ``notes`` carries the contact's own
     notes (full body, ORDER BY ``created_at`` DESC, capped at
-    ``_INLINE_NOTES_CAP`` in ``database.py``); ``company_notes`` carries the
+    ``_INLINE_NOTES_CAP`` in ``database/``); ``company_notes`` carries the
     parent company's notes when ``company_id`` is set, else an empty list.
     Totals reflect the actual row count in the database, not the cap.
 

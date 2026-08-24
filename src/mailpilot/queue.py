@@ -1,7 +1,7 @@
 """Queue-report helpers for ``mailpilot show queue`` (§V.166).
 
 Formatting only -- SQL lives in ``database.get_queue_report``. Kept out of
-``cli.py`` so ``--help`` stays click-only at import time (§V.2).
+``cli/`` so ``--help`` stays click-only at import time (§V.2).
 """
 
 from __future__ import annotations
