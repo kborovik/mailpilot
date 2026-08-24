@@ -26,5 +26,6 @@ def test_prompt_audit_allowed_tools_omits_search_tool() -> None:
     """§V.102 / §B.149: orchestrator never invokes search_tool."""
     tools = _allowed_tools(_PROMPT_AUDIT)
     assert "search_tool" not in tools
+    assert "read_file" in tools
     assert "run_terminal_command" in tools
     assert "spawn_subagent" in tools

@@ -38,6 +38,39 @@ from _common import (
 DEFAULT_TIMEOUT = 300
 
 
+def _mechanical_subject(received_id: str) -> str:
+    """Return an Automatic-reply subject so routing sees the mechanical signal.
+
+    ``email reply`` defaults to ``Re:``. Mechanical OOO is subject
+    ``Automatic reply`` or ``AUTO_SUBMITTED`` at ``route_email`` (§V.188 /
+    §B.150). Stamp the Gmail subject at inject, before handle_replies syncs
+    and routes the sender mailbox.
+    """
+    view = mp(["email", "view", received_id], check=False)
+    email = view.get("email", {}) if view.get("ok") else {}
+    original = str(email.get("subject") or "")
+    if original.lower().startswith("automatic reply"):
+        return original
+    return f"Automatic reply: {original}" if original else "Automatic reply"
+
+
+def _send_reply(received_id: str, body: str, *, mechanical: bool) -> dict:
+    """Reply in-thread; mechanical scenarios send Automatic-reply subject."""
+    args = [
+        "email",
+        "reply",
+        "--account-email",
+        PROSPECT_MAILBOX,
+        "--email-id",
+        received_id,
+        "--body",
+        body,
+    ]
+    if mechanical:
+        args.extend(["--subject", _mechanical_subject(received_id)])
+    return mp(args, check=False)
+
+
 def _received_index(window_start: str) -> dict[str, str]:
     """Map received Touch 1 RFC Message-ID -> received email id (and subject).
 
@@ -132,6 +165,7 @@ def main() -> int:
             time.sleep(args.poll)
 
     reply_window_start = datetime.now().astimezone().isoformat()
+    mechanical_keys = {s["key"] for s in load_scenarios() if s.get("mechanical")}
     replies = []
     for send in sends:
         key = send["scenario_key"]
@@ -139,18 +173,10 @@ def main() -> int:
         if received_id is None:
             replies.append({"scenario_key": key, "reply_status": "touch1_not_received"})
             continue
-        payload = mp(
-            [
-                "email",
-                "reply",
-                "--account-email",
-                PROSPECT_MAILBOX,
-                "--email-id",
-                received_id,
-                "--body",
-                bodies[key],
-            ],
-            check=False,
+        payload = _send_reply(
+            received_id,
+            bodies[key],
+            mechanical=key in mechanical_keys,
         )
         email = payload.get("email", {}) if isinstance(payload, dict) else {}
         replies.append(

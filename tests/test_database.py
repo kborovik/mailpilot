@@ -7522,6 +7522,89 @@ def test_create_tasks_for_routed_emails_skips_historical(
     assert created[0].email_id == recent_email.id
 
 
+def test_create_tasks_for_routed_emails_skips_mechanical_ooo(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.188: mechanical Automatic reply does not enqueue handle inbound."""
+    from datetime import timedelta
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    make_test_enrollment(database_connection, workflow.id, contact.id)
+
+    email = create_email(
+        database_connection,
+        gmail_message_id="msg-mech-ooo",
+        gmail_thread_id="thread-mech-ooo",
+        account_id=account.id,
+        direction="inbound",
+        subject="Automatic reply: out of the office until Monday",
+        body_text="I am out of the office until Monday.",
+        labels=["INBOX"],
+        received_at=workflow.created_at + timedelta(minutes=5),
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+    )
+    assert email is not None
+
+    created = create_tasks_for_routed_emails(database_connection)
+    assert [
+        task for task in created if task.description == "handle inbound email"
+    ] == []
+    handle = database_connection.execute(
+        "SELECT id FROM task WHERE email_id = %s AND description = %s",
+        (email.id, "handle inbound email"),
+    ).fetchall()
+    assert handle == []
+    marked = database_connection.execute(
+        "SELECT id FROM task WHERE email_id = %s",
+        (email.id,),
+    ).fetchall()
+    assert len(marked) == 1
+
+    again = create_tasks_for_routed_emails(database_connection)
+    assert again == []
+    still = database_connection.execute(
+        "SELECT id FROM task WHERE email_id = %s AND description = %s",
+        (email.id, "handle inbound email"),
+    ).fetchall()
+    assert still == []
+
+
+def test_create_tasks_for_routed_emails_enqueues_language_only_ooo(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.188: language-only absence still creates handle inbound email."""
+    from datetime import timedelta
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    contact = make_test_contact(database_connection)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+
+    email = create_email(
+        database_connection,
+        gmail_message_id="msg-lang-ooo",
+        gmail_thread_id="thread-lang-ooo",
+        account_id=account.id,
+        direction="inbound",
+        subject="Re: hello",
+        body_text="I am out of the office until Monday.",
+        labels=["INBOX"],
+        received_at=workflow.created_at + timedelta(minutes=5),
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+    )
+    assert email is not None
+
+    created = create_tasks_for_routed_emails(database_connection)
+    assert len(created) == 1
+    assert created[0].description == "handle inbound email"
+    assert created[0].email_id == email.id
+    assert created[0].enrollment_id == enrollment.id
+
+
 def test_create_tasks_for_routed_emails_bridges_email_synced_after_workflow(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:

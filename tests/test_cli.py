@@ -6192,9 +6192,51 @@ def test_email_reply_success(runner: CliRunner, mock_connection: MagicMock) -> N
     assert kwargs["email_id"] == "original-email-1"
     assert kwargs["body"] == "Reply body"
     assert kwargs["workflow_id"] is None
+    assert kwargs["subject"] is None
     data = json.loads(result.output)
     assert data["ok"] is True
     assert data["email"]["id"] == sent.id
+
+
+def test_email_reply_subject_override(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.188: --subject reaches reply_email for mechanical inject."""
+    account = _make_account()
+    sent = _make_email(
+        direction="outbound",
+        status="sent",
+        subject="Automatic reply: Hi",
+        body_text="Out of office",
+        gmail_message_id="gm-2",
+        gmail_thread_id="gt-1",
+        sent_at=_NOW,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.gmail.GmailClient"),
+        patch("mailpilot.email_ops.reply_email", return_value=sent) as mock_reply,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "email",
+                "reply",
+                "--account-email",
+                account.id,
+                "--email-id",
+                "original-email-1",
+                "--body",
+                "Out of office",
+                "--subject",
+                "Automatic reply: Hi",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert mock_reply.call_args.kwargs["subject"] == "Automatic reply: Hi"
 
 
 def test_email_reply_account_not_found(

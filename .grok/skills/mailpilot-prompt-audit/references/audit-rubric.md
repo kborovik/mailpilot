@@ -67,6 +67,7 @@ Each suggested improvement must carry:
 - **target** — one of: `code:templates.py:<fragment>`, `code:classify.py`,
   `toml:<workflow> goal`, `toml:<workflow> instructions`. Code targets are a
   change plus PR (§V.44), not a workflow update — say so.
+- **summary** — one line naming the change (GitHub issue title material).
 - **current** — the exact line or short block being changed (quoted).
 - **proposed** — the replacement wording.
 - **evidence** — the telemetry signal or composition observation that motivates
@@ -74,4 +75,5 @@ Each suggested improvement must carry:
 - **confidence** — high | medium | low.
 - **priority** — the first edit is the single highest-impact change.
 
-Suggestions are advisory. This skill recommends; it never edits the prompts.
+This analysis step proposes edits; it never edits the prompts and never files
+GitHub issues.

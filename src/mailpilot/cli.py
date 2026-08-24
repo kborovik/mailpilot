@@ -3715,6 +3715,11 @@ def email_send(
     help="ID of the email being replied to.",
 )
 @click.option("--body", required=True, help="Reply body (plain text).")
+@click.option(
+    "--subject",
+    default=None,
+    help="Override reply subject (default: Re: original).",
+)
 @click.option("--workflow-id", default=None, help="Link to a workflow (name or ID).")
 @click.option("--cc", default=None, help="CC recipient(s), comma-separated.")
 @click.option("--bcc", default=None, help="BCC recipient(s), comma-separated.")
@@ -3722,6 +3727,7 @@ def email_reply(
     account_email: str | None,
     email_id: str,
     body: str,
+    subject: str | None,
     workflow_id: str | None,
     cc: str | None,
     bcc: str | None,
@@ -3729,7 +3735,8 @@ def email_reply(
     """Reply to an existing email in-thread.
 
     Auto-derives recipient, subject (with "Re: " prefix), thread, and
-    In-Reply-To from the original. No cooldown applied.
+    In-Reply-To from the original. ``--subject`` overrides the subject.
+    No cooldown applied.
     """
     import logfire
 
@@ -3760,6 +3767,7 @@ def email_reply(
                 workflow_id=resolved_workflow_id,
                 cc=cc,
                 bcc=bcc,
+                subject=subject,
             )
         except email_ops.EmailOpsError as exc:
             output_error(str(exc), exc.code)

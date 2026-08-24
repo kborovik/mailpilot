@@ -6512,6 +6512,11 @@ def create_tasks_for_routed_emails(
     the enrollment row is guaranteed present because
     ``routing._ensure_enrollment`` runs earlier in the inbound pipeline.
 
+    Mechanical OOO on an outbound enrollment is skipped (§V.188): resume
+    was already scheduled in routing, and a processed marker with
+    ``email_id`` set keeps later sync from re-enqueueing. Language-only
+    OOO still gets ``handle inbound email``.
+
     Uses ``e.created_at`` (DB insert time) rather than ``e.received_at``
     (Gmail timestamp) to filter historical emails. An email can be received
     by Gmail before a workflow exists but synced into our DB after -- using
@@ -6521,11 +6526,15 @@ def create_tasks_for_routed_emails(
         connection: Open database connection.
 
     Returns:
-        List of newly created tasks.
+        List of newly created inbound agent tasks.
     """
+    from mailpilot.ooo import is_mechanical_ooo
+
     unmatched = connection.execute(
         """\
-        SELECT e.id, e.workflow_id, e.contact_id, en.id AS enrollment_id
+        SELECT e.id, e.workflow_id, e.contact_id, e.account_id, e.direction,
+               e.subject, e.body_text, e.labels, e.created_at,
+               en.id AS enrollment_id, w.type AS workflow_type
         FROM email e
         JOIN workflow w ON w.id = e.workflow_id
         JOIN enrollment en
@@ -6539,6 +6548,28 @@ def create_tasks_for_routed_emails(
     ).fetchall()
     tasks: list[Task] = []
     for email_row in unmatched:
+        email = Email.model_validate(
+            {
+                "id": email_row["id"],
+                "account_id": email_row["account_id"],
+                "direction": email_row["direction"],
+                "subject": email_row["subject"],
+                "body_text": email_row["body_text"],
+                "labels": email_row["labels"] or [],
+                "created_at": email_row["created_at"],
+                "contact_id": email_row["contact_id"],
+                "workflow_id": email_row["workflow_id"],
+            }
+        )
+        if email_row["workflow_type"] == "outbound" and is_mechanical_ooo(email):
+            _mark_mechanical_ooo_processed(
+                connection,
+                enrollment_id=email_row["enrollment_id"],
+                workflow_id=email_row["workflow_id"],
+                contact_id=email_row["contact_id"],
+                email_id=email_row["id"],
+            )
+            continue
         now = datetime.now(UTC).isoformat()
         t = create_task(
             connection,
@@ -6551,6 +6582,34 @@ def create_tasks_for_routed_emails(
         )
         tasks.append(t)
     return tasks
+
+
+def _mark_mechanical_ooo_processed(
+    connection: psycopg.Connection[dict[str, Any]],
+    *,
+    enrollment_id: str,
+    workflow_id: str,
+    contact_id: str,
+    email_id: str,
+) -> None:
+    """Insert a completed processed marker so later sync skips this inbound."""
+    now = datetime.now(UTC).isoformat()
+    task = create_task(
+        connection,
+        enrollment_id=enrollment_id,
+        workflow_id=workflow_id,
+        contact_id=contact_id,
+        description="mechanical ooo",
+        scheduled_at=now,
+        email_id=email_id,
+        commit=False,
+    )
+    complete_task(
+        connection,
+        task.id,
+        status="completed",
+        result={"reason": "ooo_pause"},
+    )
 
 
 # -- Activity ------------------------------------------------------------------

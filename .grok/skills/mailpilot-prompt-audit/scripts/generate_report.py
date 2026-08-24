@@ -3,7 +3,8 @@
 Reads ``analysis_input.json`` (composed systems joined with derived telemetry)
 and ``analysis.md`` (the analysis subagent's findings and prioritized edits), then
 writes ``report.md``: a systems-overview table, a per-system composition-sizing
-table, the classifier section, and the folded-in analysis. Deterministic
+table, the classifier section, the folded-in analysis, and the GitHub issues
+filed for each suggested edit (when ``issues.json`` is present). Deterministic
 formatting only -- every judgment lives in ``analysis.md``.
 """
 
@@ -107,6 +108,41 @@ def _classifier_section(classifier: dict[str, Any]) -> list[str]:
     return out
 
 
+def _issues_section(payload: dict[str, Any]) -> list[str]:
+    """Render the GitHub issues filed (or skipped) for this run's edits."""
+    rows: list[dict[str, Any]] = payload.get("issues") or []
+    out = ["## GitHub issues", ""]
+    if not rows:
+        out.append("No issues filed.")
+        out.append("")
+        return out
+    out.extend(
+        [
+            "| Target | Repo | Issue | Status |",
+            "|---|---|---|---|",
+        ]
+    )
+    for row in rows:
+        number = row.get("number")
+        url = row.get("url")
+        if number and url:
+            issue_cell = f"[#{number}]({url})"
+        elif url:
+            issue_cell = url
+        else:
+            issue_cell = "--"
+        out.append(
+            "| `{target}` | {repo} | {issue} | {status} |".format(
+                target=row.get("target", "--"),
+                repo=row.get("repo") or "this repo",
+                issue=issue_cell,
+                status=row.get("status", "--"),
+            )
+        )
+    out.append("")
+    return out
+
+
 def _composition_run_lines(systems: list[dict[str, Any]]) -> list[str]:
     """One line per system naming the trigger mix and the composition it ran."""
     lines: list[str] = []
@@ -195,6 +231,10 @@ def main() -> int:
             "did not write its findings._"
         )
     out.append("")
+
+    issues_path = directory / "issues.json"
+    if issues_path.exists():
+        out.extend(_issues_section(read_json(issues_path)))
 
     report_path = directory / "report.md"
     report_path.write_text("\n".join(out))

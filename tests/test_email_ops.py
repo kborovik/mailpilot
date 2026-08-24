@@ -400,6 +400,34 @@ def test_reply_email_preserves_existing_re_prefix(
     assert gmail_client.send_message.call_args.kwargs["subject"] == "Re: Pricing"
 
 
+def test_reply_email_subject_override(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.188: optional subject override keeps Automatic-reply at inject."""
+    account = make_test_account(database_connection)
+    contact = make_test_contact(database_connection, email="sender@example.com")
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    _activate(database_connection, workflow.id)
+    inbound = _make_inbound(database_connection, account.id, contact.id, workflow.id)
+    gmail_client = _make_gmail_client(account)
+
+    reply_email(
+        connection=database_connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=make_test_settings(),
+        email_id=inbound.id,
+        body="I am out of the office.",
+        workflow_id=workflow.id,
+        subject="Automatic reply: out of office",
+    )
+
+    assert (
+        gmail_client.send_message.call_args.kwargs["subject"]
+        == "Automatic reply: out of office"
+    )
+
+
 def test_reply_email_raises_original_not_found(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:

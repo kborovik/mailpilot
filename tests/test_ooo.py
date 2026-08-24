@@ -19,6 +19,7 @@ from mailpilot.database import (
     activate_workflow,
     create_email,
     create_task,
+    create_tasks_for_routed_emails,
     get_latest_enrollment_outcome,
     get_task,
     get_workflow,
@@ -485,6 +486,100 @@ def test_route_ooo_cancels_t2_and_schedules_resume(
     assert isinstance(pending[0]["context"]["touch"], int)
 
 
+def test_route_mechanical_ooo_does_not_enqueue_inbound_agent_task(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.188: Automatic reply after route → no handle-inbound, one resume."""
+    account, contact, _workflow, enrollment, t2 = _seed_t1(
+        database_connection, suffix="mech-enq"
+    )
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Automatic reply: out of the office until 2026-08-17",
+        body_text="I am out of the office until 2026-08-17.",
+        gmail_thread_id="t-ooo-mech-enq",
+        contact_id=contact.id,
+        sender=contact.email,
+    )
+    assert inbound is not None
+    route_email(database_connection, inbound, contact.email, make_test_settings())
+
+    created = create_tasks_for_routed_emails(database_connection)
+    handle = [task for task in created if task.description == "handle inbound email"]
+    assert handle == []
+    inbound_agent = database_connection.execute(
+        "SELECT id FROM task WHERE email_id = %s AND description = %s",
+        (inbound.id, "handle inbound email"),
+    ).fetchall()
+    assert inbound_agent == []
+
+    pending = database_connection.execute(
+        "SELECT context FROM task WHERE enrollment_id = %s AND status = 'pending' "
+        "AND context->>'reason' = 'ooo_pause'",
+        (enrollment.id,),
+    ).fetchall()
+    assert len(pending) == 1
+    assert pending[0]["context"]["touch"] == 2
+
+    cancelled = get_task(database_connection, t2.id)
+    assert cancelled is not None
+    assert cancelled.status == "cancelled"
+    assert get_latest_enrollment_outcome(database_connection, enrollment.id) is None
+
+    again = create_tasks_for_routed_emails(database_connection)
+    assert [task for task in again if task.description == "handle inbound email"] == []
+    still = database_connection.execute(
+        "SELECT id FROM task WHERE email_id = %s AND description = %s",
+        (inbound.id, "handle inbound email"),
+    ).fetchall()
+    assert still == []
+    resumes = database_connection.execute(
+        "SELECT id FROM task WHERE enrollment_id = %s AND status = 'pending' "
+        "AND context->>'reason' = 'ooo_pause'",
+        (enrollment.id,),
+    ).fetchall()
+    assert len(resumes) == 1
+
+
+def test_route_language_only_ooo_still_enqueues_inbound_agent_task(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.188: language-only absence still gets handle inbound email."""
+    account, contact, _workflow, enrollment, t2 = _seed_t1(
+        database_connection, suffix="lang-enq"
+    )
+    inbound = create_email(
+        database_connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Re: Touch 1",
+        body_text="I am out of the office returning 2026-08-17.",
+        gmail_thread_id="t-ooo-lang-enq",
+        contact_id=contact.id,
+        sender=contact.email,
+    )
+    assert inbound is not None
+    route_email(database_connection, inbound, contact.email, make_test_settings())
+
+    created = create_tasks_for_routed_emails(database_connection)
+    handle = [task for task in created if task.description == "handle inbound email"]
+    assert len(handle) == 1
+    assert handle[0].email_id == inbound.id
+    assert handle[0].enrollment_id == enrollment.id
+
+    pending_ooo = database_connection.execute(
+        "SELECT id FROM task WHERE enrollment_id = %s AND status = 'pending' "
+        "AND context->>'reason' = 'ooo_pause'",
+        (enrollment.id,),
+    ).fetchall()
+    assert pending_ooo == []
+    cancelled = get_task(database_connection, t2.id)
+    assert cancelled is not None
+    assert cancelled.status == "cancelled"
+
+
 def test_route_gina_last_day_does_not_schedule_ooo(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
@@ -665,6 +760,15 @@ def test_execute_task_ooo_skips_agent_and_does_not_burn_touch(
     assert row.next_touch == 2
     assert row.disposition is None
     assert get_latest_enrollment_outcome(database_connection, enrollment.id) is None
+    resumes = database_connection.execute(
+        "SELECT id FROM task WHERE enrollment_id = %s AND status = 'pending' "
+        "AND context->>'reason' = 'ooo_pause'",
+        (enrollment.id,),
+    ).fetchall()
+    assert len(resumes) == 1
+    assert row.next_scheduled_at is not None
+    delta_days = (row.next_scheduled_at - datetime.now(UTC)).total_seconds() / 86400
+    assert -0.5 < delta_days < 21
 
 
 def test_execute_task_ooo_fail_path_no_ack_no_burned_touch(
