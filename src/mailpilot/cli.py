@@ -3735,8 +3735,8 @@ def email_reply(
     """Reply to an existing email in-thread.
 
     Auto-derives recipient, subject (with "Re: " prefix), thread, and
-    In-Reply-To from the original. ``--subject`` overrides the subject
-    (mechanical Automatic-reply inject). No cooldown applied.
+    In-Reply-To from the original. ``--subject`` overrides the subject.
+    No cooldown applied.
     """
     import logfire
 

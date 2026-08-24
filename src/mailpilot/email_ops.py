@@ -189,8 +189,8 @@ def reply_email(  # noqa: PLR0913
 
     Auto-derives recipient (contact.email), subject ("Re: " prefixed
     unless already prefixed), thread_id, and In-Reply-To from the
-    original. Pass ``subject`` to override (campaign-test mechanical
-    Automatic-reply). No cooldown -- replies are always allowed.
+    original. Pass ``subject`` to override. No cooldown -- replies
+    are always allowed.
 
     Raises:
         AccountDisabledError: sending account is soft-disabled (§V.79).
