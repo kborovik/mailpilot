@@ -215,7 +215,7 @@ def _load_execute_context(  # noqa: PLR0911
             return None
 
     email = get_email(connection, task.email_id) if task.email_id else None
-    if _complete_mechanical_ooo(connection, task, workflow, enrollment, email):
+    if _complete_mechanical_ooo(connection, task, workflow, email):
         return None
 
     # §V.32: scheduled first-touch tasks carry ``trigger=enrollment_schedule``
@@ -261,16 +261,16 @@ def _complete_mechanical_ooo(
     connection: psycopg.Connection[dict[str, Any]],
     task: Task,
     workflow: Workflow,
-    enrollment: Enrollment,
     email: Email | None,
 ) -> bool:
-    """Complete a mechanical OOO inbound without an agent turn (§V.169).
+    """Complete a leftover mechanical-OOO inbound without an agent turn.
 
-    Returns True when the task was handled so the caller can return.
+    New mechanical OOO is paused in routing and never enqueued (§V.188).
+    This path remains for inbound agent tasks already in the queue.
+    Resume is not scheduled here; routing ``_maybe_ooo_pause`` owns that.
     """
     if email is None or workflow.type != "outbound" or not is_mechanical_ooo(email):
         return False
-    schedule_ooo_resume(connection, workflow, enrollment, email)
     complete_task(
         connection,
         task.id,

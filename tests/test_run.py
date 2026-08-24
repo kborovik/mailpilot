@@ -1100,12 +1100,59 @@ def test_execute_task_mechanical_ooo_skips_agent(
 
     mock_invoke.assert_not_called()
     mock_email_ops.reply_email.assert_not_called()
-    mock_resume.assert_called_once()
+    mock_resume.assert_not_called()
     mock_complete.assert_called_once_with(
         database_connection,
         _TASK_ID,
         status="completed",
         result={"reason": "ooo_pause"},
+    )
+
+
+def test_execute_task_language_only_ooo_noop_schedules_resume(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.188 / §V.169: agent noop on language-only OOO still resumes."""
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings()
+    email = _make_email(
+        subject="Re: Touch 1",
+        body_text="I am out of the office returning Thursday.",
+    )
+    task = _make_task(email_id=_EMAIL_ID)
+    workflow = _make_workflow()
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch("mailpilot.run.get_email", return_value=email),
+        patch(
+            "mailpilot.run.get_latest_enrollment_outcome",
+            return_value=None,
+        ),
+        patch(
+            "mailpilot.run.invoke_workflow_agent",
+            return_value={"tool_calls": 1, "reasoning": "noop"},
+        ) as mock_invoke,
+        patch("mailpilot.run.schedule_ooo_resume") as mock_resume,
+        patch("mailpilot.run.complete_task") as mock_complete,
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_invoke.assert_called_once()
+    mock_resume.assert_called_once_with(
+        database_connection, workflow, enrollment, email
+    )
+    mock_complete.assert_called_once_with(
+        database_connection,
+        _TASK_ID,
+        status="completed",
+        result={"tool_calls": 1, "reasoning": "noop"},
     )
 
 

@@ -301,7 +301,7 @@ T317|x|impl emit-rg mode on `.spec/scripts/check-extras.sh`; parse backticked rg
 T318|x|impl §V.185(+) + §V.152(∆)+§V.150(∆) — merge enrollment list APIs; parent SELECT fragment; detailed WHERE+lean/full; fold outcome into full drop EnrollmentWithOutcome; preview contact_id + ANY not N+1; agent latest_outcome keys stay; --touch stays parse; existing list/preview/report/agent-tool tests (#264)|V185,V152,V150,V171,V178,V184,V5,V15,I.cli
 T319|x|impl §V.186(+) + §V.127(∆)+§V.128(∆)+§V.136(∆)+§V.163(∆) — one conclude helper; agent validates then calls; bounce skip_if_terminal; booking concludes terminal unless flag; cadence no re-enroll; existing conclude/bounce/booking/cadence tests (#265)|V186,V127,V128,V136,V163,V123,V15,V80
 T320|x|impl §V.187(+) + §V.22(∆)+§V.27(∆)+§V.76(∆)+§V.164(∆) — skip marks via route_email or mark_routed; recency/no-workflows/predates once in sync_account; thread contact once (cache thread+In-Reply-To); RFC parent not twice; route_method enum same; existing sync+routing tests (#266)|V187,V22,V27,V76,V164,V20
-T321|.|impl §V.188(+) + §V.169(∆) — mechanical OOO after route: no inbound agent task; resume once in routing; later sync ! re-enqueue; language-only OOO still agent; agent noop still `_maybe_ooo_resume_after_invoke`; tests mechanical vs language-only (#267)|V188,V169,V123,V83
+T321|x|impl §V.188(+) + §V.169(∆) — mechanical OOO after route: no inbound agent task; resume once in routing; later sync ! re-enqueue; language-only OOO still agent; agent noop still `_maybe_ooo_resume_after_invoke`; tests mechanical vs language-only (#267)|V188,V169,V123,V83
 
 ## §B BUGS
 
