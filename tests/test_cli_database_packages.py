@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import ast
 import importlib
+import subprocess
+import sys
 from pathlib import Path
-
-from click.testing import CliRunner
 
 REPO = Path(__file__).resolve().parents[1]
 SRC = REPO / "src" / "mailpilot"
@@ -141,15 +141,22 @@ def test_cli_modules_lazy_import_heavy_deps() -> None:
 
 def test_cli_help_stays_fast_without_database() -> None:
     """§V.2 / §V.190: `mailpilot --help` does not import mailpilot.database."""
-    # Re-import in this process after dropping a loaded database module is
-    # unreliable (other tests import it). Probe via a fresh module copy of
-    # the CLI package files' AST plus CliRunner --help.
-    from mailpilot.cli import main
-
-    runner = CliRunner()
-    result = runner.invoke(main, ["--help"])
-    assert result.exit_code == 0
-    assert "MailPilot" in result.output or "SKILL" in result.output or result.output
+    probe = r"""
+import sys
+from click.testing import CliRunner
+from mailpilot.cli import main
+result = CliRunner().invoke(main, ["--help"])
+assert result.exit_code == 0, result.output
+assert "mailpilot CLI skill" in result.output
+assert "mailpilot.database" not in sys.modules
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", probe],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr + completed.stdout
 
 
 def test_entrypoint_unchanged() -> None:
