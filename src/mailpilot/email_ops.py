@@ -1,7 +1,7 @@
 """Policy layer for outbound email operations.
 
 This module is the single source of truth for the rules that govern
-sending and replying. Both ``cli.py`` and ``agent/tools.py`` call into
+sending and replying. Both ``cli/`` and ``agent/tools.py`` call into
 ``send_email`` / ``reply_email`` here, so guards (contact-status,
 cooldown, reply preconditions) and side effects (enrollment activation)
 live in one place.

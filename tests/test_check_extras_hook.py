@@ -1,6 +1,6 @@
 """I.nouns / I.verbs set-diff hook (.spec/scripts/check-extras.sh).
 
-Mechanical extras-hook: SPEC §I list-shape vs cli.py noun-group @command.
+Mechanical extras-hook: SPEC §I list-shape vs cli/ noun-group @command.
 Stdout rows `id|verdict|evidence` (no header). Verdicts MATCH / MISSING /
 EXTRA / DRIFT. show/config groups and top-level commands excluded (I.cli).
 """
@@ -112,7 +112,7 @@ def test_hook_is_executable() -> None:
 
 
 def test_live_repo_match() -> None:
-    """I.nouns + I.verbs: live SPEC.md §I lists match cli.py registrations."""
+    """I.nouns + I.verbs: live SPEC.md §I lists match cli/ registrations."""
     result = run()
     parsed = rows(result.stdout)
     assert result.returncode == 0, result.stdout
@@ -384,7 +384,7 @@ def test_live_emit_rg_well_formed() -> None:
         row
         for row in parsed
         if row[0] == "V4"
-        and "cli.py" in row[3]
+        and ("cli/" in row[3] or "cli.py" in row[3])
         and isinstance(row[2], int)
         and row[2] > 0
     ]

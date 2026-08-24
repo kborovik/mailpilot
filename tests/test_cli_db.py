@@ -12,30 +12,31 @@ from mailpilot.cli import (
     _db,  # pyright: ignore[reportPrivateUsage]
 )
 
-_CLI_PATH = Path(__file__).resolve().parents[1] / "src" / "mailpilot" / "cli.py"
+_CLI_DIR = Path(__file__).resolve().parents[1] / "src" / "mailpilot" / "cli"
 
 
 def test_initialize_database_only_inside_db() -> None:
     """§V.177 / §V.2: `initialize_database(` lives only in `_db`; no module-level database import."""
-    source = _CLI_PATH.read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    for node in tree.body:
-        if isinstance(node, ast.ImportFrom):
-            assert node.module != "mailpilot.database"
-        elif isinstance(node, ast.Import):
-            assert all(
-                not alias.name.startswith("mailpilot.database") for alias in node.names
-            )
-    db_fn = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "_db"
-    )
-    db_source = ast.get_source_segment(source, db_fn)
-    assert db_source is not None
-    in_helper = db_source.count("initialize_database(")
-    assert in_helper == 1
-    assert source.count("initialize_database(") == in_helper
+    helper_count = 0
+    total = 0
+    for path in sorted(_CLI_DIR.rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        for node in tree.body:
+            if isinstance(node, ast.ImportFrom):
+                assert node.module != "mailpilot.database"
+            elif isinstance(node, ast.Import):
+                assert all(
+                    not alias.name.startswith("mailpilot.database")
+                    for alias in node.names
+                )
+            if isinstance(node, ast.FunctionDef) and node.name == "_db":
+                db_source = ast.get_source_segment(source, node)
+                assert db_source is not None
+                helper_count += db_source.count("initialize_database(")
+        total += source.count("initialize_database(")
+    assert helper_count == 1
+    assert total == helper_count
 
 
 def test_db_mutate_false_skips_schema_gate() -> None:

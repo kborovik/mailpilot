@@ -984,7 +984,7 @@ def test_note_add_emits_span_and_event(
 def _envelope_from_stderr(stderr: str) -> dict[str, Any]:
     """Extract the JSON envelope ``output_error`` writes to stderr.
 
-    ``output_error`` (``src/mailpilot/cli.py:111``) emits a JSON envelope to
+    ``output_error`` (``mailpilot.cli.output_error``) emits a JSON envelope to
     stderr; the stream also carries one or more newline-delimited
     ``operator_event`` lines. Walk the stream and return the first complete
     JSON object (the envelope).
