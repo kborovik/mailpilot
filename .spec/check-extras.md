@@ -148,7 +148,7 @@ Trigger: `src/mailpilot/database.py` changed.
 
 ## §V22 — is_routed gate: single route pass per email
 
-At most 1 `routing.route_email` span lifecycle per `email_id`. Gate: every routing outcome (§V.20) sets `is_routed=TRUE`; a subsequent History-API re-delivery or repeat sync sweep skips routing entirely on an already-routed message. Duplicate route spans inflate metrics and mask classifier regressions.
+At most 1 `routing.route_email` span lifecycle per `email_id`. Gate: every routing outcome (§V.20) sets `is_routed=TRUE`; a subsequent History-API re-delivery or repeat sync sweep skips routing entirely on an already-routed message. Duplicate route spans inflate metrics and mask classifier regressions. Skip marks (`skipped_outside_window` / `skipped_no_workflows` / `skipped_predates_workflows`) go through `route_email` or shared `mark_routed` (§V.187) — `_store_inbound_message` never opens a `routing.route_email` span without that path.
 
 Trigger: `src/mailpilot/routing.py` or `src/mailpilot/sync.py` changed.
 - `rg 'is_routed\b' src/mailpilot/routing.py src/mailpilot/sync.py` -> is_routed gate present
@@ -175,7 +175,7 @@ Trigger: `src/mailpilot/agent/invoke.py` or `src/mailpilot/database.py` changed.
 
 ## §V27 — routing pipeline order + classifier bounds
 
-Routing pipeline order: RFC message-id match -> thread match -> LLM classify; every stage account-scoped. Message-ID preferred when In-Reply-To/References present (Gmail same-subject merge must not rebind replies across multi-workflow enrollments). Classifier = single-turn, no tools; body truncated @ 16384 chars; hallucinated workflow_id coerced to None; zero active inbound workflows -> no LLM call. Every outcome marks is_routed=TRUE w/ a distinct route_method (§V.20 enum).
+Routing pipeline order: RFC message-id match -> thread match -> LLM classify; every stage account-scoped. Message-ID preferred when In-Reply-To/References present (Gmail same-subject merge must not rebind replies across multi-workflow enrollments). RFC parent lookup not queried twice for the same headers (`_try_rfc_message_id_match` vs `find_thread_enrolled_contact`; §V.187). Classifier = single-turn, no tools; body truncated @ 16384 chars; hallucinated workflow_id coerced to None; zero active inbound workflows -> no LLM call. Every outcome marks is_routed=TRUE w/ a distinct route_method (§V.20 enum).
 
 Trigger: `src/mailpilot/routing.py` or `src/mailpilot/agent/classify.py` changed.
 - `rg '_try_rfc_message_id_match' src/mailpilot/routing.py` -> RFC message-id stage before thread match
@@ -1077,7 +1077,7 @@ Trigger: bounce handler changed.
 
 ## §V164 — thread-alias inbound bind
 
-thread-alias inbound bind — inbound on existing outbound thread binds email.contact_id to enrolled contact even when From: local-part differs; ! mint or auto-enroll alias From; left-company/retired → conclude original do_not_contact + cancel follow-ups (§V.161/§V.123); referral addrs stay note (agent never enrolls); distinct from case-variant (§V.90) and same-contact address-change (§V.161)
+thread-alias inbound bind — inbound on existing outbound thread binds email.contact_id to enrolled contact even when From: local-part differs; ! mint or auto-enroll alias From; left-company/retired → conclude original do_not_contact + cancel follow-ups (§V.161/§V.123); referral addrs stay note (agent never enrolls); distinct from case-variant (§V.90) and same-contact address-change (§V.161). Thread-enrolled contact resolved once per inbound message — account-scoped cache keyed by thread + In-Reply-To; `_thread_bound_sender_emails`, `_store_inbound_message`, `route_email` share that result (§V.187).
 
 Trigger: inbound routing / thread match / contact bind changed.
 - `rg 'thread_match|contact_id|gmail_thread' src/mailpilot/routing.py src/mailpilot/sync.py` -> thread bind to enrolled contact
@@ -1292,7 +1292,7 @@ Trigger: `src/mailpilot/models.py` or company profile write changed.
 
 ## §V76 — routing eligibility window
 
-routing eligibility window — received_at older than 7 days, zero active workflows, or predates earliest active workflow -> is_routed=TRUE w/ matching skipped_* route_method, no LLM call
+routing eligibility window — received_at older than 7 days, zero active workflows, or predates earliest active workflow -> is_routed=TRUE w/ matching skipped_* route_method, no LLM call. Recency, no-workflows, predates-workflow computed once in `sync_account` and passed in; skip marks go through `route_email` or shared `mark_routed` (§V.187). Recency gate still runs before the LLM classifier.
 
 Trigger: `src/mailpilot/sync.py` or `src/mailpilot/routing.py` changed.
 - `rg 'skipped_outside_window|skipped_no_workflows|skipped_predates' src/mailpilot/` -> skipped_* methods present
@@ -1457,3 +1457,12 @@ Trigger: conclude helper or agent/bounce/booking/cadence conclude path changed.
 - `rg 'skip_if_terminal' src/mailpilot/` -> flag present
 - `rg 'record_enrollment_outcome' src/mailpilot/agent/tools.py src/mailpilot/cadence.py src/mailpilot/routing.py src/mailpilot/sync.py` -> zero hits (helper, not pasted)
 - `rg 'def conclude_enrollment' src/mailpilot/` -> helper + agent tool
+
+## §V187 — route-email skip marks + thread-contact cache
+
+route-email-skip-and-thread-cache — skip marks (`skipped_outside_window`, `skipped_no_workflows`, `skipped_predates_workflows`) go through `route_email` or shared `mark_routed(email, method)`; `_store_inbound_message` never opens a `routing.route_email` span + `update_email(is_routed=True)` without that path. Recency, no-workflows, predates-workflow computed once in `sync_account` and passed in; recency gate still before LLM classifier (§V.76). Thread-enrolled contact resolved once per inbound message — account-scoped cache keyed by thread + In-Reply-To; `_thread_bound_sender_emails`, `_store_inbound_message`, `route_email` share that result. RFC parent lookup not queried twice for the same headers. `route_method` enum values stay the same (§V.20). Bind-versus-From alias stays §V.164.
+
+Trigger: `src/mailpilot/routing.py` or `src/mailpilot/sync.py` changed.
+- `rg 'skipped_outside_window|skipped_no_workflows|skipped_predates_workflows' src/mailpilot/routing.py` -> skip marks owned in routing
+- `rg 'routing.route_email' src/mailpilot/sync.py` -> zero span names in sync
+- `rg 'find_thread_enrolled_contact' src/mailpilot/sync.py src/mailpilot/routing.py` -> shared resolve, not three independent walks

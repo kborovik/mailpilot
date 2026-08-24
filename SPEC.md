@@ -90,12 +90,12 @@ V18: schema drift = live structure diverged from `schema.sql` w/ no migration pa
 V19: schema hash = sha256 over normalized schema.sql (strip -- comments, collapse whitespace)
 V20: email.route_method NULL or 7-value enum; non-NULL → is_routed; unrouted = span-only — → .spec/check-extras.md §V20
 V21: background loops wake on events not timers; run_interval tick = fallback only; each tick re-SELECT `app_config` (§V.85) — → .spec/check-extras.md §V21
-V22: <= 1 routing.route_email span lifecycle per email_id — is_routed gate; History-API re-delivery + repeat sync never trigger second route pass; → .spec/check-extras.md §V22
+V22: <= 1 routing.route_email span lifecycle per email_id — is_routed gate; History-API re-delivery + repeat sync never trigger second route pass; skip marks via route_email or mark_routed §V.187 — → .spec/check-extras.md §V22
 V23: task drain = bounded pool <= max_concurrent_tasks; atomic claim; each worker owns its connection + roots its own trace (trace_id 1:1 w/ agent.invoke) — → .spec/check-extras.md §V23
 V24: main loop never blocks on task futures — reaper collects on later ticks + emits task.drain
 V25: advisory locks 2-tier — coarse (workflow_id, contact_id) + task-scoped; acquired before agent.invoke span opens; contention -> reschedule w/o attempt_count bump — → .spec/check-extras.md §V25
 V26: agent.invoke span trigger attr in {enrollment_run, enrollment_schedule, task, email, manual} = caller path
-V27: routing order RFC message-id → thread → LLM classify; account-scoped; is_routed + distinct route_method — → .spec/check-extras.md §V27
+V27: routing order RFC message-id → thread → LLM classify; account-scoped; is_routed + distinct route_method; RFC parent lookup once per headers §V.187 — → .spec/check-extras.md §V27
 V28: task.enrollment_id NOT NULL; _ensure_enrollment ON CONFLICT once — → .spec/check-extras.md §V28
 V29: trigger email body inlined once under "New inbound email:"; excluded from email_history — no prompt duplicate
 V30: prompt framing follows trigger; inbound email present → email framing wins — → .spec/check-extras.md §V30
@@ -129,7 +129,7 @@ V72: company.profile JSONB vs CompanyProfile; required non-empty; malformed → 
 V73: skill-body-embedded Workflow snippet runnable as authored — (a) zero free vars; (b) args-as-collection guard; (c) prose-matches-dispatch; (d) saved-workflow byte-identical — recipe → .spec/check-extras.md §V73
 V74: CSV ingestion uses RFC-4180 parser (csv module / csv.DictReader); redirect resolution = hop-agnostic curl -sL; scope .grok/skills/**; .claude/workflows/*.js excluded — recipe → .spec/check-extras.md §V74
 V75: sync incremental History API; 404 → full INBOX; first sync full; mid-batch 429|5xx backoff never drop; checkpoint past persisted only — → .spec/check-extras.md §V75
-V76: routing eligibility window — stale/no-workflow/predates → skipped_* no LLM — → .spec/check-extras.md §V76
+V76: routing eligibility window — stale/no-workflow/predates → skipped_* no LLM; recency/no-workflows/predates computed once in sync_account passed in; skip via route_email or mark_routed §V.187 — → .spec/check-extras.md §V76
 V77: outbound email row persists only after Gmail accepts send; orphan recovery via get_email_by_gmail_message_id on conflict — → .spec/check-extras.md §V77
 V78: outbound MIME headers (X-MailPilot-*) + thread_id threading via send path — → .spec/check-extras.md §V78
 V79: send/reply guards + account soft-disable lifecycle; cooldown typed err = `email_ops.CooldownError` (not `exceptions.CooldownError`); no unused `ClassificationError` — → .spec/check-extras.md §V79
@@ -214,7 +214,7 @@ V160: enrollment list --disposition — filter terminal disposition ∈ {do_not_
 V161: address-change auto-reply hard-stop — active outbound + address-change/redirect auto-reply → conclude do_not_contact; ! OOO pause/resume; last-day-was past → §V.179 — → .spec/check-extras.md §V161
 V162: touch-context-parse — context.touch N or T<n> or "n" → int; SQL never raw ::int; unparseable → NULL; first-touch writer emits 1 — → .spec/check-extras.md §V162
 V163: bounce enrollment hard-stop — outbound bounce → every active outbound enrollment do_not_contact + cancel follow-ups; via helper §V.186 skip_if_terminal — → .spec/check-extras.md §V163
-V164: thread-alias inbound bind — inbound on existing outbound thread binds enrolled contact when From local-part differs; ! auto-enroll alias — → .spec/check-extras.md §V164
+V164: thread-alias inbound bind — inbound on existing outbound thread binds enrolled contact when From local-part differs; ! auto-enroll alias; thread contact once per message (account-scoped cache keyed thread + In-Reply-To) §V.187 — → .spec/check-extras.md §V164
 V165: live-e2e-dev-only — campaign-test + reply-test ! read settings.environment before any CRM/Gmail mutate; != dev → preflight fail + skill bail; pytest unit tests exempt — → .spec/check-extras.md §V165
 V166: show-queue — `mailpilot show queue` human report hub; default ASCII table; `--format json` opt-in; `--detail` task grain; next_at table+JSON ISO in `--tz` (default host local); every workflow status; pending tasks only; no LLM; no write — → .spec/check-extras.md §V166
 V167: company-create-oneshot — `company create` accepts §V.140 profile flags + repeatable `--tag` same invocation; one txn all-or-nothing; `--tag` additive never invent (§V.116); undefined tag → not_found; invalid profile → validation_error; second `--upsert` exit 0, update profile if flags, no tag dups — → .spec/check-extras.md §V167
@@ -237,6 +237,7 @@ V183: email-history-prefeed — invoke_workflow_agent loads enrollment-scoped hi
 V184: campaign-query-stack — stats/report/status/review share SQL; `get_workflow_stats` takes loaded Workflow (no inner fetch); report/status/review call stats once; one `_sql_outbound_sent_count(e)` fragment; `--full` `emails_sent AS last_touch` keeps JSON key; `_review_window_emails` absent (review calls `list_emails` §V.178); `list_active_workflows` `WHERE status = 'active'`; status `wording` via `check_workflow_wording` never hardcoded `"unknown"`; CLI verbs + envelope keys unchanged — → .spec/check-extras.md §V184
 V185: enrollment-list-stack — one `_enrollment_parent_select()` for row+list loaders; detailed splits `_enrollment_where` + lean/full SELECT; outcome LATERAL on `list_enrollments_detailed(full=True)`; drop `list_enrollments_with_outcomes` + `EnrollmentWithOutcome`; preview `contact_id` SELECT not hydrated `Enrollment` list; one `_preview_from_contacts`; tag preview `company_id = ANY(...)`; `--touch` stays `_sql_parse_touch`; agent `list_enrollments` still latest_outcome*; CLI lean/full + envelopes unchanged (§V.152); distinct §V.178/§V.184 — → .spec/check-extras.md §V185
 V186: conclude-enrollment-helper — one internal helper (enrollment_id, disposition, reason, reschedule_at?, note?, skip_if_terminal); agent tool validates then calls; bounce/booking/cadence pass system reasons; skip_if_terminal true → skip already-terminal (bounce); false → conclude already-terminal (booking default); meeting_booked writes note; cadence contact_later no re-enrollment task; record_enrollment_outcome stays system-internal — → .spec/check-extras.md §V186
+V187: route-email-skip-and-thread-cache — skip marks go through `route_email` or shared `mark_routed(email, method)`; recency/no-workflows/predates computed once in `sync_account` passed in; thread contact once per message (account-scoped cache keyed thread + In-Reply-To); RFC parent lookup not twice same headers; route_method enum unchanged; recency gate before LLM; bind-versus-From alias stays §V.164 — → .spec/check-extras.md §V187
 
 ## §T TASKS
 
@@ -298,6 +299,7 @@ T316|x|impl §V.184(+) + §V.132(∆)+§V.153(∆)+§V.157(∆)+§V.174(∆) + �
 T317|x|impl emit-rg mode on `.spec/scripts/check-extras.sh`; parse backticked rg under each `## §Vn`; run; emit section/line/hit_count/files; no-arg extras-hook path unchanged; tests (#282)|-
 T318|x|impl §V.185(+) + §V.152(∆)+§V.150(∆) — merge enrollment list APIs; parent SELECT fragment; detailed WHERE+lean/full; fold outcome into full drop EnrollmentWithOutcome; preview contact_id + ANY not N+1; agent latest_outcome keys stay; --touch stays parse; existing list/preview/report/agent-tool tests (#264)|V185,V152,V150,V171,V178,V184,V5,V15,I.cli
 T319|x|impl §V.186(+) + §V.127(∆)+§V.128(∆)+§V.136(∆)+§V.163(∆) — one conclude helper; agent validates then calls; bounce skip_if_terminal; booking concludes terminal unless flag; cadence no re-enroll; existing conclude/bounce/booking/cadence tests (#265)|V186,V127,V128,V136,V163,V123,V15,V80
+T320|x|impl §V.187(+) + §V.22(∆)+§V.27(∆)+§V.76(∆)+§V.164(∆) — skip marks via route_email or mark_routed; recency/no-workflows/predates once in sync_account; thread contact once (cache thread+In-Reply-To); RFC parent not twice; route_method enum same; existing sync+routing tests (#266)|V187,V22,V27,V76,V164,V20
 
 ## §B BUGS
 

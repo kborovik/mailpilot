@@ -38,6 +38,9 @@ from mailpilot.database import (
     upsert_sync_status,
 )
 from mailpilot.gmail import GmailClient
+from mailpilot.models import Account, Contact, Email
+from mailpilot.routing import RoutingContext
+from mailpilot.settings import Settings
 from mailpilot.sync import (
     _collect_new_message_ids,  # pyright: ignore[reportPrivateUsage]
     is_pid_alive,
@@ -45,6 +48,18 @@ from mailpilot.sync import (
     start_sync_loop,
     sync_account,
 )
+
+
+def _store_routing(
+    *,
+    has_active_workflows: bool = False,
+    earliest_workflow_at: datetime | None = None,
+) -> RoutingContext:
+    return RoutingContext(
+        recency_cutoff=datetime.now(UTC) - timedelta(days=7),
+        has_active_workflows=has_active_workflows,
+        earliest_workflow_at=earliest_workflow_at,
+    )
 
 
 def test_upsert_and_get_sync_status(
@@ -930,22 +945,27 @@ def test_sync_account_fresh_message_routed_as_unrouted_without_workflows(
 def test_sync_account_skips_routing_when_no_active_workflows(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):
-    """route_email must not be called when the account has zero active workflows."""
+    """Zero active workflows: skip-mark via route_email, no LLM classify."""
     from unittest.mock import patch
+
+    from mailpilot.routing import route_email as real_route
 
     account = make_test_account(database_connection, email="noroute@example.com")
     client, service = _make_mock_client(account.email)
     _set_list_messages(service, [{"id": "nr1", "threadId": "t-nr1"}])
     _set_get_messages(service, [_make_gmail_message("nr1", "t-nr1")])
 
-    with patch("mailpilot.sync.route_email") as mock_route:
+    with patch("mailpilot.sync.route_email", wraps=real_route) as mock_route:
         sync_account(database_connection, account, client, make_test_settings())
 
-    mock_route.assert_not_called()
+    mock_route.assert_called_once()
+    routing = mock_route.call_args.kwargs["routing"]
+    assert routing.has_active_workflows is False
     email = get_email_by_gmail_message_id(database_connection, "nr1")
     assert email is not None
     assert email.is_routed is True
     assert email.workflow_id is None
+    assert email.route_method == "skipped_no_workflows"
 
 
 def test_sync_account_skips_classification_for_emails_before_earliest_workflow(
@@ -955,6 +975,7 @@ def test_sync_account_skips_classification_for_emails_before_earliest_workflow(
     from unittest.mock import patch
 
     from mailpilot.database import activate_workflow, update_workflow
+    from mailpilot.routing import route_email as real_route
 
     account = make_test_account(database_connection, email="hist@example.com")
     workflow = make_test_workflow(
@@ -978,17 +999,20 @@ def test_sync_account_skips_classification_for_emails_before_earliest_workflow(
         [_make_gmail_message("pre-wf", "t-pre-wf", received_at=email_time)],
     )
 
-    with patch("mailpilot.sync.route_email") as mock_route:
+    with patch("mailpilot.sync.route_email", wraps=real_route) as mock_route:
         stored = sync_account(
             database_connection, account, client, make_test_settings()
         )
 
     assert stored == 1
-    mock_route.assert_not_called()
+    mock_route.assert_called_once()
+    routing = mock_route.call_args.kwargs["routing"]
+    assert routing.earliest_workflow_at == workflow.created_at
     email = get_email_by_gmail_message_id(database_connection, "pre-wf")
     assert email is not None
     assert email.is_routed is True
     assert email.workflow_id is None
+    assert email.route_method == "skipped_predates_workflows"
 
 
 def test_sync_account_uses_batch_fetch(
@@ -2200,7 +2224,7 @@ def test_sync_stores_sender_and_recipients(
         message,
         contacts_by_email={"alice@example.com": contact},
         settings=make_test_settings(),
-        has_active_workflows=False,
+        routing=_store_routing(),
     )
     assert email is not None
     assert email.sender == "alice@example.com"
@@ -2241,7 +2265,7 @@ def test_sync_inbound_emits_email_received_activity(
         message,
         contacts_by_email={"alice@example.com": contact},
         settings=make_test_settings(),
-        has_active_workflows=False,
+        routing=_store_routing(),
     )
     assert email is not None
 
@@ -2296,7 +2320,7 @@ def test_sync_inbound_skips_activity_when_create_email_returns_none(
         message,
         contacts_by_email={"alice@example.com": contact},
         settings=make_test_settings(),
-        has_active_workflows=False,
+        routing=_store_routing(),
     )
     assert result is None
     activities = list_activities(
@@ -2343,7 +2367,7 @@ def test_sync_stores_in_reply_to_and_references_headers(
         message,
         contacts_by_email={"alice@example.com": contact},
         settings=make_test_settings(),
-        has_active_workflows=False,
+        routing=_store_routing(),
     )
     assert email is not None
     assert email.in_reply_to == "<orig@mailpilot.test>"
@@ -2377,7 +2401,7 @@ def test_sync_one_message_emits_skip_span_outside_recency_window(
         message,
         contacts_by_email={"alice@example.com": contact},
         settings=make_test_settings(),
-        has_active_workflows=False,
+        routing=_store_routing(),
     )
 
     assert email is not None
@@ -2415,7 +2439,7 @@ def test_sync_one_message_emits_skip_span_when_no_active_workflows(
         message,
         contacts_by_email={"bob@example.com": contact},
         settings=make_test_settings(),
-        has_active_workflows=False,
+        routing=_store_routing(),
     )
 
     assert email is not None
@@ -2467,8 +2491,10 @@ def test_sync_one_message_emits_skip_span_when_predates_workflows(
         message,
         contacts_by_email={"carol@example.com": contact},
         settings=make_test_settings(),
-        has_active_workflows=True,
-        earliest_workflow_at=workflow.created_at,
+        routing=_store_routing(
+            has_active_workflows=True,
+            earliest_workflow_at=workflow.created_at,
+        ),
     )
 
     assert email is not None
@@ -2507,7 +2533,7 @@ def test_sync_one_message_persists_route_method_outside_recency_window(
         message,
         contacts_by_email={"alice@example.com": contact},
         settings=make_test_settings(),
-        has_active_workflows=False,
+        routing=_store_routing(),
     )
 
     assert email is not None
@@ -2539,7 +2565,7 @@ def test_sync_one_message_persists_route_method_no_active_workflows(
         message,
         contacts_by_email={"bob@example.com": contact},
         settings=make_test_settings(),
-        has_active_workflows=False,
+        routing=_store_routing(),
     )
 
     assert email is not None
@@ -2584,8 +2610,10 @@ def test_sync_one_message_persists_route_method_predates_workflows(
         message,
         contacts_by_email={"carol@example.com": contact},
         settings=make_test_settings(),
-        has_active_workflows=True,
-        earliest_workflow_at=workflow.created_at,
+        routing=_store_routing(
+            has_active_workflows=True,
+            earliest_workflow_at=workflow.created_at,
+        ),
     )
 
     assert email is not None
@@ -2593,6 +2621,222 @@ def test_sync_one_message_persists_route_method_predates_workflows(
     persisted = get_email(database_connection, email.id)
     assert persisted is not None
     assert persisted.route_method == "skipped_predates_workflows"
+
+
+def test_sync_account_passes_same_recency_cutoff(
+    database_connection: psycopg.Connection[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Recency cutoff is computed once in sync_account and passed to every store."""
+    import mailpilot.sync as sync_module
+
+    account = make_test_account(database_connection, email="cutoff-once@example.com")
+    client, service = _make_mock_client(account.email)
+    _set_list_messages(
+        service,
+        [
+            {"id": "m-cut-1", "threadId": "t-cut-1"},
+            {"id": "m-cut-2", "threadId": "t-cut-2"},
+        ],
+    )
+    _set_get_messages(
+        service,
+        [
+            _make_gmail_message(
+                "m-cut-1", "t-cut-1", from_header="A <a@cut.example.com>"
+            ),
+            _make_gmail_message(
+                "m-cut-2", "t-cut-2", from_header="B <b@cut.example.com>"
+            ),
+        ],
+    )
+
+    cutoffs: list[datetime | None] = []
+    contexts: list[RoutingContext] = []
+    real = sync_module._store_inbound_message  # pyright: ignore[reportPrivateUsage]
+
+    def spy(
+        connection: psycopg.Connection[dict[str, Any]],
+        account: Account,
+        message: dict[str, Any],
+        contacts_by_email: dict[str, Contact],
+        settings: Settings,
+        *,
+        routing: RoutingContext,
+    ) -> Email | None:
+        contexts.append(routing)
+        cutoffs.append(routing.recency_cutoff)
+        return real(
+            connection,
+            account,
+            message,
+            contacts_by_email,
+            settings,
+            routing=routing,
+        )
+
+    monkeypatch.setattr(sync_module, "_store_inbound_message", spy)
+
+    stored = sync_account(database_connection, account, client, make_test_settings())
+
+    assert stored == 2
+    assert len(cutoffs) == 2
+    assert cutoffs[0] is not None
+    assert cutoffs[0] is cutoffs[1]
+    assert contexts[0] is contexts[1]
+
+
+def test_sync_account_resolves_thread_contact_once_per_message(
+    database_connection: psycopg.Connection[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same thread + In-Reply-To shares one thread-contact walk."""
+    import mailpilot.routing as routing_module
+
+    account = make_test_account(database_connection, email="tc-once@example.com")
+    workflow = make_test_workflow(
+        database_connection,
+        account_id=account.id,
+        name="tc-once",
+        workflow_type="outbound",
+    )
+    _activate_outbound(database_connection, workflow.id)
+    enrolled = make_test_contact(database_connection, email="a@tc-once.example.com")
+    make_test_enrollment(database_connection, workflow.id, enrolled.id)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="Touch 1",
+        gmail_thread_id="t-tc-once",
+        contact_id=enrolled.id,
+        workflow_id=workflow.id,
+        status="sent",
+        is_routed=True,
+        rfc2822_message_id="<t1-tc-once@mail>",
+    )
+    client, service = _make_mock_client(account.email)
+    _set_list_messages(
+        service,
+        [
+            {"id": "m-tc-1", "threadId": "t-tc-once"},
+            {"id": "m-tc-2", "threadId": "t-tc-once"},
+        ],
+    )
+    _set_get_messages(
+        service,
+        [
+            _make_gmail_message(
+                "m-tc-1",
+                "t-tc-once",
+                from_header="A Full <afull@tc-once.example.com>",
+                extra_headers=[{"name": "In-Reply-To", "value": "<t1-tc-once@mail>"}],
+            ),
+            _make_gmail_message(
+                "m-tc-2",
+                "t-tc-once",
+                from_header="A Full <afull@tc-once.example.com>",
+                extra_headers=[{"name": "In-Reply-To", "value": "<t1-tc-once@mail>"}],
+            ),
+        ],
+    )
+
+    calls: list[object] = []
+    real = routing_module._walk_thread_enrolled_contact  # pyright: ignore[reportPrivateUsage]
+
+    def spy(
+        connection: psycopg.Connection[dict[str, Any]],
+        account_id: str,
+        *,
+        gmail_thread_id: str | None,
+        in_reply_to: str | None,
+        references_header: str | None,
+        rfc_parents: dict[tuple[str, ...], Email | None] | None,
+    ) -> Contact | None:
+        calls.append((account_id, gmail_thread_id, in_reply_to, references_header))
+        return real(
+            connection,
+            account_id,
+            gmail_thread_id=gmail_thread_id,
+            in_reply_to=in_reply_to,
+            references_header=references_header,
+            rfc_parents=rfc_parents,
+        )
+
+    monkeypatch.setattr(routing_module, "_walk_thread_enrolled_contact", spy)
+
+    stored = sync_account(database_connection, account, client, make_test_settings())
+
+    assert stored == 2
+    assert len(calls) == 1
+
+
+def test_sync_account_rfc_parent_lookup_once_per_headers(
+    database_connection: psycopg.Connection[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Thread bind + RFC workflow match share one parent lookup per headers."""
+    import mailpilot.routing as routing_module
+
+    account = make_test_account(database_connection, email="rfc-sync-once@example.com")
+    workflow = make_test_workflow(
+        database_connection,
+        account_id=account.id,
+        name="rfc-sync-once",
+        workflow_type="outbound",
+    )
+    _activate_outbound(database_connection, workflow.id)
+    enrolled = make_test_contact(
+        database_connection, email="a@rfc-sync-once.example.com"
+    )
+    make_test_enrollment(database_connection, workflow.id, enrolled.id)
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        subject="Touch 1",
+        gmail_thread_id="t-rfc-sync-once-out",
+        contact_id=enrolled.id,
+        workflow_id=workflow.id,
+        status="sent",
+        is_routed=True,
+        rfc2822_message_id="<t1-rfc-sync-once@mail>",
+    )
+    client, service = _make_mock_client(account.email)
+    _set_list_messages(
+        service, [{"id": "m-rfc-once", "threadId": "t-rfc-sync-once-in"}]
+    )
+    _set_get_messages(
+        service,
+        [
+            _make_gmail_message(
+                "m-rfc-once",
+                "t-rfc-sync-once-in",
+                from_header="A Full <afull@rfc-sync-once.example.com>",
+                extra_headers=[
+                    {"name": "In-Reply-To", "value": "<t1-rfc-sync-once@mail>"},
+                ],
+            )
+        ],
+    )
+
+    calls: list[object] = []
+    real = routing_module.find_email_by_rfc2822_message_id
+
+    def spy(
+        connection: psycopg.Connection[dict[str, Any]],
+        account_id: str,
+        message_ids: list[str],
+    ) -> object:
+        calls.append(tuple(message_ids))
+        return real(connection, account_id, message_ids)
+
+    monkeypatch.setattr(routing_module, "find_email_by_rfc2822_message_id", spy)
+
+    stored = sync_account(database_connection, account, client, make_test_settings())
+
+    assert stored == 1
+    assert len(calls) == 1
 
 
 # -- Thread-alias inbound bind (§V.164 / §B.134) --------------------------------
