@@ -263,12 +263,7 @@ def _complete_mechanical_ooo(
     workflow: Workflow,
     email: Email | None,
 ) -> bool:
-    """Complete a leftover mechanical-OOO inbound without an agent turn.
-
-    New mechanical OOO is paused in routing and never enqueued (§V.188).
-    This path remains for inbound agent tasks already in the queue.
-    Resume is not scheduled here; routing ``_maybe_ooo_pause`` owns that.
-    """
+    """Complete leftover in-queue inbound tasks without an agent or second resume."""
     if email is None or workflow.type != "outbound" or not is_mechanical_ooo(email):
         return False
     complete_task(

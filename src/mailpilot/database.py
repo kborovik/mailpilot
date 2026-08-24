@@ -6592,11 +6592,7 @@ def _mark_mechanical_ooo_processed(
     contact_id: str,
     email_id: str,
 ) -> None:
-    """Insert a completed processed marker so later sync skips this inbound.
-
-    Not ``handle inbound email``: mechanical OOO must not enqueue an agent
-    task (§V.188). ``email_id`` is set so ``NOT EXISTS`` stays false.
-    """
+    """Insert a completed processed marker so later sync skips this inbound."""
     now = datetime.now(UTC).isoformat()
     task = create_task(
         connection,
