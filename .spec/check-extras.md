@@ -1466,3 +1466,13 @@ Trigger: `src/mailpilot/routing.py` or `src/mailpilot/sync.py` changed.
 - `rg 'skipped_outside_window|skipped_no_workflows|skipped_predates_workflows' src/mailpilot/routing.py` -> skip marks owned in routing
 - `rg 'routing.route_email' src/mailpilot/sync.py` -> zero span names in sync
 - `rg 'find_thread_enrolled_contact' src/mailpilot/sync.py src/mailpilot/routing.py` -> shared resolve, not three independent walks
+
+## §V188 — mechanical OOO no inbound agent task
+
+mechanical-ooo-no-agent-task — `is_mechanical_ooo` inbound on outbound enrollment after `route_email` → `_maybe_ooo_pause` schedules resume once; `create_tasks_for_routed_emails` never inserts `handle inbound email` for that email; later sync ! re-enqueue that inbound (processed marker or equivalent); language-only (`is_ooo_auto_reply` and not `is_mechanical_ooo`) still enqueues agent; `_maybe_ooo_resume_after_invoke` stays for agent `noop`; `_ack_or_ooo_pause_on_failure` stays for language-only terminal fail (skip ACK). Pause/no-ACK/resume-date stay §V.169.
+
+Trigger: OOO route / inbound-task enqueue / run-loop mechanical-OOO path changed.
+- `rg 'is_mechanical_ooo' src/mailpilot/database.py src/mailpilot/routing.py` -> enqueue skip or route processed-marker
+- `rg '_complete_mechanical_ooo' src/mailpilot/run.py` -> leftover-only or not a second resume site
+- fixture: mechanical Automatic reply after route → zero handle-inbound-email tasks, one ooo_pause resume
+- fixture: language-only absence body w/o Automatic reply / Auto-Submitted → inbound agent task created
