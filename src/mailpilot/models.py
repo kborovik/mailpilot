@@ -761,14 +761,18 @@ class QueueWorkflowRow(BaseModel):
     t2: int
     t3: int
     t4p: int
+    failed: int
+    stuck: int
     next_at: datetime | None
 
 
 class QueueTaskRow(BaseModel):
-    """One pending-task row for ``show queue --detail`` (§V.166).
+    """One task-grain row for ``show queue --detail`` (§V.166).
 
     Table+JSON public cols: workflow_name, company_domain, contact, email,
     touch, attempts, next_at. Table hides ``task_id`` and ``enrollment_id``.
+    ``next_at`` / ``task_id`` are null on stuck enrollments with no failed
+    task.
     """
 
     workflow_name: str
@@ -777,8 +781,8 @@ class QueueTaskRow(BaseModel):
     email: str
     touch: str = ""
     attempts: int
-    next_at: datetime
-    task_id: str
+    next_at: datetime | None = None
+    task_id: str | None = None
     enrollment_id: str
 
 

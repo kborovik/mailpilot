@@ -174,11 +174,29 @@ mailpilot email list --account-email <ACCOUNT_REF> --limit 50
 
 Human hub for "what is due?". Default is an ASCII table (not JSON). One row
 per workflow (draft, active, paused) with pending-task counts by resolved
-touch (`t1`, `t2`, `t3`, `t4p` for touch 4+) and next send as a full ISO
-datetime in `--tz` (offset included) for table and JSON. Omit `--tz` to
+touch (`t1`, `t2`, `t3`, `t4p` for touch 4+), `failed` (failed-unsent task
+count), `stuck` (stuck-enrollment count), and next send as a full ISO
+datetime in `--tz` (offset included) for table and JSON. `next_at` is the
+earliest pending send; it is empty when there is no pending task even if
+`failed` or `stuck` is greater than 0. Omit `--tz` to
 use the host local IANA timezone (`TZ` env or OS zoneinfo); an
 unresolvable host zone falls back to UTC. Explicit `--tz` overrides.
+
+`failed` counts tasks with status failed, no send (`email_id` null), an
+active enrollment, and no terminal disposition -- including
+`attempt_count` 0. Those rows stay in `failed` until `task retry` or the
+enrollment is concluded or disabled. `stuck` counts active enrollments
+with no next send and no terminal outcome whose latest task failed or
+that still await a first touch. This is not the enrollment/report
+`--stuck` 24h SLA filter.
+
 `--detail` switches to pending-task grain in queue order (oldest first).
+`--detail --failed` lists failed-unsent rows. `--detail --stuck` lists
+stuck enrollments (same columns; touch, attempts, and next_at come from
+the latest failed task when present). `--overdue`, `--failed`, and
+`--stuck` are exclusive on `--detail`; without `--detail` they are
+ignored.
+
 Detail columns: `workflow_name`, `company_domain`, `contact`, `email`,
 `touch`, `attempts`, `next_at`. `touch` is `T<n>`; first-reach rows
 (`enrollment_schedule` with no `touch`) print `T1`. Table and JSON
@@ -187,11 +205,16 @@ Detail columns: `workflow_name`, `company_domain`, `contact`, `email`,
 table/JSON column. Empty prints `(no rows)` and exits 0. Read-only; no
 LLM.
 
+For "why is the queue empty / where did scheduled emails go", one call.
+Do not follow with `workflow review` for that diagnosis.
+
 ```
 mailpilot show queue
 mailpilot show queue --workflow-name <NAME_OR_ID>
 mailpilot show queue --detail
 mailpilot show queue --detail --overdue --limit 50
+mailpilot show queue --detail --failed
+mailpilot show queue --detail --stuck
 mailpilot show queue --format json --tz America/Toronto
 ```
 

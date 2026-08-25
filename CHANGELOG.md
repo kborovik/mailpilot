@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `show queue` workflow-grain columns include `failed` (failed-unsent
+  task count) and `stuck` (stuck-enrollment count) in the same envelope
+  as pending touch buckets. `--detail --failed` lists unsent fails;
+  `--detail --stuck` lists stuck enrollments. `--overdue`, `--failed`,
+  and `--stuck` are exclusive on `--detail`. Queue stuck has no 24h
+  SLA and includes `attempt_count` 0.
 - `task retry --status failed` (and `--status cancelled`) retries every
   matching row with no other scope filter. `--dry-run` previews the set
   in one envelope. `--scheduled-at` still applies to every selected

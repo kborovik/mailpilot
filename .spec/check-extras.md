@@ -1006,7 +1006,7 @@ Trigger: activity/email list filters changed.
 
 ## §V155 — stuck/overdue filters
 
-stuck/overdue filters — `task list --overdue` = pending + scheduled_at < now; enrollment/report `--stuck` heuristics (active no pending no terminal + never-sent past SLA or cadence lag; bounced w/o disposition; high attempt_count fails); default first-send SLA 24h; read-only
+stuck/overdue filters — `task list --overdue` = pending + scheduled_at < now; enrollment/report `--stuck` heuristics (active no pending no terminal + never-sent past SLA or cadence lag; bounced w/o disposition; high attempt_count fails); default first-send SLA 24h; read-only. Queue failed/stuck grain distinct §V.166 (no SLA; includes attempt_count 0 failed-unsent; not this SQL).
 
 Trigger: stuck/overdue filter paths changed.
 - `rg 'overdue|--stuck|first.send|24' src/mailpilot/cli src/mailpilot/database` -> overdue/stuck surfaces
@@ -1109,9 +1109,9 @@ Trigger: `src/mailpilot/settings.py` changed.
 
 `mailpilot show queue` = read-only operator report hub (not CRM noun). Default stdout ASCII table via `tabulate` `tablefmt=simple` (no Unicode box, no ANSI color, no TTY-variant bytes). `--format json|table` (default table). No csv/ndjson. Errors stay JSON stderr + exit 1. `--format json` envelope `{"queue":{grain,tz,rows},"ok":true,"record_count":N}` N=len(rows). `grain` in {`workflow`,`task`}. `--detail` -> task grain else workflow grain.
 
-Workflow grain: 1 row / workflow in scope incl draft|active|paused; omit `--workflow-name` = every workflow; columns {workflow_name, status, t1, t2, t3, t4p, next_at} only (drop active, pending, overdue, due_today, failed_24h, never_sent; keep status). tN = pending-task count whose resolved touch = N (§V.162 parse + first-touch trigger fallback). t4p = resolved touch ≥4. table+JSON `next_at` = full ISO datetime in `--tz` (empty if none; ISO offset required); next_at = MIN pending scheduled_at (all pending, not t1-only); sort next_at ASC (empty last) then name; no `--limit`.
+Workflow grain: 1 row / workflow in scope incl draft|active|paused; omit `--workflow-name` = every workflow; columns {workflow_name, status, t1, t2, t3, t4p, failed, stuck, next_at} only (drop active, pending, overdue, due_today, failed_24h, never_sent; keep status). tN = pending-task count whose resolved touch = N (§V.162 parse + first-touch trigger fallback). t4p = resolved touch ≥4. `failed` = failed-unsent task count (status=failed AND email_id IS NULL AND enrollment.status=active AND no terminal disposition). `stuck` = stuck-enrollment count (status=active AND next_scheduled_at null AND no terminal AND (latest task failed OR awaiting first touch)). table+JSON `next_at` = full ISO datetime in `--tz` (empty if none; ISO offset required); next_at = MIN pending scheduled_at (all pending, not t1-only; null when no pending even if failed/stuck >0); sort next_at ASC (empty last) then name; no `--limit`. Failed-unsent stay in `failed` until retry (task leaves failed) or enrollment conclude/disable.
 
-Task grain: 1 row / pending task; sort scheduled_at ASC (queue order; ! change `list_tasks` DESC); table+JSON cols {workflow_name, company_domain, contact, email, touch, attempts, next_at} only (drop when, trigger, state); hide UUIDs on table; JSON ? include task_id + enrollment_id; `--limit` default 100; `--overdue` = pending + scheduled_at < now; stuck-without-task ! rows (stays §V.155 enrollment/report `--stuck`).
+Task grain: default 1 row / pending task; sort scheduled_at ASC (queue order; ! change `list_tasks` DESC); table+JSON cols {workflow_name, company_domain, contact, email, touch, attempts, next_at} only (drop when, trigger, state); hide UUIDs on table; JSON ? include task_id + enrollment_id; `--limit` default 100; `--overdue` = pending + scheduled_at < now; `--failed` = failed-unsent rows (same cols; next_at = stored scheduled_at); `--stuck` = stuck-enrollment rows (same cols; touch/attempts/next_at from latest failed task when present else empty); `--overdue`/`--failed`/`--stuck` XOR on `--detail` (2+ → validation_error); without `--detail` ignored (same as `--overdue` today). Distinct from §V.155 enrollment/report `--stuck` (no 24h SLA; includes attempt_count=0 failed-unsent). --skill one-call `show queue --format json` replaces `show queue` then `workflow review` for empty-queue / where-did-scheduled-go; `--detail --failed` lists unsent fails. Help zero SPEC cites §V.111.
 
 `--workflow-name` name|UUID §V.107 unknown -> not_found; flag matches table+JSON col `workflow_name` (name, not UUID). `--tz` IANA default host local (TZ env or OS zoneinfo); omit → host TZ; explicit `--tz` overrides; unresolvable local → UTC. table+JSON `next_at` = full ISO datetime in `--tz` (same both grains; ISO offset required). Envelope `tz` = resolved IANA name. `touch` = T<n> via §V.162 parse + first-touch trigger fallback (`enrollment_schedule` / `enrollment_run` → T1 when touch absent). No LLM. No CRM write. Entity JSON verbs byte-stable. Empty -> `(no rows)` exit 0.
 
@@ -1119,6 +1119,7 @@ Trigger: `show queue` path changed.
 - `rg 'show.*queue|def show_queue' src/mailpilot/cli` -> command present
 - `rg 'tabulate|tablefmt' src/mailpilot/` -> tabulate simple renderer
 - `rg 'QueueWorkflowRow|QueueTaskRow|QueueReport' src/mailpilot/models.py` -> read models
+- `rg 'failed|--stuck' src/mailpilot/cli/show.py src/mailpilot/database/workflow.py` -> failed+stuck grains
 
 ## §V167 — company create oneshot profile+tags
 

@@ -59,6 +59,8 @@ def test_queue_table_cells_next_at_is_iso() -> None:
         "t2": 0,
         "t3": 0,
         "t4p": 0,
+        "failed": 0,
+        "stuck": 0,
         "next_at": "2026-08-13T14:30:00+00:00",
     }
     cells = queue_table_cells(row, detail=False, tz=ZoneInfo("UTC"))
@@ -69,8 +71,21 @@ def test_queue_table_cells_next_at_is_iso() -> None:
         "0",
         "0",
         "0",
+        "0",
+        "0",
         "2026-08-13T14:30:00+00:00",
     ]
+    assert queue_table_headers(detail=False) == (
+        "workflow_name",
+        "status",
+        "t1",
+        "t2",
+        "t3",
+        "t4p",
+        "failed",
+        "stuck",
+        "next_at",
+    )
 
 
 def test_queue_table_cells_detail_cols_and_next_at_iso() -> None:

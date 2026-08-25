@@ -10925,6 +10925,8 @@ def test_get_queue_report_workflow_grain_includes_draft_and_sorts(
     assert draft.t2 == 0
     assert draft.t3 == 0
     assert draft.t4p == 0
+    assert draft.failed == 0
+    assert draft.stuck == 0
     assert draft.next_at is None
 
 
@@ -10995,6 +10997,8 @@ def test_get_queue_report_workflow_grain_touch_buckets(
     assert row.t2 == 1
     assert row.t3 == 1
     assert row.t4p == 1
+    assert row.failed == 0
+    assert row.stuck == 0
     assert row.next_at == datetime(2099, 1, 1, 9, 0, tzinfo=UTC)
     assert not hasattr(row, "never_sent")
     assert not hasattr(row, "pending")
@@ -11151,4 +11155,202 @@ def test_get_queue_report_overdue_and_limit(
     all_pending = get_queue_report(database_connection, detail=True)
     pending_rows = [row for row in all_pending.rows if isinstance(row, QueueTaskRow)]
     assert len(pending_rows) == 2
+    assert pending_rows[0].next_at is not None
+    assert pending_rows[1].next_at is not None
     assert pending_rows[0].next_at < pending_rows[1].next_at
+
+
+def _fail_unsent_queue_fixture(
+    database_connection: psycopg.Connection[dict[str, Any]],
+    *,
+    workflow_name: str,
+    email: str,
+) -> tuple[Any, Any, Any]:
+    """Active enrollment + attempt_count 0 failed-unsent T1 (no send)."""
+    from mailpilot.database import complete_task, get_task
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name=workflow_name
+    )
+    company = make_test_company(
+        database_connection, domain="failco.com", name="Fail Co"
+    )
+    contact = make_test_contact(database_connection, email=email, company_id=company.id)
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    task = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="scheduled first reach-out",
+        scheduled_at="2099-01-01T09:00:00+00:00",
+        context={"touch": 1, "trigger": "enrollment_schedule"},
+    )
+    complete_task(
+        database_connection, task.id, status="failed", result={"reason": "provider"}
+    )
+    stored = get_task(database_connection, task.id)
+    assert stored is not None
+    assert stored.status == "failed"
+    assert stored.attempt_count == 0
+    assert stored.email_id is None
+    return workflow, enrollment, task
+
+
+def test_get_queue_report_failed_unsent_attempt_count_zero_until_retry(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.166: attempt_count 0 unsent fail stays until retry; next_at null."""
+    from mailpilot.database import get_queue_report, get_task
+    from mailpilot.models import QueueTaskRow, QueueWorkflowRow
+
+    workflow, enrollment, task = _fail_unsent_queue_fixture(
+        database_connection,
+        workflow_name="queue-failed-retry",
+        email="unsent@failco.com",
+    )
+    report = get_queue_report(database_connection, workflow_id=workflow.id)
+    assert len(report.rows) == 1
+    row = report.rows[0]
+    assert isinstance(row, QueueWorkflowRow)
+    assert row.t1 == 0
+    assert row.failed == 1
+    assert row.stuck == 1
+    assert row.next_at is None
+
+    failed_detail = get_queue_report(
+        database_connection, detail=True, failed=True, workflow_id=workflow.id
+    )
+    assert len(failed_detail.rows) == 1
+    failed_row = failed_detail.rows[0]
+    assert isinstance(failed_row, QueueTaskRow)
+    assert failed_row.email == "unsent@failco.com"
+    assert failed_row.touch == "T1"
+    assert failed_row.attempts == 0
+    assert failed_row.task_id == task.id
+    assert failed_row.enrollment_id == enrollment.id
+    assert failed_row.next_at == datetime(2099, 1, 1, 9, 0, tzinfo=UTC)
+
+    stuck_detail = get_queue_report(
+        database_connection, detail=True, stuck=True, workflow_id=workflow.id
+    )
+    assert len(stuck_detail.rows) == 1
+    stuck_row = stuck_detail.rows[0]
+    assert isinstance(stuck_row, QueueTaskRow)
+    assert stuck_row.email == "unsent@failco.com"
+    assert stuck_row.touch == "T1"
+    assert stuck_row.attempts == 0
+    assert stuck_row.task_id == task.id
+    assert stuck_row.next_at == datetime(2099, 1, 1, 9, 0, tzinfo=UTC)
+
+    retry_tasks_matching(database_connection, workflow_id=workflow.id, status="failed")
+    retried = get_task(database_connection, task.id)
+    assert retried is not None
+    assert retried.status == "pending"
+    after = get_queue_report(database_connection, workflow_id=workflow.id)
+    after_row = after.rows[0]
+    assert isinstance(after_row, QueueWorkflowRow)
+    assert after_row.failed == 0
+    assert after_row.stuck == 0
+    assert after_row.t1 == 1
+    assert after_row.next_at is not None
+    assert (
+        get_queue_report(
+            database_connection, detail=True, failed=True, workflow_id=workflow.id
+        ).rows
+        == []
+    )
+
+
+def test_get_queue_report_failed_unsent_until_conclude(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.166: attempt_count 0 unsent fail leaves the queue on conclude."""
+    from mailpilot.database import get_queue_report
+    from mailpilot.models import QueueWorkflowRow
+
+    workflow, enrollment, _task = _fail_unsent_queue_fixture(
+        database_connection,
+        workflow_name="queue-failed-conclude",
+        email="stop@failco.com",
+    )
+    before = get_queue_report(database_connection, workflow_id=workflow.id)
+    assert isinstance(before.rows[0], QueueWorkflowRow)
+    assert before.rows[0].failed == 1
+    assert before.rows[0].stuck == 1
+    conclude_enrollment(
+        database_connection,
+        enrollment.id,
+        "do_not_contact",
+        "operator stop",
+    )
+    after = get_queue_report(database_connection, workflow_id=workflow.id)
+    after_row = after.rows[0]
+    assert isinstance(after_row, QueueWorkflowRow)
+    assert after_row.failed == 0
+    assert after_row.stuck == 0
+    assert after_row.next_at is None
+    assert (
+        get_queue_report(
+            database_connection, detail=True, failed=True, workflow_id=workflow.id
+        ).rows
+        == []
+    )
+
+
+def test_get_queue_report_stuck_awaiting_first_touch(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.166: never-sent enrollment with no pending is stuck, not failed."""
+    from mailpilot.database import get_queue_report
+    from mailpilot.models import QueueTaskRow, QueueWorkflowRow
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="queue-awaiting"
+    )
+    contact = make_test_contact(database_connection, email="wait@await.test")
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    report = get_queue_report(database_connection, workflow_id=workflow.id)
+    row = report.rows[0]
+    assert isinstance(row, QueueWorkflowRow)
+    assert row.failed == 0
+    assert row.stuck == 1
+    assert row.next_at is None
+    stuck = get_queue_report(
+        database_connection, detail=True, stuck=True, workflow_id=workflow.id
+    )
+    assert len(stuck.rows) == 1
+    stuck_row = stuck.rows[0]
+    assert isinstance(stuck_row, QueueTaskRow)
+    assert stuck_row.email == "wait@await.test"
+    assert stuck_row.enrollment_id == enrollment.id
+    assert stuck_row.task_id is None
+    assert stuck_row.touch == ""
+    assert stuck_row.attempts == 0
+    assert stuck_row.next_at is None
+
+
+def test_get_queue_report_failed_unsent_distinct_from_v155(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.166 / §V.155: attempt_count 0 unsent fail is queue stuck, not 24h SLA."""
+    from mailpilot.database import get_queue_report, list_enrollments_detailed
+    from mailpilot.models import QueueWorkflowRow
+
+    workflow, enrollment, _task = _fail_unsent_queue_fixture(
+        database_connection,
+        workflow_name="queue-vs-sla",
+        email="fresh@failco.com",
+    )
+    report = get_queue_report(database_connection, workflow_id=workflow.id)
+    row = report.rows[0]
+    assert isinstance(row, QueueWorkflowRow)
+    assert row.failed == 1
+    assert row.stuck == 1
+    v155 = list_enrollments_detailed(
+        database_connection, workflow_id=workflow.id, stuck=True, full=True
+    )
+    assert v155 == []
+    assert enrollment.status == "active"
