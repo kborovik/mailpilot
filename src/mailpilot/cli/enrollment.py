@@ -200,12 +200,7 @@ def _reject_enrollment_add_pack_flags(
     limit: int | None,
     company_atomic: bool,
 ) -> None:
-    """Reject packing / filter flags used on the wrong source.
-
-    ``--exclude-peer`` is valid on ``--contact-email`` as well as
-    ``--file`` / ``--tag``; ``--limit`` / ``--company-atomic`` stay
-    batch-source only.
-    """
+    """Reject packing / filter flags used on the wrong source."""
     if min_contacts is not None and tag_ref is None:
         output_error(
             "--min-contacts is only valid with --tag",
@@ -536,12 +531,7 @@ def _enrollment_add_contact(
     *,
     exclude_peer: bool = False,
 ) -> None:
-    """Enroll a single contact, optionally scheduling first touch.
-
-    ``--exclude-peer`` skips when the contact is active on another workflow
-    and returns ``enrollment_batch`` with ``source=contact`` instead of the
-    singular entity envelope.
-    """
+    """Enroll a single contact, optionally scheduling first touch."""
     from mailpilot.database import _preview_peer_workflows, get_account
     from mailpilot.models import EnrollmentBatchRow
     from mailpilot.operator_log import cli_mutation, operator_event

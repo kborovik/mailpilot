@@ -12686,6 +12686,85 @@ def test_enrollment_add_contact_exclude_peer_skips_peer_active(
     assert len(list_enrollments(database_connection, workflow_id=peer.id)) == 1
 
 
+def test_enrollment_add_contact_exclude_peer_omits_scheduled_at(
+    runner: CliRunner, database_connection: Any
+) -> None:
+    """§V.171: --contact-email --exclude-peer w/o --scheduled-at → scheduled_at null."""
+    from conftest import (
+        make_test_account,
+        make_test_company,
+        make_test_contact,
+        make_test_enrollment,
+        make_test_workflow,
+    )
+    from mailpilot.database import list_enrollments
+
+    account = make_test_account(database_connection, email="omit-sched@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="omit-sched-wf"
+    )
+    peer = make_test_workflow(
+        database_connection, account_id=account.id, name="omit-sched-peer-wf"
+    )
+    firm = make_test_company(database_connection, domain="omit-sched.test", name="Omit")
+    ada = make_test_contact(
+        database_connection, email="ada@omit-sched.test", company_id=firm.id
+    )
+    lee = make_test_contact(
+        database_connection, email="lee@omit-sched.test", company_id=firm.id
+    )
+    make_test_enrollment(database_connection, peer.id, lee.id)
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        enrolled = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.name,
+                "--contact-email",
+                ada.email,
+                "--exclude-peer",
+            ],
+        )
+        skipped = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.name,
+                "--contact-email",
+                lee.email,
+                "--exclude-peer",
+            ],
+        )
+
+    assert enrolled.exit_code == 0, enrolled.output
+    enrolled_data = json.loads(enrolled.output)
+    enrolled_batch = enrolled_data["enrollment_batch"]
+    assert enrolled_data["record_count"] == 1
+    assert enrolled_batch["source"] == "contact"
+    assert enrolled_batch["scheduled_at"] is None
+    assert enrolled_batch["enrolled"][0]["scheduled_at"] is None
+    assert enrolled_batch["enrolled"][0]["action"] == "created"
+    assert enrolled_batch["excluded"]["peer"] == 0
+
+    assert skipped.exit_code == 0, skipped.output
+    skipped_data = json.loads(skipped.output)
+    skipped_batch = skipped_data["enrollment_batch"]
+    assert skipped_data["record_count"] == 0
+    assert skipped_batch["source"] == "contact"
+    assert skipped_batch["scheduled_at"] is None
+    assert skipped_batch["enrolled"] == []
+    assert skipped_batch["excluded"]["peer"] == 1
+
+    rows = list_enrollments(database_connection, workflow_id=workflow.id)
+    assert len(rows) == 1
+    assert rows[0].contact_id == ada.id
+
+
 def test_enrollment_add_limit_and_company_atomic_still_require_file_or_tag(
     runner: CliRunner,
 ) -> None:
