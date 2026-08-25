@@ -25,6 +25,8 @@ _QUEUE_WORKFLOW_HEADERS = (
     "t2",
     "t3",
     "t4p",
+    "failed",
+    "stuck",
     "next_at",
 )
 _QUEUE_TASK_TABLE_HEADERS = (

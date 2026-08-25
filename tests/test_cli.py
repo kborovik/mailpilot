@@ -17024,6 +17024,8 @@ def _make_queue_workflow_report() -> Any:
                 t2=0,
                 t3=0,
                 t4p=0,
+                failed=0,
+                stuck=0,
                 next_at=_NOW,
             )
         ],
@@ -17047,6 +17049,8 @@ def test_show_queue_default_is_table(
     assert "alpha-outreach" in result.output
     assert "t1" in result.output
     assert "t4p" in result.output
+    assert "failed" in result.output
+    assert "stuck" in result.output
     assert "------" in result.output or "--------" in result.output
     assert "2024-01-01T00:00:00+00:00" in result.output
 
@@ -17071,6 +17075,8 @@ def test_show_queue_json_envelope_record_count(
     assert data["queue"]["grain"] == "workflow"
     assert data["queue"]["tz"] == "UTC"
     assert data["queue"]["rows"][0]["workflow_name"] == "alpha-outreach"
+    assert data["queue"]["rows"][0]["failed"] == 0
+    assert data["queue"]["rows"][0]["stuck"] == 0
     assert "workflow" not in data["queue"]["rows"][0]
     assert data["queue"]["rows"][0]["next_at"].startswith("2024-01-01T")
 
@@ -17092,6 +17098,8 @@ def test_show_queue_json_next_at_is_iso_in_tz(
                 t2=0,
                 t3=0,
                 t4p=0,
+                failed=0,
+                stuck=0,
                 next_at=_NOW,
             ),
             QueueWorkflowRow(
@@ -17101,6 +17109,8 @@ def test_show_queue_json_next_at_is_iso_in_tz(
                 t2=0,
                 t3=0,
                 t4p=0,
+                failed=0,
+                stuck=0,
                 next_at=None,
             ),
         ],
@@ -17249,11 +17259,19 @@ def test_skill_documents_show_queue() -> None:
     assert "--workflow-name" in body
     assert "t1" in body
     assert "t4p" in body
+    assert "failed" in body
+    assert "stuck" in body
+    assert "--failed" in body
+    assert "--stuck" in body
     assert "company_domain" in body
     assert "next_at" in body
     assert "JSON keeps the stored ISO" not in body
     assert "table and JSON" in body
     assert "host local" in body.lower()
+    assert "Do not follow with `workflow review`" in body
+    assert "show queue --format json" in body
+    assert "§V." not in body
+    assert "§T." not in body
 
 
 def test_show_queue_help_uses_workflow_name(runner: CliRunner) -> None:
@@ -17262,7 +17280,151 @@ def test_show_queue_help_uses_workflow_name(runner: CliRunner) -> None:
     assert result.exit_code == 0
     assert "--workflow-name" in result.output
     assert "--workflow-id" not in result.output
+    assert "--failed" in result.output
+    assert "--stuck" in result.output
     assert "host local" in result.output.lower()
+    assert "§V." not in result.output
+    assert "§T." not in result.output
+
+
+def test_show_queue_detail_failed_stuck_overdue_xor(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.166: --overdue/--failed/--stuck XOR on --detail."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        result = runner.invoke(
+            main, ["show", "queue", "--detail", "--failed", "--overdue"]
+        )
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert data["ok"] is False
+    assert "record_count" not in data
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+    ):
+        both = runner.invoke(main, ["show", "queue", "--detail", "--failed", "--stuck"])
+    assert both.exit_code == 1
+    assert json.loads(both.output)["error"] == "validation_error"
+
+
+def test_show_queue_failed_stuck_ignored_without_detail(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.166: --failed/--stuck without --detail are ignored."""
+    from mailpilot.models import QueueReport, QueueWorkflowRow
+
+    captured: list[dict[str, Any]] = []
+
+    def _report(_connection: Any, **kwargs: Any) -> QueueReport:
+        captured.append(kwargs)
+        return QueueReport(
+            grain="workflow",
+            tz=kwargs["tz"],
+            rows=[
+                QueueWorkflowRow(
+                    workflow_name="alpha-outreach",
+                    status="active",
+                    t1=1,
+                    t2=0,
+                    t3=0,
+                    t4p=0,
+                    failed=2,
+                    stuck=1,
+                    next_at=_NOW,
+                )
+            ],
+        )
+
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_queue_report", side_effect=_report),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "show",
+                "queue",
+                "--failed",
+                "--stuck",
+                "--overdue",
+                "--format",
+                "json",
+                "--tz",
+                "UTC",
+            ],
+        )
+    assert result.exit_code == 0
+    assert captured[0]["detail"] is False
+    assert captured[0]["failed"] is False
+    assert captured[0]["stuck"] is False
+    assert captured[0]["overdue"] is False
+    data = json.loads(result.output)
+    assert data["record_count"] == 1
+    assert data["queue"]["rows"][0]["failed"] == 2
+    assert data["queue"]["rows"][0]["stuck"] == 1
+
+
+def test_show_queue_detail_failed_passes_flag(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.166: --detail --failed lists failed-unsent (same task-grain cols)."""
+    from mailpilot.models import QueueReport, QueueTaskRow
+
+    captured: list[dict[str, Any]] = []
+
+    def _report(_connection: Any, **kwargs: Any) -> QueueReport:
+        captured.append(kwargs)
+        return QueueReport(
+            grain="task",
+            tz=kwargs["tz"],
+            rows=[
+                QueueTaskRow(
+                    workflow_name="alpha-outreach",
+                    company_domain="example.com",
+                    contact="Ada Lovelace",
+                    email="ada@example.com",
+                    touch="T1",
+                    attempts=0,
+                    next_at=_NOW,
+                    task_id="01234567-0000-7000-0000-000000000099",
+                    enrollment_id="01234567-0000-7000-0000-000000000088",
+                )
+            ],
+        )
+
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_queue_report", side_effect=_report),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "show",
+                "queue",
+                "--detail",
+                "--failed",
+                "--format",
+                "json",
+                "--tz",
+                "UTC",
+            ],
+        )
+    assert result.exit_code == 0
+    assert captured[0]["detail"] is True
+    assert captured[0]["failed"] is True
+    assert captured[0]["stuck"] is False
+    assert captured[0]["overdue"] is False
+    data = json.loads(result.output)
+    assert data["queue"]["grain"] == "task"
+    assert data["record_count"] == 1
+    assert data["queue"]["rows"][0]["attempts"] == 0
 
 
 def test_show_queue_omitted_tz_uses_host_local(
@@ -17283,6 +17445,8 @@ def test_show_queue_omitted_tz_uses_host_local(
                     t2=0,
                     t3=0,
                     t4p=0,
+                    failed=0,
+                    stuck=0,
                     next_at=_NOW,
                 )
             ],
@@ -17321,6 +17485,8 @@ def test_show_queue_explicit_tz_overrides_host(
                     t2=0,
                     t3=0,
                     t4p=0,
+                    failed=0,
+                    stuck=0,
                     next_at=_NOW,
                 )
             ],

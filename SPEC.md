@@ -310,7 +310,7 @@ T323|x|impl §V.189(+) + §V.37(∆)+§V.75(∆)+§V.49(∆)+§V.126(∆)+§I �
 T324|x|impl §V.190(+) + §V.2(∆) — split `cli.py` → `cli/` (`main.py` group+output+`_db`+resolvers; per-noun cmds); `database.py` → `database/` (schema/status + per-entity); thin `from mailpilot.database import X`; lazy-import per module; existing tests pass same PR or listed follow-on; extras-hook + SKILL-drift greps retarget `cli/` `database/`; entrypoint `mailpilot.cli:main` (#269)|V190,V2,V177,V107,I.cli,I.entrypoint
 T325|x|impl §V.175(∆) + §I — `task retry --status failed --dry-run` previews every failed; `task retry --status failed` one write; `--scheduled-at` on set; SKILL one-call replaces per-workflow retry loop; tests (#296)|V175,V170,V180,V4,V111,I.cli
 T326|x|impl §V.191(+) + §V.47(∆) + §V.181(∆) + §I.config — drop `xai_api_host` Settings/APP_CONFIG_KEYS/schema/CLI; `XaiProvider` no `api_host`; migration DROP COLUMN; SKILL; tests leftover-col + no override (#295)|V191,V47,V181,I.config
-T327|.|impl §V.166(∆) + §I — show queue failed-unsent + stuck counts on workflow grain; --detail --failed|--stuck XOR --overdue; SKILL one-call drops workflow review for empty-queue diagnosis; tests fixture attempt_count 0 unsent fail stays until retry or conclude (#294)|V166,V155,V4,V111,I.cli
+T327|x|impl §V.166(∆) + §I — show queue failed-unsent + stuck counts on workflow grain; --detail --failed|--stuck XOR --overdue; SKILL one-call drops workflow review for empty-queue diagnosis; tests fixture attempt_count 0 unsent fail stays until retry or conclude (#294)|V166,V155,V4,V111,I.cli
 
 ## §B BUGS
 

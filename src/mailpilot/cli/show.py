@@ -30,7 +30,7 @@ def show() -> None:
     "--detail",
     is_flag=True,
     default=False,
-    help="Task-grain queue: one row per pending task.",
+    help="Task-grain queue: pending, or --failed / --stuck / --overdue.",
 )
 @scope_option("--workflow-name", "workflow_name", "Filter by workflow (name or ID).")
 @click.option(
@@ -55,6 +55,18 @@ def show() -> None:
     default=False,
     help="Only pending tasks with scheduled_at in the past.",
 )
+@click.option(
+    "--failed",
+    is_flag=True,
+    default=False,
+    help="Only failed-unsent tasks (needs --detail).",
+)
+@click.option(
+    "--stuck",
+    is_flag=True,
+    default=False,
+    help="Only stuck enrollments (needs --detail).",
+)
 def show_queue(
     detail: bool,
     workflow_name: str | None,
@@ -62,13 +74,17 @@ def show_queue(
     output_format: str,
     limit: int,
     overdue: bool,
+    failed: bool,
+    stuck: bool,
 ) -> None:
     """Show the outbound queue as a human table (JSON opt-in).
 
     Default grain is one row per workflow (draft, active, paused) with
-    pending counts by touch (t1/t2/t3/t4p). --detail lists pending tasks
-    (workflow_name, company_domain, contact, email, touch, attempts,
-    next_at). Empty prints (no rows).
+    pending counts by touch (t1/t2/t3/t4p), failed-unsent, and stuck
+    enrollments. --detail lists pending tasks (workflow_name,
+    company_domain, contact, email, touch, attempts, next_at).
+    --detail --failed / --stuck list those rows instead. Empty prints
+    (no rows).
     """
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -81,6 +97,12 @@ def show_queue(
         queue_table_headers,
         resolve_host_tz,
     )
+
+    if detail and (overdue + failed + stuck) > 1:
+        output_error(
+            "--overdue, --failed, and --stuck are mutually exclusive",
+            "validation_error",
+        )
 
     resolved_tz = resolve_host_tz() if tz_name is None else tz_name
     try:
@@ -99,6 +121,8 @@ def show_queue(
             tz=resolved_tz,
             limit=limit if detail else 100,
             overdue=overdue if detail else False,
+            failed=failed if detail else False,
+            stuck=stuck if detail else False,
         )
 
     dumped = project_queue_json_next_at(report.model_dump(mode="json"), tz=zone)

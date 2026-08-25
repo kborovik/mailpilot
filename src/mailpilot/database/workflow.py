@@ -10,13 +10,14 @@ from datetime import UTC, datetime
 from typing import Any
 
 import psycopg
-from psycopg.sql import SQL
+from psycopg.sql import SQL, Composed
 
 from mailpilot.database._common import (
     _build_update,
     _new_id,
 )
 from mailpilot.database._sql import (
+    _enrollment_outcome_lateral,
     _sql_outbound_sent_count,
     _sql_resolve_touch,
 )
@@ -707,14 +708,17 @@ def get_queue_report(
     tz: str = "UTC",
     limit: int = 100,
     overdue: bool = False,
+    failed: bool = False,
+    stuck: bool = False,
 ) -> QueueReport:
     """Build the ``show queue`` report (§V.166).
 
     Workflow grain: one row per in-scope workflow (draft/active/paused),
     sorted by next pending ``scheduled_at`` ascending (empty last) then name.
-    Task grain: pending tasks only, sorted by ``scheduled_at`` ascending
-    (does not change ``list_tasks`` DESC). ``--limit`` and ``--overdue``
-    apply to task grain only. No LLM, no write.
+    Task grain: pending tasks by default, sorted by ``scheduled_at``
+    ascending (does not change ``list_tasks`` DESC). ``--limit``,
+    ``--overdue``, ``--failed``, and ``--stuck`` apply to task grain only.
+    No LLM, no write.
     """
     from zoneinfo import ZoneInfo
 
@@ -725,6 +729,8 @@ def get_queue_report(
             workflow_id=workflow_id,
             limit=limit,
             overdue=overdue,
+            failed=failed,
+            stuck=stuck,
         )
         return QueueReport(grain="task", tz=tz, rows=rows)
     workflow_rows = _queue_workflow_rows(connection, workflow_id=workflow_id)
@@ -744,6 +750,7 @@ def _queue_workflow_rows(
         params["workflow_id"] = workflow_id
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     resolved = _sql_resolve_touch(SQL("t.context"))
+    sent_count = _sql_outbound_sent_count(SQL("e"))
     query = SQL(
         """\
         WITH tasks AS (
@@ -765,6 +772,37 @@ def _queue_workflow_rows(
                     AS next_at
             FROM task t
             GROUP BY t.workflow_id
+        ),
+        failed AS (
+            SELECT t.workflow_id, COUNT(*)::int AS failed
+            FROM task t
+            JOIN enrollment e ON e.id = t.enrollment_id
+            {outcome}
+            WHERE t.status = 'failed'
+              AND t.email_id IS NULL
+              AND e.status = 'active'
+              AND outcome.latest_outcome IS NULL
+            GROUP BY t.workflow_id
+        ),
+        stuck AS (
+            SELECT e.workflow_id, COUNT(*)::int AS stuck
+            FROM enrollment e
+            LEFT JOIN LATERAL (
+                SELECT t.scheduled_at FROM task t
+                WHERE t.enrollment_id = e.id AND t.status = 'pending'
+                ORDER BY t.scheduled_at ASC NULLS LAST LIMIT 1
+            ) nt ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT t.status FROM task t
+                WHERE t.enrollment_id = e.id
+                ORDER BY t.created_at DESC LIMIT 1
+            ) lt ON TRUE
+            {outcome}
+            WHERE e.status = 'active'
+              AND nt.scheduled_at IS NULL
+              AND outcome.latest_outcome IS NULL
+              AND (lt.status = 'failed' OR {sent} = 0)
+            GROUP BY e.workflow_id
         )
         SELECT
             w.name AS workflow_name,
@@ -773,15 +811,53 @@ def _queue_workflow_rows(
             COALESCE(tasks.t2, 0) AS t2,
             COALESCE(tasks.t3, 0) AS t3,
             COALESCE(tasks.t4p, 0) AS t4p,
+            COALESCE(failed.failed, 0) AS failed,
+            COALESCE(stuck.stuck, 0) AS stuck,
             tasks.next_at
         FROM workflow w
         LEFT JOIN tasks ON tasks.workflow_id = w.id
+        LEFT JOIN failed ON failed.workflow_id = w.id
+        LEFT JOIN stuck ON stuck.workflow_id = w.id
         {where}
         ORDER BY tasks.next_at ASC NULLS LAST, w.name ASC
         """
-    ).format(touch=resolved, where=where)
+    ).format(
+        touch=resolved,
+        outcome=_enrollment_outcome_lateral(),
+        sent=sent_count,
+        where=where,
+    )
     rows = connection.execute(query, params).fetchall()
     return [QueueWorkflowRow.model_validate(row) for row in rows]
+
+
+_QUEUE_CONTACT_SQL = SQL(
+    "COALESCE("
+    "NULLIF(TRIM(BOTH FROM CONCAT_WS(' ', c.first_name, c.last_name)), ''), "
+    "c.email)"
+)
+
+
+def _queue_task_from_row(row: dict[str, Any]) -> QueueTaskRow:
+    """Map a task-grain SQL row onto ``QueueTaskRow``."""
+    from mailpilot.queue import format_queue_touch
+
+    context = row["context"]
+    context_dict = context if isinstance(context, dict) else None
+    trigger = row["trigger"]
+    trigger_text = trigger if isinstance(trigger, str) else ""
+    attempts = row["attempts"]
+    return QueueTaskRow(
+        workflow_name=row["workflow_name"],
+        company_domain=row["company_domain"] or "",
+        contact=row["contact"],
+        email=row["email"],
+        touch=format_queue_touch(context_dict, trigger_text),
+        attempts=int(attempts) if attempts is not None else 0,
+        next_at=row["next_at"],
+        task_id=row["task_id"],
+        enrollment_id=row["enrollment_id"],
+    )
 
 
 def _queue_task_rows(
@@ -790,10 +866,14 @@ def _queue_task_rows(
     workflow_id: str | None,
     limit: int,
     overdue: bool,
+    failed: bool = False,
+    stuck: bool = False,
 ) -> list[QueueTaskRow]:
-    """Pending-task grain, queue order (scheduled_at ASC)."""
-    from mailpilot.queue import format_queue_touch
-
+    """Task grain: pending (default), failed-unsent, or stuck enrollments."""
+    if stuck:
+        return _queue_stuck_rows(connection, workflow_id=workflow_id, limit=limit)
+    if failed:
+        return _queue_failed_rows(connection, workflow_id=workflow_id, limit=limit)
     conditions: list[SQL] = [SQL("t.status = 'pending'")]
     params: dict[str, object] = {"limit": limit}
     if workflow_id is not None:
@@ -808,13 +888,7 @@ def _queue_task_rows(
             t.id AS task_id,
             t.enrollment_id,
             t.scheduled_at AS next_at,
-            COALESCE(
-                NULLIF(
-                    TRIM(BOTH FROM CONCAT_WS(' ', c.first_name, c.last_name)),
-                    ''
-                ),
-                c.email
-            ) AS contact,
+            {contact} AS contact,
             c.email AS email,
             COALESCE(co.domain, '') AS company_domain,
             w.name AS workflow_name,
@@ -825,30 +899,130 @@ def _queue_task_rows(
         JOIN workflow w ON w.id = t.workflow_id
         JOIN contact c ON c.id = t.contact_id
         LEFT JOIN company co ON co.id = c.company_id
-        {}
+        {where}
         ORDER BY t.scheduled_at ASC
         LIMIT %(limit)s
         """
-    ).format(where)
+    ).format(contact=_QUEUE_CONTACT_SQL, where=where)
     rows = connection.execute(query, params).fetchall()
-    result: list[QueueTaskRow] = []
-    for row in rows:
-        context = row["context"]
-        context_dict = context if isinstance(context, dict) else None
-        result.append(
-            QueueTaskRow(
-                workflow_name=row["workflow_name"],
-                company_domain=row["company_domain"],
-                contact=row["contact"],
-                email=row["email"],
-                touch=format_queue_touch(context_dict, row["trigger"]),
-                attempts=row["attempts"],
-                next_at=row["next_at"],
-                task_id=row["task_id"],
-                enrollment_id=row["enrollment_id"],
-            )
-        )
-    return result
+    return [_queue_task_from_row(row) for row in rows]
+
+
+def _queue_failed_rows(
+    connection: psycopg.Connection[dict[str, Any]],
+    *,
+    workflow_id: str | None,
+    limit: int,
+) -> list[QueueTaskRow]:
+    """Failed-unsent task grain (status=failed, email_id null, active, no terminal)."""
+    conditions: list[SQL] = [
+        SQL("t.status = 'failed'"),
+        SQL("t.email_id IS NULL"),
+        SQL("e.status = 'active'"),
+        SQL("outcome.latest_outcome IS NULL"),
+    ]
+    params: dict[str, object] = {"limit": limit}
+    if workflow_id is not None:
+        conditions.append(SQL("t.workflow_id = %(workflow_id)s"))
+        params["workflow_id"] = workflow_id
+    where = SQL("WHERE ") + SQL(" AND ").join(conditions)
+    query = SQL(
+        """\
+        SELECT
+            t.id AS task_id,
+            t.enrollment_id,
+            t.scheduled_at AS next_at,
+            {contact} AS contact,
+            c.email AS email,
+            COALESCE(co.domain, '') AS company_domain,
+            w.name AS workflow_name,
+            t.context,
+            COALESCE(t.context->>'trigger', '') AS trigger,
+            t.attempt_count AS attempts
+        FROM task t
+        JOIN enrollment e ON e.id = t.enrollment_id
+        JOIN workflow w ON w.id = t.workflow_id
+        JOIN contact c ON c.id = t.contact_id
+        LEFT JOIN company co ON co.id = c.company_id
+        {outcome}
+        {where}
+        ORDER BY t.scheduled_at ASC
+        LIMIT %(limit)s
+        """
+    ).format(
+        contact=_QUEUE_CONTACT_SQL,
+        outcome=_enrollment_outcome_lateral(),
+        where=where,
+    )
+    rows = connection.execute(query, params).fetchall()
+    return [_queue_task_from_row(row) for row in rows]
+
+
+def _queue_stuck_rows(
+    connection: psycopg.Connection[dict[str, Any]],
+    *,
+    workflow_id: str | None,
+    limit: int,
+) -> list[QueueTaskRow]:
+    """Stuck-enrollment grain; latest failed task fills touch/attempts/next_at."""
+    sent_count = _sql_outbound_sent_count(SQL("e"))
+    conditions: list[SQL | Composed] = [
+        SQL("e.status = 'active'"),
+        SQL("nt.scheduled_at IS NULL"),
+        SQL("outcome.latest_outcome IS NULL"),
+        SQL("(lt.status = 'failed' OR {sent} = 0)").format(sent=sent_count),
+    ]
+    params: dict[str, object] = {"limit": limit}
+    if workflow_id is not None:
+        conditions.append(SQL("e.workflow_id = %(workflow_id)s"))
+        params["workflow_id"] = workflow_id
+    where = SQL("WHERE ") + SQL(" AND ").join(conditions)
+    query = SQL(
+        """\
+        SELECT
+            ft.id AS task_id,
+            e.id AS enrollment_id,
+            ft.scheduled_at AS next_at,
+            {contact} AS contact,
+            c.email AS email,
+            COALESCE(co.domain, '') AS company_domain,
+            w.name AS workflow_name,
+            ft.context,
+            COALESCE(ft.trigger, '') AS trigger,
+            ft.attempt_count AS attempts
+        FROM enrollment e
+        JOIN workflow w ON w.id = e.workflow_id
+        JOIN contact c ON c.id = e.contact_id
+        LEFT JOIN company co ON co.id = c.company_id
+        LEFT JOIN LATERAL (
+            SELECT t.scheduled_at FROM task t
+            WHERE t.enrollment_id = e.id AND t.status = 'pending'
+            ORDER BY t.scheduled_at ASC NULLS LAST LIMIT 1
+        ) nt ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT t.status FROM task t
+            WHERE t.enrollment_id = e.id
+            ORDER BY t.created_at DESC LIMIT 1
+        ) lt ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT t.id, t.scheduled_at, t.attempt_count, t.context,
+                   COALESCE(t.context->>'trigger', '') AS trigger
+            FROM task t
+            WHERE t.enrollment_id = e.id AND t.status = 'failed'
+            ORDER BY t.created_at DESC LIMIT 1
+        ) ft ON TRUE
+        {outcome}
+        {where}
+        ORDER BY ft.scheduled_at ASC NULLS LAST, c.email ASC
+        LIMIT %(limit)s
+        """
+    ).format(
+        contact=_QUEUE_CONTACT_SQL,
+        outcome=_enrollment_outcome_lateral(),
+        where=where,
+    )
+    rows = connection.execute(query, params).fetchall()
+    return [_queue_task_from_row(row) for row in rows]
 
 
 def _compute_workflow_wording_hash(
