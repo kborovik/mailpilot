@@ -117,7 +117,10 @@ def include_disabled_option(fn: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def enrollment_coverage_options(fn: Callable[..., Any]) -> Callable[..., Any]:
-    """Add ``--unenrolled`` / ``--enrolled`` coverage flags (defaults off; XOR is the command body's ``validation_error``)."""
+    """Add ``--unenrolled`` / ``--enrolled`` coverage flags.
+
+    Defaults off; XOR is the command body's ``validation_error``.
+    """
     fn = click.option(
         "--enrolled",
         is_flag=True,
