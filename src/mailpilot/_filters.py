@@ -117,12 +117,7 @@ def include_disabled_option(fn: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def enrollment_coverage_options(fn: Callable[..., Any]) -> Callable[..., Any]:
-    """Add ``--unenrolled`` / ``--enrolled`` XOR coverage flags.
-
-    Both default off (no enrollment-row filter). The command body rejects
-    both-true as ``validation_error``. Unenrolled is zero enrollment rows
-    (any workflow, any status); enrolled is at least one row any status.
-    """
+    """Add ``--unenrolled`` / ``--enrolled`` coverage flags (defaults off; XOR is the command body's ``validation_error``)."""
     fn = click.option(
         "--enrolled",
         is_flag=True,

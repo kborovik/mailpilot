@@ -282,7 +282,7 @@ def create_contacts_bulk(
 def _enrollment_coverage_conditions(
     enrollment: Literal["unenrolled", "enrolled"] | None,
 ) -> list[SQL]:
-    """Enrollment-row EXISTS / NOT EXISTS predicates (empty when unset)."""
+    """Any enrollment status counts; subquery has no ``status`` predicate."""
     if enrollment == "unenrolled":
         return [
             SQL("NOT EXISTS (SELECT 1 FROM enrollment e WHERE e.contact_id = c.id)")
