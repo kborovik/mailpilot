@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- `task retry --status failed` (and `--status cancelled`) retries every
+  matching row with no other scope filter. `--dry-run` previews the set
+  in one envelope. `--scheduled-at` still applies to every selected
+  row. `task cancel` still requires a scope filter.
+
 ## [v0.32.0] - 2026-08-24
 
 ### Added

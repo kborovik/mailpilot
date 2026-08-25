@@ -307,7 +307,7 @@ T321|x|impl §V.188(+) + §V.169(∆) — mechanical OOO after route: no inbound
 T322|x|impl §V.188 — campaign-test mechanical signal before route; leftover execute_task ! second resume; isolation before `_wait_for_routing`; auto_reply next_scheduled_at within 21d|V188,V169,B150
 T323|x|impl §V.189(+) + §V.37(∆)+§V.75(∆)+§V.49(∆)+§V.126(∆)+§I — google_auth.py creds; one build_delegated_service + client base; Drive _list_markdown_files; drop dead Gmail methods + user_id; Pub/Sub resolve_project_id; shared Google transient set (no 529); get_messages_batch per-item retry; retarget creds patches; existing Gmail/Drive/Calendar/Pub/Sub/batch-fetch tests (#268)|V189,V37,V75,V49,V126,V35,I.module,I.pubsub
 T324|x|impl §V.190(+) + §V.2(∆) — split `cli.py` → `cli/` (`main.py` group+output+`_db`+resolvers; per-noun cmds); `database.py` → `database/` (schema/status + per-entity); thin `from mailpilot.database import X`; lazy-import per module; existing tests pass same PR or listed follow-on; extras-hook + SKILL-drift greps retarget `cli/` `database/`; entrypoint `mailpilot.cli:main` (#269)|V190,V2,V177,V107,I.cli,I.entrypoint
-T325|.|impl §V.175(∆) + §I — `task retry --status failed --dry-run` previews every failed; `task retry --status failed` one write; `--scheduled-at` on set; SKILL one-call replaces per-workflow retry loop; tests (#296)|V175,V170,V180,V4,V111,I.cli
+T325|x|impl §V.175(∆) + §I — `task retry --status failed --dry-run` previews every failed; `task retry --status failed` one write; `--scheduled-at` on set; SKILL one-call replaces per-workflow retry loop; tests (#296)|V175,V170,V180,V4,V111,I.cli
 
 ## §B BUGS
 

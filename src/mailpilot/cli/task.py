@@ -133,6 +133,7 @@ _TASK_RETRY_REQUIRED: tuple[str, ...] = (
     "workflow-id",
     "contact-email",
     "trigger",
+    "status",
 )
 _TASK_CANCEL_STATUS: tuple[str, ...] = ("pending",)
 _TASK_RETRY_STATUS: tuple[str, ...] = ("failed", "cancelled")
@@ -159,14 +160,10 @@ def _task_filter_mode(
         "contact-email": contact_email is not None,
         "trigger": trigger is not None,
         "overdue": overdue,
+        "status": status is not None,
     }
     has_required = any(flags[name] for name in required)
-    has_any_filter = bool(
-        any(flags.values())
-        or status is not None
-        or since is not None
-        or until is not None
-    )
+    has_any_filter = bool(any(flags.values()) or since is not None or until is not None)
     if task_id is not None and has_any_filter:
         output_error(
             "TASK_ID is exclusive with filter flags",
@@ -291,10 +288,12 @@ def task_retry(
 
     Pass TASK_ID to retry one row, or filters to retry every matching
     failed (default) or cancelled row. Filter-mode needs at least one of
-    --touch, --workflow-id, --contact-email, or --trigger. --status
-    defaults to failed; only failed and cancelled are allowed. TASK_ID
-    and filters are exclusive. --scheduled-at applies to every selected
-    row. --dry-run previews ids and companies with no writes.
+    --touch, --workflow-id, --contact-email, --trigger, or --status.
+    --status failed or --status cancelled with no other scope retries
+    every matching row. --status defaults to failed; only failed and
+    cancelled are allowed. TASK_ID and filters are exclusive.
+    --scheduled-at applies to every selected row. --dry-run previews
+    ids and companies with no writes.
     """
     from mailpilot.database import (
         get_task,

@@ -14220,6 +14220,23 @@ def test_task_cancel_filter_mode_requires_scope(
     assert data["error"] == "validation_error"
 
 
+def test_task_cancel_status_only_validation_error(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.173/§V.180: --status is not a cancel scope filter."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.cancel_tasks_matching") as mock_filter,
+    ):
+        result = runner.invoke(main, ["task", "cancel", "--status", "pending"])
+
+    assert result.exit_code == 1
+    mock_filter.assert_not_called()
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+
+
 def test_task_cancel_since_only_validation_error(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
@@ -14728,7 +14745,7 @@ def test_task_retry_task_id_plus_filters_validation_error(
 def test_task_retry_filter_mode_requires_scope(
     runner: CliRunner, mock_connection: MagicMock
 ) -> None:
-    """§V.175: filter-mode needs --touch/workflow/contact/trigger."""
+    """§V.175: bare retry still needs a filter (status is sufficient)."""
     with (
         patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
         patch("mailpilot.database.initialize_database", return_value=mock_connection),
@@ -14740,6 +14757,122 @@ def test_task_retry_filter_mode_requires_scope(
     mock_filter.assert_not_called()
     data = json.loads(result.output)
     assert data["error"] == "validation_error"
+
+
+def test_task_retry_status_failed_no_scope_dry_run(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.175: --status failed --dry-run previews every failed row."""
+    from mailpilot.models import TaskRetryCompany, TaskRetryResult
+
+    join = TaskRetryResult(
+        retried_count=2,
+        ids=["id-a", "id-b"],
+        companies=[
+            TaskRetryCompany(domain="a.com", count=1),
+            TaskRetryCompany(domain="b.com", count=1),
+        ],
+        dry_run=True,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.retry_tasks_matching", return_value=join
+        ) as mock_retry,
+    ):
+        result = runner.invoke(
+            main, ["task", "retry", "--status", "failed", "--dry-run"]
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_retry.assert_called_once()
+    kwargs = mock_retry.call_args.kwargs
+    assert kwargs["workflow_id"] is None
+    assert kwargs["contact_id"] is None
+    assert kwargs["status"] == "failed"
+    assert kwargs["trigger"] is None
+    assert kwargs["touches"] is None
+    assert kwargs["dry_run"] is True
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 2
+    assert data["task_retry"]["retried_count"] == 2
+    assert data["task_retry"]["ids"] == ["id-a", "id-b"]
+    assert data["task_retry"]["dry_run"] is True
+
+
+def test_task_retry_status_failed_no_scope_write(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.175/§V.170: --status failed retries every failed; --scheduled-at on set."""
+    from mailpilot.models import TaskRetryCompany, TaskRetryResult
+
+    when = "2099-08-24T09:00:00-04:00"
+    join = TaskRetryResult(
+        retried_count=2,
+        ids=["id-a", "id-b"],
+        scheduled_at=when,
+        companies=[
+            TaskRetryCompany(domain="a.com", count=1),
+            TaskRetryCompany(domain="b.com", count=1),
+        ],
+        dry_run=False,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.retry_tasks_matching", return_value=join
+        ) as mock_retry,
+    ):
+        result = runner.invoke(
+            main,
+            ["task", "retry", "--status", "failed", "--scheduled-at", when],
+        )
+
+    assert result.exit_code == 0, result.output
+    mock_retry.assert_called_once()
+    kwargs = mock_retry.call_args.kwargs
+    assert kwargs["workflow_id"] is None
+    assert kwargs["status"] == "failed"
+    assert kwargs["dry_run"] is False
+    assert kwargs["scheduled_at"] is not None
+    parsed = datetime.fromisoformat(kwargs["scheduled_at"])
+    assert parsed == datetime.fromisoformat(when)
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 2
+    assert data["task_retry"]["retried_count"] == 2
+    assert data["task_retry"]["ids"] == ["id-a", "id-b"]
+    assert data["task_retry"]["dry_run"] is False
+    assert data["task_retry"]["scheduled_at"] == when
+
+
+def test_task_retry_status_cancelled_no_scope(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.175: --status cancelled with no other scope retries every cancelled."""
+    from mailpilot.models import TaskRetryResult
+
+    join = TaskRetryResult(retried_count=1, ids=["id-c"], dry_run=False)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.retry_tasks_matching", return_value=join
+        ) as mock_retry,
+    ):
+        result = runner.invoke(main, ["task", "retry", "--status", "cancelled"])
+
+    assert result.exit_code == 0, result.output
+    mock_retry.assert_called_once()
+    kwargs = mock_retry.call_args.kwargs
+    assert kwargs["workflow_id"] is None
+    assert kwargs["status"] == "cancelled"
+    assert kwargs["dry_run"] is False
+    data = json.loads(result.output)
+    assert data["task_retry"]["retried_count"] == 1
 
 
 def test_task_retry_overdue_only_validation_error(
@@ -15046,6 +15179,111 @@ def test_task_retry_live_filter_mode(
     assert get_task(database_connection, t2.id).status == "failed"  # type: ignore[union-attr]
 
 
+def test_task_retry_live_status_failed_cross_workflow(
+    runner: CliRunner, database_connection: Any
+) -> None:
+    """§V.175/§V.170: --status failed retries every failed across workflows."""
+    from conftest import (
+        make_test_account,
+        make_test_company,
+        make_test_contact,
+        make_test_enrollment,
+        make_test_workflow,
+    )
+    from mailpilot.database import complete_task, create_task, get_task
+
+    account = make_test_account(database_connection, email="retry-status-all@lab5.test")
+    workflow_a = make_test_workflow(
+        database_connection, account_id=account.id, name="retry-status-a"
+    )
+    workflow_b = make_test_workflow(
+        database_connection, account_id=account.id, name="retry-status-b"
+    )
+    company = make_test_company(
+        database_connection, name="Retry Status Co", domain="retry-status.test"
+    )
+    contact_a = make_test_contact(
+        database_connection, email="a@retry-status.test", company_id=company.id
+    )
+    contact_b = make_test_contact(
+        database_connection, email="b@retry-status.test", company_id=company.id
+    )
+    en_a = make_test_enrollment(database_connection, workflow_a.id, contact_a.id)
+    en_b = make_test_enrollment(database_connection, workflow_b.id, contact_b.id)
+    failed_a = create_task(
+        database_connection,
+        enrollment_id=en_a.id,
+        workflow_id=workflow_a.id,
+        contact_id=contact_a.id,
+        description="Touch 1 of 3",
+        scheduled_at="2020-01-01T12:00:00Z",
+        context={"touch": 1},
+    )
+    failed_b = create_task(
+        database_connection,
+        enrollment_id=en_b.id,
+        workflow_id=workflow_b.id,
+        contact_id=contact_b.id,
+        description="Touch 2 of 3",
+        scheduled_at="2020-01-01T13:00:00Z",
+        context={"touch": 2},
+    )
+    pending = create_task(
+        database_connection,
+        enrollment_id=en_a.id,
+        workflow_id=workflow_a.id,
+        contact_id=contact_a.id,
+        description="still queued",
+        scheduled_at="2099-01-01T00:00:00Z",
+        context={"touch": 3},
+    )
+    complete_task(
+        database_connection, failed_a.id, status="failed", result={"reason": "boom"}
+    )
+    complete_task(
+        database_connection, failed_b.id, status="failed", result={"reason": "boom"}
+    )
+
+    when = "2099-08-24T09:00:00-04:00"
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        preview = runner.invoke(
+            main, ["task", "retry", "--status", "failed", "--dry-run"]
+        )
+    assert preview.exit_code == 0, preview.output
+    preview_data = json.loads(preview.output)
+    assert preview_data["ok"] is True
+    assert preview_data["record_count"] == 2
+    assert set(preview_data["task_retry"]["ids"]) == {failed_a.id, failed_b.id}
+    assert preview_data["task_retry"]["dry_run"] is True
+    assert get_task(database_connection, failed_a.id).status == "failed"  # type: ignore[union-attr]
+    assert get_task(database_connection, failed_b.id).status == "failed"  # type: ignore[union-attr]
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            ["task", "retry", "--status", "failed", "--scheduled-at", when],
+        )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 2
+    assert set(data["task_retry"]["ids"]) == {failed_a.id, failed_b.id}
+    assert data["task_retry"]["retried_count"] == 2
+    assert data["task_retry"]["dry_run"] is False
+    assert data["task_retry"]["companies"] == [
+        {"domain": "retry-status.test", "count": 2}
+    ]
+    reset_a = get_task(database_connection, failed_a.id)
+    reset_b = get_task(database_connection, failed_b.id)
+    assert reset_a is not None
+    assert reset_b is not None
+    assert reset_a.status == "pending"
+    assert reset_b.status == "pending"
+    assert reset_a.scheduled_at == datetime.fromisoformat(when)
+    assert reset_b.scheduled_at == datetime.fromisoformat(when)
+    assert get_task(database_connection, pending.id).status == "pending"  # type: ignore[union-attr]
+
+
 def test_skill_documents_task_retry_one_call() -> None:
     """§V.175: packaged SKILL.md one-call replaces list-then-N-retry."""
     from importlib.resources import files
@@ -15053,7 +15291,9 @@ def test_skill_documents_task_retry_one_call() -> None:
     body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
     assert "Retry failed tasks (one call)" in body
     assert "Do not list then loop `task retry" in body
+    assert "Do not retry once per" in body
     assert "retried_count" in body
+    assert "task retry --status failed" in body
     assert "task retry --workflow-id" in body
     assert "--dry-run" in body
     assert "never description" in body

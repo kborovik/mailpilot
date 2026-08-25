@@ -1028,6 +1028,8 @@ mailpilot task cancel <TID>
 mailpilot task cancel --workflow-id <NAME_OR_ID> --touch 2
 mailpilot task retry <TID>
 mailpilot task retry <TID> --scheduled-at 2026-08-17T13:01:49-04:00
+mailpilot task retry --status failed --dry-run
+mailpilot task retry --status failed
 mailpilot task retry --workflow-id <NAME_OR_ID> --touch 1 --dry-run
 mailpilot task retry --workflow-id <NAME_OR_ID> --status failed \
   --touch 1 --scheduled-at 2026-08-24T09:00:00-04:00
@@ -1076,19 +1078,25 @@ returns the single task entity.
 
 ### Retry failed tasks (one call)
 
-Do not list then loop `task retry <id>`. One call retries every matching
-failed (default) or cancelled row and returns the join.
+Do not list then loop `task retry <id>`. Do not retry once per
+workflow. One call retries every matching failed (default) or cancelled
+row and returns the join.
 
 Filter-mode needs at least one of `--touch`, `--workflow-id`,
-`--contact-email`, or `--trigger`. `--status` defaults to failed; only
-failed and cancelled are allowed. TASK_ID and filters are exclusive.
-`--scheduled-at` applies the same instant to every selected row. Omit
-it to keep a still-future stored time, or now when the stored time is
-past. `--dry-run` previews ids and companies with no writes. Touch is
-read from task context, never description text. Distinct from
-`task cancel`.
+`--contact-email`, `--trigger`, or `--status`. `--status failed` or
+`--status cancelled` with no other scope retries every matching row.
+`--status` defaults to failed; only failed and cancelled are allowed.
+TASK_ID and filters are exclusive. `--scheduled-at` applies the same
+instant to every selected row. Omit it to keep a still-future stored
+time, or now when the stored time is past. `--dry-run` previews ids
+and companies with no writes. Touch is read from task context,
+never description text. Distinct from `task cancel`.
 
 ```
+mailpilot task retry --status failed --dry-run
+mailpilot task retry --status failed
+mailpilot task retry --status failed --scheduled-at 2026-08-24T09:00:00-04:00
+mailpilot task retry --status cancelled
 mailpilot task retry --workflow-id <NAME_OR_ID> --touch 1 --dry-run
 mailpilot task retry --workflow-id <NAME_OR_ID> --status failed \
   --touch 1 --scheduled-at 2026-08-24T09:00:00-04:00
