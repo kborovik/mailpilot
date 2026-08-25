@@ -801,6 +801,19 @@ the pending first-reach time. The task is updated in place; no second
 enrollment is created. A re-run at the same instant is a no-op. Later
 touches and already-sent enrollments are not moved.
 
+`--contact-email --exclude-peer` is one call. Do not run `enrollment list`
+first. Same skip as the tag/file pack: if the contact is already active on
+another workflow, nothing is written (`enrollment_batch` `source=contact`,
+`count` 0, `excluded.peer` 1). Otherwise the seat enrolls (`count` 1,
+`action` created / scheduled_first_send / unchanged). Without
+`--exclude-peer` the envelope stays the singular `enrollment` entity.
+`--limit` and `--company-atomic` still need `--file` or `--tag`.
+
+```
+mailpilot enrollment add --workflow-id <WID_OR_NAME> \
+  --contact-email <CONTACT_REF> --scheduled-at <ISO> --exclude-peer
+```
+
 Enrollment status is `active` or `disabled`. `disabled` is the operator halt
 (set via `enrollment disable`, reversed via `enrollment enable`); the agent
 never re-enables an enrollment. Terminal outcomes (`completed`, `failed`) are

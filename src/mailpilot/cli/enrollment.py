@@ -32,7 +32,7 @@ from mailpilot.cli.main import (
 )
 
 if TYPE_CHECKING:
-    from mailpilot.models import EnrollmentBatchAction
+    from mailpilot.models import EnrollmentBatchAction, EnrollmentBatchRow
 
 _ENROLLMENT_STATUSES = ["active", "disabled"]
 
@@ -199,7 +199,6 @@ def _reject_enrollment_add_pack_flags(
     min_contacts: int | None,
     limit: int | None,
     company_atomic: bool,
-    exclude_peer: bool,
 ) -> None:
     """Reject packing / filter flags used on the wrong source."""
     if min_contacts is not None and tag_ref is None:
@@ -212,9 +211,9 @@ def _reject_enrollment_add_pack_flags(
     if limit is not None and limit < 1:
         output_error("--limit must be >= 1", "validation_error")
     batch_source = tag_ref is not None or file_path is not None
-    if (limit is not None or company_atomic or exclude_peer) and not batch_source:
+    if (limit is not None or company_atomic) and not batch_source:
         output_error(
-            "--limit / --company-atomic / --exclude-peer require --file or --tag",
+            "--limit / --company-atomic require --file or --tag",
             "validation_error",
         )
 
@@ -228,7 +227,6 @@ def _validate_enrollment_add_args(
     scheduled_at: str | None,
     limit: int | None,
     company_atomic: bool,
-    exclude_peer: bool,
 ) -> str | None:
     """Validate flag combinations for ``enrollment add``; return scheduled ISO."""
     from datetime import datetime
@@ -237,7 +235,7 @@ def _validate_enrollment_add_args(
         contact_email, tag_ref, file_path, dry_run, scheduled_at
     )
     _reject_enrollment_add_pack_flags(
-        tag_ref, file_path, min_contacts, limit, company_atomic, exclude_peer
+        tag_ref, file_path, min_contacts, limit, company_atomic
     )
     if dry_run and scheduled_at is not None:
         output_error(
@@ -488,14 +486,54 @@ def _assert_company_atomic_days(
         days[domain] = day
 
 
+def _contact_company_domain(connection: Any, contact: Any) -> str | None:
+    """Resolve a contact's company domain for a batch row, else None."""
+    if contact.company_id is None:
+        return None
+    from mailpilot.database import get_company
+
+    company = get_company(connection, contact.company_id)
+    return None if company is None else company.domain
+
+
+def _emit_contact_enrollment_batch(
+    *,
+    workflow_name: str,
+    scheduled_iso: str | None,
+    enrolled: list[EnrollmentBatchRow],
+    peer_excluded: int,
+) -> None:
+    """Write the one-off ``--exclude-peer`` ``enrollment_batch`` envelope."""
+    from mailpilot.models import EnrollmentBatch, EnrollmentPreviewExcluded
+
+    batch = EnrollmentBatch(
+        workflow=workflow_name,
+        scheduled_at=scheduled_iso,
+        source="contact",
+        tag=None,
+        limit=None,
+        company_atomic=False,
+        count=len(enrolled),
+        enrolled=enrolled,
+        excluded=EnrollmentPreviewExcluded(peer=peer_excluded),
+    )
+    output(
+        {"enrollment_batch": batch.model_dump(mode="json")},
+        record_count=batch.count,
+    )
+
+
 def _enrollment_add_contact(
     connection: Any,
     workflow: Any,
     contact_email: str,
     scheduled_iso: str | None,
+    *,
+    exclude_peer: bool = False,
 ) -> None:
     """Enroll a single contact, optionally scheduling first touch."""
-    from mailpilot.database import get_account
+    from mailpilot.database import _preview_peer_workflows, get_account
+    from mailpilot.models import EnrollmentBatchRow
     from mailpilot.operator_log import cli_mutation, operator_event
 
     if scheduled_iso is not None and workflow.type != "outbound":
@@ -506,6 +544,16 @@ def _enrollment_add_contact(
     contact = _resolve_contact(connection, contact_email)
     account = get_account(connection, workflow.account_id)
     _reject_enrollment_self_loop(account, contact, workflow.name)
+    if exclude_peer:
+        peers = _preview_peer_workflows(connection, [contact.id], workflow.id)
+        if peers.get(contact.id):
+            _emit_contact_enrollment_batch(
+                workflow_name=workflow.name,
+                scheduled_iso=scheduled_iso,
+                enrolled=[],
+                peer_excluded=1,
+            )
+            return
     mutation_attrs: dict[str, Any] = {
         "workflow_id": workflow.id,
         "contact_id": contact.id,
@@ -526,6 +574,22 @@ def _enrollment_add_contact(
             event_fields["scheduled_at"] = scheduled_iso
         event_fields["changed"] = changed
         operator_event("enrollment.add", **event_fields)
+        if exclude_peer:
+            _emit_contact_enrollment_batch(
+                workflow_name=workflow.name,
+                scheduled_iso=scheduled_iso,
+                enrolled=[
+                    EnrollmentBatchRow(
+                        email=contact.email,
+                        company_domain=_contact_company_domain(connection, contact),
+                        enrollment_id=target.id,
+                        scheduled_at=scheduled_iso,
+                        action=_batch_action("status" in changed, changed),
+                    )
+                ],
+                peer_excluded=0,
+            )
+            return
         output_entity("enrollment", target)
 
 
@@ -729,7 +793,8 @@ def _enrollment_add_batch(
     default=None,
     help=(
         "Cap included seats (first N by company_domain then email). "
-        "Soft cap when combined with --company-atomic."
+        "Soft cap when combined with --company-atomic. Requires --file "
+        "or --tag."
     ),
 )
 @click.option(
@@ -738,14 +803,18 @@ def _enrollment_add_batch(
     default=False,
     help=(
         "Never split a domain. Last company may exceed --limit. Included "
-        "seats on a domain share the same calendar day."
+        "seats on a domain share the same calendar day. Requires --file "
+        "or --tag."
     ),
 )
 @click.option(
     "--exclude-peer",
     is_flag=True,
     default=False,
-    help="Drop contacts with an active enrollment in another workflow.",
+    help=(
+        "Skip if already active on another workflow. Works with --file, "
+        "--tag, or --contact-email."
+    ),
 )
 @click.option(
     "--scheduled-at",
@@ -774,11 +843,15 @@ def enrollment_add(
     Single-contact path: ``--workflow-id`` + ``--contact-email``. When
     ``--scheduled-at`` is given on an outbound workflow, a pending first
     reach-out is inserted, or an existing never-sent first-reach is
-    updated in place. Tag / file dry-run: ``--tag`` or ``--file`` plus
-    ``--dry-run`` returns ``enrollment_preview`` with no writes. Tag /
-    file apply: same source plus ``--scheduled-at`` writes one
-    ``enrollment_batch`` envelope. ``--tag`` matches company tags or
-    contact tags (union, unique by contact).
+    updated in place. ``--exclude-peer`` with ``--contact-email`` skips
+    when the contact is already active on another workflow and returns
+    ``enrollment_batch`` with ``source=contact``. Without ``--exclude-peer``
+    the envelope stays the singular enrollment entity. Tag / file dry-run:
+    ``--tag`` or ``--file`` plus ``--dry-run`` returns ``enrollment_preview``
+    with no writes. Tag / file apply: same source plus ``--scheduled-at``
+    writes one ``enrollment_batch`` envelope. ``--tag`` matches company
+    tags or contact tags (union, unique by contact). ``--limit`` and
+    ``--company-atomic`` still require ``--file`` or ``--tag``.
     """
     scheduled_iso = _validate_enrollment_add_args(
         contact_email,
@@ -789,7 +862,6 @@ def enrollment_add(
         scheduled_at,
         seat_limit,
         company_atomic,
-        exclude_peer,
     )
     file_rows = (
         _read_enrollment_batch_file(file_path) if file_path is not None else None
@@ -834,7 +906,13 @@ def enrollment_add(
             )
             return
         assert contact_email is not None
-        _enrollment_add_contact(connection, workflow, contact_email, scheduled_iso)
+        _enrollment_add_contact(
+            connection,
+            workflow,
+            contact_email,
+            scheduled_iso,
+            exclude_peer=exclude_peer,
+        )
 
 
 @enrollment.command("run")

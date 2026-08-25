@@ -11497,6 +11497,18 @@ def test_skill_documents_enrollment_batch_one_call() -> None:
     assert "§T." not in body
 
 
+def test_skill_documents_enrollment_contact_exclude_peer_one_call() -> None:
+    """§V.171: one-off --contact-email --exclude-peer is one call (no list)."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "--contact-email --exclude-peer" in body
+    assert "Do not run `enrollment list`" in body
+    assert "source=contact" in body
+    assert "§V." not in body
+    assert "§T." not in body
+
+
 def test_enrollment_add_help_tag_is_company_or_contact(runner: CliRunner) -> None:
     """§V.150/§V.111: help names company-or-contact tag; no SPEC cites."""
     result = runner.invoke(main, ["enrollment", "add", "--help"])
@@ -12173,6 +12185,9 @@ def test_enrollment_add_help_documents_batch_flags(runner: CliRunner) -> None:
     assert "--file" in result.output
     assert "--company-atomic" in result.output
     assert "--exclude-peer" in result.output
+    assert "--contact-email" in result.output
+    collapsed = " ".join(result.output.split()).replace("- ", "-")
+    assert "Works with --file, --tag, or --contact-email" in collapsed
     assert "soft cap" in result.output.lower() or "Soft cap" in result.output
     assert "§V." not in result.output
     assert "§T." not in result.output
@@ -12552,6 +12567,264 @@ def test_enrollment_add_exclude_peer_live(
     emails = [row["email"] for row in data["enrollment_batch"]["enrolled"]]
     assert emails == [ada.email]
     assert data["enrollment_batch"]["excluded"]["peer"] == 1
+
+
+def test_enrollment_add_contact_exclude_peer_enrolls_when_not_peer(
+    runner: CliRunner, database_connection: Any
+) -> None:
+    """§V.171: --contact-email --exclude-peer enrolls; source=contact."""
+    from conftest import (
+        make_test_account,
+        make_test_company,
+        make_test_contact,
+        make_test_workflow,
+    )
+    from mailpilot.database import list_enrollments
+
+    account = make_test_account(database_connection, email="oneoff@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="oneoff-target-wf"
+    )
+    firm = make_test_company(
+        database_connection, domain="oneoff-enroll.test", name="Oneoff"
+    )
+    ada = make_test_contact(
+        database_connection, email="ada@oneoff-enroll.test", company_id=firm.id
+    )
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.name,
+                "--contact-email",
+                ada.email,
+                "--scheduled-at",
+                _BATCH_AT,
+                "--exclude-peer",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 1
+    assert "enrollment" not in data
+    batch = data["enrollment_batch"]
+    assert batch["source"] == "contact"
+    assert batch["workflow"] == workflow.name
+    assert batch["scheduled_at"] == _BATCH_AT
+    assert batch["count"] == 1
+    assert batch["excluded"]["peer"] == 0
+    assert batch["enrolled"][0]["email"] == ada.email
+    assert batch["enrolled"][0]["company_domain"] == firm.domain
+    assert batch["enrolled"][0]["action"] == "created"
+    assert batch["enrolled"][0]["scheduled_at"] == _BATCH_AT
+    rows = list_enrollments(database_connection, workflow_id=workflow.id)
+    assert len(rows) == 1
+    assert rows[0].contact_id == ada.id
+
+
+def test_enrollment_add_contact_exclude_peer_skips_peer_active(
+    runner: CliRunner, database_connection: Any
+) -> None:
+    """§V.171: peer-active one-off skip: count=0, excluded.peer=1, no write."""
+    from conftest import (
+        make_test_account,
+        make_test_company,
+        make_test_contact,
+        make_test_enrollment,
+        make_test_workflow,
+    )
+    from mailpilot.database import list_enrollments
+
+    account = make_test_account(database_connection, email="skippeer@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="skip-target-wf"
+    )
+    peer = make_test_workflow(
+        database_connection, account_id=account.id, name="skip-peer-wf"
+    )
+    firm = make_test_company(
+        database_connection, domain="oneoff-skip.test", name="Skip"
+    )
+    ada = make_test_contact(
+        database_connection, email="ada@oneoff-skip.test", company_id=firm.id
+    )
+    make_test_enrollment(database_connection, peer.id, ada.id)
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.name,
+                "--contact-email",
+                ada.email,
+                "--scheduled-at",
+                _BATCH_AT,
+                "--exclude-peer",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 0
+    assert "enrollment" not in data
+    batch = data["enrollment_batch"]
+    assert batch["source"] == "contact"
+    assert batch["count"] == 0
+    assert batch["enrolled"] == []
+    assert batch["excluded"]["peer"] == 1
+    assert list_enrollments(database_connection, workflow_id=workflow.id) == []
+    assert len(list_enrollments(database_connection, workflow_id=peer.id)) == 1
+
+
+def test_enrollment_add_contact_exclude_peer_omits_scheduled_at(
+    runner: CliRunner, database_connection: Any
+) -> None:
+    """§V.171: --contact-email --exclude-peer w/o --scheduled-at → scheduled_at null."""
+    from conftest import (
+        make_test_account,
+        make_test_company,
+        make_test_contact,
+        make_test_enrollment,
+        make_test_workflow,
+    )
+    from mailpilot.database import list_enrollments
+
+    account = make_test_account(database_connection, email="omit-sched@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="omit-sched-wf"
+    )
+    peer = make_test_workflow(
+        database_connection, account_id=account.id, name="omit-sched-peer-wf"
+    )
+    firm = make_test_company(database_connection, domain="omit-sched.test", name="Omit")
+    ada = make_test_contact(
+        database_connection, email="ada@omit-sched.test", company_id=firm.id
+    )
+    lee = make_test_contact(
+        database_connection, email="lee@omit-sched.test", company_id=firm.id
+    )
+    make_test_enrollment(database_connection, peer.id, lee.id)
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        enrolled = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.name,
+                "--contact-email",
+                ada.email,
+                "--exclude-peer",
+            ],
+        )
+        skipped = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.name,
+                "--contact-email",
+                lee.email,
+                "--exclude-peer",
+            ],
+        )
+
+    assert enrolled.exit_code == 0, enrolled.output
+    enrolled_data = json.loads(enrolled.output)
+    enrolled_batch = enrolled_data["enrollment_batch"]
+    assert enrolled_data["record_count"] == 1
+    assert enrolled_batch["source"] == "contact"
+    assert enrolled_batch["scheduled_at"] is None
+    assert enrolled_batch["enrolled"][0]["scheduled_at"] is None
+    assert enrolled_batch["enrolled"][0]["action"] == "created"
+    assert enrolled_batch["excluded"]["peer"] == 0
+
+    assert skipped.exit_code == 0, skipped.output
+    skipped_data = json.loads(skipped.output)
+    skipped_batch = skipped_data["enrollment_batch"]
+    assert skipped_data["record_count"] == 0
+    assert skipped_batch["source"] == "contact"
+    assert skipped_batch["scheduled_at"] is None
+    assert skipped_batch["enrolled"] == []
+    assert skipped_batch["excluded"]["peer"] == 1
+
+    rows = list_enrollments(database_connection, workflow_id=workflow.id)
+    assert len(rows) == 1
+    assert rows[0].contact_id == ada.id
+
+
+def test_enrollment_add_limit_and_company_atomic_still_require_file_or_tag(
+    runner: CliRunner,
+) -> None:
+    """§V.171: --limit / --company-atomic stay --file|--tag even with one-off."""
+    for extra in (["--limit", "1"], ["--company-atomic"]):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--contact-email",
+                "ada@a.com",
+                "--exclude-peer",
+                *extra,
+            ],
+        )
+        assert result.exit_code == 1, result.output
+        data = json.loads(result.output)
+        assert data["error"] == "validation_error"
+        assert "--limit / --company-atomic require --file or --tag" in data["message"]
+        assert "record_count" not in data
+
+
+def test_enrollment_add_contact_without_exclude_peer_stays_entity(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.171: --contact-email without --exclude-peer stays entity envelope."""
+    enrollment = _make_enrollment()
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_workflow", return_value=_make_workflow()),
+        patch(
+            "mailpilot.database.get_contact",
+            return_value=_make_contact(id=_CONTACT_ID),
+        ),
+        patch("mailpilot.database.get_account", return_value=_make_account()),
+        patch("mailpilot.database.create_enrollment", return_value=enrollment),
+        patch("mailpilot.database.create_activity"),
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                _WORKFLOW_ID,
+                "--contact-email",
+                _CONTACT_ID,
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert "enrollment" in data
+    assert "enrollment_batch" not in data
+    assert data["record_count"] == 1
 
 
 def test_enrollment_add_tag_never_restamps_already_enrolled(
