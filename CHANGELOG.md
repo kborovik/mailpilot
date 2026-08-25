@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matching row with no other scope filter. `--dry-run` previews the set
   in one envelope. `--scheduled-at` still applies to every selected
   row. `task cancel` still requires a scope filter.
+- Dropped the `xai_api_host` setting. The xAI client always uses the
+  official host. `config set xai_api_host` returns `invalid_key`.
 
 ## [v0.32.0] - 2026-08-24
 

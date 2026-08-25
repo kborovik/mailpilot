@@ -18,6 +18,7 @@ from pydantic_ai.messages import (
     ToolCallPart,
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.providers.xai import XaiProvider
 
 from conftest import (
     make_test_account,
@@ -2499,16 +2500,27 @@ def test_build_model_requires_xai_api_key() -> None:
     assert "MAILPILOT_XAI_API_KEY" not in str(exc_info.value)
 
 
-def test_build_xai_model_threads_api_host() -> None:
-    """§V.47: optional xai_api_host is passed when set."""
-    settings = make_test_settings(
-        llm_provider="xai",
-        xai_api_key="xai-test",
-        xai_api_host="gateway.example.com:443",
-    )
+def test_build_xai_model_does_not_pass_api_host() -> None:
+    """§V.191: XaiProvider is never given api_host (SDK official host)."""
+    settings = make_test_settings(llm_provider="xai", xai_api_key="xai-test")
+    with patch("mailpilot.agent.model.XaiProvider") as provider_cls:
+        provider_cls.return_value = MagicMock()
+        _build_xai_model(settings, role="workflow")
+    kwargs = provider_cls.call_args.kwargs
+    assert "api_host" not in kwargs
+    assert kwargs["api_key"] == "xai-test"
+
+
+def test_build_xai_model_uses_sdk_official_host() -> None:
+    """§V.191: empty/missing host never DNS-binds; SDK official host only."""
+    settings = make_test_settings(llm_provider="xai", xai_api_key="xai-test")
     model = _build_xai_model(settings, role="workflow")
-    # Provider stores api_host on the SDK client; base_url stays telemetry-only.
-    assert model.model_name == "grok-4.5"
+    provider = model.provider
+    assert isinstance(provider, XaiProvider)
+    lazy = provider._lazy_client  # pyright: ignore[reportPrivateUsage]
+    assert lazy is not None
+    assert "api_host" not in lazy._kwargs  # pyright: ignore[reportPrivateUsage]
+    assert provider.base_url.startswith("https://api.x.ai")
 
 
 def test_build_anthropic_classifier_omits_workflow_knobs() -> None:

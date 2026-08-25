@@ -97,19 +97,13 @@ def _build_anthropic_model(settings: Settings, *, role: ModelRole) -> AnthropicM
 def _build_xai_model(settings: Settings, *, role: ModelRole) -> XaiModel:
     """Construct an XaiModel with §V.48 timeout and workflow-only effort/budget.
 
-    No Anthropic cache flags (omit -- no false cache telemetry). ``api_host`` is
-    optional for gateway/proxy; empty string means SDK default host.
+    No Anthropic cache flags (omit -- no false cache telemetry). Never pass
+    ``api_host``: the SDK official host is code-pinned (§V.191).
 
     Workflow role: ``xai_reasoning_effort`` + ``xai_max_tokens`` always passed
     (effort has no empty/none; Grok 4.5 always reasons). Classifier role omits
     both.
     """
-    provider_kwargs: dict[str, object] = {
-        "api_key": settings.xai_api_key,
-        "timeout": _PROVIDER_TIMEOUT_SECONDS,
-    }
-    if settings.xai_api_host:
-        provider_kwargs["api_host"] = settings.xai_api_host
     model_settings: XaiModelSettings | None = None
     if role == "workflow":
         model_settings = XaiModelSettings(
@@ -118,6 +112,9 @@ def _build_xai_model(settings: Settings, *, role: ModelRole) -> XaiModel:
         )
     return XaiModel(
         settings.xai_model,
-        provider=XaiProvider(**provider_kwargs),  # type: ignore[arg-type]
+        provider=XaiProvider(
+            api_key=settings.xai_api_key,
+            timeout=_PROVIDER_TIMEOUT_SECONDS,
+        ),
         settings=model_settings,
     )

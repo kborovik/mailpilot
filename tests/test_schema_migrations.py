@@ -870,6 +870,47 @@ def test_migration_010_adds_cadence_cols_and_rewrites_touch_tasks(
     assert contexts["tk_done"] == {}
 
 
+# -- migration 015: drop leftover app_config.xai_api_host (§V.191) -------------
+
+
+def test_migration_015_drops_xai_api_host(
+    migration_schema: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.191: leftover app_config.xai_api_host is dropped."""
+    conn = migration_schema
+    conn.execute(
+        """
+        CREATE TABLE app_config (
+            id TEXT PRIMARY KEY DEFAULT 'singleton' CHECK (id = 'singleton'),
+            xai_api_host TEXT NOT NULL DEFAULT '',
+            xai_api_key TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO app_config (id, xai_api_host) "
+        "VALUES ('singleton', 'gateway.example.com:443')"
+    )
+    conn.commit()
+
+    pre = conn.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name = 'app_config' "
+        "AND column_name = 'xai_api_host'"
+    ).fetchone()
+    assert pre is not None
+
+    conn.execute(_read_shipped_migration("015"))  # type: ignore[arg-type]
+    conn.commit()
+
+    post = conn.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name = 'app_config' "
+        "AND column_name = 'xai_api_host'"
+    ).fetchone()
+    assert post is None
+
+
 # -- identity invariant: schema.sql == apply-all-migrations-from-zero (§V.108) -
 
 

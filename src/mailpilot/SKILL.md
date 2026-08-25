@@ -118,7 +118,6 @@ Keys (row, unless noted):
   budget before any reply text. Classifier never reads this key.
 - `xai_api_key` -- required when `llm_provider=xai` (the default).
 - `xai_model` -- default `grok-4.5`.
-- `xai_api_host` -- optional hostname for a gateway/proxy.
 - `xai_reasoning_effort` -- `low`, `medium` (default), or `high`.
 - `xai_max_tokens` -- workflow-agent output-token budget. Default `32768`.
 - `google_application_credentials` -- JSON service-account document (not a
