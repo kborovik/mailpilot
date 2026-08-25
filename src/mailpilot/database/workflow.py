@@ -778,30 +778,15 @@ def _queue_workflow_rows(
             FROM task t
             JOIN enrollment e ON e.id = t.enrollment_id
             {outcome}
-            WHERE t.status = 'failed'
-              AND t.email_id IS NULL
-              AND e.status = 'active'
-              AND outcome.latest_outcome IS NULL
+            WHERE {failed_where}
             GROUP BY t.workflow_id
         ),
         stuck AS (
             SELECT e.workflow_id, COUNT(*)::int AS stuck
             FROM enrollment e
-            LEFT JOIN LATERAL (
-                SELECT t.scheduled_at FROM task t
-                WHERE t.enrollment_id = e.id AND t.status = 'pending'
-                ORDER BY t.scheduled_at ASC NULLS LAST LIMIT 1
-            ) nt ON TRUE
-            LEFT JOIN LATERAL (
-                SELECT t.status FROM task t
-                WHERE t.enrollment_id = e.id
-                ORDER BY t.created_at DESC LIMIT 1
-            ) lt ON TRUE
+            {stuck_laterals}
             {outcome}
-            WHERE e.status = 'active'
-              AND nt.scheduled_at IS NULL
-              AND outcome.latest_outcome IS NULL
-              AND (lt.status = 'failed' OR {sent} = 0)
+            WHERE {stuck_where}
             GROUP BY e.workflow_id
         )
         SELECT
@@ -824,7 +809,9 @@ def _queue_workflow_rows(
     ).format(
         touch=resolved,
         outcome=_enrollment_outcome_lateral(),
-        sent=sent_count,
+        failed_where=_QUEUE_FAILED_UNSENT_WHERE,
+        stuck_laterals=_QUEUE_STUCK_LATERALS,
+        stuck_where=_queue_stuck_where(sent_count),
         where=where,
     )
     rows = connection.execute(query, params).fetchall()
@@ -836,6 +823,35 @@ _QUEUE_CONTACT_SQL = SQL(
     "NULLIF(TRIM(BOTH FROM CONCAT_WS(' ', c.first_name, c.last_name)), ''), "
     "c.email)"
 )
+
+# Counts and --detail lists share these so a later edit cannot desync them.
+_QUEUE_FAILED_UNSENT_WHERE = SQL(
+    "t.status = 'failed' "
+    "AND t.email_id IS NULL "
+    "AND e.status = 'active' "
+    "AND outcome.latest_outcome IS NULL"
+)
+_QUEUE_STUCK_LATERALS = SQL(
+    "LEFT JOIN LATERAL ("
+    "SELECT t.scheduled_at FROM task t "
+    "WHERE t.enrollment_id = e.id AND t.status = 'pending' "
+    "ORDER BY t.scheduled_at ASC NULLS LAST LIMIT 1"
+    ") nt ON TRUE "
+    "LEFT JOIN LATERAL ("
+    "SELECT t.status FROM task t "
+    "WHERE t.enrollment_id = e.id "
+    "ORDER BY t.created_at DESC LIMIT 1"
+    ") lt ON TRUE"
+)
+
+
+def _queue_stuck_where(sent: SQL | Composed) -> Composed:
+    return SQL(
+        "e.status = 'active' "
+        "AND nt.scheduled_at IS NULL "
+        "AND outcome.latest_outcome IS NULL "
+        "AND (lt.status = 'failed' OR {sent} = 0)"
+    ).format(sent=sent)
 
 
 def _queue_task_from_row(row: dict[str, Any]) -> QueueTaskRow:
@@ -915,12 +931,7 @@ def _queue_failed_rows(
     limit: int,
 ) -> list[QueueTaskRow]:
     """Failed-unsent task grain (status=failed, email_id null, active, no terminal)."""
-    conditions: list[SQL] = [
-        SQL("t.status = 'failed'"),
-        SQL("t.email_id IS NULL"),
-        SQL("e.status = 'active'"),
-        SQL("outcome.latest_outcome IS NULL"),
-    ]
+    conditions: list[SQL] = [_QUEUE_FAILED_UNSENT_WHERE]
     params: dict[str, object] = {"limit": limit}
     if workflow_id is not None:
         conditions.append(SQL("t.workflow_id = %(workflow_id)s"))
@@ -966,12 +977,7 @@ def _queue_stuck_rows(
 ) -> list[QueueTaskRow]:
     """Stuck-enrollment grain; latest failed task fills touch/attempts/next_at."""
     sent_count = _sql_outbound_sent_count(SQL("e"))
-    conditions: list[SQL | Composed] = [
-        SQL("e.status = 'active'"),
-        SQL("nt.scheduled_at IS NULL"),
-        SQL("outcome.latest_outcome IS NULL"),
-        SQL("(lt.status = 'failed' OR {sent} = 0)").format(sent=sent_count),
-    ]
+    conditions: list[SQL | Composed] = [_queue_stuck_where(sent_count)]
     params: dict[str, object] = {"limit": limit}
     if workflow_id is not None:
         conditions.append(SQL("e.workflow_id = %(workflow_id)s"))
@@ -994,16 +1000,7 @@ def _queue_stuck_rows(
         JOIN workflow w ON w.id = e.workflow_id
         JOIN contact c ON c.id = e.contact_id
         LEFT JOIN company co ON co.id = c.company_id
-        LEFT JOIN LATERAL (
-            SELECT t.scheduled_at FROM task t
-            WHERE t.enrollment_id = e.id AND t.status = 'pending'
-            ORDER BY t.scheduled_at ASC NULLS LAST LIMIT 1
-        ) nt ON TRUE
-        LEFT JOIN LATERAL (
-            SELECT t.status FROM task t
-            WHERE t.enrollment_id = e.id
-            ORDER BY t.created_at DESC LIMIT 1
-        ) lt ON TRUE
+        {stuck_laterals}
         LEFT JOIN LATERAL (
             SELECT t.id, t.scheduled_at, t.attempt_count, t.context,
                    COALESCE(t.context->>'trigger', '') AS trigger
@@ -1018,6 +1015,7 @@ def _queue_stuck_rows(
         """
     ).format(
         contact=_QUEUE_CONTACT_SQL,
+        stuck_laterals=_QUEUE_STUCK_LATERALS,
         outcome=_enrollment_outcome_lateral(),
         where=where,
     )
