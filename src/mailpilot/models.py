@@ -540,7 +540,7 @@ class EnrollmentBatchRow(BaseModel):
     email: str
     company_domain: str | None = None
     enrollment_id: str
-    scheduled_at: str
+    scheduled_at: str | None
     action: EnrollmentBatchAction
 
 
@@ -548,13 +548,14 @@ class EnrollmentBatch(BaseModel):
     """Scheduled-batch apply report (§V.171).
 
     ``count`` equals ``len(enrolled)`` and is the CLI ``record_count``.
-    ``source`` is ``file`` or ``tag``. ``tag`` / ``limit`` are omitted from
-    meaning when the flag was not passed (serialized as null).
+    ``source`` is ``file``, ``tag``, or ``contact`` (one-off ``--exclude-peer``).
+    ``scheduled_at`` is the flag ISO, or null when the one-off omits it.
+    ``tag`` / ``limit`` serialize as null when the flag was not passed.
     """
 
     workflow: str
-    scheduled_at: str
-    source: Literal["file", "tag"]
+    scheduled_at: str | None
+    source: Literal["file", "tag", "contact"]
     tag: str | None = None
     limit: int | None = None
     company_atomic: bool
