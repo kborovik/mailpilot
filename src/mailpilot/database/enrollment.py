@@ -598,8 +598,10 @@ def list_never_sent_t1_schedules_by_domain(
     """Map company_domain to pending never-sent T1 instants (§V.171 / §V.152).
 
     Same match as ``enrollment list --touch 1`` for never-sent first-reach:
-    active enrollment, ``emails_sent=0``, pending task with parsed touch 1
-    or absent ``context.touch``. Contacts with no company are omitted.
+    active enrollment, ``emails_sent=0``, pending first-reach task
+    (``email_id IS NULL``, parsed touch 1 or absent ``context.touch``).
+    Inbound auto-tasks (``email_id`` set) are excluded. Contacts with no
+    company are omitted.
 
     Args:
         connection: Open database connection.
@@ -619,6 +621,7 @@ def list_never_sent_t1_schedules_by_domain(
         "WHERE e.workflow_id = %(workflow_id)s "
         "AND e.status = 'active' "
         "AND t.status = 'pending' "
+        "AND t.email_id IS NULL "
         "AND {sent_count} = 0 "
         "AND ({parsed_touch} = 1 OR t.context->>'touch' IS NULL) "
         "ORDER BY co.domain, t.scheduled_at"

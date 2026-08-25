@@ -492,12 +492,7 @@ ENROLLMENT_FULL_FIELDS: frozenset[str] = frozenset(
 
 
 class EnrollmentPreviewContact(BaseModel):
-    """One candidate contact in a tag-cohort enrollment dry-run (§V.150).
-
-    ``scheduled_at`` and ``aligned_to_existing_t1`` are set on
-    ``--company-atomic`` dry-run (true when snapped to a live never-sent
-    T1 sibling). Without that flag they stay null.
-    """
+    """One candidate contact in a tag-cohort enrollment dry-run (§V.150)."""
 
     email: str
     title: str | None = None

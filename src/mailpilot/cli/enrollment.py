@@ -262,6 +262,28 @@ def _calendar_day(iso: str) -> Any:
     return parsed.date()
 
 
+def _tzinfo_of_iso(iso: str) -> Any:
+    """Timezone of an ISO instant (naive treated as UTC)."""
+    from datetime import UTC, datetime
+
+    parsed = datetime.fromisoformat(iso)
+    if parsed.tzinfo is None:
+        return UTC
+    return parsed.tzinfo
+
+
+def _calendar_day_in_tz(value: Any, tz: Any) -> Any:
+    """Calendar date of a stored instant in an operator timezone."""
+    from datetime import UTC, datetime
+
+    parsed = (
+        value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+    )
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(tz).date()
+
+
 def _iso_scheduled_at(value: Any) -> str:
     """ISO-8601 string for a datetime or already-ISO value."""
     from datetime import UTC, datetime
@@ -277,14 +299,23 @@ def _iso_scheduled_at(value: Any) -> str:
     return parsed.isoformat()
 
 
-def _existing_t1_anchors(connection: Any, workflow_id: str) -> dict[str, Any]:
-    """Earliest never-sent T1 instant per domain; mixed days error."""
+def _existing_t1_anchors(
+    connection: Any,
+    workflow_id: str,
+    *,
+    domains: set[str],
+    day_tz: Any,
+) -> dict[str, Any]:
+    """Earliest never-sent T1 instant per packed domain; mixed days error."""
     from mailpilot.database import list_never_sent_t1_schedules_by_domain
 
     schedules = list_never_sent_t1_schedules_by_domain(connection, workflow_id)
     anchors: dict[str, Any] = {}
-    for domain, instants in schedules.items():
-        days = {_calendar_day(_iso_scheduled_at(instant)) for instant in instants}
+    for domain in domains:
+        instants = schedules.get(domain)
+        if not instants:
+            continue
+        days = {_calendar_day_in_tz(instant, day_tz) for instant in instants}
         if len(days) > 1:
             output_error(
                 f"--company-atomic: {domain} has seats on more than one calendar day",
@@ -298,9 +329,16 @@ def _snap_company_atomic_seats(
     connection: Any,
     workflow_id: str,
     seats: list[tuple[Any, str]],
+    *,
+    day_tz: Any,
 ) -> list[tuple[Any, str]]:
     """Override packed seat times with live same-domain never-sent T1."""
-    anchors = _existing_t1_anchors(connection, workflow_id)
+    domains = {
+        contact.company_domain for contact, _iso in seats if contact.company_domain
+    }
+    anchors = _existing_t1_anchors(
+        connection, workflow_id, domains=domains, day_tz=day_tz
+    )
     snapped: list[tuple[Any, str]] = []
     for contact, iso in seats:
         domain = contact.company_domain
@@ -318,7 +356,17 @@ def _annotate_company_atomic_preview(
     overrides: dict[str, str | None],
 ) -> list[Any]:
     """Set dry-run ``scheduled_at`` + ``aligned_to_existing_t1`` per seat."""
-    anchors = _existing_t1_anchors(connection, workflow_id)
+    from datetime import UTC
+
+    domains = {contact.company_domain for contact in contacts if contact.company_domain}
+    day_tz = UTC
+    for override in overrides.values():
+        if override:
+            day_tz = _tzinfo_of_iso(override)
+            break
+    anchors = _existing_t1_anchors(
+        connection, workflow_id, domains=domains, day_tz=day_tz
+    )
     annotated: list[Any] = []
     for contact in contacts:
         domain = contact.company_domain
@@ -772,7 +820,12 @@ def _enrollment_add_batch(
         for contact in contacts
     ]
     if company_atomic:
-        seats = _snap_company_atomic_seats(connection, workflow.id, seats)
+        seats = _snap_company_atomic_seats(
+            connection,
+            workflow.id,
+            seats,
+            day_tz=_tzinfo_of_iso(scheduled_iso),
+        )
         _assert_company_atomic_days(seats)
     enrolled: list[EnrollmentBatchRow] = []
     mutation_attrs: dict[str, Any] = {

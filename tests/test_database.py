@@ -5463,6 +5463,28 @@ def test_list_never_sent_t1_schedules_by_domain_matches_touch_1(
         scheduled_at="2026-11-05T13:00:00+00:00",
         context={"trigger": "enrollment_schedule", "touch": 1},
     )
+    inbound_mail = create_email(
+        database_connection,
+        gmail_message_id="msg-t1-sib-in",
+        gmail_thread_id="thread-t1-sib-in",
+        account_id=account.id,
+        direction="inbound",
+        subject="hi",
+        body_text="ping",
+        labels=["INBOX"],
+        contact_id=never.id,
+        workflow_id=workflow.id,
+    )
+    assert inbound_mail is not None
+    create_task(
+        database_connection,
+        enrollment_id=e_never.id,
+        workflow_id=workflow.id,
+        contact_id=never.id,
+        description="handle inbound email",
+        scheduled_at="2026-11-02T13:00:00+00:00",
+        email_id=inbound_mail.id,
+    )
 
     schedules = list_never_sent_t1_schedules_by_domain(database_connection, workflow.id)
     assert set(schedules) == {"t1-sib.test", "t1-sib-b.test"}
