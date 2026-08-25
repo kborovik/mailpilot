@@ -378,7 +378,6 @@ CREATE TABLE IF NOT EXISTS app_config (
     anthropic_max_tokens           INTEGER NOT NULL DEFAULT 32768,
     xai_api_key                    TEXT NOT NULL DEFAULT '',
     xai_model                      TEXT NOT NULL DEFAULT 'grok-4.5',
-    xai_api_host                   TEXT NOT NULL DEFAULT '',
     xai_reasoning_effort           TEXT NOT NULL DEFAULT 'medium'
                                    CHECK (xai_reasoning_effort IN
                                    ('low', 'medium', 'high')),

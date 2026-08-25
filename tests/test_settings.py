@@ -15,6 +15,7 @@ from mailpilot.settings import (
     load_settings,
     require_active_provider_key,
     set_setting,
+    settings_from_app_config_row,
 )
 
 
@@ -27,7 +28,8 @@ def test_default_settings():
     assert settings.xai_model == "grok-4.5"
     assert settings.xai_reasoning_effort == "medium"
     assert settings.xai_max_tokens == 32768
-    assert settings.xai_api_host == ""
+    assert "xai_api_host" not in Settings.model_fields
+    assert not hasattr(settings, "xai_api_host")
     assert settings.environment == "dev"
     assert settings.google_application_credentials is None
     assert "logfire_environment" not in Settings.model_fields
@@ -294,6 +296,46 @@ def test_set_setting_rejects_unknown_key(
 ) -> None:
     with pytest.raises(KeyError):
         set_setting(database_connection, "not_a_real_field", "x")
+
+
+def test_set_setting_rejects_xai_api_host(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.191: config set xai_api_host is invalid_key."""
+    with pytest.raises(KeyError):
+        set_setting(database_connection, "xai_api_host", "gateway.example.com:443")
+
+
+def test_settings_from_app_config_row_ignores_leftover_xai_api_host() -> None:
+    """§V.191: leftover app_config.xai_api_host is ignored on hydrate."""
+    row = {key: getattr(Settings(), key) for key in APP_CONFIG_KEYS}
+    row["xai_api_host"] = "gateway.example.com:443"
+    settings = settings_from_app_config_row(
+        row, database_url="postgresql://localhost/mailpilot"
+    )
+    assert "xai_api_host" not in Settings.model_fields
+    assert not hasattr(settings, "xai_api_host")
+
+
+def test_xai_api_host_env_is_not_a_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    """§V.191: MAILPILOT_XAI_API_HOST and XAI_API_HOST are not sources."""
+    monkeypatch.setenv("MAILPILOT_XAI_API_HOST", "gateway.example.com:443")
+    monkeypatch.setenv("XAI_API_HOST", "gateway.example.com:443")
+    settings = Settings()
+    assert "xai_api_host" not in Settings.model_fields
+    assert not hasattr(settings, "xai_api_host")
+
+
+def test_app_config_has_no_xai_api_host_column(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.191: current schema has no leftover xai_api_host column."""
+    row = database_connection.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name = 'app_config' "
+        "AND column_name = 'xai_api_host'"
+    ).fetchone()
+    assert row is None
 
 
 def test_set_setting_rejects_database_url(

@@ -273,6 +273,42 @@ def test_config_set_database_url_invalid(runner: CliRunner) -> None:
     assert data["error"] == "invalid_key"
 
 
+def test_config_set_xai_api_host_invalid(runner: CliRunner) -> None:
+    """§V.191: config set xai_api_host returns invalid_key."""
+    result = runner.invoke(
+        main, ["config", "set", "xai_api_host", "gateway.example.com:443"]
+    )
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "invalid_key"
+
+
+def test_config_get_xai_api_host_invalid(
+    runner: CliRunner,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.191: config get xai_api_host returns invalid_key."""
+    del database_connection
+    result = runner.invoke(main, ["config", "get", "xai_api_host"])
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["ok"] is False
+    assert data["error"] == "invalid_key"
+
+
+def test_config_get_omits_xai_api_host(
+    runner: CliRunner,
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.191: config get dump has no xai_api_host."""
+    del database_connection
+    result = runner.invoke(main, ["config", "get"])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert "xai_api_host" not in data["config"]
+
+
 def test_config_set_invalid_credentials_json(runner: CliRunner) -> None:
     """§V.181: invalid JSON for google_application_credentials → validation_error."""
     result = runner.invoke(

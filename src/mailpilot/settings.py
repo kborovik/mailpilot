@@ -48,7 +48,6 @@ APP_CONFIG_KEYS = (
     "anthropic_max_tokens",
     "xai_api_key",
     "xai_model",
-    "xai_api_host",
     "xai_reasoning_effort",
     "xai_max_tokens",
     "google_application_credentials",
@@ -87,7 +86,6 @@ class Settings(BaseModel):
     anthropic_max_tokens: int = 32768
     xai_api_key: str = ""
     xai_model: str = "grok-4.5"
-    xai_api_host: str = ""
     xai_reasoning_effort: XaiReasoningEffort = "medium"
     xai_max_tokens: int = 32768
     google_application_credentials: dict[str, Any] | None = None
