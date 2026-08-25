@@ -5362,6 +5362,117 @@ def test_apply_enrollment_packing_exclude_peer_then_limit() -> None:
     assert excluded.over_limit == 1
 
 
+def test_list_never_sent_t1_schedules_by_domain_matches_touch_1(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.171/§V.152: never-sent T1 siblings match --touch 1 pending first-reach."""
+    from mailpilot.database import list_never_sent_t1_schedules_by_domain
+
+    account = make_test_account(database_connection, email="t1sib@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="t1-sib-wf"
+    )
+    other = make_test_workflow(
+        database_connection, account_id=account.id, name="t1-sib-other-wf"
+    )
+    firm = make_test_company(database_connection, domain="t1-sib.test", name="T1")
+    other_firm = make_test_company(
+        database_connection, domain="t1-sib-b.test", name="T1B"
+    )
+    never = make_test_contact(
+        database_connection, email="never@t1-sib.test", company_id=firm.id
+    )
+    later = make_test_contact(
+        database_connection, email="t2@t1-sib.test", company_id=firm.id
+    )
+    noon = make_test_contact(
+        database_connection, email="noon@t1-sib.test", company_id=firm.id
+    )
+    peer = make_test_contact(
+        database_connection, email="peer@t1-sib.test", company_id=firm.id
+    )
+    other_domain = make_test_contact(
+        database_connection, email="ada@t1-sib-b.test", company_id=other_firm.id
+    )
+    no_company = make_test_contact(database_connection, email="solo@t1-sib.test")
+    e_never = make_test_enrollment(database_connection, workflow.id, never.id)
+    e_later = make_test_enrollment(database_connection, workflow.id, later.id)
+    e_noon = make_test_enrollment(database_connection, workflow.id, noon.id)
+    e_peer = make_test_enrollment(database_connection, other.id, peer.id)
+    e_other = make_test_enrollment(database_connection, workflow.id, other_domain.id)
+    e_solo = make_test_enrollment(database_connection, workflow.id, no_company.id)
+    create_task(
+        database_connection,
+        enrollment_id=e_never.id,
+        workflow_id=workflow.id,
+        contact_id=never.id,
+        description="scheduled first reach-out",
+        scheduled_at="2026-11-01T13:00:00+00:00",
+        context={"trigger": "enrollment_schedule"},
+    )
+    create_email(
+        database_connection,
+        account_id=account.id,
+        direction="outbound",
+        status="sent",
+        contact_id=later.id,
+        workflow_id=workflow.id,
+    )
+    create_task(
+        database_connection,
+        enrollment_id=e_noon.id,
+        workflow_id=workflow.id,
+        contact_id=noon.id,
+        description="scheduled first reach-out",
+        scheduled_at="2026-11-01T15:00:00+00:00",
+        context={"trigger": "enrollment_schedule", "touch": 1},
+    )
+    create_task(
+        database_connection,
+        enrollment_id=e_later.id,
+        workflow_id=workflow.id,
+        contact_id=later.id,
+        description="Touch 2",
+        scheduled_at="2026-11-08T13:00:00+00:00",
+        context={"touch": 2},
+    )
+    create_task(
+        database_connection,
+        enrollment_id=e_peer.id,
+        workflow_id=other.id,
+        contact_id=peer.id,
+        description="scheduled first reach-out",
+        scheduled_at="2026-11-03T13:00:00+00:00",
+        context={"trigger": "enrollment_schedule", "touch": 1},
+    )
+    create_task(
+        database_connection,
+        enrollment_id=e_other.id,
+        workflow_id=workflow.id,
+        contact_id=other_domain.id,
+        description="scheduled first reach-out",
+        scheduled_at="2026-11-04T15:00:00+00:00",
+        context={"trigger": "enrollment_schedule", "touch": 1},
+    )
+    create_task(
+        database_connection,
+        enrollment_id=e_solo.id,
+        workflow_id=workflow.id,
+        contact_id=no_company.id,
+        description="scheduled first reach-out",
+        scheduled_at="2026-11-05T13:00:00+00:00",
+        context={"trigger": "enrollment_schedule", "touch": 1},
+    )
+
+    schedules = list_never_sent_t1_schedules_by_domain(database_connection, workflow.id)
+    assert set(schedules) == {"t1-sib.test", "t1-sib-b.test"}
+    assert schedules["t1-sib.test"] == [
+        datetime(2026, 11, 1, 13, 0, tzinfo=UTC),
+        datetime(2026, 11, 1, 15, 0, tzinfo=UTC),
+    ]
+    assert schedules["t1-sib-b.test"] == [datetime(2026, 11, 4, 15, 0, tzinfo=UTC)]
+
+
 def test_enrollment_row_carries_parent_denorm_fields(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:

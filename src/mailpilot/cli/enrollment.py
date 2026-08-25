@@ -262,6 +262,83 @@ def _calendar_day(iso: str) -> Any:
     return parsed.date()
 
 
+def _iso_scheduled_at(value: Any) -> str:
+    """ISO-8601 string for a datetime or already-ISO value."""
+    from datetime import UTC, datetime
+
+    if isinstance(value, str):
+        return value
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        parsed = datetime.fromisoformat(str(value))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.isoformat()
+
+
+def _existing_t1_anchors(connection: Any, workflow_id: str) -> dict[str, Any]:
+    """Earliest never-sent T1 instant per domain; mixed days error."""
+    from mailpilot.database import list_never_sent_t1_schedules_by_domain
+
+    schedules = list_never_sent_t1_schedules_by_domain(connection, workflow_id)
+    anchors: dict[str, Any] = {}
+    for domain, instants in schedules.items():
+        days = {_calendar_day(_iso_scheduled_at(instant)) for instant in instants}
+        if len(days) > 1:
+            output_error(
+                f"--company-atomic: {domain} has seats on more than one calendar day",
+                "validation_error",
+            )
+        anchors[domain] = min(instants)
+    return anchors
+
+
+def _snap_company_atomic_seats(
+    connection: Any,
+    workflow_id: str,
+    seats: list[tuple[Any, str]],
+) -> list[tuple[Any, str]]:
+    """Override packed seat times with live same-domain never-sent T1."""
+    anchors = _existing_t1_anchors(connection, workflow_id)
+    snapped: list[tuple[Any, str]] = []
+    for contact, iso in seats:
+        domain = contact.company_domain
+        seat_iso = (
+            _iso_scheduled_at(anchors[domain]) if domain and domain in anchors else iso
+        )
+        snapped.append((contact, seat_iso))
+    return snapped
+
+
+def _annotate_company_atomic_preview(
+    connection: Any,
+    workflow_id: str,
+    contacts: list[Any],
+    overrides: dict[str, str | None],
+) -> list[Any]:
+    """Set dry-run ``scheduled_at`` + ``aligned_to_existing_t1`` per seat."""
+    anchors = _existing_t1_anchors(connection, workflow_id)
+    annotated: list[Any] = []
+    for contact in contacts:
+        domain = contact.company_domain
+        if domain and domain in anchors:
+            scheduled: str | None = _iso_scheduled_at(anchors[domain])
+            aligned = True
+        else:
+            scheduled = overrides.get(contact.email.lower())
+            aligned = False
+        annotated.append(
+            contact.model_copy(
+                update={
+                    "scheduled_at": scheduled,
+                    "aligned_to_existing_t1": aligned,
+                }
+            )
+        )
+    return annotated
+
+
 def _read_enrollment_batch_file(path: str) -> list[tuple[str, str | None]]:
     """Parse ``--file`` JSON into ``(email, scheduled_at_override)`` rows."""
     import pathlib
@@ -305,6 +382,9 @@ def _pack_enrollment_preview(
     limit: int | None,
     company_atomic: bool,
     exclude_peer: bool,
+    connection: Any | None = None,
+    workflow_id: str | None = None,
+    scheduled_overrides: dict[str, str | None] | None = None,
 ) -> Any:
     """Apply §V.171 packing flags onto a dry-run preview (no writes)."""
     from mailpilot.database import apply_enrollment_packing
@@ -317,6 +397,15 @@ def _pack_enrollment_preview(
         company_atomic=company_atomic,
         exclude_peer=exclude_peer,
     )
+    if company_atomic:
+        assert connection is not None
+        assert workflow_id is not None
+        contacts = _annotate_company_atomic_preview(
+            connection,
+            workflow_id,
+            contacts,
+            scheduled_overrides or {},
+        )
     return EnrollmentPreview(
         workflow=preview.workflow,
         tag=preview.tag,
@@ -362,6 +451,8 @@ def _enrollment_add_tag_preview(
         limit=limit,
         company_atomic=company_atomic,
         exclude_peer=exclude_peer,
+        connection=connection,
+        workflow_id=workflow.id,
     )
     _emit_enrollment_preview(packed)
 
@@ -393,6 +484,9 @@ def _enrollment_add_file_preview(
         limit=limit,
         company_atomic=company_atomic,
         exclude_peer=exclude_peer,
+        connection=connection,
+        workflow_id=workflow.id,
+        scheduled_overrides=dict(rows),
     )
     _emit_enrollment_preview(packed)
 
@@ -678,6 +772,7 @@ def _enrollment_add_batch(
         for contact in contacts
     ]
     if company_atomic:
+        seats = _snap_company_atomic_seats(connection, workflow.id, seats)
         _assert_company_atomic_days(seats)
     enrolled: list[EnrollmentBatchRow] = []
     mutation_attrs: dict[str, Any] = {
@@ -803,8 +898,9 @@ def _enrollment_add_batch(
     default=False,
     help=(
         "Never split a domain. Last company may exceed --limit. Included "
-        "seats on a domain share the same calendar day. Requires --file "
-        "or --tag."
+        "seats on a domain share the same calendar day, snapping new seats "
+        "to a live same-domain never-sent first-touch day and clock. "
+        "Requires --file or --tag."
     ),
 )
 @click.option(

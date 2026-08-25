@@ -314,7 +314,7 @@ T326|x|impl §V.191(+) + §V.47(∆) + §V.181(∆) + §I.config — drop `xai_a
 T327|x|impl §V.166(∆) + §I — show queue failed-unsent + stuck counts on workflow grain; --detail --failed|--stuck XOR --overdue; SKILL one-call drops workflow review for empty-queue diagnosis; tests fixture attempt_count 0 unsent fail stays until retry or conclude (#294)|V166,V155,V4,V111,I.cli
 T328|x|impl §V.171(∆) + §I — enrollment add --exclude-peer valid w/ --contact-email; one-off+flag → enrollment_batch source=contact; peer-active skip no write excluded.peer=1; --limit/--company-atomic still --file|--tag; help documents combo; tests + SKILL (#285)|V171,V32,V4,V111,I.cli
 T329|x|impl §V.192(+) + §I — contact list --unenrolled|--enrolled XOR; zero/any enrollment row any status; compose --tag/--no-tag/--include-disabled; lean contacts envelope; SKILL one-call replaces list+enrollment diff; tests (#289)|V192,V115,V116,V4,V111,I.cli
-T330|.|impl §V.171(∆)+§V.150(∆)+§I — enrollment add --company-atomic snaps new seats to existing same-domain never-sent T1 day+clock; dry-run scheduled_at + aligned_to_existing_t1; SKILL drops T1-list+reschedule; tests (#290)|V171,V150,V32,V152,V4,V111,I.cli
+T330|x|impl §V.171(∆)+§V.150(∆)+§I — enrollment add --company-atomic snaps new seats to existing same-domain never-sent T1 day+clock; dry-run scheduled_at + aligned_to_existing_t1; SKILL drops T1-list+reschedule; tests (#290)|V171,V150,V32,V152,V4,V111,I.cli
 
 ## §B BUGS
 

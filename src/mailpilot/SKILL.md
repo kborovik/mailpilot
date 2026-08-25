@@ -871,6 +871,10 @@ mailpilot enrollment add --workflow-id acumatica-outreach \
 Optional packing flags on dry-run reuse the apply pack (still no writes):
 `--limit N`, `--company-atomic`, `--exclude-peer`. Packed contacts stay
 in `contacts`; dropped seats increment `excluded.peer` / `excluded.over_limit`.
+With `--company-atomic`, each packed contact also carries `scheduled_at`
+(resolved first-touch instant, or null when none) and
+`aligned_to_existing_t1` (true when snapped to a live same-domain
+never-sent first-touch sibling).
 
 ```
 mailpilot enrollment add --workflow-id acumatica-outreach \
@@ -893,7 +897,9 @@ Envelope (no writes):
         "company_tags": ["acumatica-var"],
         "contact_tags": ["sales-seat"],
         "email_confidence": 98,
-        "peer_workflows": []
+        "peer_workflows": [],
+        "scheduled_at": null,
+        "aligned_to_existing_t1": false
       },
       {
         "email": "grace@b.com",
@@ -902,7 +908,9 @@ Envelope (no writes):
         "company_tags": [],
         "contact_tags": ["sales-seat"],
         "email_confidence": 90,
-        "peer_workflows": ["other-outbound"]
+        "peer_workflows": ["other-outbound"],
+        "scheduled_at": null,
+        "aligned_to_existing_t1": false
       }
     ],
     "excluded": {
@@ -924,7 +932,8 @@ Undefined tag → `not_found`. Zero candidates → ok empty (`record_count` 0).
 ### Enroll a scheduled batch (one call)
 
 After reviewing the dry-run, apply in one call. Do not loop
-`enrollment add --contact-email`.
+`enrollment add --contact-email`. Do not list T1 then loop per-email reschedules.
+One `--file` or `--tag` apply with `--company-atomic` `--scheduled-at` is enough.
 
 ```
 mailpilot enrollment add --workflow-id acumatica-outreach \
@@ -937,12 +946,16 @@ mailpilot enrollment add --workflow-id acumatica-outreach \
 
 `--file` is a JSON array of email strings or `{email, scheduled_at}`
 objects. Per-row `scheduled_at` overrides the flag. `--company-atomic`
-keeps every included seat on a domain on the same calendar day and may
-exceed `--limit` to fit the last company. `--limit` without
-`--company-atomic` is a hard cap (first N by company_domain then email).
-`--exclude-peer` drops contacts already active in another workflow.
-Tag apply never restamps seats already enrolled in this workflow.
-File apply last-write-wins an existing never-sent first-reach.
+keeps every included seat on a domain on the same calendar day,
+including live never-sent first-touch siblings already on this workflow:
+new seats inherit that day and clock (over `--scheduled-at` and per-row
+times). Live siblings already split across days is `validation_error`
+(zero writes). May exceed `--limit` to fit the last company. `--limit`
+without `--company-atomic` is a hard cap (first N by company_domain then
+email). `--exclude-peer` drops contacts already active in another
+workflow. Tag apply never restamps seats already enrolled in this
+workflow. File apply last-write-wins an existing never-sent first-reach
+unless `--company-atomic` snaps it to the sibling instant.
 
 Envelope:
 

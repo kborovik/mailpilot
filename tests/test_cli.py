@@ -11631,6 +11631,8 @@ def test_skill_documents_enrollment_batch_one_call() -> None:
     assert "enrollment_batch" in body
     assert "Do not loop" in body
     assert "enrollment add --contact-email" in body
+    assert "Do not list T1 then loop per-email reschedules" in body
+    assert "aligned_to_existing_t1" in body
     assert "§V." not in body
     assert "§T." not in body
 
@@ -12220,6 +12222,9 @@ def test_enrollment_add_contact_not_found(
 
 
 _BATCH_AT = "2026-12-01T09:00:00-04:00"
+_SIBLING_AT = "2026-11-01T09:00:00-04:00"
+_SIBLING_INSTANT = datetime(2026, 11, 1, 13, 0, tzinfo=UTC)
+_BATCH_INSTANT = datetime(2026, 12, 1, 13, 0, tzinfo=UTC)
 
 
 def test_enrollment_add_file_exclusive_with_tag(
@@ -12649,6 +12654,488 @@ def test_enrollment_add_company_atomic_conflicting_days(
     assert data["error"] == "validation_error"
     assert "calendar day" in data["message"]
     assert list_enrollments(database_connection, workflow_id=workflow.id) == []
+
+
+def _queue_never_sent_t1(
+    connection: Any,
+    workflow: Any,
+    contact: Any,
+    enrollment: Any,
+    scheduled_at: str,
+) -> Any:
+    """Queue a pending never-sent first-reach matching ``--touch 1``."""
+    from mailpilot.database import create_task
+
+    return create_task(
+        connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="scheduled first reach-out",
+        scheduled_at=scheduled_at,
+        context={"trigger": "enrollment_schedule", "touch": 1},
+    )
+
+
+def _assert_instant(iso: str, expected: datetime) -> None:
+    parsed = datetime.fromisoformat(iso)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    assert parsed == expected
+
+
+def test_enrollment_add_company_atomic_file_snaps_to_existing_t1(
+    runner: CliRunner, database_connection: Any, tmp_path: pathlib.Path
+) -> None:
+    """§V.171: file --company-atomic inherits live same-domain never-sent T1."""
+    from conftest import (
+        make_test_account,
+        make_test_company,
+        make_test_contact,
+        make_test_enrollment,
+        make_test_workflow,
+    )
+    from mailpilot.database import find_pending_first_touch_task, list_enrollments
+
+    account = make_test_account(database_connection, email="snapfile@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="snap-file-wf"
+    )
+    firm = make_test_company(database_connection, domain="snap-file.test", name="Snap")
+    ada = make_test_contact(
+        database_connection, email="ada@snap-file.test", company_id=firm.id
+    )
+    grace = make_test_contact(
+        database_connection, email="grace@snap-file.test", company_id=firm.id
+    )
+    enrollment = make_test_enrollment(database_connection, workflow.id, ada.id)
+    existing = _queue_never_sent_t1(
+        database_connection, workflow, ada, enrollment, _SIBLING_AT
+    )
+    emails = tmp_path / "snap.json"
+    emails.write_text(json.dumps([ada.email, grace.email]), encoding="utf-8")
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.name,
+                "--file",
+                str(emails),
+                "--scheduled-at",
+                _BATCH_AT,
+                "--company-atomic",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    batch = data["enrollment_batch"]
+    assert batch["scheduled_at"] == _BATCH_AT
+    assert batch["count"] == 2
+    by_email = {row["email"]: row for row in batch["enrolled"]}
+    _assert_instant(by_email[ada.email]["scheduled_at"], _SIBLING_INSTANT)
+    _assert_instant(by_email[grace.email]["scheduled_at"], _SIBLING_INSTANT)
+    assert by_email[ada.email]["action"] == "unchanged"
+    assert by_email[grace.email]["action"] == "created"
+    kept = find_pending_first_touch_task(database_connection, enrollment.id)
+    assert kept is not None
+    assert kept.id == existing.id
+    assert kept.scheduled_at == _SIBLING_INSTANT
+    rows = list_enrollments(database_connection, workflow_id=workflow.id)
+    assert {row.contact_id for row in rows} == {ada.id, grace.id}
+    grace_row = next(row for row in rows if row.contact_id == grace.id)
+    grace_task = find_pending_first_touch_task(database_connection, grace_row.id)
+    assert grace_task is not None
+    assert grace_task.scheduled_at == _SIBLING_INSTANT
+
+
+def test_enrollment_add_company_atomic_tag_snaps_to_existing_t1(
+    runner: CliRunner, database_connection: Any
+) -> None:
+    """§V.171: tag --company-atomic snaps new seats to live sibling T1."""
+    from conftest import (
+        make_test_account,
+        make_test_company,
+        make_test_contact,
+        make_test_enrollment,
+        make_test_tag,
+        make_test_tag_assignment,
+        make_test_workflow,
+    )
+    from mailpilot.database import find_pending_first_touch_task, list_enrollments
+
+    account = make_test_account(database_connection, email="snaptag@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="snap-tag-wf"
+    )
+    tag = make_test_tag(database_connection, name="snap-tag-seat")
+    firm = make_test_company(
+        database_connection, domain="snap-tag.test", name="SnapTag"
+    )
+    ada = make_test_contact(
+        database_connection, email="ada@snap-tag.test", company_id=firm.id
+    )
+    grace = make_test_contact(
+        database_connection, email="grace@snap-tag.test", company_id=firm.id
+    )
+    make_test_tag_assignment(database_connection, contact_id=grace.id, name=tag.name)
+    enrollment = make_test_enrollment(database_connection, workflow.id, ada.id)
+    existing = _queue_never_sent_t1(
+        database_connection, workflow, ada, enrollment, _SIBLING_AT
+    )
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.name,
+                "--tag",
+                tag.name,
+                "--scheduled-at",
+                _BATCH_AT,
+                "--company-atomic",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    batch = data["enrollment_batch"]
+    assert batch["scheduled_at"] == _BATCH_AT
+    assert batch["count"] == 1
+    assert batch["enrolled"][0]["email"] == grace.email
+    _assert_instant(batch["enrolled"][0]["scheduled_at"], _SIBLING_INSTANT)
+    kept = find_pending_first_touch_task(database_connection, enrollment.id)
+    assert kept is not None
+    assert kept.id == existing.id
+    assert kept.scheduled_at == _SIBLING_INSTANT
+    rows = list_enrollments(database_connection, workflow_id=workflow.id)
+    grace_row = next(row for row in rows if row.contact_id == grace.id)
+    grace_task = find_pending_first_touch_task(database_connection, grace_row.id)
+    assert grace_task is not None
+    assert grace_task.scheduled_at == _SIBLING_INSTANT
+
+
+def test_enrollment_add_company_atomic_snaps_to_earliest_same_day_clock(
+    runner: CliRunner, database_connection: Any, tmp_path: pathlib.Path
+) -> None:
+    """§V.171: same-day sibling clocks snap new seats to the earliest instant."""
+    from conftest import (
+        make_test_account,
+        make_test_company,
+        make_test_contact,
+        make_test_enrollment,
+        make_test_workflow,
+    )
+    from mailpilot.database import find_pending_first_touch_task, list_enrollments
+
+    account = make_test_account(database_connection, email="earlyclk@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="early-clock-wf"
+    )
+    firm = make_test_company(
+        database_connection, domain="early-clock.test", name="Early"
+    )
+    ada = make_test_contact(
+        database_connection, email="ada@early-clock.test", company_id=firm.id
+    )
+    lee = make_test_contact(
+        database_connection, email="lee@early-clock.test", company_id=firm.id
+    )
+    grace = make_test_contact(
+        database_connection, email="grace@early-clock.test", company_id=firm.id
+    )
+    ada_enroll = make_test_enrollment(database_connection, workflow.id, ada.id)
+    lee_enroll = make_test_enrollment(database_connection, workflow.id, lee.id)
+    ada_task = _queue_never_sent_t1(
+        database_connection, workflow, ada, ada_enroll, _SIBLING_AT
+    )
+    lee_task = _queue_never_sent_t1(
+        database_connection,
+        workflow,
+        lee,
+        lee_enroll,
+        "2026-11-01T11:00:00-04:00",
+    )
+    emails = tmp_path / "early.json"
+    emails.write_text(json.dumps([grace.email]), encoding="utf-8")
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.name,
+                "--file",
+                str(emails),
+                "--scheduled-at",
+                _BATCH_AT,
+                "--company-atomic",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    _assert_instant(
+        data["enrollment_batch"]["enrolled"][0]["scheduled_at"], _SIBLING_INSTANT
+    )
+    rows = list_enrollments(database_connection, workflow_id=workflow.id)
+    grace_row = next(row for row in rows if row.contact_id == grace.id)
+    grace_task = find_pending_first_touch_task(database_connection, grace_row.id)
+    assert grace_task is not None
+    assert grace_task.scheduled_at == _SIBLING_INSTANT
+    kept_ada = find_pending_first_touch_task(database_connection, ada_enroll.id)
+    kept_lee = find_pending_first_touch_task(database_connection, lee_enroll.id)
+    assert kept_ada is not None
+    assert kept_ada.id == ada_task.id
+    assert kept_lee is not None
+    assert kept_lee.id == lee_task.id
+    assert kept_ada.scheduled_at == _SIBLING_INSTANT
+    assert kept_lee.scheduled_at == datetime(2026, 11, 1, 15, 0, tzinfo=UTC)
+
+
+def test_enrollment_add_company_atomic_existing_t1_split_days(
+    runner: CliRunner, database_connection: Any, tmp_path: pathlib.Path
+) -> None:
+    """§V.171: live siblings on two calendar days is validation_error."""
+    from conftest import (
+        make_test_account,
+        make_test_company,
+        make_test_contact,
+        make_test_enrollment,
+        make_test_workflow,
+    )
+    from mailpilot.database import list_enrollments
+
+    account = make_test_account(database_connection, email="splitdays@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="split-days-wf"
+    )
+    firm = make_test_company(
+        database_connection, domain="split-days.test", name="Split"
+    )
+    ada = make_test_contact(
+        database_connection, email="ada@split-days.test", company_id=firm.id
+    )
+    lee = make_test_contact(
+        database_connection, email="lee@split-days.test", company_id=firm.id
+    )
+    grace = make_test_contact(
+        database_connection, email="grace@split-days.test", company_id=firm.id
+    )
+    ada_enroll = make_test_enrollment(database_connection, workflow.id, ada.id)
+    lee_enroll = make_test_enrollment(database_connection, workflow.id, lee.id)
+    _queue_never_sent_t1(database_connection, workflow, ada, ada_enroll, _SIBLING_AT)
+    _queue_never_sent_t1(
+        database_connection, workflow, lee, lee_enroll, "2026-11-02T09:00:00-04:00"
+    )
+    emails = tmp_path / "split.json"
+    emails.write_text(json.dumps([grace.email]), encoding="utf-8")
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.name,
+                "--file",
+                str(emails),
+                "--scheduled-at",
+                _BATCH_AT,
+                "--company-atomic",
+            ],
+        )
+
+    assert result.exit_code == 1, result.output
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert "calendar day" in data["message"]
+    rows = list_enrollments(database_connection, workflow_id=workflow.id)
+    assert {row.contact_id for row in rows} == {ada.id, lee.id}
+
+
+def test_enrollment_add_company_atomic_dry_run_projects_existing_t1(
+    runner: CliRunner, database_connection: Any, tmp_path: pathlib.Path
+) -> None:
+    """§V.150: --company-atomic dry-run projects scheduled_at + aligned flag."""
+    from conftest import (
+        make_test_account,
+        make_test_company,
+        make_test_contact,
+        make_test_enrollment,
+        make_test_workflow,
+    )
+    from mailpilot.database import list_enrollments
+
+    account = make_test_account(database_connection, email="snapdry@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="snap-dry-wf"
+    )
+    firm = make_test_company(database_connection, domain="snap-dry.test", name="Dry")
+    other = make_test_company(
+        database_connection, domain="snap-dry-other.test", name="Other"
+    )
+    ada = make_test_contact(
+        database_connection, email="ada@snap-dry.test", company_id=firm.id
+    )
+    grace = make_test_contact(
+        database_connection, email="grace@snap-dry.test", company_id=firm.id
+    )
+    lee = make_test_contact(
+        database_connection, email="lee@snap-dry-other.test", company_id=other.id
+    )
+    enrollment = make_test_enrollment(database_connection, workflow.id, ada.id)
+    _queue_never_sent_t1(database_connection, workflow, ada, enrollment, _SIBLING_AT)
+    emails = tmp_path / "dry.json"
+    emails.write_text(json.dumps([grace.email, lee.email]), encoding="utf-8")
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.name,
+                "--file",
+                str(emails),
+                "--dry-run",
+                "--company-atomic",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    preview = data["enrollment_preview"]
+    assert preview["count"] == 2
+    by_email = {row["email"]: row for row in preview["contacts"]}
+    _assert_instant(by_email[grace.email]["scheduled_at"], _SIBLING_INSTANT)
+    assert by_email[grace.email]["aligned_to_existing_t1"] is True
+    assert by_email[lee.email]["aligned_to_existing_t1"] is False
+    assert by_email[lee.email]["scheduled_at"] is None
+    rows = list_enrollments(database_connection, workflow_id=workflow.id)
+    assert len(rows) == 1
+    assert rows[0].contact_id == ada.id
+
+
+def test_enrollment_add_company_atomic_no_sibling_keeps_flag_day(
+    runner: CliRunner, database_connection: Any, tmp_path: pathlib.Path
+) -> None:
+    """§V.171: --company-atomic with no live sibling keeps --scheduled-at."""
+    from conftest import (
+        make_test_account,
+        make_test_company,
+        make_test_contact,
+        make_test_workflow,
+    )
+    from mailpilot.database import find_pending_first_touch_task, list_enrollments
+
+    account = make_test_account(database_connection, email="nosib@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="no-sib-wf"
+    )
+    firm = make_test_company(database_connection, domain="no-sib.test", name="NoSib")
+    grace = make_test_contact(
+        database_connection, email="grace@no-sib.test", company_id=firm.id
+    )
+    emails = tmp_path / "nosib.json"
+    emails.write_text(json.dumps([grace.email]), encoding="utf-8")
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.name,
+                "--file",
+                str(emails),
+                "--scheduled-at",
+                _BATCH_AT,
+                "--company-atomic",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    batch = data["enrollment_batch"]
+    assert batch["enrolled"][0]["scheduled_at"] == _BATCH_AT
+    rows = list_enrollments(database_connection, workflow_id=workflow.id)
+    assert len(rows) == 1
+    task = find_pending_first_touch_task(database_connection, rows[0].id)
+    assert task is not None
+    assert task.scheduled_at == _BATCH_INSTANT
+
+
+def test_enrollment_add_contact_email_does_not_snap_to_existing_t1(
+    runner: CliRunner, database_connection: Any
+) -> None:
+    """§V.171: one-off --contact-email does not inherit sibling T1."""
+    from conftest import (
+        make_test_account,
+        make_test_company,
+        make_test_contact,
+        make_test_enrollment,
+        make_test_workflow,
+    )
+    from mailpilot.database import find_pending_first_touch_task, list_enrollments
+
+    account = make_test_account(database_connection, email="onesnap@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="one-snap-wf"
+    )
+    firm = make_test_company(
+        database_connection, domain="one-snap.test", name="OneSnap"
+    )
+    ada = make_test_contact(
+        database_connection, email="ada@one-snap.test", company_id=firm.id
+    )
+    grace = make_test_contact(
+        database_connection, email="grace@one-snap.test", company_id=firm.id
+    )
+    enrollment = make_test_enrollment(database_connection, workflow.id, ada.id)
+    existing = _queue_never_sent_t1(
+        database_connection, workflow, ada, enrollment, _SIBLING_AT
+    )
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(
+            main,
+            [
+                "enrollment",
+                "add",
+                "--workflow-id",
+                workflow.name,
+                "--contact-email",
+                grace.email,
+                "--scheduled-at",
+                _BATCH_AT,
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert "enrollment" in data
+    rows = list_enrollments(database_connection, workflow_id=workflow.id)
+    grace_row = next(row for row in rows if row.contact_id == grace.id)
+    grace_task = find_pending_first_touch_task(database_connection, grace_row.id)
+    assert grace_task is not None
+    assert grace_task.scheduled_at == _BATCH_INSTANT
+    kept = find_pending_first_touch_task(database_connection, enrollment.id)
+    assert kept is not None
+    assert kept.id == existing.id
+    assert kept.scheduled_at == _SIBLING_INSTANT
 
 
 def test_enrollment_add_exclude_peer_live(
