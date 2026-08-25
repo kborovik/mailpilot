@@ -19,7 +19,6 @@ import psycopg
 import pytest
 
 from conftest import make_test_account, make_test_contact, make_test_settings
-from mailpilot import database as db_mod
 from mailpilot.database import (
     _MAILPILOT_VERSION,  # pyright: ignore[reportPrivateUsage]
     _scrub_database_url,  # pyright: ignore[reportPrivateUsage]
@@ -27,6 +26,7 @@ from mailpilot.database import (
     get_status_payload,
     update_account,
 )
+from mailpilot.database import schema as schema_mod
 from mailpilot.models import SchemaMetadata
 
 # -- (i) fresh DB --------------------------------------------------------------
@@ -310,9 +310,9 @@ def test_pre_seeded_stale_hash_surfaces_drift_and_pins_version(
         schema_hash="cafef00d" * 8,
         applied_at=datetime(2020, 1, 1, tzinfo=UTC),
     )
-    monkeypatch.setattr(db_mod, "_read_schema_metadata", lambda _conn: stale)
+    monkeypatch.setattr(schema_mod, "_read_schema_metadata", lambda _conn: stale)
     # No migration explains the divergence → verdict=drift (not pending).
-    monkeypatch.setattr(db_mod, "_discover_migrations", list)
+    monkeypatch.setattr(schema_mod, "_discover_migrations", list)
 
     payload = get_status_payload(database_connection, make_test_settings())
     schema = payload["schema"]
