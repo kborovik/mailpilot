@@ -1202,12 +1202,12 @@ Trigger: `workflow review` path changed.
 
 ## §V175 — task-retry-filter
 
-`task retry` dual-mode: positional TASK_ID XOR filter flags. Filter set = `task list` {`--workflow-id`,`--contact-email`,`--status`,`--trigger`,`--overdue`,`--since`,`--until`} + repeatable `--touch N` (parse §V.162). Filter-mode requires ≥1 of {`--touch`,`--workflow-id`,`--contact-email`,`--trigger`}. `--status` default failed; other than failed|cancelled → `validation_error`. TASK_ID+filters → `validation_error`. `--scheduled-at` applies §V.170 to every selected (same day-window). `--dry-run` preview ids+companies no writes. One txn retry every matching failed|cancelled; no default `--limit`. Envelope `{"task_retry":{retried_count,ids[],scheduled_at,companies[{domain,count}],dry_run},"ok":true}` record_count=retried_count. Zero match → ok no-op. Id-mode entity envelope unchanged. `--dry-run` + TASK_ID → `task_retry` envelope no write. Never `--description`. SKILL one-call replaces list-then-N-retry. Distinct from §V.173 cancel.
+`task retry` dual-mode: positional TASK_ID XOR filter flags. Filter set = `task list` {`--workflow-id`,`--contact-email`,`--status`,`--trigger`,`--overdue`,`--since`,`--until`} + repeatable `--touch N` (parse §V.162). Filter-mode requires ≥1 of {`--touch`,`--workflow-id`,`--contact-email`,`--trigger`,`--status`}. `--status failed` or `--status cancelled` w/ no other scope = every matching row. `--status` default failed; other than failed|cancelled → `validation_error`. TASK_ID+filters → `validation_error`. `--scheduled-at` applies §V.170 to every selected (same day-window). `--dry-run` preview ids+companies no writes. One txn retry every matching failed|cancelled; no default `--limit`. Envelope `{"task_retry":{retried_count,ids[],scheduled_at,companies[{domain,count}],dry_run},"ok":true}` record_count=retried_count. Zero match → ok no-op. Id-mode entity envelope unchanged. `--dry-run` + TASK_ID → `task_retry` envelope no write. Never `--description`. SKILL one-call replaces list-then-N-retry (incl. `--status failed` global, no per-workflow loop). Distinct from §V.173 cancel.
 
 Trigger: `task retry` path changed.
 - `rg 'retry_tasks_matching|task_retry' src/mailpilot/` -> filter-mode join present
 - `rg 'dry-run|--touch' src/mailpilot/cli` -> dry-run + touch on retry
-- `rg 'task retry --workflow-id|retried_count' src/mailpilot/SKILL.md` -> one-call recipe present
+- `rg 'task retry --status failed|retried_count' src/mailpilot/SKILL.md` -> one-call recipe present
 
 ## §V16 — race-safe create
 
