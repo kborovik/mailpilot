@@ -430,6 +430,29 @@ last=Drouin). Multi-word queries require every token to match at least one
 of those fields (AND), so partial noise does not flood results. Disabled
 contacts stay searchable for forensics.
 
+### Unenrolled contacts (one call)
+
+One call for live contacts with no enrollment in any workflow. Do not
+list contacts then list enrollments and diff.
+
+`--unenrolled` keeps contacts with zero enrollment rows (any workflow,
+any status). `--enrolled` keeps contacts with at least one enrollment
+row, including disabled enrollments. The two flags are exclusive (both
+together returns `validation_error`). They compose with `--tag` /
+`--no-tag` / `--include-disabled`. Default still excludes disabled
+contacts. Lean `contacts` envelope is unchanged. `record_count` is the
+page length; raise `--limit` when it equals the cap, same as other
+lists.
+
+```
+mailpilot contact list --unenrolled
+mailpilot contact list --unenrolled --tag sales-seat
+mailpilot contact list --unenrolled --no-tag skip
+mailpilot contact list --unenrolled --include-disabled
+mailpilot contact list --enrolled
+mailpilot contact list --unenrolled --limit 500
+```
+
 ### Contact view timeline (dossier)
 
 ```

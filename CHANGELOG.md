@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `contact list --unenrolled` and `--enrolled` return live contacts
+  with zero or at least one enrollment row (any workflow, any
+  status) in one envelope. Both flags together is a
+  `validation_error`. Compose with `--tag` / `--no-tag` /
+  `--include-disabled`. Disabled enrollments still count as
+  enrolled. Default list still excludes disabled contacts.
+
 ### Changed
 
 - `show queue` workflow-grain columns include `failed` (failed-unsent

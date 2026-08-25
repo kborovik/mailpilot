@@ -11,6 +11,7 @@ from mailpilot._filters import (
     TASK_STATUSES,
     TASK_TRIGGERS,
     desc_option,
+    enrollment_coverage_options,
     enum_option,
     include_disabled_option,
     limit_option,
@@ -162,6 +163,26 @@ def test_presence_option_is_tristate_without_no_has_artifact() -> None:
     # No `--no-has-profile` artifact is generated.
     bogus = CliRunner().invoke(cmd, ["--no-has-profile"])
     assert bogus.exit_code != 0
+
+
+def test_enrollment_coverage_options_xor_flags() -> None:
+    """§V.192: --unenrolled / --enrolled default off; both may be set at parse."""
+
+    @click.command()
+    @enrollment_coverage_options
+    def cmd(unenrolled: bool, enrolled: bool) -> None:
+        click.echo(f"{unenrolled}|{enrolled}")
+
+    none_state = CliRunner().invoke(cmd, [])
+    assert none_state.exit_code == 0
+    assert none_state.output.strip() == "False|False"
+    unenrolled = CliRunner().invoke(cmd, ["--unenrolled"])
+    assert unenrolled.output.strip() == "True|False"
+    enrolled = CliRunner().invoke(cmd, ["--enrolled"])
+    assert enrolled.output.strip() == "False|True"
+    both = CliRunner().invoke(cmd, ["--unenrolled", "--enrolled"])
+    assert both.exit_code == 0
+    assert both.output.strip() == "True|True"
 
 
 def test_include_disabled_flag_defaults_false() -> None:

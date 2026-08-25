@@ -116,6 +116,30 @@ def include_disabled_option(fn: Callable[..., Any]) -> Callable[..., Any]:
     )(fn)
 
 
+def enrollment_coverage_options(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Add ``--unenrolled`` / ``--enrolled`` XOR coverage flags.
+
+    Both default off (no enrollment-row filter). The command body rejects
+    both-true as ``validation_error``. Unenrolled is zero enrollment rows
+    (any workflow, any status); enrolled is at least one row any status.
+    """
+    fn = click.option(
+        "--enrolled",
+        is_flag=True,
+        default=False,
+        help=(
+            "Only contacts with at least one enrollment row (any workflow, any status)."
+        ),
+    )(fn)
+    fn = click.option(
+        "--unenrolled",
+        is_flag=True,
+        default=False,
+        help=("Only contacts with zero enrollment rows (any workflow, any status)."),
+    )(fn)
+    return fn
+
+
 class TouchNumber(click.ParamType):
     """Parse ``--touch`` as N or ``T<n>`` (same rules as context.touch)."""
 
