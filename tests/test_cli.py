@@ -4865,6 +4865,7 @@ def test_contact_list_with_filters(
         title=None,
         tag=None,
         exclude_tags=[],
+        enrollment=None,
     )
 
 
@@ -4891,6 +4892,7 @@ def test_contact_list_include_disabled(
         title=None,
         tag=None,
         exclude_tags=[],
+        enrollment=None,
     )
 
 
@@ -4920,6 +4922,7 @@ def test_contact_list_max_email_confidence(
         title=None,
         tag=None,
         exclude_tags=[],
+        enrollment=None,
     )
 
 
@@ -4949,6 +4952,7 @@ def test_contact_list_min_email_confidence(
         title=None,
         tag=None,
         exclude_tags=[],
+        enrollment=None,
     )
 
 
@@ -4983,6 +4987,7 @@ def test_contact_list_company_domain(
         title=None,
         tag=None,
         exclude_tags=[],
+        enrollment=None,
     )
 
 
@@ -5033,6 +5038,7 @@ def test_contact_list_title(runner: CliRunner, mock_connection: MagicMock) -> No
         title="VP",
         tag=None,
         exclude_tags=[],
+        enrollment=None,
     )
 
 
@@ -5059,7 +5065,109 @@ def test_contact_list_with_since(runner: CliRunner, mock_connection: MagicMock) 
         title=None,
         tag=None,
         exclude_tags=[],
+        enrollment=None,
     )
+
+
+def test_contact_list_unenrolled_forwards_filter(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.192: --unenrolled flows to list_contacts as enrollment=unenrolled."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_contacts", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(main, ["contact", "list", "--unenrolled"])
+
+    assert result.exit_code == 0
+    _, kwargs = mock_list.call_args
+    assert kwargs["enrollment"] == "unenrolled"
+    assert kwargs["include_disabled"] is False
+
+
+def test_contact_list_enrolled_forwards_filter(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.192: --enrolled flows to list_contacts as enrollment=enrolled."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_contacts", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(main, ["contact", "list", "--enrolled"])
+
+    assert result.exit_code == 0
+    _, kwargs = mock_list.call_args
+    assert kwargs["enrollment"] == "enrolled"
+
+
+def test_contact_list_unenrolled_and_enrolled_xor(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.192: --unenrolled and --enrolled together is validation_error."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_contacts") as mock_list,
+    ):
+        result = runner.invoke(main, ["contact", "list", "--unenrolled", "--enrolled"])
+
+    assert result.exit_code == 1
+    data = json.loads(result.output)
+    assert data["error"] == "validation_error"
+    assert data["ok"] is False
+    assert "record_count" not in data
+    assert "exclusive" in data["message"]
+    mock_list.assert_not_called()
+
+
+def test_contact_list_unenrolled_envelope_record_count(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.192/§V.4: lean contacts envelope; record_count is page length."""
+    contacts = [
+        _make_contact_summary(email="a@cov.test"),
+        _make_contact_summary(
+            id="01234567-0000-7000-0000-0000000000cc",
+            email="b@cov.test",
+        ),
+    ]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_contacts", return_value=contacts),
+    ):
+        result = runner.invoke(
+            main, ["contact", "list", "--unenrolled", "--limit", "2"]
+        )
+
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 2
+    assert len(data["contacts"]) == 2
+    assert "verification_meta" not in data["contacts"][0]
+    assert data["contacts"][0]["email"] == "a@cov.test"
+
+
+def test_contact_list_unenrolled_composes_include_disabled(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.192: --unenrolled composes with --include-disabled."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_contacts", return_value=[]) as mock_list,
+    ):
+        result = runner.invoke(
+            main, ["contact", "list", "--unenrolled", "--include-disabled"]
+        )
+
+    assert result.exit_code == 0
+    _, kwargs = mock_list.call_args
+    assert kwargs["enrollment"] == "unenrolled"
+    assert kwargs["include_disabled"] is True
 
 
 def test_contact_list_company_not_found(
@@ -5283,6 +5391,18 @@ def test_contact_list_help_documents_tags(runner: CliRunner) -> None:
     assert "§T." not in result.output
 
 
+def test_contact_list_help_documents_enrollment_coverage(runner: CliRunner) -> None:
+    """§V.192/§V.111: contact list --help documents --unenrolled/--enrolled."""
+    result = runner.invoke(main, ["contact", "list", "--help"])
+    assert result.exit_code == 0
+    assert "--unenrolled" in result.output
+    assert "--enrolled" in result.output
+    assert "exclusive" in result.output
+    assert "§V." not in result.output
+    assert "§T." not in result.output
+    assert "§B." not in result.output
+
+
 def test_skill_documents_contact_tags() -> None:
     """§V.8/§V.111: packaged SKILL.md documents contact tags[] projection."""
     from importlib.resources import files
@@ -5292,6 +5412,24 @@ def test_skill_documents_contact_tags() -> None:
     assert "contact search" in body
     assert "contact view" in body
     assert "project `tags`" in body or "project tags" in body
+    assert "§V." not in body
+    assert "§T." not in body
+
+
+def test_skill_documents_contact_list_enrollment_coverage() -> None:
+    """§V.192: packaged SKILL.md one-call replaces contact-list + enrollment-list diff."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "Unenrolled contacts (one call)" in body
+    assert "Do not" in body
+    assert "list enrollments and diff" in body
+    assert "contact list --unenrolled" in body
+    assert "contact list --enrolled" in body
+    assert "--include-disabled" in body
+    assert "validation_error" in body
+    assert "record_count" in body
+    assert "page length" in body
     assert "§V." not in body
     assert "§T." not in body
 

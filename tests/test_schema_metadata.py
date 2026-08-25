@@ -25,6 +25,7 @@ from mailpilot.database import (
     initialize_database,
     provision_database,
 )
+from mailpilot.database import schema as schema_mod
 from mailpilot.models import SchemaMetadata, SchemaStatus
 
 # -- _compute_schema_hash (§V.19) ---------------------------------------------
@@ -211,7 +212,7 @@ def _patch_verdict_inputs(
     current_hash: str = "H",
 ) -> None:
     """Stub every determine_schema_verdict dependency for DB-free logic tests."""
-    monkeypatch.setattr(db_mod, "_compute_schema_hash", lambda _sql: current_hash)
+    monkeypatch.setattr(schema_mod, "_compute_schema_hash", lambda _sql: current_hash)
     recorded = (
         None
         if recorded_hash is None
@@ -221,12 +222,12 @@ def _patch_verdict_inputs(
             applied_at=datetime(2020, 1, 1, tzinfo=UTC),
         )
     )
-    monkeypatch.setattr(db_mod, "_read_schema_metadata", lambda _conn: recorded)
+    monkeypatch.setattr(schema_mod, "_read_schema_metadata", lambda _conn: recorded)
     monkeypatch.setattr(
-        db_mod, "_read_applied_migration_versions", lambda _conn: set(applied)
+        schema_mod, "_read_applied_migration_versions", lambda _conn: set(applied)
     )
     monkeypatch.setattr(
-        db_mod,
+        schema_mod,
         "_discover_migrations",
         lambda: [(v, f"m{v}", Path(f"/{v}.sql")) for v in discovered],
     )

@@ -1259,6 +1259,142 @@ def test_list_contacts_excludes_disabled_by_default(
     assert disabled_row.disabled_reason == "bounced: hard bounce"
 
 
+def test_list_contacts_unenrolled_zero_enrollment_rows(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.192: unenrolled = live contacts with zero enrollment rows."""
+    account = make_test_account(database_connection, email="unenrolled@acct.test")
+    workflow = make_test_workflow(database_connection, account.id, name="coverage-wf")
+    seated = make_test_contact(database_connection, email="seated@cov.test")
+    bare = make_test_contact(database_connection, email="bare@cov.test")
+    make_test_enrollment(database_connection, workflow.id, seated.id)
+    rows = list_contacts(database_connection, enrollment="unenrolled")
+    assert [row.email for row in rows] == ["bare@cov.test"]
+    assert {c.email for c in list_contacts(database_connection)} == {
+        "bare@cov.test",
+        "seated@cov.test",
+    }
+    assert bare.email == "bare@cov.test"
+
+
+def test_list_contacts_unenrolled_disabled_enrollment_counts_as_enrolled(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.192: a disabled enrollment row still counts as enrolled."""
+    account = make_test_account(database_connection, email="disabled-enr@acct.test")
+    workflow = make_test_workflow(database_connection, account.id, name="disabled-enr")
+    seated = make_test_contact(database_connection, email="disabled-enr@cov.test")
+    bare = make_test_contact(database_connection, email="still-bare@cov.test")
+    enrollment = make_test_enrollment(database_connection, workflow.id, seated.id)
+    disabled = disable_enrollment(database_connection, enrollment.id, "paused")
+    assert disabled is not None
+    assert disabled.status == "disabled"
+    rows = list_contacts(database_connection, enrollment="unenrolled")
+    assert [row.email for row in rows] == ["still-bare@cov.test"]
+    enrolled = list_contacts(database_connection, enrollment="enrolled")
+    assert [row.email for row in enrolled] == ["disabled-enr@cov.test"]
+    assert bare.email == "still-bare@cov.test"
+
+
+def test_list_contacts_enrolled_any_status(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.192: enrolled = at least one enrollment row, any status."""
+    account = make_test_account(database_connection, email="enrolled-any@acct.test")
+    wf_active = make_test_workflow(database_connection, account.id, name="enr-active")
+    wf_disabled = make_test_workflow(database_connection, account.id, name="enr-off")
+    active = make_test_contact(database_connection, email="active-enr@cov.test")
+    halted = make_test_contact(database_connection, email="halted-enr@cov.test")
+    make_test_contact(database_connection, email="never-enr@cov.test")
+    make_test_enrollment(database_connection, wf_active.id, active.id)
+    halted_row = make_test_enrollment(database_connection, wf_disabled.id, halted.id)
+    disable_enrollment(database_connection, halted_row.id, "operator halt")
+    rows = list_contacts(database_connection, enrollment="enrolled")
+    assert {row.email for row in rows} == {
+        "active-enr@cov.test",
+        "halted-enr@cov.test",
+    }
+
+
+def test_list_contacts_unenrolled_composes_with_tag(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.192/§V.116: --unenrolled AND-composes with --tag."""
+    account = make_test_account(database_connection, email="unenr-tag@acct.test")
+    workflow = make_test_workflow(database_connection, account.id, name="unenr-tag")
+    tagged_bare = make_test_contact(database_connection, email="tagged-bare@cov.test")
+    make_test_contact(database_connection, email="untagged-bare@cov.test")
+    tagged_seated = make_test_contact(
+        database_connection, email="tagged-seated@cov.test"
+    )
+    tag = create_tag(database_connection, name="sales-seat")
+    assert tag is not None
+    make_test_tag_assignment(
+        database_connection, contact_id=tagged_bare.id, name="sales-seat"
+    )
+    make_test_tag_assignment(
+        database_connection, contact_id=tagged_seated.id, name="sales-seat"
+    )
+    make_test_enrollment(database_connection, workflow.id, tagged_seated.id)
+    rows = list_contacts(database_connection, enrollment="unenrolled", tag=tag.id)
+    assert [row.email for row in rows] == ["tagged-bare@cov.test"]
+
+
+def test_list_contacts_unenrolled_composes_with_no_tag(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.192/§V.116: --unenrolled AND-composes with --no-tag."""
+    account = make_test_account(database_connection, email="unenr-notag@acct.test")
+    workflow = make_test_workflow(database_connection, account.id, name="unenr-notag")
+    skipped = make_test_contact(database_connection, email="skipped-bare@cov.test")
+    keep = make_test_contact(database_connection, email="keep-bare@cov.test")
+    seated = make_test_contact(database_connection, email="keep-seated@cov.test")
+    tag = create_tag(database_connection, name="skip")
+    assert tag is not None
+    make_test_tag_assignment(database_connection, contact_id=skipped.id, name="skip")
+    make_test_enrollment(database_connection, workflow.id, seated.id)
+    rows = list_contacts(
+        database_connection, enrollment="unenrolled", exclude_tags=[tag.id]
+    )
+    assert [row.email for row in rows] == ["keep-bare@cov.test"]
+    assert keep.email == "keep-bare@cov.test"
+
+
+def test_list_contacts_unenrolled_excludes_disabled_contact_by_default(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.192: default --unenrolled still excludes disabled contacts."""
+    live = make_test_contact(database_connection, email="live-bare@cov.test")
+    blocked = make_test_contact(database_connection, email="blocked-bare@cov.test")
+    disable_contact(database_connection, blocked.id, reason="bounced: hard bounce")
+    rows = list_contacts(database_connection, enrollment="unenrolled")
+    assert [row.email for row in rows] == ["live-bare@cov.test"]
+    included = list_contacts(
+        database_connection, enrollment="unenrolled", include_disabled=True
+    )
+    assert {row.email for row in included} == {
+        "live-bare@cov.test",
+        "blocked-bare@cov.test",
+    }
+    assert live.email == "live-bare@cov.test"
+
+
+def test_list_contacts_unenrolled_record_count_is_page_length(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.192/§V.4/§V.115: record_count is page length; raise --limit at cap."""
+    account = make_test_account(database_connection, email="page@acct.test")
+    workflow = make_test_workflow(database_connection, account.id, name="page-wf")
+    seated = make_test_contact(database_connection, email="page-seated@cov.test")
+    make_test_enrollment(database_connection, workflow.id, seated.id)
+    for index in range(3):
+        make_test_contact(database_connection, email=f"page-bare-{index}@cov.test")
+    page = list_contacts(database_connection, enrollment="unenrolled", limit=2)
+    assert len(page) == 2
+    full = list_contacts(database_connection, enrollment="unenrolled", limit=10)
+    assert len(full) == 3
+
+
 def test_enable_contact_clears_any_reason(
     database_connection: psycopg.Connection[dict[str, Any]],
 ):

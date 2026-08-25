@@ -372,6 +372,54 @@ def test_emit_rg_missing_extras_file(tmp_path: Path) -> None:
     assert "check-extras.md" in result.stderr
 
 
+def test_emit_rg_first_close_does_not_redirect_prose(
+    tmp_path: Path,
+) -> None:
+    """Piped recipe + later prose ticks must not write cwd files.
+
+    Live recipes of the form ``rg ... | wc -l` -> single polymorphic `...``
+    used to swallow the explanation; bash then treated ``-> single`` as a
+    redirect and left empty ``classify`` / ``reads`` / ``single`` files.
+    """
+    extras = tmp_path / "check-extras.md"
+    extras.write_text(
+        "## §V4 — envelope\n\n"
+        "- `rg 'alpha' src/a.py | grep alpha` -> classify each hit: in a "
+        "Click `help=` string or docstring → fail; in a `#` comment → "
+        "exempt\n"
+        "- `rg 'alpha' src/a.py | wc -l` -> single polymorphic "
+        "`--account-email` on account-requiring cmds\n"
+        "- `rg 'alpha' src/a.py | grep alpha` -> reads `name` field from "
+        "TOML (not file stem)\n"
+    )
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.py").write_text("alpha\n")
+    result = run_emit_rg(extras, cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    parsed = emit_rows(result.stdout)
+    assert len(parsed) == 3
+    for _section, _line, hits, _files in parsed:
+        assert hits != "err", result.stdout
+        assert isinstance(hits, int)
+        assert hits > 0
+    for name in ("classify", "reads", "single"):
+        assert not (tmp_path / name).exists(), name
+
+
+def test_live_emit_rg_does_not_write_repo_root_files() -> None:
+    """emit-rg against live check-extras.md must not create cwd files."""
+    before = {path.name for path in REPO.iterdir() if path.is_file()}
+    result = run_emit_rg()
+    assert result.returncode == 0, result.stderr
+    created = sorted(
+        path.name
+        for path in REPO.iterdir()
+        if path.is_file() and path.name not in before
+    )
+    assert created == [], created
+
+
 def test_live_emit_rg_well_formed() -> None:
     """Live .spec/check-extras.md rows are section|line|hit_count|files."""
     result = run_emit_rg()

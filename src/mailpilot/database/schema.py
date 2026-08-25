@@ -226,14 +226,12 @@ def determine_schema_verdict(
     read-only diagnosis, dead-stop for ``run`` + mutations) lives in the
     callers per §V.18.
     """
-    from mailpilot import database as db
-
-    current_hash = db._compute_schema_hash(SCHEMA_PATH.read_text())
-    recorded = db._read_schema_metadata(connection)
-    applied_versions = db._read_applied_migration_versions(connection)
+    current_hash = _compute_schema_hash(SCHEMA_PATH.read_text())
+    recorded = _read_schema_metadata(connection)
+    applied_versions = _read_applied_migration_versions(connection)
     pending_versions = [
         version
-        for version, _name, _path in db._discover_migrations()
+        for version, _name, _path in _discover_migrations()
         if version not in applied_versions
     ]
 

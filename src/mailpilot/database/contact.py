@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from typing import Any
+from typing import Any, Literal
 
 import psycopg
 from psycopg.sql import SQL, Composable, Composed, Placeholder
@@ -279,6 +279,19 @@ def create_contacts_bulk(
     return inserted
 
 
+def _enrollment_coverage_conditions(
+    enrollment: Literal["unenrolled", "enrolled"] | None,
+) -> list[SQL]:
+    """Any enrollment status counts; subquery has no ``status`` predicate."""
+    if enrollment == "unenrolled":
+        return [
+            SQL("NOT EXISTS (SELECT 1 FROM enrollment e WHERE e.contact_id = c.id)")
+        ]
+    if enrollment == "enrolled":
+        return [SQL("EXISTS (SELECT 1 FROM enrollment e WHERE e.contact_id = c.id)")]
+    return []
+
+
 def list_contacts(
     connection: psycopg.Connection[dict[str, Any]],
     limit: int | None = 100,
@@ -292,6 +305,7 @@ def list_contacts(
     title: str | None = None,
     tag: str | Sequence[str] | None = None,
     exclude_tags: Sequence[str] | None = None,
+    enrollment: Literal["unenrolled", "enrolled"] | None = None,
 ) -> list[ContactSummary]:
     """List contacts as summaries with optional filters.
 
@@ -330,6 +344,12 @@ def list_contacts(
         exclude_tags: When set (resolved tag ids), returns only contacts
             carrying NONE of the given tags -- one ``NOT EXISTS`` predicate per
             tag, all intersected (§V.116).
+        enrollment: When ``unenrolled``, only contacts with zero enrollment
+            rows (any workflow, any status). When ``enrolled``, only contacts
+            with at least one enrollment row any status. Disabled enrollments
+            still count as enrolled. ``None`` applies no enrollment-row
+            filter. Composes with ``tag`` / ``exclude_tags`` /
+            ``include_disabled``.
 
     Returns:
         List of contact summaries ordered by email.
@@ -372,6 +392,7 @@ def list_contacts(
     conditions.extend(
         _tag_assignment_conditions(exclude_tags, "contact_id", params, negate=True)
     )
+    conditions.extend(_enrollment_coverage_conditions(enrollment))
     where = SQL("WHERE ") + SQL(" AND ").join(conditions) if conditions else SQL("")
     limit_sql = SQL(" LIMIT %(limit)s") if limit is not None else SQL("")
     query = SQL(

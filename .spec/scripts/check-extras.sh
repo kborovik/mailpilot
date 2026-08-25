@@ -229,6 +229,11 @@ def _is_rg_argv(cmd: str) -> bool:
 
 
 def _rg_cmds_on_line(line: str) -> list[str]:
+    """Extract backticked ``rg`` argv. First valid close wins.
+
+    Later ticks on the line are prose. Last-valid-close plus ``shell=True``
+    treated ``-> classify`` as a bash redirect into an empty cwd file.
+    """
     cmds: list[str] = []
     i = 0
     while True:
@@ -247,6 +252,7 @@ def _rg_cmds_on_line(line: str) -> list[str]:
             if _is_rg_argv(candidate):
                 found = candidate
                 close_at = end
+                break
             j = end + 1
         if found is None:
             i = start + 1
@@ -348,6 +354,11 @@ def extract_files(cmd: str, stdout: str, cwd: Path, hit_count: int) -> list[str]
 
 def run_rg(cmd: str, cwd: Path) -> tuple[int | str, list[str]]:
     use_shell = _needs_shell(cmd)
+    # Piped recipes run through the shell. A leftover backtick in that
+    # string is command-substitution, and bash parses ``-> classify`` as
+    # a redirect that creates an empty cwd file.
+    if use_shell and "`" in cmd:
+        return "err", ["shell-backtick"]
     argv = None if use_shell else _tokens(cmd)
     try:
         if argv is None:

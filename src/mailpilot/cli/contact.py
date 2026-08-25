@@ -3,11 +3,12 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 import click
 
 from mailpilot._filters import (
+    enrollment_coverage_options,
     include_disabled_option,
     limit_option,
     range_options,
@@ -628,6 +629,7 @@ def contact_search(query: str, limit: int) -> None:
     help="Filter by title (case-insensitive exact match; use search for substring).",
 )
 @tag_filter_options
+@enrollment_coverage_options
 @include_disabled_option
 @time_window_options("created_at")
 @limit_option
@@ -637,6 +639,8 @@ def contact_list(
     since: str | None,
     until: str | None,
     include_disabled: bool,
+    unenrolled: bool,
+    enrolled: bool,
     max_email_confidence: int | None,
     min_email_confidence: int | None,
     title: str | None,
@@ -648,10 +652,25 @@ def contact_list(
     Each row projects tags (assigned names, empty ok) with title and
     company_domain. Repeatable --tag is AND (row must carry every named
     tag). Repeatable --no-tag is AND (row must carry none of the named
-    tags).
+    tags). --unenrolled keeps contacts with zero enrollment rows (any
+    workflow, any status); --enrolled keeps contacts with at least one.
+    The two flags are exclusive. Disabled enrollments still count as
+    enrolled. Default list still excludes disabled contacts.
     """
     from mailpilot.database import list_contacts
 
+    if unenrolled and enrolled:
+        output_error(
+            "--unenrolled is exclusive with --enrolled",
+            "validation_error",
+        )
+    enrollment: Literal["unenrolled", "enrolled"] | None
+    if unenrolled:
+        enrollment = "unenrolled"
+    elif enrolled:
+        enrollment = "enrolled"
+    else:
+        enrollment = None
     with _db() as connection:
         company_id = (
             _resolve_company(connection, company_domain).id
@@ -672,6 +691,7 @@ def contact_list(
             title=title,
             tag=tag_ids or None,
             exclude_tags=exclude_tag_ids,
+            enrollment=enrollment,
         )
         output({"contacts": [c.model_dump(mode="json") for c in contacts]})
 
