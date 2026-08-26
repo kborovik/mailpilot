@@ -50,12 +50,16 @@ it defaults to an ASCII table; pass `--format json` for the `queue` envelope.
 - `workflow review`:
   `{"workflow_review": {"since": "...", "until": "...", "reviews": [...]}, "record_count": N, "ok": true}`
   (`record_count` is the number of workflow reviews; `all` is every active)
+- `workflow stats` / `workflow status`:
+  one slug: `{"workflow_stats": {...}, "record_count": 1, "ok": true}`
+  `all`: `{"workflow_stats": [...], "record_count": N, "ok": true}`
+  (same shape for `workflow_status`; `all` is every active workflow)
 
 Every `ok: true` envelope carries a top-level integer `record_count`: the
 array length for array payloads, `1` for single-object payloads,
 `cancelled_count` for filter-mode `task cancel`, `retried_count` for
-filter-mode `task retry`, review count for `workflow review`. Error
-envelopes omit it.
+filter-mode `task retry`, review count for `workflow review`, array length
+for `workflow stats all` / `workflow status all`. Error envelopes omit it.
 
 Plural keys mirror the noun (`accounts`, `companies`, `contacts`,
 `workflows`, `enrollments`, `tasks`, `emails`, `activities`, `tags`, `notes`,
@@ -270,12 +274,43 @@ mailpilot enrollment list --workflow-id acumatica-outreach --full \
 
 ```
 mailpilot workflow stats acumatica-var-outbound
+mailpilot workflow stats all
 ```
 
-Envelope key `workflow_stats`. Eight enrollment-grain stages (enrolled, sent,
-bounced, replied, meeting_booked, contact_later, do_not_contact, active) plus
-`touches` map (`"1"/{sent,pending}`, ... for def `touches`), `awaiting_first_touch`,
+Envelope key `workflow_stats`. One slug is an object; `all` is an array of
+those objects (`record_count` is the array length). `all` is every active
+workflow (same set as `workflow review all`). Zero active is an ok empty
+array. Eight enrollment-grain stages (enrolled, sent, bounced, replied,
+meeting_booked, contact_later, do_not_contact, active) plus `touches` map
+(`"1"/{sent,pending}`, ... for def `touches`), `awaiting_first_touch`,
 and `disabled`. Pure SQL; no LLM.
+
+### Campaign stack health (one call)
+
+One call for current funnel plus ops on listed workflows. Do not loop
+`workflow stats` and `workflow status` after `workflow list`.
+
+```
+mailpilot workflow list --health
+```
+
+Each row embeds `funnel` (the same object as `workflow stats`) and `ops`
+(`wording`, `run_loop`, `overdue_tasks`, `failed_tasks_24h`). Lean list
+(no flag) is unchanged. `--health` composes with existing list filters
+(`--status`, `--direction`, `--account-email`).
+
+Fan-out without a list join (every active workflow, same set as
+`workflow review all`):
+
+```
+mailpilot workflow stats all
+mailpilot workflow status all
+```
+
+Per-slug verbs stay: `workflow stats <NAME_OR_ID>` and
+`workflow status <NAME_OR_ID>` still return a single object. Envelope
+keys stay `workflow_stats` / `workflow_status` -- object for a slug,
+array for `all`. Zero active is ok (`record_count` 0).
 
 ### Workflow report and status
 
@@ -285,6 +320,7 @@ mailpilot workflow report <NAME_OR_ID> --stuck --touch 2 --status active
 mailpilot workflow report <NAME_OR_ID> --format table
 mailpilot workflow report <NAME_OR_ID> --format csv --out /tmp/report.csv
 mailpilot workflow status <NAME_OR_ID>
+mailpilot workflow status all
 ```
 
 `workflow report` returns funnel + task aggregate + enrollment matrix under
@@ -292,7 +328,8 @@ mailpilot workflow status <NAME_OR_ID>
 past 24h SLA, bounced without disposition, high-attempt failed tasks).
 
 `workflow status` is ops health (not funnel): wording, run_loop, overdue_tasks,
-failed_tasks_24h, enrollments_never_sent, funnel_active pointer.
+failed_tasks_24h, enrollments_never_sent, funnel_active pointer. One slug is
+an object; `all` is an array of those objects.
 
 Default output is JSON. Optional `--format table|csv|ndjson` on report and
 enrollment list; `csv`/`ndjson` prefer `--out` (file + status envelope).

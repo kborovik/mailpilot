@@ -318,7 +318,7 @@ T328|x|impl §V.171(∆) + §I — enrollment add --exclude-peer valid w/ --cont
 T329|x|impl §V.192(+) + §I — contact list --unenrolled|--enrolled XOR; zero/any enrollment row any status; compose --tag/--no-tag/--include-disabled; lean contacts envelope; SKILL one-call replaces list+enrollment diff; tests (#289)|V192,V115,V116,V4,V111,I.cli
 T330|x|impl §V.171(∆)+§V.150(∆)+§I — enrollment add --company-atomic snaps new seats to existing same-domain never-sent T1 day+clock; dry-run scheduled_at + aligned_to_existing_t1; SKILL drops T1-list+reschedule; tests (#290)|V171,V150,V32,V152,V4,V111,I.cli
 T331|x|impl §V.166(∆) + §I — show queue --detail union pending+failed-unsent+stuck; kind+reason cols; --limit per kind; SKILL one-call drops task list --status failed; tests (#303)|V166,V172,V155,V4,V111,I.cli
-T332|.|impl §V.193(+) + §V.132(∆)+§V.157(∆)+§I — workflow stats|status all array envelope; list --health funnel+ops; SKILL one-call drops N stats+N status+list; tests (#305)|V193,V132,V157,V174,V184,V4,V107,V111,I.cli
+T332|x|impl §V.193(+) + §V.132(∆)+§V.157(∆)+§I — workflow stats|status all array envelope; list --health funnel+ops; SKILL one-call drops N stats+N status+list; tests (#305)|V193,V132,V157,V174,V184,V4,V107,V111,I.cli
 
 ## §B BUGS
 

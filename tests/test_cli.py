@@ -41,6 +41,7 @@ from mailpilot.models import (
     WorkflowCheck,
     WorkflowCheckEntry,
     WorkflowStats,
+    WorkflowSummary,
 )
 
 _NOW = datetime(2024, 1, 1, tzinfo=UTC)
@@ -6681,6 +6682,45 @@ def _make_workflow(**overrides: Any) -> Workflow:
     return Workflow(**{**defaults, **overrides})
 
 
+def _make_workflow_stats(**overrides: Any) -> WorkflowStats:
+    from mailpilot.models import TouchStageCounts
+
+    defaults: dict[str, Any] = {
+        "workflow_id": _WORKFLOW_ID,
+        "workflow_name": "Demo outreach",
+        "enrolled": 8,
+        "sent": 5,
+        "bounced": 1,
+        "replied": 3,
+        "meeting_booked": 1,
+        "contact_later": 1,
+        "do_not_contact": 1,
+        "active": 4,
+        "touches": {
+            "1": TouchStageCounts(sent=5, pending=2),
+            "2": TouchStageCounts(sent=1, pending=1),
+        },
+        "awaiting_first_touch": 2,
+        "disabled": 1,
+    }
+    return WorkflowStats(**{**defaults, **overrides})
+
+
+def _make_workflow_status_health(**overrides: Any) -> Any:
+    from mailpilot.models import WorkflowReportMeta, WorkflowStatusHealth
+
+    defaults: dict[str, Any] = {
+        "workflow": WorkflowReportMeta(name="Demo", status="active"),
+        "wording": "orphaned",
+        "run_loop": "stopped",
+        "overdue_tasks": 0,
+        "failed_tasks_24h": 0,
+        "enrollments_never_sent": 1,
+        "funnel_active": 1,
+    }
+    return WorkflowStatusHealth(**{**defaults, **overrides})
+
+
 # -- workflow create -----------------------------------------------------------
 
 
@@ -7286,6 +7326,86 @@ def test_workflow_list_with_filters(
     )
 
 
+def test_workflow_list_lean_omits_health_keys(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.193: lean `workflow list` is unchanged (no funnel/ops keys)."""
+    workflows = [WorkflowSummary.model_validate(_make_workflow().model_dump())]
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_workflows", return_value=workflows),
+    ):
+        result = runner.invoke(main, ["workflow", "list"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 1
+    row = data["workflows"][0]
+    assert "funnel" not in row
+    assert "ops" not in row
+    assert row["id"] == _WORKFLOW_ID
+    assert row["name"] == "Demo outreach"
+
+
+def test_workflow_list_health_embeds_funnel_and_ops(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.193: `workflow list --health` joins funnel + ops onto list rows."""
+    workflow = _make_workflow(status="active")
+    summary = WorkflowSummary.model_validate(workflow.model_dump())
+    stats = _make_workflow_stats()
+    health = _make_workflow_status_health(
+        wording="in_sync",
+        run_loop="ok",
+        overdue_tasks=2,
+        failed_tasks_24h=1,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_workflows", return_value=[summary]) as mock_list,
+        patch("mailpilot.database.get_workflow", return_value=workflow) as mock_get,
+        patch("mailpilot.database.get_workflow_stats", return_value=stats),
+        patch(
+            "mailpilot.database.get_workflow_status_health",
+            return_value=health,
+        ),
+    ):
+        result = runner.invoke(
+            main,
+            ["workflow", "list", "--health", "--status", "active"],
+        )
+    assert result.exit_code == 0, result.output
+    mock_list.assert_called_once_with(
+        mock_connection,
+        account_id=None,
+        status="active",
+        workflow_type=None,
+        template=None,
+        limit=100,
+        since=None,
+        until=None,
+    )
+    mock_get.assert_called_once_with(mock_connection, summary.id)
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 1
+    row = data["workflows"][0]
+    assert row["id"] == _WORKFLOW_ID
+    assert row["name"] == "Demo outreach"
+    assert row["funnel"] == stats.model_dump(mode="json")
+    assert row["ops"] == {
+        "wording": "in_sync",
+        "run_loop": "ok",
+        "overdue_tasks": 2,
+        "failed_tasks_24h": 1,
+    }
+    assert "workflow" not in row["ops"]
+    assert "enrollments_never_sent" not in row["ops"]
+    assert "funnel_active" not in row["ops"]
+
+
 def test_workflow_view(runner: CliRunner, mock_connection: MagicMock) -> None:
     workflow = _make_workflow()
     with (
@@ -7397,6 +7517,8 @@ def test_workflow_stats_envelope(runner: CliRunner, mock_connection: MagicMock) 
     assert funnel["disabled"] == 1
     assert funnel["touches"]["1"]["sent"] == 5
     assert funnel["touches"]["1"]["pending"] == 2
+    assert isinstance(funnel, dict)
+    assert data["record_count"] == 1
 
 
 def test_workflow_stats_not_found(
@@ -7413,6 +7535,77 @@ def test_workflow_stats_not_found(
     assert result.exit_code == 1
     data = json.loads(result.output)
     assert data["error"] == "not_found"
+
+
+def test_workflow_stats_all_envelope(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.193: `workflow stats all` is an array of the same per-slug objects."""
+    wf_a = _make_workflow(
+        id="aaaaaaaa-0000-7000-0000-000000000001",
+        name="alpha",
+        status="active",
+    )
+    wf_b = _make_workflow(
+        id="bbbbbbbb-0000-7000-0000-000000000002",
+        name="beta",
+        status="active",
+    )
+    stats_a = _make_workflow_stats(
+        workflow_id=wf_a.id, workflow_name=wf_a.name, enrolled=3
+    )
+    stats_b = _make_workflow_stats(
+        workflow_id=wf_b.id, workflow_name=wf_b.name, enrolled=5
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.list_active_workflows",
+            return_value=[wf_a, wf_b],
+        ) as mock_active,
+        patch(
+            "mailpilot.database.get_workflow_stats",
+            side_effect=[stats_a, stats_b],
+        ) as mock_stats,
+        patch("mailpilot.database.get_workflow") as mock_get,
+        patch("mailpilot.database.get_workflow_by_name") as mock_by_name,
+    ):
+        result = runner.invoke(main, ["workflow", "stats", "all"])
+    assert result.exit_code == 0, result.output
+    mock_active.assert_called_once_with(mock_connection)
+    assert mock_stats.call_count == 2
+    mock_get.assert_not_called()
+    mock_by_name.assert_not_called()
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 2
+    assert isinstance(data["workflow_stats"], list)
+    assert data["workflow_stats"][0]["workflow_name"] == "alpha"
+    assert data["workflow_stats"][0]["enrolled"] == 3
+    assert data["workflow_stats"][1]["workflow_name"] == "beta"
+    assert data["workflow_stats"][1]["enrolled"] == 5
+
+
+def test_workflow_stats_all_empty(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.193: zero active workflows is an ok empty array."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_active_workflows", return_value=[]),
+        patch("mailpilot.database.get_workflow") as mock_get,
+        patch("mailpilot.database.get_workflow_stats") as mock_stats,
+    ):
+        result = runner.invoke(main, ["workflow", "stats", "ALL"])
+    assert result.exit_code == 0, result.output
+    mock_get.assert_not_called()
+    mock_stats.assert_not_called()
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["workflow_stats"] == []
+    assert data["record_count"] == 0
 
 
 def test_workflow_check_envelope(
@@ -17806,6 +17999,165 @@ def test_workflow_status_envelope(
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data["workflow_status"]["run_loop"] == "stopped"
+    assert isinstance(data["workflow_status"], dict)
+    assert data["record_count"] == 1
+
+
+def test_workflow_status_all_envelope(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.193: `workflow status all` is an array of the same per-slug objects."""
+    wf_a = _make_workflow(
+        id="aaaaaaaa-0000-7000-0000-000000000001",
+        name="alpha",
+        status="active",
+    )
+    wf_b = _make_workflow(
+        id="bbbbbbbb-0000-7000-0000-000000000002",
+        name="beta",
+        status="active",
+    )
+    from mailpilot.models import WorkflowReportMeta
+
+    health_a = _make_workflow_status_health(
+        workflow=WorkflowReportMeta(name="alpha", status="active"),
+        wording="orphaned",
+        run_loop="ok",
+        overdue_tasks=1,
+    )
+    health_b = _make_workflow_status_health(
+        workflow=WorkflowReportMeta(name="beta", status="active"),
+        wording="in_sync",
+        run_loop="stopped",
+        failed_tasks_24h=2,
+    )
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch(
+            "mailpilot.database.list_active_workflows",
+            return_value=[wf_a, wf_b],
+        ) as mock_active,
+        patch(
+            "mailpilot.database.get_workflow_status_health",
+            side_effect=[health_a, health_b],
+        ) as mock_health,
+        patch("mailpilot.database.get_workflow") as mock_get,
+        patch("mailpilot.database.get_workflow_by_name") as mock_by_name,
+    ):
+        result = runner.invoke(main, ["workflow", "status", "all"])
+    assert result.exit_code == 0, result.output
+    mock_active.assert_called_once_with(mock_connection)
+    assert mock_health.call_count == 2
+    mock_health.assert_any_call(mock_connection, wf_a.id)
+    mock_health.assert_any_call(mock_connection, wf_b.id)
+    mock_get.assert_not_called()
+    mock_by_name.assert_not_called()
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 2
+    assert isinstance(data["workflow_status"], list)
+    assert data["workflow_status"][0]["workflow"]["name"] == "alpha"
+    assert data["workflow_status"][0]["overdue_tasks"] == 1
+    assert data["workflow_status"][1]["workflow"]["name"] == "beta"
+    assert data["workflow_status"][1]["failed_tasks_24h"] == 2
+
+
+def test_workflow_status_all_empty(
+    runner: CliRunner, mock_connection: MagicMock
+) -> None:
+    """§V.193: zero active workflows is an ok empty array."""
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.list_active_workflows", return_value=[]),
+        patch("mailpilot.database.get_workflow") as mock_get,
+        patch("mailpilot.database.get_workflow_status_health") as mock_health,
+    ):
+        result = runner.invoke(main, ["workflow", "status", "All"])
+    assert result.exit_code == 0, result.output
+    mock_get.assert_not_called()
+    mock_health.assert_not_called()
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["workflow_status"] == []
+    assert data["record_count"] == 0
+
+
+def test_workflow_stats_all_cli_live_active_only(
+    runner: CliRunner, database_connection: Any
+) -> None:
+    """§V.193 / #305: `stats all` is every active workflow, not drafts."""
+    from conftest import make_test_account, make_test_workflow
+    from mailpilot.database import activate_workflow, update_workflow
+
+    account = make_test_account(database_connection, email="stats-all-live@lab5.test")
+    active_a = make_test_workflow(
+        database_connection, account.id, name="stats-all-live-a"
+    )
+    active_b = make_test_workflow(
+        database_connection, account.id, name="stats-all-live-b"
+    )
+    make_test_workflow(database_connection, account.id, name="stats-all-live-draft")
+    for workflow in (active_a, active_b):
+        update_workflow(
+            database_connection,
+            workflow.id,
+            goal="Book demo",
+            instructions="You are a sales rep.",
+        )
+        activate_workflow(database_connection, workflow.id)
+    database_connection.commit()
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(main, ["workflow", "stats", "all"])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 2
+    names = {row["workflow_name"] for row in data["workflow_stats"]}
+    assert names == {"stats-all-live-a", "stats-all-live-b"}
+    for row in data["workflow_stats"]:
+        assert "enrolled" in row
+        assert "awaiting_first_touch" in row
+
+
+def test_workflow_list_health_cli_live(
+    runner: CliRunner, database_connection: Any
+) -> None:
+    """§V.193: live `workflow list --health` joins funnel plus ops."""
+    from conftest import make_test_account, make_test_workflow
+    from mailpilot.database import activate_workflow, update_workflow
+
+    account = make_test_account(database_connection, email="list-health-live@lab5.test")
+    workflow = make_test_workflow(
+        database_connection, account.id, name="list-health-live"
+    )
+    update_workflow(
+        database_connection,
+        workflow.id,
+        goal="Book demo",
+        instructions="You are a sales rep.",
+    )
+    activate_workflow(database_connection, workflow.id)
+    database_connection.commit()
+
+    with patch("mailpilot.settings.get_settings", return_value=make_test_settings()):
+        result = runner.invoke(main, ["workflow", "list", "--health"])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["ok"] is True
+    assert data["record_count"] == 1
+    row = data["workflows"][0]
+    assert row["name"] == "list-health-live"
+    assert row["funnel"]["workflow_id"] == workflow.id
+    assert row["funnel"]["enrolled"] == 0
+    assert set(row["ops"]) == {
+        "wording",
+        "run_loop",
+        "overdue_tasks",
+        "failed_tasks_24h",
+    }
 
 
 def test_workflow_review_envelope(
@@ -18099,6 +18451,25 @@ def test_skill_documents_workflow_review_one_call() -> None:
     assert "result.reason" in body
     assert "Do not loop" in body
     assert "`workflow stats`" in body
+    assert "§V." not in body
+    assert "§T." not in body
+
+
+def test_skill_documents_workflow_stack_health_one_call() -> None:
+    """#305: packaged SKILL.md one-call replaces list + N stats + N status."""
+    from importlib.resources import files
+
+    body = files("mailpilot").joinpath("SKILL.md").read_text(encoding="utf-8")
+    assert "Campaign stack health (one call)" in body
+    assert "mailpilot workflow list --health" in body
+    assert "mailpilot workflow stats all" in body
+    assert "mailpilot workflow status all" in body
+    assert "Do not loop" in body
+    assert "`workflow stats`" in body
+    assert "`workflow status`" in body
+    assert "workflow list" in body
+    assert "overdue_tasks" in body
+    assert "failed_tasks_24h" in body
     assert "§V." not in body
     assert "§T." not in body
 
