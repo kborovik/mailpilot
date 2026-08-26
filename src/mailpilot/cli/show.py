@@ -6,7 +6,6 @@ from __future__ import annotations
 import click
 
 from mailpilot._filters import (
-    limit_option,
     scope_option,
 )
 from mailpilot.cli.main import (
@@ -30,7 +29,7 @@ def show() -> None:
     "--detail",
     is_flag=True,
     default=False,
-    help="Task-grain queue: pending, or --failed / --stuck / --overdue.",
+    help="Task-grain union of pending, failed-unsent, and stuck.",
 )
 @scope_option("--workflow-name", "workflow_name", "Filter by workflow (name or ID).")
 @click.option(
@@ -48,7 +47,12 @@ def show() -> None:
     show_default=True,
     help="Output format (default table).",
 )
-@limit_option
+@click.option(
+    "--limit",
+    default=100,
+    show_default=True,
+    help="Maximum rows per kind (pending, failed, stuck).",
+)
 @click.option(
     "--overdue",
     is_flag=True,
@@ -81,10 +85,10 @@ def show_queue(
 
     Default grain is one row per workflow (draft, active, paused) with
     pending counts by touch (t1/t2/t3/t4p), failed-unsent, and stuck
-    enrollments. --detail lists pending tasks (workflow_name,
-    company_domain, contact, email, touch, attempts, next_at).
-    --detail --failed / --stuck list those rows instead. Empty prints
-    (no rows).
+    enrollments. --detail lists pending + failed-unsent + stuck
+    (workflow_name, company_domain, contact, email, touch, attempts,
+    next_at, kind, reason). --limit caps each kind. --detail --failed /
+    --stuck / --overdue list one kind. Empty prints (no rows).
     """
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 

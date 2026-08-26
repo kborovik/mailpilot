@@ -98,6 +98,8 @@ def test_queue_table_cells_detail_cols_and_next_at_iso() -> None:
         "touch": "T2",
         "attempts": 0,
         "next_at": "2026-08-14T02:00:00+00:00",
+        "kind": "failed",
+        "reason": "xai 403",
         "task_id": "01234567-0000-7000-0000-000000000099",
         "when": "in 3d",
         "trigger": "task",
@@ -112,10 +114,13 @@ def test_queue_table_cells_detail_cols_and_next_at_iso() -> None:
         "touch",
         "attempts",
         "next_at",
+        "kind",
+        "reason",
     )
     assert "when" not in headers
     assert "trigger" not in headers
     assert "state" not in headers
+    assert "task_id" not in headers
     cells = queue_table_cells(row, detail=True, tz=ZoneInfo("America/Toronto"))
     assert cells == [
         "alpha-outreach",
@@ -125,6 +130,8 @@ def test_queue_table_cells_detail_cols_and_next_at_iso() -> None:
         "T2",
         "0",
         "2026-08-13T22:00:00-04:00",
+        "failed",
+        "xai 403",
     ]
 
 
