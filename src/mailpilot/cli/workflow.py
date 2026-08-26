@@ -273,7 +273,7 @@ def workflow_search(query: str, limit: int) -> None:
 
 
 def _attach_workflow_health(connection: Any, summary: Any) -> Any:
-    """Embed funnel + ops on a list row; drop nested workflow meta."""
+    """List rows lack ``touches``; stats needs the loaded Workflow."""
     from mailpilot.database import (
         get_workflow,
         get_workflow_stats,
