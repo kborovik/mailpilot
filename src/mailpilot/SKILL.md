@@ -190,28 +190,37 @@ with no next send and no terminal outcome whose latest task failed or
 that still await a first touch. This is not the enrollment/report
 `--stuck` 24h SLA filter.
 
-`--detail` switches to pending-task grain in queue order (oldest first).
-`--detail --failed` lists failed-unsent rows. `--detail --stuck` lists
-stuck enrollments (same columns; touch, attempts, and next_at come from
-the latest failed task when present). `--overdue`, `--failed`, and
-`--stuck` are exclusive on `--detail`; without `--detail` they are
-ignored.
+`--detail` switches to task grain: pending + failed-unsent + stuck
+(oldest pending first, then failed, then stuck). Each row has `kind`
+(`pending` / `failed` / `stuck`) and `reason` (empty on pending; stored
+`result.reason` on failed; latest failed-task reason on stuck when
+present). `--limit` is per kind (default 100 each), so pending filling
+100 does not hide failed or stuck. `--detail --failed` lists
+failed-unsent only. `--detail --stuck` lists stuck enrollments only
+(touch, attempts, next_at, and reason come from the latest failed task
+when present). `--overdue` is pending-kind only (`scheduled_at` in the
+past). `--overdue`, `--failed`, and `--stuck` are exclusive on
+`--detail`; without `--detail` they are ignored.
 
 Detail columns: `workflow_name`, `company_domain`, `contact`, `email`,
-`touch`, `attempts`, `next_at`. `touch` is `T<n>`; first-reach rows
-(`enrollment_schedule` with no `touch`) print `T1`. Table and JSON
-`next_at` is a full ISO datetime in `--tz` (offset required).
-`--workflow-name` accepts name or UUID and matches the `workflow_name`
-table/JSON column. Empty prints `(no rows)` and exits 0. Read-only; no
-LLM.
+`touch`, `attempts`, `next_at`, `kind`, `reason`. `touch` is `T<n>`;
+first-reach rows (`enrollment_schedule` with no `touch`) print `T1`.
+Table and JSON `next_at` is a full ISO datetime in `--tz` (offset
+required). `--workflow-name` accepts name or UUID and matches the
+`workflow_name` table/JSON column. Empty prints `(no rows)` and exits 0.
+Read-only; no LLM.
 
 For "why is the queue empty / where did scheduled emails go", one call.
 Do not follow with `workflow review` for that diagnosis.
+
+For send-window outage classify (failed stack / why failed+stuck), one
+call. Do not follow with `task list --status failed`.
 
 ```
 mailpilot show queue
 mailpilot show queue --workflow-name <NAME_OR_ID>
 mailpilot show queue --detail
+mailpilot show queue --detail --format json
 mailpilot show queue --detail --overdue --limit 50
 mailpilot show queue --detail --failed
 mailpilot show queue --detail --stuck

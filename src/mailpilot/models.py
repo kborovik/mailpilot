@@ -753,6 +753,7 @@ class WorkflowStatusHealth(BaseModel):
 
 
 QueueGrain = Literal["workflow", "task"]
+QueueTaskKind = Literal["pending", "failed", "stuck"]
 
 
 class QueueWorkflowRow(BaseModel):
@@ -773,9 +774,9 @@ class QueueTaskRow(BaseModel):
     """One task-grain row for ``show queue --detail`` (§V.166).
 
     Table+JSON public cols: workflow_name, company_domain, contact, email,
-    touch, attempts, next_at. Table hides ``task_id`` and ``enrollment_id``.
-    ``next_at`` / ``task_id`` are null on stuck enrollments with no failed
-    task.
+    touch, attempts, next_at, kind, reason. Table hides ``task_id`` and
+    ``enrollment_id``. ``next_at`` / ``task_id`` are null on stuck
+    enrollments with no failed task. ``reason`` is empty on pending.
     """
 
     workflow_name: str
@@ -785,6 +786,8 @@ class QueueTaskRow(BaseModel):
     touch: str = ""
     attempts: int
     next_at: datetime | None = None
+    kind: QueueTaskKind = "pending"
+    reason: str = ""
     task_id: str | None = None
     enrollment_id: str
 

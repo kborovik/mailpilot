@@ -18293,6 +18293,8 @@ def test_show_queue_detail_json_hides_no_ids(
                 touch="T2",
                 attempts=0,
                 next_at=_NOW,
+                kind="failed",
+                reason="xai 403",
                 task_id="01234567-0000-7000-0000-000000000099",
                 enrollment_id="01234567-0000-7000-0000-000000000088",
             )
@@ -18312,12 +18314,15 @@ def test_show_queue_detail_json_hides_no_ids(
     assert "workflow_name" in header
     assert "company_domain" in header
     assert "next_at" in header
+    assert "kind" in header
+    assert "reason" in header
     assert "when" not in header
     assert "trigger" not in header
     assert "state" not in header
     assert "01234567-0000-7000-0000-000000000099" not in table.output
     assert "Ada Lovelace" in table.output
     assert "T2" in table.output
+    assert "xai 403" in table.output
     assert "2024-01-01T00:00:00+00:00" in table.output
     data = json.loads(js.output)
     assert data["queue"]["grain"] == "task"
@@ -18325,6 +18330,8 @@ def test_show_queue_detail_json_hides_no_ids(
     assert row["task_id"].endswith("099")
     assert row["company_domain"] == "example.com"
     assert row["next_at"].startswith("2024-01-01T")
+    assert row["kind"] == "failed"
+    assert row["reason"] == "xai 403"
     assert "when" not in row
     assert "trigger" not in row
     assert "state" not in row
@@ -18394,6 +18401,9 @@ def test_skill_documents_show_queue() -> None:
     assert "host local" in body.lower()
     assert "Do not follow with `workflow review`" in body
     assert "show queue --format json" in body
+    assert "show queue --detail --format json" in body
+    assert "Do not follow with `task list --status failed`" in body
+    assert "per kind" in body
     assert "§V." not in body
     assert "§T." not in body
 
@@ -18407,6 +18417,7 @@ def test_show_queue_help_uses_workflow_name(runner: CliRunner) -> None:
     assert "--failed" in result.output
     assert "--stuck" in result.output
     assert "host local" in result.output.lower()
+    assert "per kind" in result.output
     assert "§V." not in result.output
     assert "§T." not in result.output
 
@@ -18516,6 +18527,8 @@ def test_show_queue_detail_failed_passes_flag(
                     touch="T1",
                     attempts=0,
                     next_at=_NOW,
+                    kind="failed",
+                    reason="provider",
                     task_id="01234567-0000-7000-0000-000000000099",
                     enrollment_id="01234567-0000-7000-0000-000000000088",
                 )
@@ -18549,6 +18562,8 @@ def test_show_queue_detail_failed_passes_flag(
     assert data["queue"]["grain"] == "task"
     assert data["record_count"] == 1
     assert data["queue"]["rows"][0]["attempts"] == 0
+    assert data["queue"]["rows"][0]["kind"] == "failed"
+    assert data["queue"]["rows"][0]["reason"] == "provider"
 
 
 def test_show_queue_omitted_tz_uses_host_local(

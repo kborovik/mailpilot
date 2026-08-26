@@ -35,6 +35,7 @@ from mailpilot.database.task import (
 )
 from mailpilot.models import (
     QueueReport,
+    QueueTaskKind,
     QueueTaskRow,
     QueueWorkflowRow,
     TouchStageCounts,
@@ -715,10 +716,10 @@ def get_queue_report(
 
     Workflow grain: one row per in-scope workflow (draft/active/paused),
     sorted by next pending ``scheduled_at`` ascending (empty last) then name.
-    Task grain: pending tasks by default, sorted by ``scheduled_at``
-    ascending (does not change ``list_tasks`` DESC). ``--limit``,
-    ``--overdue``, ``--failed``, and ``--stuck`` apply to task grain only.
-    No LLM, no write.
+    Task grain: default union pending + failed-unsent + stuck, sorted
+    pending ``scheduled_at`` ASC then failed then stuck. ``--limit`` caps
+    each kind. ``--overdue`` / ``--failed`` / ``--stuck`` select one kind.
+    Does not change ``list_tasks`` DESC. No LLM, no write.
     """
     from zoneinfo import ZoneInfo
 
@@ -854,7 +855,7 @@ def _queue_stuck_where(sent: SQL | Composed) -> Composed:
     ).format(sent=sent)
 
 
-def _queue_task_from_row(row: dict[str, Any]) -> QueueTaskRow:
+def _queue_task_from_row(row: dict[str, Any], *, kind: QueueTaskKind) -> QueueTaskRow:
     """Map a task-grain SQL row onto ``QueueTaskRow``."""
     from mailpilot.queue import format_queue_touch
 
@@ -863,6 +864,8 @@ def _queue_task_from_row(row: dict[str, Any]) -> QueueTaskRow:
     trigger = row["trigger"]
     trigger_text = trigger if isinstance(trigger, str) else ""
     attempts = row["attempts"]
+    raw_reason = row.get("reason")
+    reason = raw_reason if isinstance(raw_reason, str) else ""
     return QueueTaskRow(
         workflow_name=row["workflow_name"],
         company_domain=row["company_domain"] or "",
@@ -871,6 +874,8 @@ def _queue_task_from_row(row: dict[str, Any]) -> QueueTaskRow:
         touch=format_queue_touch(context_dict, trigger_text),
         attempts=int(attempts) if attempts is not None else 0,
         next_at=row["next_at"],
+        kind=kind,
+        reason=reason,
         task_id=row["task_id"],
         enrollment_id=row["enrollment_id"],
     )
@@ -885,11 +890,29 @@ def _queue_task_rows(
     failed: bool = False,
     stuck: bool = False,
 ) -> list[QueueTaskRow]:
-    """Task grain: pending (default), failed-unsent, or stuck enrollments."""
+    """Task grain: union pending+failed-unsent+stuck, or one kind."""
     if stuck:
         return _queue_stuck_rows(connection, workflow_id=workflow_id, limit=limit)
     if failed:
         return _queue_failed_rows(connection, workflow_id=workflow_id, limit=limit)
+    pending = _queue_pending_rows(
+        connection, workflow_id=workflow_id, limit=limit, overdue=overdue
+    )
+    if overdue:
+        return pending
+    failed_rows = _queue_failed_rows(connection, workflow_id=workflow_id, limit=limit)
+    stuck_rows = _queue_stuck_rows(connection, workflow_id=workflow_id, limit=limit)
+    return pending + failed_rows + stuck_rows
+
+
+def _queue_pending_rows(
+    connection: psycopg.Connection[dict[str, Any]],
+    *,
+    workflow_id: str | None,
+    limit: int,
+    overdue: bool,
+) -> list[QueueTaskRow]:
+    """Pending task grain; ``--overdue`` keeps scheduled_at < now."""
     conditions: list[SQL] = [SQL("t.status = 'pending'")]
     params: dict[str, object] = {"limit": limit}
     if workflow_id is not None:
@@ -910,7 +933,8 @@ def _queue_task_rows(
             w.name AS workflow_name,
             t.context,
             COALESCE(t.context->>'trigger', '') AS trigger,
-            t.attempt_count AS attempts
+            t.attempt_count AS attempts,
+            '' AS reason
         FROM task t
         JOIN workflow w ON w.id = t.workflow_id
         JOIN contact c ON c.id = t.contact_id
@@ -921,7 +945,7 @@ def _queue_task_rows(
         """
     ).format(contact=_QUEUE_CONTACT_SQL, where=where)
     rows = connection.execute(query, params).fetchall()
-    return [_queue_task_from_row(row) for row in rows]
+    return [_queue_task_from_row(row, kind="pending") for row in rows]
 
 
 def _queue_failed_rows(
@@ -949,7 +973,8 @@ def _queue_failed_rows(
             w.name AS workflow_name,
             t.context,
             COALESCE(t.context->>'trigger', '') AS trigger,
-            t.attempt_count AS attempts
+            t.attempt_count AS attempts,
+            COALESCE(t.result->>'reason', '') AS reason
         FROM task t
         JOIN enrollment e ON e.id = t.enrollment_id
         JOIN workflow w ON w.id = t.workflow_id
@@ -966,7 +991,7 @@ def _queue_failed_rows(
         where=where,
     )
     rows = connection.execute(query, params).fetchall()
-    return [_queue_task_from_row(row) for row in rows]
+    return [_queue_task_from_row(row, kind="failed") for row in rows]
 
 
 def _queue_stuck_rows(
@@ -995,7 +1020,8 @@ def _queue_stuck_rows(
             w.name AS workflow_name,
             ft.context,
             COALESCE(ft.trigger, '') AS trigger,
-            ft.attempt_count AS attempts
+            ft.attempt_count AS attempts,
+            COALESCE(ft.reason, '') AS reason
         FROM enrollment e
         JOIN workflow w ON w.id = e.workflow_id
         JOIN contact c ON c.id = e.contact_id
@@ -1003,7 +1029,8 @@ def _queue_stuck_rows(
         {stuck_laterals}
         LEFT JOIN LATERAL (
             SELECT t.id, t.scheduled_at, t.attempt_count, t.context,
-                   COALESCE(t.context->>'trigger', '') AS trigger
+                   COALESCE(t.context->>'trigger', '') AS trigger,
+                   COALESCE(t.result->>'reason', '') AS reason
             FROM task t
             WHERE t.enrollment_id = e.id AND t.status = 'failed'
             ORDER BY t.created_at DESC LIMIT 1
@@ -1020,7 +1047,7 @@ def _queue_stuck_rows(
         where=where,
     )
     rows = connection.execute(query, params).fetchall()
-    return [_queue_task_from_row(row) for row in rows]
+    return [_queue_task_from_row(row, kind="stuck") for row in rows]
 
 
 def _compute_workflow_wording_hash(

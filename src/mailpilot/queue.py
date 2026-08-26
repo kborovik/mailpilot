@@ -37,6 +37,8 @@ _QUEUE_TASK_TABLE_HEADERS = (
     "touch",
     "attempts",
     "next_at",
+    "kind",
+    "reason",
 )
 
 

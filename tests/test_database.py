@@ -11276,7 +11276,7 @@ def test_get_queue_report_workflow_grain_touch_buckets(
 def test_get_queue_report_task_grain_pending_asc_touch(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.166 / §V.162: pending only, ASC queue order, T2 parse; list_tasks DESC."""
+    """§V.166 / §V.162: pending ASC then kind; T2 parse; list_tasks DESC."""
     from mailpilot.database import get_queue_report, update_contact
     from mailpilot.models import QueueTaskRow
 
@@ -11329,12 +11329,14 @@ def test_get_queue_report_task_grain_pending_asc_touch(
     assert report.grain == "task"
     rows = [row for row in report.rows if isinstance(row, QueueTaskRow)]
     assert [row.touch for row in rows] == ["T1", "T2"]
+    assert [row.kind for row in rows] == ["pending", "pending"]
     assert rows[0].next_at == datetime(2099, 1, 1, tzinfo=UTC)
     assert rows[0].contact == "Lead Person"
     assert rows[0].email == "lead@acme.com"
     assert rows[0].company_domain == "acme.com"
     assert rows[0].workflow_name == "queue-tasks"
     assert rows[0].attempts == 0
+    assert rows[0].reason == ""
     assert rows[0].task_id
     assert not hasattr(rows[0], "when")
     assert not hasattr(rows[0], "trigger")
@@ -11383,7 +11385,7 @@ def test_get_queue_report_detail_t1_for_empty_touch_schedule(
 def test_get_queue_report_overdue_and_limit(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """§V.155 / §V.166: --overdue + --limit on task grain only."""
+    """§V.155 / §V.166: --overdue is pending-kind only; --limit caps that kind."""
     from mailpilot.database import get_queue_report
     from mailpilot.models import QueueTaskRow
 
@@ -11415,11 +11417,14 @@ def test_get_queue_report_overdue_and_limit(
     assert len(overdue.rows) == 1
     first_overdue = overdue.rows[0]
     assert isinstance(first_overdue, QueueTaskRow)
+    assert first_overdue.kind == "pending"
+    assert first_overdue.reason == ""
     assert first_overdue.next_at == datetime(2020, 1, 1, tzinfo=UTC)
     limited = get_queue_report(database_connection, detail=True, limit=1)
     assert len(limited.rows) == 1
     first_limited = limited.rows[0]
     assert isinstance(first_limited, QueueTaskRow)
+    assert first_limited.kind == "pending"
     assert first_limited.next_at == datetime(2020, 1, 1, tzinfo=UTC)
     all_pending = get_queue_report(database_connection, detail=True)
     pending_rows = [row for row in all_pending.rows if isinstance(row, QueueTaskRow)]
@@ -11497,6 +11502,8 @@ def test_get_queue_report_failed_unsent_attempt_count_zero_until_retry(
     assert failed_row.email == "unsent@failco.com"
     assert failed_row.touch == "T1"
     assert failed_row.attempts == 0
+    assert failed_row.kind == "failed"
+    assert failed_row.reason == "provider"
     assert failed_row.task_id == task.id
     assert failed_row.enrollment_id == enrollment.id
     assert failed_row.next_at == datetime(2099, 1, 1, 9, 0, tzinfo=UTC)
@@ -11510,8 +11517,19 @@ def test_get_queue_report_failed_unsent_attempt_count_zero_until_retry(
     assert stuck_row.email == "unsent@failco.com"
     assert stuck_row.touch == "T1"
     assert stuck_row.attempts == 0
+    assert stuck_row.kind == "stuck"
+    assert stuck_row.reason == "provider"
     assert stuck_row.task_id == task.id
     assert stuck_row.next_at == datetime(2099, 1, 1, 9, 0, tzinfo=UTC)
+
+    union = get_queue_report(database_connection, detail=True, workflow_id=workflow.id)
+    assert [row.kind for row in union.rows if isinstance(row, QueueTaskRow)] == [
+        "failed",
+        "stuck",
+    ]
+    assert all(
+        isinstance(row, QueueTaskRow) and row.reason == "provider" for row in union.rows
+    )
 
     retry_tasks_matching(database_connection, workflow_id=workflow.id, status="failed")
     retried = get_task(database_connection, task.id)
@@ -11598,6 +11616,8 @@ def test_get_queue_report_stuck_awaiting_first_touch(
     assert stuck_row.task_id is None
     assert stuck_row.touch == ""
     assert stuck_row.attempts == 0
+    assert stuck_row.kind == "stuck"
+    assert stuck_row.reason == ""
     assert stuck_row.next_at is None
 
 
@@ -11623,3 +11643,153 @@ def test_get_queue_report_failed_unsent_distinct_from_v155(
     )
     assert v155 == []
     assert enrollment.status == "active"
+
+
+def _queue_detail_seat(
+    database_connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+    *,
+    email: str,
+    company_id: str | None = None,
+    scheduled_at: str | None = None,
+    fail_reason: str | None = None,
+) -> None:
+    """Pending, failed-unsent, or stuck-awaiting seat on one workflow."""
+    contact = make_test_contact(database_connection, email=email, company_id=company_id)
+    enrollment = make_test_enrollment(database_connection, workflow_id, contact.id)
+    if scheduled_at is None:
+        return
+    task = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow_id,
+        contact_id=contact.id,
+        description="queued",
+        scheduled_at=scheduled_at,
+        context={"touch": 1, "trigger": "enrollment_schedule"},
+    )
+    if fail_reason is not None:
+        complete_task(
+            database_connection,
+            task.id,
+            status="failed",
+            result={"reason": fail_reason},
+        )
+
+
+def test_get_queue_report_detail_union_pending_failed_stuck_kind_reason(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.166: --detail default union pending then failed then stuck; kind+reason."""
+    from mailpilot.database import get_queue_report
+    from mailpilot.models import QueueTaskRow
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="queue-union"
+    )
+    company = make_test_company(
+        database_connection, domain="unionco.com", name="Union Co"
+    )
+    _queue_detail_seat(
+        database_connection,
+        workflow.id,
+        email="pending@unionco.com",
+        company_id=company.id,
+        scheduled_at="2099-01-01T09:00:00+00:00",
+    )
+    _queue_detail_seat(
+        database_connection,
+        workflow.id,
+        email="fail@unionco.com",
+        company_id=company.id,
+        scheduled_at="2099-03-01T09:00:00+00:00",
+        fail_reason="xai 403",
+    )
+    _queue_detail_seat(
+        database_connection,
+        workflow.id,
+        email="wait@unionco.com",
+        company_id=company.id,
+    )
+
+    report = get_queue_report(database_connection, detail=True, workflow_id=workflow.id)
+    rows = [row for row in report.rows if isinstance(row, QueueTaskRow)]
+    assert [(row.kind, row.email, row.reason) for row in rows] == [
+        ("pending", "pending@unionco.com", ""),
+        ("failed", "fail@unionco.com", "xai 403"),
+        ("stuck", "fail@unionco.com", "xai 403"),
+        ("stuck", "wait@unionco.com", ""),
+    ]
+    assert rows[0].touch == "T1"
+    assert rows[1].kind == "failed"
+    assert rows[1].next_at == datetime(2099, 3, 1, 9, 0, tzinfo=UTC)
+
+
+def test_get_queue_report_detail_limit_per_kind_does_not_starve(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.166: --limit caps each kind; pending filling a shared cap must not hide failed/stuck."""
+    from mailpilot.database import get_queue_report
+    from mailpilot.models import QueueTaskRow
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="queue-limit-kinds"
+    )
+    company = make_test_company(database_connection, domain="limco.com", name="Lim Co")
+    for index in range(3):
+        _queue_detail_seat(
+            database_connection,
+            workflow.id,
+            email=f"p{index}@limco.com",
+            company_id=company.id,
+            scheduled_at=f"2099-01-0{index + 1}T00:00:00+00:00",
+        )
+    _queue_detail_seat(
+        database_connection,
+        workflow.id,
+        email="f0@limco.com",
+        company_id=company.id,
+        scheduled_at="2099-02-01T00:00:00+00:00",
+        fail_reason="r0",
+    )
+    _queue_detail_seat(
+        database_connection,
+        workflow.id,
+        email="f1@limco.com",
+        company_id=company.id,
+        scheduled_at="2099-02-02T00:00:00+00:00",
+        fail_reason="r1",
+    )
+    _queue_detail_seat(
+        database_connection,
+        workflow.id,
+        email="s0@limco.com",
+        company_id=company.id,
+    )
+
+    limited = get_queue_report(
+        database_connection, detail=True, limit=1, workflow_id=workflow.id
+    )
+    limited_rows = [row for row in limited.rows if isinstance(row, QueueTaskRow)]
+    assert [(row.kind, row.email) for row in limited_rows] == [
+        ("pending", "p0@limco.com"),
+        ("failed", "f0@limco.com"),
+        ("stuck", "f0@limco.com"),
+    ]
+
+    capped = get_queue_report(
+        database_connection, detail=True, limit=2, workflow_id=workflow.id
+    )
+    capped_rows = [row for row in capped.rows if isinstance(row, QueueTaskRow)]
+    assert [(row.kind, row.email) for row in capped_rows] == [
+        ("pending", "p0@limco.com"),
+        ("pending", "p1@limco.com"),
+        ("failed", "f0@limco.com"),
+        ("failed", "f1@limco.com"),
+        ("stuck", "f0@limco.com"),
+        ("stuck", "f1@limco.com"),
+    ]
+    assert "s0@limco.com" not in [row.email for row in capped_rows]
+    assert "p2@limco.com" not in [row.email for row in capped_rows]
