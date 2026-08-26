@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- Dependency lock refresh: pydantic-ai-slim 2.35.0 (was 2.14.1),
+  Anthropic SDK 1.1.0 (was 0.117.1), xAI SDK 1.19.0, Logfire 4.41.0,
+  and current Google API clients. Pyproject ranges are unchanged.
+
 ## [v0.34.0] - 2026-08-26
 
 ### Added
