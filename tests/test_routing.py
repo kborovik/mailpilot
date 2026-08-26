@@ -2038,9 +2038,7 @@ def test_route_email_invalid_key_logs_error_not_exception(
         patch("mailpilot.routing.logfire.exception") as mock_exception,
         patch("mailpilot.routing.logfire.error") as mock_error,
     ):
-        routed = route_email(
-            database_connection, email, "alice@example.com", settings
-        )
+        routed = route_email(database_connection, email, "alice@example.com", settings)
 
     assert routed.is_routed is False
     assert remaining_drain_is_skipped() is True

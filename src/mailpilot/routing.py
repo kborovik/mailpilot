@@ -166,9 +166,7 @@ def route_email(
                 if first:
                     message = invalid_provider_key_message(settings.llm_provider)
                     logfire.error("run.provider_key.invalid", message=message)
-                    operator_event(
-                        "error", source="run.provider_key", message=message
-                    )
+                    operator_event("error", source="run.provider_key", message=message)
                 return email
             logfire.exception("routing.route_email failed", email_id=email.id)
             operator_event("error", source="routing.route_email", message=str(exc))
