@@ -289,19 +289,6 @@ class Workflow(BaseModel):
     updated_at: datetime
 
 
-class WorkflowSummary(BaseModel):
-    """List-view projection of `Workflow`."""
-
-    id: str
-    name: str
-    template: WorkflowTemplateName
-    type: WorkflowType
-    account_id: str
-    account_email: str
-    status: WorkflowStatus
-    created_at: datetime
-
-
 class TouchStageCounts(BaseModel):
     """Per-touch sent/pending counts inside ``WorkflowStats.touches`` (§V.132)."""
 
@@ -339,6 +326,48 @@ class WorkflowStats(BaseModel):
     touches: dict[str, TouchStageCounts] = Field(default_factory=dict)
     awaiting_first_touch: int = 0
     disabled: int = 0
+
+
+class WorkflowListOps(BaseModel):
+    """Ops slice on ``workflow list --health`` rows (§V.193).
+
+    Nested workflow meta is omitted: the list row already carries name/status.
+    """
+
+    wording: str
+    run_loop: str
+    overdue_tasks: int
+    failed_tasks_24h: int
+
+
+class WorkflowSummary(BaseModel):
+    """List-view projection of `Workflow`.
+
+    ``funnel`` and ``ops`` are absent on the lean list; ``workflow list
+    --health`` fills them (§V.193).
+    """
+
+    id: str
+    name: str
+    template: WorkflowTemplateName
+    type: WorkflowType
+    account_id: str
+    account_email: str
+    status: WorkflowStatus
+    created_at: datetime
+    funnel: WorkflowStats | None = None
+    ops: WorkflowListOps | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_health(
+        self, handler: Callable[[WorkflowSummary], dict[str, Any]]
+    ) -> dict[str, Any]:
+        data = handler(self)
+        if data.get("funnel") is None:
+            data.pop("funnel", None)
+        if data.get("ops") is None:
+            data.pop("ops", None)
+        return data
 
 
 WorkflowCheckState = Literal["in_sync", "out_of_sync", "not_imported", "orphaned"]

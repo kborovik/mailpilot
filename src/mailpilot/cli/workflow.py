@@ -272,6 +272,31 @@ def workflow_search(query: str, limit: int) -> None:
         output({"workflows": [w.model_dump(mode="json") for w in workflows]})
 
 
+def _attach_workflow_health(connection: Any, summary: Any) -> Any:
+    """List rows lack ``touches``; stats needs the loaded Workflow."""
+    from mailpilot.database import (
+        get_workflow,
+        get_workflow_stats,
+        get_workflow_status_health,
+    )
+    from mailpilot.models import WorkflowListOps
+
+    loaded = get_workflow(connection, summary.id)
+    if loaded is None:
+        return summary
+    funnel = get_workflow_stats(connection, loaded)
+    status_health = get_workflow_status_health(connection, summary.id)
+    ops = None
+    if status_health is not None:
+        ops = WorkflowListOps(
+            wording=status_health.wording,
+            run_loop=status_health.run_loop,
+            overdue_tasks=status_health.overdue_tasks,
+            failed_tasks_24h=status_health.failed_tasks_24h,
+        )
+    return summary.model_copy(update={"funnel": funnel, "ops": ops})
+
+
 @workflow.command("list")
 @scope_option("--account-email", "account_email", "Filter by account (email or ID).")
 @enum_option("--status", "status", _WORKFLOW_STATUSES, "Filter by workflow status.")
@@ -282,6 +307,15 @@ def workflow_search(query: str, limit: int) -> None:
     "--template", "template", _WORKFLOW_TEMPLATES, "Filter by workflow template."
 )
 @time_window_options("created_at")
+@click.option(
+    "--health",
+    is_flag=True,
+    default=False,
+    help=(
+        "Embed funnel (same object as workflow stats) and ops "
+        "(wording, run_loop, overdue_tasks, failed_tasks_24h) on each row."
+    ),
+)
 @limit_option
 def workflow_list(
     account_email: str | None,
@@ -291,8 +325,13 @@ def workflow_list(
     limit: int,
     since: str | None,
     until: str | None,
+    health: bool,
 ) -> None:
-    """List workflows as summaries."""
+    """List workflows as summaries.
+
+    Pass --health to embed funnel and ops on each row. Lean list (no flag)
+    is unchanged. --health composes with existing filters.
+    """
     from mailpilot.database import list_workflows
 
     with _db() as connection:
@@ -311,6 +350,10 @@ def workflow_list(
             since=since,
             until=until,
         )
+        if health:
+            workflows = [
+                _attach_workflow_health(connection, summary) for summary in workflows
+            ]
         output({"workflows": [w.model_dump(mode="json") for w in workflows]})
 
 
@@ -325,10 +368,22 @@ def workflow_view(workflow_ref: str) -> None:
 @workflow.command("stats")
 @click.argument("workflow_ref")
 def workflow_stats(workflow_ref: str) -> None:
-    """Show the per-campaign funnel for a workflow by name or ID."""
-    from mailpilot.database import get_workflow_stats
+    """Show the per-campaign funnel for a workflow, or every active one.
+
+    Pass a name or ID for one campaign. Pass ``all`` for every active
+    workflow (same set as ``workflow review all``). Envelope key
+    ``workflow_stats`` is an object for one slug and an array for ``all``.
+    """
+    from mailpilot.database import get_workflow_stats, list_active_workflows
 
     with _db() as connection:
+        if workflow_ref.casefold() == "all":
+            items = [
+                get_workflow_stats(connection, workflow).model_dump(mode="json")
+                for workflow in list_active_workflows(connection)
+            ]
+            output({"workflow_stats": items})
+            return
         workflow = _resolve_workflow(connection, workflow_ref)
         stats = get_workflow_stats(connection, workflow)
         output({"workflow_stats": stats.model_dump(mode="json")})
@@ -459,10 +514,24 @@ def workflow_review(
 @workflow.command("status")
 @click.argument("workflow_ref")
 def workflow_status_cmd(workflow_ref: str) -> None:
-    """Ops-health for a workflow (wording, run loop, overdue/failed tasks)."""
-    from mailpilot.database import get_workflow_status_health
+    """Ops-health for a workflow, or every active one.
+
+    Pass a name or ID for one campaign. Pass ``all`` for every active
+    workflow (same set as ``workflow review all``). Envelope key
+    ``workflow_status`` is an object for one slug and an array for ``all``.
+    """
+    from mailpilot.database import get_workflow_status_health, list_active_workflows
 
     with _db() as connection:
+        if workflow_ref.casefold() == "all":
+            items: list[dict[str, Any]] = []
+            for workflow in list_active_workflows(connection):
+                health = get_workflow_status_health(connection, workflow.id)
+                if health is None:
+                    continue
+                items.append(health.model_dump(mode="json"))
+            output({"workflow_status": items})
+            return
         workflow_id = _resolve_workflow_id(connection, workflow_ref)
         health = get_workflow_status_health(connection, workflow_id)
         if health is None:
