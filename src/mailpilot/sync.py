@@ -402,6 +402,9 @@ def _run_periodic_iteration(  # noqa: PLR0913
     the inter-wave gap that Gmail Pub/Sub batching otherwise stretches into
     the burst SLA budget. Returns False on a quiet tick.
     """
+    from mailpilot.run import reset_remaining_drain_skip
+
+    reset_remaining_drain_skip()
     iteration = _next_iteration_count()
     operator_event(
         "loop.tick",
@@ -688,12 +691,18 @@ def _drain_pending_tasks(
     ``_reap_completed_tasks`` on subsequent ticks; ``task.drain`` operator
     events fire from there, not from this dispatcher.
     """
+    from mailpilot.run import remaining_drain_is_skipped
+
+    if remaining_drain_is_skipped():
+        return
     pending = list_pending_tasks(connection)
     if not pending:
         return
     claimed: set[str] = {task_id for task_id, _ in in_flight.values()}
     submit_time = time.monotonic()
     for task in pending:
+        if remaining_drain_is_skipped():
+            break
         if task.id in claimed:
             continue
         future = pool.submit(_execute_task_in_worker, settings, task)
@@ -749,8 +758,10 @@ def _execute_task_in_worker(settings: Settings, task: Any) -> None:
     paired logfire/operator events per §V.51 keep the operator stream
     complete.
     """
-    from mailpilot.run import execute_task
+    from mailpilot.run import execute_task, remaining_drain_is_skipped
 
+    if remaining_drain_is_skipped():
+        return
     try:
         connection = cast(
             psycopg.Connection[dict[str, Any]],

@@ -56,6 +56,16 @@ def make_test_settings(**overrides: Any) -> Settings:
 
 
 @pytest.fixture(autouse=True)
+def _reset_remaining_drain_skip() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]
+    """§V.47: do not leak the skip-remaining-drain latch across tests."""
+    from mailpilot.run import reset_remaining_drain_skip
+
+    reset_remaining_drain_skip()
+    yield
+    reset_remaining_drain_skip()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_settings(  # pyright: ignore[reportUnusedFunction]
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[None]:

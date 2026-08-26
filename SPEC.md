@@ -319,7 +319,7 @@ T329|x|impl §V.192(+) + §I — contact list --unenrolled|--enrolled XOR; zero/
 T330|x|impl §V.171(∆)+§V.150(∆)+§I — enrollment add --company-atomic snaps new seats to existing same-domain never-sent T1 day+clock; dry-run scheduled_at + aligned_to_existing_t1; SKILL drops T1-list+reschedule; tests (#290)|V171,V150,V32,V152,V4,V111,I.cli
 T331|x|impl §V.166(∆) + §I — show queue --detail union pending+failed-unsent+stuck; kind+reason cols; --limit per kind; SKILL one-call drops task list --status failed; tests (#303)|V166,V172,V155,V4,V111,I.cli
 T332|x|impl §V.193(+) + §V.132(∆)+§V.157(∆)+§I — workflow stats|status all array envelope; list --health funnel+ops; SKILL one-call drops N stats+N status+list; tests (#305)|V193,V132,V157,V174,V184,V4,V107,V111,I.cli
-T333|.|impl §V.47(∆) — invalid-key ModelAPIError/401 skip remaining drain; in-flight stays pending; remaining due not claimed; operator error names config set; zero Traceback; Anthropic 401 same class; fixture due T1 batch + injected invalid-key → zero failed (#306)|V47,B152,I.config
+T333|x|impl §V.47(∆) — invalid-key ModelAPIError/401 skip remaining drain; in-flight stays pending; remaining due not claimed; operator error names config set; zero Traceback; Anthropic 401 same class; fixture due T1 batch + injected invalid-key → zero failed (#306)|V47,B152,I.config
 
 ## §B BUGS
 

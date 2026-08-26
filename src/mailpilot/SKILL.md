@@ -138,9 +138,11 @@ Keys (row, unless noted):
 - `max_concurrent_tasks` -- bound on the worker pool that drains the task
   queue. Default `10`.
 
-A missing active-provider API key skips that `run` tick (process stays up;
-zero due tasks claimed). The error names `mailpilot config set xai_api_key`
-or `mailpilot config set anthropic_api_key`.
+A missing or invalid active-provider API key skips remaining drain that
+`run` tick (process stays up; in-flight stays pending; remaining due tasks
+are not claimed or marked failed). The error names
+`mailpilot config set xai_api_key` or
+`mailpilot config set anthropic_api_key`. No console Traceback.
 
 `config get` and `mailpilot status` also project derived Pub/Sub names
 (not settable; `config set` returns `invalid_key`):

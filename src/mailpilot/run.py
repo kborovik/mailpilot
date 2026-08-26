@@ -8,6 +8,7 @@ primitive -- all agent invocations flow through the task queue.
 from __future__ import annotations
 
 import random
+import threading
 from datetime import datetime
 from typing import Any
 
@@ -16,7 +17,13 @@ import psycopg
 
 from mailpilot import email_ops
 from mailpilot.agent import invoke_workflow_agent
-from mailpilot.agent.retry import BACKOFF_SECONDS, MAX_ATTEMPTS, is_transient
+from mailpilot.agent.retry import (
+    BACKOFF_SECONDS,
+    MAX_ATTEMPTS,
+    invalid_provider_key_message,
+    is_invalid_provider_key,
+    is_transient,
+)
 from mailpilot.agent.templates import (
     _FALLBACK_ACKNOWLEDGEMENT,  # pyright: ignore[reportPrivateUsage]
 )
@@ -54,6 +61,34 @@ _LOCK_CONTENTION_JITTER_SECONDS = 5
 # one hour out instead of composing a malformed touch (§V.25 reschedule shape).
 _NULL_CADENCE_BACKOFF_SECONDS = 3600
 
+# §V.47 / §B.152: present-but-wrong LLM key is host-config, not per-task.
+# First model call latches this so remaining drain that tick does not claim
+# more due tasks. Reset at the start of each sync tick.
+_skip_remaining_drain = threading.Event()
+_skip_remaining_drain_lock = threading.Lock()
+
+
+def remaining_drain_is_skipped() -> bool:
+    """True when this tick should not claim more due tasks (§V.47)."""
+    return _skip_remaining_drain.is_set()
+
+
+def skip_remaining_drain() -> bool:
+    """Latch skip-remaining-drain for this tick.
+
+    Returns:
+        True if this caller is first (emit the operator error once).
+    """
+    with _skip_remaining_drain_lock:
+        first = not _skip_remaining_drain.is_set()
+        _skip_remaining_drain.set()
+        return first
+
+
+def reset_remaining_drain_skip() -> None:
+    """Clear the skip latch at the start of a sync tick (§V.47)."""
+    _skip_remaining_drain.clear()
+
 
 def execute_task(
     connection: psycopg.Connection[dict[str, Any]],
@@ -80,6 +115,8 @@ def execute_task(
         # reply when a non-transient class raised after a mid-turn send.
         reply_emitted_scope(),
     ):
+        if remaining_drain_is_skipped():
+            return
         loaded = _load_execute_context(connection, task)
         if loaded is None:
             return
@@ -359,6 +396,15 @@ def _handle_agent_failure(
     gets silent NO_REPLY (§V.131).
     """
     connection.rollback()
+    if is_invalid_provider_key(exc):
+        # §V.47 / §B.152: host-config, not a per-task failure. Keep the
+        # in-flight row pending (no attempt_count bump, no §V.131 ACK).
+        first = skip_remaining_drain()
+        if first:
+            message = invalid_provider_key_message(settings.llm_provider)
+            logfire.error("run.provider_key.invalid", message=message)
+            operator_event("error", source="run.provider_key", message=message)
+        return
     next_attempt = task.attempt_count + 1
     transient = is_transient(exc)
     if transient and next_attempt < MAX_ATTEMPTS:
