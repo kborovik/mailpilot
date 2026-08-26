@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- `show queue --detail` lists pending, failed-unsent, and stuck
+  together. Each row has `kind` and `reason`. `--limit` caps each
+  kind (default 100) so pending due rows do not hide failures.
+  `--detail --failed`, `--detail --stuck`, and `--detail --overdue`
+  still exclusive-filter that union.
+
 ## [v0.33.0] - 2026-08-25
 
 ### Added
