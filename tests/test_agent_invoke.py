@@ -2372,7 +2372,7 @@ def test_build_model_requires_anthropic_api_key() -> None:
 def test_build_anthropic_model_uses_240s_read_timeout() -> None:
     """§V.48: workflow agent's AnthropicProvider HTTP client carries a 240s read-timeout.
 
-    Default httpx read-timeout is 60s; under model load that intersects
+    Default httpx2 read-timeout is 60s; under model load that intersects
     long-context multi-turn agent latency and surfaces ``TimeoutError``
     mid-conversation, which would bubble to ``run.task.agent_failed`` with
     no retry (see SPEC.md §B.16). 240s = 4x headroom; idempotency forbids

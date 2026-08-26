@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-import httpx
+import httpx2
 from pydantic_ai.models import Model
 from pydantic_ai.models.anthropic import AnthropicModel, AnthropicModelSettings
 from pydantic_ai.models.xai import XaiModel, XaiModelSettings
@@ -86,8 +86,8 @@ def _build_anthropic_model(settings: Settings, *, role: ModelRole) -> AnthropicM
         provider=AnthropicProvider(
             api_key=settings.anthropic_api_key,
             base_url=settings.anthropic_base_url,
-            http_client=httpx.AsyncClient(
-                timeout=httpx.Timeout(_PROVIDER_TIMEOUT_SECONDS)
+            http_client=httpx2.AsyncClient(
+                timeout=httpx2.Timeout(_PROVIDER_TIMEOUT_SECONDS)
             ),
         ),
         settings=model_settings,

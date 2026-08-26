@@ -5,8 +5,9 @@ classifier inspects exception type and (where applicable) HTTP status
 code, returning ``True`` only for failures that are safely re-drivable
 without risking duplicate side-effects on the next attempt.
 
-Carve-out (`§V.48`): Anthropic LLM read-timeouts (``httpx.ReadTimeout``,
-``anthropic.APITimeoutError``) are *not* transient for retry purposes -
+Carve-out (`§V.48`): Anthropic LLM read-timeouts (``httpx2.ReadTimeout``,
+``httpx.ReadTimeout``, ``anthropic.APITimeoutError``) are *not* transient
+for retry purposes -
 they may interrupt a multi-turn run mid tool-call, after the underlying
 side-effect (``send_email``, ``reply_email``, Drive read) has already
 fired. Idempotency is not guaranteed across SMTP / Drive boundaries, so
@@ -60,9 +61,10 @@ def _is_llm_read_timeout(exc: BaseException) -> bool:
     read), so re-driving the task could duplicate side-effects.
     """
     import httpx
+    import httpx2
     from anthropic import APITimeoutError
 
-    return isinstance(exc, (APITimeoutError, httpx.ReadTimeout))
+    return isinstance(exc, (APITimeoutError, httpx.ReadTimeout, httpx2.ReadTimeout))
 
 
 def _google_status(exc: BaseException) -> int | None:

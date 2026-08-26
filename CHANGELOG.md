@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Dependency lock refresh: pydantic-ai-slim 2.35.0 (was 2.14.1),
   Anthropic SDK 1.1.0 (was 0.117.1), xAI SDK 1.19.0, Logfire 4.41.0,
-  and current Google API clients. Pyproject ranges are unchanged.
+  and current Google API clients. Anthropic LLM transport uses
+  `httpx2` (anthropic 1.x rejects a legacy `httpx.AsyncClient`).
 
 ## [v0.34.0] - 2026-08-26
 

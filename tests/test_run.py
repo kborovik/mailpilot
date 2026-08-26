@@ -802,7 +802,7 @@ def test_execute_task_apitimeout_is_terminal_v43_exclusion(
 ) -> None:
     """§V.48 exclusion: anthropic.APITimeoutError mid-turn cannot be
     re-driven safely, must go terminal regardless of attempt budget."""
-    import httpx
+    import httpx2
     from anthropic import APITimeoutError
 
     from conftest import make_test_settings
@@ -815,7 +815,7 @@ def test_execute_task_apitimeout_is_terminal_v43_exclusion(
     enrollment = _make_enrollment()
 
     timeout_err = APITimeoutError(
-        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
     )
 
     with (
@@ -857,6 +857,39 @@ def test_execute_task_httpx_readtimeout_is_terminal_v43_exclusion(
         patch(
             "mailpilot.run.invoke_workflow_agent",
             side_effect=httpx.ReadTimeout("read timeout"),
+        ),
+        patch("mailpilot.run.complete_task") as mock_complete,
+        patch("mailpilot.run.reschedule_task_for_retry") as mock_reschedule,
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_reschedule.assert_not_called()
+    mock_complete.assert_called_once()
+    assert mock_complete.call_args.kwargs["result"]["terminal"] == "non_transient"
+
+
+def test_execute_task_httpx2_readtimeout_is_terminal_v43_exclusion(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.48 exclusion: anthropic 1.x raises httpx2.ReadTimeout on the wire."""
+    import httpx2
+
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings()
+    task = _make_task()
+    workflow = _make_workflow()
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch(
+            "mailpilot.run.invoke_workflow_agent",
+            side_effect=httpx2.ReadTimeout("read timeout"),
         ),
         patch("mailpilot.run.complete_task") as mock_complete,
         patch("mailpilot.run.reschedule_task_for_retry") as mock_reschedule,
