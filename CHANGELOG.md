@@ -30,6 +30,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   row. `task cancel` still requires a scope filter.
 - Dropped the `xai_api_host` setting. The xAI client always uses the
   official host. `config set xai_api_host` returns `invalid_key`.
+- `enrollment add --exclude-peer` works with `--contact-email`. A
+  peer-active contact writes nothing (`enrollment_batch`
+  `source=contact`, `excluded.peer` 1). Otherwise the seat enrolls.
+  Without the flag the envelope stays the singular `enrollment`
+  entity. `--limit` and `--company-atomic` still need `--file` or
+  `--tag`.
+- `enrollment add --company-atomic` snaps new seats to a live
+  same-domain never-sent first-touch day and clock (over
+  `--scheduled-at` and per-row times). Dry-run projects
+  `scheduled_at` and `aligned_to_existing_t1`. Split days on one
+  domain is a `validation_error` with zero writes.
 
 ## [v0.32.0] - 2026-08-24
 
