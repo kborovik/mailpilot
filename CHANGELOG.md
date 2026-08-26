@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [v0.34.0] - 2026-08-26
+
 ### Added
 
 - `workflow stats all` and `workflow status all` return an array of the
