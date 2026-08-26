@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- A present-but-wrong xAI or Anthropic API key no longer marks due tasks
+  `failed` or dumps a traceback. The run loop skips remaining drain that
+  tick (in-flight stays pending) and names `mailpilot config set xai_api_key`
+  or `mailpilot config set anthropic_api_key`.
+
 ### Changed
 
 - `show queue --detail` lists pending, failed-unsent, and stuck

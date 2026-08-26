@@ -13,6 +13,7 @@ from mailpilot.agent.retry import (
     BACKOFF_SECONDS,
     GOOGLE_TRANSIENT_STATUSES,
     MAX_ATTEMPTS,
+    is_invalid_provider_key,
     is_transient,
 )
 
@@ -106,3 +107,67 @@ def test_agent_completed_without_reply_not_transient() -> None:
     from mailpilot.exceptions import AgentCompletedWithoutReplyError
 
     assert is_transient(AgentCompletedWithoutReplyError("no reply")) is False
+
+
+def _xai_incorrect_api_key() -> Exception:
+    """xAI present-but-wrong key as raised by pydantic-ai (§B.152)."""
+    from pydantic_ai.exceptions import ModelAPIError
+
+    return ModelAPIError(
+        "grok-4.5",
+        "Incorrect API key provided. You can obtain an API key from https://console.x.ai.",
+    )
+
+
+def test_xai_incorrect_api_key_is_invalid_provider_key() -> None:
+    """§V.47 / §B.152: xAI ModelAPIError 'Incorrect API key' is host-config."""
+    err = _xai_incorrect_api_key()
+    assert is_invalid_provider_key(err) is True
+    assert is_transient(err) is False
+
+
+def test_anthropic_401_is_invalid_provider_key() -> None:
+    """§V.47: Anthropic 401 is the same host-config class as xAI invalid key."""
+    err = _api_status_error(401)
+    assert is_invalid_provider_key(err) is True
+    assert is_transient(err) is False
+
+
+def test_model_http_error_401_is_invalid_provider_key() -> None:
+    """§V.47: pydantic-ai ModelHTTPError 401 is invalid-key regardless of body."""
+    from pydantic_ai.exceptions import ModelHTTPError
+
+    err = ModelHTTPError(401, "claude-sonnet-5", body="authentication_error")
+    assert is_invalid_provider_key(err) is True
+    assert is_transient(err) is False
+
+
+def test_wrapped_invalid_key_is_still_host_config() -> None:
+    """§V.47: invalid-key signal in ``__cause__`` is the same class."""
+    inner = _xai_incorrect_api_key()
+    err = RuntimeError("agent run failed")
+    err.__cause__ = inner
+    assert is_invalid_provider_key(err) is True
+
+
+def test_other_model_api_error_is_not_invalid_provider_key() -> None:
+    """§V.47: non-auth ModelAPIError stays a per-task failure, not host-config."""
+    from pydantic_ai.exceptions import ModelAPIError
+
+    err = ModelAPIError("grok-4.5", "Internal server error")
+    assert is_invalid_provider_key(err) is False
+    assert is_transient(err) is False
+
+
+def test_google_http_401_is_not_invalid_provider_key() -> None:
+    """§V.47: Gmail 401 is not an LLM host-config key error."""
+    err = _http_error(401)
+    assert is_invalid_provider_key(err) is False
+    assert is_transient(err) is False
+
+
+def test_anthropic_503_is_not_invalid_provider_key() -> None:
+    """§V.49: Anthropic overload stays transient retry, not host-config skip."""
+    err = _api_status_error(503)
+    assert is_invalid_provider_key(err) is False
+    assert is_transient(err) is True

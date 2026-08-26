@@ -147,9 +147,27 @@ def route_email(
                 span.set_attribute("route_method", skip_method)
                 return mark_routed(connection, email, skip_method)
 
+            from mailpilot.run import remaining_drain_is_skipped
+
+            if remaining_drain_is_skipped():
+                return email
+
             return _route_pipeline(connection, email, sender_email, settings, ctx, span)
         except Exception as exc:
             span.set_attribute("result", "failure")
+            from mailpilot.agent.retry import (
+                invalid_provider_key_message,
+                is_invalid_provider_key,
+            )
+            from mailpilot.run import skip_remaining_drain
+
+            if is_invalid_provider_key(exc):
+                first = skip_remaining_drain()
+                if first:
+                    message = invalid_provider_key_message(settings.llm_provider)
+                    logfire.error("run.provider_key.invalid", message=message)
+                    operator_event("error", source="run.provider_key", message=message)
+                return email
             logfire.exception("routing.route_email failed", email_id=email.id)
             operator_event("error", source="routing.route_email", message=str(exc))
             raise

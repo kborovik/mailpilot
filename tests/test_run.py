@@ -7,6 +7,7 @@ from typing import Any
 from unittest.mock import patch
 
 import psycopg
+import pytest
 
 from mailpilot.models import (
     Account,
@@ -989,6 +990,163 @@ def test_execute_task_terminal_outbound_failure_sends_no_fallback(
 
     mock_email_ops.reply_email.assert_not_called()
     assert mock_complete.call_args.kwargs["status"] == "failed"
+
+
+def _xai_incorrect_api_key() -> Exception:
+    """xAI present-but-wrong key as raised by pydantic-ai (§B.152)."""
+    from pydantic_ai.exceptions import ModelAPIError
+
+    return ModelAPIError(
+        "grok-4.5",
+        "Incorrect API key provided. You can obtain an API key from https://console.x.ai.",
+    )
+
+
+def test_execute_task_invalid_key_stays_pending(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.47 / §B.152: invalid-key does not mark the in-flight task failed."""
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings(xai_api_key="xai-wrong")
+    task = _make_task()
+    workflow = _make_workflow()
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch(
+            "mailpilot.run.invoke_workflow_agent",
+            side_effect=_xai_incorrect_api_key(),
+        ),
+        patch("mailpilot.run.complete_task") as mock_complete,
+        patch("mailpilot.run.reschedule_task_for_retry") as mock_reschedule,
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_complete.assert_not_called()
+    mock_reschedule.assert_not_called()
+
+
+def test_execute_task_invalid_key_inbound_sends_no_fallback(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.47: invalid-key is not a §V.131 terminal failure; no fallback ACK."""
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings(xai_api_key="xai-wrong")
+    task = _make_task(email_id=_EMAIL_ID)
+    workflow = _make_workflow()
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+    email = _make_email()
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch("mailpilot.run.get_email", return_value=email),
+        patch(
+            "mailpilot.run.invoke_workflow_agent",
+            side_effect=_xai_incorrect_api_key(),
+        ),
+        patch("mailpilot.run.email_ops") as mock_email_ops,
+        patch("mailpilot.run.complete_task") as mock_complete,
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_email_ops.reply_email.assert_not_called()
+    mock_complete.assert_not_called()
+
+
+def test_execute_task_invalid_key_logs_error_not_exception(
+    capsys: pytest.CaptureFixture[str],
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.47: operator stderr names config set; logfire.error not exception."""
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings(xai_api_key="xai-wrong")
+    task = _make_task()
+    workflow = _make_workflow()
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch(
+            "mailpilot.run.invoke_workflow_agent",
+            side_effect=_xai_incorrect_api_key(),
+        ),
+        patch("mailpilot.run.complete_task"),
+        patch("mailpilot.run.logfire.exception") as mock_exception,
+        patch("mailpilot.run.logfire.error") as mock_error,
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_exception.assert_not_called()
+    mock_error.assert_called_once()
+    assert mock_error.call_args.args[0] == "run.provider_key.invalid"
+    err = capsys.readouterr().err
+    assert err.count("event=error") == 1
+    assert "mailpilot config set xai_api_key" in err
+    assert "MAILPILOT_XAI_API_KEY" not in err
+    assert "Traceback" not in err
+
+
+def test_execute_task_anthropic_401_names_anthropic_config_set(
+    capsys: pytest.CaptureFixture[str],
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.47: Anthropic 401 names ``mailpilot config set anthropic_api_key``."""
+    from unittest.mock import MagicMock
+
+    from anthropic import APIStatusError
+
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings(
+        llm_provider="anthropic", anthropic_api_key="sk-wrong"
+    )
+    task = _make_task()
+    workflow = _make_workflow()
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+    response = MagicMock()
+    response.status_code = 401
+    response.headers = {}
+    err_401 = APIStatusError(
+        "invalid x-api-key",
+        response=response,
+        body={"error": {"type": "authentication_error"}},
+    )
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch("mailpilot.run.invoke_workflow_agent", side_effect=err_401),
+        patch("mailpilot.run.complete_task") as mock_complete,
+        patch("mailpilot.run.logfire.exception") as mock_exception,
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_complete.assert_not_called()
+    mock_exception.assert_not_called()
+    err = capsys.readouterr().err
+    assert err.count("event=error") == 1
+    assert "mailpilot config set anthropic_api_key" in err
+    assert "MAILPILOT_ANTHROPIC_API_KEY" not in err
+    assert "Traceback" not in err
 
 
 def test_execute_task_no_double_reply_when_reply_emitted(

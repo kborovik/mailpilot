@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from unittest.mock import patch
 
 import psycopg
 import pytest
@@ -1976,3 +1977,101 @@ def test_thread_contact_cache_keys_on_references(
     assert second is not None
     assert second.id == contact_b.id
     assert len(ctx.thread_contacts) == 2
+
+
+def _xai_incorrect_api_key() -> Exception:
+    """xAI present-but-wrong key as raised by pydantic-ai (§B.152)."""
+    from pydantic_ai.exceptions import ModelAPIError
+
+    return ModelAPIError(
+        "grok-4.5",
+        "Incorrect API key provided. You can obtain an API key from https://console.x.ai.",
+    )
+
+
+def _inbound_unthreaded_email(
+    connection: psycopg.Connection[dict[str, Any]],
+    *,
+    account_email: str,
+    thread_id: str,
+) -> Any:
+    """Inbound email that falls through to LLM classify."""
+    account = make_test_account(connection, email=account_email)
+    workflow = make_test_workflow(
+        connection,
+        account_id=account.id,
+        name=f"wf-{thread_id}",
+        workflow_type="inbound",
+    )
+    _activate_workflow(connection, workflow.id)
+    email = create_email(
+        connection,
+        account_id=account.id,
+        direction="inbound",
+        subject="Pricing question",
+        body_text="How much does your product cost?",
+        gmail_thread_id=thread_id,
+    )
+    assert email is not None
+    return email
+
+
+def test_route_email_invalid_key_logs_error_not_exception(
+    capsys: pytest.CaptureFixture[str],
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.47: classify invalid-key is host-config; no Traceback, email stays unrouted."""
+    from mailpilot.run import remaining_drain_is_skipped
+
+    email = _inbound_unthreaded_email(
+        database_connection,
+        account_email="classify-badkey@example.com",
+        thread_id="t-classify-badkey",
+    )
+    settings = make_test_settings(llm_provider="xai", xai_api_key="xai-wrong")
+
+    with (
+        patch(
+            "mailpilot.routing.classify_email",
+            side_effect=_xai_incorrect_api_key(),
+        ),
+        patch("mailpilot.routing.logfire.exception") as mock_exception,
+        patch("mailpilot.routing.logfire.error") as mock_error,
+    ):
+        routed = route_email(database_connection, email, "alice@example.com", settings)
+
+    assert routed.is_routed is False
+    assert remaining_drain_is_skipped() is True
+    mock_exception.assert_not_called()
+    mock_error.assert_called_once()
+    assert mock_error.call_args.args[0] == "run.provider_key.invalid"
+    err = capsys.readouterr().err
+    assert err.count("event=error") == 1
+    assert "mailpilot config set xai_api_key" in err
+    assert "Traceback" not in err
+
+
+def test_route_email_invalid_key_skips_remaining_classify(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.47: after invalid-key classify, remaining inbound this tick skip LLM."""
+    first = _inbound_unthreaded_email(
+        database_connection,
+        account_email="classify-skip1@example.com",
+        thread_id="t-classify-skip-1",
+    )
+    second = _inbound_unthreaded_email(
+        database_connection,
+        account_email="classify-skip2@example.com",
+        thread_id="t-classify-skip-2",
+    )
+    settings = make_test_settings(llm_provider="xai", xai_api_key="xai-wrong")
+
+    with patch(
+        "mailpilot.routing.classify_email",
+        side_effect=_xai_incorrect_api_key(),
+    ) as mock_classify:
+        route_email(database_connection, first, "a@example.com", settings)
+        route_email(database_connection, second, "b@example.com", settings)
+
+    mock_classify.assert_called_once()
