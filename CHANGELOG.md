@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `workflow stats all` and `workflow status all` return an array of the
+  same per-slug objects for every active workflow (zero active is an
+  ok empty array). `workflow list --health` embeds `funnel` (the
+  stats object) and `ops` (wording, run_loop, overdue_tasks,
+  failed_tasks_24h) on each list row. Lean list and per-slug verbs
+  stay.
+
 ### Fixed
 
 - A present-but-wrong xAI or Anthropic API key no longer marks due tasks
