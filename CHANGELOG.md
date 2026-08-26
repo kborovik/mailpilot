@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- Drop the leftover `httpx` runtime dependency after the Anthropic
+  transport switch to `httpx2`. Anthropic LLM read-timeouts now
+  raise `httpx2.ReadTimeout` (still terminal, not retried).
+
 ## [v0.34.1] - 2026-08-26
 
 ### Changed
