@@ -17,7 +17,7 @@ _HEAVY_MODULES = frozenset(
     {
         "logfire",
         "psycopg",
-        "httpx",
+        "httpx2",
         "pydantic",
         "mailpilot.database",
         "mailpilot.settings",

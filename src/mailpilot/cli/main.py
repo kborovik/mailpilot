@@ -1,7 +1,7 @@
 """CLI interface for MailPilot.
 
 Startup-critical: only ``click`` is imported at module level. All heavy
-dependencies (logfire, psycopg, httpx, pydantic, mailpilot.database,
+dependencies (logfire, psycopg, httpx2, pydantic, mailpilot.database,
 mailpilot.settings) are lazy-imported inside command functions so that
 ``--help`` / ``--version`` stay fast (~50 ms).
 When adding new commands, keep imports inside the function body.
