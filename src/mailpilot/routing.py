@@ -173,7 +173,7 @@ def route_email(
             raise
 
 
-def _route_pipeline(  # noqa: PLR0913
+def _route_pipeline(  # noqa: PLR0913, PLR0917
     connection: psycopg.Connection[dict[str, Any]],
     email: Email,
     sender_email: str,

@@ -108,7 +108,7 @@ def next_touch_scheduled_at(base: datetime, interval_days: int) -> datetime:
     return target
 
 
-def advance_touch_cadence(  # noqa: PLR0913
+def advance_touch_cadence(  # noqa: PLR0913, PLR0917
     connection: psycopg.Connection[dict[str, Any]],
     workflow: Workflow,
     enrollment: Enrollment,

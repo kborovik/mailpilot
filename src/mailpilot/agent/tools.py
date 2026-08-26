@@ -134,7 +134,7 @@ def _email_tool_result(op: Callable[[], Email]) -> dict[str, Any]:
     }
 
 
-def send_email(  # noqa: PLR0913
+def send_email(  # noqa: PLR0913, PLR0917
     ctx: RunContext[AgentDeps],
     to: str,
     subject: str,

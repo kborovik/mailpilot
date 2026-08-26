@@ -320,7 +320,7 @@ def _format_trigger(
     )
 
 
-def _build_user_prompt(  # noqa: PLR0913
+def _build_user_prompt(  # noqa: PLR0913, PLR0917
     workflow: Workflow,
     contact: Contact,
     email_history: list[Email],
@@ -464,7 +464,7 @@ def _resolve_prior_touch_email(
     return next((msg for msg in email_history if msg.direction == "outbound"), None)
 
 
-def _send_touch_message(  # noqa: PLR0913
+def _send_touch_message(  # noqa: PLR0913, PLR0917
     connection: psycopg.Connection[dict[str, Any]],
     account: Account,
     gmail_client: GmailClient,
@@ -607,7 +607,7 @@ def _run_compose_only_touch(  # noqa: PLR0913
 # -- Main entry point ----------------------------------------------------------
 
 
-def invoke_workflow_agent(  # noqa: PLR0913, PLR0915, C901
+def invoke_workflow_agent(  # noqa: PLR0913, PLR0917, PLR0915, C901
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
     workflow: Workflow,

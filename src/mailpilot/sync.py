@@ -1361,7 +1361,7 @@ def _resolve_threading_headers(
     return latest_mid, references
 
 
-def send_email(  # noqa: PLR0913
+def send_email(  # noqa: PLR0913, PLR0917
     connection: psycopg.Connection[dict[str, Any]],
     account: Account,
     gmail_client: GmailClient,

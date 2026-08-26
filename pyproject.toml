@@ -106,23 +106,27 @@ known-first-party = ["mailpilot"]
 [tool.ruff.lint.per-file-ignores]
 "src/mailpilot/cli/**/*.py" = [
     "PLR0913", # Click commands have many parameters by design
+    "PLR0917", # positional-arg split of PLR0913 (ruff 0.16)
 ]
 "src/mailpilot/cli/__init__.py" = [
     "F401", # thin re-export barrel
 ]
 "src/mailpilot/database/**/*.py" = [
     "PLR0913", # Create functions map to table columns
+    "PLR0917", # positional-arg split of PLR0913 (ruff 0.16)
 ]
 "src/mailpilot/database/__init__.py" = [
     "F401", # thin re-export barrel
 ]
 "src/mailpilot/gmail.py" = [
     "PLR0913", # Gmail API functions have many parameters
+    "PLR0917", # positional-arg split of PLR0913 (ruff 0.16)
 ]
 "tests/**/*.py" = [
     "D",       # No docstrings required in tests
     "PLR2004", # Magic values OK in tests
     "PLR0913", # Too many arguments OK in tests
+    "PLR0917", # positional-arg split of PLR0913 (ruff 0.16)
     "E501",    # Line too long
 ]
 ".grok/**/*.py" = [
