@@ -501,6 +501,8 @@ class EnrollmentPreviewContact(BaseModel):
     contact_tags: list[str] = Field(default_factory=list)
     email_confidence: int | None = None
     peer_workflows: list[str] = Field(default_factory=list)
+    scheduled_at: str | None = None
+    aligned_to_existing_t1: bool | None = None
 
 
 class EnrollmentPreviewExcluded(BaseModel):

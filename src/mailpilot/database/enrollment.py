@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any
 
 import psycopg
@@ -20,6 +21,7 @@ from mailpilot.database._sql import (
     _enrollment_parent_select,
     _enrollment_where,
     _sql_outbound_sent_count,
+    _sql_parse_touch,
 )
 from mailpilot.database.activity import (
     create_activity,
@@ -587,6 +589,52 @@ def _company_atomic_groups(
     if current:
         groups.append(current)
     return groups
+
+
+def list_never_sent_t1_schedules_by_domain(
+    connection: psycopg.Connection[dict[str, Any]],
+    workflow_id: str,
+) -> dict[str, list[datetime]]:
+    """Map company_domain to pending never-sent T1 instants (§V.171 / §V.152).
+
+    Same match as ``enrollment list --touch 1`` for never-sent first-reach:
+    active enrollment, ``emails_sent=0``, pending first-reach task
+    (``email_id IS NULL``, parsed touch 1 or absent ``context.touch``).
+    Inbound auto-tasks (``email_id`` set) are excluded. Contacts with no
+    company are omitted.
+
+    Args:
+        connection: Open database connection.
+        workflow_id: Workflow whose live T1 siblings to load.
+
+    Returns:
+        Domain -> scheduled_at instants, ordered by time per domain.
+    """
+    sent_count = _sql_outbound_sent_count(SQL("e"))
+    parsed_touch = _sql_parse_touch(SQL("t.context"))
+    query = SQL(
+        "SELECT co.domain AS company_domain, t.scheduled_at "
+        "FROM enrollment e "
+        "JOIN contact c ON c.id = e.contact_id "
+        "JOIN company co ON co.id = c.company_id "
+        "JOIN task t ON t.enrollment_id = e.id "
+        "WHERE e.workflow_id = %(workflow_id)s "
+        "AND e.status = 'active' "
+        "AND t.status = 'pending' "
+        "AND t.email_id IS NULL "
+        "AND {sent_count} = 0 "
+        "AND ({parsed_touch} = 1 OR t.context->>'touch' IS NULL) "
+        "ORDER BY co.domain, t.scheduled_at"
+    ).format(sent_count=sent_count, parsed_touch=parsed_touch)
+    rows = connection.execute(query, {"workflow_id": workflow_id}).fetchall()
+    schedules: dict[str, list[datetime]] = {}
+    for row in rows:
+        domain = str(row["company_domain"])
+        instant = row["scheduled_at"]
+        if not isinstance(instant, datetime):
+            continue
+        schedules.setdefault(domain, []).append(instant)
+    return schedules
 
 
 def get_latest_enrollment_outcome(
