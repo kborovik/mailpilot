@@ -68,11 +68,15 @@ def main() -> int:
         list_args += ["--min-email-confidence", str(args.min_confidence)]
     data = mp(list_args, check=False)
 
+    t1_mode = preflight.get("t1_mode")
     grounding = None
     for row in data.get("contacts", []):
         if str(row.get("email", "")).lower() in excluded:
             continue
         if row.get("company_domain") == NEUTRAL_COMPANY_DOMAIN:
+            continue
+        # Templated T1 fails closed on empty used placeholders (§V.194).
+        if t1_mode == "template" and not row.get("first_name"):
             continue
         grounding = {field: row.get(field) for field in CONTACT_FIELDS}
         break
@@ -93,6 +97,7 @@ def main() -> int:
         "prospect_mailbox": preflight["prospect_mailbox"],
         "workflow_file": preflight["workflow_file"],
         "workflow_name": preflight.get("workflow_name"),
+        "t1_mode": preflight.get("t1_mode"),
         "grounding_contact": grounding,
         "scenarios": scenarios,
     }

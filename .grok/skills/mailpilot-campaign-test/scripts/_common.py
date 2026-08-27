@@ -5,12 +5,13 @@ shell out to the ``mailpilot`` CLI and parse its JSON envelopes, load the
 scenario catalog, and name the scaffolding the multi-step test depends on.
 
 The skill tests the **full multi-step flow** of the real outbound workflow agent
-(default ``var-sales-coclose.toml`` under lab5.ca; ``--workflow-file``
-overrides): the agent sends a cold Touch 1, the test replies to that email with
-content crafted to drive each branch of the workflow's "Handling replies"
-section, the agent handles the reply, and the test verifies the branch the agent
-took. No real prospect is ever emailed -- the only recipient is the controlled
-``inbound@lab5.ca`` mailbox.
+(default: two synthetics under ``workflows/`` -- LLM T1 and templated T1,
+cloned from var-sales-coclose reply branches; ``--workflow-file`` overrides
+to a single file): the agent sends a cold Touch 1, the test replies to that
+email with content crafted to drive each branch of the workflow's "Handling
+replies" section, the agent handles the reply, and the test verifies the
+branch the agent took. No real prospect is ever emailed -- the only recipient
+is the controlled ``inbound@lab5.ca`` mailbox.
 
 The prospect is a single contact whose own email IS ``inbound@lab5.ca``. Inbound
 contact attribution is by the From address, and a reply can only be sent from a
@@ -65,12 +66,41 @@ PROSPECT_EMAIL = "inbound@lab5.ca"
 NEUTRAL_COMPANY_DOMAIN = "campaign-test.invalid"
 NEUTRAL_COMPANY_NAME = "MailPilot Campaign Test"
 
-# The outbound workflow whose agent this skill exercises. Default = VAR sales
-# co-close campaign under lab5.ca; ``--workflow-file`` overrides it.
-DEFAULT_WORKFLOW_FILE = (
-    "/Users/kb/github/lab5.ca/campaigns/var-sales-coclose/"
-    "workflows/var-sales-coclose.toml"
+# Default campaign-test synthetics (LLM T1, then templated T1). The skill
+# orchestrator runs both when ``--workflow-file`` is omitted; scripts that
+# take a single file default to the LLM synthetic.
+_WORKFLOWS_DIR = Path(__file__).resolve().parent.parent / "workflows"
+DEFAULT_WORKFLOW_FILES = (
+    str(_WORKFLOWS_DIR / "campaign-test-llm-t1.toml"),
+    str(_WORKFLOWS_DIR / "campaign-test-template-t1.toml"),
 )
+DEFAULT_WORKFLOW_FILE = DEFAULT_WORKFLOW_FILES[0]
+
+# Expected ``enrollment run`` result.reasoning prefix per T1 dispatch path
+# (``_deliver_touch`` in invoke.py: "rendered and sent" vs "composed and sent").
+T1_PATH_REASONING = {
+    "template": "rendered and sent",
+    "llm": "composed and sent",
+}
+
+
+def t1_mode_from_parsed(parsed: dict[str, Any]) -> str:
+    """Return ``template`` when the def has a ``touch_copy`` n=1 row, else ``llm``."""
+    rows = parsed.get("touch_copy") or []
+    if any(isinstance(row, dict) and row.get("n") == 1 for row in rows):
+        return "template"
+    return "llm"
+
+
+def t1_path_from_reasoning(reasoning: str) -> str:
+    """Map agent-run reasoning to ``rendered`` / ``composed`` / ``unknown``."""
+    text = (reasoning or "").strip().lower()
+    if text.startswith("rendered and sent"):
+        return "rendered"
+    if text.startswith("composed and sent"):
+        return "composed"
+    return "unknown"
+
 
 # The scenario catalog drives the reply branches under test. One ephemeral
 # workflow + one enrollment + one Touch 1 + one crafted reply per scenario.

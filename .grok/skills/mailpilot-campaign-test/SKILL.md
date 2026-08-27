@@ -4,9 +4,9 @@ description: >-
   Grok-native multi-step smoke test for an outbound cold-email workflow agent.
   Sends live Touch 1 from outbound@lab5.ca to inbound@lab5.ca only, injects
   crafted prospect replies per branch, verifies agent branch outcomes, then
-  cleans up. Default workflow is var-sales-coclose. Use when the user
-  wants to test, smoke-test, dry-run, or validate a campaign / outreach
-  workflow before real sends, or runs /mailpilot-campaign-test.
+  cleans up. Default is two synthetics (LLM T1 and templated T1). Use when
+  the user wants to test, smoke-test, dry-run, or validate a campaign /
+  outreach workflow before real sends, or runs /mailpilot-campaign-test.
 argument-hint: "[--workflow-file <path>] [--company-domain <domain>] [--min-confidence N]"
 allowed-tools: run_terminal_command, spawn_subagent, search_tool, use_tool
 ---
@@ -17,12 +17,20 @@ Test the real outbound workflow agent end-to-end without emailing a real
 prospect. Deterministic work lives in `scripts/`; this skill is the Grok
 orchestrator.
 
-**Scripts / references:** `scripts/` and `references/`
-(`reply-scenarios.json` is the branch catalog; `mechanical` scenarios send
-Automatic-reply subject at inject, before route; date tokens are filled at inject).
+**Scripts / references / workflows:** `scripts/`, `references/`,
+`workflows/` (`reply-scenarios.json` is the branch catalog; `mechanical`
+scenarios send Automatic-reply subject at inject, before route; date tokens
+are filled at inject).
 
-**Default workflow file:**
-`/Users/kb/github/lab5.ca/campaigns/var-sales-coclose/workflows/var-sales-coclose.toml`
+**Default workflows** (run both, this order, unless `--workflow-file`):
+
+1. `.grok/skills/mailpilot-campaign-test/workflows/campaign-test-llm-t1.toml`
+   — compose-only LLM T1 (no `[[touch_copy]]`)
+2. `.grok/skills/mailpilot-campaign-test/workflows/campaign-test-template-t1.toml`
+   — harness-rendered T1 (`[[touch_copy]]` n=1)
+
+Both are T1-only clones of var-sales-coclose reply branches. `--workflow-file`
+is a single-file override (live campaign or one synthetic).
 
 Every command runs from the **repo root** via `uv run python` / `uv run mailpilot`.
 
@@ -118,7 +126,8 @@ is unavailable, say so once and continue — same as step 11.
 
 ## Arguments
 
-- `--workflow-file <path>` -- defaults to the var-sales-coclose path above
+- `--workflow-file <path>` -- omit to run both default synthetics; pass to
+  run one file (example: lab5.ca `var-sales-coclose.toml`)
 - `--company-domain <domain>` -- optional grounding filter
 - `--min-confidence N` -- optional `email_confidence` floor
 
@@ -126,6 +135,11 @@ is unavailable, say so once and continue — same as step 11.
 
 Reuse the printed `$RUN_ID` as a **literal** in later commands (tool calls do not
 share shell state). Artifacts: `reports/campaign-test/<run_id>/` (git-ignored).
+
+**Passes:** if `--workflow-file` is set, one pass with that file as
+`$WORKFLOW_FILE`. Else two passes (set `$WORKFLOW_FILE` to llm-t1, then
+template-t1). Steps 0a–0c run once. Each pass: mint `$RUN_ID` (step 0),
+then steps 1–11 (cleanup before the next pass).
 
 ### 0. Mint run id
 
@@ -184,7 +198,7 @@ field mismatches.
 ```bash
 uv run python .grok/skills/mailpilot-campaign-test/scripts/preflight.py \
   --run-id $RUN_ID \
-  --workflow-file /Users/kb/github/lab5.ca/campaigns/var-sales-coclose/workflows/var-sales-coclose.toml
+  --workflow-file $WORKFLOW_FILE
 ```
 
 Stop if `verdict != "ok"`. WARNING lines are non-blocking.
@@ -215,7 +229,11 @@ From here on, always run cleanup before finish.
 uv run python .grok/skills/mailpilot-campaign-test/scripts/send_touch1.py --run-id $RUN_ID
 ```
 
-Captures `rfc2822_message_id` per scenario (§V.122). Show the user one sent body.
+Captures `rfc2822_message_id` per scenario (§V.122). Show the user one sent
+body. Templated T1 must report `t1_path=rendered` (reasoning prefix
+`rendered and sent`); LLM T1 must report `t1_path=composed`. Path mismatch
+fails that send.
+
 **Poll Logfire for errors** (see Logfire real-time error watch) after this step.
 
 ### 5. Inject replies
@@ -268,7 +286,8 @@ Score never gates the verdict.
 uv run python .grok/skills/mailpilot-campaign-test/scripts/generate_report.py --run-id $RUN_ID
 ```
 
-Present `reports/campaign-test/$RUN_ID/report.md`. PASS only when every scenario matched.
+Present `reports/campaign-test/$RUN_ID/report.md`. PASS only when every
+scenario matched. After both default passes, both reports must PASS.
 
 ### 10. Clean up (always)
 
@@ -307,7 +326,7 @@ After PASS:
 
 1. open reports/campaign-test/<run_id>/report.md
 2. mailpilot email list --account-email inbound@lab5.ca --limit 20
-3. /mailpilot-campaign-test --company-domain <domain>
+3. /mailpilot-campaign-test --workflow-file <path>
 ```
 
 After FAIL:
@@ -316,9 +335,10 @@ After FAIL:
 ## Next
 
 1. open reports/campaign-test/<run_id>/verify.json
-2. open reports/campaign-test/<run_id>/logfire_report.md
-3. edit workflow reply-handling wording from critique highest-impact edit
-4. /mailpilot-campaign-test
+2. open reports/campaign-test/<run_id>/touch1.json
+3. open reports/campaign-test/<run_id>/logfire_report.md
+4. edit workflow reply-handling wording from critique highest-impact edit
+5. /mailpilot-campaign-test --workflow-file <failing-pass-file>
 ```
 
 ## Prerequisites
@@ -328,7 +348,7 @@ After FAIL:
 - `outbound@lab5.ca` + `inbound@lab5.ca` (step 0b creates if missing)
 - Outbound identity set (step 0c: display_name + signature; preflight enforces)
 - `google_application_credentials` configured
-- Workflow file present
+- Workflow file present (default synthetics under the skill `workflows/` dir)
 - At least one real (non-infra) contact for grounding
 - Logfire MCP connected (preferred) for real-time error watch + step 11 digest;
   skill continues without it

@@ -93,7 +93,8 @@ def main() -> int:
     lines = [
         f"# Campaign reply-flow test report -- run {args.run_id}",
         "",
-        f"Workflow under test: {manifest.get('workflow_name') or '(unknown)'}.",
+        f"Workflow under test: {manifest.get('workflow_name') or '(unknown)'} "
+        f"(T1 path: {manifest.get('t1_mode') or 'unknown'}).",
         "",
         "The live outbound agent sent a cold Touch 1 to the prospect mailbox; the "
         "test replied with content crafted to drive each branch; the agent handled "
