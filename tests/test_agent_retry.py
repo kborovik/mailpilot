@@ -163,11 +163,34 @@ def _xai_token_generation_500() -> ModelHTTPError:
     )
 
 
-@pytest.mark.parametrize("status", [500, 502, 503, 504, 529, 599])
+@pytest.mark.parametrize("status", [500, 502, 503, 529, 599])
 def test_model_http_error_5xx_is_transient(status: int) -> None:
-    """§V.49: xAI ModelHTTPError 5xx (500-599) is bounded-retry transient."""
+    """§V.49: xAI ModelHTTPError 5xx (500-599 except 504) is bounded-retry."""
     err = ModelHTTPError(status, "grok-4.5", body="server error")
     assert is_invalid_provider_key(err) is False
+    assert is_transient(err) is True
+
+
+def test_model_http_error_504_is_not_transient() -> None:
+    """§V.48: 504 is pydantic-ai xAI DEADLINE_EXCEEDED; retry is unsafe."""
+    err = ModelHTTPError(504, "grok-4.5", body="deadline exceeded")
+    assert is_invalid_provider_key(err) is False
+    assert is_transient(err) is False
+
+
+def test_wrapped_anthropic_500_model_http_error_is_not_transient() -> None:
+    """§V.49: Anthropic ModelHTTPError wrap keeps the Anthropic allow-list."""
+    inner = _api_status_error(500)
+    err = ModelHTTPError(500, "claude-sonnet-5", body="internal")
+    err.__cause__ = inner
+    assert is_transient(err) is False
+
+
+def test_wrapped_anthropic_502_model_http_error_is_transient() -> None:
+    """§V.49: wrapped Anthropic 502/503/529 still retry."""
+    inner = _api_status_error(502)
+    err = ModelHTTPError(502, "claude-sonnet-5", body="bad gateway")
+    err.__cause__ = inner
     assert is_transient(err) is True
 
 
