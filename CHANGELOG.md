@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [v0.35.0] - 2026-08-27
+
 ### Added
 
 - Outbound cadence can ship per-touch copy in `[[touch_copy]]` on the
