@@ -612,7 +612,7 @@ def _run_copy_row_touch(  # noqa: PLR0913
     if _is_new_thread_touch(prior_email) and (
         touch_message.subject is None or not touch_message.subject.strip()
     ):
-        raise TouchCopyRenderError("n=1 subject must be non-empty after render")
+        raise TouchCopyRenderError(_SUBJECT_REQUIRED_RETRY)
     return _deliver_touch(
         span=span,
         connection=connection,
@@ -842,7 +842,7 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0917, PLR0915, PLR0912, C901
                     )
 
             # Resolve the model once for compose-only and the tool-loop.
-            # §V.47: provider-aware factory. Copy-row path returned above.
+            # §V.47: provider-aware factory.
             if model_override is not None:
                 model = model_override
             else:
