@@ -549,3 +549,106 @@ def test_workflow_cadence_fields_round_trip(
         ],
     )
     assert _read_catalog(out_two) == _read_catalog(out_dir)
+
+
+def test_workflow_touch_copy_round_trip_and_check_out_of_sync(
+    runner: CliRunner,
+    database_connection: psycopg.Connection[dict[str, Any]],
+    tmp_path: pathlib.Path,
+) -> None:
+    """§V.194/§V.103/§V.134: [[touch_copy]] imports, hashes, check out_of_sync."""
+    account = make_test_account(database_connection)
+    toml_path = tmp_path / "copy-outreach.toml"
+    toml_path.write_text(
+        'name = "copy-outreach"\n'
+        'template = "outbound-general"\n'
+        'theme = "blue"\n'
+        "touches = 2\n"
+        "touch_interval_days = 7\n"
+        'goal = "Book a chat"\n'
+        "instructions = '''\nBe brief.'''\n"
+        "\n[[touch_copy]]\n"
+        "n = 1\n"
+        'subject = "Quick question, {first_name}"\n'
+        "body = '''\nHi {first_name}.'''\n"
+    )
+    imported = _invoke(
+        runner,
+        database_connection,
+        [
+            "workflow",
+            "import",
+            "--account-email",
+            account.email,
+            "--file",
+            str(toml_path),
+        ],
+    )
+    row = imported["workflows"][0]
+    assert row["action"] == "created"
+    assert row["in_sync"] is True
+    live = get_workflow_by_name(database_connection, "copy-outreach")
+    assert live is not None
+    assert len(live.touch_copy) == 1
+    assert live.touch_copy[0].n == 1
+    assert live.touch_copy[0].subject == "Quick question, {first_name}"
+
+    checked = _invoke(
+        runner,
+        database_connection,
+        ["workflow", "check", "--file", str(toml_path)],
+    )
+    assert checked["workflow_check"]["workflows"][0]["state"] == "in_sync"
+
+    drifted = tmp_path / "copy-outreach.toml"
+    drifted.write_text(
+        'name = "copy-outreach"\n'
+        'template = "outbound-general"\n'
+        'theme = "blue"\n'
+        "touches = 2\n"
+        "touch_interval_days = 7\n"
+        'goal = "Book a chat"\n'
+        "instructions = '''\nBe brief.'''\n"
+        "\n[[touch_copy]]\n"
+        "n = 1\n"
+        'subject = "Different subject"\n'
+        "body = '''\nHi {first_name}.'''\n"
+    )
+    disagreed = _invoke(
+        runner,
+        database_connection,
+        ["workflow", "check", "--file", str(drifted)],
+    )
+    assert disagreed["workflow_check"]["workflows"][0]["state"] == "out_of_sync"
+
+    out_dir = tmp_path / "exported"
+    _invoke(
+        runner,
+        database_connection,
+        [
+            "workflow",
+            "export",
+            "--account-email",
+            account.email,
+            "--out-dir",
+            str(out_dir),
+        ],
+    )
+    exported = (out_dir / "copy-outreach.toml").read_text()
+    assert "[[touch_copy]]" in exported
+    assert "Quick question, {first_name}" in exported
+
+    out_two = tmp_path / "cat2"
+    _invoke(
+        runner,
+        database_connection,
+        [
+            "workflow",
+            "export",
+            "--account-email",
+            account.id,
+            "--out-dir",
+            str(out_two),
+        ],
+    )
+    assert _read_catalog(out_two) == _read_catalog(out_dir)

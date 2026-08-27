@@ -911,6 +911,59 @@ def test_migration_015_drops_xai_api_host(
     assert post is None
 
 
+# -- migration 016: workflow.touch_copy JSONB (§V.194) -------------------------
+
+
+def test_migration_016_adds_touch_copy_jsonb(
+    migration_schema: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.194/§V.108: migration 016 adds touch_copy JSONB default []."""
+    conn = migration_schema
+    for prefix in (
+        "001",
+        "002",
+        "003",
+        "004",
+        "005",
+        "006",
+        "007",
+        "008",
+        "009",
+        "010",
+        "011",
+        "012",
+        "013",
+        "014",
+        "015",
+    ):
+        conn.execute(_read_shipped_migration(prefix))  # type: ignore[arg-type]
+    conn.commit()
+
+    conn.execute(
+        "INSERT INTO account (id, email) VALUES (%s, %s)", ("ac1", "a@lab5.ca")
+    )
+    conn.execute(
+        "INSERT INTO workflow (id, account_id, template, type, name) "
+        "VALUES (%s, %s, %s, %s, %s)",
+        ("wf1", "ac1", "outbound-general", "outbound", "ai-engineering"),
+    )
+    conn.commit()
+
+    pre = conn.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name = 'workflow' "
+        "AND column_name = 'touch_copy'"
+    ).fetchall()
+    assert pre == []
+
+    conn.execute(_read_shipped_migration("016"))  # type: ignore[arg-type]
+    conn.commit()
+
+    row = conn.execute("SELECT touch_copy FROM workflow WHERE id = 'wf1'").fetchone()
+    assert row is not None
+    assert row["touch_copy"] == []
+
+
 # -- identity invariant: schema.sql == apply-all-migrations-from-zero (§V.108) -
 
 

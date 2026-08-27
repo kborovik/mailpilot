@@ -47,6 +47,7 @@ from mailpilot.drive import DriveClient
 from mailpilot.exceptions import (
     AgentCompletedWithoutReplyError,
     AgentDidNotUseToolsError,
+    TouchCopyRenderError,
 )
 from mailpilot.gmail import GmailClient
 from mailpilot.models import (
@@ -56,11 +57,13 @@ from mailpilot.models import (
     ContactView,
     Email,
     Enrollment,
+    TouchCopy,
     TouchMessage,
     Workflow,
 )
 from mailpilot.operator_log import operator_event
 from mailpilot.settings import Settings
+from mailpilot.touch_copy import copy_for_touch, render_touch_copy
 
 # Compose-only output validators (§V.42 body lint + §V.136 first-touch subject)
 # use a bounded ModelRetry so a bad draft is re-composed a capped number of
@@ -509,7 +512,7 @@ def _send_touch_message(  # noqa: PLR0913, PLR0917
     )
 
 
-def _run_compose_only_touch(  # noqa: PLR0913
+def _deliver_touch(  # noqa: PLR0913
     *,
     span: Any,
     connection: psycopg.Connection[dict[str, Any]],
@@ -519,33 +522,22 @@ def _run_compose_only_touch(  # noqa: PLR0913
     workflow: Workflow,
     contact: Contact,
     enrollment: Enrollment,
-    email_history: list[Email],
-    task_context: dict[str, Any] | None,
-    prompt: str,
-    model: Model | str,
+    touch_message: TouchMessage,
+    prior_email: Email | None,
     touch_number: int,
+    llm_requests: int,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_input_tokens: int,
+    cache_creation_input_tokens: int,
+    reasoning: str,
 ) -> dict[str, Any]:
-    """Run one compose-only outbound touch: compose, send, advance cadence (§V.136).
+    """Send a composed touch and advance cadence (§V.136, §V.194).
 
-    One LLM call yields a validated ``TouchMessage`` (output validators: §V.42
-    body lint + §V.136 first-touch subject require). The harness sends it via
-    ``email_ops`` -- a follow-up threads on the prior touch, the first touch
-    opens a new thread -- then the cadence engine schedules the next touch or,
-    after the final one, concludes the enrollment ``contact_later``
-    system-internally (§V.127, §V.128). No tool loop, so §V.81 / §V.120 do not
-    apply; the send is structural. Returns the same completed-run result dict
-    shape as the tool-loop path, plus the sent email id and the touch number.
+    Shared by the copy-row render path and the compose-only LLM path. Owns
+    ``_send_touch_message``, ``advance_touch_cadence``, and completed-run
+    span fields. ``llm_requests`` is 0 on the render path.
     """
-    # Resolve prior outbound before the LLM call so the subject validator knows
-    # whether this touch opens a new thread (§V.136 / §B.127).
-    prior_email = _resolve_prior_touch_email(connection, task_context, email_history)
-    touch_agent = _build_touch_agent(
-        workflow,
-        require_subject=_is_new_thread_touch(prior_email),
-    )
-    result = touch_agent.run_sync(prompt, model=model)
-    touch_message = result.output
-
     sent_email = _send_touch_message(
         connection,
         account,
@@ -564,24 +556,17 @@ def _run_compose_only_touch(  # noqa: PLR0913
         prior_email_id=sent_email.id,
         base=datetime.now(UTC),
     )
-
-    usage = result.usage
     span.set_attribute("model", active_model_name(settings))
-    span.set_attribute("input_tokens", usage.input_tokens)
-    span.set_attribute("output_tokens", usage.output_tokens)
-    span.set_attribute("total_tokens", usage.input_tokens + usage.output_tokens)
-    span.set_attribute("llm_requests", usage.requests)
-    # §V.47: bubble Anthropic prompt-cache token counts to the rollup span
-    # (xAI path reports zeros; names stay for schema stability).
-    span.set_attribute("cache_read_input_tokens", usage.cache_read_tokens)
-    span.set_attribute("cache_creation_input_tokens", usage.cache_write_tokens)
-    # Compose-only runs bind no tools (§V.81 exempt) -- report zero for both so
-    # the rollup schema matches the tool-loop path.
+    span.set_attribute("input_tokens", input_tokens)
+    span.set_attribute("output_tokens", output_tokens)
+    span.set_attribute("total_tokens", input_tokens + output_tokens)
+    span.set_attribute("llm_requests", llm_requests)
+    span.set_attribute("cache_read_input_tokens", cache_read_input_tokens)
+    span.set_attribute("cache_creation_input_tokens", cache_creation_input_tokens)
     span.set_attribute("tool_call_count", 0)
     span.set_attribute("tool_error_count", 0)
     span.set_attribute("touch_number", touch_number)
     span.set_attribute("sent_email_id", sent_email.id)
-    reasoning = f"composed and sent touch {touch_number}"
     span.set_attribute("result", "completed")
     span.set_attribute("status", "completed")
     span.set_attribute("agent_reasoning", reasoning)
@@ -604,10 +589,106 @@ def _run_compose_only_touch(  # noqa: PLR0913
     }
 
 
+def _run_copy_row_touch(  # noqa: PLR0913
+    *,
+    span: Any,
+    connection: psycopg.Connection[dict[str, Any]],
+    account: Account,
+    gmail_client: GmailClient,
+    settings: Settings,
+    workflow: Workflow,
+    contact: Contact,
+    enrollment: Enrollment,
+    email_history: list[Email],
+    task_context: dict[str, Any] | None,
+    contact_view: ContactView,
+    company_view: CompanyView | None,
+    copy_row: TouchCopy,
+    touch_number: int,
+) -> dict[str, Any]:
+    """Render catalog copy for N and deliver with zero model calls (§V.194)."""
+    prior_email = _resolve_prior_touch_email(connection, task_context, email_history)
+    touch_message = render_touch_copy(copy_row, contact_view, company_view)
+    if _is_new_thread_touch(prior_email) and (
+        touch_message.subject is None or not touch_message.subject.strip()
+    ):
+        raise TouchCopyRenderError("n=1 subject must be non-empty after render")
+    return _deliver_touch(
+        span=span,
+        connection=connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=settings,
+        workflow=workflow,
+        contact=contact,
+        enrollment=enrollment,
+        touch_message=touch_message,
+        prior_email=prior_email,
+        touch_number=touch_number,
+        llm_requests=0,
+        input_tokens=0,
+        output_tokens=0,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+        reasoning=f"rendered and sent touch {touch_number}",
+    )
+
+
+def _run_compose_only_touch(  # noqa: PLR0913
+    *,
+    span: Any,
+    connection: psycopg.Connection[dict[str, Any]],
+    account: Account,
+    gmail_client: GmailClient,
+    settings: Settings,
+    workflow: Workflow,
+    contact: Contact,
+    enrollment: Enrollment,
+    email_history: list[Email],
+    task_context: dict[str, Any] | None,
+    prompt: str,
+    model: Model | str,
+    touch_number: int,
+) -> dict[str, Any]:
+    """Run one compose-only outbound touch: compose, send, advance cadence (§V.136).
+
+    One LLM call yields a validated ``TouchMessage`` when no ``touch_copy``
+    row exists for N. The harness sends it via ``_deliver_touch``.
+    """
+    # Resolve prior outbound before the LLM call so the subject validator knows
+    # whether this touch opens a new thread (§V.136 / §B.127).
+    prior_email = _resolve_prior_touch_email(connection, task_context, email_history)
+    touch_agent = _build_touch_agent(
+        workflow,
+        require_subject=_is_new_thread_touch(prior_email),
+    )
+    result = touch_agent.run_sync(prompt, model=model)
+    usage = result.usage
+    return _deliver_touch(
+        span=span,
+        connection=connection,
+        account=account,
+        gmail_client=gmail_client,
+        settings=settings,
+        workflow=workflow,
+        contact=contact,
+        enrollment=enrollment,
+        touch_message=result.output,
+        prior_email=prior_email,
+        touch_number=touch_number,
+        llm_requests=usage.requests,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        cache_read_input_tokens=usage.cache_read_tokens,
+        cache_creation_input_tokens=usage.cache_write_tokens,
+        reasoning=f"composed and sent touch {touch_number}",
+    )
+
+
 # -- Main entry point ----------------------------------------------------------
 
 
-def invoke_workflow_agent(  # noqa: PLR0913, PLR0917, PLR0915, C901
+def invoke_workflow_agent(  # noqa: PLR0913, PLR0917, PLR0915, PLR0912, C901
     connection: psycopg.Connection[dict[str, Any]],
     settings: Settings,
     workflow: Workflow,
@@ -712,21 +793,13 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0917, PLR0915, C901
                 workflow_id=workflow.id,
             )
 
-            # Resolve the model once; both the compose-only and the tool-loop
-            # path use it. §V.47: provider-aware factory.
-            if model_override is not None:
-                model = model_override
-            else:
-                model = build_model(settings, role="workflow")
-
-            gmail_client = GmailClient(account.email)
-
             # §V.135: mechanically pre-feed the CRM records the system already
             # holds keys for. load_contact_view / load_company_view are the same
             # loaders that back CLI ``contact view`` / ``company view``, so the
             # agent prompt and the operator CLI carry byte-identical context
             # (§V.8). The company record is loaded only when the contact has a
-            # parent company.
+            # parent company. Loaded before dispatch so copy-row render uses
+            # the same views (§V.194).
             contact_view = database.load_contact_view(connection, contact.id)
             company_view = (
                 database.load_company_view(connection, contact.company_id)
@@ -734,7 +807,48 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0917, PLR0915, C901
                 else None
             )
 
-            # Assemble prompt (shared by both agent shapes).
+            gmail_client = GmailClient(account.email)
+
+            # §V.194 dispatch sits above build_model: copy-row N never
+            # constructs a model or assembles the LLM prompt.
+            touch_number = cadence.resolve_touch_number(task_context, trigger)
+            outbound_touch = (
+                workflow.type == "outbound"
+                and email is None
+                and touch_number is not None
+            )
+            if outbound_touch and touch_number is not None:
+                copy_row = copy_for_touch(workflow, touch_number)
+                if copy_row is not None:
+                    if contact_view is None:
+                        raise TouchCopyRenderError(
+                            f"contact view missing for copy-row touch {touch_number}"
+                        )
+                    return _run_copy_row_touch(
+                        span=span,
+                        connection=connection,
+                        account=account,
+                        gmail_client=gmail_client,
+                        settings=settings,
+                        workflow=workflow,
+                        contact=contact,
+                        enrollment=enrollment,
+                        email_history=email_history,
+                        task_context=task_context,
+                        contact_view=contact_view,
+                        company_view=company_view,
+                        copy_row=copy_row,
+                        touch_number=touch_number,
+                    )
+
+            # Resolve the model once for compose-only and the tool-loop.
+            # §V.47: provider-aware factory. Copy-row path returned above.
+            if model_override is not None:
+                model = model_override
+            else:
+                model = build_model(settings, role="workflow")
+
+            # Assemble prompt (shared by LLM agent shapes).
             prompt = _build_user_prompt(
                 workflow=workflow,
                 contact=contact,
@@ -749,19 +863,10 @@ def invoke_workflow_agent(  # noqa: PLR0913, PLR0917, PLR0915, C901
 
             span.set_attribute("prompt_length", len(prompt))
 
-            # §V.136 dispatch: an outbound touch run -- the first reach-out or a
-            # system-scheduled touch-N task, both with no triggering email --
-            # composes a structured TouchMessage. The harness sends it and
-            # advances the cadence; there is no tool loop, so the §V.81 tool-count
-            # check and the §V.120 reply walker do not apply (the send is
-            # structural). All other runs (inbound reply, outbound reply-branch
-            # task, manual) keep the tool loop below.
-            touch_number = cadence.resolve_touch_number(task_context, trigger)
-            if (
-                workflow.type == "outbound"
-                and email is None
-                and touch_number is not None
-            ):
+            # §V.136: outbound touch with no copy row for N is compose-only
+            # LLM. Inbound / reply-branch / manual keep the tool loop and
+            # never consult touch_copy (§V.194).
+            if outbound_touch and touch_number is not None:
                 return _run_compose_only_touch(
                     span=span,
                     connection=connection,

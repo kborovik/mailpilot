@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Outbound cadence can ship per-touch copy in `[[touch_copy]]` on the
+  workflow TOML. A row for touch N is rendered from ContactView /
+  CompanyView with no LLM call; missing N stays compose-only. Import
+  hashes `touch_copy` with the other def fields. `template list|view`
+  is unchanged.
+
 ## [v0.34.2] - 2026-08-26
 
 ### Changed

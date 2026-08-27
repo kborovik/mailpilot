@@ -11,6 +11,7 @@ from typing import Any
 
 import psycopg
 from psycopg.sql import SQL, Composed
+from psycopg.types.json import Json
 
 from mailpilot.database._common import (
     _build_update,
@@ -38,6 +39,7 @@ from mailpilot.models import (
     QueueTaskKind,
     QueueTaskRow,
     QueueWorkflowRow,
+    TouchCopy,
     TouchStageCounts,
     Workflow,
     WorkflowCheck,
@@ -1050,6 +1052,35 @@ def _queue_stuck_rows(
     return [_queue_task_from_row(row, kind="stuck") for row in rows]
 
 
+def canonical_touch_copy(value: object) -> list[dict[str, Any]]:
+    """Normalize ``touch_copy`` to hashed list-of-dicts form (§V.194).
+
+    Sorted by ``n``. Missing/invalid entries collapse to ``[]`` so an omitted
+    catalog table hashes the same as a live default empty JSONB array.
+    """
+    if not isinstance(value, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in value:
+        if isinstance(item, TouchCopy):
+            rows.append({"n": item.n, "subject": item.subject, "body": item.body})
+            continue
+        if not isinstance(item, dict):
+            continue
+        n = item.get("n")
+        if not isinstance(n, int):
+            continue
+        rows.append(
+            {
+                "n": n,
+                "subject": str(item.get("subject") or ""),
+                "body": str(item.get("body") or ""),
+            }
+        )
+    rows.sort(key=lambda row: int(row["n"]))
+    return rows
+
+
 def _compute_workflow_wording_hash(
     template: str,
     theme: str,
@@ -1057,16 +1088,15 @@ def _compute_workflow_wording_hash(
     instructions: str,
     touches: int | None,
     touch_interval_days: int | None,
+    touch_copy: object = (),
 ) -> str:
     """SHA-256 over the def fields, name excluded (§V.134).
 
-    Hashes ``{template, theme, goal, instructions, touches, touch_interval_days}``
-    -- the cadence pair joined the def fields per §V.136. The workflow ``name``
-    is the join key, never a hashed field (§V.134), so it is excluded here. A
-    canonical JSON serialization (sorted keys) keeps the hash stable across field
-    order and is safe for the pipe and newline content that ``instructions``
-    carries -- a delimiter-joined string could collide. The nullable cadence
-    ints serialize as JSON numbers or ``null``.
+    Hashes ``{template, theme, goal, instructions, touches,
+    touch_interval_days, touch_copy}`` -- cadence pair per §V.136,
+    ``touch_copy`` per §V.194. The workflow ``name`` is the join key, never a
+    hashed field (§V.134). Canonical JSON (sorted keys) keeps the hash stable
+    across field order and is safe for pipes/newlines in ``instructions``.
 
     Args:
         template: Template name.
@@ -1075,6 +1105,7 @@ def _compute_workflow_wording_hash(
         instructions: Workflow instructions.
         touches: Total sends in the touch cadence, or None for single-touch.
         touch_interval_days: Days between touches, or None for single-touch.
+        touch_copy: Per-touch copy catalog (list of rows or empty).
 
     Returns:
         Hex SHA-256 digest of the canonical def payload.
@@ -1087,6 +1118,7 @@ def _compute_workflow_wording_hash(
             "instructions": instructions,
             "touches": touches,
             "touch_interval_days": touch_interval_days,
+            "touch_copy": canonical_touch_copy(touch_copy),
         },
         sort_keys=True,
         ensure_ascii=False,
@@ -1120,6 +1152,7 @@ def catalog_def_fields(entry: dict[str, Any]) -> dict[str, Any]:
         "instructions": str(entry.get("instructions") or ""),
         "touches": touches,
         "touch_interval_days": interval,
+        "touch_copy": canonical_touch_copy(entry.get("touch_copy")),
     }
 
 
@@ -1139,6 +1172,7 @@ def _stored_def_fields(persisted: dict[str, Any]) -> dict[str, Any]:
         "instructions": str(persisted.get("instructions") or ""),
         "touches": touches_raw if isinstance(touches_raw, int) else None,
         "touch_interval_days": interval_raw if isinstance(interval_raw, int) else None,
+        "touch_copy": canonical_touch_copy(persisted.get("touch_copy")),
     }
 
 
@@ -1157,6 +1191,7 @@ def _persisted_wording_hash(persisted: dict[str, Any]) -> str:
         instructions=stored["instructions"],
         touches=stored["touches"],
         touch_interval_days=stored["touch_interval_days"],
+        touch_copy=stored["touch_copy"],
     )
 
 
@@ -1192,7 +1227,8 @@ def import_row_in_sync(entry: dict[str, Any], persisted: dict[str, Any]) -> bool
 
     Import uses this for the per-row ``in_sync`` flag after create/update.
     ``persisted`` is the live written-row def
-    ``{template, theme, goal, instructions, touches, touch_interval_days}``.
+    ``{template, theme, goal, instructions, touches, touch_interval_days,
+    touch_copy}``.
     """
     report = workflow_import_sync_report(entry, persisted)
     return bool(report["in_sync"])
@@ -1207,9 +1243,10 @@ def check_workflow_wording(
     """Compare catalog defs against live rows by name and classify each (§V.134).
 
     A read-only 2-way live SHA-256 over the def fields
-    ``{template, theme, goal, instructions, touches, touch_interval_days}``
-    mirroring ``db check``: no stored column, both sides hashed on the fly. The
-    cadence pair joined the hashed set per §V.136. The globally unique ``name``
+    ``{template, theme, goal, instructions, touches, touch_interval_days,
+    touch_copy}`` mirroring ``db check``: no stored column, both sides hashed
+    on the fly. Cadence pair per §V.136; ``touch_copy`` per §V.194. The
+    globally unique ``name``
     (§V.90)
     is the join key, so the comparison spans every account's rows unless
     ``account_id`` scopes the live side. Each name lands in one of four states:
@@ -1246,6 +1283,7 @@ def check_workflow_wording(
             instructions=row.instructions,
             touches=row.touches,
             touch_interval_days=row.touch_interval_days,
+            touch_copy=row.touch_copy,
         )
         for row in list_workflows_full(connection, account_id)
     }
@@ -1322,9 +1360,10 @@ def update_workflow(
     """Update a workflow by ID.
 
     Writable fields: the def fields ``name``, ``goal``, ``instructions``,
-    ``theme``, ``touches``, ``touch_interval_days`` (import-only writers per
-    §V.103, the cadence pair per §V.136) plus the non-def ``account_id`` (account
-    re-binding, the sole field ``workflow update`` exposes). Status transitions
+    ``theme``, ``touches``, ``touch_interval_days``, ``touch_copy`` (import-only
+    writers per §V.103, cadence pair per §V.136, copy catalog per §V.194) plus
+    the non-def ``account_id`` (account re-binding, the sole field
+    ``workflow update`` exposes). Status transitions
     use ``activate_workflow()`` / ``pause_workflow()``. ``type`` and ``template``
     are immutable after creation (§V.44).
 
@@ -1343,6 +1382,7 @@ def update_workflow(
         "theme",
         "touches",
         "touch_interval_days",
+        "touch_copy",
         "account_id",
     }
     if "template" in fields:
@@ -1358,6 +1398,8 @@ def update_workflow(
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return get_workflow(connection, workflow_id)
+    if "touch_copy" in updates:
+        updates["touch_copy"] = Json(canonical_touch_copy(updates["touch_copy"]))
     updates["id"] = workflow_id
     query = _build_update("workflow", updates, SQL("id = %(id)s"))
     row = connection.execute(query, updates).fetchone()

@@ -795,7 +795,11 @@ mailpilot workflow import --account-email <ACCOUNT_REF> --file workflows/
 JSON status envelope of the paths written (TOML never goes to stdout). `workflow
 import` takes a single `.toml` file or a directory of them (`**/*.toml`
 recurse). Each file carries `name`, `template`, `goal`, `instructions`, `theme`,
-with `instructions` as a TOML multi-line literal string. Available templates:
+with `instructions` as a TOML multi-line literal string. Optional
+`[[touch_copy]]` tables are per-touch copy for outbound cadence (not
+`template`): `n`, `subject`, `body`. A row for N is rendered with no
+LLM call; missing N stays compose-only LLM. Duplicate `n`, empty `n = 1`
+subject, empty `body`, or unknown keys are rejected. Available templates:
 
 ```
 mailpilot template list

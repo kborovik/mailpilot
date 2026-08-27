@@ -229,9 +229,11 @@ def workflow_update(
 ) -> None:
     """Update a workflow's non-def fields by name or ID.
 
-    Def fields ``{name, template, theme, goal, instructions}`` are import-only:
-    edit the ``workflows/*.toml`` and re-import to change them. ``update`` mutates
-    only non-def fields -- account binding here, status via ``start`` / ``stop``.
+    Def fields ``{name, template, theme, goal, instructions, touches,
+    touch_interval_days, touch_copy}`` are import-only: edit the
+    ``workflows/*.toml`` and re-import to change them. ``touch_copy`` is
+    per-touch copy, not ``template``. ``update`` mutates only non-def fields
+    -- account binding here, status via ``start`` / ``stop``.
     """
     # Def fields import-only; update restricted to non-def fields per §V.103.
     from mailpilot.database import update_workflow
@@ -360,7 +362,7 @@ def workflow_list(
 @workflow.command("view")
 @click.argument("workflow_ref")
 def workflow_view(workflow_ref: str) -> None:
-    """Show a workflow by name or ID."""
+    """Show a workflow by name or ID, including per-touch copy."""
     with _db() as connection:
         output_entity("workflow", _resolve_workflow(connection, workflow_ref))
 
@@ -708,12 +710,13 @@ def _workflow_to_toml(workflow: Any) -> str:
     """Serialize a ``Workflow`` row to a one-workflow TOML catalog entry (§V.103).
 
     Emits the def fields ``{name, template, theme, goal[, touches,
-    touch_interval_days], instructions}`` in a fixed order; ``instructions`` uses
-    a multi-line literal string so pipes and quotes survive verbatim. The leading
-    newline after the opening ``'''`` is trimmed by the TOML parser, so the value
-    re-parses byte-identically. The cadence pair (§V.136) emits as bare TOML ints
-    and is omitted entirely for a single-touch workflow (both columns NULL), so a
-    non-cadence catalog stays byte-identical to prior exports.
+    touch_interval_days], instructions[, [[touch_copy]]]}`` in a fixed
+    order; ``instructions`` uses a multi-line literal string so pipes and
+    quotes survive verbatim. The leading newline after the opening ``'''``
+    is trimmed by the TOML parser, so the value re-parses byte-identically.
+    The cadence pair (§V.136) emits as bare TOML ints and is omitted for a
+    single-touch workflow. ``[[touch_copy]]`` is per-touch copy (§V.194),
+    not ``template``, and is omitted when the catalog is empty.
     """
     parts = [
         f"name = {_toml_basic_string(workflow.name)}\n",
@@ -726,6 +729,11 @@ def _workflow_to_toml(workflow: Any) -> str:
     if workflow.touch_interval_days is not None:
         parts.append(f"touch_interval_days = {workflow.touch_interval_days}\n")
     parts.append(f"instructions = '''\n{workflow.instructions}'''\n")
+    for row in workflow.touch_copy:
+        parts.append("\n[[touch_copy]]\n")
+        parts.append(f"n = {row.n}\n")
+        parts.append(f"subject = {_toml_basic_string(row.subject)}\n")
+        parts.append(f"body = '''\n{row.body}'''\n")
     return "".join(parts)
 
 
@@ -747,9 +755,10 @@ def workflow_export(account_email: str | None, out_dir: str) -> None:
 
     TOML-only: writes one ``*.toml`` per workflow into ``--out-dir`` (def fields
     ``{name, template, theme, goal, instructions}`` plus the optional cadence
-    pair ``touches`` / ``touch_interval_days`` when set, name-sorted) and prints
-    a JSON status envelope listing the paths written. TOML never reaches stdout
-    -- stdout stays strict JSON. ``export -> dir -> import`` round-trips
+    pair ``touches`` / ``touch_interval_days`` when set and optional
+    ``[[touch_copy]]`` per-touch copy when set, name-sorted) and prints a JSON
+    status envelope listing the paths written. TOML never reaches stdout --
+    stdout stays strict JSON. ``export -> dir -> import`` round-trips
     idempotently.
     """
     import pathlib
@@ -777,7 +786,9 @@ _WORKFLOW_IMPORT_UPDATABLE = (
     "theme",
     "touches",
     "touch_interval_days",
+    "touch_copy",
 )
+_TOUCH_COPY_KEYS = frozenset({"n", "subject", "body"})
 _IMPORT_EXCERPT_HEAD = 160
 _IMPORT_EXCERPT_TAIL = 160
 
@@ -799,6 +810,8 @@ def _import_field_excerpt(value: object) -> str:
 
 def _row_def_payload(row: Any) -> dict[str, Any]:
     """Live workflow def fields for the post-apply wording hash (§V.103)."""
+    from mailpilot.database import canonical_touch_copy
+
     return {
         "template": row.template,
         "theme": row.theme,
@@ -806,6 +819,7 @@ def _row_def_payload(row: Any) -> dict[str, Any]:
         "instructions": row.instructions,
         "touches": row.touches,
         "touch_interval_days": row.touch_interval_days,
+        "touch_copy": canonical_touch_copy(row.touch_copy),
     }
 
 
@@ -862,6 +876,8 @@ def _workflow_import_extras(entry: dict[str, Any]) -> dict[str, object]:
     if catalog["touches"] is not None:
         extras["touches"] = catalog["touches"]
         extras["touch_interval_days"] = catalog["touch_interval_days"]
+    if catalog["touch_copy"]:
+        extras["touch_copy"] = catalog["touch_copy"]
     return extras
 
 
@@ -920,14 +936,21 @@ def _import_workflow_create(
 def _import_workflow_update(
     connection: Any, current: Any, entry: dict[str, Any]
 ) -> dict[str, object]:
-    from mailpilot.database import catalog_def_fields, update_workflow
+    from mailpilot.database import (
+        canonical_touch_copy,
+        catalog_def_fields,
+        update_workflow,
+    )
     from mailpilot.operator_log import operator_event
 
     catalog = catalog_def_fields(entry)
     diff: dict[str, object] = {}
     for field in _WORKFLOW_IMPORT_UPDATABLE:
         catalog_value = catalog[field]
-        if getattr(current, field) != catalog_value:
+        current_value = getattr(current, field)
+        if field == "touch_copy":
+            current_value = canonical_touch_copy(current_value)
+        if current_value != catalog_value:
             diff[field] = catalog_value
     if not diff:
         operator_event(
@@ -947,6 +970,44 @@ def _import_workflow_update(
         changed=list(diff.keys()),
     )
     return _import_applied_preview(current.name, "updated", entry, written, diff)
+
+
+def _validate_touch_copy(entry: dict[str, Any]) -> str | None:  # noqa: PLR0911, C901
+    """Return an error if ``[[touch_copy]]`` is invalid, else None (§V.194).
+
+    Rejects duplicate ``n``, ``n < 1``, empty ``body``, empty ``n = 1``
+    subject, and unknown keys. Omitted or empty list is all-LLM.
+    """
+    raw = entry.get("touch_copy")
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        return "touch_copy must be an array of tables"
+    seen: set[int] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            return "touch_copy entries must be tables"
+        unknown = set(item) - _TOUCH_COPY_KEYS
+        if unknown:
+            keys = ", ".join(sorted(unknown))
+            return f"touch_copy unknown keys: {keys}"
+        n = item.get("n")
+        if not isinstance(n, int) or n < 1:
+            return "touch_copy n must be an integer >= 1"
+        if n in seen:
+            return f"touch_copy duplicate n={n}"
+        seen.add(n)
+        body = item.get("body")
+        if not isinstance(body, str) or not body.strip():
+            return "touch_copy body must be non-empty"
+        subject = item.get("subject", "")
+        if subject is None:
+            subject = ""
+        if not isinstance(subject, str):
+            return "touch_copy subject must be a string"
+        if n == 1 and not subject.strip():
+            return "touch_copy n=1 subject must be non-empty"
+    return None
 
 
 def _validate_workflow_import_name(name: str, stem: str) -> str | None:
@@ -1009,6 +1070,19 @@ def _import_workflow_row(
             "name": name,
             "error": "validation_error",
             "message": name_error,
+        }
+    copy_error = _validate_touch_copy(entry)
+    if copy_error is not None:
+        operator_event(
+            "workflow.import",
+            account_id=account_id,
+            name=name,
+            changed=[],
+        )
+        return {
+            "name": name,
+            "error": "validation_error",
+            "message": copy_error,
         }
     current = existing.get(name)
     if current is None:

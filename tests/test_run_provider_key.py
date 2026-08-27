@@ -148,6 +148,67 @@ def test_iteration_skips_drain_when_key_empty(
     assert list_tasks(database_connection, status="failed") == []
 
 
+def test_iteration_skips_drain_copy_row_when_key_empty(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.47/§V.194: missing key skips drain including copy-row touches."""
+    from mailpilot.sync import (
+        _run_periodic_iteration,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    update_workflow(
+        database_connection,
+        workflow.id,
+        goal="test goal",
+        instructions="test instructions",
+        touch_copy=[{"n": 1, "subject": "Hi {first_name}", "body": "Hello"}],
+    )
+    activate_workflow(database_connection, workflow.id)
+    contact = make_test_contact(database_connection, email="copy@example.com")
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    task = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="scheduled first reach-out",
+        scheduled_at="2020-01-01T00:00:00Z",
+        context={"trigger": "enrollment_schedule", "touch": 1},
+    )
+    settings = make_test_settings(llm_provider="xai", xai_api_key="")
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        with (
+            patch("mailpilot.sync._drain_sync_queue"),
+            patch("mailpilot.sync._sync_all_accounts"),
+            patch("mailpilot.sync._drain_pending_tasks") as mock_drain,
+        ):
+            _run_periodic_iteration(
+                database_connection,
+                settings,
+                queue.Queue(),
+                "timer",
+                do_full_sweep=False,
+                pool=pool,
+                in_flight={},
+                wakeup_event=threading.Event(),
+            )
+    finally:
+        pool.shutdown(wait=True)
+
+    mock_drain.assert_not_called()
+    pending = get_task(database_connection, task.id)
+    assert pending is not None
+    assert pending.status == "pending"
+    assert list_tasks(database_connection, status="failed") == []
+    sent = database_connection.execute(
+        "SELECT id FROM email WHERE workflow_id = %s", (workflow.id,)
+    ).fetchall()
+    assert sent == []
+
+
 def _wait_for_in_flight(
     in_flight: dict[concurrent.futures.Future[None], tuple[str, float]],
     timeout: float = 5.0,
@@ -219,6 +280,67 @@ def test_drain_invalid_xai_key_skips_remaining_zero_failed(
     assert err.count("event=error") == 1
     assert "mailpilot config set xai_api_key" in err
     assert "Traceback" not in err
+
+
+def test_drain_invalid_key_skips_remaining_copy_row(
+    capsys: pytest.CaptureFixture[str],
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.47/§V.194: invalid key skip remaining includes copy-row touches."""
+    from mailpilot.sync import (
+        _drain_pending_tasks,  # pyright: ignore[reportPrivateUsage]
+        _reap_completed_tasks,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    llm_ids = _seed_due_t1_batch(database_connection, count=1)
+    account = make_test_account(database_connection, email="copy-owner@example.com")
+    workflow = make_test_workflow(
+        database_connection, account_id=account.id, name="copy-flow"
+    )
+    update_workflow(
+        database_connection,
+        workflow.id,
+        goal="copy goal",
+        instructions="copy instructions",
+        touch_copy=[{"n": 1, "subject": "Hi", "body": "Hello"}],
+    )
+    activate_workflow(database_connection, workflow.id)
+    contact = make_test_contact(database_connection, email="copy-seat@example.com")
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    copy_task = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="scheduled first reach-out",
+        scheduled_at="2020-01-01T00:00:01Z",
+        context={"trigger": "enrollment_schedule", "touch": 1},
+    )
+    settings = make_test_settings(
+        llm_provider="xai", xai_api_key="xai-wrong", max_concurrent_tasks=1
+    )
+    in_flight: dict[concurrent.futures.Future[None], tuple[str, float]] = {}
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        with patch(
+            "mailpilot.run.invoke_workflow_agent",
+            side_effect=_xai_incorrect_api_key(),
+        ) as mock_invoke:
+            _drain_pending_tasks(database_connection, settings, pool, in_flight)
+            _wait_for_in_flight(in_flight)
+            _reap_completed_tasks(in_flight)
+    finally:
+        pool.shutdown(wait=True)
+
+    assert mock_invoke.call_count == 1
+    for task_id in [*llm_ids, copy_task.id]:
+        task = get_task(database_connection, task_id)
+        assert task is not None
+        assert task.status == "pending"
+        assert task.attempt_count == 0
+    assert list_tasks(database_connection, status="failed") == []
+    err = capsys.readouterr().err
+    assert "mailpilot config set xai_api_key" in err
 
 
 def test_drain_anthropic_401_skips_remaining_zero_failed(
