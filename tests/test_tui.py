@@ -35,6 +35,7 @@ from mailpilot.tui import (
     CONTACT_LIMIT,
     MailpilotTui,
     TuiConnectError,
+    format_company_detail,
     hide_disabled,
     is_truncated,
     open_readonly_connection,
@@ -331,6 +332,10 @@ def test_child_contacts_are_extras_not_lean_view_fields(
     extras = list_company_inspect_contacts(database_connection, company.id)
     assert extras
     assert extras[0]["email"] == "kid@kids.tui"
+    text = format_company_detail(view, child_contacts=extras)
+    assert "not lean view" not in text
+    assert f"contacts: {len(extras)}" in text
+    assert extras[0]["email"] not in text
 
 
 def _run_pilot(
@@ -441,6 +446,118 @@ def test_pilot_cross_link(
                 assert app.query_one("#tabs", TabbedContent).active == "companies"
                 assert app.company_view is not None
                 assert app.company_view.domain == "acme.tui"
+
+        asyncio.run(body())
+    finally:
+        tui_conn.close()
+
+
+def test_pilot_reload_cancels_stale_detail_timer(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Reload stops a pending detail timer so an empty table keeps (no rows)."""
+    make_test_company(database_connection, name="Timer Co", domain="timer.tui")
+    database_connection.commit()
+    tui_conn = open_readonly_connection(TEST_DATABASE_URL)
+    app = MailpilotTui(tui_conn, detail_delay=0.05)
+    try:
+
+        async def body() -> None:
+            async with app.run_test(size=(140, 40)) as pilot:
+                await pilot.pause()
+                assert app.company_view is not None
+                old_id = app.company_rows[0].id
+                app._schedule_detail("companies", old_id)  # pyright: ignore[reportPrivateUsage]
+                app.search_query["companies"] = "zzz-no-match-tui"
+                app._reload("companies")  # pyright: ignore[reportPrivateUsage]
+                await asyncio.sleep(0.12)
+                await pilot.pause()
+                assert app.company_rows == []
+                assert app.company_view is None
+                assert "(no rows)" in str(app.query_one("#company-detail").render())
+
+        asyncio.run(body())
+    finally:
+        tui_conn.close()
+
+
+def test_pilot_cross_link_shows_disabled_child(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Enter on a disabled child contact turns include-disabled on and lands."""
+    from textual.widgets import TabbedContent
+
+    company = make_test_company(database_connection, name="Mix Co", domain="mix.tui")
+    gone = make_test_contact(
+        database_connection, email="gone@mix.tui", company_id=company.id
+    )
+    disable_contact(database_connection, gone.id, "retired")
+    database_connection.commit()
+    tui_conn = open_readonly_connection(TEST_DATABASE_URL)
+    app = MailpilotTui(tui_conn, detail_delay=0)
+    try:
+
+        async def body() -> None:
+            async with app.run_test(size=(140, 40)) as pilot:
+                await pilot.pause()
+                assert any(
+                    str(child.get("id")) == gone.id
+                    for child in app.company_child_contacts
+                )
+                assert app.include_disabled is False
+                app.cross_link_to_contact(gone.id)
+                await pilot.pause()
+                assert app.include_disabled is True
+                assert app.query_one("#tabs", TabbedContent).active == "contacts"
+                assert app.contact_view is not None
+                assert app.contact_view.email == "gone@mix.tui"
+                assert "disabled=on" in str(app.query_one("#status").render())
+
+        asyncio.run(body())
+    finally:
+        tui_conn.close()
+
+
+def test_pilot_cross_link_shows_disabled_parent_company(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Enter from an enabled contact whose company is disabled turns d on."""
+    from textual.widgets import TabbedContent
+
+    company = make_test_company(
+        database_connection, name="Parent Gone", domain="parentgone.tui"
+    )
+    contact = make_test_contact(
+        database_connection, email="live@parentgone.tui", company_id=company.id
+    )
+    disable_company(database_connection, company.id, "retired")
+    database_connection.commit()
+    tui_conn = open_readonly_connection(TEST_DATABASE_URL)
+    app = MailpilotTui(tui_conn, detail_delay=0)
+    try:
+
+        async def body() -> None:
+            async with app.run_test(size=(140, 40)) as pilot:
+                await pilot.pause()
+                tabs = app.query_one("#tabs", TabbedContent)
+                tabs.active = "contacts"
+                await pilot.pause()
+                app.search_query["contacts"] = contact.email
+                app._reload("contacts")  # pyright: ignore[reportPrivateUsage]
+                await pilot.pause()
+                assert [row.email for row in app.contact_rows] == [contact.email]
+                assert app.contact_rows[0].company_domain == "parentgone.tui"
+                app._select_row("contact-table", contact.id)  # pyright: ignore[reportPrivateUsage]
+                app._load_detail("contacts", contact.id)  # pyright: ignore[reportPrivateUsage]
+                assert app.contact_view is not None
+                assert app.include_disabled is False
+                app.cross_link_to_company(contact.id)
+                await pilot.pause()
+                assert app.include_disabled is True
+                assert app.company_view is not None
+                assert app.company_view.domain == "parentgone.tui"
+                assert "disabled=on" in str(app.query_one("#status").render())
+                assert any(row.domain == "parentgone.tui" for row in app.company_rows)
 
         asyncio.run(body())
     finally:

@@ -150,11 +150,7 @@ def format_company_detail(
         _format_notes(view.notes, view.notes_total),
     ]
     if child_contacts is not None:
-        lines.append(f"contacts (extra, not lean view): {len(child_contacts)}")
-        for child in child_contacts:
-            email = child.get("email", "")
-            title = child.get("title") or ""
-            lines.append(f"- {email} {title}".rstrip())
+        lines.append(f"contacts: {len(child_contacts)}")
     return "\n".join(lines)
 
 
@@ -421,11 +417,15 @@ class MailpilotTui(App[None]):
         elif table_id == "contact-table":
             self.cross_link_to_company(row_key)
 
-    def _schedule_detail(self, tab: str, entity_id: str) -> None:
-        """Debounce load_*_view on rapid cursor motion."""
+    def _cancel_detail_timer(self) -> None:
+        """Stop a pending cursor-debounce so reload cannot flash a stale pane."""
         if self._detail_timer is not None:
             self._detail_timer.stop()
             self._detail_timer = None
+
+    def _schedule_detail(self, tab: str, entity_id: str) -> None:
+        """Debounce load_*_view on rapid cursor motion."""
+        self._cancel_detail_timer()
         if self.detail_delay <= 0:
             self._load_detail(tab, entity_id)
             return
@@ -434,8 +434,15 @@ class MailpilotTui(App[None]):
             lambda: self._load_detail(tab, entity_id),
         )
 
+    def _master_ids(self, tab: str) -> set[str]:
+        """Return ids currently in the master table for a tab."""
+        rows = self.company_rows if tab == "companies" else self.contact_rows
+        return {row.id for row in rows}
+
     def _load_detail(self, tab: str, entity_id: str) -> None:
         """Load shared view loaders into the right pane."""
+        if entity_id not in self._master_ids(tab):
+            return
         if tab == "companies":
             view = load_company_view(self.connection, entity_id)
             self.company_view = view
@@ -476,6 +483,7 @@ class MailpilotTui(App[None]):
 
     def _reload(self, tab: str) -> None:
         """Fetch list or search for one tab and refill the master table."""
+        self._cancel_detail_timer()
         query = self.search_query[tab]
         if tab == "companies":
             if query:
@@ -541,6 +549,7 @@ class MailpilotTui(App[None]):
         rows: Sequence[CompanySummary | ContactSummary]
         rows = self.company_rows if tab == "companies" else self.contact_rows
         if not rows:
+            self._cancel_detail_timer()
             if tab == "companies":
                 self.company_view = None
                 self.company_child_contacts = []
@@ -575,21 +584,38 @@ class MailpilotTui(App[None]):
                 return True
         return False
 
+    def _ensure_include_disabled(self) -> None:
+        """Turn include-disabled on and reload both tabs for a hidden row."""
+        if self.include_disabled:
+            return
+        self.include_disabled = True
+        self._reload("companies")
+        self._reload("contacts")
+
     def cross_link_to_contact(self, contact_id: str) -> None:
         """Focus a contact in the Contacts tab (Enter from company extras)."""
         email = ""
+        disabled = False
         for child in self.company_child_contacts:
             if str(child.get("id")) == contact_id:
                 email = str(child.get("email") or "")
+                disabled = child.get("disabled_reason") is not None
                 break
         tabs = self.query_one("#tabs", TabbedContent)
         tabs.active = "contacts"
-        if not any(row.id == contact_id for row in self.contact_rows) and email:
-            self.search_query["contacts"] = email
-            self._search_input("contacts").value = email
-            self._reload("contacts")
+        if not any(row.id == contact_id for row in self.contact_rows):
+            if disabled:
+                self.search_query["contacts"] = ""
+                self._search_input("contacts").value = ""
+                self._ensure_include_disabled()
+            elif email:
+                self.search_query["contacts"] = email
+                self._search_input("contacts").value = email
+                self._reload("contacts")
+        tabs.active = "contacts"
         if self._select_row("contact-table", contact_id):
             self._load_detail("contacts", contact_id)
+        self.query_one("#contact-table", DataTable).focus()
         self._update_status()
 
     def cross_link_to_company(self, contact_id: str) -> None:
@@ -615,9 +641,19 @@ class MailpilotTui(App[None]):
                 None,
             )
         if match is None:
+            self.search_query["companies"] = ""
+            self._search_input("companies").value = ""
+            self._ensure_include_disabled()
+            match = next(
+                (row for row in self.company_rows if row.domain == domain),
+                None,
+            )
+        if match is None:
             return
+        tabs.active = "companies"
         if self._select_row("company-table", match.id):
             self._load_detail("companies", match.id)
+        self.query_one("#company-table", DataTable).focus()
         self._update_status()
 
 
