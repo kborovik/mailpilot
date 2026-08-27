@@ -718,6 +718,149 @@ def test_execute_task_completed_without_reply_terminal(
     )
 
 
+def test_execute_task_xai_500_compose_only_does_not_stay_failed(
+    capsys: pytest.CaptureFixture[str],
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.49 / §B.153: injected xAI 500 on due compose-only touch retries.
+
+    No ``touch_copy`` row → compose-only LLM path. First 500 must not
+    leave the task ``failed``; attempt_count bumps, scheduled_at is
+    pushed, operator sees ``task.retry``.
+    """
+    from pydantic_ai.exceptions import ModelHTTPError
+
+    from conftest import (
+        make_test_account,
+        make_test_contact,
+        make_test_enrollment,
+        make_test_settings,
+        make_test_workflow,
+    )
+    from mailpilot.database import (
+        activate_workflow,
+        create_task,
+        get_task,
+        list_tasks,
+        update_workflow,
+    )
+    from mailpilot.run import execute_task
+
+    account = make_test_account(database_connection)
+    workflow = make_test_workflow(database_connection, account_id=account.id)
+    update_workflow(
+        database_connection,
+        workflow.id,
+        goal="test goal",
+        instructions="test instructions",
+    )
+    activate_workflow(database_connection, workflow.id)
+    contact = make_test_contact(database_connection, email="compose-500@example.com")
+    enrollment = make_test_enrollment(database_connection, workflow.id, contact.id)
+    task = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="scheduled first reach-out",
+        scheduled_at="2020-01-01T00:00:00Z",
+        context={"trigger": "enrollment_schedule", "touch": 1},
+    )
+    original_scheduled_at = task.scheduled_at
+    settings = make_test_settings(llm_provider="xai", xai_api_key="xai-test")
+    injected = ModelHTTPError(
+        500, "grok-4.5", body="Internal error during token generation"
+    )
+
+    with patch("mailpilot.run.invoke_workflow_agent", side_effect=injected):
+        execute_task(database_connection, settings, task)
+
+    updated = get_task(database_connection, task.id)
+    assert updated is not None
+    assert updated.status == "pending"
+    assert updated.attempt_count == 1
+    assert updated.scheduled_at > original_scheduled_at
+    assert list_tasks(database_connection, status="failed") == []
+    err = capsys.readouterr().err
+    assert "event=task.retry" in err
+    assert "exc=ModelHTTPError" in err
+
+
+def test_execute_task_model_http_error_4xx_terminal(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.49: ModelHTTPError 4xx except 401 is a per-task terminal fail."""
+    from pydantic_ai.exceptions import ModelHTTPError
+
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings()
+    task = _make_task()
+    workflow = _make_workflow()
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+    client_err = ModelHTTPError(400, "grok-4.5", body="bad request")
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch("mailpilot.run.invoke_workflow_agent", side_effect=client_err),
+        patch("mailpilot.run.complete_task") as mock_complete,
+        patch("mailpilot.run.reschedule_task_for_retry") as mock_reschedule,
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_reschedule.assert_not_called()
+    mock_complete.assert_called_once_with(
+        database_connection,
+        _TASK_ID,
+        status="failed",
+        result={
+            "reason": str(client_err),
+            "attempt_count": 1,
+            "terminal": "non_transient",
+        },
+    )
+
+
+def test_execute_task_xai_500_budget_exhausted_terminal(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.49: xAI 500 on the 4th attempt is still bounded to terminal failed."""
+    from pydantic_ai.exceptions import ModelHTTPError
+
+    from conftest import make_test_settings
+    from mailpilot.run import execute_task
+
+    settings = make_test_settings()
+    task = _make_task(attempt_count=3)
+    workflow = _make_workflow()
+    contact = _make_contact()
+    enrollment = _make_enrollment()
+    injected = ModelHTTPError(
+        500, "grok-4.5", body="Internal error during token generation"
+    )
+
+    with (
+        patch("mailpilot.run.get_workflow", return_value=workflow),
+        patch("mailpilot.run.get_contact", return_value=contact),
+        patch("mailpilot.run.get_enrollment", return_value=enrollment),
+        patch("mailpilot.run.invoke_workflow_agent", side_effect=injected),
+        patch("mailpilot.run.complete_task") as mock_complete,
+        patch("mailpilot.run.reschedule_task_for_retry") as mock_reschedule,
+    ):
+        execute_task(database_connection, settings, task)
+
+    mock_reschedule.assert_not_called()
+    mock_complete.assert_called_once()
+    kwargs = mock_complete.call_args.kwargs
+    assert kwargs["status"] == "failed"
+    assert kwargs["result"]["attempt_count"] == 4
+    assert kwargs["result"]["terminal"] == "max_attempts"
+
+
 def test_execute_task_transient_error_reschedules(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:

@@ -155,6 +155,13 @@ def invalid_provider_key_message(llm_provider: str) -> str:
     return "xai_api_key is invalid; set it via `mailpilot config set xai_api_key`"
 
 
+def _is_model_http_5xx(exc: BaseException) -> bool:
+    """True when ``exc`` is pydantic-ai ``ModelHTTPError`` with HTTP 5xx."""
+    from pydantic_ai.exceptions import ModelHTTPError
+
+    return isinstance(exc, ModelHTTPError) and 500 <= exc.status_code <= 599
+
+
 def is_transient(exc: BaseException) -> bool:
     """Return ``True`` if ``exc`` is safe to retry per `§V.49`.
 
@@ -163,8 +170,8 @@ def is_transient(exc: BaseException) -> bool:
 
     Returns:
         ``True`` for the §V.49 allow-list (Google statuses from the shared
-        set, Anthropic 502/503/529, Drive socket timeouts). ``False``
-        otherwise --
+        set, Anthropic 502/503/529, xAI ``ModelHTTPError`` 5xx including
+        token-generation 500, Drive socket timeouts). ``False`` otherwise --
         including for the §V.48 exclusion (Anthropic LLM read-timeouts)
         and any unrecognised exception class.
     """
@@ -178,6 +185,12 @@ def is_transient(exc: BaseException) -> bool:
     anthropic_status = _anthropic_status(exc)
     if anthropic_status is not None:
         return anthropic_status in _ANTHROPIC_TRANSIENT_STATUSES
+
+    # Walk ``__cause__`` / ``__context__`` so a wrapped xAI 5xx still
+    # retries. 4xx ModelHTTPError is not returned here: fall through so a
+    # coincidental TimeoutError on the same chain stays classified.
+    if any(_is_model_http_5xx(current) for current in _walk_exception_chain(exc)):
+        return True
 
     # ``socket.timeout`` aliases ``TimeoutError`` on Python 3.10+; the
     # Drive httplib2 path bounded by ``Http(timeout=...)`` raises
