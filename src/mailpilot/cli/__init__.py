@@ -27,6 +27,7 @@ from mailpilot.cli import show as show
 from mailpilot.cli import tag as tag
 from mailpilot.cli import task as task
 from mailpilot.cli import template as template
+from mailpilot.cli import tui as tui
 from mailpilot.cli import workflow as workflow
 from mailpilot.cli.company import (
     company_create as company_create,

@@ -43,6 +43,9 @@ Or install with pip:
 pip install mailpilot-crm
 ```
 
+Optional read-only TUI (`mailpilot tui`): install the `tui` extra
+(`pip install 'mailpilot-crm[tui]'` or `uv tool install 'mailpilot-crm[tui]'`).
+
 Verify the install:
 
 ```bash

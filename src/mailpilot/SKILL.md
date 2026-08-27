@@ -9,7 +9,7 @@ settings. Out of scope: database schema, internal agent / template wiring.
 
 ```
 mailpilot <noun> <verb> [args]
-mailpilot run | status | config get|set | show queue
+mailpilot run | status | config get|set | show queue | tui
 mailpilot --version | --help | --completion <shell> | --debug
 ```
 
@@ -33,6 +33,8 @@ configuration.
 Every noun-verb command writes a single JSON document to stdout. Operator
 diagnostics go to stderr and never to stdout. `show queue` is the exception:
 it defaults to an ASCII table; pass `--format json` for the `queue` envelope.
+`tui` draws to a TTY (not JSON). Piped stdout or a missing `mailpilot-crm[tui]`
+extra returns the error envelope on stderr and exits 1.
 
 - `list`, `search`, `sync`, `export`, `import`:
   `{"<plural>": [...], "record_count": <int>, "ok": true}`
@@ -232,6 +234,22 @@ mailpilot show queue --detail --failed
 mailpilot show queue --detail --stuck
 mailpilot show queue --format json --tz America/Toronto
 ```
+
+### Browse companies and contacts (TUI)
+
+Read-only terminal browser for companies and contacts. Requires a TTY and
+`pip install 'mailpilot-crm[tui]'` (or the uv equivalent). Does not
+provision schema. Does not write. `show queue` stays an ASCII table.
+
+```
+mailpilot tui
+```
+
+Keys: `/` search, `d` include-disabled (default off), Enter cross-link,
+Escape returns focus to the table, `q` quit. Company list cap 500,
+contact list cap 100. Status marks truncated when the fetch hits the
+cap. Child contacts on a company are extras (same as `company view --full`),
+not lean-view fields.
 
 ### Campaign enrollment triage
 

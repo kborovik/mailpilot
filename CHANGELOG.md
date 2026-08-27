@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `mailpilot tui` is a read-only terminal browser for companies and
+  contacts (optional extra `mailpilot-crm[tui]`). Piped stdout is
+  refused with the JSON error envelope. `show queue` stays ASCII.
+
 ## [v0.35.0] - 2026-08-27
 
 ### Added

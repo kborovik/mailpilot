@@ -31,6 +31,11 @@ Repository = "https://github.com/kborovik/mailpilot"
 [project.scripts]
 mailpilot = "mailpilot.cli:main"
 
+[project.optional-dependencies]
+tui = [
+    "textual>=8.0.0,<9.0.0",
+]
+
 [build-system]
 requires = ["uv_build>=0.11.2,<0.12.0"]
 build-backend = "uv_build"
@@ -44,6 +49,7 @@ dev = [
     "httpx2>=2.0.0",
     "pytest>=8.4.0,<9.0.0",
     "ruff>=0.13.0",
+    "textual>=8.0.0,<9.0.0",
     "uv>=0.8.17",
 ]
 

@@ -52,6 +52,7 @@ ALLOWED_VERBS = {
     "set",
     "status",
     "queue",  # leaf of `show queue` (§V.166 / §I Read)
+    "tui",  # top-level TTY browser (§V.195 / §I)
 }
 
 # Owner selectors attach a sub-entity to a contact/company/workflow. Alone they

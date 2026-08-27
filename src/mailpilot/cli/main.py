@@ -622,8 +622,9 @@ def main(ctx: click.Context, debug: bool) -> None:
     if ctx.invoked_subcommand is None:
         return
     # ``db init|migrate|check`` bootstrap the URL only; --help/--version
-    # skip settings load entirely (§V.1).
-    if ctx.invoked_subcommand == "db":
+    # skip settings load entirely (§V.1). ``tui`` uses bootstrap
+    # ``database_url`` only and must not auto-provision (§V.195).
+    if ctx.invoked_subcommand in {"db", "tui"}:
         return
     if "--help" in sys.argv or "--version" in sys.argv:
         return

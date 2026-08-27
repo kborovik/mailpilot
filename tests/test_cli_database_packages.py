@@ -93,6 +93,7 @@ def test_cli_is_package_with_main_and_nouns() -> None:
     assert (CLI_DIR / "main.py").is_file()
     for noun in (
         "show",
+        "tui",
         "db",
         "config",
         "account",

@@ -955,6 +955,8 @@ Trigger: `src/mailpilot/cli` or logging config changed.
 - `rg 'ConsoleOptions' src/mailpilot/ --type py` -> console exporter targets stderr
 - `rg 'format.*table|table.*csv|ndjson' src/mailpilot/cli` -> opt-in --format surface present
 - `rg 'show.*queue|--format' src/mailpilot/cli` -> show group format surface present
+- `rg 'def tui' src/mailpilot/cli` -> tui command present (TTY-draw carve-out)
+- `rg 'textual' src/mailpilot/cli/show.py src/mailpilot/queue.py` -> zero hits (`show queue` stays ASCII)
 
 ## §V48 — provider transport timeout 240s
 
@@ -1503,3 +1505,14 @@ Trigger: `src/mailpilot/touch_copy.py` or `src/mailpilot/agent/invoke.py` change
 - `rg 'copy_for_touch' src/mailpilot/agent/invoke.py` -> dispatch key above `build_model`
 - `rg 'def _deliver_touch' src/mailpilot/agent/invoke.py` -> shared send+cadence
 - `rg 'touch_copy' src/mailpilot/schema.sql src/mailpilot/migrations` -> JSONB def col
+
+## §V195 — tui-readonly-browse
+
+tui-readonly-browse — `mailpilot tui` top-level TTY companies+contacts browser; optional extra `mailpilot-crm[tui]`; lazy-import Textual; `src/mailpilot/tui.py` one `MailpilotTui`; session READ ONLY; no `_db` no `initialize_database` no auto-provision; allowlisted `database` reads; `show queue` stays ASCII
+
+Trigger: `src/mailpilot/tui.py` or `src/mailpilot/cli/tui.py` changed.
+- `rg 'def tui' src/mailpilot/cli` -> top-level tui command
+- `rg 'class MailpilotTui' src/mailpilot/tui.py` -> one App subclass
+- `rg 'SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY' src/mailpilot/tui.py` -> session read-only
+- `rg 'initialize_database|provision_database' src/mailpilot/tui.py` -> zero hits
+- `rg 'textual' src/mailpilot/cli/show.py src/mailpilot/queue.py` -> zero hits
