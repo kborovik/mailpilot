@@ -28,9 +28,11 @@ from _common import (
     PROSPECT_EMAIL,
     PROSPECT_MAILBOX,
     SENDER_EMAIL,
+    T1_PATH_REASONING,
     mp,
     read_json,
     run_dir,
+    t1_path_from_reasoning,
     write_json,
 )
 
@@ -94,6 +96,7 @@ def _read_touch1(workflow_id: str) -> dict | None:
     return {
         "outbound_email_id": row["id"],
         "subject": email.get("subject") or row.get("subject", ""),
+        "body_text": email.get("body_text") or "",
         "gmail_thread_id": email.get("gmail_thread_id"),
         "rfc2822_message_id": email.get("rfc2822_message_id"),
     }
@@ -106,6 +109,9 @@ def main() -> int:
 
     directory = run_dir(args.run_id)
     scaffold = read_json(directory / "scaffold.json")
+    manifest = read_json(directory / "run_manifest.json")
+    t1_mode = manifest.get("t1_mode")
+    expected_prefix = T1_PATH_REASONING.get(t1_mode) if t1_mode else None
     window_start = datetime.now().astimezone().isoformat()
 
     sends = []
@@ -113,7 +119,23 @@ def main() -> int:
         _ensure_prospect_enabled()
         run = _run_enrollment(entry["enrollment_id"])
         touch1 = _read_touch1(entry["ephemeral_workflow_id"])
-        status = "sent" if touch1 else "failed"
+        t1_path = t1_path_from_reasoning(run["reasoning"])
+        path_ok = expected_prefix is None or (run["reasoning"] or "").startswith(
+            expected_prefix
+        )
+        if touch1 and path_ok:
+            status = "sent"
+            error = run["error"]
+        elif touch1 and not path_ok:
+            status = "failed"
+            error = (
+                f"T1 path mismatch: t1_mode={t1_mode!r} "
+                f"expected reasoning prefix {expected_prefix!r}; "
+                f"got {run['reasoning']!r} (t1_path={t1_path})"
+            )
+        else:
+            status = "failed"
+            error = run["error"]
         sends.append(
             {
                 "scenario_key": entry["scenario_key"],
@@ -122,11 +144,14 @@ def main() -> int:
                 "status": status,
                 "outbound_email_id": touch1["outbound_email_id"] if touch1 else None,
                 "subject": touch1["subject"] if touch1 else None,
+                "body_text": touch1["body_text"] if touch1 else None,
                 "gmail_thread_id": touch1["gmail_thread_id"] if touch1 else None,
                 "rfc2822_message_id": touch1["rfc2822_message_id"] if touch1 else None,
                 "agent_run_status": run["agent_run_status"],
                 "tool_calls": run["tool_calls"],
-                "error": run["error"],
+                "reasoning": run["reasoning"],
+                "t1_path": t1_path,
+                "error": error,
             }
         )
 
@@ -134,6 +159,7 @@ def main() -> int:
         "window_start": window_start,
         "sender_email": SENDER_EMAIL,
         "prospect_mailbox": PROSPECT_MAILBOX,
+        "t1_mode": t1_mode,
         "sends": sends,
     }
     write_json(directory / "touch1.json", result)
@@ -147,9 +173,16 @@ def main() -> int:
     print(
         json.dumps(
             {
+                "t1_mode": t1_mode,
                 "sent": sent,
                 "failed": sum(1 for s in sends if s["status"] == "failed"),
                 "of": len(sends),
+                "path_mismatch": [
+                    s["scenario_key"]
+                    for s in sends
+                    if s["status"] == "failed"
+                    and "T1 path mismatch" in (s["error"] or "")
+                ],
                 "missing_message_id": missing_msgid,
                 "window_start": window_start,
             },

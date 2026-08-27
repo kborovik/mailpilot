@@ -244,11 +244,25 @@ class TouchMessage(BaseModel):
     touch and ``None`` on a later follow-up that continues an existing thread
     (the harness threads the reply and reuses the thread's subject); ``body``
     is the plain-text message. The harness sends it via ``email_ops`` and
-    schedules the next touch -- one LLM call per touch, the send structural
-    (§V.120, §V.136).
+    schedules the next touch -- one LLM call per touch when no copy row
+    exists for N, else harness render (§V.120, §V.136, §V.194).
     """
 
     subject: str | None = None
+    body: str
+
+
+class TouchCopy(BaseModel):
+    """Per-touch campaign copy on a workflow def (§V.194).
+
+    ``n`` is 1-based and unique per workflow. ``body`` is non-empty at
+    import. ``n = 1`` requires a non-empty subject at import and after
+    render; ``n >= 2`` may leave subject empty so the harness continues
+    the thread.
+    """
+
+    n: int
+    subject: str = ""
     body: str
 
 
@@ -270,7 +284,8 @@ class Workflow(BaseModel):
     nullable pair -- both ``None`` means single-touch (no automatic follow-up);
     the schema CHECK forbids setting one without the other. Like the other def
     fields they are import-only (§V.103) and covered by the ``workflow check``
-    wording hash (§V.134).
+    wording hash (§V.134). ``touch_copy`` is the per-touch template catalog
+    (§V.194): empty list is all-LLM; a row for N is harness-rendered copy.
     """
 
     id: str
@@ -285,6 +300,7 @@ class Workflow(BaseModel):
     theme: str = "blue"
     touches: int | None = None
     touch_interval_days: int | None = None
+    touch_copy: list[TouchCopy] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -386,8 +402,8 @@ class WorkflowCheckEntry(BaseModel):
 
     ``catalog_hash`` is ``None`` when orphaned (no def) and ``row_hash`` is
     ``None`` when not imported (no row); both are SHA-256 over the def fields
-    ``{template, theme, goal, instructions, touches, touch_interval_days}`` (the
-    cadence pair joined the hashed set per §V.136).
+    ``{template, theme, goal, instructions, touches, touch_interval_days,
+    touch_copy}`` (cadence pair per §V.136; ``touch_copy`` per §V.194).
     """
 
     name: str

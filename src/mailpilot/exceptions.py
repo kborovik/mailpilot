@@ -34,6 +34,14 @@ class AgentDidNotUseToolsError(MailPilotError):
     """Agent completed a run without calling any tools."""
 
 
+class TouchCopyRenderError(MailPilotError):
+    """Harness touch-copy render failed; do not send (§V.194).
+
+    Unknown token, leftover brace, empty placeholder, or empty T1 subject.
+    The task is failed and the enrollment stays active.
+    """
+
+
 class AgentCompletedWithoutReplyError(MailPilotError):
     """Send-obligated run ended without a send or an explicit noop.
 

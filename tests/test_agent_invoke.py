@@ -2750,3 +2750,376 @@ def test_invoke_span_no_email_id_when_trigger_enrollment_run(
     assert attrs["workflow_id"] == workflow.id
     assert attrs["contact_id"] == contact.id
     assert attrs["workflow_type"] == workflow.type
+
+
+# -- §V.194 touch-copy dispatch ------------------------------------------------
+
+
+def _setup_copy(
+    connection: psycopg.Connection[dict[str, Any]],
+    *,
+    rows: list[dict[str, Any]],
+    touches: int = 3,
+) -> tuple[Any, Any, Any]:
+    """Account + named contact at a company + outbound workflow with copy."""
+    from conftest import make_test_company
+    from mailpilot.database import update_contact
+
+    account = make_test_account(connection, email="sender@example.com")
+    company = make_test_company(connection, name="Acme", domain="acme.com")
+    contact = make_test_contact(connection, email="ada@acme.com", company_id=company.id)
+    update_contact(
+        connection,
+        contact.id,
+        first_name="Ada",
+        last_name="Lovelace",
+        title="VP Sales",
+    )
+    workflow = make_test_workflow(connection, account_id=account.id)
+    _activate(connection, workflow.id)
+    create_enrollment(connection, workflow.id, contact.id)
+    updated = update_workflow(
+        connection,
+        workflow.id,
+        touches=touches,
+        touch_interval_days=7,
+        touch_copy=rows,
+    )
+    assert updated is not None
+    return account, contact, updated
+
+
+def test_copy_row_touch_one_zero_tokens(
+    database_connection: psycopg.Connection[dict[str, Any]],
+    capfire: CaptureLogfire,
+) -> None:
+    """§V.194: copy-row T1 sends, advances cadence, llm_requests=0."""
+    _account, contact, workflow = _setup_copy(
+        database_connection,
+        rows=[
+            {
+                "n": 1,
+                "subject": "Quick question, {first_name}",
+                "body": "Hi {first_name} at {company_name}.",
+            }
+        ],
+    )
+    settings = make_test_settings(xai_api_key="xai-test")
+    llm_calls = {"n": 0}
+
+    def _respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        del messages, info
+        llm_calls["n"] += 1
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="final_result",
+                    args={"subject": "LLM", "body": "should not send"},
+                )
+            ]
+        )
+
+    with (
+        patch("mailpilot.agent.invoke.GmailClient") as mock_cls,
+        patch("mailpilot.agent.invoke.DriveClient") as mock_drive,
+        patch("mailpilot.agent.invoke.build_model") as mock_build,
+    ):
+        mock_client = MagicMock()
+        mock_client.send_message.return_value = {
+            "id": "sent-copy-1",
+            "threadId": "thread-copy-1",
+            "labelIds": ["SENT"],
+        }
+        mock_cls.return_value = mock_client
+        result = invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            trigger="enrollment_run",
+            model_override=FunctionModel(_respond),
+        )
+
+    assert result is not None
+    assert result["status"] == "completed"
+    assert result["touch_number"] == 1
+    assert llm_calls["n"] == 0
+    mock_build.assert_not_called()
+    mock_drive.assert_not_called()
+    call_kwargs = mock_client.send_message.call_args.kwargs
+    assert call_kwargs["subject"] == "Quick question, Ada"
+    sent = database_connection.execute(
+        "SELECT body_text FROM email WHERE workflow_id = %s AND direction = 'outbound'",
+        (workflow.id,),
+    ).fetchone()
+    assert sent is not None
+    assert "Hi Ada at Acme." in sent["body_text"]
+    invoke_spans = [
+        s
+        for s in capfire.exporter.exported_spans_as_dict()
+        if s["name"] == "agent.invoke"
+    ]
+    assert len(invoke_spans) == 1
+    attrs = invoke_spans[0]["attributes"]
+    assert attrs["llm_requests"] == 0
+    assert attrs["input_tokens"] == 0
+    assert attrs["output_tokens"] == 0
+    assert attrs["total_tokens"] == 0
+
+
+def test_copy_row_touch_two_zero_tokens_advances_cadence(
+    database_connection: psycopg.Connection[dict[str, Any]],
+    capfire: CaptureLogfire,
+) -> None:
+    """§V.194: copy-row N>=2 renders, threads, llm_requests=0, schedules next."""
+    from mailpilot.database import create_email
+
+    account, contact, workflow = _setup_copy(
+        database_connection,
+        rows=[
+            {"n": 1, "subject": "T1", "body": "first"},
+            {"n": 2, "subject": "", "body": "Following up, {first_name}."},
+        ],
+    )
+    prior = create_email(
+        database_connection,
+        gmail_message_id="msg-copy-t1",
+        gmail_thread_id="thread-copy-t1",
+        rfc2822_message_id="<copy-t1@mail>",
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        direction="outbound",
+        subject="T1",
+        body_text="first",
+    )
+    assert prior is not None
+    settings = make_test_settings(xai_api_key="xai-test")
+    with (
+        patch("mailpilot.agent.invoke.GmailClient") as mock_cls,
+        patch("mailpilot.agent.invoke.build_model") as mock_build,
+    ):
+        mock_client = MagicMock()
+        mock_client.send_message.return_value = {
+            "id": "sent-copy-2",
+            "threadId": "thread-copy-t1",
+            "labelIds": ["SENT"],
+        }
+        mock_cls.return_value = mock_client
+        result = invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            trigger="task",
+            task_context={"touch": 2, "prior_email_id": prior.id},
+        )
+
+    assert result is not None
+    assert result["touch_number"] == 2
+    mock_build.assert_not_called()
+    call_kwargs = mock_client.send_message.call_args.kwargs
+    assert call_kwargs["thread_id"] == "thread-copy-t1"
+    sent = database_connection.execute(
+        "SELECT body_text FROM email WHERE workflow_id = %s "
+        "AND direction = 'outbound' ORDER BY created_at DESC LIMIT 1",
+        (workflow.id,),
+    ).fetchone()
+    assert sent is not None
+    assert "Following up, Ada." in sent["body_text"]
+    rows = database_connection.execute(
+        "SELECT context FROM task WHERE workflow_id = %s AND status = 'pending'",
+        (workflow.id,),
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["context"]["touch"] == 3
+    attrs = next(
+        s["attributes"]
+        for s in capfire.exporter.exported_spans_as_dict()
+        if s["name"] == "agent.invoke"
+    )
+    assert attrs["llm_requests"] == 0
+    assert attrs["total_tokens"] == 0
+
+
+def test_no_copy_row_uses_compose_only_llm(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.194: missing N stays compose-only LLM; empty catalog matches today."""
+    _account, contact, workflow = _setup_copy(database_connection, rows=[], touches=2)
+    settings = make_test_settings(xai_api_key="xai-test")
+    with patch("mailpilot.agent.invoke.GmailClient") as mock_cls:
+        mock_client = MagicMock()
+        mock_client.send_message.return_value = {
+            "id": "sent-llm-1",
+            "threadId": "thread-llm-1",
+            "labelIds": ["SENT"],
+        }
+        mock_cls.return_value = mock_client
+        result = invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            trigger="enrollment_run",
+            model_override=_touch_model("LLM subject", "LLM body"),
+        )
+    assert result is not None
+    call_kwargs = mock_client.send_message.call_args.kwargs
+    assert call_kwargs["subject"] == "LLM subject"
+    sent = database_connection.execute(
+        "SELECT body_text FROM email WHERE workflow_id = %s AND direction = 'outbound'",
+        (workflow.id,),
+    ).fetchone()
+    assert sent is not None
+    assert "LLM body" in sent["body_text"]
+
+
+def test_mixed_t1_render_t2_llm_sees_t1_history(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.194/§V.183: T1 copy-row; T2 LLM prompt includes sent T1 body."""
+    _account, contact, workflow = _setup_copy(
+        database_connection,
+        rows=[{"n": 1, "subject": "T1 {first_name}", "body": "TEMPLATE-T1-BODY"}],
+        touches=3,
+    )
+    settings = make_test_settings(xai_api_key="xai-test")
+    with patch("mailpilot.agent.invoke.GmailClient") as mock_cls:
+        mock_client = MagicMock()
+        mock_client.send_message.return_value = {
+            "id": "sent-mix-1",
+            "threadId": "thread-mix",
+            "labelIds": ["SENT"],
+        }
+        mock_cls.return_value = mock_client
+        t1 = invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            trigger="enrollment_run",
+        )
+    assert t1 is not None
+    captured: list[str] = []
+
+    def _respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        del info
+        captured.append(str(messages))
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="final_result",
+                    args={"subject": None, "body": "LLM follow-up"},
+                )
+            ]
+        )
+
+    sent = database_connection.execute(
+        "SELECT id FROM email WHERE workflow_id = %s AND direction = 'outbound'",
+        (workflow.id,),
+    ).fetchone()
+    assert sent is not None
+    with patch("mailpilot.agent.invoke.GmailClient") as mock_cls:
+        mock_client = MagicMock()
+        mock_client.send_message.return_value = {
+            "id": "sent-mix-2",
+            "threadId": "thread-mix",
+            "labelIds": ["SENT"],
+        }
+        mock_cls.return_value = mock_client
+        t2 = invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            trigger="task",
+            task_context={"touch": 2, "prior_email_id": sent["id"]},
+            model_override=FunctionModel(_respond),
+        )
+    assert t2 is not None
+    assert t2["touch_number"] == 2
+    assert any("TEMPLATE-T1-BODY" in blob for blob in captured)
+
+
+def test_copy_row_unknown_token_fails_task_enrollment_stays_active(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.194/§V.131: render fail → task failed, no send, enrollment active."""
+    from mailpilot.database import create_task, get_enrollment, get_task
+    from mailpilot.run import execute_task
+
+    _account, contact, workflow = _setup_copy(
+        database_connection,
+        rows=[{"n": 1, "subject": "Hi", "body": "Hello {nope}"}],
+    )
+    enrollment = get_enrollment(database_connection, workflow.id, contact.id)
+    assert enrollment is not None
+    task = create_task(
+        database_connection,
+        enrollment_id=enrollment.id,
+        workflow_id=workflow.id,
+        contact_id=contact.id,
+        description="scheduled first reach-out",
+        scheduled_at="2020-01-01T00:00:00Z",
+        context={"trigger": "enrollment_schedule", "touch": 1},
+    )
+    settings = make_test_settings(xai_api_key="xai-test")
+    with patch("mailpilot.agent.invoke.GmailClient") as mock_cls:
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        execute_task(database_connection, settings, task)
+    failed = get_task(database_connection, task.id)
+    assert failed is not None
+    assert failed.status == "failed"
+    live = get_enrollment(database_connection, workflow.id, contact.id)
+    assert live is not None
+    assert live.status == "active"
+    mock_client.send_message.assert_not_called()
+    sent = database_connection.execute(
+        "SELECT id FROM email WHERE workflow_id = %s AND direction = 'outbound'",
+        (workflow.id,),
+    ).fetchall()
+    assert sent == []
+
+
+def test_inbound_invoke_ignores_touch_copy(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.194: inbound tool-loop still runs a model; touch_copy is not consulted."""
+    account, contact, workflow = _setup_copy(
+        database_connection,
+        rows=[{"n": 1, "subject": "T1", "body": "copy body"}],
+    )
+    from mailpilot.database import create_email
+
+    email = create_email(
+        database_connection,
+        gmail_message_id="msg-in-copy",
+        gmail_thread_id="thread-in-copy",
+        account_id=account.id,
+        contact_id=contact.id,
+        workflow_id=workflow.id,
+        direction="inbound",
+        subject="Re: T1",
+        body_text="Thanks, let's talk.",
+    )
+    assert email is not None
+    settings = make_test_settings(xai_api_key="xai-test")
+    with (
+        patch("mailpilot.agent.invoke.GmailClient"),
+        patch("mailpilot.agent.invoke.DriveClient"),
+        patch("mailpilot.agent.invoke.copy_for_touch") as mock_copy,
+    ):
+        result = invoke_workflow_agent(
+            database_connection,
+            settings,
+            workflow,
+            contact,
+            email=email,
+            trigger="email",
+            model_override=FunctionModel(_model_that_calls_noop),
+        )
+    assert result is not None
+    assert result["status"] == "completed"
+    mock_copy.assert_not_called()

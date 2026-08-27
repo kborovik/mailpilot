@@ -8927,6 +8927,87 @@ def test_workflow_import_rejects_non_kebab_name(
     mock_create.assert_not_called()
 
 
+def _import_touch_copy_toml(
+    path: pathlib.Path, extra: str, *, name: str = "demo-outreach"
+) -> None:
+    path.write_text(
+        f'name = "{name}"\n'
+        'template = "outbound-general"\n'
+        'theme = "blue"\n'
+        'goal = "Book demos"\n'
+        "instructions = '''\nBe brief.'''\n"
+        f"{extra}\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("extra", "needle"),
+    [
+        (
+            "[[touch_copy]]\nn = 1\nsubject = \"Hi\"\nbody = '''\nA'''\n"
+            "[[touch_copy]]\nn = 1\nsubject = \"Hi2\"\nbody = '''\nB'''\n",
+            "duplicate n",
+        ),
+        (
+            "[[touch_copy]]\nn = 1\nsubject = \"\"\nbody = '''\nHello'''\n",
+            "n=1 subject",
+        ),
+        (
+            '[[touch_copy]]\nn = 1\nsubject = "Hi"\nbody = ""\n',
+            "body must be non-empty",
+        ),
+        (
+            "[[touch_copy]]\nn = 1\nsubject = \"Hi\"\nbody = '''\nHello'''\n"
+            'extra = "nope"\n',
+            "unknown keys",
+        ),
+    ],
+)
+def test_workflow_import_rejects_invalid_touch_copy(
+    runner: CliRunner,
+    mock_connection: MagicMock,
+    tmp_path: pathlib.Path,
+    extra: str,
+    needle: str,
+) -> None:
+    """§V.194: import rejects dup n, empty n=1 subject, empty body, unknown keys."""
+    account = _make_account()
+    toml_file = tmp_path / "demo-outreach.toml"
+    _import_touch_copy_toml(toml_file, extra)
+    with (
+        patch("mailpilot.settings.get_settings", return_value=make_test_settings()),
+        patch("mailpilot.database.initialize_database", return_value=mock_connection),
+        patch("mailpilot.database.get_account", return_value=account),
+        patch("mailpilot.database.list_workflows_full", return_value=[]),
+        patch("mailpilot.database.create_workflow") as mock_create,
+    ):
+        result = runner.invoke(
+            main,
+            [
+                "workflow",
+                "import",
+                "--account-email",
+                _ACCOUNT_ID,
+                "--file",
+                str(toml_file),
+            ],
+        )
+    assert result.exit_code == 1, result.output
+    data = json.loads(result.stderr)
+    assert data["error"] == "import_failed"
+    assert data["workflows"][0]["error"] == "validation_error"
+    assert needle in data["workflows"][0]["message"]
+    mock_create.assert_not_called()
+
+
+def test_workflow_view_help_names_per_touch_copy(runner: CliRunner) -> None:
+    """§I.cli: help names touch_copy as per-touch copy, not template."""
+    result = runner.invoke(main, ["workflow", "view", "--help"])
+    assert result.exit_code == 0
+    assert "per-touch copy" in result.output
+    assert "§V." not in result.output
+
+
 def test_workflow_import_rejects_name_not_file_stem(
     runner: CliRunner, mock_connection: MagicMock, tmp_path: pathlib.Path
 ) -> None:

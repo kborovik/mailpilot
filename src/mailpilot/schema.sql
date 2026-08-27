@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS workflow (
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     touches             INTEGER,
     touch_interval_days INTEGER,
+    touch_copy          JSONB NOT NULL DEFAULT '[]'::jsonb,
     UNIQUE (name),
     CONSTRAINT workflow_touch_cadence_check CHECK (
         ((touches IS NULL) = (touch_interval_days IS NULL))

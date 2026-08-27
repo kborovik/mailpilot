@@ -21,7 +21,7 @@ from mailpilot.agent.model import (
     _build_xai_model,  # pyright: ignore[reportPrivateUsage]
     build_model,
 )
-from mailpilot.models import Workflow
+from mailpilot.models import TouchCopy, Workflow
 
 
 def make_workflow(
@@ -70,6 +70,29 @@ def function_model_returning(
         )
 
     return FunctionModel(_respond)
+
+
+def test_classify_prompt_ignores_touch_copy() -> None:
+    """§V.194: classifier prompt is id/name/goal only; never reads touch_copy."""
+    from mailpilot.agent.classify import (
+        _format_prompt,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    workflow = make_workflow("w1", "demo-outreach", "Book a chat")
+    workflow = workflow.model_copy(
+        update={
+            "touch_copy": [TouchCopy(n=1, subject="SECRET-SUBJECT", body="SECRET-BODY")]
+        }
+    )
+    prompt = _format_prompt(
+        "Question about pricing",
+        "Hi, I'd like to know more about your plans.",
+        "alice@example.com",
+        [workflow],
+    )
+    assert "SECRET-SUBJECT" not in prompt
+    assert "SECRET-BODY" not in prompt
+    assert "touch_copy" not in prompt
 
 
 def run_classify(

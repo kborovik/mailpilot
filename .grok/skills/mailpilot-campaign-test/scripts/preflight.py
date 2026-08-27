@@ -32,6 +32,7 @@ from _common import (
     repo_root,
     resolve_account,
     run_dir,
+    t1_mode_from_parsed,
     write_json,
 )
 
@@ -69,10 +70,7 @@ def _resolve_workflow(
         path = repo_root() / workflow_file
     result["workflow_file"] = str(path)
     if not path.is_file():
-        issues.append(
-            f"workflow file not found: {workflow_file} "
-            "(is the workflows/ symlink present? `ln -s ../workflows workflows`)"
-        )
+        issues.append(f"workflow file not found: {workflow_file}")
         return
     try:
         parsed = tomllib.loads(path.read_text())
@@ -85,6 +83,7 @@ def _resolve_workflow(
         return
     result["workflow_name"] = parsed["name"]
     result["workflow_template"] = parsed["template"]
+    result["t1_mode"] = t1_mode_from_parsed(parsed)
     if not str(parsed["template"]).startswith("outbound"):
         issues.append(
             f"WARNING workflow template {parsed['template']!r} is not an outbound "
