@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `touch_copy` with the other def fields. `template list|view` is
   unchanged.
 
+### Fixed
+
+- xAI token-generation HTTP 5xx is a bounded auto-retry (4 attempts,
+  same backoff as other transients), not a terminal task fail. A
+  present-but-wrong API key still skips the drain.
+
 ## [v0.34.2] - 2026-08-26
 
 ### Changed
