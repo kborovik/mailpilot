@@ -116,7 +116,7 @@ V45: protocol compose order tool-loop; compose-only touch §V.136; deferred §V.
 V46: template name = <direction>-<data-system>; prefix == direction field
 V47: provider-aware model config — llm_provider dispatches `build_model` (public); `require_active_provider_key` once at `build_model` (not inner anthropic/xai builders); Anthropic cache/thinking/effort; xAI reasoning_effort; no `xai_api_host` (host code-pinned); enums validated; host-config key error (missing/empty or invalid) skip remaining drain that tick (process stays up); in-flight stays pending; error names `config set` not `MAILPILOT_*_API_KEY`; no console Traceback — → .spec/check-extras.md §V47
 V48: provider transport timeout = 240s terminal (Anthropic HTTP + xAI `XaiProvider`); mid-turn tool side-effects → retry unsafe — → .spec/check-extras.md §V48
-V49: bounded auto-retry — 4 attempts, execute_task per-task classification, manual retry = failed/cancelled only; Google transient statuses from shared set per google-client-stack invariant (no 529); Anthropic 502/503/529 stay Anthropic; schedule → §V.170 — retry matrix → .spec/check-extras.md §V49
+V49: bounded auto-retry — 4 attempts, execute_task per-task classification, manual retry = failed/cancelled only; Google transient statuses from shared set per google-client-stack invariant (no 529); Anthropic 502/503/529 stay Anthropic; xAI ModelHTTPError 5xx (500-599) transient, distinct §V.47 invalid-key skip; schedule → §V.170 — retry matrix → .spec/check-extras.md §V49
 V51: every logfire.exception site reachable from `mailpilot run` ! paired operator_event("error", source=..., message=...); contract test sweeps run-reachable modules; → .spec/check-extras.md §V51
 V52: logfire.configure maps settings.environment internally (dev→development, prd→production per §V.176) → spans carry deployment_environment; no `logfire_environment` setting — → .spec/check-extras.md §V52
 V53: agent tool spans from instrument_pydantic_ai; no logfire.span in tools — → .spec/check-extras.md §V53
@@ -322,6 +322,7 @@ T331|x|impl §V.166(∆) + §I — show queue --detail union pending+failed-unse
 T332|x|impl §V.193(+) + §V.132(∆)+§V.157(∆)+§I — workflow stats|status all array envelope; list --health funnel+ops; SKILL one-call drops N stats+N status+list; tests (#305)|V193,V132,V157,V174,V184,V4,V107,V111,I.cli
 T333|x|impl §V.47(∆) — invalid-key ModelAPIError/401 skip remaining drain; in-flight stays pending; remaining due not claimed; operator error names config set; zero Traceback; Anthropic 401 same class; fixture due T1 batch + injected invalid-key → zero failed (#306)|V47,B152,I.config
 T334|x|impl §V.194(+) + §V.136(∆) + §V.103(∆) + §V.134(∆) + §C/§I — TouchCopy + [[touch_copy]] JSONB import-only hashed; copy-row N render+deliver llm_requests=0 (N=1 and N≥2); no-row compose-only LLM; mixed T1 render T2 LLM sees T1 in history; import reject dup n/empty n=1 subject/empty body; check out_of_sync on touch_copy disagree; render fail unknown token leftover brace empty placeholder empty T1 subject → fail no send enrollment active; inbound+classify ignore touch_copy; missing/invalid key skip drain incl copy-row §V.47; template registry+CLI unchanged; tests (#309)|V194,V136,V103,V134,V135,V47,V183,V44,V131,I.cli
+T335|x|impl §V.49(∆) — xAI ModelHTTPError 5xx transient (500 token-generation incl.); 401/incorrect-key still §V.47 skip; 4xx else terminal; fixture injected 500 on due compose-only touch ! stay failed after first attempt; attempt_count bump or task.retry event; non-transient still failed; 4-attempt bound (#311)|V49,B153,V47,V48,V136
 
 ## §B BUGS
 
@@ -389,3 +390,4 @@ B149|2026-08-22|mailpilot-prompt-audit allowed-tools grants `search_tool`; orche
 B150|2026-08-24|campaign-test stamps mechanical AUTO_SUBMITTED after route → `_maybe_ooo_pause` skipped, next_scheduled_at null|V188
 B151|2026-08-24|empty `xai_api_host` → grok-4.5 gRPC used API key as hostname; 191 tasks HTTP 503|V191
 B152|2026-08-26|present-but-wrong xai_api_key ModelAPIError inside execute_task → due T1 marked failed + traceback|V47
+B153|2026-08-27|xAI ModelHTTPError 500 token-generation not on V49 allow-list → compose-only touch failed attempt_count 0|V49

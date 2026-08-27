@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 from anthropic import APIStatusError, APITimeoutError
 from googleapiclient.errors import HttpError
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 
 from mailpilot.agent.retry import (
     BACKOFF_SECONDS,
@@ -113,8 +114,6 @@ def test_agent_completed_without_reply_not_transient() -> None:
 
 def _xai_incorrect_api_key() -> Exception:
     """xAI present-but-wrong key as raised by pydantic-ai (§B.152)."""
-    from pydantic_ai.exceptions import ModelAPIError
-
     return ModelAPIError(
         "grok-4.5",
         "Incorrect API key provided. You can obtain an API key from https://console.x.ai.",
@@ -137,8 +136,6 @@ def test_anthropic_401_is_invalid_provider_key() -> None:
 
 def test_model_http_error_401_is_invalid_provider_key() -> None:
     """§V.47: pydantic-ai ModelHTTPError 401 is invalid-key regardless of body."""
-    from pydantic_ai.exceptions import ModelHTTPError
-
     err = ModelHTTPError(401, "claude-sonnet-5", body="authentication_error")
     assert is_invalid_provider_key(err) is True
     assert is_transient(err) is False
@@ -154,11 +151,72 @@ def test_wrapped_invalid_key_is_still_host_config() -> None:
 
 def test_other_model_api_error_is_not_invalid_provider_key() -> None:
     """§V.47: non-auth ModelAPIError stays a per-task failure, not host-config."""
-    from pydantic_ai.exceptions import ModelAPIError
-
     err = ModelAPIError("grok-4.5", "Internal server error")
     assert is_invalid_provider_key(err) is False
     assert is_transient(err) is False
+
+
+def _xai_token_generation_500() -> ModelHTTPError:
+    """Incident-shape xAI 500 during token generation (§B.153)."""
+    return ModelHTTPError(
+        500, "grok-4.5", body="Internal error during token generation"
+    )
+
+
+@pytest.mark.parametrize("status", [500, 502, 503, 529, 599])
+def test_model_http_error_5xx_is_transient(status: int) -> None:
+    """§V.49: xAI ModelHTTPError 5xx (500-599 except 504) is bounded-retry."""
+    err = ModelHTTPError(status, "grok-4.5", body="server error")
+    assert is_invalid_provider_key(err) is False
+    assert is_transient(err) is True
+
+
+def test_model_http_error_504_is_not_transient() -> None:
+    """§V.48: 504 is pydantic-ai xAI DEADLINE_EXCEEDED; retry is unsafe."""
+    err = ModelHTTPError(504, "grok-4.5", body="deadline exceeded")
+    assert is_invalid_provider_key(err) is False
+    assert is_transient(err) is False
+
+
+def test_wrapped_anthropic_500_model_http_error_is_not_transient() -> None:
+    """§V.49: Anthropic ModelHTTPError wrap keeps the Anthropic allow-list."""
+    inner = _api_status_error(500)
+    err = ModelHTTPError(500, "claude-sonnet-5", body="internal")
+    err.__cause__ = inner
+    assert is_transient(err) is False
+
+
+def test_wrapped_anthropic_502_model_http_error_is_transient() -> None:
+    """§V.49: wrapped Anthropic 502/503/529 still retry."""
+    inner = _api_status_error(502)
+    err = ModelHTTPError(502, "claude-sonnet-5", body="bad gateway")
+    err.__cause__ = inner
+    assert is_transient(err) is True
+
+
+def test_model_http_error_500_token_generation_is_transient() -> None:
+    """§V.49 / §B.153: token-generation 500 body is the same 5xx class."""
+    err = _xai_token_generation_500()
+    assert err.status_code == 500
+    assert is_invalid_provider_key(err) is False
+    assert is_transient(err) is True
+
+
+@pytest.mark.parametrize("status", [400, 403, 404, 422])
+def test_model_http_error_4xx_is_not_transient(status: int) -> None:
+    """§V.49: ModelHTTPError 4xx except 401 stay terminal per-task fail."""
+    err = ModelHTTPError(status, "grok-4.5", body="client error")
+    assert is_invalid_provider_key(err) is False
+    assert is_transient(err) is False
+
+
+def test_wrapped_model_http_error_500_is_transient() -> None:
+    """§V.49: wrapped ModelHTTPError 5xx still matches via __cause__."""
+    inner = _xai_token_generation_500()
+    err = RuntimeError("agent run failed")
+    err.__cause__ = inner
+    assert is_transient(err) is True
+    assert is_invalid_provider_key(err) is False
 
 
 def test_google_http_401_is_not_invalid_provider_key() -> None:

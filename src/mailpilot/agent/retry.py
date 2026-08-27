@@ -155,6 +155,21 @@ def invalid_provider_key_message(llm_provider: str) -> str:
     return "xai_api_key is invalid; set it via `mailpilot config set xai_api_key`"
 
 
+def _is_model_http_5xx(exc: BaseException) -> bool:
+    """True when ``exc`` is pydantic-ai ``ModelHTTPError`` 5xx except 504.
+
+    504 is pydantic-ai's map of xAI gRPC ``DEADLINE_EXCEEDED`` and stays
+    terminal per ``§V.48``.
+    """
+    from pydantic_ai.exceptions import ModelHTTPError
+
+    return (
+        isinstance(exc, ModelHTTPError)
+        and 500 <= exc.status_code <= 599
+        and exc.status_code != 504
+    )
+
+
 def is_transient(exc: BaseException) -> bool:
     """Return ``True`` if ``exc`` is safe to retry per `§V.49`.
 
@@ -163,10 +178,10 @@ def is_transient(exc: BaseException) -> bool:
 
     Returns:
         ``True`` for the §V.49 allow-list (Google statuses from the shared
-        set, Anthropic 502/503/529, Drive socket timeouts). ``False``
-        otherwise --
-        including for the §V.48 exclusion (Anthropic LLM read-timeouts)
-        and any unrecognised exception class.
+        set, Anthropic 502/503/529, xAI ``ModelHTTPError`` 5xx including
+        token-generation 500, Drive socket timeouts). ``False`` otherwise --
+        including for the §V.48 exclusion (Anthropic LLM read-timeouts
+        and xAI gRPC 504) and any unrecognised exception class.
     """
     if _is_llm_read_timeout(exc):
         return False
@@ -175,9 +190,16 @@ def is_transient(exc: BaseException) -> bool:
     if google_status is not None:
         return google_status in GOOGLE_TRANSIENT_STATUSES
 
-    anthropic_status = _anthropic_status(exc)
-    if anthropic_status is not None:
-        return anthropic_status in _ANTHROPIC_TRANSIENT_STATUSES
+    # Anthropic ``APIStatusError`` (bare or wrapped in ``ModelHTTPError``)
+    # uses the Anthropic allow-list, not the xAI 5xx catch-all.
+    for current in _walk_exception_chain(exc):
+        anthropic_status = _anthropic_status(current)
+        if anthropic_status is not None:
+            return anthropic_status in _ANTHROPIC_TRANSIENT_STATUSES
+
+    # Wrapped xAI 5xx must still retry.
+    if any(_is_model_http_5xx(current) for current in _walk_exception_chain(exc)):
+        return True
 
     # ``socket.timeout`` aliases ``TimeoutError`` on Python 3.10+; the
     # Drive httplib2 path bounded by ``Http(timeout=...)`` raises
