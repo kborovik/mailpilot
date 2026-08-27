@@ -284,7 +284,11 @@ Trigger: `src/mailpilot/agent/invoke.py`, `src/mailpilot/agent/classify.py`, `sr
 
 ## §V49 — bounded auto-retry parameters
 
-4 attempts total; backoff [30, 120, 300]s; transient allow-list = Google 429/5xx, Anthropic 502/503/529, socket/TimeoutError; Drive socket timeout 60s feeds classifier; manual retry only failed/cancelled (completed + pending refused); schedule policy → §V.170; retry UPDATE fires task_pending_trigger.
+4 attempts total; backoff [30, 120, 300]s; transient allow-list = Google 429/5xx, Anthropic 502/503/529, xAI `ModelHTTPError` 5xx (500-599 incl. token-generation 500 `Internal error during token generation`; walk `__cause__`/`__context__`), socket/TimeoutError; Drive socket timeout 60s feeds classifier; xAI 401 + "Incorrect API key" still §V.47 skip not retry; Anthropic LLM read-timeout still §V.48 terminal; `ModelHTTPError` 4xx except 401 stay terminal per-task fail; manual retry only failed/cancelled (completed + pending refused); schedule policy → §V.170; retry UPDATE fires task_pending_trigger; attempt_count bump + operator_event("task.retry") per retry (closes §B.153)
+
+Trigger: `src/mailpilot/agent/retry.py` or `src/mailpilot/run.py` changed.
+- `rg 'ModelHTTPError' src/mailpilot/agent/retry.py` -> pydantic-ai 5xx classified
+- `rg 'status_code == 500|ModelHTTPError' tests/` -> injected 500 fixture
 
 ## §V51 — logfire.exception + operator_event("error") pairing
 
