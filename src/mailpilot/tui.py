@@ -57,8 +57,11 @@ mailpilot tui -- read-only companies and contacts
 /        compact centered search overlay (Enter submits; empty restores list)
 d        include-disabled (default off)
 r        refresh current tab
-Enter    open Markdown pane (company+contacts / contact+company)
-Escape   close Markdown; or hide search and clear filter;
+Enter    open company start page or contact Markdown;
+         on company Contacts table, open that contact
+Escape   close contact Markdown to company start page when
+         opened from that table; close start page or list-origin
+         contact to the table; or hide search and clear filter;
          idle table does nothing
 q        quit
 ?        this help
@@ -235,27 +238,15 @@ def _item_lines(values: Any) -> list[str]:
     return [f"- {item}" for item in values]
 
 
-def _contacts_block(child_contacts: list[dict[str, Any]]) -> list[str]:
-    """H2 Contacts extras list; empty becomes ``(none)``."""
-    body = [_child_contact_line(child) for child in child_contacts]
-    return _h2_block("Contacts", body)
-
-
-def _company_start_page_markdown(
-    view: CompanyView,
-    *,
-    child_contacts: list[dict[str, Any]] | None = None,
-) -> list[str]:
-    """Company start-page outline: H1 name, H2 fields, Contacts, Notes, Sources last."""
+def _company_start_upper_lines(view: CompanyView) -> list[str]:
+    """Start-page Markdown above the Contacts DataTable (heading only)."""
     lines = [f"# {view.name}", ""]
     if view.disabled_reason:
         lines.append(view.disabled_reason)
         lines.append("")
     if view.profile is None:
         lines.extend(["(no profile)", ""])
-        if child_contacts is not None:
-            lines.extend(_contacts_block(child_contacts))
-        lines.extend(_notes_markdown("Notes", view.notes, view.notes_total, level=2))
+        lines.extend(["## Contacts", ""])
         return lines
     profile = view.profile
     lines.extend(_h2_block("Websites", _website_lines(view)))
@@ -267,10 +258,15 @@ def _company_start_page_markdown(
             _paragraph_lines(profile.get("target_customers")),
         )
     )
-    if child_contacts is not None:
-        lines.extend(_contacts_block(child_contacts))
-    lines.extend(_notes_markdown("Notes", view.notes, view.notes_total, level=2))
-    lines.extend(_h2_block("Sources", _source_lines(profile.get("sources"))))
+    lines.extend(["## Contacts", ""])
+    return lines
+
+
+def _company_start_lower_lines(view: CompanyView) -> list[str]:
+    """Start-page Markdown below the Contacts DataTable (Notes, Sources last)."""
+    lines = _notes_markdown("Notes", view.notes, view.notes_total, level=2)
+    if view.profile is not None:
+        lines.extend(_h2_block("Sources", _source_lines(view.profile.get("sources"))))
     return lines
 
 
@@ -298,31 +294,19 @@ def _nested_company_markdown(view: CompanyView) -> list[str]:
     return lines
 
 
-def _child_contact_line(child: dict[str, Any]) -> str:
-    """One Markdown list line for a company-view --full extra contact."""
-    email = str(child.get("email") or "")
-    first = child.get("first_name") or ""
-    last = child.get("last_name") or ""
-    name = f"{first} {last}".strip()
-    title = str(child.get("title") or "")
-    extra = " ".join(part for part in (name, title) if part)
-    reason = child.get("disabled_reason")
-    if reason:
-        marker = f"disabled: {reason}"
-        extra = f"{extra}; {marker}" if extra else marker
-    if extra:
-        return f"- {email} ({extra})"
-    return f"- {email}"
+def format_company_upper_markdown(view: CompanyView) -> str:
+    """Render start-page Markdown above the Contacts DataTable."""
+    return "\n".join(_company_start_upper_lines(view)).strip() + "\n"
 
 
-def format_company_markdown(
-    view: CompanyView,
-    *,
-    child_contacts: list[dict[str, Any]] | None = None,
-) -> str:
-    """Render company start-page Markdown (contacts are --full extras)."""
-    lines = _company_start_page_markdown(view, child_contacts=child_contacts)
-    return "\n".join(lines).strip() + "\n"
+def format_company_lower_markdown(view: CompanyView) -> str:
+    """Render start-page Markdown below the Contacts DataTable."""
+    return "\n".join(_company_start_lower_lines(view)).strip() + "\n"
+
+
+def format_company_markdown(view: CompanyView) -> str:
+    """Render company start-page Markdown (contacts live in the DataTable)."""
+    return format_company_upper_markdown(view) + format_company_lower_markdown(view)
 
 
 def format_contact_markdown(
@@ -437,7 +421,7 @@ class SearchScreen(ModalScreen[str]):
 
 
 class DetailScreen(ModalScreen[None]):
-    """Markdown detail overlay (company+contacts or contact+company)."""
+    """Markdown detail overlay (contact+company)."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("q", "app.quit", "Quit", show=False),
@@ -453,6 +437,42 @@ class DetailScreen(ModalScreen[None]):
             yield Markdown(self._markdown, id="detail-markdown", open_links=True)
 
 
+class CompanyStartScreen(ModalScreen[None]):
+    """Company start page: Markdown outline plus Contacts DataTable."""
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("q", "app.quit", "Quit", show=False),
+    ]
+
+    def __init__(
+        self,
+        upper_markdown: str,
+        child_contacts: list[dict[str, Any]],
+        lower_markdown: str,
+    ) -> None:
+        super().__init__()
+        self._upper_markdown = upper_markdown
+        self._child_contacts = child_contacts
+        self._lower_markdown = lower_markdown
+
+    def compose(self) -> ComposeResult:
+        """Render upper Markdown, Contacts table, then Notes/Sources."""
+        with VerticalScroll(id="detail-scroll"):
+            yield Markdown(self._upper_markdown, id="detail-markdown", open_links=True)
+            yield DataTable(id="company-contacts-table", cursor_type="row")
+            yield Markdown(
+                self._lower_markdown,
+                id="detail-notes-markdown",
+                open_links=True,
+            )
+
+    def on_mount(self) -> None:
+        """Fill the Contacts DataTable from company view --full extras."""
+        table = self.query_one("#company-contacts-table", DataTable)
+        _fill_company_contacts_table(table, self._child_contacts)
+        table.focus()
+
+
 class MailpilotTui(App[None]):
     """Read-only one-table browser for companies and contacts."""
 
@@ -463,6 +483,12 @@ class MailpilotTui(App[None]):
     #help-body { padding: 1 2; }
     #detail-scroll { height: 1fr; }
     #detail-markdown { padding: 1 2; height: auto; overflow-y: auto; }
+    #company-contacts-table {
+        height: auto;
+        max-height: 16;
+        padding: 0 2 1 2;
+    }
+    #detail-notes-markdown { padding: 1 2; height: auto; overflow-y: auto; }
     SearchScreen { align: center middle; }
     #search-dialog {
         width: 48;
@@ -554,7 +580,9 @@ class MailpilotTui(App[None]):
 
     def action_focus_search(self) -> None:
         """Show the compact centered search overlay."""
-        if isinstance(self.screen, (DetailScreen, HelpScreen, SearchScreen)):
+        if isinstance(
+            self.screen, (DetailScreen, HelpScreen, SearchScreen, CompanyStartScreen)
+        ):
             return
         tab = self._active_tab()
         self.push_screen(
@@ -566,7 +594,9 @@ class MailpilotTui(App[None]):
         """Toggle include-disabled (default off) and reload lists."""
         if isinstance(self.focused, Input):
             return
-        if isinstance(self.screen, (DetailScreen, HelpScreen, SearchScreen)):
+        if isinstance(
+            self.screen, (DetailScreen, HelpScreen, SearchScreen, CompanyStartScreen)
+        ):
             return
         self.include_disabled = not self.include_disabled
         self._reload("companies")
@@ -574,19 +604,34 @@ class MailpilotTui(App[None]):
 
     def action_refresh(self) -> None:
         """Reload the active tab list."""
-        if isinstance(self.screen, (DetailScreen, HelpScreen, SearchScreen)):
+        if isinstance(
+            self.screen, (DetailScreen, HelpScreen, SearchScreen, CompanyStartScreen)
+        ):
             return
         self._reload(self._active_tab())
 
     def action_help(self) -> None:
         """Show the keybinding overlay."""
-        if isinstance(self.screen, (DetailScreen, HelpScreen, SearchScreen)):
+        if isinstance(
+            self.screen, (DetailScreen, HelpScreen, SearchScreen, CompanyStartScreen)
+        ):
             return
         self.push_screen(HelpScreen())
 
     def action_escape(self) -> None:
         """Contextual Esc: close Markdown, or hide search/clear filter, or no-op."""
-        if isinstance(self.screen, (DetailScreen, HelpScreen)):
+        if isinstance(self.screen, HelpScreen):
+            self.pop_screen()
+            self._master_table(self._active_tab()).focus()
+            return
+        if isinstance(self.screen, DetailScreen):
+            self.pop_screen()
+            if isinstance(self.screen, CompanyStartScreen):
+                self.screen.query_one("#company-contacts-table", DataTable).focus()
+                return
+            self._master_table(self._active_tab()).focus()
+            return
+        if isinstance(self.screen, CompanyStartScreen):
             self.pop_screen()
             self._master_table(self._active_tab()).focus()
             return
@@ -609,7 +654,7 @@ class MailpilotTui(App[None]):
         row_key = str(event.row_key.value)
         if table_id == "company-table":
             self._open_detail("companies", row_key)
-        elif table_id == "contact-table":
+        elif table_id in {"contact-table", "company-contacts-table"}:
             self._open_detail("contacts", row_key)
 
     def _open_detail(self, tab: str, entity_id: str) -> None:
@@ -623,9 +668,10 @@ class MailpilotTui(App[None]):
                 return
             children = list_company_inspect_contacts(self.connection, view.id)
             self.company_child_contacts = children
-            markdown = format_company_markdown(view, child_contacts=children)
-            self.detail_markdown = markdown
-            self.push_screen(DetailScreen(markdown))
+            upper = format_company_upper_markdown(view)
+            lower = format_company_lower_markdown(view)
+            self.detail_markdown = upper + lower
+            self.push_screen(CompanyStartScreen(upper, children, lower))
             return
         view = load_contact_view(self.connection, entity_id)
         self.contact_view = view
@@ -758,6 +804,28 @@ def _contact_cells(row: ContactSummary, *, include_disabled: bool) -> tuple[str,
     if include_disabled:
         return (*cells, row.disabled_reason or "")
     return cells
+
+
+def _company_contact_cells(child: dict[str, Any]) -> tuple[str, str, str]:
+    """Start-page Contacts DataTable cells: email, name, title."""
+    first = child.get("first_name") or ""
+    last = child.get("last_name") or ""
+    return (
+        str(child.get("email") or ""),
+        f"{first} {last}".strip(),
+        str(child.get("title") or ""),
+    )
+
+
+def _fill_company_contacts_table(
+    table: DataTable[str], children: list[dict[str, Any]]
+) -> None:
+    """Fill the company start-page Contacts DataTable from --full extras."""
+    table.clear(columns=True)
+    table.add_columns("email", "name", "title")
+    table.cursor_type = "row"
+    for child in children:
+        table.add_row(*_company_contact_cells(child), key=str(child["id"]))
 
 
 def run_tui() -> None:

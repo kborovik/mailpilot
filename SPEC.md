@@ -331,7 +331,7 @@ T338|x|impl §V.195(∆) + §I — company+contact detail formatted Markdown doc
 T339|x|impl §V.195(∆) + §I — `/` compact centered search overlay (bounded width, not full-width dock; title per tab); tests (#293)|V195,I.cli
 T340|x|impl §V.195(∆)+§I — company start-page Markdown H1 name + H1 Profile + H2 Websites (clickable domain+alias URLs) + H2 Summary paragraph + H2 Products + H2 Target Customers + H2 Sources (clickable) + H2 Notes + H1 Contacts; drop timezone + identity dump; tests (#293)|V195,V8,V72,V168,I.cli
 T341|x|impl §V.195(∆)+§I — company start-page drop H1 Profile; H2 Contacts after Target Customers; H2 Sources last; tests (#293)|V195,V8,V72,V168,I.cli
-T342|.|impl §V.195 + §I — company start-page H2 Contacts DataTable of --full extras (not Markdown list); Enter row → contact Markdown; Esc contact → company start-page; tests (#293)|V195,V8,V168,I.cli
+T342|x|impl §V.195 + §I — company start-page H2 Contacts DataTable of --full extras (not Markdown list); Enter row → contact Markdown; Esc contact → company start-page; tests (#293)|V195,V8,V168,I.cli
 
 ## §B BUGS
 

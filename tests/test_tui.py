@@ -33,6 +33,7 @@ from mailpilot.models import CompanySummary, ContactSummary
 from mailpilot.tui import (
     COMPANY_LIMIT,
     CONTACT_LIMIT,
+    CompanyStartScreen,
     DetailScreen,
     HelpScreen,
     MailpilotTui,
@@ -342,10 +343,9 @@ def test_child_contacts_are_extras_not_lean_view_fields(
     extras = list_company_inspect_contacts(database_connection, company.id)
     assert extras
     assert extras[0]["email"] == "kid@kids.tui"
-    text = format_company_markdown(view, child_contacts=extras)
-    assert extras[0]["email"] in text
+    text = format_company_markdown(view)
+    assert extras[0]["email"] not in text
     assert "## Contacts" in text
-    assert view.domain in text
 
 
 def _run_pilot(
@@ -606,7 +606,7 @@ def test_escape_idle_table_is_noop(
 def test_enter_company_markdown_includes_contacts(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """Enter on a company row opens Markdown with company+contacts extras."""
+    """Enter on a company row opens start page with Contacts DataTable extras."""
     from textual.widgets import DataTable, Markdown
 
     app, tui_conn, ids = _run_pilot(database_connection)
@@ -618,20 +618,22 @@ def test_enter_company_markdown_includes_contacts(
                 app._select_row("company-table", ids["company"].id)  # pyright: ignore[reportPrivateUsage]
                 app.query_one("#company-table", DataTable).action_select_cursor()
                 await pilot.pause()
-                assert isinstance(app.screen, DetailScreen)
+                assert isinstance(app.screen, CompanyStartScreen)
                 markdown = app.screen.query_one("#detail-markdown", Markdown)
                 source = markdown.source
                 assert ids["company"].name in source
-                assert ids["company"].domain in source
-                assert ids["contact"].email in source
+                assert ids["contact"].email not in source
                 assert "## Contacts" in source
                 assert source.startswith(f"# {ids['company'].name}")
                 assert "# Profile" not in source
                 assert "```json" not in source
                 assert len(app.screen.query("#detail-scroll")) == 1
+                table = app.screen.query_one("#company-contacts-table", DataTable)
+                emails = [str(table.get_row_at(i)[0]) for i in range(table.row_count)]
+                assert ids["contact"].email in emails
                 await pilot.press("escape")
                 await pilot.pause()
-                assert not isinstance(app.screen, DetailScreen)
+                assert not isinstance(app.screen, CompanyStartScreen)
 
         asyncio.run(body())
     finally:
@@ -782,14 +784,7 @@ def test_format_company_markdown_is_document_not_record_dump() -> None:
         created_at=now,
         updated_at=now,
     )
-    child = {
-        "email": "ada@viewco.tui",
-        "first_name": "Ada",
-        "last_name": "Lovelace",
-        "title": "VP",
-        "tags": ["sales-seat"],
-    }
-    text = format_company_markdown(view, child_contacts=[child])
+    text = format_company_markdown(view)
     assert text.startswith("# View Co\n")
     assert "# Profile" not in text
     assert "## Websites" in text
@@ -804,7 +799,7 @@ def test_format_company_markdown_is_document_not_record_dump() -> None:
     assert "## Sources" in text
     assert "- [https://viewco.tui/](https://viewco.tui/)" in text
     assert "## Contacts" in text
-    assert "- ada@viewco.tui (Ada Lovelace VP)" in text
+    assert "ada@viewco.tui" not in text
     assert "```json" not in text
     assert '"id":' not in text
     assert '"summary":' not in text
@@ -846,17 +841,7 @@ def test_company_start_page_heading_order() -> None:
         created_at=now,
         updated_at=now,
     )
-    text = format_company_markdown(
-        view,
-        child_contacts=[
-            {
-                "email": "ada@viewco.tui",
-                "first_name": "Ada",
-                "last_name": "Lovelace",
-                "title": "VP",
-            }
-        ],
-    )
+    text = format_company_markdown(view)
     headings = [line for line in text.splitlines() if line.startswith("#")]
     assert headings == [
         "# View Co",
@@ -891,7 +876,7 @@ def test_company_start_page_empty_profile_keeps_notes_and_contacts() -> None:
         created_at=now,
         updated_at=now,
     )
-    text = format_company_markdown(view, child_contacts=[])
+    text = format_company_markdown(view)
     assert text.startswith("# Bare Co\n")
     assert "# Profile" not in text
     assert "(no profile)" in text
@@ -900,7 +885,7 @@ def test_company_start_page_empty_profile_keeps_notes_and_contacts() -> None:
     assert "## Notes" in text
     assert "- keep me" in text
     assert "## Contacts" in text
-    assert "(none)" in text.split("## Contacts", 1)[1]
+    assert "## Contacts\n\n(none)\n" not in text
     assert "## Sources" not in text
     headings = [line for line in text.splitlines() if line.startswith("#")]
     assert headings == [
@@ -936,13 +921,14 @@ def test_company_start_page_empty_h2_is_none() -> None:
         created_at=now,
         updated_at=now,
     )
-    text = format_company_markdown(view, child_contacts=[])
+    text = format_company_markdown(view)
     assert "## Websites" in text
     assert "- [https://empty.tui](https://empty.tui)" in text
     assert "## Summary\n\n(none)\n" in text
     assert "## Products\n\n(none)\n" in text
     assert "## Target Customers\n\n(none)\n" in text
-    assert "## Contacts\n\n(none)\n" in text
+    assert "## Contacts" in text
+    assert "## Contacts\n\n(none)\n" not in text
     assert "## Sources\n\n(none)\n" in text
     assert "timezone" not in text
     headings = [line for line in text.splitlines() if line.startswith("#")]
@@ -971,7 +957,7 @@ def test_company_start_page_disabled_reason_under_h1() -> None:
         created_at=now,
         updated_at=now,
     )
-    text = format_company_markdown(view, child_contacts=[])
+    text = format_company_markdown(view)
     assert text.startswith("# Gone Co\n\nretired\n\n(no profile)\n")
     assert "# Profile" not in text
     assert "- disabled:" not in text
@@ -1009,46 +995,177 @@ def test_company_start_page_sources_link_url_shaped_only() -> None:
     assert "[LinkedIn]" not in text
 
 
-def test_child_contact_markdown_marks_disabled() -> None:
-    """§V.168 extras: disabled child contacts carry the reason in Markdown."""
-    from datetime import UTC, datetime
+def test_company_contacts_datatable_columns_and_rows(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.195: Contacts DataTable cols email, name, title; row-key is contact id."""
+    from textual.widgets import DataTable
 
-    from mailpilot.models import CompanyView
+    from mailpilot.database import create_contact
 
-    now = datetime(2024, 1, 1, tzinfo=UTC)
-    view = CompanyView(
-        id="co-1",
-        name="View Co",
-        domain="viewco.tui",
-        profile=None,
-        tags=[],
-        aliases=[],
-        disabled_reason=None,
-        notes=[],
-        notes_total=0,
-        created_at=now,
-        updated_at=now,
+    company = make_test_company(database_connection, name="Seat Co", domain="seat.tui")
+    contact = create_contact(
+        database_connection,
+        email="ada@seat.tui",
+        company_id=company.id,
+        first_name="Ada",
+        last_name="Lovelace",
+        title="VP",
     )
-    text = format_company_markdown(
-        view,
-        child_contacts=[
-            {
-                "email": "ada@viewco.tui",
-                "first_name": "Ada",
-                "last_name": "Lovelace",
-                "title": "VP",
-            },
-            {
-                "email": "bob@viewco.tui",
-                "first_name": "",
-                "last_name": "",
-                "title": "",
-                "disabled_reason": "retired",
-            },
-        ],
+    assert contact is not None
+    database_connection.commit()
+    tui_conn = open_readonly_connection(TEST_DATABASE_URL)
+    app = MailpilotTui(tui_conn)
+    try:
+
+        async def body() -> None:
+            async with app.run_test(size=(140, 40)) as pilot:
+                await pilot.pause()
+                app._select_row("company-table", company.id)  # pyright: ignore[reportPrivateUsage]
+                app._open_detail("companies", company.id)  # pyright: ignore[reportPrivateUsage]
+                await pilot.pause()
+                assert isinstance(app.screen, CompanyStartScreen)
+                table = app.screen.query_one("#company-contacts-table", DataTable)
+                assert [col.label.plain for col in table.columns.values()] == [
+                    "email",
+                    "name",
+                    "title",
+                ]
+                assert table.row_count == 1
+                assert tuple(table.get_row_at(0)) == (
+                    "ada@seat.tui",
+                    "Ada Lovelace",
+                    "VP",
+                )
+                keys = [str(row.key.value) for row in table.ordered_rows]
+                assert keys == [contact.id]
+                source = app.screen.query_one("#detail-markdown").source  # type: ignore[attr-defined]
+                assert "ada@seat.tui" not in str(source)
+
+        asyncio.run(body())
+    finally:
+        tui_conn.close()
+
+
+def test_company_contacts_datatable_empty_is_zero_rows(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.195: empty Contacts extras are 0 DataTable rows, not a Markdown list."""
+    from textual.widgets import DataTable, Markdown
+
+    app, tui_conn, ids = _run_pilot(database_connection)
+    try:
+
+        async def body() -> None:
+            async with app.run_test(size=(140, 40)) as pilot:
+                await pilot.pause()
+                app._select_row("company-table", ids["other"].id)  # pyright: ignore[reportPrivateUsage]
+                app._open_detail("companies", ids["other"].id)  # pyright: ignore[reportPrivateUsage]
+                await pilot.pause()
+                assert isinstance(app.screen, CompanyStartScreen)
+                table = app.screen.query_one("#company-contacts-table", DataTable)
+                assert table.row_count == 0
+                upper = app.screen.query_one("#detail-markdown", Markdown).source
+                assert "## Contacts" in upper
+                assert "- " not in upper.split("## Contacts", 1)[1]
+                assert "(none)" not in upper.split("## Contacts", 1)[1]
+
+        asyncio.run(body())
+    finally:
+        tui_conn.close()
+
+
+def test_enter_company_contact_row_opens_contact_markdown(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.195: Enter on start-page Contacts row opens contact Markdown."""
+    from textual.widgets import DataTable, Markdown
+
+    app, tui_conn, ids = _run_pilot(database_connection)
+    try:
+
+        async def body() -> None:
+            async with app.run_test(size=(140, 40)) as pilot:
+                await pilot.pause()
+                app._select_row("company-table", ids["company"].id)  # pyright: ignore[reportPrivateUsage]
+                app._open_detail("companies", ids["company"].id)  # pyright: ignore[reportPrivateUsage]
+                await pilot.pause()
+                table = app.screen.query_one("#company-contacts-table", DataTable)
+                for index, row in enumerate(table.ordered_rows):
+                    if str(row.key.value) == ids["contact"].id:
+                        table.move_cursor(row=index)
+                        table.action_select_cursor()
+                        break
+                await pilot.pause()
+                assert isinstance(app.screen, DetailScreen)
+                source = app.screen.query_one("#detail-markdown", Markdown).source
+                assert ids["contact"].email in source
+                assert source.startswith("#")
+                assert "## Company" in source
+                await pilot.press("escape")
+                await pilot.pause()
+                assert isinstance(app.screen, CompanyStartScreen)
+                assert len(app.screen.query("#company-contacts-table")) == 1
+                await pilot.press("escape")
+                await pilot.pause()
+                assert not isinstance(app.screen, (CompanyStartScreen, DetailScreen))
+                assert app.focused is app.query_one("#company-table", DataTable)
+
+        asyncio.run(body())
+    finally:
+        tui_conn.close()
+
+
+def test_company_contacts_datatable_includes_disabled_extras(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.168 extras: disabled child contacts still appear as DataTable rows."""
+    from textual.widgets import DataTable
+
+    from mailpilot.database import create_contact
+
+    company = make_test_company(
+        database_connection, name="Mix Seat", domain="mixseat.tui"
     )
-    assert "- ada@viewco.tui (Ada Lovelace VP)" in text
-    assert "- bob@viewco.tui (disabled: retired)" in text
+    live = create_contact(
+        database_connection,
+        email="ada@mixseat.tui",
+        company_id=company.id,
+        first_name="Ada",
+        last_name="Lovelace",
+        title="VP",
+    )
+    retired = create_contact(
+        database_connection,
+        email="bob@mixseat.tui",
+        company_id=company.id,
+    )
+    assert live is not None
+    assert retired is not None
+    disable_contact(database_connection, retired.id, "retired")
+    database_connection.commit()
+    tui_conn = open_readonly_connection(TEST_DATABASE_URL)
+    app = MailpilotTui(tui_conn)
+    try:
+
+        async def body() -> None:
+            async with app.run_test(size=(140, 40)) as pilot:
+                await pilot.pause()
+                app._select_row("company-table", company.id)  # pyright: ignore[reportPrivateUsage]
+                app._open_detail("companies", company.id)  # pyright: ignore[reportPrivateUsage]
+                await pilot.pause()
+                table = app.screen.query_one("#company-contacts-table", DataTable)
+                emails = [str(table.get_row_at(i)[0]) for i in range(table.row_count)]
+                assert live.email in emails
+                assert retired.email in emails
+                labels = [col.label.plain for col in table.columns.values()]
+                assert labels == ["email", "name", "title"]
+                source = str(app.screen.query_one("#detail-markdown").source)  # type: ignore[attr-defined]
+                assert "disabled: retired" not in source
+
+        asyncio.run(body())
+    finally:
+        tui_conn.close()
 
 
 def test_detail_markdown_opens_links(
@@ -1211,7 +1328,7 @@ def test_q_quits_from_help(
 def test_q_quits_from_detail(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """Documented q quits from the Detail overlay."""
+    """Documented q quits from the company start page."""
     from textual.widgets import DataTable
 
     app, tui_conn, ids = _run_pilot(database_connection)
@@ -1223,7 +1340,7 @@ def test_q_quits_from_detail(
                 app._select_row("company-table", ids["company"].id)  # pyright: ignore[reportPrivateUsage]
                 app.query_one("#company-table", DataTable).action_select_cursor()
                 await pilot.pause()
-                assert isinstance(app.screen, DetailScreen)
+                assert isinstance(app.screen, CompanyStartScreen)
                 await pilot.press("q")
                 await pilot.pause()
                 assert not app.is_running
