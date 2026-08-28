@@ -326,7 +326,7 @@ T333|x|impl §V.47(∆) — invalid-key ModelAPIError/401 skip remaining drain; 
 T334|x|impl §V.194(+) + §V.136(∆) + §V.103(∆) + §V.134(∆) + §C/§I — TouchCopy + [[touch_copy]] JSONB import-only hashed; copy-row N render+deliver llm_requests=0 (N=1 and N≥2); no-row compose-only LLM; mixed T1 render T2 LLM sees T1 in history; import reject dup n/empty n=1 subject/empty body; check out_of_sync on touch_copy disagree; render fail unknown token leftover brace empty placeholder empty T1 subject → fail no send enrollment active; inbound+classify ignore touch_copy; missing/invalid key skip drain incl copy-row §V.47; template registry+CLI unchanged; tests (#309)|V194,V136,V103,V134,V135,V47,V183,V44,V131,I.cli
 T335|x|impl §V.49(∆) — xAI ModelHTTPError 5xx transient (500 token-generation incl.); 401/incorrect-key still §V.47 skip; 4xx else terminal; fixture injected 500 on due compose-only touch ! stay failed after first attempt; attempt_count bump or task.retry event; non-transient still failed; 4-attempt bound (#311)|V49,B153,V47,V48,V136
 T336|x|impl §V.195(+) + §V.3(∆) + §C/§I — `mailpilot tui` TTY companies+contacts; optional extra; READ ONLY no provision; AST allowlist; view-parity tests; show queue unchanged (#293)|V195,V3,V2,V4,V8,V110,V114,V115,V148,V166,V177,I.cli
-T337|.|impl §V.195(∆) + §I — tui one table per tab; drop docked search + child table; `/` on-screen Input; Esc contextual; Enter Markdown company+contacts / contact+company; tests (#293)|V195,V3,V8,V114,V115,V148,V168,I.cli
+T337|x|impl §V.195(∆) + §I — tui one table per tab; drop docked search + child table; `/` on-screen Input; Esc contextual; Enter Markdown company+contacts / contact+company; tests (#293)|V195,V3,V8,V114,V115,V148,V168,I.cli
 
 ## §B BUGS
 

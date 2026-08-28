@@ -33,9 +33,11 @@ from mailpilot.models import CompanySummary, ContactSummary
 from mailpilot.tui import (
     COMPANY_LIMIT,
     CONTACT_LIMIT,
+    DetailScreen,
     MailpilotTui,
     TuiConnectError,
-    format_company_detail,
+    format_company_markdown,
+    format_contact_markdown,
     hide_disabled,
     is_truncated,
     open_readonly_connection,
@@ -291,10 +293,13 @@ def test_company_and_contact_detail_match_shared_loaders(
     extras = list_company_inspect_contacts(database_connection, company.id)
     tui_conn = open_readonly_connection(TEST_DATABASE_URL)
     try:
-        app = MailpilotTui(tui_conn, detail_delay=0)
+        app = MailpilotTui(tui_conn)
 
         async def body() -> None:
             async with app.run_test(size=(140, 40)) as pilot:
+                await pilot.pause()
+                app._select_row("company-table", company.id)  # pyright: ignore[reportPrivateUsage]
+                app._open_detail("companies", company.id)  # pyright: ignore[reportPrivateUsage]
                 await pilot.pause()
                 assert app.company_view is not None
                 assert app.company_view.model_dump(
@@ -302,11 +307,13 @@ def test_company_and_contact_detail_match_shared_loaders(
                 ) == expected_company.model_dump(mode="json")
                 assert "contacts" not in expected_company.model_dump(mode="json")
                 assert app.company_child_contacts == extras
+                await pilot.press("escape")
+                await pilot.pause()
                 tabs = app.query_one("#tabs")
                 tabs.active = "contacts"  # type: ignore[attr-defined]
                 await pilot.pause()
                 app._select_row("contact-table", contact.id)  # pyright: ignore[reportPrivateUsage]
-                app._load_detail("contacts", contact.id)  # pyright: ignore[reportPrivateUsage]
+                app._open_detail("contacts", contact.id)  # pyright: ignore[reportPrivateUsage]
                 await pilot.pause()
                 assert app.contact_view is not None
                 assert app.contact_view.model_dump(
@@ -332,10 +339,10 @@ def test_child_contacts_are_extras_not_lean_view_fields(
     extras = list_company_inspect_contacts(database_connection, company.id)
     assert extras
     assert extras[0]["email"] == "kid@kids.tui"
-    text = format_company_detail(view, child_contacts=extras)
-    assert "not lean view" not in text
-    assert f"contacts: {len(extras)}" in text
-    assert extras[0]["email"] not in text
+    text = format_company_markdown(view, child_contacts=extras)
+    assert extras[0]["email"] in text
+    assert "## Contacts" in text
+    assert view.domain in text
 
 
 def _run_pilot(
@@ -372,7 +379,7 @@ def _run_pilot(
             "disabled_ct": disabled_ct,
         }
     tui_conn = open_readonly_connection(TEST_DATABASE_URL)
-    app = MailpilotTui(tui_conn, detail_delay=0)
+    app = MailpilotTui(tui_conn)
     return app, tui_conn, ids
 
 
@@ -380,7 +387,7 @@ def test_pilot_tab_switch_search_disabled(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
     """Pilot: tab switch, search submit path, disabled toggle."""
-    from textual.widgets import DataTable, TabbedContent
+    from textual.widgets import DataTable, Input, TabbedContent
 
     app, tui_conn, _ids = _run_pilot(database_connection)
     try:
@@ -398,37 +405,114 @@ def test_pilot_tab_switch_search_disabled(
                 assert contact_table.row_count >= 1
                 tabs.active = "companies"
                 await pilot.pause()
-                app.search_query["companies"] = "acme"
-                app._reload("companies")  # pyright: ignore[reportPrivateUsage]
+                await pilot.press("/")
+                await pilot.pause()
+                search = app.query_one("#search", Input)
+                search.value = "acme"
+                await search.action_submit()
                 await pilot.pause()
                 assert len(app.company_rows) == 1
                 assert app.company_rows[0].domain == "acme.tui"
                 status = str(app.query_one("#status").render())
                 assert "truncated" not in status
                 assert "q=acme" in status
-                app.search_query["companies"] = ""
-                app._reload("companies")  # pyright: ignore[reportPrivateUsage]
+                assert search.display is False
+                await pilot.press("escape")
+                await pilot.pause()
+                assert app.search_query["companies"] == ""
                 enabled_count = len(app.company_rows)
                 app.include_disabled = True
                 app._reload("companies")  # pyright: ignore[reportPrivateUsage]
                 await pilot.pause()
                 assert len(app.company_rows) > enabled_count
                 assert any(r.disabled_reason for r in app.company_rows)
-                await pilot.press("/")
-                await pilot.pause()
-                await pilot.press("escape")
-                await pilot.pause()
 
         asyncio.run(body())
     finally:
         tui_conn.close()
 
 
-def test_pilot_cross_link(
+def test_layout_one_table_per_tab_search_hidden(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """Pilot: Enter cross-link company child contact and contact domain."""
-    from textual.widgets import TabbedContent
+    """Each tab is one DataTable; search Input is hidden; no child table."""
+    from textual.widgets import DataTable, Footer, Input
+
+    app, tui_conn, _ids = _run_pilot(database_connection)
+    try:
+
+        async def body() -> None:
+            async with app.run_test(size=(140, 40)) as pilot:
+                await pilot.pause()
+                table_ids = {widget.id for widget in app.query(DataTable)}
+                assert table_ids == {"company-table", "contact-table"}
+                assert len(app.query("#company-child-contacts")) == 0
+                search = app.query_one("#search", Input)
+                assert search.display is False
+                assert len(app.query(Footer)) == 1
+
+        asyncio.run(body())
+    finally:
+        tui_conn.close()
+
+
+def test_slash_shows_search_escape_hides(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Slash shows the search Input; Esc hides it and restores the list."""
+    from textual.widgets import Input
+
+    app, tui_conn, _ids = _run_pilot(database_connection)
+    try:
+
+        async def body() -> None:
+            async with app.run_test(size=(140, 40)) as pilot:
+                await pilot.pause()
+                search = app.query_one("#search", Input)
+                assert search.display is False
+                await pilot.press("/")
+                await pilot.pause()
+                assert search.display is True
+                await pilot.press("escape")
+                await pilot.pause()
+                assert search.display is False
+                assert app.search_query["companies"] == ""
+
+        asyncio.run(body())
+    finally:
+        tui_conn.close()
+
+
+def test_escape_idle_table_is_noop(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Esc on an idle table does not quit or change the list."""
+    from textual.widgets import DataTable
+
+    app, tui_conn, _ids = _run_pilot(database_connection)
+    try:
+
+        async def body() -> None:
+            async with app.run_test(size=(140, 40)) as pilot:
+                await pilot.pause()
+                before = len(app.company_rows)
+                await pilot.press("escape")
+                await pilot.pause()
+                assert app.is_running
+                assert len(app.company_rows) == before
+                assert app.focused is app.query_one("#company-table", DataTable)
+                assert len(app.query("#detail-markdown")) == 0
+
+        asyncio.run(body())
+    finally:
+        tui_conn.close()
+
+
+def test_enter_company_markdown_includes_contacts(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Enter on a company row opens Markdown with company+contacts extras."""
+    from textual.widgets import DataTable, Markdown
 
     app, tui_conn, ids = _run_pilot(database_connection)
     try:
@@ -436,104 +520,32 @@ def test_pilot_cross_link(
         async def body() -> None:
             async with app.run_test(size=(140, 40)) as pilot:
                 await pilot.pause()
-                app.cross_link_to_contact(ids["contact"].id)
+                app._select_row("company-table", ids["company"].id)  # pyright: ignore[reportPrivateUsage]
+                app.query_one("#company-table", DataTable).action_select_cursor()
                 await pilot.pause()
-                assert app.query_one("#tabs", TabbedContent).active == "contacts"
-                assert app.contact_view is not None
-                assert app.contact_view.email == "lead@acme.tui"
-                app.cross_link_to_company(ids["contact"].id)
+                assert isinstance(app.screen, DetailScreen)
+                markdown = app.screen.query_one("#detail-markdown", Markdown)
+                source = markdown.source
+                assert ids["company"].name in source
+                assert ids["company"].domain in source
+                assert ids["contact"].email in source
+                assert "## Contacts" in source
+                await pilot.press("escape")
                 await pilot.pause()
-                assert app.query_one("#tabs", TabbedContent).active == "companies"
-                assert app.company_view is not None
-                assert app.company_view.domain == "acme.tui"
+                assert not isinstance(app.screen, DetailScreen)
 
         asyncio.run(body())
     finally:
         tui_conn.close()
 
 
-def test_pilot_reload_cancels_stale_detail_timer(
+def test_enter_contact_markdown_includes_company(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """Reload stops a pending detail timer so an empty table keeps (no rows)."""
-    make_test_company(database_connection, name="Timer Co", domain="timer.tui")
-    database_connection.commit()
-    tui_conn = open_readonly_connection(TEST_DATABASE_URL)
-    app = MailpilotTui(tui_conn, detail_delay=0.05)
-    try:
+    """Enter on a contact row opens Markdown with contact+company."""
+    from textual.widgets import DataTable, Markdown, TabbedContent
 
-        async def body() -> None:
-            async with app.run_test(size=(140, 40)) as pilot:
-                await pilot.pause()
-                assert app.company_view is not None
-                old_id = app.company_rows[0].id
-                app._schedule_detail("companies", old_id)  # pyright: ignore[reportPrivateUsage]
-                app.search_query["companies"] = "zzz-no-match-tui"
-                app._reload("companies")  # pyright: ignore[reportPrivateUsage]
-                await asyncio.sleep(0.12)
-                await pilot.pause()
-                assert app.company_rows == []
-                assert app.company_view is None
-                assert "(no rows)" in str(app.query_one("#company-detail").render())
-
-        asyncio.run(body())
-    finally:
-        tui_conn.close()
-
-
-def test_pilot_cross_link_shows_disabled_child(
-    database_connection: psycopg.Connection[dict[str, Any]],
-) -> None:
-    """Enter on a disabled child contact turns include-disabled on and lands."""
-    from textual.widgets import TabbedContent
-
-    company = make_test_company(database_connection, name="Mix Co", domain="mix.tui")
-    gone = make_test_contact(
-        database_connection, email="gone@mix.tui", company_id=company.id
-    )
-    disable_contact(database_connection, gone.id, "retired")
-    database_connection.commit()
-    tui_conn = open_readonly_connection(TEST_DATABASE_URL)
-    app = MailpilotTui(tui_conn, detail_delay=0)
-    try:
-
-        async def body() -> None:
-            async with app.run_test(size=(140, 40)) as pilot:
-                await pilot.pause()
-                assert any(
-                    str(child.get("id")) == gone.id
-                    for child in app.company_child_contacts
-                )
-                assert app.include_disabled is False
-                app.cross_link_to_contact(gone.id)
-                await pilot.pause()
-                assert app.include_disabled is True
-                assert app.query_one("#tabs", TabbedContent).active == "contacts"
-                assert app.contact_view is not None
-                assert app.contact_view.email == "gone@mix.tui"
-                assert "disabled=on" in str(app.query_one("#status").render())
-
-        asyncio.run(body())
-    finally:
-        tui_conn.close()
-
-
-def test_pilot_cross_link_shows_disabled_parent_company(
-    database_connection: psycopg.Connection[dict[str, Any]],
-) -> None:
-    """Enter from an enabled contact whose company is disabled turns d on."""
-    from textual.widgets import TabbedContent
-
-    company = make_test_company(
-        database_connection, name="Parent Gone", domain="parentgone.tui"
-    )
-    contact = make_test_contact(
-        database_connection, email="live@parentgone.tui", company_id=company.id
-    )
-    disable_company(database_connection, company.id, "retired")
-    database_connection.commit()
-    tui_conn = open_readonly_connection(TEST_DATABASE_URL)
-    app = MailpilotTui(tui_conn, detail_delay=0)
+    app, tui_conn, ids = _run_pilot(database_connection)
     try:
 
         async def body() -> None:
@@ -542,26 +554,68 @@ def test_pilot_cross_link_shows_disabled_parent_company(
                 tabs = app.query_one("#tabs", TabbedContent)
                 tabs.active = "contacts"
                 await pilot.pause()
-                app.search_query["contacts"] = contact.email
-                app._reload("contacts")  # pyright: ignore[reportPrivateUsage]
+                app._select_row("contact-table", ids["contact"].id)  # pyright: ignore[reportPrivateUsage]
+                app.query_one("#contact-table", DataTable).action_select_cursor()
                 await pilot.pause()
-                assert [row.email for row in app.contact_rows] == [contact.email]
-                assert app.contact_rows[0].company_domain == "parentgone.tui"
-                app._select_row("contact-table", contact.id)  # pyright: ignore[reportPrivateUsage]
-                app._load_detail("contacts", contact.id)  # pyright: ignore[reportPrivateUsage]
-                assert app.contact_view is not None
-                assert app.include_disabled is False
-                app.cross_link_to_company(contact.id)
+                assert isinstance(app.screen, DetailScreen)
+                markdown = app.screen.query_one("#detail-markdown", Markdown)
+                source = markdown.source
+                assert ids["contact"].email in source
+                assert ids["company"].domain in source
+                assert ids["company"].name in source
+                assert "## Company" in source
+                await pilot.press("escape")
                 await pilot.pause()
-                assert app.include_disabled is True
-                assert app.company_view is not None
-                assert app.company_view.domain == "parentgone.tui"
-                assert "disabled=on" in str(app.query_one("#status").render())
-                assert any(row.domain == "parentgone.tui" for row in app.company_rows)
+                assert not isinstance(app.screen, DetailScreen)
 
         asyncio.run(body())
     finally:
         tui_conn.close()
+
+
+def test_format_contact_markdown_includes_company_view() -> None:
+    """Contact Markdown embeds the parent CompanyView when provided."""
+    from datetime import UTC, datetime
+
+    from mailpilot.models import CompanyView, ContactView
+
+    now = datetime(2024, 1, 1, tzinfo=UTC)
+    company = CompanyView(
+        id="co-1",
+        name="View Co",
+        domain="viewco.tui",
+        profile=None,
+        tags=["vip"],
+        aliases=[],
+        disabled_reason=None,
+        notes=[],
+        notes_total=0,
+        created_at=now,
+        updated_at=now,
+    )
+    row = ContactView(
+        id="ct-1",
+        email="ada@viewco.tui",
+        company_id="co-1",
+        company_domain="viewco.tui",
+        first_name="Ada",
+        last_name="Lovelace",
+        title="VP",
+        email_confidence=90,
+        disabled_reason=None,
+        tags=[],
+        notes=[],
+        notes_total=0,
+        company_notes=[],
+        company_notes_total=0,
+        created_at=now,
+        updated_at=now,
+    )
+    text = format_contact_markdown(row, company=company)
+    assert "ada@viewco.tui" in text
+    assert "View Co" in text
+    assert "viewco.tui" in text
+    assert "vip" in text
 
 
 def test_tui_help_has_no_spec_cite() -> None:

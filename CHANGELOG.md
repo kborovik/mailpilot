@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contacts (optional extra `mailpilot-crm[tui]`). Piped stdout is
   refused with the JSON error envelope. `show queue` stays ASCII.
 
+### Changed
+
+- `mailpilot tui` shows one table per tab. `/` opens on-screen search.
+  Enter opens a Markdown pane (company plus contacts, or contact plus
+  company). Escape closes the pane, or hides search and clears the
+  filter.
+
 ## [v0.35.0] - 2026-08-27
 
 ### Added

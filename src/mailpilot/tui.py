@@ -10,10 +10,16 @@ from typing import Any, ClassVar, Protocol
 import psycopg
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
-from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.timer import Timer
-from textual.widgets import DataTable, Footer, Input, Static, TabbedContent, TabPane
+from textual.widgets import (
+    DataTable,
+    Footer,
+    Input,
+    Markdown,
+    Static,
+    TabbedContent,
+    TabPane,
+)
 
 from mailpilot.database import (
     determine_schema_verdict,
@@ -42,12 +48,12 @@ NOTES_CAP = 10
 HELP_TEXT = """\
 mailpilot tui -- read-only companies and contacts
 
-/        search (submit Enter; empty restores list)
+/        show search (Enter submits; empty restores list)
 d        include-disabled (default off)
 r        refresh current tab
-Enter    cross-link (company child contact -> Contacts;
-         contact company_domain -> Companies)
-Escape   return focus to the table
+Enter    open Markdown pane (company+contacts / contact+company)
+Escape   close Markdown; or hide search and clear filter;
+         idle table does nothing
 q        quit
 ?        this help
 
@@ -116,68 +122,133 @@ def format_profile(profile: dict[str, Any] | None) -> str:
     return json.dumps(profile, indent=2, ensure_ascii=False, default=str)
 
 
-def _format_notes(notes: list[Note], total: int) -> str:
-    """Format capped notes plus the true total."""
-    lines = [f"notes ({len(notes)} of {total}, cap {NOTES_CAP}):"]
+def _join_names(values: list[str]) -> str:
+    """Comma-join names, or (none) when empty."""
+    return ", ".join(values) if values else "(none)"
+
+
+def _notes_markdown(
+    heading: str, notes: list[Note], total: int, *, level: int = 2
+) -> list[str]:
+    """Markdown section for capped notes plus the true total."""
+    prefix = "#" * level
+    lines = [f"{prefix} {heading} ({len(notes)} of {total}, cap {NOTES_CAP})", ""]
     if not notes:
         lines.append("(none)")
-        return "\n".join(lines)
+        lines.append("")
+        return lines
     for note in notes:
         lines.append(f"- {note.body}")
-    return "\n".join(lines)
+    lines.append("")
+    return lines
 
 
-def format_company_detail(
+def _company_core_markdown(
+    view: CompanyView, *, heading: str | None = None
+) -> list[str]:
+    """Core CompanyView fields as Markdown lines (no contacts extras)."""
+    disabled = view.disabled_reason or "(enabled)"
+    title = heading if heading is not None else f"# {view.name}"
+    sub_level = 2 if heading is None else 3
+    sub = "#" * sub_level
+    if view.profile is None:
+        profile_block = ["(no profile)", ""]
+    else:
+        profile_block = ["```json", format_profile(view.profile), "```", ""]
+    lines = [
+        title,
+        "",
+        f"- name: {view.name}",
+        f"- domain: {view.domain}",
+        f"- id: {view.id}",
+        f"- disabled: {disabled}",
+        f"- tags: {_join_names(view.tags)}",
+        f"- aliases: {_join_names(view.aliases)}",
+        f"- created_at: {view.created_at.isoformat()}",
+        f"- updated_at: {view.updated_at.isoformat()}",
+        "",
+        f"{sub} Profile",
+        "",
+        *profile_block,
+    ]
+    lines.extend(
+        _notes_markdown("Notes", view.notes, view.notes_total, level=sub_level)
+    )
+    return lines
+
+
+def _child_contact_line(child: dict[str, Any]) -> str:
+    """One Markdown list line for a company-view --full extra contact."""
+    email = str(child.get("email") or "")
+    first = child.get("first_name") or ""
+    last = child.get("last_name") or ""
+    name = f"{first} {last}".strip()
+    title = str(child.get("title") or "")
+    extra = " ".join(part for part in (name, title) if part)
+    if extra:
+        return f"- {email} ({extra})"
+    return f"- {email}"
+
+
+def format_company_markdown(
     view: CompanyView,
     *,
     child_contacts: list[dict[str, Any]] | None = None,
 ) -> str:
-    """Render core CompanyView fields; child contacts are extras."""
-    disabled = view.disabled_reason or "(enabled)"
-    tags = ", ".join(view.tags) if view.tags else "(none)"
-    aliases = ", ".join(view.aliases) if view.aliases else "(none)"
-    lines = [
-        f"name: {view.name}",
-        f"domain: {view.domain}",
-        f"id: {view.id}",
-        f"disabled: {disabled}",
-        f"tags: {tags}",
-        f"aliases: {aliases}",
-        f"created_at: {view.created_at.isoformat()}",
-        f"updated_at: {view.updated_at.isoformat()}",
-        "profile:",
-        format_profile(view.profile),
-        _format_notes(view.notes, view.notes_total),
-    ]
+    """Render company+contacts Markdown (contacts are --full extras)."""
+    lines = _company_core_markdown(view)
     if child_contacts is not None:
-        lines.append(f"contacts: {len(child_contacts)}")
-    return "\n".join(lines)
+        lines.extend(["## Contacts", ""])
+        if child_contacts:
+            lines.extend(_child_contact_line(child) for child in child_contacts)
+        else:
+            lines.append("(none)")
+        lines.append("")
+    return "\n".join(lines).strip() + "\n"
 
 
-def format_contact_detail(view: ContactView) -> str:
-    """Render core ContactView fields (same loader as contact view)."""
+def format_contact_markdown(
+    view: ContactView,
+    *,
+    company: CompanyView | None = None,
+) -> str:
+    """Render contact+company Markdown from shared view loaders."""
     disabled = view.disabled_reason or "(enabled)"
-    tags = ", ".join(view.tags) if view.tags else "(none)"
     confidence = (
         str(view.email_confidence) if view.email_confidence is not None else "(none)"
     )
-    return "\n".join(
-        [
-            f"name: {contact_display_name(view)}",
-            f"email: {view.email}",
-            f"id: {view.id}",
-            f"title: {view.title or '(none)'}",
-            f"company_domain: {view.company_domain or '(none)'}",
-            f"email_confidence: {confidence}",
-            f"disabled: {disabled}",
-            f"tags: {tags}",
-            f"created_at: {view.created_at.isoformat()}",
-            f"updated_at: {view.updated_at.isoformat()}",
-            _format_notes(view.notes, view.notes_total),
-            "company_notes:",
-            _format_notes(view.company_notes, view.company_notes_total),
-        ]
-    )
+    lines = [
+        f"# {contact_display_name(view)}",
+        "",
+        f"- email: {view.email}",
+        f"- id: {view.id}",
+        f"- title: {view.title or '(none)'}",
+        f"- company_domain: {view.company_domain or '(none)'}",
+        f"- email_confidence: {confidence}",
+        f"- disabled: {disabled}",
+        f"- tags: {_join_names(view.tags)}",
+        f"- created_at: {view.created_at.isoformat()}",
+        f"- updated_at: {view.updated_at.isoformat()}",
+        "",
+    ]
+    lines.extend(_notes_markdown("Notes", view.notes, view.notes_total))
+    if company is not None:
+        lines.extend(_company_core_markdown(company, heading="## Company"))
+    else:
+        lines.extend(
+            [
+                "## Company",
+                "",
+                f"- company_domain: {view.company_domain or '(none)'}",
+                "",
+            ]
+        )
+        lines.extend(
+            _notes_markdown(
+                "Company notes", view.company_notes, view.company_notes_total
+            )
+        )
+    return "\n".join(lines).strip() + "\n"
 
 
 def open_readonly_connection(
@@ -215,17 +286,298 @@ def open_readonly_connection(
 class HelpScreen(ModalScreen[None]):
     """Keybinding overlay."""
 
-    BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("escape", "close_help", "Close", show=False),
-    ]
-
     def compose(self) -> ComposeResult:
         """Render help text."""
         yield Static(HELP_TEXT, id="help-body")
 
-    def action_close_help(self) -> None:
-        """Close the overlay."""
-        self.dismiss()
+
+class DetailScreen(ModalScreen[None]):
+    """Markdown detail overlay (company+contacts or contact+company)."""
+
+    def __init__(self, markdown: str) -> None:
+        super().__init__()
+        self._markdown = markdown
+
+    def compose(self) -> ComposeResult:
+        """Render the Markdown body."""
+        yield Markdown(self._markdown, id="detail-markdown", open_links=False)
+
+
+class MailpilotTui(App[None]):
+    """Read-only one-table browser for companies and contacts."""
+
+    CSS = """
+    #status { dock: bottom; height: 1; }
+    TabbedContent { height: 1fr; }
+    DataTable { height: 1fr; }
+    Input.search { dock: bottom; height: 3; display: none; }
+    #help-body { padding: 1 2; }
+    #detail-markdown { padding: 1 2; height: 1fr; }
+    """
+
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("/", "focus_search", "Search", priority=True),
+        Binding("d", "toggle_disabled", "Disabled"),
+        Binding("r", "refresh", "Refresh"),
+        Binding("question_mark", "help", "Help"),
+        Binding("escape", "escape", "Back", show=False, priority=True),
+        Binding("q", "quit", "Quit"),
+    ]
+
+    def __init__(
+        self,
+        connection: psycopg.Connection[dict[str, Any]],
+    ) -> None:
+        super().__init__()
+        self.connection = connection
+        self.include_disabled = False
+        self.search_query = {"companies": "", "contacts": ""}
+        self.truncated = {"companies": False, "contacts": False}
+        self.company_rows: list[CompanySummary] = []
+        self.contact_rows: list[ContactSummary] = []
+        self.company_view: CompanyView | None = None
+        self.contact_view: ContactView | None = None
+        self.company_child_contacts: list[dict[str, Any]] = []
+        self.detail_markdown: str = ""
+
+    def compose(self) -> ComposeResult:
+        """Two tabs, one master table each, plus hidden search and status."""
+        with TabbedContent(id="tabs"):
+            with TabPane("Companies", id="companies"):
+                yield DataTable(id="company-table", cursor_type="row")
+            with TabPane("Contacts", id="contacts"):
+                yield DataTable(id="contact-table", cursor_type="row")
+        yield Input(
+            placeholder="/ search companies",
+            id="search",
+            classes="search",
+        )
+        yield Static(id="status")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        """Load both tabs and focus the company table."""
+        self._reload("companies")
+        self._reload("contacts")
+        self.query_one("#company-table", DataTable).focus()
+
+    def _active_tab(self) -> str:
+        """Return the active TabPane id (companies or contacts)."""
+        tabs = self.query_one("#tabs", TabbedContent)
+        return str(tabs.active)
+
+    def _search_input(self) -> Input:
+        """Return the on-screen search Input (hidden at rest)."""
+        return self.query_one("#search", Input)
+
+    def _search_visible(self) -> bool:
+        """Return True when the search Input is on screen."""
+        return bool(self._search_input().display)
+
+    def _master_table(self, tab: str) -> DataTable[str]:
+        """Return the master DataTable for a tab."""
+        widget_id = "company-table" if tab == "companies" else "contact-table"
+        return self.query_one(f"#{widget_id}", DataTable)
+
+    def _hide_search(self) -> None:
+        """Hide the search Input without changing the filter."""
+        search = self._search_input()
+        search.display = False
+
+    def _clear_search_and_restore(self, tab: str) -> None:
+        """Hide search, clear the filter, restore the list, focus the table."""
+        search = self._search_input()
+        search.display = False
+        search.value = ""
+        self.search_query[tab] = ""
+        self._reload(tab)
+        self._master_table(tab).focus()
+
+    def action_focus_search(self) -> None:
+        """Show the on-screen search Input and focus it."""
+        if isinstance(self.screen, (DetailScreen, HelpScreen)):
+            return
+        tab = self._active_tab()
+        search = self._search_input()
+        search.display = True
+        search.placeholder = f"/ search {tab}"
+        search.value = self.search_query[tab]
+        search.focus()
+
+    def action_toggle_disabled(self) -> None:
+        """Toggle include-disabled (default off) and reload lists."""
+        if isinstance(self.focused, Input):
+            return
+        if isinstance(self.screen, (DetailScreen, HelpScreen)):
+            return
+        self.include_disabled = not self.include_disabled
+        self._reload("companies")
+        self._reload("contacts")
+
+    def action_refresh(self) -> None:
+        """Reload the active tab list."""
+        if isinstance(self.screen, (DetailScreen, HelpScreen)):
+            return
+        self._reload(self._active_tab())
+
+    def action_help(self) -> None:
+        """Show the keybinding overlay."""
+        if isinstance(self.screen, (DetailScreen, HelpScreen)):
+            return
+        self.push_screen(HelpScreen())
+
+    def action_escape(self) -> None:
+        """Contextual Esc: close Markdown, or hide search/clear filter, or no-op."""
+        if isinstance(self.screen, (DetailScreen, HelpScreen)):
+            self.pop_screen()
+            self._master_table(self._active_tab()).focus()
+            return
+        tab = self._active_tab()
+        if self._search_visible() or self.search_query[tab]:
+            self._clear_search_and_restore(tab)
+            return
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Run search on submit; empty query restores the list path."""
+        if event.input.id != "search":
+            return
+        tab = self._active_tab()
+        self.search_query[tab] = event.value.strip()
+        self._reload(tab)
+        self._hide_search()
+        self._master_table(tab).focus()
+
+    def on_tabbed_content_tab_activated(
+        self, event: TabbedContent.TabActivated
+    ) -> None:
+        """Refresh status and search placeholder when the operator switches tabs."""
+        del event
+        tab = self._active_tab()
+        search = self._search_input()
+        search.placeholder = f"/ search {tab}"
+        if self._search_visible():
+            search.value = self.search_query[tab]
+        self._update_status()
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Enter on a highlighted row opens the Markdown pane."""
+        table_id = event.data_table.id
+        row_key = str(event.row_key.value)
+        if table_id == "company-table":
+            self._open_detail("companies", row_key)
+        elif table_id == "contact-table":
+            self._open_detail("contacts", row_key)
+
+    def _open_detail(self, tab: str, entity_id: str) -> None:
+        """Load shared view loaders into a Markdown overlay."""
+        if tab == "companies":
+            view = load_company_view(self.connection, entity_id)
+            self.company_view = view
+            if view is None:
+                self.company_child_contacts = []
+                self.detail_markdown = ""
+                return
+            children = list_company_inspect_contacts(self.connection, view.id)
+            self.company_child_contacts = children
+            markdown = format_company_markdown(view, child_contacts=children)
+            self.detail_markdown = markdown
+            self.push_screen(DetailScreen(markdown))
+            return
+        view = load_contact_view(self.connection, entity_id)
+        self.contact_view = view
+        if view is None:
+            self.detail_markdown = ""
+            return
+        company: CompanyView | None = None
+        if view.company_id is not None:
+            company = load_company_view(self.connection, view.company_id)
+        markdown = format_contact_markdown(view, company=company)
+        self.detail_markdown = markdown
+        self.push_screen(DetailScreen(markdown))
+
+    def _reload(self, tab: str) -> None:
+        """Fetch list or search for one tab and refill the master table."""
+        query = self.search_query[tab]
+        if tab == "companies":
+            if query:
+                fetched = search_companies(self.connection, query, limit=COMPANY_LIMIT)
+            else:
+                fetched = list_companies(
+                    self.connection,
+                    limit=COMPANY_LIMIT,
+                    include_disabled=self.include_disabled,
+                )
+            self.truncated[tab] = is_truncated(len(fetched), COMPANY_LIMIT)
+            rows = hide_disabled(fetched, include_disabled=self.include_disabled)
+            self.company_rows = rows
+            self._fill_company_table(rows)
+        else:
+            if query:
+                fetched = search_contacts(self.connection, query, limit=CONTACT_LIMIT)
+            else:
+                fetched = list_contacts(
+                    self.connection,
+                    limit=CONTACT_LIMIT,
+                    include_disabled=self.include_disabled,
+                )
+            self.truncated[tab] = is_truncated(len(fetched), CONTACT_LIMIT)
+            rows = hide_disabled(fetched, include_disabled=self.include_disabled)
+            self.contact_rows = rows
+            self._fill_contact_table(rows)
+        self._update_status()
+
+    def _fill_company_table(self, rows: list[CompanySummary]) -> None:
+        """Replace company master rows."""
+        table = self.query_one("#company-table", DataTable)
+        table.clear(columns=True)
+        headers = ["name", "domain", "profile", "contacts"]
+        if self.include_disabled:
+            headers.append("disabled")
+        table.add_columns(*headers)
+        table.cursor_type = "row"
+        for row in rows:
+            table.add_row(
+                *_company_cells(row, include_disabled=self.include_disabled),
+                key=row.id,
+            )
+
+    def _fill_contact_table(self, rows: list[ContactSummary]) -> None:
+        """Replace contact master rows."""
+        table = self.query_one("#contact-table", DataTable)
+        table.clear(columns=True)
+        headers = ["name", "email", "title", "company", "confidence"]
+        if self.include_disabled:
+            headers.append("disabled")
+        table.add_columns(*headers)
+        table.cursor_type = "row"
+        for row in rows:
+            table.add_row(
+                *_contact_cells(row, include_disabled=self.include_disabled),
+                key=row.id,
+            )
+
+    def _update_status(self) -> None:
+        """Show tab, count, truncated flag, disabled toggle, search."""
+        tab = self._active_tab()
+        count = len(self.company_rows) if tab == "companies" else len(self.contact_rows)
+        truncated = " truncated" if self.truncated[tab] else ""
+        disabled = "on" if self.include_disabled else "off"
+        query = self.search_query[tab]
+        query_bit = f" q={query}" if query else ""
+        label = "Companies" if tab == "companies" else "Contacts"
+        self.query_one("#status", Static).update(
+            f"{label}  {count}{truncated}  disabled={disabled}{query_bit}"
+        )
+
+    def _select_row(self, table_id: str, key: str) -> bool:
+        """Move the cursor to a row key. Return True when found."""
+        table = self.query_one(f"#{table_id}", DataTable)
+        for index, row in enumerate(table.ordered_rows):
+            if str(row.key.value) == key:
+                table.move_cursor(row=index)
+                table.focus()
+                return True
+        return False
 
 
 def _cell(value: object) -> str:
@@ -262,399 +614,6 @@ def _contact_cells(row: ContactSummary, *, include_disabled: bool) -> tuple[str,
     if include_disabled:
         return (*cells, row.disabled_reason or "")
     return cells
-
-
-class MailpilotTui(App[None]):
-    """Read-only master-detail browser for companies and contacts."""
-
-    CSS = """
-    #status { dock: bottom; height: 1; }
-    TabbedContent { height: 1fr; }
-    .pane { height: 1fr; }
-    #company-table, #contact-table { width: 3fr; height: 1fr; }
-    #company-detail-wrap, #contact-detail-wrap { width: 2fr; height: 1fr; }
-    #company-child-contacts { height: 12; }
-    Input.search { dock: bottom; height: 3; }
-    #help-body { padding: 1 2; }
-    """
-
-    BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("/", "focus_search", "Search"),
-        Binding("d", "toggle_disabled", "Disabled"),
-        Binding("r", "refresh", "Refresh"),
-        Binding("question_mark", "help", "Help"),
-        Binding("escape", "return_table", "Back", show=False),
-        Binding("q", "quit", "Quit"),
-    ]
-
-    def __init__(
-        self,
-        connection: psycopg.Connection[dict[str, Any]],
-        *,
-        detail_delay: float = 0.15,
-    ) -> None:
-        super().__init__()
-        self.connection = connection
-        self.detail_delay = detail_delay
-        self.include_disabled = False
-        self.search_query = {"companies": "", "contacts": ""}
-        self.truncated = {"companies": False, "contacts": False}
-        self.company_rows: list[CompanySummary] = []
-        self.contact_rows: list[ContactSummary] = []
-        self.company_view: CompanyView | None = None
-        self.contact_view: ContactView | None = None
-        self.company_child_contacts: list[dict[str, Any]] = []
-        self._detail_timer: Timer | None = None
-
-    def compose(self) -> ComposeResult:
-        """Two tabs, each master-detail, plus status."""
-        with TabbedContent(id="tabs"):
-            with TabPane("Companies", id="companies"):
-                with Horizontal(classes="pane"):
-                    yield DataTable(id="company-table", cursor_type="row")
-                    with Vertical(id="company-detail-wrap"):
-                        yield VerticalScroll(Static(id="company-detail"))
-                        yield DataTable(
-                            id="company-child-contacts",
-                            cursor_type="row",
-                        )
-                yield Input(
-                    placeholder="/ search companies",
-                    id="company-search",
-                    classes="search",
-                )
-            with TabPane("Contacts", id="contacts"):
-                with Horizontal(classes="pane"):
-                    yield DataTable(id="contact-table", cursor_type="row")
-                    with Vertical(id="contact-detail-wrap"):
-                        yield VerticalScroll(Static(id="contact-detail"))
-                yield Input(
-                    placeholder="/ search contacts",
-                    id="contact-search",
-                    classes="search",
-                )
-        yield Static(id="status")
-        yield Footer()
-
-    def on_mount(self) -> None:
-        """Load both tabs and focus the company table."""
-        child = self.query_one("#company-child-contacts", DataTable)
-        child.add_columns("email", "name", "title")
-        child.cursor_type = "row"
-        self._reload("companies")
-        self._reload("contacts")
-        self.query_one("#company-table", DataTable).focus()
-
-    def _active_tab(self) -> str:
-        """Return the active TabPane id (companies or contacts)."""
-        tabs = self.query_one("#tabs", TabbedContent)
-        return str(tabs.active)
-
-    def _search_input(self, tab: str) -> Input:
-        """Return the search Input for a tab."""
-        widget_id = "company-search" if tab == "companies" else "contact-search"
-        return self.query_one(f"#{widget_id}", Input)
-
-    def _master_table(self, tab: str) -> DataTable[str]:
-        """Return the master DataTable for a tab."""
-        widget_id = "company-table" if tab == "companies" else "contact-table"
-        return self.query_one(f"#{widget_id}", DataTable)
-
-    def action_focus_search(self) -> None:
-        """Focus the search input for the active tab."""
-        self._search_input(self._active_tab()).focus()
-
-    def action_toggle_disabled(self) -> None:
-        """Toggle include-disabled (default off) and reload lists."""
-        focused = self.focused
-        if isinstance(focused, Input):
-            return
-        self.include_disabled = not self.include_disabled
-        self._reload("companies")
-        self._reload("contacts")
-
-    def action_refresh(self) -> None:
-        """Reload the active tab list and focused detail."""
-        self._reload(self._active_tab())
-
-    def action_help(self) -> None:
-        """Show the keybinding overlay."""
-        self.push_screen(HelpScreen())
-
-    def action_return_table(self) -> None:
-        """Clear search focus or return focus to the table."""
-        self._master_table(self._active_tab()).focus()
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Run search on submit; empty query restores the list path."""
-        tab = "companies" if event.input.id == "company-search" else "contacts"
-        self.search_query[tab] = event.value.strip()
-        self._reload(tab)
-        self._master_table(tab).focus()
-
-    def on_tabbed_content_tab_activated(
-        self, event: TabbedContent.TabActivated
-    ) -> None:
-        """Refresh status when the operator switches tabs."""
-        del event
-        self._update_status()
-
-    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
-        """Cursor motion updates the detail pane (debounced)."""
-        table_id = event.data_table.id
-        row_key = str(event.row_key.value)
-        if table_id == "company-table":
-            self._schedule_detail("companies", row_key)
-        elif table_id == "contact-table":
-            self._schedule_detail("contacts", row_key)
-
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        """Enter cross-links company child contacts and contact domains."""
-        table_id = event.data_table.id
-        row_key = str(event.row_key.value)
-        if table_id == "company-child-contacts":
-            self.cross_link_to_contact(row_key)
-        elif table_id == "contact-table":
-            self.cross_link_to_company(row_key)
-
-    def _cancel_detail_timer(self) -> None:
-        """Stop a pending cursor-debounce so reload cannot flash a stale pane."""
-        if self._detail_timer is not None:
-            self._detail_timer.stop()
-            self._detail_timer = None
-
-    def _schedule_detail(self, tab: str, entity_id: str) -> None:
-        """Debounce load_*_view on rapid cursor motion."""
-        self._cancel_detail_timer()
-        if self.detail_delay <= 0:
-            self._load_detail(tab, entity_id)
-            return
-        self._detail_timer = self.set_timer(
-            self.detail_delay,
-            lambda: self._load_detail(tab, entity_id),
-        )
-
-    def _master_ids(self, tab: str) -> set[str]:
-        """Return ids currently in the master table for a tab."""
-        rows = self.company_rows if tab == "companies" else self.contact_rows
-        return {row.id for row in rows}
-
-    def _load_detail(self, tab: str, entity_id: str) -> None:
-        """Load shared view loaders into the right pane."""
-        if entity_id not in self._master_ids(tab):
-            return
-        if tab == "companies":
-            view = load_company_view(self.connection, entity_id)
-            self.company_view = view
-            if view is None:
-                self.company_child_contacts = []
-                self.query_one("#company-detail", Static).update("(not found)")
-                self._fill_child_contacts([])
-                return
-            children = list_company_inspect_contacts(self.connection, view.id)
-            self.company_child_contacts = children
-            self.query_one("#company-detail", Static).update(
-                format_company_detail(view, child_contacts=children)
-            )
-            self._fill_child_contacts(children)
-            return
-        view = load_contact_view(self.connection, entity_id)
-        self.contact_view = view
-        if view is None:
-            self.query_one("#contact-detail", Static).update("(not found)")
-            return
-        self.query_one("#contact-detail", Static).update(format_contact_detail(view))
-
-    def _fill_child_contacts(self, children: list[dict[str, Any]]) -> None:
-        """Fill the company-detail extra contact table."""
-        table = self.query_one("#company-child-contacts", DataTable)
-        table.clear()
-        for child in children:
-            email = str(child.get("email") or "")
-            first = child.get("first_name") or ""
-            last = child.get("last_name") or ""
-            name = f"{first} {last}".strip() or email
-            table.add_row(
-                email,
-                name,
-                str(child.get("title") or ""),
-                key=str(child.get("id") or email),
-            )
-
-    def _reload(self, tab: str) -> None:
-        """Fetch list or search for one tab and refill the master table."""
-        self._cancel_detail_timer()
-        query = self.search_query[tab]
-        if tab == "companies":
-            if query:
-                fetched = search_companies(self.connection, query, limit=COMPANY_LIMIT)
-            else:
-                fetched = list_companies(
-                    self.connection,
-                    limit=COMPANY_LIMIT,
-                    include_disabled=self.include_disabled,
-                )
-            self.truncated[tab] = is_truncated(len(fetched), COMPANY_LIMIT)
-            rows = hide_disabled(fetched, include_disabled=self.include_disabled)
-            self.company_rows = rows
-            self._fill_company_table(rows)
-        else:
-            if query:
-                fetched = search_contacts(self.connection, query, limit=CONTACT_LIMIT)
-            else:
-                fetched = list_contacts(
-                    self.connection,
-                    limit=CONTACT_LIMIT,
-                    include_disabled=self.include_disabled,
-                )
-            self.truncated[tab] = is_truncated(len(fetched), CONTACT_LIMIT)
-            rows = hide_disabled(fetched, include_disabled=self.include_disabled)
-            self.contact_rows = rows
-            self._fill_contact_table(rows)
-        self._update_status()
-        self._load_first_detail(tab)
-
-    def _fill_company_table(self, rows: list[CompanySummary]) -> None:
-        """Replace company master rows."""
-        table = self.query_one("#company-table", DataTable)
-        table.clear(columns=True)
-        headers = ["name", "domain", "profile", "contacts"]
-        if self.include_disabled:
-            headers.append("disabled")
-        table.add_columns(*headers)
-        table.cursor_type = "row"
-        for row in rows:
-            table.add_row(
-                *_company_cells(row, include_disabled=self.include_disabled),
-                key=row.id,
-            )
-
-    def _fill_contact_table(self, rows: list[ContactSummary]) -> None:
-        """Replace contact master rows."""
-        table = self.query_one("#contact-table", DataTable)
-        table.clear(columns=True)
-        headers = ["name", "email", "title", "company", "confidence"]
-        if self.include_disabled:
-            headers.append("disabled")
-        table.add_columns(*headers)
-        table.cursor_type = "row"
-        for row in rows:
-            table.add_row(
-                *_contact_cells(row, include_disabled=self.include_disabled),
-                key=row.id,
-            )
-
-    def _load_first_detail(self, tab: str) -> None:
-        """Load detail for the first master row when present."""
-        rows: Sequence[CompanySummary | ContactSummary]
-        rows = self.company_rows if tab == "companies" else self.contact_rows
-        if not rows:
-            self._cancel_detail_timer()
-            if tab == "companies":
-                self.company_view = None
-                self.company_child_contacts = []
-                self.query_one("#company-detail", Static).update("(no rows)")
-                self._fill_child_contacts([])
-            else:
-                self.contact_view = None
-                self.query_one("#contact-detail", Static).update("(no rows)")
-            return
-        self._load_detail(tab, rows[0].id)
-
-    def _update_status(self) -> None:
-        """Show tab, count, truncated flag, disabled toggle, search."""
-        tab = self._active_tab()
-        count = len(self.company_rows) if tab == "companies" else len(self.contact_rows)
-        truncated = " truncated" if self.truncated[tab] else ""
-        disabled = "on" if self.include_disabled else "off"
-        query = self.search_query[tab]
-        query_bit = f" q={query}" if query else ""
-        label = "Companies" if tab == "companies" else "Contacts"
-        self.query_one("#status", Static).update(
-            f"{label}  {count}{truncated}  disabled={disabled}{query_bit}"
-        )
-
-    def _select_row(self, table_id: str, key: str) -> bool:
-        """Move the cursor to a row key. Return True when found."""
-        table = self.query_one(f"#{table_id}", DataTable)
-        for index, row in enumerate(table.ordered_rows):
-            if str(row.key.value) == key:
-                table.move_cursor(row=index)
-                table.focus()
-                return True
-        return False
-
-    def _ensure_include_disabled(self) -> None:
-        """Turn include-disabled on and reload both tabs for a hidden row."""
-        if self.include_disabled:
-            return
-        self.include_disabled = True
-        self._reload("companies")
-        self._reload("contacts")
-
-    def cross_link_to_contact(self, contact_id: str) -> None:
-        """Focus a contact in the Contacts tab (Enter from company extras)."""
-        email = ""
-        disabled = False
-        for child in self.company_child_contacts:
-            if str(child.get("id")) == contact_id:
-                email = str(child.get("email") or "")
-                disabled = child.get("disabled_reason") is not None
-                break
-        tabs = self.query_one("#tabs", TabbedContent)
-        tabs.active = "contacts"
-        if not any(row.id == contact_id for row in self.contact_rows):
-            if disabled:
-                self.search_query["contacts"] = ""
-                self._search_input("contacts").value = ""
-                self._ensure_include_disabled()
-            elif email:
-                self.search_query["contacts"] = email
-                self._search_input("contacts").value = email
-                self._reload("contacts")
-        tabs.active = "contacts"
-        if self._select_row("contact-table", contact_id):
-            self._load_detail("contacts", contact_id)
-        self.query_one("#contact-table", DataTable).focus()
-        self._update_status()
-
-    def cross_link_to_company(self, contact_id: str) -> None:
-        """Focus the parent company in the Companies tab."""
-        domain: str | None = None
-        for row in self.contact_rows:
-            if row.id == contact_id:
-                domain = row.company_domain
-                break
-        if domain is None and self.contact_view is not None:
-            domain = self.contact_view.company_domain
-        if not domain:
-            return
-        tabs = self.query_one("#tabs", TabbedContent)
-        tabs.active = "companies"
-        match = next((row for row in self.company_rows if row.domain == domain), None)
-        if match is None:
-            self.search_query["companies"] = domain
-            self._search_input("companies").value = domain
-            self._reload("companies")
-            match = next(
-                (row for row in self.company_rows if row.domain == domain),
-                None,
-            )
-        if match is None:
-            self.search_query["companies"] = ""
-            self._search_input("companies").value = ""
-            self._ensure_include_disabled()
-            match = next(
-                (row for row in self.company_rows if row.domain == domain),
-                None,
-            )
-        if match is None:
-            return
-        tabs.active = "companies"
-        if self._select_row("company-table", match.id):
-            self._load_detail("companies", match.id)
-        self.query_one("#company-table", DataTable).focus()
-        self._update_status()
 
 
 def run_tui() -> None:
