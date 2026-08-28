@@ -9,7 +9,7 @@ from typing import Any, ClassVar, Protocol
 import psycopg
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
-from textual.containers import Vertical
+from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import (
     DataTable,
@@ -164,7 +164,9 @@ def _notes_markdown(
         lines.append("")
         return lines
     for note in notes:
-        lines.append(f"- {note.body}")
+        parts = note.body.splitlines() or [""]
+        lines.append(f"- {parts[0]}")
+        lines.extend(f"  {part}" for part in parts[1:])
     lines.append("")
     return lines
 
@@ -208,6 +210,10 @@ def _child_contact_line(child: dict[str, Any]) -> str:
     name = f"{first} {last}".strip()
     title = str(child.get("title") or "")
     extra = " ".join(part for part in (name, title) if part)
+    reason = child.get("disabled_reason")
+    if reason:
+        marker = f"disabled: {reason}"
+        extra = f"{extra}; {marker}" if extra else marker
     if extra:
         return f"- {email} ({extra})"
     return f"- {email}"
@@ -309,13 +315,17 @@ def open_readonly_connection(
 class HelpScreen(ModalScreen[None]):
     """Keybinding overlay."""
 
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("q", "app.quit", "Quit", show=False),
+    ]
+
     def compose(self) -> ComposeResult:
         """Render help text."""
         yield Static(HELP_TEXT, id="help-body")
 
 
 class SearchScreen(ModalScreen[str]):
-    """Compact centered search overlay (bounded width, not a dock)."""
+    """Centered search overlay."""
 
     def __init__(self, title: str, initial: str = "") -> None:
         super().__init__()
@@ -340,13 +350,18 @@ class SearchScreen(ModalScreen[str]):
 class DetailScreen(ModalScreen[None]):
     """Markdown detail overlay (company+contacts or contact+company)."""
 
+    BINDINGS: ClassVar[list[BindingType]] = [
+        Binding("q", "app.quit", "Quit", show=False),
+    ]
+
     def __init__(self, markdown: str) -> None:
         super().__init__()
         self._markdown = markdown
 
     def compose(self) -> ComposeResult:
-        """Render the Markdown body."""
-        yield Markdown(self._markdown, id="detail-markdown", open_links=False)
+        """Render a scrollable Markdown document."""
+        with VerticalScroll(id="detail-scroll"):
+            yield Markdown(self._markdown, id="detail-markdown", open_links=False)
 
 
 class MailpilotTui(App[None]):
@@ -357,7 +372,8 @@ class MailpilotTui(App[None]):
     TabbedContent { height: 1fr; }
     DataTable { height: 1fr; }
     #help-body { padding: 1 2; }
-    #detail-markdown { padding: 1 2; height: 1fr; }
+    #detail-scroll { height: 1fr; }
+    #detail-markdown { padding: 1 2; height: auto; overflow-y: auto; }
     SearchScreen { align: center middle; }
     #search-dialog {
         width: 48;
@@ -397,7 +413,7 @@ class MailpilotTui(App[None]):
         self.detail_markdown: str = ""
 
     def compose(self) -> ComposeResult:
-        """Two tabs, one master table each, plus status. Search is an overlay."""
+        """Two tabs, one master table each, plus status."""
         with TabbedContent(id="tabs"):
             with TabPane("Companies", id="companies"):
                 yield DataTable(id="company-table", cursor_type="row")
@@ -493,9 +509,10 @@ class MailpilotTui(App[None]):
     def on_tabbed_content_tab_activated(
         self, event: TabbedContent.TabActivated
     ) -> None:
-        """Refresh status when the operator switches tabs."""
+        """Refresh status and move focus to the active table."""
         del event
         self._update_status()
+        self._master_table(self._active_tab()).focus()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Enter on a highlighted row opens the Markdown pane."""

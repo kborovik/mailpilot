@@ -34,6 +34,7 @@ from mailpilot.tui import (
     COMPANY_LIMIT,
     CONTACT_LIMIT,
     DetailScreen,
+    HelpScreen,
     MailpilotTui,
     SearchScreen,
     TuiConnectError,
@@ -626,6 +627,7 @@ def test_enter_company_markdown_includes_contacts(
                 assert "## Contacts" in source
                 assert source.startswith(f"# {ids['company'].name}")
                 assert "```json" not in source
+                assert len(app.screen.query("#detail-scroll")) == 1
                 await pilot.press("escape")
                 await pilot.pause()
                 assert not isinstance(app.screen, DetailScreen)
@@ -802,6 +804,79 @@ def test_format_company_markdown_is_document_not_record_dump() -> None:
     assert '"summary":' not in text
 
 
+def test_child_contact_markdown_marks_disabled() -> None:
+    """§V.168 extras: disabled child contacts carry the reason in Markdown."""
+    from datetime import UTC, datetime
+
+    from mailpilot.models import CompanyView
+
+    now = datetime(2024, 1, 1, tzinfo=UTC)
+    view = CompanyView(
+        id="co-1",
+        name="View Co",
+        domain="viewco.tui",
+        profile=None,
+        tags=[],
+        aliases=[],
+        disabled_reason=None,
+        notes=[],
+        notes_total=0,
+        created_at=now,
+        updated_at=now,
+    )
+    text = format_company_markdown(
+        view,
+        child_contacts=[
+            {
+                "email": "ada@viewco.tui",
+                "first_name": "Ada",
+                "last_name": "Lovelace",
+                "title": "VP",
+            },
+            {
+                "email": "bob@viewco.tui",
+                "first_name": "",
+                "last_name": "",
+                "title": "",
+                "disabled_reason": "retired",
+            },
+        ],
+    )
+    assert "- ada@viewco.tui (Ada Lovelace VP)" in text
+    assert "- bob@viewco.tui (disabled: retired)" in text
+
+
+def test_notes_markdown_indents_continuation_lines() -> None:
+    """Multi-line notes stay one Markdown list item."""
+    from datetime import UTC, datetime
+
+    from mailpilot.models import CompanyView, Note
+
+    now = datetime(2024, 1, 1, tzinfo=UTC)
+    view = CompanyView(
+        id="co-1",
+        name="View Co",
+        domain="viewco.tui",
+        profile=None,
+        tags=[],
+        aliases=[],
+        disabled_reason=None,
+        notes=[
+            Note(
+                id="n-1",
+                company_id="co-1",
+                body="First line\nsecond line",
+                created_at=now,
+            )
+        ],
+        notes_total=1,
+        created_at=now,
+        updated_at=now,
+    )
+    text = format_company_markdown(view)
+    assert "- First line\n  second line" in text
+
+
 def test_format_contact_markdown_is_document_not_record_dump() -> None:
     """§V.195: contact detail is H1 + lists; company profile stays Markdown."""
     from datetime import UTC, datetime
@@ -857,6 +932,75 @@ def test_format_contact_markdown_is_document_not_record_dump() -> None:
     assert "- timezone: (none)" in text
     assert "```json" not in text
     assert '"email":' not in text
+
+
+def test_tab_switch_focuses_master_table(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """After a tab change, Enter targets the highlighted row."""
+    from textual.widgets import DataTable, TabbedContent
+
+    app, tui_conn, _ids = _run_pilot(database_connection)
+    try:
+
+        async def body() -> None:
+            async with app.run_test(size=(140, 40)) as pilot:
+                await pilot.pause()
+                tabs = app.query_one("#tabs", TabbedContent)
+                tabs.active = "contacts"
+                await pilot.pause()
+                assert app.focused is app.query_one("#contact-table", DataTable)
+
+        asyncio.run(body())
+    finally:
+        tui_conn.close()
+
+
+def test_q_quits_from_help(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Documented q quits from the Help overlay."""
+    app, tui_conn, _ids = _run_pilot(database_connection)
+    try:
+
+        async def body() -> None:
+            async with app.run_test(size=(140, 40)) as pilot:
+                await pilot.pause()
+                await pilot.press("question_mark")
+                await pilot.pause()
+                assert isinstance(app.screen, HelpScreen)
+                await pilot.press("q")
+                await pilot.pause()
+                assert not app.is_running
+
+        asyncio.run(body())
+    finally:
+        tui_conn.close()
+
+
+def test_q_quits_from_detail(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Documented q quits from the Detail overlay."""
+    from textual.widgets import DataTable
+
+    app, tui_conn, ids = _run_pilot(database_connection)
+    try:
+
+        async def body() -> None:
+            async with app.run_test(size=(140, 40)) as pilot:
+                await pilot.pause()
+                app._select_row("company-table", ids["company"].id)  # pyright: ignore[reportPrivateUsage]
+                app.query_one("#company-table", DataTable).action_select_cursor()
+                await pilot.pause()
+                assert isinstance(app.screen, DetailScreen)
+                await pilot.press("q")
+                await pilot.pause()
+                assert not app.is_running
+
+        asyncio.run(body())
+    finally:
+        tui_conn.close()
 
 
 def test_tui_help_has_no_spec_cite() -> None:
