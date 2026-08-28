@@ -45,6 +45,7 @@ from mailpilot.tui import (
     hide_disabled,
     is_truncated,
     open_readonly_connection,
+    visible_search_rows,
 )
 
 REPO = Path(__file__).resolve().parents[1]
@@ -1404,3 +1405,63 @@ def test_hide_disabled_contacts() -> None:
     assert [r.email for r in hide_disabled([live, gone], include_disabled=False)] == [
         "a@t.tui"
     ]
+
+
+class _DisabledRow:
+    """Minimal row for visible_search_rows."""
+
+    def __init__(self, name: str, disabled_reason: str | None) -> None:
+        self.name = name
+        self.disabled_reason = disabled_reason
+
+
+def test_visible_search_rows_skips_disabled_before_display_cap() -> None:
+    """Search hide-disabled runs before slicing to the display cap."""
+    dead = [_DisabledRow(f"d{i}", "retired") for i in range(5)]
+    live = [_DisabledRow(f"l{i}", None) for i in range(3)]
+    rows, truncated = visible_search_rows(
+        [*dead, *live],
+        display_limit=3,
+        include_disabled=False,
+        fetch_limit=8,
+    )
+    assert [row.name for row in rows] == ["l0", "l1", "l2"]
+    assert truncated is True
+
+
+def test_visible_search_rows_include_disabled_keeps_order() -> None:
+    """Opt-in disabled search keeps disabled rows and the fetch-cap marker."""
+    dead = _DisabledRow("gone", "retired")
+    live = _DisabledRow("live", None)
+    rows, truncated = visible_search_rows(
+        [dead, live],
+        display_limit=2,
+        include_disabled=True,
+        fetch_limit=2,
+    )
+    assert [row.name for row in rows] == ["gone", "live"]
+    assert truncated is True
+
+
+def test_company_start_page_does_not_focus_contacts_table(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Start-page focus stays on the scroll document, not the Contacts table."""
+    from textual.widgets import DataTable
+
+    app, tui_conn, ids = _run_pilot(database_connection)
+    try:
+
+        async def body() -> None:
+            async with app.run_test(size=(140, 40)) as pilot:
+                await pilot.pause()
+                app._select_row("company-table", ids["company"].id)  # pyright: ignore[reportPrivateUsage]
+                app._open_detail("companies", ids["company"].id)  # pyright: ignore[reportPrivateUsage]
+                await pilot.pause()
+                assert isinstance(app.screen, CompanyStartScreen)
+                table = app.screen.query_one("#company-contacts-table", DataTable)
+                assert app.focused is not table
+
+        asyncio.run(body())
+    finally:
+        tui_conn.close()

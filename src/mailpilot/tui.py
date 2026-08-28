@@ -116,6 +116,26 @@ def is_truncated(fetched_count: int, limit: int) -> bool:
     return fetched_count >= limit
 
 
+_SEARCH_OVERFETCH = 10
+
+
+def visible_search_rows[T: _HasDisabled](
+    fetched: Sequence[T],
+    *,
+    display_limit: int,
+    include_disabled: bool,
+    fetch_limit: int,
+) -> tuple[list[T], bool]:
+    """Hide disabled (unless opted in), then slice to the display cap.
+
+    Truncation is true when visible rows fill the display cap, or the
+    raw fetch itself hit ``fetch_limit`` (more matches may exist).
+    """
+    rows = hide_disabled(fetched, include_disabled=include_disabled)
+    truncated = len(rows) >= display_limit or len(fetched) >= fetch_limit
+    return rows[:display_limit], truncated
+
+
 def contact_display_name(row: ContactSummary | ContactView) -> str:
     """Return first+last, or email when the name is empty."""
     parts = [part for part in (row.first_name, row.last_name) if part]
@@ -239,7 +259,7 @@ def _item_lines(values: Any) -> list[str]:
 
 
 def _company_start_upper_lines(view: CompanyView) -> list[str]:
-    """Start-page Markdown above the Contacts DataTable (heading only)."""
+    """Start-page Markdown above the Contacts DataTable."""
     lines = [f"# {view.name}", ""]
     if view.disabled_reason:
         lines.append(view.disabled_reason)
@@ -470,7 +490,6 @@ class CompanyStartScreen(ModalScreen[None]):
         """Fill the Contacts DataTable from company view --full extras."""
         table = self.query_one("#company-contacts-table", DataTable)
         _fill_company_contacts_table(table, self._child_contacts)
-        table.focus()
 
 
 class MailpilotTui(App[None]):
@@ -690,28 +709,52 @@ class MailpilotTui(App[None]):
         query = self.search_query[tab]
         if tab == "companies":
             if query:
-                fetched = search_companies(self.connection, query, limit=COMPANY_LIMIT)
+                fetch_limit = (
+                    COMPANY_LIMIT
+                    if self.include_disabled
+                    else COMPANY_LIMIT * _SEARCH_OVERFETCH
+                )
+                fetched = search_companies(self.connection, query, limit=fetch_limit)
+                rows, truncated = visible_search_rows(
+                    fetched,
+                    display_limit=COMPANY_LIMIT,
+                    include_disabled=self.include_disabled,
+                    fetch_limit=fetch_limit,
+                )
             else:
                 fetched = list_companies(
                     self.connection,
                     limit=COMPANY_LIMIT,
                     include_disabled=self.include_disabled,
                 )
-            self.truncated[tab] = is_truncated(len(fetched), COMPANY_LIMIT)
-            rows = hide_disabled(fetched, include_disabled=self.include_disabled)
+                truncated = is_truncated(len(fetched), COMPANY_LIMIT)
+                rows = hide_disabled(fetched, include_disabled=self.include_disabled)
+            self.truncated[tab] = truncated
             self.company_rows = rows
             self._fill_company_table(rows)
         else:
             if query:
-                fetched = search_contacts(self.connection, query, limit=CONTACT_LIMIT)
+                fetch_limit = (
+                    CONTACT_LIMIT
+                    if self.include_disabled
+                    else CONTACT_LIMIT * _SEARCH_OVERFETCH
+                )
+                fetched = search_contacts(self.connection, query, limit=fetch_limit)
+                rows, truncated = visible_search_rows(
+                    fetched,
+                    display_limit=CONTACT_LIMIT,
+                    include_disabled=self.include_disabled,
+                    fetch_limit=fetch_limit,
+                )
             else:
                 fetched = list_contacts(
                     self.connection,
                     limit=CONTACT_LIMIT,
                     include_disabled=self.include_disabled,
                 )
-            self.truncated[tab] = is_truncated(len(fetched), CONTACT_LIMIT)
-            rows = hide_disabled(fetched, include_disabled=self.include_disabled)
+                truncated = is_truncated(len(fetched), CONTACT_LIMIT)
+                rows = hide_disabled(fetched, include_disabled=self.include_disabled)
+            self.truncated[tab] = truncated
             self.contact_rows = rows
             self._fill_contact_table(rows)
         self._update_status()
