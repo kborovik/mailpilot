@@ -16,9 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `mailpilot tui` shows one table per tab. `/` opens on-screen search.
-  Enter opens a Markdown pane (company plus contacts, or contact plus
-  company). Escape closes the pane, or hides search and clears the
-  filter.
+  Enter opens a formatted Markdown document (H1 plus field lists;
+  company profile as Markdown, not a JSON fence; company plus
+  contacts, or contact plus company). Escape closes the pane, or
+  hides search and clears the filter.
 
 ## [v0.35.0] - 2026-08-27
 

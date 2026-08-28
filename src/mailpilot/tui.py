@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Sequence
 from typing import Any, ClassVar, Protocol
 
@@ -44,6 +43,13 @@ from mailpilot.settings import bootstrap_database_url
 COMPANY_LIMIT = 500
 CONTACT_LIMIT = 100
 NOTES_CAP = 10
+_PROFILE_FIELDS = (
+    "summary",
+    "products",
+    "target_customers",
+    "timezone",
+    "sources",
+)
 
 HELP_TEXT = """\
 mailpilot tui -- read-only companies and contacts
@@ -116,10 +122,29 @@ def contact_display_name(row: ContactSummary | ContactView) -> str:
 
 
 def format_profile(profile: dict[str, Any] | None) -> str:
-    """Pretty-print a company profile as JSON."""
+    """Render a company profile as Markdown fields (never a JSON fence)."""
+    return "\n".join(_profile_markdown_lines(profile)).rstrip() + "\n"
+
+
+def _profile_markdown_lines(profile: dict[str, Any] | None) -> list[str]:
+    """Markdown list lines for CompanyProfile fields, or (no profile)."""
     if profile is None:
-        return "(no profile)"
-    return json.dumps(profile, indent=2, ensure_ascii=False, default=str)
+        return ["(no profile)", ""]
+    lines: list[str] = []
+    for key in _PROFILE_FIELDS:
+        value = profile.get(key)
+        if isinstance(value, list):
+            if not value:
+                lines.append(f"- {key}: (none)")
+            else:
+                lines.append(f"- {key}:")
+                lines.extend(f"  - {item}" for item in value)
+        elif value in (None, ""):
+            lines.append(f"- {key}: (none)")
+        else:
+            lines.append(f"- {key}: {value}")
+    lines.append("")
+    return lines
 
 
 def _join_names(values: list[str]) -> str:
@@ -151,10 +176,7 @@ def _company_core_markdown(
     title = heading if heading is not None else f"# {view.name}"
     sub_level = 2 if heading is None else 3
     sub = "#" * sub_level
-    if view.profile is None:
-        profile_block = ["(no profile)", ""]
-    else:
-        profile_block = ["```json", format_profile(view.profile), "```", ""]
+    profile_block = _profile_markdown_lines(view.profile)
     lines = [
         title,
         "",

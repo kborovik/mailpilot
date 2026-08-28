@@ -38,6 +38,7 @@ from mailpilot.tui import (
     TuiConnectError,
     format_company_markdown,
     format_contact_markdown,
+    format_profile,
     hide_disabled,
     is_truncated,
     open_readonly_connection,
@@ -558,6 +559,8 @@ def test_enter_company_markdown_includes_contacts(
                 assert ids["company"].domain in source
                 assert ids["contact"].email in source
                 assert "## Contacts" in source
+                assert source.startswith(f"# {ids['company'].name}")
+                assert "```json" not in source
                 await pilot.press("escape")
                 await pilot.pause()
                 assert not isinstance(app.screen, DetailScreen)
@@ -592,6 +595,9 @@ def test_enter_contact_markdown_includes_company(
                 assert ids["company"].domain in source
                 assert ids["company"].name in source
                 assert "## Company" in source
+                assert "Ada" in source or ids["contact"].email in source
+                assert source.startswith("#")
+                assert "```json" not in source
                 await pilot.press("escape")
                 await pilot.pause()
                 assert not isinstance(app.screen, DetailScreen)
@@ -644,6 +650,148 @@ def test_format_contact_markdown_includes_company_view() -> None:
     assert "View Co" in text
     assert "viewco.tui" in text
     assert "vip" in text
+
+
+def test_format_profile_is_markdown_not_json_fence() -> None:
+    """§V.72 / §V.195: profile fields are Markdown, never a JSON fence."""
+    empty = format_profile(None)
+    assert empty.strip() == "(no profile)"
+    assert "```" not in empty
+    text = format_profile(
+        {
+            "summary": "ERP reseller.",
+            "products": ["Acumatica", "BC"],
+            "target_customers": "Mid-market manufacturers.",
+            "timezone": "America/Chicago",
+            "sources": ["https://example.com/"],
+        }
+    )
+    assert text.startswith("- summary: ERP reseller.\n")
+    assert "- products:\n  - Acumatica\n  - BC\n" in text
+    assert "- target_customers: Mid-market manufacturers.\n" in text
+    assert "- timezone: America/Chicago\n" in text
+    assert "- sources:\n  - https://example.com/\n" in text
+    assert "```json" not in text
+    assert '"summary"' not in text
+    missing = format_profile(
+        {
+            "summary": "Only summary.",
+            "products": [],
+            "target_customers": "",
+            "timezone": None,
+            "sources": [],
+        }
+    )
+    assert "- products: (none)" in missing
+    assert "- target_customers: (none)" in missing
+    assert "- timezone: (none)" in missing
+    assert "- sources: (none)" in missing
+
+
+def test_format_company_markdown_is_document_not_record_dump() -> None:
+    """§V.195: company detail is H1 + lists, not a JSON record dump."""
+    from datetime import UTC, datetime
+
+    from mailpilot.models import CompanyView
+
+    now = datetime(2024, 1, 1, tzinfo=UTC)
+    view = CompanyView(
+        id="co-1",
+        name="View Co",
+        domain="viewco.tui",
+        profile={
+            "summary": "ERP reseller.",
+            "products": ["Acumatica"],
+            "target_customers": "Manufacturers.",
+            "timezone": "America/Chicago",
+            "sources": ["https://viewco.tui/"],
+        },
+        tags=["vip"],
+        aliases=["alt.viewco.tui"],
+        disabled_reason=None,
+        notes=[],
+        notes_total=0,
+        created_at=now,
+        updated_at=now,
+    )
+    child = {
+        "email": "ada@viewco.tui",
+        "first_name": "Ada",
+        "last_name": "Lovelace",
+        "title": "VP",
+        "tags": ["sales-seat"],
+    }
+    text = format_company_markdown(view, child_contacts=[child])
+    assert text.startswith("# View Co\n")
+    assert "- name: View Co" in text
+    assert "- domain: viewco.tui" in text
+    assert "- tags: vip" in text
+    assert "- aliases: alt.viewco.tui" in text
+    assert "## Profile" in text
+    assert "- summary: ERP reseller." in text
+    assert "  - Acumatica" in text
+    assert "## Contacts" in text
+    assert "- ada@viewco.tui (Ada Lovelace VP)" in text
+    assert "```json" not in text
+    assert '"id":' not in text
+    assert '"summary":' not in text
+
+
+def test_format_contact_markdown_is_document_not_record_dump() -> None:
+    """§V.195: contact detail is H1 + lists; company profile stays Markdown."""
+    from datetime import UTC, datetime
+
+    from mailpilot.models import CompanyView, ContactView
+
+    now = datetime(2024, 1, 1, tzinfo=UTC)
+    company = CompanyView(
+        id="co-1",
+        name="View Co",
+        domain="viewco.tui",
+        profile={
+            "summary": "ERP reseller.",
+            "products": ["Acumatica"],
+            "target_customers": "Manufacturers.",
+            "timezone": None,
+            "sources": ["https://viewco.tui/"],
+        },
+        tags=["vip"],
+        aliases=[],
+        disabled_reason=None,
+        notes=[],
+        notes_total=0,
+        created_at=now,
+        updated_at=now,
+    )
+    row = ContactView(
+        id="ct-1",
+        email="ada@viewco.tui",
+        company_id="co-1",
+        company_domain="viewco.tui",
+        first_name="Ada",
+        last_name="Lovelace",
+        title="VP",
+        email_confidence=90,
+        disabled_reason=None,
+        tags=["sales-seat"],
+        notes=[],
+        notes_total=0,
+        company_notes=[],
+        company_notes_total=0,
+        created_at=now,
+        updated_at=now,
+    )
+    text = format_contact_markdown(row, company=company)
+    assert text.startswith("# Ada Lovelace\n")
+    assert "- email: ada@viewco.tui" in text
+    assert "- title: VP" in text
+    assert "- tags: sales-seat" in text
+    assert "## Company" in text
+    assert "### Profile" in text
+    assert "- summary: ERP reseller." in text
+    assert "- timezone: (none)" in text
+    assert "```json" not in text
+    assert '"email":' not in text
 
 
 def test_tui_help_has_no_spec_cite() -> None:

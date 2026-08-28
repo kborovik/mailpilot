@@ -327,7 +327,7 @@ T334|x|impl §V.194(+) + §V.136(∆) + §V.103(∆) + §V.134(∆) + §C/§I �
 T335|x|impl §V.49(∆) — xAI ModelHTTPError 5xx transient (500 token-generation incl.); 401/incorrect-key still §V.47 skip; 4xx else terminal; fixture injected 500 on due compose-only touch ! stay failed after first attempt; attempt_count bump or task.retry event; non-transient still failed; 4-attempt bound (#311)|V49,B153,V47,V48,V136
 T336|x|impl §V.195(+) + §V.3(∆) + §C/§I — `mailpilot tui` TTY companies+contacts; optional extra; READ ONLY no provision; AST allowlist; view-parity tests; show queue unchanged (#293)|V195,V3,V2,V4,V8,V110,V114,V115,V148,V166,V177,I.cli
 T337|x|impl §V.195(∆) + §I — tui one table per tab; drop docked search + child table; `/` on-screen Input; Esc contextual; Enter Markdown company+contacts / contact+company; tests (#293)|V195,V3,V8,V114,V115,V148,V168,I.cli
-T338|.|impl §V.195(∆) + §I — company+contact detail formatted Markdown document (H1+lists; profile Markdown not json-fence; never record dump); tests (#293)|V195,V8,V72,V168,I.cli
+T338|x|impl §V.195(∆) + §I — company+contact detail formatted Markdown document (H1+lists; profile Markdown not json-fence; never record dump); tests (#293)|V195,V8,V72,V168,I.cli
 T339|.|impl §V.195(∆) + §I — `/` compact centered search overlay (bounded width, not full-width dock; title per tab); tests (#293)|V195,I.cli
 
 ## §B BUGS

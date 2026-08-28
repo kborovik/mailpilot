@@ -247,12 +247,13 @@ mailpilot tui
 
 Keys: `/` shows on-screen search (hidden at rest; Enter submits; empty
 restores the list), `d` include-disabled (default off), Enter opens a
-Markdown pane (company plus contacts extras, or contact plus company),
-Escape closes the Markdown pane, or hides search and clears the filter,
-or does nothing on an idle table, `q` quit. Company list cap 500,
-contact list cap 100. Status marks truncated when the fetch hits the
-cap. Child contacts on a company are extras (same as `company view --full`),
-not lean-view fields. Each tab is one table.
+formatted Markdown document (H1 plus field lists; company profile as
+Markdown, never a JSON fence; company plus contacts extras, or contact
+plus company), Escape closes the Markdown pane, or hides search and
+clears the filter, or does nothing on an idle table, `q` quit. Company
+list cap 500, contact list cap 100. Status marks truncated when the
+fetch hits the cap. Child contacts on a company are extras (same as
+`company view --full`), not lean-view fields. Each tab is one table.
 
 ### Campaign enrollment triage
 
