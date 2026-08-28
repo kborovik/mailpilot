@@ -92,9 +92,9 @@ uv.lock: pyproject.toml
 # Release
 ###############################################################################
 
-install: ## Install mailpilot globally as an editable uv tool
+install: ## Install mailpilot globally as an editable uv tool with the tui extra
 	$(call header,Installing mailpilot via uv tool)
-	uv tool install --editable .
+	uv tool install --force --editable '.[tui]'
 
 # `make release <part>` passes the part as an extra goal; pick it out and
 # give the part words no-op recipes so make does not try to build them.
