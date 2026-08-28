@@ -483,6 +483,34 @@ def test_slash_shows_search_escape_hides(
         tui_conn.close()
 
 
+def test_slash_types_into_focused_search(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """A second slash inserts '/' into the query instead of resetting it."""
+    from textual.widgets import Input
+
+    app, tui_conn, _ids = _run_pilot(database_connection)
+    try:
+
+        async def body() -> None:
+            async with app.run_test(size=(140, 40)) as pilot:
+                await pilot.pause()
+                search = app.query_one("#search", Input)
+                await pilot.press("/")
+                await pilot.pause()
+                assert search.display is True
+                search.value = "VP "
+                search.cursor_position = len(search.value)
+                await pilot.press("/")
+                await pilot.pause()
+                assert search.value == "VP /"
+                assert search.display is True
+
+        asyncio.run(body())
+    finally:
+        tui_conn.close()
+
+
 def test_escape_idle_table_is_noop(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:

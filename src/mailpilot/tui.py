@@ -316,7 +316,7 @@ class MailpilotTui(App[None]):
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding("/", "focus_search", "Search", priority=True),
+        Binding("/", "focus_search", "Search"),
         Binding("d", "toggle_disabled", "Disabled"),
         Binding("r", "refresh", "Refresh"),
         Binding("question_mark", "help", "Help"),
