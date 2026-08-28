@@ -329,7 +329,7 @@ T336|x|impl §V.195(+) + §V.3(∆) + §C/§I — `mailpilot tui` TTY companies+
 T337|x|impl §V.195(∆) + §I — tui one table per tab; drop docked search + child table; `/` on-screen Input; Esc contextual; Enter Markdown company+contacts / contact+company; tests (#293)|V195,V3,V8,V114,V115,V148,V168,I.cli
 T338|x|impl §V.195(∆) + §I — company+contact detail formatted Markdown document (H1+lists; profile Markdown not json-fence; never record dump); tests (#293)|V195,V8,V72,V168,I.cli
 T339|x|impl §V.195(∆) + §I — `/` compact centered search overlay (bounded width, not full-width dock; title per tab); tests (#293)|V195,I.cli
-T340|.|impl §V.195(∆)+§I — company start-page Markdown H1 name + H1 Profile + H2 Websites (clickable domain+alias URLs) + H2 Summary paragraph + H2 Products + H2 Target Customers + H2 Sources (clickable) + H2 Notes + H1 Contacts; drop timezone + identity dump; tests (#293)|V195,V8,V72,V168,I.cli
+T340|x|impl §V.195(∆)+§I — company start-page Markdown H1 name + H1 Profile + H2 Websites (clickable domain+alias URLs) + H2 Summary paragraph + H2 Products + H2 Target Customers + H2 Sources (clickable) + H2 Notes + H1 Contacts; drop timezone + identity dump; tests (#293)|V195,V8,V72,V168,I.cli
 
 ## §B BUGS
 

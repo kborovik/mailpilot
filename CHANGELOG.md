@@ -16,11 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `mailpilot tui` shows one table per tab. `/` opens a compact
-  centered search overlay (not a full-width dock). Enter opens a
-  formatted Markdown document (H1 plus field lists; company profile
-  as Markdown, not a JSON fence; company plus contacts, or contact
-  plus company). Escape closes the pane, or hides the overlay and
-  clears the filter.
+  centered search overlay (not a full-width dock). Enter on a
+  company opens a start page: H1 name, H1 Profile, H2 Websites
+  (clickable domain and alias URLs), H2 Summary, H2 Products, H2
+  Target Customers, H2 Sources (clickable URLs), H2 Notes, H1
+  Contacts. Timezone and the identity dump (id, timestamps,
+  labeled name/domain/tags/aliases) are omitted. Enter on a
+  contact opens H1 plus a field list plus a nested Company
+  section (not the start-page outline). Escape closes the pane,
+  or hides the overlay and clears the filter.
 
 ## [v0.35.0] - 2026-08-27
 

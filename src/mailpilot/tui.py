@@ -48,7 +48,6 @@ _PROFILE_FIELDS = (
     "summary",
     "products",
     "target_customers",
-    "timezone",
     "sources",
 )
 
@@ -128,7 +127,10 @@ def format_profile(profile: dict[str, Any] | None) -> str:
 
 
 def _profile_markdown_lines(profile: dict[str, Any] | None) -> list[str]:
-    """Markdown list lines for CompanyProfile fields, or (no profile)."""
+    """Markdown list lines for nested-company profile fields, or (no profile).
+
+    Timezone is omitted from TUI documents (CLI JSON keeps it).
+    """
     if profile is None:
         return ["(no profile)", ""]
     lines: list[str] = []
@@ -171,17 +173,99 @@ def _notes_markdown(
     return lines
 
 
-def _company_core_markdown(
-    view: CompanyView, *, heading: str | None = None
-) -> list[str]:
-    """Core CompanyView fields as Markdown lines (no contacts extras)."""
+def _is_url_shaped(value: str) -> bool:
+    """True when a source string is an http(s) URL."""
+    return value.startswith(("http://", "https://"))
+
+
+def _https_url(domain: str) -> str:
+    """Return ``https://{domain}`` unless the value already has a scheme."""
+    if domain.startswith(("http://", "https://")):
+        return domain
+    return f"https://{domain}"
+
+
+def _markdown_link(url: str) -> str:
+    """Clickable Markdown link whose label is the URL."""
+    return f"[{url}]({url})"
+
+
+def _h2_block(title: str, body: list[str]) -> list[str]:
+    """H2 section; empty body becomes ``(none)``."""
+    lines = [f"## {title}", ""]
+    if not body:
+        lines.append("(none)")
+    else:
+        lines.extend(body)
+    lines.append("")
+    return lines
+
+
+def _website_lines(view: CompanyView) -> list[str]:
+    """Markdown-link list for the primary domain plus aliases."""
+    domains = [view.domain, *view.aliases]
+    return [f"- {_markdown_link(_https_url(domain))}" for domain in domains if domain]
+
+
+def _source_lines(values: Any) -> list[str]:
+    """List items; URL-shaped sources become Markdown links."""
+    if not isinstance(values, list) or not values:
+        return []
+    lines: list[str] = []
+    for item in values:
+        text = str(item)
+        if _is_url_shaped(text):
+            lines.append(f"- {_markdown_link(text)}")
+        else:
+            lines.append(f"- {text}")
+    return lines
+
+
+def _paragraph_lines(value: Any) -> list[str]:
+    """Non-empty paragraph, or empty so the H2 emits ``(none)``."""
+    if value in (None, ""):
+        return []
+    return [str(value)]
+
+
+def _item_lines(values: Any) -> list[str]:
+    """Bullet list, or empty so the H2 emits ``(none)``."""
+    if not isinstance(values, list) or not values:
+        return []
+    return [f"- {item}" for item in values]
+
+
+def _company_start_page_markdown(view: CompanyView) -> list[str]:
+    """Company start-page outline: H1 name, H1 Profile, H2 fields, H2 Notes."""
+    lines = [f"# {view.name}", ""]
+    if view.disabled_reason:
+        lines.append(view.disabled_reason)
+        lines.append("")
+    lines.extend(["# Profile", ""])
+    if view.profile is None:
+        lines.extend(["(no profile)", ""])
+    else:
+        profile = view.profile
+        lines.extend(_h2_block("Websites", _website_lines(view)))
+        lines.extend(_h2_block("Summary", _paragraph_lines(profile.get("summary"))))
+        lines.extend(_h2_block("Products", _item_lines(profile.get("products"))))
+        lines.extend(
+            _h2_block(
+                "Target Customers",
+                _paragraph_lines(profile.get("target_customers")),
+            )
+        )
+        lines.extend(_h2_block("Sources", _source_lines(profile.get("sources"))))
+    lines.extend(_notes_markdown("Notes", view.notes, view.notes_total, level=2))
+    return lines
+
+
+def _nested_company_markdown(view: CompanyView) -> list[str]:
+    """Contact nested-company section: field list, not the start-page outline."""
     disabled = view.disabled_reason or "(enabled)"
-    title = heading if heading is not None else f"# {view.name}"
-    sub_level = 2 if heading is None else 3
-    sub = "#" * sub_level
     profile_block = _profile_markdown_lines(view.profile)
     lines = [
-        title,
+        "## Company",
         "",
         f"- name: {view.name}",
         f"- domain: {view.domain}",
@@ -192,13 +276,11 @@ def _company_core_markdown(
         f"- created_at: {view.created_at.isoformat()}",
         f"- updated_at: {view.updated_at.isoformat()}",
         "",
-        f"{sub} Profile",
+        "### Profile",
         "",
         *profile_block,
     ]
-    lines.extend(
-        _notes_markdown("Notes", view.notes, view.notes_total, level=sub_level)
-    )
+    lines.extend(_notes_markdown("Notes", view.notes, view.notes_total, level=3))
     return lines
 
 
@@ -224,10 +306,10 @@ def format_company_markdown(
     *,
     child_contacts: list[dict[str, Any]] | None = None,
 ) -> str:
-    """Render company+contacts Markdown (contacts are --full extras)."""
-    lines = _company_core_markdown(view)
+    """Render company start-page Markdown (contacts are --full extras)."""
+    lines = _company_start_page_markdown(view)
     if child_contacts is not None:
-        lines.extend(["## Contacts", ""])
+        lines.extend(["# Contacts", ""])
         if child_contacts:
             lines.extend(_child_contact_line(child) for child in child_contacts)
         else:
@@ -262,7 +344,7 @@ def format_contact_markdown(
     ]
     lines.extend(_notes_markdown("Notes", view.notes, view.notes_total))
     if company is not None:
-        lines.extend(_company_core_markdown(company, heading="## Company"))
+        lines.extend(_nested_company_markdown(company))
     else:
         lines.extend(
             [
@@ -361,7 +443,7 @@ class DetailScreen(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         """Render a scrollable Markdown document."""
         with VerticalScroll(id="detail-scroll"):
-            yield Markdown(self._markdown, id="detail-markdown", open_links=False)
+            yield Markdown(self._markdown, id="detail-markdown", open_links=True)
 
 
 class MailpilotTui(App[None]):

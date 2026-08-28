@@ -344,7 +344,7 @@ def test_child_contacts_are_extras_not_lean_view_fields(
     assert extras[0]["email"] == "kid@kids.tui"
     text = format_company_markdown(view, child_contacts=extras)
     assert extras[0]["email"] in text
-    assert "## Contacts" in text
+    assert "# Contacts" in text
     assert view.domain in text
 
 
@@ -624,8 +624,9 @@ def test_enter_company_markdown_includes_contacts(
                 assert ids["company"].name in source
                 assert ids["company"].domain in source
                 assert ids["contact"].email in source
-                assert "## Contacts" in source
+                assert "# Contacts" in source
                 assert source.startswith(f"# {ids['company'].name}")
+                assert "# Profile" in source
                 assert "```json" not in source
                 assert len(app.screen.query("#detail-scroll")) == 1
                 await pilot.press("escape")
@@ -720,7 +721,7 @@ def test_format_contact_markdown_includes_company_view() -> None:
 
 
 def test_format_profile_is_markdown_not_json_fence() -> None:
-    """§V.72 / §V.195: profile fields are Markdown, never a JSON fence."""
+    """§V.72 / §V.195: nested profile fields are Markdown, never a JSON fence."""
     empty = format_profile(None)
     assert empty.strip() == "(no profile)"
     assert "```" not in empty
@@ -736,7 +737,7 @@ def test_format_profile_is_markdown_not_json_fence() -> None:
     assert text.startswith("- summary: ERP reseller.\n")
     assert "- products:\n  - Acumatica\n  - BC\n" in text
     assert "- target_customers: Mid-market manufacturers.\n" in text
-    assert "- timezone: America/Chicago\n" in text
+    assert "timezone" not in text
     assert "- sources:\n  - https://example.com/\n" in text
     assert "```json" not in text
     assert '"summary"' not in text
@@ -751,12 +752,12 @@ def test_format_profile_is_markdown_not_json_fence() -> None:
     )
     assert "- products: (none)" in missing
     assert "- target_customers: (none)" in missing
-    assert "- timezone: (none)" in missing
+    assert "timezone" not in missing
     assert "- sources: (none)" in missing
 
 
 def test_format_company_markdown_is_document_not_record_dump() -> None:
-    """§V.195: company detail is H1 + lists, not a JSON record dump."""
+    """§V.195: company start page is the H1/H2 outline, not a JSON dump."""
     from datetime import UTC, datetime
 
     from mailpilot.models import CompanyView
@@ -790,18 +791,158 @@ def test_format_company_markdown_is_document_not_record_dump() -> None:
     }
     text = format_company_markdown(view, child_contacts=[child])
     assert text.startswith("# View Co\n")
-    assert "- name: View Co" in text
-    assert "- domain: viewco.tui" in text
-    assert "- tags: vip" in text
-    assert "- aliases: alt.viewco.tui" in text
-    assert "## Profile" in text
-    assert "- summary: ERP reseller." in text
-    assert "  - Acumatica" in text
-    assert "## Contacts" in text
+    assert "# Profile" in text
+    assert "## Websites" in text
+    assert "- [https://viewco.tui](https://viewco.tui)" in text
+    assert "- [https://alt.viewco.tui](https://alt.viewco.tui)" in text
+    assert "## Summary" in text
+    assert "ERP reseller." in text
+    assert "## Products" in text
+    assert "- Acumatica" in text
+    assert "## Target Customers" in text
+    assert "Manufacturers." in text
+    assert "## Sources" in text
+    assert "- [https://viewco.tui/](https://viewco.tui/)" in text
+    assert "# Contacts" in text
     assert "- ada@viewco.tui (Ada Lovelace VP)" in text
     assert "```json" not in text
     assert '"id":' not in text
     assert '"summary":' not in text
+    assert "- name:" not in text
+    assert "- domain:" not in text
+    assert "- tags:" not in text
+    assert "- aliases:" not in text
+    assert "- id:" not in text
+    assert "created_at" not in text
+    assert "updated_at" not in text
+    assert "timezone" not in text
+    assert "America/Chicago" not in text
+    assert "vip" not in text
+
+
+def test_company_start_page_empty_profile_keeps_notes_and_contacts() -> None:
+    """§V.195: empty profile is (no profile); Notes and Contacts still emit."""
+    from datetime import UTC, datetime
+
+    from mailpilot.models import CompanyView, Note
+
+    now = datetime(2024, 1, 1, tzinfo=UTC)
+    view = CompanyView(
+        id="co-1",
+        name="Bare Co",
+        domain="bare.tui",
+        profile=None,
+        tags=[],
+        aliases=[],
+        disabled_reason=None,
+        notes=[Note(id="n-1", company_id="co-1", body="keep me", created_at=now)],
+        notes_total=1,
+        created_at=now,
+        updated_at=now,
+    )
+    text = format_company_markdown(view, child_contacts=[])
+    assert text.startswith("# Bare Co\n")
+    assert "# Profile" in text
+    assert "(no profile)" in text
+    assert "## Websites" not in text
+    assert "## Summary" not in text
+    assert "## Notes" in text
+    assert "- keep me" in text
+    assert "# Contacts" in text
+    assert "(none)" in text.split("# Contacts", 1)[1]
+
+
+def test_company_start_page_empty_h2_is_none() -> None:
+    """§V.195: empty H2 sections render (none)."""
+    from datetime import UTC, datetime
+
+    from mailpilot.models import CompanyView
+
+    now = datetime(2024, 1, 1, tzinfo=UTC)
+    view = CompanyView(
+        id="co-1",
+        name="Empty Co",
+        domain="empty.tui",
+        profile={
+            "summary": "",
+            "products": [],
+            "target_customers": None,
+            "timezone": "America/Chicago",
+            "sources": [],
+        },
+        tags=[],
+        aliases=[],
+        disabled_reason=None,
+        notes=[],
+        notes_total=0,
+        created_at=now,
+        updated_at=now,
+    )
+    text = format_company_markdown(view, child_contacts=[])
+    assert "## Websites" in text
+    assert "- [https://empty.tui](https://empty.tui)" in text
+    assert "## Summary\n\n(none)\n" in text
+    assert "## Products\n\n(none)\n" in text
+    assert "## Target Customers\n\n(none)\n" in text
+    assert "## Sources\n\n(none)\n" in text
+    assert "timezone" not in text
+
+
+def test_company_start_page_disabled_reason_under_h1() -> None:
+    """§V.195: disabled_reason is one line under the name H1."""
+    from datetime import UTC, datetime
+
+    from mailpilot.models import CompanyView
+
+    now = datetime(2024, 1, 1, tzinfo=UTC)
+    view = CompanyView(
+        id="co-1",
+        name="Gone Co",
+        domain="gone.tui",
+        profile=None,
+        tags=[],
+        aliases=[],
+        disabled_reason="retired",
+        notes=[],
+        notes_total=0,
+        created_at=now,
+        updated_at=now,
+    )
+    text = format_company_markdown(view, child_contacts=[])
+    assert text.startswith("# Gone Co\n\nretired\n\n# Profile\n")
+    assert "- disabled:" not in text
+
+
+def test_company_start_page_sources_link_url_shaped_only() -> None:
+    """§V.195: URL-shaped sources are Markdown links; others stay plain."""
+    from datetime import UTC, datetime
+
+    from mailpilot.models import CompanyView
+
+    now = datetime(2024, 1, 1, tzinfo=UTC)
+    view = CompanyView(
+        id="co-1",
+        name="Mix Co",
+        domain="mix.tui",
+        profile={
+            "summary": "Mix.",
+            "products": ["A"],
+            "target_customers": "Buyers.",
+            "sources": ["https://mix.tui/about", "LinkedIn", "http://old.mix.tui"],
+        },
+        tags=[],
+        aliases=[],
+        disabled_reason=None,
+        notes=[],
+        notes_total=0,
+        created_at=now,
+        updated_at=now,
+    )
+    text = format_company_markdown(view)
+    assert "- [https://mix.tui/about](https://mix.tui/about)" in text
+    assert "- LinkedIn" in text
+    assert "- [http://old.mix.tui](http://old.mix.tui)" in text
+    assert "[LinkedIn]" not in text
 
 
 def test_child_contact_markdown_marks_disabled() -> None:
@@ -844,6 +985,29 @@ def test_child_contact_markdown_marks_disabled() -> None:
     )
     assert "- ada@viewco.tui (Ada Lovelace VP)" in text
     assert "- bob@viewco.tui (disabled: retired)" in text
+
+
+def test_detail_markdown_opens_links(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """§V.195: company start-page Markdown widget opens links."""
+    from textual.widgets import DataTable, Markdown
+
+    app, tui_conn, ids = _run_pilot(database_connection)
+    try:
+
+        async def body() -> None:
+            async with app.run_test(size=(140, 40)) as pilot:
+                await pilot.pause()
+                app._select_row("company-table", ids["company"].id)  # pyright: ignore[reportPrivateUsage]
+                app.query_one("#company-table", DataTable).action_select_cursor()
+                await pilot.pause()
+                markdown = app.screen.query_one("#detail-markdown", Markdown)
+                assert markdown._open_links is True  # pyright: ignore[reportPrivateUsage]
+
+        asyncio.run(body())
+    finally:
+        tui_conn.close()
 
 
 def test_notes_markdown_indents_continuation_lines() -> None:
@@ -928,8 +1092,10 @@ def test_format_contact_markdown_is_document_not_record_dump() -> None:
     assert "- tags: sales-seat" in text
     assert "## Company" in text
     assert "### Profile" in text
+    assert "\n# Profile\n" not in text
+    assert "## Websites" not in text
     assert "- summary: ERP reseller." in text
-    assert "- timezone: (none)" in text
+    assert "timezone" not in text
     assert "```json" not in text
     assert '"email":' not in text
 
