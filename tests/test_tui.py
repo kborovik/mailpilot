@@ -35,6 +35,7 @@ from mailpilot.tui import (
     CONTACT_LIMIT,
     DetailScreen,
     MailpilotTui,
+    SearchScreen,
     TuiConnectError,
     format_company_markdown,
     format_contact_markdown,
@@ -408,7 +409,8 @@ def test_pilot_tab_switch_search_disabled(
                 await pilot.pause()
                 await pilot.press("/")
                 await pilot.pause()
-                search = app.query_one("#search", Input)
+                assert isinstance(app.screen, SearchScreen)
+                search = app.screen.query_one("#search-input", Input)
                 search.value = "acme"
                 await search.action_submit()
                 await pilot.pause()
@@ -417,7 +419,7 @@ def test_pilot_tab_switch_search_disabled(
                 status = str(app.query_one("#status").render())
                 assert "truncated" not in status
                 assert "q=acme" in status
-                assert search.display is False
+                assert not isinstance(app.screen, SearchScreen)
                 await pilot.press("escape")
                 await pilot.pause()
                 assert app.search_query["companies"] == ""
@@ -436,7 +438,7 @@ def test_pilot_tab_switch_search_disabled(
 def test_layout_one_table_per_tab_search_hidden(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """Each tab is one DataTable; search Input is hidden; no child table."""
+    """Each tab is one DataTable; search overlay is hidden; no child table."""
     from textual.widgets import DataTable, Footer, Input
 
     app, tui_conn, _ids = _run_pilot(database_connection)
@@ -448,8 +450,9 @@ def test_layout_one_table_per_tab_search_hidden(
                 table_ids = {widget.id for widget in app.query(DataTable)}
                 assert table_ids == {"company-table", "contact-table"}
                 assert len(app.query("#company-child-contacts")) == 0
-                search = app.query_one("#search", Input)
-                assert search.display is False
+                assert len(app.query("#search")) == 0
+                assert len(app.query(Input)) == 0
+                assert not isinstance(app.screen, SearchScreen)
                 assert len(app.query(Footer)) == 1
 
         asyncio.run(body())
@@ -460,8 +463,8 @@ def test_layout_one_table_per_tab_search_hidden(
 def test_slash_shows_search_escape_hides(
     database_connection: psycopg.Connection[dict[str, Any]],
 ) -> None:
-    """Slash shows the search Input; Esc hides it and restores the list."""
-    from textual.widgets import Input
+    """Slash shows the search overlay; Esc hides it and restores the list."""
+    from textual.widgets import Static
 
     app, tui_conn, _ids = _run_pilot(database_connection)
     try:
@@ -469,14 +472,15 @@ def test_slash_shows_search_escape_hides(
         async def body() -> None:
             async with app.run_test(size=(140, 40)) as pilot:
                 await pilot.pause()
-                search = app.query_one("#search", Input)
-                assert search.display is False
+                assert not isinstance(app.screen, SearchScreen)
                 await pilot.press("/")
                 await pilot.pause()
-                assert search.display is True
+                assert isinstance(app.screen, SearchScreen)
+                title = str(app.screen.query_one("#search-title", Static).render())
+                assert title == "Search companies"
                 await pilot.press("escape")
                 await pilot.pause()
-                assert search.display is False
+                assert not isinstance(app.screen, SearchScreen)
                 assert app.search_query["companies"] == ""
 
         asyncio.run(body())
@@ -496,16 +500,77 @@ def test_slash_types_into_focused_search(
         async def body() -> None:
             async with app.run_test(size=(140, 40)) as pilot:
                 await pilot.pause()
-                search = app.query_one("#search", Input)
                 await pilot.press("/")
                 await pilot.pause()
-                assert search.display is True
+                assert isinstance(app.screen, SearchScreen)
+                search = app.screen.query_one("#search-input", Input)
                 search.value = "VP "
                 search.cursor_position = len(search.value)
                 await pilot.press("/")
                 await pilot.pause()
                 assert search.value == "VP /"
-                assert search.display is True
+                assert isinstance(app.screen, SearchScreen)
+
+        asyncio.run(body())
+    finally:
+        tui_conn.close()
+
+
+def test_search_overlay_title_per_tab(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Overlay title is Search companies or Search contacts per tab."""
+    from textual.widgets import Static, TabbedContent
+
+    app, tui_conn, _ids = _run_pilot(database_connection)
+    try:
+
+        async def body() -> None:
+            async with app.run_test(size=(140, 40)) as pilot:
+                await pilot.pause()
+                await pilot.press("/")
+                await pilot.pause()
+                title = str(app.screen.query_one("#search-title", Static).render())
+                assert title == "Search companies"
+                await pilot.press("escape")
+                await pilot.pause()
+                tabs = app.query_one("#tabs", TabbedContent)
+                tabs.active = "contacts"
+                await pilot.pause()
+                await pilot.press("/")
+                await pilot.pause()
+                title = str(app.screen.query_one("#search-title", Static).render())
+                assert title == "Search contacts"
+
+        asyncio.run(body())
+    finally:
+        tui_conn.close()
+
+
+def test_search_overlay_is_compact_centered_not_docked(
+    database_connection: psycopg.Connection[dict[str, Any]],
+) -> None:
+    """Search overlay is bounded width, centered, and not a full-width dock."""
+    app, tui_conn, _ids = _run_pilot(database_connection)
+    try:
+
+        async def body() -> None:
+            async with app.run_test(size=(140, 40)) as pilot:
+                await pilot.pause()
+                await pilot.press("/")
+                await pilot.pause()
+                assert isinstance(app.screen, SearchScreen)
+                dialog = app.screen.query_one("#search-dialog")
+                assert dialog.region.width < app.size.width
+                assert dialog.region.width <= 48
+                assert dialog.region.x > 0
+                assert dialog.region.y > 0
+                assert dialog.region.x + dialog.region.width < app.size.width
+                dock = str(dialog.styles.dock)
+                assert dock in {"", "none"}
+                css = MailpilotTui.CSS
+                assert "align: center middle" in css
+                assert "Input.search { dock: bottom" not in css
 
         asyncio.run(body())
     finally:

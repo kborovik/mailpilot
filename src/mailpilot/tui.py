@@ -9,6 +9,7 @@ from typing import Any, ClassVar, Protocol
 import psycopg
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
+from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import (
     DataTable,
@@ -54,7 +55,7 @@ _PROFILE_FIELDS = (
 HELP_TEXT = """\
 mailpilot tui -- read-only companies and contacts
 
-/        show search (Enter submits; empty restores list)
+/        compact centered search overlay (Enter submits; empty restores list)
 d        include-disabled (default off)
 r        refresh current tab
 Enter    open Markdown pane (company+contacts / contact+company)
@@ -313,6 +314,29 @@ class HelpScreen(ModalScreen[None]):
         yield Static(HELP_TEXT, id="help-body")
 
 
+class SearchScreen(ModalScreen[str]):
+    """Compact centered search overlay (bounded width, not a dock)."""
+
+    def __init__(self, title: str, initial: str = "") -> None:
+        super().__init__()
+        self._title = title
+        self._initial = initial
+
+    def compose(self) -> ComposeResult:
+        """Centered dialog: title plus Input."""
+        with Vertical(id="search-dialog"):
+            yield Static(self._title, id="search-title")
+            yield Input(value=self._initial, id="search-input")
+
+    def on_mount(self) -> None:
+        """Focus the query Input."""
+        self.query_one("#search-input", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Return the stripped query to the app."""
+        self.dismiss(event.value.strip())
+
+
 class DetailScreen(ModalScreen[None]):
     """Markdown detail overlay (company+contacts or contact+company)."""
 
@@ -332,9 +356,19 @@ class MailpilotTui(App[None]):
     #status { dock: bottom; height: 1; }
     TabbedContent { height: 1fr; }
     DataTable { height: 1fr; }
-    Input.search { dock: bottom; height: 3; display: none; }
     #help-body { padding: 1 2; }
     #detail-markdown { padding: 1 2; height: 1fr; }
+    SearchScreen { align: center middle; }
+    #search-dialog {
+        width: 48;
+        max-width: 90%;
+        height: auto;
+        padding: 1 2;
+        border: solid $accent;
+        background: $surface;
+    }
+    #search-title { width: 100%; text-align: center; padding-bottom: 1; }
+    #search-input { width: 100%; }
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
@@ -363,17 +397,12 @@ class MailpilotTui(App[None]):
         self.detail_markdown: str = ""
 
     def compose(self) -> ComposeResult:
-        """Two tabs, one master table each, plus hidden search and status."""
+        """Two tabs, one master table each, plus status. Search is an overlay."""
         with TabbedContent(id="tabs"):
             with TabPane("Companies", id="companies"):
                 yield DataTable(id="company-table", cursor_type="row")
             with TabPane("Contacts", id="contacts"):
                 yield DataTable(id="contact-table", cursor_type="row")
-        yield Input(
-            placeholder="/ search companies",
-            id="search",
-            classes="search",
-        )
         yield Static(id="status")
         yield Footer()
 
@@ -388,49 +417,51 @@ class MailpilotTui(App[None]):
         tabs = self.query_one("#tabs", TabbedContent)
         return str(tabs.active)
 
-    def _search_input(self) -> Input:
-        """Return the on-screen search Input (hidden at rest)."""
-        return self.query_one("#search", Input)
-
     def _search_visible(self) -> bool:
-        """Return True when the search Input is on screen."""
-        return bool(self._search_input().display)
+        """Return True when the compact search overlay is open."""
+        return isinstance(self.screen, SearchScreen)
+
+    def _search_title(self, tab: str) -> str:
+        """Overlay title for the active tab."""
+        return "Search companies" if tab == "companies" else "Search contacts"
 
     def _master_table(self, tab: str) -> DataTable[str]:
         """Return the master DataTable for a tab."""
         widget_id = "company-table" if tab == "companies" else "contact-table"
         return self.query_one(f"#{widget_id}", DataTable)
 
-    def _hide_search(self) -> None:
-        """Hide the search Input without changing the filter."""
-        search = self._search_input()
-        search.display = False
-
     def _clear_search_and_restore(self, tab: str) -> None:
-        """Hide search, clear the filter, restore the list, focus the table."""
-        search = self._search_input()
-        search.display = False
-        search.value = ""
+        """Hide overlay, clear the filter, restore the list, focus the table."""
+        if isinstance(self.screen, SearchScreen):
+            self.pop_screen()
         self.search_query[tab] = ""
         self._reload(tab)
         self._master_table(tab).focus()
 
-    def action_focus_search(self) -> None:
-        """Show the on-screen search Input and focus it."""
-        if isinstance(self.screen, (DetailScreen, HelpScreen)):
+    def _apply_search(self, query: str | None) -> None:
+        """Apply a submitted overlay query; empty restores the list path."""
+        if query is None:
             return
         tab = self._active_tab()
-        search = self._search_input()
-        search.display = True
-        search.placeholder = f"/ search {tab}"
-        search.value = self.search_query[tab]
-        search.focus()
+        self.search_query[tab] = query
+        self._reload(tab)
+        self._master_table(tab).focus()
+
+    def action_focus_search(self) -> None:
+        """Show the compact centered search overlay."""
+        if isinstance(self.screen, (DetailScreen, HelpScreen, SearchScreen)):
+            return
+        tab = self._active_tab()
+        self.push_screen(
+            SearchScreen(self._search_title(tab), self.search_query[tab]),
+            self._apply_search,
+        )
 
     def action_toggle_disabled(self) -> None:
         """Toggle include-disabled (default off) and reload lists."""
         if isinstance(self.focused, Input):
             return
-        if isinstance(self.screen, (DetailScreen, HelpScreen)):
+        if isinstance(self.screen, (DetailScreen, HelpScreen, SearchScreen)):
             return
         self.include_disabled = not self.include_disabled
         self._reload("companies")
@@ -438,13 +469,13 @@ class MailpilotTui(App[None]):
 
     def action_refresh(self) -> None:
         """Reload the active tab list."""
-        if isinstance(self.screen, (DetailScreen, HelpScreen)):
+        if isinstance(self.screen, (DetailScreen, HelpScreen, SearchScreen)):
             return
         self._reload(self._active_tab())
 
     def action_help(self) -> None:
         """Show the keybinding overlay."""
-        if isinstance(self.screen, (DetailScreen, HelpScreen)):
+        if isinstance(self.screen, (DetailScreen, HelpScreen, SearchScreen)):
             return
         self.push_screen(HelpScreen())
 
@@ -459,26 +490,11 @@ class MailpilotTui(App[None]):
             self._clear_search_and_restore(tab)
             return
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Run search on submit; empty query restores the list path."""
-        if event.input.id != "search":
-            return
-        tab = self._active_tab()
-        self.search_query[tab] = event.value.strip()
-        self._reload(tab)
-        self._hide_search()
-        self._master_table(tab).focus()
-
     def on_tabbed_content_tab_activated(
         self, event: TabbedContent.TabActivated
     ) -> None:
-        """Refresh status and search placeholder when the operator switches tabs."""
+        """Refresh status when the operator switches tabs."""
         del event
-        tab = self._active_tab()
-        search = self._search_input()
-        search.placeholder = f"/ search {tab}"
-        if self._search_visible():
-            search.value = self.search_query[tab]
         self._update_status()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
