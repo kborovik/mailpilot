@@ -235,28 +235,42 @@ def _item_lines(values: Any) -> list[str]:
     return [f"- {item}" for item in values]
 
 
-def _company_start_page_markdown(view: CompanyView) -> list[str]:
-    """Company start-page outline: H1 name, H1 Profile, H2 fields, H2 Notes."""
+def _contacts_block(child_contacts: list[dict[str, Any]]) -> list[str]:
+    """H2 Contacts extras list; empty becomes ``(none)``."""
+    body = [_child_contact_line(child) for child in child_contacts]
+    return _h2_block("Contacts", body)
+
+
+def _company_start_page_markdown(
+    view: CompanyView,
+    *,
+    child_contacts: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    """Company start-page outline: H1 name, H2 fields, Contacts, Notes, Sources last."""
     lines = [f"# {view.name}", ""]
     if view.disabled_reason:
         lines.append(view.disabled_reason)
         lines.append("")
-    lines.extend(["# Profile", ""])
     if view.profile is None:
         lines.extend(["(no profile)", ""])
-    else:
-        profile = view.profile
-        lines.extend(_h2_block("Websites", _website_lines(view)))
-        lines.extend(_h2_block("Summary", _paragraph_lines(profile.get("summary"))))
-        lines.extend(_h2_block("Products", _item_lines(profile.get("products"))))
-        lines.extend(
-            _h2_block(
-                "Target Customers",
-                _paragraph_lines(profile.get("target_customers")),
-            )
+        if child_contacts is not None:
+            lines.extend(_contacts_block(child_contacts))
+        lines.extend(_notes_markdown("Notes", view.notes, view.notes_total, level=2))
+        return lines
+    profile = view.profile
+    lines.extend(_h2_block("Websites", _website_lines(view)))
+    lines.extend(_h2_block("Summary", _paragraph_lines(profile.get("summary"))))
+    lines.extend(_h2_block("Products", _item_lines(profile.get("products"))))
+    lines.extend(
+        _h2_block(
+            "Target Customers",
+            _paragraph_lines(profile.get("target_customers")),
         )
-        lines.extend(_h2_block("Sources", _source_lines(profile.get("sources"))))
+    )
+    if child_contacts is not None:
+        lines.extend(_contacts_block(child_contacts))
     lines.extend(_notes_markdown("Notes", view.notes, view.notes_total, level=2))
+    lines.extend(_h2_block("Sources", _source_lines(profile.get("sources"))))
     return lines
 
 
@@ -307,14 +321,7 @@ def format_company_markdown(
     child_contacts: list[dict[str, Any]] | None = None,
 ) -> str:
     """Render company start-page Markdown (contacts are --full extras)."""
-    lines = _company_start_page_markdown(view)
-    if child_contacts is not None:
-        lines.extend(["# Contacts", ""])
-        if child_contacts:
-            lines.extend(_child_contact_line(child) for child in child_contacts)
-        else:
-            lines.append("(none)")
-        lines.append("")
+    lines = _company_start_page_markdown(view, child_contacts=child_contacts)
     return "\n".join(lines).strip() + "\n"
 
 

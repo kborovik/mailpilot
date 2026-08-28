@@ -344,7 +344,7 @@ def test_child_contacts_are_extras_not_lean_view_fields(
     assert extras[0]["email"] == "kid@kids.tui"
     text = format_company_markdown(view, child_contacts=extras)
     assert extras[0]["email"] in text
-    assert "# Contacts" in text
+    assert "## Contacts" in text
     assert view.domain in text
 
 
@@ -624,9 +624,9 @@ def test_enter_company_markdown_includes_contacts(
                 assert ids["company"].name in source
                 assert ids["company"].domain in source
                 assert ids["contact"].email in source
-                assert "# Contacts" in source
+                assert "## Contacts" in source
                 assert source.startswith(f"# {ids['company'].name}")
-                assert "# Profile" in source
+                assert "# Profile" not in source
                 assert "```json" not in source
                 assert len(app.screen.query("#detail-scroll")) == 1
                 await pilot.press("escape")
@@ -791,7 +791,7 @@ def test_format_company_markdown_is_document_not_record_dump() -> None:
     }
     text = format_company_markdown(view, child_contacts=[child])
     assert text.startswith("# View Co\n")
-    assert "# Profile" in text
+    assert "# Profile" not in text
     assert "## Websites" in text
     assert "- [https://viewco.tui](https://viewco.tui)" in text
     assert "- [https://alt.viewco.tui](https://alt.viewco.tui)" in text
@@ -803,7 +803,7 @@ def test_format_company_markdown_is_document_not_record_dump() -> None:
     assert "Manufacturers." in text
     assert "## Sources" in text
     assert "- [https://viewco.tui/](https://viewco.tui/)" in text
-    assert "# Contacts" in text
+    assert "## Contacts" in text
     assert "- ada@viewco.tui (Ada Lovelace VP)" in text
     assert "```json" not in text
     assert '"id":' not in text
@@ -818,6 +818,57 @@ def test_format_company_markdown_is_document_not_record_dump() -> None:
     assert "timezone" not in text
     assert "America/Chicago" not in text
     assert "vip" not in text
+
+
+def test_company_start_page_heading_order() -> None:
+    """§V.195: no H1 Profile; H2 Contacts after Target Customers; Sources last."""
+    from datetime import UTC, datetime
+
+    from mailpilot.models import CompanyView, Note
+
+    now = datetime(2024, 1, 1, tzinfo=UTC)
+    view = CompanyView(
+        id="co-1",
+        name="View Co",
+        domain="viewco.tui",
+        profile={
+            "summary": "ERP reseller.",
+            "products": ["Acumatica"],
+            "target_customers": "Manufacturers.",
+            "timezone": "America/Chicago",
+            "sources": ["https://viewco.tui/"],
+        },
+        tags=["vip"],
+        aliases=["alt.viewco.tui"],
+        disabled_reason=None,
+        notes=[Note(id="n-1", company_id="co-1", body="keep me", created_at=now)],
+        notes_total=1,
+        created_at=now,
+        updated_at=now,
+    )
+    text = format_company_markdown(
+        view,
+        child_contacts=[
+            {
+                "email": "ada@viewco.tui",
+                "first_name": "Ada",
+                "last_name": "Lovelace",
+                "title": "VP",
+            }
+        ],
+    )
+    headings = [line for line in text.splitlines() if line.startswith("#")]
+    assert headings == [
+        "# View Co",
+        "## Websites",
+        "## Summary",
+        "## Products",
+        "## Target Customers",
+        "## Contacts",
+        "## Notes (1 of 1, cap 10)",
+        "## Sources",
+    ]
+    assert "# Profile" not in text
 
 
 def test_company_start_page_empty_profile_keeps_notes_and_contacts() -> None:
@@ -842,14 +893,21 @@ def test_company_start_page_empty_profile_keeps_notes_and_contacts() -> None:
     )
     text = format_company_markdown(view, child_contacts=[])
     assert text.startswith("# Bare Co\n")
-    assert "# Profile" in text
+    assert "# Profile" not in text
     assert "(no profile)" in text
     assert "## Websites" not in text
     assert "## Summary" not in text
     assert "## Notes" in text
     assert "- keep me" in text
-    assert "# Contacts" in text
-    assert "(none)" in text.split("# Contacts", 1)[1]
+    assert "## Contacts" in text
+    assert "(none)" in text.split("## Contacts", 1)[1]
+    assert "## Sources" not in text
+    headings = [line for line in text.splitlines() if line.startswith("#")]
+    assert headings == [
+        "# Bare Co",
+        "## Contacts",
+        "## Notes (1 of 1, cap 10)",
+    ]
 
 
 def test_company_start_page_empty_h2_is_none() -> None:
@@ -884,8 +942,13 @@ def test_company_start_page_empty_h2_is_none() -> None:
     assert "## Summary\n\n(none)\n" in text
     assert "## Products\n\n(none)\n" in text
     assert "## Target Customers\n\n(none)\n" in text
+    assert "## Contacts\n\n(none)\n" in text
     assert "## Sources\n\n(none)\n" in text
     assert "timezone" not in text
+    headings = [line for line in text.splitlines() if line.startswith("#")]
+    assert headings.index("## Target Customers") < headings.index("## Contacts")
+    assert headings.index("## Contacts") < headings.index("## Notes (0 of 0, cap 10)")
+    assert headings[-1] == "## Sources"
 
 
 def test_company_start_page_disabled_reason_under_h1() -> None:
@@ -909,7 +972,8 @@ def test_company_start_page_disabled_reason_under_h1() -> None:
         updated_at=now,
     )
     text = format_company_markdown(view, child_contacts=[])
-    assert text.startswith("# Gone Co\n\nretired\n\n# Profile\n")
+    assert text.startswith("# Gone Co\n\nretired\n\n(no profile)\n")
+    assert "# Profile" not in text
     assert "- disabled:" not in text
 
 

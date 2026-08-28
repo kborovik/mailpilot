@@ -247,11 +247,14 @@ mailpilot tui
 
 Keys: `/` opens a compact centered search overlay (title Search
 companies or Search contacts; hidden at rest; Enter submits; empty
-restores the list), `d` include-disabled (default off), Enter opens a
-formatted Markdown document (H1 plus field lists; company profile as
-Markdown, never a JSON fence; company plus contacts extras, or contact
-plus company), Escape closes the Markdown pane, or hides the overlay
-and clears the filter, or does nothing on an idle table, `q` quit.
+restores the list), `d` include-disabled (default off), Enter on a
+company opens a start page (H1 name then H2 Websites, Summary,
+Products, Target Customers, Contacts, Notes, Sources last; no H1
+Profile; clickable URLs; never a JSON fence), Enter on a contact
+opens H1 plus a field list plus a nested Company section (not the
+start-page outline), Escape closes the Markdown pane, or hides the
+overlay and clears the filter, or does nothing on an idle table,
+`q` quit.
 Company list cap 500, contact list cap 100. Status marks truncated
 when the fetch hits the cap. Child contacts on a company are extras
 (same as `company view --full`), not lean-view fields. Each tab is
